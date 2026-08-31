@@ -569,6 +569,16 @@ func inferCall(node *Call, env FormulaEnv) (inferred, *FormulaError) {
 			"`%s` was called with %d argument(s)", callDisplayName(node), len(node.Args))
 	}
 
+	// `if` types its arguments ITSELF, before this eager loop, because two of
+	// FR-143a's rules need the arguments' POSITIONS and not just their types:
+	// the then-branch is typed in a NARROWED environment (inferIfCall), and an
+	// empty-string else-literal under a guard is read as absence. Typing every
+	// argument in the same environment first would have already refused
+	// `cost / 12` before either rule could be applied.
+	if node.Name == "if" {
+		return inferIfCall(node, env)
+	}
+
 	args := make([]inferred, 0, len(node.Args))
 	for _, a := range node.Args {
 		got, err := inferNode(a, env)
@@ -583,8 +593,6 @@ func inferCall(node *Call, env FormulaEnv) (inferred, *FormulaError) {
 	}
 
 	switch node.Name {
-	case "if":
-		return inferIf(node, args)
 	case "isType":
 		return inferIsType(node)
 	case "list":
@@ -694,6 +702,187 @@ func inferIsType(node *Call) (inferred, *FormulaError) {
 			"`isType(%q)` names a type this grammar does not test for", lit.Value)
 	}
 	return inferred{typ: FormulaBoolean, arity: ArityOne}, nil
+}
+
+// ---------------------------------------------------------------------------
+// NARROWING — the one place a property has a different type in part of a tree
+//
+// `isType` is a PER-RECORD runtime test; this checker types a property once,
+// against the ONE type its schema declares. Those two facts collided on the
+// founder's own base file:
+//
+//	monthly_cost: if(cost.isType("number"), if(cycle == "annual", cost / 12, cost), "")
+//
+// `subscription.cost` genuinely holds prose ("PLACEHOLDER — cost unknown")
+// alongside numbers — 42 of 63 values parse as a decimal — so the import types
+// it TEXT, correctly, and says so. The founder compensated exactly as an author
+// should: he guarded the arithmetic with a runtime type test. The checker then
+// refused `cost / 12` anyway, because inside the branch the guard protects it
+// still saw `cost` as text. Eight column and summary losses across one base came
+// from that single disagreement.
+//
+// Narrowing closes it: inside the then-branch of `if(P.isType("number"), …)`, P
+// is a number.
+//
+// WHAT THE NARROWING PROMISES, AND WHO KEEPS THE PROMISE. A static narrowing is
+// the claim that the guarded branch CANNOT see a non-number. Three things in
+// this package make that claim true rather than hopeful, and all three are
+// load-bearing:
+//
+//  1. `evalIf` is LAZY — the branch not taken is never evaluated, so a record
+//     whose `cost` is "PLACEHOLDER" runs the else-branch and the division never
+//     happens. Make `if` eager and this narrowing becomes a runtime surprise
+//     strictly worse than the refusal it replaced.
+//  2. `evalIsType`'s `number` answer is the per-record READING of the value, not
+//     the property's declaration. Before this change it could only ever answer
+//     the declared type, so the guard was a constant `false` for a text-typed
+//     property: narrowing the type check alone would have type-checked the
+//     formula and then produced a BLANK column on all 63 records where Obsidian
+//     shows 42 numbers — a named loss traded for a silent one.
+//  3. `evalIf` BINDS P to that same reading for the then-branch, so the operand
+//     the arithmetic actually receives is the number the guard vouched for.
+//
+// HOW FAR THIS GOES, deliberately:
+//
+//   - `number` ONLY. `isType("string")` is not narrowed: narrowing a declared
+//     date or number to text would need a text conversion this package does not
+//     define (see durationTolerantFunctions for the same reasoning), and it
+//     removes no loss. `isType("list")` is not narrowed either: arity comes from
+//     the DECLARATION at runtime (`fval.many`), so a single-valued property can
+//     never answer true to it — narrowing there would be a static promise about
+//     a branch that can never run.
+//   - The guard must be written DIRECTLY as the condition, over a plain
+//     property. `!P.isType("number")`, `P.isType("number") && q`, `file.name`
+//     and `formula.x` are all left alone. Every admitted shape has to be
+//     mirrored exactly in `evalIf`, and an unadmitted one still REFUSES — the
+//     safe direction — rather than being silently mistyped.
+//   - Only a property this checker typed as TEXT is narrowed. A date can never
+//     read as a number, so there is nothing to narrow it to and the arithmetic
+//     is still refused by name.
+//
+// The other side of the coin: inside the guarded branch a TEXT use of P now
+// refuses, because in that branch P is a number. That is the narrowing being
+// honest in both directions.
+//
+// FR-146 NOTE: this narrows an EXISTING function's type behaviour. It adds no
+// function, no accessor and no operator to the pinned grammar snapshot, so it is
+// not a spec revision — unlike `.year`/`.month`, which would be new accessors
+// and were correctly refused on exactly those grounds.
+// ---------------------------------------------------------------------------
+
+// narrowedFormulaEnv is a FormulaEnv with ONE property's type replaced.
+//
+// It wraps rather than copies so a nested guard composes: the inner env defers
+// to the outer for every name but its own, and the outer's narrowing is still
+// visible inside it.
+type narrowedFormulaEnv struct {
+	base  FormulaEnv
+	name  string
+	typ   FormulaType
+	arity FormulaArity
+}
+
+// LookupProperty implements FormulaEnv.
+func (e narrowedFormulaEnv) LookupProperty(name string) (FormulaType, FormulaArity, bool) {
+	if name == e.name {
+		return e.typ, e.arity, true
+	}
+	return e.base.LookupProperty(name)
+}
+
+// LookupFormula implements FormulaEnv.
+//
+// A sibling formula is NOT re-typed under the narrowing. `formula.x` has its own
+// declaration, inferred in its own environment, and a guard in one formula
+// cannot change what another one produces — the evaluator draws the same line
+// (FormulaEvaluator.Evaluate clears the runtime bindings around each formula's
+// tree), and the two lines have to be in the same place.
+func (e narrowedFormulaEnv) LookupFormula(name string) (FormulaDecl, bool) {
+	return e.base.LookupFormula(name)
+}
+
+// numberGuardProperty reports the property named by a `P.isType("number")`
+// guard written directly as an expression.
+//
+// It is the SHARED shape test: formula_type.go narrows against it and
+// formula_eval.go binds against it, so the static claim and the runtime value
+// can never be keyed on two different readings of the same source.
+func numberGuardProperty(cond FormulaNode) (string, bool) {
+	call, ok := cond.(*Call)
+	if !ok || call.Name != "isType" || len(call.Args) != 2 {
+		return "", false
+	}
+	ref, ok := call.Args[0].(*Ref)
+	if !ok || ref.Kind != RefProperty {
+		return "", false
+	}
+	lit, ok := call.Args[1].(*TextLit)
+	if !ok || lit.Value != "number" {
+		return "", false
+	}
+	return ref.Name, true
+}
+
+// isEmptyTextLiteral reports whether a branch is written as `""`.
+func isEmptyTextLiteral(n FormulaNode) bool {
+	lit, ok := n.(*TextLit)
+	return ok && lit.Value == ""
+}
+
+// inferIfCall types `if(...)` with FR-143a's two position-sensitive rules
+// applied before the branches are typed.
+//
+// RULE 1 — the then-branch is typed under the guard's narrowing.
+//
+// RULE 2 — under such a guard, an else-branch written as `""` DECLINES rather
+// than producing text. `if(P.isType("number"), <number>, "")` is the upstream
+// idiom for "the number where there is one, blank where there is not", and
+// FR-143a already has a word for a branch that produces nothing: absence, which
+// is what a two-argument `if()` means. Without this rule the narrowing buys
+// nothing here — the arithmetic would type-check and the formula would then be
+// refused one level up for branches that disagree, the same eight losses wearing
+// a different message.
+//
+// Rule 2 is deliberately confined to the guard, and the confinement is the
+// FR-105 argument. The general rule — `""` is absence in ANY `if` branch —
+// reads more cleanly and covers thirteen more formulas in this vault, but it
+// also changes `if(c, someText, "")`, which is valid today, from a present empty
+// string to absence. Under FR-008 a negated filter RE-INCLUDES absence, so that
+// general rule could hand back MORE rows than Obsidian on a view nobody was
+// looking at. Confined to the guard, it can only affect expressions this change
+// is the reason are accepted at all.
+func inferIfCall(node *Call, env FormulaEnv) (inferred, *FormulaError) {
+	cond, err := inferNode(node.Args[0], env)
+	if err != nil {
+		return inferred{}, err
+	}
+
+	guarded, isGuard := numberGuardProperty(node.Args[0])
+	thenEnv := env
+	if isGuard {
+		if typ, arity, ok := env.LookupProperty(guarded); ok && typ == FormulaText && arity == ArityOne {
+			thenEnv = narrowedFormulaEnv{base: env, name: guarded, typ: FormulaNumber, arity: ArityOne}
+		}
+	}
+
+	then, err := inferNode(node.Args[1], thenEnv)
+	if err != nil {
+		return inferred{}, err
+	}
+
+	args := []inferred{cond, then}
+	if len(node.Args) == 3 {
+		if isGuard && isEmptyTextLiteral(node.Args[2]) {
+			args = append(args, inferred{typ: FormulaAbsent, arity: ArityOne})
+		} else {
+			els, elsErr := inferNode(node.Args[2], env)
+			if elsErr != nil {
+				return inferred{}, elsErr
+			}
+			args = append(args, els)
+		}
+	}
+	return inferIf(node, args)
 }
 
 // inferIf is FR-143a's headline rule: the branches must AGREE, or one be absent.

@@ -159,6 +159,17 @@ type FormulaEvaluator struct {
 	// when it does it must be an error, not a hang.
 	inProgress map[string]bool
 	steps      int
+	// narrowed holds the values bound by an `if(P.isType("number"), …)` guard
+	// for the branch it protects — see evalIf. It is the RUNTIME half of
+	// formula_type.go's narrowing: the type checker claims the guarded branch
+	// cannot see a non-number, and this is where that claim is made true.
+	//
+	// It is scoped twice over. `evalIf` restores the previous binding when the
+	// branch is done, so a guard reaches no further than its own subtree; and
+	// `Evaluate` clears the whole map around each formula's tree, so a guard in
+	// one formula cannot change what `formula.x` produces — the same boundary
+	// narrowedFormulaEnv.LookupFormula draws for the type checker.
+	narrowed map[string]fval
 }
 
 // maxEvalStepsPerCandidate is FR-146's per-candidate work budget, expressed in
@@ -195,6 +206,7 @@ func (e *FormulaEvaluator) Begin(c FormulaCandidate) {
 	e.candidate = c
 	e.memo = make(map[string]FormulaResult, e.set.Len())
 	e.steps = 0
+	e.narrowed = nil
 }
 
 // Evaluate returns one formula's value for the current candidate, memoized.
@@ -219,7 +231,15 @@ func (e *FormulaEvaluator) Evaluate(name string) (FormulaResult, bool) {
 		}, true
 	}
 	e.inProgress[name] = true
+	// A guard narrows ONE formula's tree, never a sibling's. Without this the
+	// binding would still be in place while `formula.x`'s own tree was walked,
+	// and — worse — the memo would then cache x's narrowed value under x's name
+	// for every later reader. The type checker draws the identical line in
+	// narrowedFormulaEnv.LookupFormula.
+	outer := e.narrowed
+	e.narrowed = nil
 	val, problems := e.eval(decl.Root)
+	e.narrowed = outer
 	delete(e.inProgress, name)
 
 	res := FormulaResult{
@@ -502,6 +522,15 @@ func (e *FormulaEvaluator) evalRef(node *Ref) (fval, []ComparisonProblem) {
 		// still has a LIST of backlinks.
 		v.many = fileManyProperties[node.Name]
 		return v, problems
+	}
+
+	// A narrowing guard's binding wins over the property's declared reading, and
+	// it has to be consulted BEFORE the candidate lookup: inside
+	// `if(cost.isType("number"), cost / 12, …)` the operand the arithmetic
+	// receives must be the number the guard vouched for, not the text the schema
+	// declares. Nothing else can put an entry in this map — see evalIf.
+	if bound, ok := e.narrowed[node.Name]; ok {
+		return bound, nil
 	}
 
 	if e.candidate == nil {
@@ -869,17 +898,110 @@ func (e *FormulaEvaluator) evalIf(node *Call) (fval, []ComparisonProblem) {
 			taken = it.flag
 		}
 	}
+	guarded, isGuard := numberGuardProperty(node.Args[0])
+
 	if taken {
+		if isGuard {
+			// THE RUNTIME HALF OF THE NARROWING. The type checker has already
+			// declared that inside this branch `guarded` is a number; bind it to
+			// the reading that just answered the guard TRUE, so the two cannot
+			// disagree. `evalIsType` computed its answer from the same
+			// numericReading, over the same value, for the same record.
+			if bound, ok := e.narrowNumber(guarded); ok {
+				prev, had := e.narrowed[guarded]
+				if e.narrowed == nil {
+					e.narrowed = map[string]fval{}
+				}
+				e.narrowed[guarded] = bound
+				v, p := e.eval(node.Args[1])
+				if had {
+					e.narrowed[guarded] = prev
+				} else {
+					delete(e.narrowed, guarded)
+				}
+				return v, append(problems, p...)
+			}
+		}
 		v, p := e.eval(node.Args[1])
 		return v, append(problems, p...)
 	}
 	if len(node.Args) == 3 {
+		// The mirror of inferIfCall's rule 2: under a `isType("number")` guard,
+		// an else-branch written as `""` DECLINES. The type checker typed this
+		// position as absence and gave the formula the then-branch's type;
+		// evaluating the literal to a present empty string here would hand a
+		// text value to a formula declared `number`, which is the exact shape
+		// FR-143a exists to prevent — a wrong answer wearing a type system.
+		if isGuard && isEmptyTextLiteral(node.Args[2]) {
+			return fval{absent: true}, problems
+		}
 		v, p := e.eval(node.Args[2])
 		return v, append(problems, p...)
 	}
 	// Two-argument if(): the missing branch IS absence, which is what FR-143a
 	// means by "or one branch be absent".
 	return fval{absent: true}, problems
+}
+
+// narrowNumber reads the guarded property for the CURRENT record and returns it
+// as a number, or ok=false when there is nothing to bind.
+//
+// ok=false is not a failure path worth reporting: the guard answered TRUE from
+// the same reading, so the only way to get here is a hand-built tree whose
+// condition and branch name different things. Binding nothing then leaves the
+// property reading exactly as it did before this change.
+func (e *FormulaEvaluator) narrowNumber(name string) (fval, bool) {
+	if e.candidate == nil {
+		return fval{}, false
+	}
+	if bound, ok := e.narrowed[name]; ok {
+		return bound, true
+	}
+	pv, ok := e.candidate.FormulaProperty(name)
+	if !ok {
+		return fval{}, false
+	}
+	typ, tok := formulaTypeOfProperty(propertyTypeOf(pv.Property))
+	if !tok {
+		return fval{}, false
+	}
+	v, _ := fvalFromPropertyValue(typ, pv)
+	v.many = pv.Property != nil && pv.Property.Many
+	r, ok := numericReading(v)
+	if !ok {
+		return fval{}, false
+	}
+	return numberVal(r), true
+}
+
+// numericReading is the ONE definition of "this record's value is a number".
+//
+// `evalIsType` answers the guard with it and `evalIf` binds the branch with it,
+// which is what stops the guard and the value it vouches for from being two
+// different judgements. A `many` value is never a number (R-9: a list is a
+// list), and absence is never a number.
+func numericReading(v fval) (*big.Rat, bool) {
+	if v.absent || v.many {
+		return nil, false
+	}
+	it, ok := v.single()
+	if !ok {
+		return nil, false
+	}
+	switch v.typ {
+	case FormulaNumber:
+		if it.num == nil {
+			return nil, false
+		}
+		return it.num, true
+	case FormulaText:
+		d, err := ParseDecimal(it.text)
+		if err != nil {
+			return nil, false
+		}
+		return ratFromDecimal(d), true
+	}
+	return nil, false
 }
 
 func (e *FormulaEvaluator) evalList(args []fval) fval {
@@ -983,6 +1105,28 @@ func evalDateFn(args []fval) fval {
 //   - A LIST IS ONLY A LIST. A `many` property of numbers answers false to
 //     `isType("number")` and true to `isType("list")`, because upstream's value
 //     for it is an array — the same reading R-9 already takes.
+//
+// `number` IS A PER-RECORD READING; `string` REMAINS A DECLARATION TEST. That
+// asymmetry is deliberate and it is the whole reason the narrowing works.
+//
+// Upstream has no schema: every value's type is whatever THAT note wrote, which
+// is what makes `isType` worth writing. This package types a property ONCE, so
+// answering `number` from the declaration made the guard a constant — false on
+// every record of a text-typed property, including the 42 of 63 whose `cost` is
+// plainly a number. A guard that can never fire is not a guard, and pairing it
+// with a static narrowing would have produced a blank column where Obsidian
+// shows values: a named loss traded for a silent one. So `number` asks the
+// value, through numericReading, exactly as upstream would.
+//
+// `string` is left as it was. Making the two exclusive — text that reads as a
+// number is not a string — is the tidier partition and matches upstream for an
+// unquoted YAML number, but our record model has already discarded the quoting
+// that would tell `42` from `"42"`, so the tidier rule would be guessing. It
+// would also flip the branch taken by every existing `isType("string")` guard
+// over numeric-looking text, which no loss in this vault requires. The visible
+// consequence is that such a value answers TRUE to both: this package's honest
+// reading of it, which is that the value is STORED as text and READS as a
+// number. Only the `number` answer is what a narrowing consumes.
 func evalIsType(args []fval) fval {
 	want, ok := args[1].single()
 	if !ok {
@@ -996,7 +1140,8 @@ func evalIsType(args []fval) fval {
 	case "list":
 		return boolVal(subject.many)
 	case "number":
-		return boolVal(!subject.many && subject.typ == FormulaNumber)
+		_, isNumber := numericReading(subject)
+		return boolVal(isNumber)
 	case "string":
 		return boolVal(!subject.many && subject.typ == FormulaText)
 	}
