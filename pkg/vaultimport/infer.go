@@ -2068,8 +2068,11 @@ func joinBaseFiles(vs []string) string {
 // WHY `date(x)` IS EVIDENCE AND MOST FUNCTIONS ARE NOT. The bar is the one
 // dateNameExact states for names and it is the same bar: a wrong declaration
 // REJECTS the operator's first real note, which is worse than the lost filter
-// the rule exists to recover. So the function has to be one whose every
-// accepted operand type denotes the SAME concept:
+// the rule exists to recover. So the shape has to be one under which the
+// property has exactly ONE reading — for a call, one whose every accepted
+// operand type denotes the SAME concept; for an operator, one the pinned
+// grammar types over a single domain. Both kinds appear below, marked
+// ADMITTED, and every other shape considered is marked REJECTED with why:
 //
 //	date(x)    ADMITTED. It is a date CONSTRUCTOR. inferCall accepts exactly
 //	           `text` and `date` for it, and `text` is accepted there as the
@@ -2103,24 +2106,70 @@ func joinBaseFiles(vs []string) string {
 //	           meaningful over a string, a number or a checkbox. Typing P from
 //	           its appearance in a guard would be typing it from the fact that
 //	           the operator tested whether it was filled in.
-//	today() - x
-//	           STRONGER evidence than `date(x)` in principle, and deliberately
-//	           NOT implemented. `today()` is unambiguously a date and
-//	           inferBinary types `date - date` as the only non-numeric `-`, so
-//	           a bare property subtracted from `today()` can only be a date.
-//	           Two measurements keep it out and both are on the founder's
-//	           vault. (a) `-` on its own is NOT evidence — it is defined over
+//	today() - x, x - today(), and the same two with now()
+//	           ADMITTED, and this entry USED TO SAY "deliberately NOT
+//	           implemented". What changed is a measurement, not a judgement,
+//	           so both are recorded here.
+//
+//	           THE READING. `today()` and `now()` are ZERO-ARGUMENT date
+//	           constructors: inferCall returns `date` for them with no operand
+//	           to look at. And inferBinary defines `-` over exactly two
+//	           domains — `date - date`, the only producer of a duration, and
+//	           number-minus-number. There is no `date - number`. So an
+//	           expression in which a bare property is subtracted from
+//	           `today()`, or `today()` from it, TYPE-CHECKS IF AND ONLY IF
+//	           that property is a date. The operator wrote an expression with
+//	           exactly one reading, which is the same thing `date(x)` is and
+//	           the bar this section sets.
+//
+//	           WHY THE OLD (a) NO LONGER APPLIES. It said `-` "is defined over
 //	           numbers as well as dates — so the rule only exists once the
 //	           OTHER operand has been proved a date, which is a second type
-//	           inference carrying its own failure modes. (b) It would recover
-//	           nothing here: the four base formulas that subtract a bare
-//	           property (`Deals.age`, `Deals.is_stale`, `Inbox-Triage.age`,
-//	           `Hiring.age_in_stage`) name `created` and `updated`, and those
-//	           are either already typed `date` from hundreds of real ISO
-//	           values or not declared on the record type at all — clause 1
-//	           refuses the second group and clause 3 the first. A rule that
-//	           cannot fire cannot be measured, and this file does not carry
-//	           rules whose behaviour is asserted rather than observed.
+//	           inference carrying its own failure modes". That is true of `-`
+//	           in general and false of the shape actually admitted here: the
+//	           other operand is not inferred, it is REQUIRED TO BE THE
+//	           SYNTACTIC TOKEN `today()` or `now()` — a call with zero
+//	           arguments, whose type is a constant of the pinned grammar.
+//	           Nothing is proved about it because there is nothing in it to
+//	           prove. A property subtracted from another PROPERTY carries no
+//	           evidence and is not matched, exactly as (a) demanded.
+//
+//	           WHY THE OLD (b) NO LONGER HOLDS. It said the rule "would
+//	           recover nothing here", because the properties these formulas
+//	           subtract "are either already typed `date` from hundreds of real
+//	           ISO values or not declared on the record type at all". The
+//	           second half stopped being true: `candidate` is now DECLARED
+//	           FROM `Hiring.base` with its properties taken from the
+//	           operator's own `03-Reference/Ops-Templates/Template —
+//	           candidate.md`, so `candidate.created` is a declared, value-less
+//	           `text` property — through clause 1, not refused by it. The
+//	           measurement today, over all 18 base files: three formulas
+//	           subtract a bare property from `today()` (`Deals.age`,
+//	           `Inbox-Triage.age`, `Hiring.age_in_stage`), and the rule fires
+//	           on exactly ONE of them. `Deals.age` names `deal.created`, which
+//	           hundreds of real ISO values already typed `date` — clauses 2
+//	           and 3 both refuse it. `Inbox-Triage.age` sits in an UNTYPED
+//	           view, so no record type owns the name and no evidence is
+//	           attributed. `Hiring.age_in_stage` names `candidate.created` and
+//	           that one is recovered, which is what returns the
+//	           `formula.age_in_stage` column to the Hiring view.
+//
+//	           BOTH OPERAND ORDERS, on the precedent `time()` set one entry
+//	           up. `today() - P` and `P - today()` are one declaration written
+//	           two ways; only the first spelling appears in this vault. The
+//	           second is admitted anyway for the reason `time()` is: refusing
+//	           it would make the rule about which order the operator happened
+//	           to write, which is not a fact about his data. `now()` joins
+//	           `today()` on the same terms — inferCall types the pair
+//	           identically, in one `case` arm.
+//
+//	           WHAT IS STILL REFUSED, so the widening is bounded: the property
+//	           must be BARE on its side (`today() - date(x)` is already the
+//	           `date()` rule, and `today() - (a + b)` is about an expression),
+//	           the constructor must take zero arguments as written, and every
+//	           one of the four containment clauses below applies to this shape
+//	           unchanged. `-` between two properties, and every other
+//	           arithmetic operator, carry nothing.
 //	(a - b).days, x.hours, …
 //	           REFUSED one level further down, for the same reason. A duration
 //	           accessor proves its RECEIVER is a duration, and in every real
@@ -2197,12 +2246,55 @@ type FormulaEvidence struct {
 	// Source is the expression EXACTLY as the operator wrote it, so the
 	// report quotes his text rather than this package's rewrite of it.
 	Source string
-	// Function is the conversion that carried the declaration — `date` or
-	// `time`, the two entries of dateEvidencingFunctions. It is recorded
-	// because the report names the call the founder is being asked to check,
-	// and a report that says `date()` about a `time()` sends him looking for
-	// text that is not in his file.
+	// Function is the grammar term that carried the declaration: `date` or
+	// `time` when a CONVERSION was applied to the property, `today` or `now`
+	// when the property was SUBTRACTED from (or had subtracted from it) a
+	// zero-argument date constructor. The four spellings are the union of
+	// dateEvidencingFunctions and dateSubtrahendFunctions, and the two maps
+	// are disjoint, so this one field says which of the two shapes fired
+	// without a second flag that could disagree with it.
+	//
+	// It is recorded because the report names the text the founder is being
+	// asked to check, and a report that says `date()` about a `time()` — or
+	// about a subtraction, which is not a call at all — sends him looking for
+	// text that is not in his file. FormulaEvidencedType.ReportLines branches
+	// on it for exactly that reason.
 	Function string
+}
+
+// dateEvidenceRank orders the shapes when one property is reached through more
+// than one of them in a single base, so the recorded spelling is a decision
+// rather than an accident of lexicographic order.
+//
+// A CONVERSION outranks a SUBTRACTION: `date(x)` names the property inside a
+// call the founder can point at, while the subtraction is a fact about the
+// whole expression, and the more specific text is the more useful thing to
+// quote back at him. Ties inside a rank fall to the spelling, alphabetically.
+//
+// Without this, the ordering would be plain string comparison over the four
+// names, which puts `now` ahead of `time` — a subtraction beating a conversion
+// because of where the letters land. Nothing in the founder's vault reaches
+// one property through two shapes today, so this is not load-bearing on his
+// data; it is here because "deterministic" and "chosen" are different claims
+// and only the second one survives someone adding a fifth spelling.
+func dateEvidenceRank(name string) int {
+	if dateEvidencingFunctions[name] {
+		return 0
+	}
+	return 1
+}
+
+// betterDateEvidence answers whether `cand` should replace `have` as the
+// recorded spelling for one property. `have` empty means there is nothing to
+// beat.
+func betterDateEvidence(have, cand string) bool {
+	if have == "" {
+		return true
+	}
+	if r, h := dateEvidenceRank(cand), dateEvidenceRank(have); r != h {
+		return r < h
+	}
+	return cand < have
 }
 
 // dateEvidencingFunctions is the closed set of formula functions whose
@@ -2216,6 +2308,27 @@ type FormulaEvidence struct {
 var dateEvidencingFunctions = map[string]bool{
 	"date": true,
 	"time": true,
+}
+
+// dateSubtrahendFunctions is the closed set of ZERO-ARGUMENT date constructors
+// whose appearance on the other side of a `-` from a BARE property name is
+// read as the operator declaring that property a date.
+//
+// The entries are the whole of `inferCall`'s `case "today", "now":` arm — one
+// arm, returning `date` for both with no operand to inspect — so this map is a
+// transcription of the grammar rather than a selection from it. That matters:
+// the rule's soundness is "the token's type is a constant", and a spelling
+// admitted here whose type were NOT constant would silently reintroduce the
+// second inference the header's old objection (a) was about.
+//
+// It is deliberately SEPARATE from dateEvidencingFunctions rather than merged
+// into one map with a flag. The two are read in different positions of
+// different node kinds — one inside a Call's argument list, one across a
+// BinaryOp — and a single map would let a `date` reach the subtraction branch
+// or a `today` reach the call branch, neither of which means anything.
+var dateSubtrahendFunctions = map[string]bool{
+	"today": true,
+	"now":   true,
 }
 
 // FormulaEvidencedType is one property this package typed from a `.base`
@@ -2258,6 +2371,15 @@ func (f FormulaEvidencedType) ReportLines() []string {
 	lines = append(lines, fmt.Sprintf("%s.%s -> %s (was %s; no note of this type carries a value for it)",
 		f.RecordType, f.Property, f.Type, f.Was))
 	for _, e := range f.Evidence {
+		// Two shapes, two sentences. The founder is being sent to a specific
+		// piece of his own text, and telling him a subtraction "reads `x`
+		// through today()" would send him looking for a call he never wrote.
+		if dateSubtrahendFunctions[e.Function] {
+			lines = append(lines, fmt.Sprintf(
+				"evidence: %s declares `%s: %s`, which subtracts the bare `%s` against %s() — and `-` is defined over two dates or two numbers, never one of each, so the only reading under which that expression works at all is a date",
+				e.Base, e.Formula, e.Source, f.Property, e.Function))
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("evidence: %s declares `%s: %s`, which reads `%s` through %s()",
 			e.Base, e.Formula, e.Source, f.Property, e.Function))
 	}
@@ -2499,20 +2621,27 @@ func appendUnseenFormulaEvidence(have, add []FormulaEvidence) []FormulaEvidence 
 	return have
 }
 
-// datePropertyArguments returns, keyed by property name and sorted, the BARE
-// property references an expression applies a dateEvidencingFunctions call to,
-// with the function that carried each.
+// datePropertyArguments returns, keyed by property name, every BARE property
+// reference in an expression that the operator's own text declares to be a
+// date, with the grammar term that carried each. Two shapes qualify and they
+// are checked independently on every node:
 //
-// BARE is the whole restriction. `date(x)` says x is a date; `date(x + "-01")`
-// says something about an expression OVER x, and `date(file.name)` is not
-// about a property at all. Anything but a single RefProperty argument answers
-// no, which keeps this a reading of what the operator wrote rather than an
-// inference about it.
+//   - a dateEvidencingFunctions CALL applied to the property — `date(x)`;
+//   - a `-` with the property bare on one side and a zero-argument
+//     dateSubtrahendFunctions constructor on the other — `today() - x`.
 //
-// One property reached through BOTH `date()` and `time()` in one expression
-// keeps the FIRST spelling in sorted order, deterministically, rather than
-// reporting the property twice: the two calls are one declaration, and the
-// founder is being pointed at a formula, not at a call count.
+// BARE is the whole restriction, in both. `date(x)` says x is a date;
+// `date(x + "-01")` says something about an expression OVER x, and
+// `date(file.name)` is not about a property at all. `today() - x` says x is a
+// date; `today() - date(x)` is the first shape wearing the second's clothes,
+// and `a - b` between two properties says nothing about either. Anything but a
+// single RefProperty in the property position answers no, which keeps this a
+// reading of what the operator wrote rather than an inference about it.
+//
+// One property reached through MORE THAN ONE of these in a single expression
+// is reported ONCE, keeping the spelling betterDateEvidence picks: they are
+// one declaration, and the founder is being pointed at a formula, not at a
+// call count.
 //
 // The walk is ITERATIVE for the reason records.countNodes is: it runs on a
 // freshly parsed tree, BEFORE FR-146's depth cap has been applied to it, so it
@@ -2528,14 +2657,77 @@ func datePropertyArguments(root records.FormulaNode) map[string]string {
 		}
 		if call, ok := n.(*records.Call); ok && dateEvidencingFunctions[call.Name] && len(call.Args) == 1 {
 			if ref, isRef := call.Args[0].(*records.Ref); isRef && ref.Kind == records.RefProperty {
-				if prev, seen := found[ref.Name]; !seen || call.Name < prev {
+				if betterDateEvidence(found[ref.Name], call.Name) {
 					found[ref.Name] = call.Name
+				}
+			}
+		}
+		if bin, ok := n.(*records.BinaryOp); ok && bin.Op == "-" {
+			if prop, ctor := bareMinusDateConstructor(bin); prop != "" {
+				if betterDateEvidence(found[prop], ctor) {
+					found[prop] = ctor
 				}
 			}
 		}
 		stack = append(stack, formulaChildren(n)...)
 	}
 	return found
+}
+
+// bareMinusDateConstructor reads one `-` node and answers, when the node is a
+// bare property subtracted from a zero-argument date constructor or the
+// reverse, the property name and the constructor that carried it. It answers
+// "" for every other subtraction.
+//
+// WHY THIS IS A DECLARATION AND `-` ON ITS OWN IS NOT. records.inferBinary
+// gives `-` exactly two typings: `date - date`, which is the only producer of
+// a duration in the whole grammar, and number-minus-number, enforced by
+// requireNumberOperands. There is no `date - number` and no
+// `number - date`. So once ONE side is known to be a date — and `today()` /
+// `now()` are known to be dates by the grammar itself, with no operand to
+// infer — the expression the operator wrote has exactly one reading under
+// which it type-checks at all, and that reading says the other side is a date.
+//
+// BOTH ORDERS MATCH. `today() - P` and `P - today()` are the same declaration;
+// see the header for why refusing the second would make the rule about the
+// operator's spelling rather than about his data.
+//
+// EVERYTHING ELSE ANSWERS "". The constructor side must be a Call with the
+// exact name and ZERO arguments as written — a `today(x)` would already have
+// been refused by the grammar, and reading evidence out of text the product
+// refuses is the mistake the unparseable-formula branch above exists to avoid.
+// The property side must be a single RefProperty: `today() - date(x)` belongs
+// to the call rule one branch up, `today() - file.ctime` is not a declared
+// property, and `today() - (a + b)` says something about an expression rather
+// than about either name in it. A subtraction of one property from another
+// carries nothing at all and is not matched — that case is the whole of the
+// header's old objection (a), and it stays refused.
+func bareMinusDateConstructor(bin *records.BinaryOp) (string, string) {
+	isCtor := func(n records.FormulaNode) (string, bool) {
+		call, ok := n.(*records.Call)
+		if !ok || len(call.Args) != 0 || !dateSubtrahendFunctions[call.Name] {
+			return "", false
+		}
+		return call.Name, true
+	}
+	isBareProp := func(n records.FormulaNode) (string, bool) {
+		ref, ok := n.(*records.Ref)
+		if !ok || ref.Kind != records.RefProperty {
+			return "", false
+		}
+		return ref.Name, true
+	}
+	if ctor, ok := isCtor(bin.Left); ok {
+		if prop, isProp := isBareProp(bin.Right); isProp {
+			return prop, ctor
+		}
+	}
+	if ctor, ok := isCtor(bin.Right); ok {
+		if prop, isProp := isBareProp(bin.Left); isProp {
+			return prop, ctor
+		}
+	}
+	return "", ""
 }
 
 // formulaChildren is records.FormulaNode's operands, in source order.
