@@ -196,6 +196,12 @@ func (r *Report) Render(w io.Writer) {
 	}
 	fmt.Fprintf(w, "  %d view files written, of which %d are DISABLED because a loss sits where the row set is decided.\n", produced, disabled)
 	fmt.Fprintf(w, "  %d are enabled and every clause they carry has a faithful mapping — an enabled imported view NEVER returns more rows than its Obsidian original.\n", produced-disabled)
+	if disabled > 0 {
+		fmt.Fprintln(w, "  What is actually blocking them, counted (this is the work list, not a list of mistakes):")
+		for _, line := range r.disablingCausesByShape() {
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+	}
 
 	v := r.Validation
 	fmt.Fprintln(w, "\n-- Validation over every note, against the schemas just written --")
@@ -215,6 +221,58 @@ func (r *Report) Render(w io.Writer) {
 	for _, g := range r.systemicGaps() {
 		fmt.Fprintf(w, "  * %s\n", g)
 	}
+}
+
+// disablingCausesByShape counts WHY views were disabled, grouped by the
+// shape of the expression rather than by its text — so the report says "27
+// disjunctions" rather than printing 27 nearly identical clauses.
+//
+// This is the list somebody prioritises from. A disabled view is not a
+// mistake in the base file; it is a capability this release does not have
+// yet, named.
+func (r *Report) disablingCausesByShape() []string {
+	shapes := []struct {
+		label string
+		match func(string) bool
+	}{
+		{"disjunction (`or:`) — ViewDef schema_version 1 stores a FLAT AND-only clause list with no boolean tree at all, so an `or:` group cannot be partially carried", func(l string) bool { return strings.Contains(l, "or:") }},
+		{"multi-clause negation (`not:` wrapping more than one clause) — De Morgan turns it into a disjunction, which v1 cannot store", func(l string) bool { return strings.Contains(l, "not:") }},
+		{"folder scoping (`file.inFolder(...)`) — a record filter compares declared properties; a note's FOLDER is not one", func(l string) bool { return strings.Contains(l, "file.") }},
+		{"computed property (`formula.*`) — the schema has no computed-property type", func(l string) bool { return strings.Contains(l, "formula.") }},
+		{"empty-string comparison (prop != \"\") — no type has an empty literal, and approximating it as is_absent would change which rows match", func(l string) bool { return strings.Contains(l, `!= ""`) || strings.Contains(l, `== ""`) }},
+		{"enum literal the inferred schema does not declare — the base filters on a value no sampled note carried", func(l string) bool { return strings.Contains(l, "declared enum values") }},
+		{"comparison on a property inferred as text", func(l string) bool { return strings.Contains(l, "not defined on text property") }},
+		{"property the record type does not declare", func(l string) bool { return strings.Contains(l, "is not declared in the") }},
+	}
+	counts := make([]int, len(shapes))
+	other := 0
+	for _, b := range r.Bases {
+		for _, v := range b.Views {
+			for _, l := range v.DisablingLosses {
+				matched := false
+				for i, sh := range shapes {
+					if sh.match(l) {
+						counts[i]++
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					other++
+				}
+			}
+		}
+	}
+	var out []string
+	for i, sh := range shapes {
+		if counts[i] > 0 {
+			out = append(out, fmt.Sprintf("%4d x %s", counts[i], sh.label))
+		}
+	}
+	if other > 0 {
+		out = append(out, fmt.Sprintf("%4d x other (see the per-view lines above)", other))
+	}
+	return out
 }
 
 // systemicGaps groups every named loss across every base into the small
