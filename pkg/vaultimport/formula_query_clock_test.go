@@ -215,6 +215,55 @@ func TestImportedFormulaView_TheEmptyStringBranchNarrowsAndNeverBroadens(t *test
 	}
 }
 
+// TestImportedView_CarriesTheBasesColumnHeadings closes a loss that produced
+// no evidence of itself at all.
+//
+// A `.base` file's top-level `properties:` block is display config — the
+// heading to show instead of the raw property name. The importer dropped it
+// SILENTLY: not translated, not refused, not named in `untranslated`. So a base
+// whose only untranslatable content was its column headings scored CLEAN, which
+// is the one outcome the three-way report must never be able to produce over an
+// undetected loss.
+//
+// ViewDef has had the field the whole time. ViewPropertyConfig's own schema
+// says it IS "the `properties` key of an Obsidian base", and the only
+// difference is spelling: Obsidian writes `displayName`, the view format writes
+// `display_name`. That is a translation, so this carries with NO loss — and the
+// test asserts the heading ARRIVED rather than that a loss was reported, because
+// reporting a loss here would have been the wrong fix.
+func TestImportedView_CarriesTheBasesColumnHeadings(t *testing.T) {
+	imp := clockLoadImported(t, clockFixture(t))
+
+	if imp.Def.PropertyConfig == nil {
+		t.Fatalf("the view carries no `property_config` at all, but Deadlines.base declares "+
+			"`properties: {formula.days_until_due: {displayName: Days Until Due}}`. "+
+			"A dropped heading that reports nothing is exactly the silent loss this field exists to end. View: %+v", imp.Def)
+	}
+	cfg, ok := (*imp.Def.PropertyConfig)["formula.days_until_due"]
+	if !ok {
+		keys := make([]string, 0, len(*imp.Def.PropertyConfig))
+		for k := range *imp.Def.PropertyConfig {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		t.Fatalf("`property_config` carries %v but not the `formula.days_until_due` heading the base configured", keys)
+	}
+	if cfg.DisplayName == nil || *cfg.DisplayName != "Days Until Due" {
+		t.Errorf("display_name = %v, want %q — Obsidian's `displayName` and the view format's `display_name` are one concept under two spellings",
+			cfg.DisplayName, "Days Until Due")
+	}
+
+	// AND IT COST NOTHING. A heading that translates exactly must not also be
+	// reported as a loss: an `untranslated` line for something carried in full
+	// would make the report say a view is lossy when it is not, which erodes
+	// the count in the opposite direction from a silent drop but just as badly.
+	for _, l := range clockStrings(imp.Def.Untranslated) {
+		if strings.Contains(l, "display") || strings.Contains(l, "property_config") {
+			t.Errorf("the heading was carried AND reported as a loss: %q", l)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fixture plumbing
 // ---------------------------------------------------------------------------
