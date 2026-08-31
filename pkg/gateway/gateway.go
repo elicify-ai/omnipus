@@ -2659,6 +2659,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 
 	runningServices, err := setupAndStartServices(
+		ctx,
 		cfg,
 		bundle,
 		agentLoop,
@@ -4249,6 +4250,7 @@ func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
 }
 
 func setupAndStartServices(
+	ctx context.Context, // gateway's own shutdown-aware context (RunContextWithOptions' ctx) — threaded through so background loops started here (e.g. runCatalogRefreshLoop) can observe cancellation instead of running untethered for the life of the process.
 	cfg *config.Config,
 	bundle credentials.SecretBundle,
 	agentLoop *agent.AgentLoop,
@@ -5189,7 +5191,21 @@ func setupAndStartServices(
 	// outright when the persisted last-known-good is less than an hour old,
 	// so a gateway restarted in a loop cannot spend GitHub's unauthenticated
 	// rate limit on a document it already has (F-34).
+	//
+	// ctx is passed through so the loop observes gateway shutdown instead of
+	// running untethered for the life of the process — see
+	// runCatalogRefreshLoop's doc comment for why this is load-bearing, not
+	// cosmetic: an un-canceled startup pull performs REAL network I/O
+	// (api.github.com, falling back to raw.githubusercontent.com) and then
+	// writes providers_catalog.json into homePath via fileutil.WriteFileAtomic
+	// on success, entirely outside every shutdown drain in shutdown.go. A
+	// caller that boots and tears down many gateways in one process (every
+	// integration/security test using testutil.StartTestGateway) leaked one
+	// of these forever per boot, each capable of landing a straggler write in
+	// homePath — including a t.TempDir() root already mid-RemoveAll —
+	// well after RunContext had already returned.
 	go runCatalogRefreshLoop(
+		ctx,
 		providerCatalog,
 		catalog.NewFileStore(homePath),
 		catalogRefreshInterval,
@@ -5436,9 +5452,26 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 
 // runCatalogRefreshLoop performs the FR-008 startup pull (unless the
 // persisted document is younger than skipWindow), then one pull every
-// interval thereafter, forever. It never returns — the sole caller
+// interval thereafter, until ctx is canceled. The sole caller
 // (setupAndStartServices) invokes it in its own goroutine, AFTER the
-// listener is bound.
+// listener is bound, passing the gateway's own shutdown-aware context.
+//
+// ctx cancellation is load-bearing, not a nicety: this loop performs REAL
+// network I/O (api.github.com, falling back to raw.githubusercontent.com on
+// failure) and — on a successful pull — writes providers_catalog.json into
+// store's directory via fileutil.WriteFileAtomic, entirely independent of
+// every drain in shutdown.go (channel manager, cron, plan engine, active
+// turns, agent loop). Before ctx was threaded through here, this goroutine
+// had no way to observe shutdown at all and ran for the life of the
+// process; a gateway stopped (or, in any test/harness process that boots
+// many gateways via testutil.StartTestGateway, torn down) while a startup
+// pull was still resolving DNS/TLS or mid-download could land a straggler
+// write into homePath — including a t.TempDir() root already mid-RemoveAll
+// — well after RunContext had returned, surfacing as "directory not empty"
+// on the test's own cleanup. Deriving each attempt's timeout context FROM
+// ctx (not context.Background()) means a cancellation during an in-flight
+// HTTP request aborts it immediately via the http.Client's context
+// plumbing, rather than merely blocking the NEXT attempt from starting.
 //
 // The pull before the ticker loop is load-bearing, not cosmetic: Go's
 // time.Ticker does not fire on creation, so a bare ticker loop never
@@ -5452,6 +5485,7 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 // currently served document and logs its own reason-keyed WARN, so this
 // loop only records that the attempt failed and carries on ticking.
 func runCatalogRefreshLoop(
+	ctx context.Context,
 	cat *catalog.Catalog,
 	store persistedCatalogAger,
 	interval, refreshTimeout, skipWindow time.Duration,
@@ -5460,11 +5494,24 @@ func runCatalogRefreshLoop(
 		return
 	}
 	refresh := func(failureLogMsg string) {
-		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
 		defer cancel()
-		if err := cat.Refresh(ctx); err != nil {
+		if err := cat.Refresh(attemptCtx); err != nil {
+			// A cancellation reaching here mid-attempt (gateway shutting
+			// down) is expected, not a real refresh failure — log it at a
+			// lower level than a genuine pull/parse/apply error so shutdown
+			// under load does not spam WARN.
+			if ctx.Err() != nil {
+				logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
+					map[string]any{"error": err})
+				return
+			}
 			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
 		}
+	}
+
+	if ctx.Err() != nil {
+		return
 	}
 
 	if skipStartupPull(store, skipWindow) {
@@ -5476,8 +5523,13 @@ func runCatalogRefreshLoop(
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for range ticker.C {
-		refresh("gateway: catalog refresh failed; last-known-good retained")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh("gateway: catalog refresh failed; last-known-good retained")
+		}
 	}
 }
 

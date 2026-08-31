@@ -24,6 +24,7 @@
 package gateway
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -76,6 +77,7 @@ func TestRestartServices_LoopAndTaskTriggerStorePaths_MatchBootHomePath(t *testi
 	mcpReg := tools.NewMCPRegistry()
 
 	rs, err := setupAndStartServices(
+		context.Background(),
 		cfg,
 		credentials.SecretBundle{},
 		al,
@@ -159,6 +161,7 @@ func TestRestartServices_ReappliesSessionMessagingCaps(t *testing.T) {
 	mcpReg := tools.NewMCPRegistry()
 
 	rs, err := setupAndStartServices(
+		context.Background(),
 		cfg,
 		credentials.SecretBundle{},
 		al,
