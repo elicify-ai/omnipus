@@ -651,7 +651,17 @@ therefore need an explicit, literal, wildcard-free entry for **every** agent in
 | Tool | Jim | Ray | Mia | Ava |
 |---|---|---|---|---|
 | `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_handle_dialog`, `browser_snapshot` | allow | allow | deny | deny |
-| `browser_upload_file` | **ask** | **ask** | **ask** | **ask** |
+| `browser_upload_file` | **ask** | **ask** | deny¹ | deny¹ |
+
+¹ **Erratum, 2026-08-31.** The ruling is that `browser_upload_file` is `ask` in
+the **global** policy for every agent, and that stands. But Mia and Ava resolve
+**`deny`** regardless, and this table previously showed `ask` for them, which
+was wrong. `denyAllThenOverride` writes an *explicit agent-level* `deny` for
+every catalog name an agent does not override, and
+`compositor.go::resolveEffectivePolicyWith` merges **deny > ask > allow** — the
+most restrictive wins. So a global `ask` cannot loosen an explicit per-agent
+`deny`. The practical effect is what the operator intended (nothing uploads
+without a human saying yes) reached by a stricter route than the table implied.
 
 **Corrected 2026-08-31:** the table above omits two agents that hold the full
 browser surface today — `IDExplorer` (`pkg/coreagent/core.go:756-760`) and
