@@ -133,16 +133,28 @@ func TestViewFindLoader_DescendingGroupIsRefusedNotFlattened(t *testing.T) {
 // Seam 2 — formulas, which a find request has no key for
 // ---------------------------------------------------------------------------
 
-// TestViewFindLoader_FormulaViewIsRefusedWithAReason.
+// TestViewFindLoader_FormulaViewIsServedAndItsSourcesHandedOver.
 //
-// The view is VALID — it loads, and knowledge_describe lists it. Only the
-// serving is refused, because VaultFindRequest carries no formulas, so every
-// `formula.<name>` the view names would resolve against nothing and come back
-// as an empty column.
+// THIS TEST ASSERTED THE OPPOSITE UNTIL THE SEAM CLOSED. It was called
+// TestViewFindLoader_FormulaViewIsRefusedWithAReason, and it required
+// ServeRefusalFormula on any view declaring `formulas` — on the premise that
+// VaultFindRequest carries no formulas, so every `formula.<name>` would resolve
+// against nothing.
 //
-// This is a seam in find's REQUEST, not a defect in the view, and the refusal
-// says so rather than blaming the file.
-func TestViewFindLoader_FormulaViewIsRefusedWithAReason(t *testing.T) {
+// The premise was true and the conclusion was not. The formulas never needed to
+// travel INSIDE the request: knowledgefind asks its LOADER for them
+// (ViewFormulaLoader), validates them into the query's namespace, and resolves
+// every reference against a real declaration. What the old refusal actually did
+// was make the importer's whole formula capability unreachable — a `.base`
+// file's `formulas:` block could be translated perfectly and written to disk,
+// and the resulting view would be dropped from Names(), reported unknown by the
+// `view` argument, and unservable.
+//
+// So the assertion is inverted, and it is inverted in BOTH halves deliberately:
+// a loader that serves the view without handing over its sources is worse than
+// the refusal it replaced — the view would run, return rows, and quietly answer
+// a different question.
+func TestViewFindLoader_FormulaViewIsServedAndItsSourcesHandedOver(t *testing.T) {
 	root, schemas := bridgeFixture(t)
 	v, rej := loadBridgeView(t, root, schemas, `
 name: calc
@@ -156,18 +168,39 @@ properties: [name, formula.doubled]
 	}
 
 	loader := NewViewFindLoader(newSet(v))
-	if _, ok := loader.View("calc"); ok {
-		t.Fatal("a view declaring formulas was served through a request that carries none; every formula.<name> in it would resolve against nothing")
+	if _, ok := loader.View("calc"); !ok {
+		t.Fatal("a view declaring formulas was NOT served; the formulas reach knowledge_find through the loader, so there is nothing for the request to carry and nothing to refuse")
 	}
-	refusal, has := loader.ServeRefusal("calc")
-	if !has || refusal.Code != ServeRefusalFormula {
-		t.Fatalf("ServeRefusal = %+v (has=%v), want %s", refusal, has, ServeRefusalFormula)
+	if refusal, has := loader.ServeRefusal("calc"); has {
+		t.Fatalf("ServeRefusal = %+v, want servable", refusal)
 	}
-	if !strings.Contains(refusal.Reason, "formula") {
-		t.Errorf("the reason does not say what could not be carried: %s", refusal.Reason)
+	if names := loader.Names(); len(names) != 1 || names[0] != "calc" {
+		t.Fatalf("Names() = %v, want [calc] — a servable view must be listed, or the `view` argument reports it unknown", names)
 	}
-	if refusal.Remedy == "" {
-		t.Error("a refusal with no remedy is a dead end")
+
+	// The other half: the SOURCES must come across, spelled exactly as stored
+	// (FR-141 keeps a view's formulas as source text).
+	sources, ok := loader.Formulas("calc")
+	if !ok {
+		t.Fatal("Formulas(calc) reported the view does not exist")
+	}
+	if got := sources["doubled"]; got != "batch * 2" {
+		t.Errorf("Formulas(calc)[doubled] = %q, want %q", got, "batch * 2")
+	}
+
+	// A view that declares NO formulas is not the same fact as a view that does
+	// not exist, and the loader must keep them apart or knowledgefind cannot.
+	if _, ok := loader.Formulas("no-such-view"); ok {
+		t.Error("Formulas() reported ok for a view that does not exist")
+	}
+
+	// The map is a COPY. Handing out the ViewSet's own map would let a caller
+	// rewrite the saved view, and the next query would silently ask a different
+	// question with the file on disk still saying the original.
+	sources["doubled"] = "MUTATED"
+	again, _ := loader.Formulas("calc")
+	if again["doubled"] != "batch * 2" {
+		t.Errorf("mutating the returned map changed the SAVED view: %q", again["doubled"])
 	}
 }
 

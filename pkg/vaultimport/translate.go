@@ -8,7 +8,9 @@
 package vaultimport
 
 import (
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -491,4 +493,454 @@ func renderVerbatim(node any) string {
 		return "<unrenderable expression>"
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// ---------------------------------------------------------------------------
+// CARRYING A BASE'S `formulas:` BLOCK (FR-140 / FR-141)
+//
+// A `.base` file declares computed properties once, at the top level, and any
+// view in the file names one as `formula.<name>` in a filter, a column, a sort
+// key, a grouping or a summary. Until this code existed ParsedBase dropped the
+// block on the floor, so 57 references across 14 of the founder's 18 bases had
+// nothing to resolve against.
+//
+// THE EXPRESSION LANGUAGES ARE NOT THE SAME LANGUAGE, and that is the whole
+// difficulty. Obsidian's formulas are JavaScript expressions over JavaScript
+// values: an absent property is `undefined`, `""` is falsy, a bare property is
+// a truthiness test, and `if()`'s two branches may return different types. Ours
+// (pkg/records) is a statically typed expression language over ADR-068's
+// PropertyValue: absence PROPAGATES (R-14), `""` is absence for every non-text
+// type (FR-007a), `if()`'s condition must be a boolean and its branches must
+// share ONE type (FR-143a).
+//
+// So a base formula is not copied — it is TRANSLATED, by exactly two rewrites,
+// each of which is a proved equivalence and neither of which is a guess. What
+// neither rewrite reaches stays a NAMED LOSS at every position that references
+// it, which is what keeps FR-105 true: a formula that decides a row set and did
+// not translate leaves its view DISABLED, exactly as it is today.
+//
+// THE TWO REWRITES, AND THE PROOF OF EACH
+//
+// W1 — `if(C, X, "")` becomes `if(C, X)`.
+//
+//	`""` is Obsidian's "show nothing" idiom for the else branch, and a
+//	two-argument `if` is ours: evalIf's own comment calls the missing branch
+//	"absence, which is what FR-143a means by 'or one branch be absent'". The
+//	two render identically. It is also the ONLY way the founder's
+//	`if(cost.isType("number"), …, "")` can be carried at all — FR-143a refuses
+//	a number then-branch against a text else-branch outright.
+//
+//	ONE DIVERGENCE, AND IT IS NAMED WHERE IT CAN MATTER. In a COMPARISON,
+//	JavaScript's `"" <= 60` is true and our absence compares FALSE under R-2.
+//	So a filter over such a formula returns FEWER rows than Obsidian's. Fewer
+//	is the direction FR-105 permits, and buildFormulaLeafNode names it on the
+//	view rather than leaving it to be discovered.
+//
+// W2 — `if(P, X, <nothing>)` becomes `X`, when P is a bare DATE property and X
+// is absent wherever P is.
+//
+//	Obsidian's bare `P` is a truthiness test. For a `date` property — and for
+//	no other type — truthy is exactly PRESENT: FR-007a makes `""` absent on a
+//	date, and a real date is never falsy in JavaScript. So the guard asks "is P
+//	present", and the guarded expression already answers absence when P is
+//	absent, because absence propagates through every step the founder's
+//	formulas take: arithmetic over an absent operand is absent
+//	(formula_eval.go's evalArithmetic), and a field access on an absent
+//	receiver is absent (evalFieldAccess). The guard is therefore REDUNDANT, and
+//	dropping a redundant guard changes no value on any record.
+//
+//	`date` IS THE WHOLE PERMITTED SET, deliberately. On text, `""` is a PRESENT
+//	falsy value (FR-007a says so in as many words); on a number it is `0`; on a
+//	checkbox it is `false`. For those three "truthy" and "present" are
+//	different questions and the rewrite would be a guess. absentWhenAbsent is
+//	the second half of the same discipline: it walks the guarded expression and
+//	answers true only for the node kinds whose absence behaviour is written
+//	down in the evaluator, and false for everything else.
+//
+// WHAT IS DELIBERATELY NOT REWRITTEN. `if(P, <boolean over P>, false)` reduces
+// too — a comparison over an absent operand is FALSE under R-2, not absent, so
+// the then-branch already yields the else-branch's value. It is left as a
+// named loss all the same: that proof runs through the comparator's rules
+// rather than through absence propagation, `!=` behaves differently from the
+// other five operators under R-2, and a second, differently-argued rewrite is
+// how a translator starts being approximately right. The founder's
+// `is_overdue` formulas stay lost, their views stay DISABLED, and the report
+// says so.
+// ---------------------------------------------------------------------------
+
+// FormulaTranslation is a base's `formulas:` block, translated.
+type FormulaTranslation struct {
+	// Sources is the source text this importer will write into a view file's
+	// `formulas:` map, keyed by name. Every entry parsed, typed against the
+	// view's schema and fitted FR-146's caps as part of one validated set.
+	Sources map[string]string
+	// Set is that validated set, so a reference can be resolved to a TYPE
+	// without re-parsing anything.
+	Set *records.FormulaSet
+	// Refused names every formula that could not be carried, with the reason,
+	// so a reference to one can be reported quoting the real fault instead of
+	// "no such formula".
+	Refused map[string]string
+	// Rewritten records, per carried formula, what W1/W2 changed — reported
+	// where the formula is USED, because a source that no longer matches the
+	// `.base` file must not be discoverable only by diffing two files.
+	Rewritten map[string]string
+}
+
+// FormulaNames lists the carried formulas, sorted.
+func (ft FormulaTranslation) FormulaNames() []string {
+	out := make([]string, 0, len(ft.Sources))
+	for n := range ft.Sources {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Closure returns the given names plus every formula they reach transitively,
+// sorted, restricted to formulas that were actually carried.
+//
+// A VIEW DECLARES ONLY WHAT IT USES, and that is FR-146 arithmetic rather than
+// tidiness: a view is capped at 16 formulas and 256 nodes IN TOTAL, and every
+// declared formula is evaluated once per candidate. Emitting a base's whole
+// block into every one of its views spends that budget on formulas the view
+// never names — and the founder's Tasks.base, whose four formulas include one
+// that alone nests twelve levels deep, is exactly the shape that makes the
+// difference matter.
+//
+// The closure is over Refs because a reference must not dangle: Deals.base's
+// `is_stale` names `formula.age`, and a view declaring the first without the
+// second is a file records.ValidateViewAgainstSchemas refuses WHOLE
+// (RejectViewUnknownFormula) rather than one clause of.
+func (ft FormulaTranslation) Closure(names []string) []string {
+	if ft.Set == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var walk func(string)
+	walk = func(n string) {
+		if seen[n] {
+			return
+		}
+		decl, ok := ft.Set.Get(n)
+		if !ok {
+			return
+		}
+		seen[n] = true
+		for _, r := range decl.Refs {
+			walk(r)
+		}
+	}
+	for _, n := range names {
+		walk(n)
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Declared reports one carried formula's declaration.
+func (ft FormulaTranslation) Declared(name string) (records.FormulaDecl, bool) {
+	if ft.Set == nil {
+		return records.FormulaDecl{}, false
+	}
+	return ft.Set.Get(name)
+}
+
+// RefusalFor explains why a formula is not available, in the operator's own
+// terms. It answers for a name the base never declared as well as for one it
+// declared and this importer could not carry, because a reference reported as
+// "no such formula" when the base plainly declares it sends a reader to the
+// wrong file.
+func (ft FormulaTranslation) RefusalFor(name string) string {
+	if r, ok := ft.Refused[name]; ok {
+		return r
+	}
+	return fmt.Sprintf("the base file declares no formula %q", name)
+}
+
+// maxFormulaTranslationPasses bounds the drop-and-revalidate loop below. Each
+// pass drops at least one formula, so the loop cannot outrun the number of
+// formulas; the constant is a belt against a future validator that reports an
+// error it does not attribute to a name, which would otherwise spin.
+const maxFormulaTranslationPasses = 32
+
+// TranslateFormulas translates one base's `formulas:` block against the schema
+// of the record type a view resolved to (nil for an untyped view, which is
+// handled honestly one layer down: SchemaFormulaEnv refuses every property
+// operand, so a formula naming one is refused rather than guessed).
+//
+// A FORMULA THAT FAILS IS DROPPED, AND THE REST STILL CARRY. That is what the
+// pass loop is for. ValidateFormulaSet reports every failure it found, each
+// attributed to a name; dropping those and re-validating lets a base with one
+// untranslatable formula keep the other three — and it also resolves the
+// knock-on case correctly, because a formula referencing a dropped one fails on
+// the NEXT pass with `formula.x names a formula the view does not define` and
+// is dropped in its turn, rather than being carried as a dangling reference the
+// loader would then refuse the whole file over.
+func TranslateFormulas(pb *ParsedBase, schema *records.Schema) FormulaTranslation {
+	out := FormulaTranslation{
+		Sources:   map[string]string{},
+		Refused:   map[string]string{},
+		Rewritten: map[string]string{},
+	}
+	if pb == nil || len(pb.FormulaNames) == 0 {
+		return out
+	}
+
+	candidates := map[string]string{}
+	for _, name := range pb.FormulaNames {
+		src, readable := pb.Formulas[name]
+		if !readable {
+			// ParseBaseFile kept the NAME and refused to invent a source for a
+			// value that was not a scalar string. Refusing here by name is the
+			// whole point of that split: the key is reported rather than
+			// quietly never having existed.
+			out.Refused[name] = "the base declares this formula with a value that is not an expression string, so there is no source to translate"
+			continue
+		}
+		rewritten, note := rewriteFormulaSource(src, schema)
+		candidates[name] = rewritten
+		if note != "" {
+			out.Rewritten[name] = note
+		}
+	}
+
+	for pass := 0; pass < maxFormulaTranslationPasses && len(candidates) > 0; pass++ {
+		set, errs := records.ValidateFormulaSet(candidates, schema)
+		if len(errs) == 0 {
+			out.Sources = candidates
+			out.Set = set
+			return out
+		}
+		dropped := false
+		for _, e := range errs {
+			if e.Formula == "" {
+				// A SET-LEVEL refusal — one of FR-146's caps on the view as a
+				// whole. It is attributable to no single formula, so nothing
+				// can be dropped to satisfy it and carrying a subset would be
+				// this importer choosing which of the operator's formulas to
+				// keep. The whole block is refused instead, naming the cap.
+				for name := range candidates {
+					out.Refused[name] = "the base's `formulas:` block as a whole was refused: " + e.Error()
+				}
+				out.Sources = map[string]string{}
+				out.Rewritten = map[string]string{}
+				return out
+			}
+			if _, still := candidates[e.Formula]; !still {
+				continue
+			}
+			delete(candidates, e.Formula)
+			out.Refused[e.Formula] = e.Error()
+			delete(out.Rewritten, e.Formula)
+			dropped = true
+		}
+		if !dropped {
+			// Every reported error named a formula already gone. Nothing more
+			// can be dropped, so refuse what remains rather than loop.
+			for name := range candidates {
+				out.Refused[name] = "this formula could not be validated as part of the base's formula set"
+			}
+			out.Sources = map[string]string{}
+			out.Rewritten = map[string]string{}
+			return out
+		}
+	}
+	return out
+}
+
+// rewriteFormulaSource applies W1 and W2 until neither fires, returning the
+// translated source and a human-readable note naming what changed (empty when
+// the source was carried verbatim).
+//
+// It is deliberately a SOURCE-TEXT rewrite rather than a tree rewrite: FR-141
+// stores source, this package has no formula printer, and a printer written to
+// serve one rewrite would silently reformat every formula it touched. Each
+// candidate substring is parsed before it is used, so nothing this function
+// emits has escaped records.ParseFormula.
+func rewriteFormulaSource(src string, schema *records.Schema) (out string, note string) {
+	out = strings.TrimSpace(src)
+	var notes []string
+	for pass := 0; pass < 4; pass++ {
+		args, ok := splitTopLevelIfArgs(out)
+		if !ok {
+			break
+		}
+		if len(args) == 3 && isEmptyTextLiteral(args[2]) {
+			out = "if(" + args[0] + ", " + args[1] + ")"
+			notes = append(notes, `its "" else-branch was dropped — an omitted `+"`if`"+` branch is this product's own spelling of "show nothing", and FR-143a refuses a number branch paired with a text one`)
+			continue
+		}
+		if len(args) == 2 {
+			if guard, guarded, reduced := reduceRedundantDateGuard(args[0], args[1], schema); reduced {
+				out = guarded
+				notes = append(notes, "its `if("+guard+", …)` presence guard was dropped as REDUNDANT — the guarded expression already answers absence wherever `"+guard+"` is absent, so no record's value changes")
+				continue
+			}
+		}
+		break
+	}
+	if _, err := records.ParseFormula(out); err != nil {
+		// A rewrite that does not parse is not a rewrite. Fall back to the
+		// operator's own text so the refusal quotes what they wrote.
+		return strings.TrimSpace(src), ""
+	}
+	return out, strings.Join(notes, "; ")
+}
+
+// reduceRedundantDateGuard decides W2. It returns the guarded expression when
+// the guard is provably redundant, and reports false otherwise — including for
+// every case it simply cannot prove, which is the safe answer.
+func reduceRedundantDateGuard(guard, guarded string, schema *records.Schema) (string, string, bool) {
+	if schema == nil {
+		return "", "", false
+	}
+	guardNode, err := records.ParseFormula(guard)
+	if err != nil {
+		return "", "", false
+	}
+	ref, ok := guardNode.(*records.Ref)
+	if !ok || ref.Kind != records.RefProperty {
+		return "", "", false
+	}
+	prop, found := schema.Property(ref.Name)
+	if !found || prop.Type != records.TypeDate || prop.Many {
+		// Only a single-valued DATE property has "truthy" and "present" as the
+		// same question — see this section's header. A `many` date is excluded
+		// too: an empty list is present-and-falsy in JavaScript.
+		return "", "", false
+	}
+	guardedNode, err := records.ParseFormula(guarded)
+	if err != nil {
+		return "", "", false
+	}
+	if !absentWhenAbsent(guardedNode, ref.Name) {
+		return "", "", false
+	}
+	return ref.Name, strings.TrimSpace(guarded), true
+}
+
+// absentWhenAbsent reports whether an expression is ABSENT on every record
+// where the named property is absent.
+//
+// IT IS A WHITELIST OVER THE EVALUATOR'S WRITTEN-DOWN RULES, not an inference.
+// Every `true` below cites a rule in pkg/records/formula_eval.go, and anything
+// not listed answers FALSE — so a node kind added to the grammar tomorrow costs
+// a rewrite that does not fire (a formula reported as a named loss), never a
+// rewrite that fires wrongly (a formula whose values silently changed).
+func absentWhenAbsent(n records.FormulaNode, prop string) bool {
+	switch node := n.(type) {
+	case *records.Ref:
+		// The property itself. Absent is absent.
+		return node.Kind == records.RefProperty && node.Name == prop
+	case *records.Call:
+		// `date(x)` / `time(x)` read a value; evalCall's conversions answer
+		// absence for an absent argument. Every OTHER call — `if`, `list`,
+		// `mean`, `isType`, the `file.*` predicates — can produce a value from
+		// an absent argument, so none of them is here.
+		switch node.Name {
+		case "date", "time":
+			return len(node.Args) == 1 && absentWhenAbsent(node.Args[0], prop)
+		}
+		return false
+	case *records.BinaryOp:
+		// evalArithmetic: "if left.absent || right.absent { return absentOf }".
+		// The COMPARISON and LOGICAL operators are excluded on purpose — R-2
+		// makes a comparison over an absent operand FALSE, which is a value.
+		switch node.Op {
+		case "+", "-", "*", "/", "%":
+			return absentWhenAbsent(node.Left, prop) || absentWhenAbsent(node.Right, prop)
+		}
+		return false
+	case *records.UnaryOp:
+		return absentWhenAbsent(node.Operand, prop)
+	case *records.FieldAccess:
+		// evalFieldAccess: "if recv.absent { return absentOf(rule.result) }".
+		return absentWhenAbsent(node.Receiver, prop)
+	}
+	return false
+}
+
+// splitTopLevelIfArgs reads `if(a, b)` or `if(a, b, c)` and returns the
+// argument source slices, verbatim.
+//
+// It refuses anything that is not exactly one top-level `if` call spanning the
+// WHOLE expression — `if(a,b) + 1` has a closing paren before the end and is
+// rejected here rather than mis-split. The scan tracks quotes as well as
+// parens, so a comma inside a string literal is not an argument boundary.
+func splitTopLevelIfArgs(src string) ([]string, bool) {
+	s := strings.TrimSpace(src)
+	if !strings.HasPrefix(s, "if") {
+		return nil, false
+	}
+	rest := strings.TrimSpace(s[len("if"):])
+	if !strings.HasPrefix(rest, "(") || !strings.HasSuffix(rest, ")") {
+		return nil, false
+	}
+	inner := rest[1 : len(rest)-1]
+
+	var args []string
+	var cur strings.Builder
+	depth := 0
+	var quote byte
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if quote != 0 {
+			cur.WriteByte(c)
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			quote = c
+			cur.WriteByte(c)
+		case '(', '[':
+			depth++
+			cur.WriteByte(c)
+		case ')', ']':
+			depth--
+			if depth < 0 {
+				// The `(` we consumed was not the call's own outermost paren —
+				// e.g. `if(a) && if(b)`. Not a shape this reads.
+				return nil, false
+			}
+			cur.WriteByte(c)
+		case ',':
+			if depth == 0 {
+				args = append(args, strings.TrimSpace(cur.String()))
+				cur.Reset()
+				continue
+			}
+			cur.WriteByte(c)
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if depth != 0 || quote != 0 {
+		return nil, false
+	}
+	args = append(args, strings.TrimSpace(cur.String()))
+	if len(args) < 2 || len(args) > 3 {
+		return nil, false
+	}
+	for _, a := range args {
+		if a == "" {
+			return nil, false
+		}
+	}
+	return args, true
+}
+
+// isEmptyTextLiteral reports whether an argument is exactly the empty string
+// literal — Obsidian's "show nothing" else-branch. `" "` is NOT one: a space is
+// a value, and treating it as absence would drop a character the operator typed.
+func isEmptyTextLiteral(arg string) bool {
+	s := strings.TrimSpace(arg)
+	return s == `""` || s == `''`
 }

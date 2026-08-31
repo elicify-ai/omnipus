@@ -10,9 +10,12 @@ package knowledgefind
 import (
 	"context"
 	"math/big"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -316,41 +319,265 @@ func frontmatterNote(typeName string, tags, links []string) string {
 }
 
 // ---------------------------------------------------------------------------
-// D: THE SEAM, PINNED — the production view loader cannot yet carry formulas
+// D: THE SEAM, CLOSED
 //
-// Everything above works through a loader that implements ViewFormulaLoader.
-// The PRODUCTION loader, records.ViewFindLoader, does not: its translateViewQuery
-// REFUSES any view declaring formulas outright (ServeRefusalFormula, "a
-// knowledge_find request carries no formulas"), and its Names() drops such a
-// view from the servable list. So a real vault's formula view never reaches
-// this package at all, and every formula test above would go on passing while
-// the capability was unreachable in production — the exact shape of green this
-// branch has learnt to distrust.
+// A test called TestSeam_ProductionViewLoaderStillCannotCarryViewFormulas stood
+// here. It asserted that records.ViewFindLoader did NOT implement
+// ViewFormulaLoader, and it was written to FAIL the day that stopped being
+// true, with instructions to delete it. That day is this one: the loader now
+// has a Formulas method and translateViewQuery's ServeRefusalFormula branch is
+// gone, so the test has been deleted as it asked to be.
 //
-// THIS TEST EXISTS TO MAKE THAT GAP LOUD RATHER THAN SILENT, and it is written
-// to FAIL THE DAY THE GAP CLOSES so nobody has to remember to come back. Two
-// changes close it, both in pkg/records/view_find_bridge.go:
-//
-//  1. give *ViewFindLoader a `Formulas(name string) (map[string]string, bool)`
-//     returning the SavedView's `Def.Formulas` — that alone satisfies
-//     knowledgefind.ViewFormulaLoader and wires the whole path;
-//  2. delete translateViewQuery's ServeRefusalFormula branch, which exists only
-//     because the REQUEST carries no formulas map. It does not need one: the
-//     loader hands the map over beside the request.
-//
-// When both land, this test fails with the instruction to delete it.
+// WHAT REPLACES IT IS STRONGER THAN WHAT IT ASSERTED. The old test proved a
+// negative about an interface. The two below prove the positive about
+// BEHAVIOUR — that the production loader carries a real view's formulas all the
+// way to a served answer, and that the answer moves when the clock does.
 // ---------------------------------------------------------------------------
 
-// The production loader must at least still satisfy the base interface, or the
-// gap below is not a gap but a break.
-var _ ViewLoader = (*records.ViewFindLoader)(nil)
+// The production loader must satisfy the base interface AND the formula one.
+// Asserted at compile time so a method removed by a later refactor is a build
+// failure here rather than a silently formula-less vault.
+var (
+	_ ViewLoader        = (*records.ViewFindLoader)(nil)
+	_ ViewFormulaLoader = (*records.ViewFindLoader)(nil)
+)
 
-func TestSeam_ProductionViewLoaderStillCannotCarryViewFormulas(t *testing.T) {
-	var loader any = records.NewViewFindLoader(records.NewViewSet())
-	if _, ok := loader.(ViewFormulaLoader); ok {
-		t.Fatal("records.ViewFindLoader now implements ViewFormulaLoader — the seam this test pins is CLOSED.\n" +
-			"That is the intended outcome, not a regression. Confirm translateViewQuery's ServeRefusalFormula\n" +
-			"branch is gone too (a loader that carries formulas while the translator still refuses the view\n" +
-			"is a half-closed seam that looks closed), then DELETE this test.")
+// ---------------------------------------------------------------------------
+// E: THE WHOLE PATH, THROUGH THE PRODUCTION LOADER, AGAINST TWO CLOCKS
+//
+// Everything in A–C proves the formula ENGINE works through a loader written
+// for the test. These two prove the PRODUCT works: a view file on disk, read by
+// records.LoadViews, wrapped in records.NewViewFindLoader — the same
+// constructor pkg/vaultprops/find_tool.go wires into the real knowledge_find —
+// and served.
+//
+// WHY THAT DISTINCTION IS THE POINT OF THIS SECTION. Until the seam closed,
+// every formula test in this file passed while the capability was unreachable:
+// the bridge refused any view declaring `formulas` outright, so a real vault's
+// formula view was dropped from Names(), reported unknown by the `view`
+// argument, and never reached this package at all. A test that cannot tell a
+// working feature from an unreachable one is not evidence, and the file said so
+// itself for as long as the gap was open.
+// ---------------------------------------------------------------------------
+
+// deadlineVault writes a schema, three notes and one saved view to a real
+// vault root, and returns the pieces knowledge_find needs.
+//
+// EVERY ARTEFACT GOES THROUGH THE PRODUCTION READER. The schema through
+// records.LoadSchemas, the notes through records.ParseRecord +
+// propindex.BuildNoteRows, the view through records.LoadViews, and the loader
+// through records.NewViewFindLoader. Nothing here is hand-assembled, because a
+// hand-assembled view would skip exactly the validation (ValidateViewAgainstSchemas,
+// validateViewFormulas) that a real imported file has to survive.
+func deadlineVault(t *testing.T) (Deps, *records.ViewFindLoader) {
+	t.Helper()
+	root := t.TempDir()
+
+	schemaDir := records.SchemaDir(root)
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(schemas): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(schemaDir, "deadline.yaml"), []byte(`schema_version: 1
+type: deadline
+properties:
+  title: { type: text }
+  due:   { type: date }
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile(schema): %v", err)
+	}
+	set, schemaReport, schemaErr := records.LoadSchemas(root)
+	if schemaErr != nil {
+		t.Fatalf("LoadSchemas: %v", schemaErr)
+	}
+	if !schemaReport.OK() {
+		t.Fatalf("the fixture schema was rejected: %v", schemaReport.Rejections)
+	}
+
+	// The view is written in the shape pkg/vaultimport now produces for
+	// Tasks.base's "Due <=7d": one formula over a date, referenced from the
+	// filter AND shown as a column.
+	viewDir := records.ViewsDir(root)
+	if err := os.MkdirAll(viewDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(views): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(viewDir, "due-soon.yaml"), []byte(`name: due-soon
+type: deadline
+label: Due within a week
+formulas:
+  days_until_due: (date(due) - today()).days
+filter:
+  property: formula.days_until_due
+  op: "<="
+  value: "7"
+properties:
+  - title
+  - due
+  - formula.days_until_due
+source: 06-Bases/Tasks.base
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile(view): %v", err)
+	}
+	views, viewReport, err := records.LoadViews(root, set)
+	if err != nil {
+		t.Fatalf("LoadViews: %v", err)
+	}
+	if !viewReport.OK() {
+		t.Fatalf("the fixture view was rejected by the LOADER, so nothing below tests serving: %v", viewReport.Rejections)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "properties.db")
+	store, err := propindex.Open(context.Background(), dbPath, propindex.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	text := &stubText{hits: map[string]TextHit{}}
+	for path, due := range map[string]string{
+		"work/soon.md":  "2026-09-02",
+		"work/later.md": "2026-09-20",
+		"work/none.md":  "",
+	} {
+		src := "---\ntype: deadline\ntitle: " + filepath.Base(path) + "\n"
+		if due != "" {
+			src += "due: " + due + "\n"
+		}
+		src += "---\n\nbody\n"
+		b := []byte(src)
+		rec := records.ParseRecord(path, b)
+		schema, _ := set.Get(rec.TypeName())
+		rows := propindex.BuildNoteRows(rec, schema, b, propindex.SourceHash(b))
+		rows.Size = int64(len(b))
+		rows.MtimeNanos = 1
+		if err := store.UpsertNote(context.Background(), rows); err != nil {
+			t.Fatalf("UpsertNote(%s): %v", path, err)
+		}
+		text.hits[path] = TextHit{Path: path, SourceHash: rows.SourceHash, Score: 1}
+	}
+
+	loader := records.NewViewFindLoader(views)
+	return Deps{Schemas: set, Store: store, Text: text, Views: loader, Epoch: 8814}, loader
+}
+
+// TestProductionLoader_ServesASavedViewsFormula is the seam closure's
+// behavioural proof: the view is SERVABLE, it is LISTED, and the formula's
+// value comes back in the row.
+func TestProductionLoader_ServesASavedViewsFormula(t *testing.T) {
+	deps, loader := deadlineVault(t)
+
+	// 1 — the view is servable at all. Before the seam closed, every one of
+	// these three assertions failed: Names() omitted the view, ServeRefusal
+	// reported formula_not_representable, and View() answered ok=false.
+	if names := loader.Names(); len(names) != 1 || names[0] != "due-soon" {
+		t.Fatalf("Names() = %v, want exactly [due-soon] — a view declaring formulas must be servable", names)
+	}
+	if refusal, unservable := loader.ServeRefusal("due-soon"); unservable {
+		t.Fatalf("ServeRefusal(due-soon) = %+v, want servable", refusal)
+	}
+	sources, ok := loader.Formulas("due-soon")
+	if !ok || sources["days_until_due"] != "(date(due) - today()).days" {
+		t.Fatalf("Formulas(due-soon) = %v, ok=%v — the loader must hand the SOURCE to knowledge_find", sources, ok)
+	}
+
+	// 2 — served, with the formula deciding the rows. On 2026-08-31 only
+	// work/soon.md (due 2026-09-02, two days out) is within seven days;
+	// work/later.md is nineteen out and work/none.md has no due date at all,
+	// so its formula is ABSENT and R-2 makes the comparison false.
+	deps.Now = time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	viewName := "due-soon"
+	resp := mustFind(t, deps, generated.VaultFindRequest{View: &viewName})
+	if got := rowIDs(resp); len(got) != 1 || got[0] != "work/soon.md" {
+		t.Fatalf("rows = %v, want exactly [work/soon.md]", got)
+	}
+
+	// 3 — the formula's VALUE is in the row, not merely used and discarded.
+	var cell string
+	var found bool
+	for _, c := range resp.Rows[0].Cells {
+		if c.Property == "formula.days_until_due" {
+			cell, found = c.Value, true
+		}
+	}
+	if !found {
+		t.Fatalf("no `formula.days_until_due` cell in the row; cells = %+v", resp.Rows[0].Cells)
+	}
+	// FR-144's default scale: a formula number that no `round`/`toFixed`
+	// declared crosses the boundary at ten decimal places, so the rendering is
+	// `2.0000000000` and not `2`. Asserted EXACTLY rather than as a prefix —
+	// the scale is part of the contract, and a prefix check would go on passing
+	// if the value became 2.5 (a `.days` truncated to a component instead of
+	// the documented total) or 20.
+	if cell != "2.0000000000" {
+		t.Errorf("formula.days_until_due = %q, want %q — 2026-09-02 is exactly two days after 2026-08-31, rendered at FR-144's default scale", cell, "2.0000000000")
+	}
+}
+
+// TestSavedViewFormula_IsEvaluatedAgainstTheQuERYClock is the requirement the
+// whole feature turns on, and it is the one a passing import cannot establish.
+//
+// A formula is written ONCE, at import, and evaluated EVERY TIME the view runs.
+// `today()` in a saved view means "today when the view runs". If it ever meant
+// "the day the vault was imported", the founder's "due in the next 7 days"
+// would be frozen to a date in the past — and it would look completely normal,
+// because a frozen view still returns rows, still renders, and still says
+// nothing is wrong. There is no error to notice.
+//
+// THE ORACLE IS A CHANGE OF ANSWER, not a passing call. The same view, the same
+// three notes, the same index, two clocks a fortnight apart, and the row set
+// must MOVE. A single-clock test would pass identically against an evaluator
+// that had baked the date in at import.
+func TestSavedViewFormula_IsEvaluatedAgainstTheQueryClock(t *testing.T) {
+	deps, _ := deadlineVault(t)
+	viewName := "due-soon"
+
+	// On 2026-08-31: soon.md is 2 days out (in), later.md is 20 days out (out).
+	deps.Now = time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	early := rowIDs(mustFind(t, deps, generated.VaultFindRequest{View: &viewName}))
+
+	// On 2026-09-15: soon.md is 13 days PAST (still <= 7, in) and later.md is
+	// 5 days out (now in). The row set has to grow by exactly one.
+	deps.Now = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	late := rowIDs(mustFind(t, deps, generated.VaultFindRequest{View: &viewName}))
+
+	if len(early) != 1 || early[0] != "work/soon.md" {
+		t.Fatalf("at 2026-08-31 rows = %v, want [work/soon.md]", early)
+	}
+	sort.Strings(late)
+	if len(late) != 2 || late[0] != "work/later.md" || late[1] != "work/soon.md" {
+		t.Fatalf("at 2026-09-15 rows = %v, want [work/later.md work/soon.md]", late)
+	}
+	if strings.Join(early, ",") == strings.Join(late, ",") {
+		t.Fatal("the same saved view returned the SAME rows against two clocks a fortnight apart.\n" +
+			"`today()` is being resolved once and reused, so every date-relative view in the vault is\n" +
+			"frozen to whatever day it was first evaluated — a wrong answer that looks entirely normal.")
+	}
+
+	// work/none.md must be absent from BOTH answers. Its `due` is absent, so
+	// the formula is absent (R-14) and R-2 makes `absent <= 7` FALSE. A record
+	// appearing here would mean absence had been coerced to a number, which is
+	// the broadening direction.
+	for _, got := range [][]string{early, late} {
+		for _, id := range got {
+			if id == "work/none.md" {
+				t.Errorf("a record with no `due` matched `formula.days_until_due <= 7`; absence must not compare, it must be false (R-2/R-14). rows = %v", got)
+			}
+		}
+	}
+}
+
+// TestServeRefusalFormula_IsNeverEmitted pins the retired refusal code.
+//
+// The constant is kept for readers (see its doc comment); what must not come
+// back is a code path that PRODUCES it. This walks a real formula-bearing view
+// through the same Unservable() report an operator reads.
+func TestServeRefusalFormula_IsNeverEmitted(t *testing.T) {
+	_, loader := deadlineVault(t)
+	for _, r := range loader.Unservable() {
+		if r.Code == records.ServeRefusalFormula {
+			t.Fatalf("a view was refused as %s: %s\nThe formulas travel beside the request through the loader; refusing the view makes the importer's whole formula capability unreachable.", r.Code, r.Reason)
+		}
 	}
 }

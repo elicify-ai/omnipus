@@ -463,9 +463,14 @@ type gapShape struct {
 // below them are ordered most-specific first.
 var gapShapes = []gapShape{
 	{
-		kind:   gapFormula,
-		label:  "computed property (`formula.*`) — the base's `formulas:` block is not carried, so every reference to one is dropped",
-		tokens: []string{"does not yet carry a base's `formulas:` block"},
+		kind:  gapFormula,
+		label: "computed property (`formula.*`) the importer could not TRANSLATE — the base's `formulas:` block IS carried now, so what remains is the individual formula our expression grammar cannot express",
+		tokens: []string{
+			"the base file declares no formula",
+			"only a direct comparison against",
+			"whose result is a LIST",
+			"and formula",
+		},
 		matchExpr: func(expr string) bool {
 			return strings.Contains(expr, "formula.")
 		},
@@ -843,7 +848,7 @@ func (r *Report) systemicGaps() []string {
 func (r *Report) narrate(k gapKind, t *gapTally) string {
 	switch k {
 	case gapFormula:
-		return fmt.Sprintf("COMPUTED / FORMULA PROPERTIES (%d dropped clause/column/sort/aggregate(s) across %d base(s)): a `.base` file that declares `formulas:` (age-in-days, days-to-renewal, stale flags, team-name lookups...) produces `formula.*` references in filters, groupBy, columns and aggregates, and this run carried none of them. %s Example: %q",
+		return fmt.Sprintf("COMPUTED / FORMULA PROPERTY THIS IMPORTER COULD NOT TRANSLATE (%d dropped clause/column/sort/aggregate(s) across %d base(s)): the base's `formulas:` block IS carried now — it is parsed, translated into this product's own expression grammar, validated against the view's record type and written into the view file, and a `formula.*` reference in a filter, a grouping, a column or a summary resolves against it. What is counted here is the residue: an individual formula our grammar cannot express, and every reference to it. The two shapes that remain in the founder's vault are a JavaScript TRUTHINESS test used as an `if` condition (`if(due, ..., false)` — ours needs a boolean, and a bare date is not one) and an expression past FR-146's depth cap. %s Example: %q",
 			t.Count, len(t.Bases), capFormulas.verdict(), t.Example)
 
 	case gapMixedTypeDisjunction:

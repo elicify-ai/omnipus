@@ -75,8 +75,8 @@ func NewViewFindLoader(views *ViewSet) *ViewFindLoader {
 
 // Names lists the views this loader can actually SERVE through
 // knowledge_find — i.e. every declared view MINUS the ones a
-// ViewServeRefusal covers: a view stored `disabled`, one grouping in
-// descending order, and one declaring `formulas`.
+// ViewServeRefusal covers: a view stored `disabled`, and one grouping in
+// descending order.
 // This is deliberately NOT every name ViewSet.Names() would report:
 // knowledge_describe's own view listing is unfiltered (it is describing what
 // the VAULT declares, not what one query surface can serve), so the two can
@@ -132,9 +132,19 @@ const (
 	// ViewGroupBy was added to end (24 of them in the founder's own vault).
 	// Refused instead, until find's request carries a direction.
 	ServeRefusalGroupDirection ViewServeRefusalCode = "group_direction_not_representable"
-	// ServeRefusalFormula — a view declaring `formulas`.
-	// VaultFindRequest has no formulas key, so find would resolve every
-	// `formula.<name>` against nothing.
+	// ServeRefusalFormula is RETIRED and nothing emits it.
+	//
+	// It named the refusal of every view declaring `formulas`, on the premise
+	// that VaultFindRequest has no formulas key. The premise is still true;
+	// the refusal was still wrong — the formulas reach knowledgefind through
+	// the LOADER (ViewFormulaLoader, satisfied by ViewFindLoader.Formulas)
+	// rather than through the request, so there was never anything to carry.
+	//
+	// The CONSTANT is kept, and deliberately: it is a wire-visible code that
+	// has appeared in operator-facing refusal text, and a reader searching for
+	// why a view was once unservable should land on this explanation rather
+	// than on nothing. TestServeRefusalFormula_IsNeverEmitted pins that no
+	// code path produces it.
 	ServeRefusalFormula ViewServeRefusalCode = "formula_not_representable"
 )
 
@@ -232,6 +242,43 @@ func (l *ViewFindLoader) View(name string) (generated.VaultFindRequest, bool) {
 	return req, true
 }
 
+// Formulas returns one view's `formulas:` map as SOURCE TEXT, satisfying
+// knowledgefind.ViewFormulaLoader.
+//
+// IT IS THE OTHER HALF OF DELETING THE FORMULA REFUSAL, and the two are one
+// change. knowledgefind asks its loader for formulas by TYPE ASSERTION — a
+// loader that does not implement the interface is read as "this vault has no
+// formulas", silently and correctly. So a bridge that stopped refusing
+// formula-bearing views without also implementing this method would serve them
+// with every `formula.<name>` resolving against nothing: the view would run,
+// return rows, and quietly answer a different question. That is strictly worse
+// than the refusal it replaced, which is why the seam test guarding this pair
+// checked for BOTH halves before it was deleted.
+//
+// ok=false means there is no such view, which is what lets knowledgefind tell
+// "the view defines no formulas" (an empty map) apart from "there is no view"
+// without a second lookup.
+func (l *ViewFindLoader) Formulas(name string) (map[string]string, bool) {
+	if l == nil || l.views == nil {
+		return nil, false
+	}
+	v, ok := l.views.Get(name)
+	if !ok || v == nil {
+		return nil, false
+	}
+	if v.Def.Formulas == nil {
+		return map[string]string{}, true
+	}
+	// COPIED, for the reason cloneFilterNode gives: handing out the view's own
+	// map would let a caller that mutates it rewrite the SAVED view held in the
+	// ViewSet, and the next query would silently ask a different question.
+	out := make(map[string]string, len(*v.Def.Formulas))
+	for k, src := range *v.Def.Formulas {
+		out[k] = src
+	}
+	return out, true
+}
+
 // translateView carries a saved view across to a knowledge_find request, or
 // reports why it cannot be served.
 func translateView(v *SavedView) (generated.VaultFindRequest, *ViewServeRefusal) {
@@ -317,30 +364,31 @@ func translateViewMechanical(def generated.ViewDef) generated.VaultFindRequest {
 // tree. The filter is a DEEP COPY rather than a translation: a view's `filter`
 // already IS find's tree.
 //
-// TWO THINGS STILL DO NOT FIT THROUGH THIS SEAM, and both are refused with a
-// reason rather than dropped:
+// ONE THING STILL DOES NOT FIT THROUGH THIS SEAM, and it is refused with a
+// reason rather than dropped: a `grouping` key asking for DESCENDING group
+// order. VaultFindRequest.group_by is a bare []string, so the direction would
+// be flattened to ascending in silence, which is exactly the loss ViewGroupBy
+// exists to end. Ascending IS the documented default, so an ascending key (or
+// one with no direction) crosses losslessly. That is a seam in
+// VaultFindRequest, not a defect in the view; it closes by giving find's
+// request a directional group key.
 //
-//   - a `grouping` key asking for DESCENDING group order —
-//     VaultFindRequest.group_by is a bare []string, so the direction would be
-//     flattened to ascending in silence, which is exactly the loss
-//     ViewGroupBy exists to end. Ascending IS the documented default, so an
-//     ascending key (or one with no direction) crosses losslessly.
-//   - `formulas` — VaultFindRequest has no formulas key at all, so every
-//     `formula.<name>` in a filter, a sort or a selection would resolve
-//     against nothing.
+// `formulas` USED TO BE THE SECOND ONE, AND IT IS NOT ANY MORE. This function
+// refused every view declaring a formula, on the grounds that
+// VaultFindRequest has no formulas key. The premise was true and the
+// conclusion did not follow: the request never needed one, because the
+// formulas travel BESIDE the request. knowledgefind reads them from the
+// LOADER (its optional ViewFormulaLoader interface, satisfied by Formulas
+// below) and validates them into the query's namespace, where every
+// `formula.<name>` resolves against a real declaration.
 //
-// Both are seams in VaultFindRequest, not defects in the view. They close by
-// giving find's request a directional group key and a formulas map.
+// The cost of the old refusal was not theoretical. It made the importer's
+// whole formula capability unreachable: a `.base` file's `formulas:` block
+// could be translated perfectly and written into a view file, and that view
+// would then be dropped from Names(), reported unknown by the `view`
+// argument, and unservable — trading a named missing column for an outright
+// refusal.
 func translateViewQuery(def generated.ViewDef, req generated.VaultFindRequest) (generated.VaultFindRequest, *ViewServeRefusal) {
-	if def.Formulas != nil && len(*def.Formulas) > 0 {
-		return generated.VaultFindRequest{}, &ViewServeRefusal{
-			Name: def.Name,
-			Code: ServeRefusalFormula,
-			Reason: fmt.Sprintf("view %q declares %d formula(s), and a knowledge_find request carries no formulas: every `formula.<name>` it names would resolve against nothing",
-				def.Name, len(*def.Formulas)),
-			Remedy: "write the expression's effect as an ordinary filter, or query the view's underlying type directly",
-		}
-	}
 	if def.Grouping != nil {
 		names := make([]string, 0, len(*def.Grouping))
 		for _, g := range *def.Grouping {

@@ -157,7 +157,13 @@ func TestClassifyLoss_Corpus(t *testing.T) {
 		},
 		{
 			name: "formula column, reason attached",
-			line: lossf(LossProperties, "column %q dropped — computed property %q dropped — this importer does not yet carry a base's `formulas:` block, so there is nothing for the reference to resolve against", "formula.age", "formula.age"),
+			// The importer now CARRIES a base's `formulas:` block, so the
+			// reason this corpus line used to hold ("does not yet carry a
+			// base's `formulas:` block") no longer exists anywhere in the
+			// package — TestGapTokens_StillExistInTheEmittingSource is what
+			// caught the drift. What a formula loss says now is why that ONE
+			// formula could not be translated, and this is the shape of it.
+			line: lossf(LossProperties, "column %q dropped — %s", "formula.age", `the base file declares no formula "age"`),
 			want: gapFormula,
 		},
 		{
@@ -290,7 +296,7 @@ func TestSystemicGaps_NeverClaimTheModelCannotDoWhatItCan(t *testing.T) {
 		cap    wireCap
 	}
 	checks := []check{
-		{"COMPUTED / FORMULA PROPERTIES", capFormulas},
+		{"COMPUTED / FORMULA PROPERTY THIS IMPORTER COULD NOT TRANSLATE", capFormulas},
 		{"MIXED-TYPE DISJUNCTION", capMultiType},
 	}
 	for _, c := range checks {
