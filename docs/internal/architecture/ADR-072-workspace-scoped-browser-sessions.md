@@ -976,3 +976,33 @@ draw-command path requires a patched Chromium; Chrome moves to a two-week
 release cadence on 2026-09-08, and Playwright and Puppeteer both drive
 Chromium in production with zero Chromium patches. Nothing above this ADR's
 scope should be attempted without re-reading that.
+
+---
+
+## 8. Corrections log
+
+Claims made in this ADR or its commit messages that were later falsified.
+Kept because a retracted claim that leaves no trace gets re-derived.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| "`ReapIdleSessions`' only removal is `delete(m.sessions, sessionID)` — it never disposes a browser" (stated in commit `3667c06a`, and twice in the D1 spec marked *verified*) | **FALSE** | It collects `se.browserCancel` into `reapedBrowsers` (`pkg/tools/browser/manager.go:3027-3032`), executes the cancels (`:3123-3125`), and reaches `coord.ReleaseTab` via `releaseGlobalTab()`. Whole-Chrome idle close is still new work, but the disposal machinery is not absent — the gap is narrower than claimed |
+| "isolation exists (ADR-043 D2); this ADR re-keys it" | **FALSE by default** | `CaptureSharedContext: true` (`pkg/config/defaults.go:671`) makes `Register` return an empty context id and log *"per-agent browser-context isolation is OFF"* (`coordinator.go:349-359`). See D1.0a |
+| "the tool is `web_serve`" | **FALSE** | `const ToolNameWebServe = "serve_web"` (`pkg/tools/web_serve.go:46`). Wrong in this ADR, its round-1 review, and root `CLAUDE.md` |
+| "`browser_snapshot` inherits `browser_get_text`'s redaction posture" | **FALSE** | `RegisterSensitiveValues` appears zero times in `pkg/tools/browser/`. See D2.11 |
+| "ADR-043 D3 is unchanged" | **FALSE** | Three gateway sites resolve a manager by agent id. See D1.0 |
+| "N Chromes need N debug ports, blocked by the compiled sandbox allow-list" | **FALSE** | No `--remote-debugging-port` exists; CDP runs over inherited fds (`exec_resolver.go:60`), and the allow-list entry was removed (`sandbox_apply.go:414`). See D1.1a item 5 |
+
+**The pattern is worth naming:** every entry above is a claim I asserted from a
+plausible reading and did not test. Four of the six were caught only because a
+reviewer or spec-writer re-derived them from source. The one that cost most
+(D1.0a) was invisible for the entire first half of the design, and would have
+shipped acceptance criteria that pass over a product with no isolation at all.
+
+**Open, and of the same class: G-2.** D1.1a's load-bearing assumption — that
+`chrome.tabCapture` works against a second Chrome's default context — is
+currently guarded by a test using `skipIfNoBrowser`
+(`pkg/tools/browser/browser_e2e_test.go:57-63`), which **skips unless
+`OMNIPUS_BROWSER_E2E=1` is set**. A skip reports green. The single assumption
+this design rests on is protected by a gate that passes without running, which
+is precisely what `docs/internal/false-green-patterns.md` exists to catch.
