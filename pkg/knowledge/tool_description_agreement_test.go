@@ -203,7 +203,7 @@ func viewDefJSONKeys(t *testing.T) []string {
 // VaultFindRequest has no formulas map, so every `formula.<name>` would
 // resolve against nothing — but it arrived at the wrong end of the workflow.
 // The write now states it, in the loader's own words.
-func TestKnowledgeConfigure_WriteView_FormulaBearingViewIsReportedUnservable(t *testing.T) {
+func TestKnowledgeConfigure_WriteView_FormulaBearingViewIsServable(t *testing.T) {
 	home, ws, _ := a4Fixture(t, "kb")
 	deps, _ := a4Deps(home)
 	tool := NewConfigureTool(deps)
@@ -223,15 +223,17 @@ func TestKnowledgeConfigure_WriteView_FormulaBearingViewIsReportedUnservable(t *
 		},
 	})
 	require.Falsef(t, res.IsError, "a formula-bearing view is legal to STORE: %s", res.ForLLM)
-	require.Contains(t, res.ForLLM, "NOT SERVABLE by knowledge_find",
-		"the write reported plain success for a view knowledge_find will refuse")
-	require.Contains(t, res.ForLLM, string(records.ServeRefusalFormula),
-		"the machine-readable reason code must be in the response, not only prose")
-	require.Contains(t, res.ForLLM, "formula",
-		"the response must name what cannot be carried")
-	// A refusal with no remedy is a dead end; ViewServeRefusal.Remedy is
-	// always populated for exactly this reason.
-	require.Contains(t, res.ForLLM, "query the view's underlying type directly")
+	// The seam CLOSED: knowledge_find now serves a view carrying `formulas`,
+	// evaluating them per query. Marking it unservable would send an agent
+	// away from a view that works — the opposite of this section's purpose.
+	// The descending-grouping sibling still asserts the mark appears where it
+	// SHOULD, so the machinery is not going untested by this inversion.
+	require.NotContains(t, res.ForLLM, "NOT SERVABLE by knowledge_find",
+		"a formula-bearing view is servable; the write must not warn otherwise")
+	// The remedy line ("query the view's underlying type directly") is
+	// deliberately NOT asserted any more: it is emitted only with a refusal,
+	// and there is no longer a refusal to remedy. Its sibling test still pins
+	// that a real refusal carries one, so the remedy contract stays guarded.
 }
 
 // TestKnowledgeConfigure_WriteView_DescendingGroupingIsReportedUnservable —
@@ -322,8 +324,13 @@ func TestDescribeViews_UnservableViewIsMarkedInTheListing(t *testing.T) {
 	writeUnderMarker(t, root, "records", "widget.yaml", describeViewWidgetSchema)
 	schemas, _, err := records.LoadSchemas(root)
 	require.NoError(t, err)
+	// A DESCENDING GROUPING, not a formula: formula-bearing views became
+	// SERVABLE when that seam closed, so using one here would assert the
+	// opposite of the truth. VaultFindRequest.group_by is a bare []string, so
+	// serving this one would flatten the direction to ascending in silence —
+	// which is what the mark exists to warn an agent about.
 	writeUnderMarker(t, root, "views", "twice.yaml",
-		"name: twice\ntype: widget\nformulas:\n  double: \"batch * 2\"\n")
+		"name: twice\ntype: widget\ngrouping:\n  - property: batch\n    direction: desc\n")
 	writeUnderMarker(t, root, "views", "plain.yaml", "name: plain\ntype: widget\n")
 	views, report, err := records.LoadViews(root, schemas)
 	require.NoError(t, err)
@@ -335,7 +342,7 @@ func TestDescribeViews_UnservableViewIsMarkedInTheListing(t *testing.T) {
 
 	require.Contains(t, out, "NOT SERVABLE by knowledge_find",
 		"a view knowledge_find refuses must be marked in the listing an agent reads first")
-	require.Contains(t, out, string(records.ServeRefusalFormula))
+	require.Contains(t, out, string(records.ServeRefusalGroupDirection))
 
 	// The servable view must NOT carry the mark — otherwise the mark means
 	// nothing and both assertions above would pass against a renderer that
