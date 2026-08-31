@@ -354,8 +354,10 @@ func (r leafResolver) typed() bool { return r.recordType != "" }
 //	     the rest would narrow the view to one side of an "either" the
 //	     operator wrote deliberately — reported instead of guessed.
 //	not  same: half of a negation is a different exclusion, not a partial one.
+//	     It ALSO flips the polarity every leaf beneath it is judged at — see
+//	     resolveTree and v2Leaf.Negated.
 func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFilterNode, []string) {
-	node, losses := r.resolveTree(n, pos)
+	node, losses := r.resolveTree(n, pos, false)
 	return node, renderLosses(losses)
 }
 
@@ -386,6 +388,16 @@ func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFil
 // COMBINATOR). So a clause that is safely narrower on its own is not safely
 // narrower under a negation, and nothing may become newly translatable here
 // without a proof at the TREE level. Improving a sentence needs no such proof.
+//
+// THAT PROOF NOW EXISTS, AND IT IS A MECHANISM RATHER THAN A PROMISE.
+// resolveTree carries the POLARITY of the path from the root — flipped by
+// every `not:`, preserved by `all` and `any` — down to each leaf as
+// v2Leaf.Negated, and buildV2LeafNode refuses by name every translation that
+// is only a SUBSET of the Obsidian clause when it finds itself under an odd
+// number of negations. A translation that is EXACT (`=` on a declared value,
+// `IS NOT NULL` for a truthy test on a type with no falsy value) is unaffected
+// at any polarity, which is what keeps the ordinary `p != "done"` desugar —
+// itself a `not:` over an `=` leaf — translating exactly as before.
 // ---------------------------------------------------------------------------
 
 // resolvedLoss is one named loss before it is rendered: the EXPRESSION the base
@@ -436,7 +448,7 @@ func joinReasons(in []resolvedLoss) string {
 
 // resolveTree is resolve's body, working in unrendered losses so that a
 // combinator can report its OWN expression with its CHILD's reason.
-func (r leafResolver) resolveTree(n *rawNode, pos LossPosition) (*generated.VaultFilterNode, []resolvedLoss) {
+func (r leafResolver) resolveTree(n *rawNode, pos LossPosition, neg bool) (*generated.VaultFilterNode, []resolvedLoss) {
 	if n == nil {
 		return nil, nil
 	}
@@ -448,9 +460,16 @@ func (r leafResolver) resolveTree(n *rawNode, pos LossPosition) (*generated.Vaul
 		return n.Prebuilt, nil
 
 	case rawKindLeaf:
-		node, reason, ok := buildV2LeafNode(r, n.Leaf)
+		// The POLARITY travels with the leaf, because the leaf builder is
+		// where a translation is chosen and only the walk knows how many
+		// `not:` wrappers stand above it. `all` and `any` preserve it: a
+		// subset conjunct narrows a conjunction and a subset disjunct
+		// narrows a disjunction. `not` inverts it. See v2Leaf.Negated.
+		leaf := n.Leaf
+		leaf.Negated = neg
+		node, reason, ok := buildV2LeafNode(r, leaf)
 		if !ok {
-			return nil, []resolvedLoss{{Pos: LossFilterLeaf, Expr: describeLeaf(n.Leaf), Reason: reason}}
+			return nil, []resolvedLoss{{Pos: LossFilterLeaf, Expr: describeLeaf(leaf), Reason: reason}}
 		}
 		return node, nil
 
@@ -458,7 +477,7 @@ func (r leafResolver) resolveTree(n *rawNode, pos LossPosition) (*generated.Vaul
 		var kids []generated.VaultFilterNode
 		var losses []resolvedLoss
 		for _, k := range n.Kids {
-			child, childLosses := r.resolveTree(k, pos)
+			child, childLosses := r.resolveTree(k, pos, neg)
 			losses = append(losses, childLosses...)
 			if child != nil {
 				kids = append(kids, *child)
@@ -475,8 +494,12 @@ func (r leafResolver) resolveTree(n *rawNode, pos LossPosition) (*generated.Vaul
 
 	case rawKindAny, rawKindNot:
 		var kids []generated.VaultFilterNode
+		childNeg := neg
+		if n.Kind == rawKindNot {
+			childNeg = !neg
+		}
 		for _, k := range n.Kids {
-			child, childLosses := r.resolveTree(k, pos)
+			child, childLosses := r.resolveTree(k, pos, childNeg)
 			if child == nil || len(childLosses) > 0 {
 				// The group's own verbatim is what is NAMED, not the child's —
 				// a reader has to see which `or:`/`not:` block went missing,
@@ -772,6 +795,14 @@ func buildV2LeafNode(r leafResolver, l v2Leaf) (*generated.VaultFilterNode, stri
 		// type). Ours is a strict SUBSET, so it can only ever return FEWER
 		// rows — the direction FR-105 permits — and it needs no declared type
 		// to be safe, which is why an untyped view may carry it.
+		//
+		// A SUBSET IS ONLY SAFE IN POSITIVE POSITION. Under a `not:` the
+		// subset becomes a superset and the same clause returns MORE rows.
+		if l.Negated {
+			return nil, fmt.Sprintf(
+				"`!%s` has no faithful translation inside a `not:`: `IS NULL` is a strict SUBSET of Obsidian's falsy test, which also catches `false`, `0` and `\"\"` — safe at the top level, where a subset only narrows, but a negation inverts it and the clause would return MORE rows than the Obsidian original",
+				l.Property), false
+		}
 		return opNode(l.Property, generated.ISNULL), "", true
 
 	case shapeTruthy:
@@ -786,34 +817,106 @@ func buildV2LeafNode(r leafResolver, l v2Leaf) (*generated.VaultFilterNode, stri
 		return opNode(l.Property, generated.ISNOTNULL), "", true
 
 	case shapeIsSet:
-		// `prop != ""`. FR-007a rules this translation in as many words: for
-		// every NON-text type the empty string IS the absent state, so
-		// Obsidian's idiomatic "is set" becomes `IS NOT NULL`.
+		// `prop != ""`. FR-007a rules this translation on BOTH sides of its own
+		// rule, and they need two different operators.
 		//
-		// It is safe under BOTH readings of what Obsidian does with a property
-		// that is not there at all. If `undefined != ""` is TRUE (JavaScript's
-		// own answer), Obsidian returns the set-plus-absent notes and ours
-		// returns only the set ones — narrower. If Obsidian instead reads an
-		// absent property as `""`, the two sets are identical. Neither reading
-		// makes ours the larger set, which is the only question FR-105 asks.
+		// NON-TEXT. The empty string IS the absent state, so Obsidian's
+		// idiomatic "is set" is `IS NOT NULL`. It is safe under BOTH readings of
+		// what Obsidian does with a property that is not there at all. If
+		// `undefined != ""` is TRUE (JavaScript's own answer), Obsidian returns
+		// the set-plus-absent notes and ours returns only the set ones —
+		// narrower. If Obsidian instead reads an absent property as `""`, the
+		// two sets are identical. Neither reading makes ours the larger set,
+		// which is the only question FR-105 asks.
+		//
+		// TEXT, AND WHY THIS IS NO LONGER A REFUSAL. `""` stays a PRESENT value
+		// on text, so `IS NOT NULL` genuinely does over-match — it admits the
+		// record whose value IS the empty string, which the Obsidian filter
+		// excludes. That reasoning was always right ABOUT `IS NOT NULL`, and it
+		// was the only operator anyone had asked about. `<>` against the EMPTY
+		// LITERAL is a different question with a better answer:
+		//
+		//	property state        `IS NOT NULL`   `<> ""`
+		//	absent                false           false   (§8 R-2: an absent
+		//	                                              operand is false for
+		//	                                              every operator but
+		//	                                              `IS NULL`, and this
+		//	                                              leaf carries no
+		//	                                              Negate, so FR-008's
+		//	                                              re-inclusion — which
+		//	                                              is a property of the
+		//	                                              negative OPERATOR —
+		//	                                              never applies)
+		//	present, `""`         TRUE            false   ← the whole defect
+		//	present, a value      true            true
+		//
+		// So `<> ""` selects exactly "present and not the empty string". That is
+		// Obsidian's `!= ""` outright under the reading where an absent property
+		// is not `!= ""`, and a strict SUBSET under the JavaScript reading —
+		// the same two-reading proof the non-text branch already stands on, and
+		// neither reading makes ours the larger set.
+		//
+		// THE EMPTY LITERAL IS EXPRESSIBLE, which is the other half of why this
+		// works. `VaultFilterNode.value` carries no `minLength`; knowledgefind's
+		// buildLeaf sets `LiteralGiven` from `value != nil` rather than from the
+		// string being non-empty; and records.Filter.LiteralGiven exists in as
+		// many words because "the empty string is a legitimate value for `=`".
+		// A view's write-time validation checks enum literals only, so a text
+		// `<> ""` passes it.
+		//
+		// MANY IS COVERED, not excluded by luck: `=`/`<>` are element-wise on a
+		// many property (R-9), so `<> ""` there means "has a non-empty element",
+		// which is again a subset of what JavaScript's list-to-string coercion
+		// would answer.
 		if !r.typed() {
-			return nil, "an UNTYPED view cannot carry `!= \"\"`: on a text property the empty string is a PRESENT value (FR-007a), so `IS NOT NULL` would match a record the Obsidian filter excludes, and with no declared type there is nothing to rule that out", false
+			return nil, "an UNTYPED view cannot carry `!= \"\"`: on a text property `<> \"\"` is the faithful operator and on every other type it is `IS NOT NULL` (FR-007a), the two select different rows, and with no declared type there is nothing to choose between them", false
 		}
 		if prop.Type == records.TypeText {
+			if l.Negated {
+				return nil, fmt.Sprintf(
+					"`%s != \"\"` has no faithful translation on a TEXT property inside a `not:`: outside a negation it is exactly `%s <> \"\"` — present and not the empty string — but that is at best a SUBSET of the Obsidian clause, and a `not:` inverts a subset into a superset, re-admitting every record that never declared %s and returning MORE rows than the Obsidian original",
+					l.Property, l.Property, l.Property), false
+			}
+			return valueNode(l.Property, generated.LessThanGreaterThan, ""), "", true
+		}
+		if l.Negated {
 			return nil, fmt.Sprintf(
-				"`%s != \"\"` has no faithful translation on a TEXT property: FR-007a keeps `\"\"` a PRESENT value for text, so `IS NOT NULL` would also match a record whose %s is the empty string — a record the Obsidian filter excludes",
-				l.Property, l.Property), false
+				"`%s != \"\"` is `IS NOT NULL` on a %s property (FR-007a makes `\"\"` the absent state there), which is at best a SUBSET of the Obsidian clause — safe at the top level, where a subset only narrows, but a `not:` inverts it and the clause would return MORE rows than the Obsidian original",
+				l.Property, prop.Type), false
 		}
 		return opNode(l.Property, generated.ISNOTNULL), "", true
 
 	case shapeIsEmpty:
-		// `prop == ""`. `IS NULL` also matches a record that never declared the
-		// property at all, which Obsidian's comparison does not, so it returns
-		// MORE rows. There is no other operator to reach for: no non-text type
-		// has an empty literal to compare against (FR-007a).
+		// `prop == ""`, the mirror case, and it splits the same way.
+		//
+		// TEXT: `= ""` is exactly "present and empty" — absent is false (§8
+		// R-2), `""` is true, a value is false. Obsidian's `== ""` is that same
+		// set under the JavaScript reading and that set PLUS the absent records
+		// under the other, so ours is never the larger one.
+		//
+		// EVERY OTHER TYPE: still refused, and now for a reason that has been
+		// checked rather than assumed. `IS NULL` over-matches — it also matches
+		// a record that never declared the property, which the Obsidian
+		// comparison does not — and there is no literal-comparison path either:
+		// FR-007a makes `""` the ABSENT state on a date, integer, decimal,
+		// enum, relation, person or checkbox, so `""` is not a value any of
+		// those types can hold and Filter.Validate refuses the literal through
+		// the same ParseValue a note's own value goes through. Both operators
+		// are exhausted, not just the obvious one.
+		if !r.typed() {
+			return nil, "an UNTYPED view cannot carry `== \"\"`: on a text property `= \"\"` is the faithful operator, and on every other type the empty string is not a value the type can hold at all (FR-007a), so with no declared type there is nothing to choose between them", false
+		}
+		if prop.Type == records.TypeText {
+			if l.Negated {
+				return nil, fmt.Sprintf(
+					"`%s == \"\"` has no faithful translation on a TEXT property inside a `not:`: outside a negation it is exactly `%s = \"\"` — present and empty — but a `not:` over it also admits every record that never declared %s, and Obsidian's own `== \"\"` may already count those in, so the negated clause can return MORE rows than the Obsidian original",
+					l.Property, l.Property, l.Property), false
+			}
+			return valueNode(l.Property, generated.Equal, ""), "", true
+		}
 		return nil, fmt.Sprintf(
-			"`%s == \"\"` has no faithful translation: `IS NULL` also matches a record that never declared %s, which the Obsidian comparison does not, so it would return MORE rows than the original",
-			l.Property, l.Property), false
+			"`%s == \"\"` has no faithful translation on a %s property: `IS NULL` also matches a record that never declared %s, which the Obsidian comparison does not, so it would return MORE rows than the original — and no literal-comparison path exists either, because FR-007a makes `\"\"` the ABSENT state on a %s, so it is not a value the type can hold and the engine refuses the literal",
+			l.Property, prop.Type, l.Property, prop.Type), false
 
 	case shapeContains:
 		if !r.typed() {

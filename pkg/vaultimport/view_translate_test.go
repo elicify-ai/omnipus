@@ -495,13 +495,32 @@ func TestBuildV2Leaf_RefusesWhatWouldBroadenOrMisfire(t *testing.T) {
 			want: "MORE rows",
 		},
 		{
-			// The other half of the same trap: on TEXT the empty string stays
-			// a PRESENT value (FR-007a), so `IS NOT NULL` admits a record the
-			// Obsidian filter excludes.
-			name: "prop != \"\" on a TEXT property would admit the empty string",
+			// The other half of the same trap, now scoped to where it is
+			// still true. On TEXT the empty string stays a PRESENT value
+			// (FR-007a), so `IS NOT NULL` admits a record the Obsidian filter
+			// excludes — but `<> ""` does not, so the clause translates at the
+			// top level (see TestBuildV2Leaf_AcceptsWhatIsFaithful). Under a
+			// `not:` that subset inverts into a superset and it is refused
+			// again.
+			name: "prop != \"\" on a TEXT property inside a not: would broaden",
 			res:  typed,
-			leaf: v2Leaf{Property: "rationale", Shape: shapeIsSet},
-			want: "TEXT property",
+			leaf: v2Leaf{Property: "rationale", Shape: shapeIsSet, Negated: true},
+			want: "TEXT property inside a `not:`",
+		},
+		{
+			// The same inversion for the non-text translation, which is also
+			// only a subset of the Obsidian clause.
+			name: "prop != \"\" on a non-text property inside a not: would broaden",
+			res:  typed,
+			leaf: v2Leaf{Property: "decided", Shape: shapeIsSet, Negated: true},
+			want: "MORE rows",
+		},
+		{
+			// `!prop` is a subset of Obsidian's falsy test, so it inverts too.
+			name: "`!prop` inside a not: would broaden",
+			res:  typed,
+			leaf: v2Leaf{Property: "rationale", Shape: shapeFalsy, Negated: true},
+			want: "MORE rows",
 		},
 	}
 	for _, tc := range cases {
@@ -538,6 +557,12 @@ func TestBuildV2Leaf_AcceptsWhatIsFaithful(t *testing.T) {
 			leafResolver{schemas: decisionSchema()}, v2Leaf{Property: "whatever", Shape: shapeFalsy}, "whatever", generated.ISNULL, ""},
 		{"`prop != \"\"` on a non-text type is FR-007a's mechanical translation",
 			typed, v2Leaf{Property: "decided", Shape: shapeIsSet}, "decided", generated.ISNOTNULL, ""},
+		// The two TEXT empty-literal translations are asserted in
+		// empty_literal_leaf_test.go instead: this table reads `wantV == ""`
+		// as "no value at all", and the whole point of `<> ""` / `= ""` is
+		// that the value is PRESENT and empty — the distinction
+		// records.Filter spells `LiteralGiven`, and one this table cannot
+		// express without weakening every other row.
 		{"contains on a many property is element-wise equality (R-9)",
 			typed, v2Leaf{Property: "labels", Shape: shapeContains, Value: "urgent"}, "labels", generated.Equal, "urgent"},
 		{"contains on text is an anchored LIKE with the operand escaped",

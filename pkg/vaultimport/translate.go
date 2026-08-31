@@ -110,13 +110,18 @@ const (
 	// types that admit a present-but-falsy value.
 	shapeTruthy
 	// shapeFalsy is `!prop`. `IS NULL` is a strict SUBSET of it (Obsidian's
-	// falsy also catches `false`, `0` and `""`), so it is always safe.
+	// falsy also catches `false`, `0` and `""`), so it is safe wherever a
+	// SUBSET is safe — which is not everywhere. See v2Leaf.Negated.
 	shapeFalsy
-	// shapeIsSet is `prop != ""`. FR-007a rules the translation: for a
-	// non-text property the empty string IS the absent state, so "is set"
-	// becomes `IS NOT NULL`.
+	// shapeIsSet is `prop != ""`. FR-007a rules the translation TWICE, once
+	// per side of its own rule: for a NON-TEXT property the empty string IS
+	// the absent state, so "is set" becomes `IS NOT NULL`; for a TEXT
+	// property `""` stays a PRESENT value, so `IS NOT NULL` over-matches and
+	// the operator that does not is `<>` against the empty literal.
 	shapeIsSet
-	// shapeIsEmpty is `prop == ""`, which has no safe translation — see
+	// shapeIsEmpty is `prop == ""`. On TEXT it is `= ""` — "present and
+	// empty". On every other type there is no empty literal to compare
+	// against at all (FR-007a), and `IS NULL` would over-match; see
 	// buildV2LeafNode.
 	shapeIsEmpty
 )
@@ -132,6 +137,26 @@ type v2Leaf struct {
 	// Source is the original expression text, so a refusal quotes what the
 	// operator actually wrote rather than a reconstruction of it.
 	Source string
+	// Negated records that this leaf sits under an ODD number of `not:`
+	// wrappers, and it exists because a proof about a leaf is not a proof
+	// about the view.
+	//
+	// Several of the translations below are APPROXIMATE in one direction:
+	// they return a SUBSET of what the Obsidian expression selects, which
+	// FR-105 permits — fewer rows, never more. A `not:` inverts that. The
+	// subset becomes a SUPERSET, and knowledge_find's `not` has no absence
+	// rule of its own to soften it (tree.go evaluates a bare
+	// `!inner.matched`; FR-008's absent-rescue lives on the negative
+	// OPERATOR inside records.PreparedFilter and never reaches a
+	// COMBINATOR). So an approximate leaf that is safe at the top level is a
+	// BROADENING under one `not:`, and buildV2LeafNode refuses it there by
+	// name instead.
+	//
+	// It is set by view_write.go's resolveTree, which is the only place that
+	// knows the path from the root, and it is FALSE by default so a leaf
+	// built without thinking about polarity is treated as the exact one it
+	// has to be.
+	Negated bool
 }
 
 // TreeTranslation is what walking one filter (sub)tree produced.
