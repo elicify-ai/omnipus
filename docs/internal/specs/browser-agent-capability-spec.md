@@ -25,6 +25,8 @@
 | 9 | `browser_upload_file` uses **`FSOpWrite`**, not `FSOpSend` + a hand-rolled roots check. | Grill M9 |
 | 10 | The actionability gate ships with a **revert switch** (FR-034), an **audit event** on uploads (FR-031), and **failure telemetry** (FR-032). | Grill M12/M13 |
 | 11 | The A-5 `Page`-domain spike is **resolved by reading chromedp's source**, not deferred. | Grill M6 |
+| 12 | **The write lease is REMOVED from this spec** and relocated to the D1 spec's §14 annex. FR-023, US-14 and S-52…S-54 are tombstoned. FR-035's exemption stays here and needs a matching D1 amendment. | Operator ruling 2026-08-31 (cross-spec duplication) |
+| 13 | Two ADR changes absorbed: **D1.2 superseded** (no attended/unattended split — every agent on a workspace shares its browser and logins, delegated work included) and **D1.1a** (isolation is now one Chrome process per workspace with its own `--user-data-dir`, not CDP browser contexts). Neither changes D2's tool surface; §6 records what they do change. | ADR-072 D1.1a, D1.2 |
 
 ---
 
@@ -77,13 +79,13 @@ Cited as `file::symbol` (grill m2). Line numbers appear only for immovable fixtu
 | `tools.go::TypeTool.Execute` | **modifies** | Same; the `clear` arg's `SetValue`+`SendKeys` sequence must run *after* the gate, not before. |
 | `tools.go::GetTextTool.Execute` | **no wait change** | Read-only. `WaitReady` (DOM presence, 8 s budget `tools.go::getTextWaitTimeout`) is deliberate — `<title>` is present but never visible. The gate is for **action** tools; forcing it here would reintroduce the documented ~30 s hang. Gains the role/name locator only. |
 | `tools.go::WaitTool.Execute` | **modifies (locator only)** | Gains role/name. Its own `WaitVisible` stays — `browser_wait`'s contract *is* visibility, not actionability. |
-| `tools.go::controlledResult` | **reuses + extends** | Returns `{"deferred": true, "reason": …}` as a **non-error** result when a human holds the live view (`mgr.Live().IsControlled`). Its doc comment names seven callers (navigate/click/type/evaluate/switch_tab/close_tab/open_tab); read-only tools (`browser_screenshot`/`browser_get_text`/`browser_wait`) are deliberately ungated. The D2.10 write lease returns the **same shape** — no prompt rewrite. Every new *action* tool must call it, **except `browser_handle_dialog`** (FR-035) and `browser_snapshot` (read-only). |
+| `tools.go::controlledResult` | **reuses + extends** | Returns `{"deferred": true, "reason": …}` as a **non-error** result when a human holds the live view (`mgr.Live().IsControlled`). Its doc comment names seven callers (navigate/click/type/evaluate/switch_tab/close_tab/open_tab); read-only tools (`browser_screenshot`/`browser_get_text`/`browser_wait`) are deliberately ungated. The D1 write lease (`browser-workspace-ownership-spec.md` §14) returns the **same shape** — no prompt rewrite. Every new *action* tool must call it, **except `browser_handle_dialog`** (FR-035) and `browser_snapshot` (read-only). |
 | `tools.go::capGetText` / `::maxGetTextChars` | **read, NOT reused** | `maxGetTextChars = config.DefaultBuiltinSuccessCap` = 64,000 (`pkg/config/context_settings.go::DefaultBuiltinSuccessCap`). **Verified: `capGetText` is `text[:maxGetTextChars] + getTextTruncationSuffix`, compared against `len(text)` — an arbitrary BYTE cut that can split a UTF-8 rune and always splits mid-node.** `browser_snapshot` obeys the **same constant** but **not the same mechanism** — see FR-017 and grill M3. |
 | `manager.go::BrowserManager.ValidateURL` | **modifies** | `manager.go::blockedSchemes` covers `file`, `javascript`, `data`, `chrome`, `chrome-extension`. **One** format string serves all five: `"browser: %s:// URLs are blocked for security reasons"`. Only `file` has a supported alternative, so the pointer must be scheme-specific. |
 | `manager.go::installTargetListenerLocked` | **pattern source, NOT modified** | Installs `chromedp.ListenTarget` on **`se.tabs[0]` only**, deliberately — `Target` discovery is browser-global so one listener suffices. Idempotence key: `sessionEntry.listenerTarget`, compared against the root tab's `targetID`; re-armed per ADR-041 fix F3 because "chromedp.ListenTarget's registration is scoped to the ctx it was given, so closing the tab that ctx belongs to silently ends the listener forever unless something re-installs it". **`Page.javascriptDialogOpening` is per-tab, not browser-global**, so the dialog listener is a SEPARATE installer with its own per-tab key — see Stream C and FR-014. |
 | `manager.go::handleTargetEvent` | **reuses (pattern)** | Runs synchronously on the CDP dispatch goroutine and must never block or call `chromedp.Run` inline. Its own doc records that `mgr.Session()` runs a blocking `chromedp.Run` to **recreate a dead tab ctx** — the reason FR-014 needs a re-arm rule. The dialog listener inherits this discipline verbatim. |
 | Tab-ctx creation sites | **modifies** | Where a tab ctx is born and the per-tab dialog listener must be armed: `manager.go::createFirstTab` (also the target of `Session`'s crash-recovery recreate), `manager.go::OpenTab`, `manager.go::adoptTarget` / `::adoptTargetWithRetry` (ADR-041 D2 adoption). Named exhaustively so FR-014 is implementable without a hunt. |
-| `manager.go::ReapIdleSessions` | **modifies (lease interaction)** | Tears down idle browsing contexts and tabs under `m.mu`. FR-023 adds lease state; the reaper must not tear down a leased context. |
+| `manager.go::ReapIdleSessions` | **not modified by D2** | Tears down idle browsing contexts and tabs under `m.mu`. Its interaction with the write lease is the **D1 spec's** concern, not this one — see the lease relocation note in §3. |
 | `metadata.go::BrowserBuiltinMetadata` | **modifies** | Eleven metadata-only instances, nil `*BrowserManager`. Feeds `pkg/gateway/gateway.go::buildKnownBuiltinToolNames` → the coverage universe. **Six additions required** (all six names, including `browser_upload_file` — see FR-029 on the difference between *seeded* and *registered*). |
 | `register.go::RegisterTools` | **modifies** | Five `RegisterReplacing` calls now, six once #659 lands. `RegisterReplacing`, not `Register` — the hot-reload rationale in its own doc applies identically. |
 | `register.go` `EvaluateTool{executeEnabled: …}` | **read, must NOT be copied** | `browser_evaluate` is registered unconditionally but **runtime-gated** by `sandbox.browser_evaluate_enabled`, independent of tool policy. It is the one place "seventeen registered" is true and misleading at once. **None of the six may replicate this pattern** — see §5 (grill m1). |
@@ -177,7 +179,7 @@ Revision 1 ordered a spike to find out whether chromedp enables the `Page` domai
 | `BrowserBuiltinMetadata` | **HIGH** | `buildKnownBuiltinToolNames`; `GET /api/v1/tools` catalog | Coverage universe — a tool in metadata but absent from `allStaticToolNames` fails the sync test |
 | `tier3SearchOnlyToolNames` + tier arithmetic literals | **MEDIUM** | `TestVisibility_TierArithmetic`, `TestVisibility_SearchOnlyToolsRemainInSearchIndex` | Build fails until updated — by design (ADR-071 FR-034), **but only for Tier 1/2; FR-036 adds the assertion that makes it true for Tier 3 too** |
 | Per-tab dialog listener (new, alongside `installTargetListenerLocked`) | **HIGH** | Every tab's event plumbing; ADR-041 tab adoption | `tabs_test.go`, `tab_adoption_e2e_test.go`, `navigate_stranded_tab_test.go` |
-| `ReapIdleSessions` (lease + dialog-state teardown) | **MEDIUM** | Idle reaping of leased contexts | FR-023's hold-time contract |
+| `sessionEntry` dialog-state teardown | **MEDIUM** | Tab close / ctx recreation must evict the per-tab dialog-listener key | FR-014's re-arm rule (S-33) |
 | `ValidateURL` | LOW | `browser_navigate`, `browser_open_tab` | `blocked_schemes_test.go` (asserts the current message) |
 | Ray / Explorer / Researcher `serve_web` grant (FR-030) | **MEDIUM** | Three agents gain a tool that writes files and serves them | `TestCoreAgentSeed_*`; a real posture change, argued in §11 |
 
@@ -253,28 +255,33 @@ func (e *ErrNotActionable) Error() string // "browser_click: element %q is not a
 // by browser_handle_dialog (FR-035 — it is a recovery verb).
 func waitActionable(tabCtx context.Context, toolName, target, display string, timeout time.Duration) error
 
-// leaseWrite acquires the D2.10 single-writer lease for the browsing context
-// named by ctxKey, held for the duration of ONE action tool call.
+// THE WRITE LEASE IS NOT DEFINED HERE. It belongs to the D1 spec.
 //
-// CONTRACT (all four points are load-bearing; grill M10):
-//  1. release is ALWAYS non-nil, including on the deferred path, where it is a
-//     no-op. Every call site writes `defer release()`; a nil on the contended
-//     path would panic on every contended call.
-//  2. FAIL-FAST, never blocking. On contention it returns immediately with the
-//     SAME non-error {"deferred": true, "reason": ...} ToolResult shape
-//     controlledResult already returns — so the model-facing contract is
-//     unchanged and no system prompt needs rewriting.
-//  3. The hold is bounded by the CALLING TOOL'S OWN context. leaseWrite starts
-//     a watchdog on tabCtx.Done() that force-releases the lease and records a
-//     lease_forced_release audit field. A holder that never returns therefore
-//     cannot wedge the context past the caller's own page timeout.
-//  4. ReapIdleSessions MUST NOT tear down a leased browsing context. It skips a
-//     leased context and reconsiders it on the next sweep.
+// Operator ruling, 2026-08-31: both specs had independently specced a lease
+// over the same seven call sites with incompatible signatures. Had both
+// landed, the action tools would have taken two unrelated mutexes and mutual
+// exclusion would have been LOST for whichever tool took only one — the
+// nondeterministic interleaving ADR §5 calls the most expensive failure class
+// for an agent. ADR §4 calls the lease "the largest open risk in D1", and it is
+// D1's re-key that creates the contention (before D1, two agents on one
+// workspace had two browsers and could not collide), so it is D1's to own.
 //
-// ctxKey is D1's browsing-context key, threaded through opaquely. This spec
-// does not decide what it is. (Revision 1's signature named it `sessionID`
-// while the prose claimed the key was undecided — grill M10.)
-func leaseWrite(mgr *BrowserManager, ctxKey, toolName string) (deferred *tools.ToolResult, release func())
+// The normative definition is:
+//   docs/internal/specs/browser-workspace-ownership-spec.md
+//   §14 "Annex — the write lease (NORMATIVE)", §14.1 API and §14.2 Rules,
+//   requirements FR-019…FR-024 and FR-019a of that spec.
+//
+// What D2 codes against, and must NOT restate:
+//   deferred, release := leaseWrite(ctx, mgr, key, agentID, "browser_click")
+//   if deferred != nil { return deferred, nil }
+//   defer release()
+//
+// D2's five new ACTION tools are automatically in scope via that annex's
+// membership RULE (§14.2 rule 3: every tool in pkg/tools/browser that mutates
+// page or tab state takes the lease, enforced against the REGISTRY, not a
+// hand-written list) — which is precisely why D2 does not need to enumerate
+// them. D2's obligation is only to state its two EXEMPTIONS and to get them
+// into that annex's closed exemption set: see FR-035 and §15 item 5.
 ```
 
 **Per-tool locator matrix — the table that makes the `Locator` abstraction pay for itself (grill m8).** Revision 1 had exactly one entry and the grill was right that a one-entry table does not justify a struct. It has five:
@@ -284,10 +291,10 @@ func leaseWrite(mgr *BrowserManager, ctxKey, toolName string) (deferred *tools.T
 | `browser_click`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_wait`, `browser_get_text` | ✅ | ✅ | ✅ | any one |
 | `browser_type` | ✅ | ❌ | ✅ | `text` is the **value typed**, not a locator — reject by name (FR-004) |
 | `browser_press_key` | ✅ | ❌ | ✅ | `key` is a value; `text` collides the same way `browser_type`'s does — reject by name (FR-004, grill O3) |
-| `browser_press_key` with **no** locator | — | — | — | legal: dispatches to whatever holds focus, or to the document body when nothing does. Takes the lease, skips `waitActionable` (A-10). |
+| `browser_press_key` with **no** locator | — | — | — | legal: dispatches to whatever holds focus, or to the document body when nothing does. Takes the D1 lease (§14), skips `waitActionable` (A-10). |
 | `browser_snapshot`, `browser_handle_dialog` | ❌ | ❌ | ❌ | take no locator at all |
 
-**Discipline inherited, not invented.** `waitActionable` and `resolveTarget` issue CDP round trips and therefore **must never run with `m.mu` held** — the ADR-038 rule the manager already documents on `installTargetListenerLocked` and `handleTargetEvent`. Every new tool follows the existing call order exactly: `controlledResult` → `leaseWrite` → `mgr.Session(...)` → `context.WithTimeout` → `displayLocator` → `resolveTarget` (+`defer cleanup()`) → `waitActionable` → the act. **`browser_handle_dialog` deliberately starts at `mgr.Session(...)`** — see FR-035.
+**Discipline inherited, not invented.** `waitActionable` and `resolveTarget` issue CDP round trips and therefore **must never run with `m.mu` held** — the ADR-038 rule the manager already documents on `installTargetListenerLocked` and `handleTargetEvent`. Every new tool follows the existing call order exactly: `controlledResult` → `leaseWrite` (D1 §14) → `mgr.Session(...)` → `context.WithTimeout` → `displayLocator` → `resolveTarget` (+`defer cleanup()`) → `waitActionable` → the act. **`browser_handle_dialog` deliberately starts at `mgr.Session(...)`** — see FR-035.
 
 ### Stream A — Target resolution + actionability [CRITICAL PATH]
 **Owns:** `target.go` (new: `Locator`, `resolveTarget`, AX branch), `actionable.go` (new: `waitActionable`, `ErrNotActionable`, the FR-034 revert switch, the FR-032 counters), the rewiring of click/type/get_text/wait onto `resolveTarget`, the wait replacement in `ClickTool.Execute` and `TypeTool.Execute`, `displayLocator`'s role/name rendering.
@@ -367,7 +374,9 @@ Revision 1 asserted "one batched CDP round trip on the fast path" while defining
 
 **Deliberately NOT auto-dismissed.** An auto-dismiss policy is a decision about the *page's* semantics (an `onbeforeunload` confirm is not an `alert`), and silently accepting one is indistinguishable from a click the agent did not make. The tool is explicit; the *recovery pointer* is automatic.
 
-**FR-035 — `browser_handle_dialog` is exempt from BOTH `controlledResult` and `leaseWrite` (grill C5).**
+**FR-035 — `browser_handle_dialog` is exempt from BOTH `controlledResult` and the D1 write lease (grill C5).**
+
+*This requirement survives the lease's relocation to D1 unchanged, because the exemption is a property of the **dialog tool**, not of the lease mechanism. D2 states it; D1 §14.2 rule 3 must carry it — see §15 item 5.*
 
 Revision 1's shared contract said "every new *action* tool must call `controlledResult`", and §5 exempted only `browser_snapshot` from the lease. Composed with the wedge, that made the only recovery verb unreachable exactly when it is needed:
 
@@ -376,9 +385,9 @@ Revision 1's shared contract said "every new *action* tool must call `controlled
 
 ADR D2.3 requires the opposite in terms: *"Whatever is built must guarantee the session cannot be left wedged."*
 
-**Therefore `browser_handle_dialog` calls neither.** It sits alongside the read-only tools that `controlledResult` already leaves ungated — `browser_screenshot`, `browser_get_text`, `browser_wait` — for a different but equally specific reason: **it is a recovery verb, not a write. Its entire effect is to return the tab to the state every other tool assumes.** Gating a recovery verb behind the mechanisms the fault disables is a deadlock, not a safety property.
+**Therefore `browser_handle_dialog` calls neither `controlledResult` nor `leaseWrite`.** It sits alongside the read-only tools that `controlledResult` already leaves ungated — `browser_screenshot`, `browser_get_text`, `browser_wait` — for a different but equally specific reason: **it is a recovery verb, not a write. Its entire effect is to return the tab to the state every other tool assumes.** Gating a recovery verb behind the mechanisms the fault disables is a deadlock, not a safety property.
 
-**Why this is safe rather than a hole in D2.10.** The lease exists to stop two writers interleaving *page mutations*. `HandleJavaScriptDialog` mutates no page state; it releases a blocked execution context. Two concurrent calls are idempotent by the map-clear-before-CDP rule above. And the elevation concern that *is* real — `accept:true` on a destructive `confirm()` — is answered by tool policy and the `accept:false` default (§11 M8 row), not by a lease.
+**Why this is safe rather than a hole in the lease.** The lease exists to stop two writers interleaving *page mutations*. `HandleJavaScriptDialog` mutates no page state; it releases a blocked execution context. Two concurrent calls are idempotent by the map-clear-before-CDP rule above. And the elevation concern that *is* real — `accept:true` on a destructive `confirm()` — is answered by tool policy and the `accept:false` default (§11 M8 row), not by a lease.
 
 ### Stream D — `browser_snapshot`
 **Owns:** `browser_snapshot` in `tools_snapshot.go`; the shared AX-tree fetch with Stream A (D2.4: *"Build them together or the second one is built twice"*).
@@ -405,14 +414,15 @@ ADR D2.3 requires the opposite in terms: *"Whatever is built must guarantee the 
 **Coverage is closed by one edit.** `ValidateToolPolicyCoverage` is OR-based: a global entry in `defaults.go` covers every agent. The per-agent edits set *posture*, not coverage. This is why Mia and Ava need **no** edit at all — `denyAllThenOverride` starts every `allStaticToolNames` member at `deny` and they list no browser override.
 **FR-029's one subtlety, stated because it decides an ordering:** `browser_upload_file`'s **name** still enters `allStaticToolNames`, `defaults.go` and `BrowserBuiltinMetadata` in this stream, or coverage gaps appear and `TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog` fails. **"Held" means unregistered, not unseeded** — Stream B omits its `RegisterReplacing` line until #659 lands.
 
-### Stream F — Error routing + write lease
-**Owns:** the `file://` pointer in `ValidateURL`; `leaseWrite` (D2.10); the FR-030 `serve_web` grants (coordinated with Stream E, same files).
+### Stream F — Error routing
+**Owns:** the `file://` pointer in `ValidateURL`; the FR-030 `serve_web` grants (coordinated with Stream E, same files).
+**Does NOT own the write lease.** It did in revision 2's first draft; the lease was relocated to the D1 spec by operator ruling on 2026-08-31 — see the interface-contract note in §3 and §15 item 5.
 
 - **`file://` (FR-019).** The shared message serves five schemes and only `file` has an answer, so branch: `file` gets `"browser: file:// URLs are blocked (they would bypass filesystem confinement). To view a local file in the browser, serve it with the serve_web tool — it returns a /preview/<agent>/<token>/ http URL that browser_navigate accepts."` The other four keep the existing string. **The tool name is `serve_web`**.
 - **FR-030 — the pointer must be reachable (grill M4).** Verified: `serve_web` is `allow` in the global default **and** is a member of `allStaticToolNames`, so every agent built through `denyAllThenOverride` resolves `deny` unless it lists an override — and **only Jim does**. Of the five agents that can call `browser_navigate` today (Jim, Ray, Explorer, Researcher, and Worker via `tightenGlobalCeiling`'s sparse-map inheritance of the global `allow`), **three resolve `serve_web: deny`: Ray, Explorer and Researcher.** For them the new message trades one dead end for a longer dead end that costs a failed tool call to discover — **#242's dead end relocated, which is precisely what D2.5 exists to remove.** *(The round-2 grill headline said "four of six" and the task framing said "five of six"; the verified figure is three of the five browser-capable agents. The fix is unchanged either way.)*
   **Decision: seed `serve_web: allow` for every agent that holds the browser surface.** Ray, Explorer and Researcher gain it; Jim and Worker already have it; Mia and Ava hold zero browser tools and are unaffected. Argued in §11 as a real posture change, not a bookkeeping edit.
   **And the pointer's other failure mode (grill unasked-question 9):** `gateway.preview_enabled` is live and read per-request (ADR-044); with it off, `/preview/` 404s and the route is dead for Jim too. The message therefore ends with a conditional clause rather than a promise: `…http URL that browser_navigate accepts (requires the serve_web tool and gateway.preview_enabled).` One clause, no extra round trip, honest when the flag is off.
-- **Write lease (FR-023).** Per browsing context, held for one action tool call, non-error `{"deferred": true, "reason": …}` on contention. **Full contract in the interface block above** — always-non-nil `release`, fail-fast, ctx-bounded watchdog, and the `ReapIdleSessions` interaction. **D1 boundary:** the lease is keyed by *the browsing context*; the parameter is named `ctxKey` and this spec does not decide what the key is.
+- **Write lease — RELOCATED, not dropped.** Defined normatively in `docs/internal/specs/browser-workspace-ownership-spec.md` §14. D2's five new action tools are in scope automatically through that annex's registry-enforced membership rule (§14.2 rule 3); D2 adds no lease code, no lease test and no lease requirement of its own. The one thing D2 still owns is its two **exemptions** — FR-035.
 
 **Parallelization.** E lands first (names + policy, no behaviour). A is then the critical path. Once A's interface commit exists, B, C, D and F fan out — different files. Stream C is the only one that touches `manager.go`'s listener plumbing and should not be parallelised against another `manager.go` edit.
 
@@ -480,7 +490,9 @@ ADR D2.3 requires the opposite in terms: *"Whatever is built must guarantee the 
   **And the snapshot handle is deliberately not a wire type (grill unasked-question 10).** It is a 0-based index inside an opaque text result. If a future UI ever renders it structurally, that is a **new wire type** requiring the full 5-step process — it must not arrive by accident because a component started parsing the text.
 - **SPA.** No change, and one **assertion**: `src/lib/toolVisibility.ts` contains no `browser` reference, so all seventeen browser tools render in the chat thread. FR-028 depends on that; §5 forbids changing it.
 - **Filesystem (ADR-046 / ADR-063).** `browser_upload_file` only. Chokepoint `tools.ResolvePath` with **`FSOpWrite`**; the `PathHandle`-cannot-mediate caveat and its accepted `RealPath()` TOCTOU window are in Stream B.
-- **D1 boundary — three items this spec does not decide.** (a) The browsing-context key the write lease uses. (b) D2.11's browsing-context-creation audit event. (c) D2.11's team-editing-UI disclosure. All three act on an object D1 owns. **D1.0a's `CaptureSharedContext` default is a fourth**, and D2 is independent of its answer.
+- **D1 boundary — four items this spec does not decide.** (a) **The write lease in its entirety** — relocated to `browser-workspace-ownership-spec.md` §14 by operator ruling, 2026-08-31. (b) D2.11's browsing-context-creation audit event. (c) D2.11's team-editing-UI disclosure. (d) D1.0a's `CaptureSharedContext` default. D2 is independent of every one of them.
+- **D1.1a — the isolation mechanism changed under D2, and D2 is unaffected in surface but not in environment.** D1 now specs **one Chrome process per workspace, each with its own `--user-data-dir`**, replacing per-agent CDP browser contexts. Nothing in D2's tool surface changes: every tool already resolves its tab through `mgr.Session(...)`, which is the seam that will resolve to the right Chrome. **Two consequences D2 implementers must not assume away:** (i) there may now be **several Chrome processes on one host**, so any test that assumes a single browser process, counts processes, or reuses a hard-coded devtools endpoint must be written per-workspace — this affects the §10 integration tests, which should each stand up their own workspace rather than sharing one; and (ii) the FR-007 round-trip count and SC-004's measurement harness must run **one workspace at a time**, or they measure contention between Chromes rather than the gate.
+- **D1.2 is superseded, and this spec contains nothing that depended on it.** Unattended delegated work no longer gets a separate browsing session — every agent on a workspace shares that workspace's browser and its logins. **Checked explicitly:** the only places this document discusses unattended agents are §11(a) and §12 A-4, and both are about *who can answer an `ask` approval prompt* (the #659 / `AutoDenyAsk` question), not about session isolation. No claim in this spec assumes a delegated agent has its own browser or its own logins. The supersession does, however, **sharpen §2.3's accepted risk**: a snapshot taken by any agent on the workspace sees the same signed-in state as every other, so "a snapshot of a signed-in page can carry a card number into the transcript" now applies to delegated work too, with no attended-operator discriminator to soften it.
 - **Human live view.** `browser_handle_dialog` is agent-facing. A human driving the wheel on a tab with an open dialog has no button. Today that tab is wedged for the human too; after this work it stays wedged for the human and becomes recoverable for the agent — **and, per FR-035, the agent's recovery is no longer blocked by the human's presence**, which is the compounding case revision 1 created. **Recorded as an accepted gap, not solved** — a live-panel dialog affordance would need a new WS frame and therefore a `contracts/` change, out of scope here. §13 holdout 8 measures how bad it is.
 
 ### 6.1 Operability — what an on-call operator sees (grill M12)
@@ -591,11 +603,7 @@ Revision 1 had no logging, audit or metrics requirement anywhere; §6's "Failure
 - AC2: **Given** each of the six, **When** `ToolManifestVisibility` is called, **Then** it returns the tier §12 A-3 records.
 - AC3 (**FR-036, the one that can actually fail**): **Given** a name added to `tier3SearchOnlyToolNames` that is **not** a registered builtin (e.g. the typo `browser_selct_option`), **When** the new partition test runs, **Then** it **fails**. *Verified: the existing test cannot detect this — `ToolManifestTier(n) == ManifestLazy` is trivially true for any string outside the two enumerated maps, because Tier 3 is the residual. The fixture is hand-maintained and nothing consults the registry, so a genuinely new Tier-3 tool nobody adds produces no failure at all.*
 
-**US-14 (P1) Two writers, one context.** As an operator, concurrent agent writes must not interleave.
-- AC1: **Given** two concurrent `browser_click` calls on one browsing context, **When** both run, **Then** exactly one acts; the other returns non-error `{"deferred": true, …}` and `IsError` is false.
-- AC2: **Given** the deferred caller, **When** it runs `defer release()`, **Then** `release` is non-nil and the call is a no-op — never a panic.
-- AC3: **Given** a lease holder whose tool context is cancelled without releasing, **When** the watchdog fires, **Then** the lease is force-released and the next writer acquires it.
-- AC4: **Given** a leased browsing context, **When** `ReapIdleSessions` runs, **Then** the context is skipped, not torn down.
+**US-14 — WITHDRAWN (relocated to the D1 spec).** "Two writers, one context" and its four acceptance criteria moved to `docs/internal/specs/browser-workspace-ownership-spec.md` §14 and its FR-019…FR-024, by operator ruling 2026-08-31. Retained as a numbered tombstone rather than renumbered, so every existing cross-reference in this document and in the round-2 grill still resolves. **D2 asserts nothing about the lease.** Its only remaining lease-adjacent obligation is FR-035's exemption, which lives under US-9.
 
 **US-16 (P1) A host with no Chromium says so.** As an operator on linux/arm64, I need the failure to name the cause.
 - *Why:* ADR D2.7 records this as a **shipping** configuration where every `browser_*` tool is registered and guaranteed to fail (#665). Six new tools multiply the surface on which that message appears.
@@ -863,20 +871,7 @@ Revision 1 had no logging, audit or metrics requirement anywhere; §6's "Failure
 - **When** the new partition test runs
 - **Then** it **fails**, naming the typo as a Tier-3 fixture entry that is not a registered builtin — and, run against the correct fixture, the four-set union equals `buildKnownBuiltinToolNames()` exactly, in both directions
 
-**S-52: the second writer defers, it does not error (Concurrency) — US-14/AC1-AC2, FR-023**
-- **Given** two concurrent `browser_click` calls on one browsing context
-- **When** both execute
-- **Then** exactly one acts; the other's result parses as `{"deferred": true, "reason": …}` with `IsError == false`, and the deferred caller's `release` is non-nil and safe to call
-
-**S-53: an abandoned lease is force-released (Concurrency) — US-14/AC3, FR-023**
-- **Given** a lease holder whose tool context is cancelled without calling `release`
-- **When** the watchdog fires on `ctx.Done()`
-- **Then** the lease is released, a `lease_forced_release` field is recorded, and a subsequent writer acquires it rather than deferring forever
-
-**S-54: the reaper skips a leased context (Concurrency) — US-14/AC4, FR-023**
-- **Given** a browsing context with a held lease and an idle timestamp past the reap threshold
-- **When** `ReapIdleSessions` runs
-- **Then** the context is not torn down, and it is reaped on a later sweep once the lease is released
+**S-52, S-53, S-54 — WITHDRAWN (relocated to the D1 spec).** The three lease scenarios (second writer defers; abandoned lease force-released; reaper skips a leased context) are the D1 spec's to specify and test, per its §14 annex. Numbers retained as tombstones so S-55…S-57 keep their identifiers and every cross-reference resolves.
 
 **S-55: a host with no Chromium names the missing browser (Error) — US-16/AC1, FR-033**
 - **Given** a resolver configured to find no Chromium (the linux/arm64 shipping state, #665)
@@ -897,7 +892,7 @@ Revision 1 had no logging, audit or metrics requirement anywhere; §6's "Failure
 
 ## 9. Traceability matrix (FR ↔ US ↔ BDD ↔ test ↔ ADR/grill)
 
-**36 FRs, 57 BDD scenarios, 18 user stories.** Every FR has at least one US, one BDD scenario and one TDD entry; every BDD scenario appears here; every US appears here.
+**35 live FRs (FR-023 withdrawn), 54 live BDD scenarios (S-52…S-54 withdrawn), 17 live user stories (US-14 withdrawn).** Every **live** FR has at least one US, one BDD scenario and one TDD entry; every live BDD scenario appears here; every live US appears here. The three withdrawn identifiers are tombstoned rather than renumbered — deliberately, so that this document, the round-2 grill and the D1 spec's §14 cross-reference all keep resolving. A tombstone is not a dangling row: it carries no test **because D2 asserts nothing there**, and it names where the requirement actually lives.
 
 | FR | US | BDD | Test (TDD, §10 order) | ADR / grill |
 |---|---|---|---|---|
@@ -923,7 +918,7 @@ Revision 1 had no logging, audit or metrics requirement anywhere; §6's "Failure
 | FR-020 tier assignment + drift-test edits (**§12 A-3 open**) | US-13/AC1-AC2 | S-50 | `TestVisibility_TierArithmetic`, `TestVisibility_PreviewedSetIsExactlySeven` (5) | D2.8 |
 | FR-021 policy seeded for every agent; boot survives; upload is `ask` everywhere | US-8/AC3, US-12 | S-25, S-47, S-48 | `TestToolPolicyCoverage_SixNewBrowserTools_NoGaps` (2), `TestCoreAgentSeed_BrowserD2Posture` (3), `TestCoreAgentSeed_UploadIsAskForEveryAgent` (4) | D2.9 + **operator ruling** / grill C3 |
 | FR-022 catalog sync (`allStaticToolNames` ↔ metadata) | US-12/AC4 | S-49 | `TestValidateOverrideKeys_PanicsOnUnknown` (1), `TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog` (existing) | Hard Constraint #6 |
-| FR-023 write lease: defers, never errors, non-nil release, ctx-bounded, reaper-safe | US-14 | S-52, S-53, S-54 | `TestLeaseWrite_SecondWriterDeferred`, `_DeferredReleaseIsNoOp`, `_WatchdogForceReleases`, `_ReaperSkipsLeasedContext` (24) | D2.10 / grill M10 |
+| ~~FR-023 write lease~~ **WITHDRAWN — relocated to the D1 spec** | ~~US-14~~ | ~~S-52…S-54~~ | ~~`TestLeaseWrite_*`~~ | Normative home: `browser-workspace-ownership-spec.md` §14 + its FR-019…FR-024, FR-019a. Operator ruling 2026-08-31. **This row is a tombstone, not a dangling requirement**: it has no test because D2 asserts nothing here, and the number is retained so cross-references resolve. |
 | FR-024 Explorer/Researcher parity: 5 × `allow` + `ask` on upload | US-12/AC2 | S-48 | `TestCoreAgentSeed_ExplorerResearcherBrowserParity` (4) | D2.9 corrected / grill C3, M11 |
 | FR-025 no `contracts/` change | — | — | `make verify-contracts` (27) | Hard Constraint #8 |
 | FR-026 no new runtime dependency | — | — | `go mod tidy` produces no diff; `go.mod` unchanged (28) | Hard Constraint #1 |
@@ -935,11 +930,11 @@ Revision 1 had no logging, audit or metrics requirement anywhere; §6's "Failure
 | **FR-032** per-condition gate-failure + indeterminate telemetry | US-18/AC3 | S-44 | `TestWaitActionable_IncrementsFailureCounters` (13) | grill M12 |
 | **FR-033** no-Chromium error names the missing browser | US-16 | S-55 | `TestBrowserTools_NoChromium_ErrorNamesMissingBrowser` (25) | ADR D2.7 / #665 / grill m7 |
 | **FR-034** actionability-gate revert switch, live, time-boxed | US-17 | S-16 | `TestActionabilityGate_RevertSwitchIsLive` (13) | ADR-071 `previewAllLazy` precedent / grill M13 |
-| **FR-035** `browser_handle_dialog` exempt from `controlledResult` **and** `leaseWrite` | US-9/AC6-AC7 | S-30, S-31 | `TestDialog_RecoversWhileHumanControls`, `_RecoversWhileLeaseHeld` (15) | ADR D2.3 "cannot be left wedged" / grill C5 |
+| **FR-035** `browser_handle_dialog` exempt from `controlledResult` **and** the D1 write lease | US-9/AC6-AC7 | S-30, S-31 | `TestDialog_RecoversWhileHumanControls`, `_RecoversWhileLeaseHeld` (15) | ADR D2.3 "cannot be left wedged" / grill C5. **Requires a matching amendment to D1 §14.2 rule 3 — see §15 item 5.** |
 | **FR-036** tier partition equals the registered builtin catalog | US-13/AC3 | S-51 | `TestManifestTierPartition_CoversRegisteredBuiltinCatalog` (5) | ADR-071 FR-034 / grill M7 |
 
 **Scenario → FR coverage check** (every scenario traced, no orphans):
-S-01→FR-001 · S-02→FR-002 · S-03,S-04→FR-004 · S-05..S-08→FR-003 · S-09,S-10,S-12,S-13→FR-006 · S-11,S-14→FR-005 · S-15→FR-007 · S-16→FR-034 · S-17,S-18→FR-009 · S-19..S-21→FR-010 · S-22→FR-011 · S-23,S-24→FR-012 · S-25→FR-021 · S-26,S-27→FR-029 · S-28→FR-031 · S-29,S-34..S-37→FR-013 · S-30,S-31→FR-035 · S-32,S-33→FR-014 · S-38→FR-015/016 · S-39→FR-017 · S-40→FR-018 · S-41→FR-027 · S-42,S-43→FR-028 · S-44→FR-032 · S-45→FR-019 · S-46→FR-030 · S-47,S-48→FR-021 · S-49→FR-022 · S-50→FR-020 · S-51→FR-036 · S-52..S-54→FR-023 · S-55→FR-033 · S-56→FR-013/014 (dependency pin) · S-57→FR-008.
+S-01→FR-001 · S-02→FR-002 · S-03→FR-004 · S-04→FR-004 · S-05→FR-003 · S-06→FR-003 · S-07→FR-003 · S-08→FR-003 · S-09→FR-006 · S-10→FR-006 · S-11→FR-005 · S-12→FR-006 · S-13→FR-006 · S-14→FR-005 · S-15→FR-007 · S-16→FR-034 · S-17→FR-009 · S-18→FR-009 · S-19→FR-010 · S-20→FR-010 · S-21→FR-010 · S-22→FR-011 · S-23→FR-012 · S-24→FR-012 · S-25→FR-021 · S-26→FR-029 · S-27→FR-029 · S-28→FR-031 · S-29→FR-013 · S-30→FR-035 · S-31→FR-035 · S-32→FR-014 · S-33→FR-014 · S-34→FR-013 · S-35→FR-013 · S-36→FR-013 · S-37→FR-013 · S-38→FR-015 + FR-016 · S-39→FR-017 · S-40→FR-018 · S-41→FR-027 · S-42→FR-028 · S-43→FR-028 · S-44→FR-032 · S-45→FR-019 · S-46→FR-030 · S-47→FR-021 · S-48→FR-021 · S-49→FR-022 · S-50→FR-020 · S-51→FR-036 · S-52/S-53/S-54 → withdrawn (D1 §14) · S-55→FR-033 · S-56→FR-013 + FR-014 (dependency pin) · S-57→FR-008.
 
 ---
 
@@ -973,7 +968,7 @@ S-01→FR-001 · S-02→FR-002 · S-03,S-04→FR-004 · S-05..S-08→FR-003 · S
 | 21 | `TestSnapshot_ReturnsRolesNamesHandles` / `_HandleResolvesInNextCall` | Integration | FR-015/016 | |
 | 22 | `TestChokePoint_PerSurfaceCap_Snapshot` | Unit | FR-017 | Mirrors `per_tool_cap_alignment_test.go`'s **constant**, not `capGetText`'s mechanism. Asserts ≤ cap in bytes, valid UTF-8, node-boundary end, marker content |
 | 23 | `TestSnapshot_ReturnsFieldValuesByDefault` / `_SchemaHasNoIncludeValues` / `_RoutedThroughSensitiveReplacer` / `_EmitsMetadataOnlyAuditEvent` / `TestToolVisibility_NoBrowserToolIsHidden` | Integration + Unit | FR-018, FR-027, FR-028 | **Fixed oracles, no conditional shape.** The disclosure test asserts a filled password field's value **is** present; the replacer test asserts a registered plaintext **is not**; the audit test asserts the record contains the metadata and **not** the values. The visibility test is a `vitest` assertion on the SPA source |
-| 24 | `TestLeaseWrite_SecondWriterDeferred` / `_DeferredReleaseIsNoOp` / `_WatchdogForceReleases` / `_ReaperSkipsLeasedContext` | Integration | FR-023 | `IsError == false` is only part of the assertion |
+| ~~24~~ | ~~`TestLeaseWrite_*`~~ — **WITHDRAWN, owned by the D1 spec** (`browser-workspace-ownership-spec.md` §10 / §14) | — | — | D2 writes no lease test. Order number retained so 25–29 keep their identifiers. **D2 does still test its two exemptions** — `TestDialog_RecoversWhileHumanControls` and `_RecoversWhileLeaseHeld` at order 15 (FR-035), which are dialog tests, not lease tests. |
 | 25 | `TestBrowserTools_NoChromium_ErrorNamesMissingBrowser` | Integration | FR-033 | Table over all six with a resolver stubbed to find nothing |
 | 26 | Full `pkg/tools/browser` suite with `OMNIPUS_BROWSER_E2E=1` | E2E | FR-008 | Then raise the floor per SC-006 |
 | 27 | `make verify-contracts` | Build | FR-025 | Must stay green with no `contracts/` diff |
@@ -1071,9 +1066,6 @@ S-01→FR-001 · S-02→FR-002 · S-03,S-04→FR-004 · S-05..S-08→FR-003 · S
 | fresh install, tools registered | zero coverage gaps; boot completes | FR-021 |
 | override key `browser_selct_option` (typo) in an agent seed | `validateOverrideKeys` panics | FR-022 |
 | the same typo in `tier3SearchOnlyToolNames` | the partition test **fails** | FR-036 |
-| two concurrent `browser_click` on one context | one acts; other `{"deferred":true}`, `IsError == false`, `release` non-nil | FR-023 |
-| lease holder whose ctx is cancelled without releasing | watchdog force-releases; next writer acquires | FR-023 |
-| `ReapIdleSessions` over a leased, idle context | skipped this sweep; reaped after release | FR-023 |
 | any browser tool on a host with no Chromium | error names the missing browser and the install path | FR-033 |
 
 ---
@@ -1152,7 +1144,7 @@ S-01→FR-001 · S-02→FR-002 · S-03,S-04→FR-004 · S-05..S-08→FR-003 · S
 | 13 | `pkg/gateway` (new test file) | `TestManifestTierPartition_CoversRegisteredBuiltinCatalog` (FR-036) | with 9 |
 | 14 | `pkg/tools/browser/manager.go::ValidateURL` | the scheme-specific `file://` branch | any time |
 | 15 | `pkg/tools/browser/manager.go` — `sessionEntry` | `dialogListeners map[target.ID]struct{}` + pending-dialog state; install at `createFirstTab`, `OpenTab`, `adoptTarget`, `adoptTargetWithRetry`; evict at tab teardown | Stream C |
-| 16 | `pkg/tools/browser/manager.go::ReapIdleSessions` | skip leased contexts (FR-023) | Stream F |
+| ~~16~~ | ~~`ReapIdleSessions` lease interaction~~ — **withdrawn, owned by the D1 spec** | — | — |
 | 17 | `pkg/config` — `tools.browser.actionability_gate` | new enum key, default `full` (FR-034) | Stream A |
 | 18 | `pkg/tools/browser` — audit logger injection | `SetAuditLogger` on the snapshot + upload tools (FR-028, FR-031) | Streams B, D |
 | 19 | `.github/workflows/pr.yml:481` | raise the floor per SC-006's formula | last |
@@ -1223,7 +1215,7 @@ S-01→FR-001 · S-02→FR-002 · S-03,S-04→FR-004 · S-05..S-08→FR-003 · S
 | **M7** tier test cannot detect Tier-3 drift | **FIXED** | FR-036; `TestManifestTierPartition_CoversRegisteredBuiltinCatalog` in `pkg/gateway`; S-51 asserts the typo **fails** |
 | **M8** `browser_handle_dialog` posture unanalysed | **FIXED** | §11(b) gives it its own row and argument; `accept` defaults to `false`; §12 A-12 |
 | **M9** `FSOpSend` + hand-rolled roots re-implements `FSOpWrite` | **FIXED** | FR-012 selects `FSOpWrite`; §12 A-9; S-24 asserts the tool contains **no** `AllowedRoots` comparison |
-| **M10** `leaseWrite` contract under-specified | **FIXED** | Four-point contract in §3; param renamed `ctxKey`; S-52/S-53/S-54; `ReapIdleSessions` interaction |
+| **M10** `leaseWrite` contract under-specified | **RESOLVED BY RELOCATION** | The finding was correct and is now moot for this document: the lease moved to the D1 spec by operator ruling (2026-08-31), and `browser-workspace-ownership-spec.md` §14.1/§14.2 carries a fuller contract than revision 2 drafted — a bounded, cancellable wait (`leaseWaitTimeout`, default 2 s, asserted strictly less than the shortest action-tool timeout), an always-idempotent `release()` via `defer`, a named lock order (`writeLease → pool.mu → m.mu`), a registry-enforced membership rule, and a stated no-fairness bound. D2 asserts nothing about the lease and therefore cannot under-specify it. |
 | **M11** "eleven-tool surface" is wrong; it is ten | **FIXED** | §2.1 corrected for Explorer/Researcher/Ray; §12 A-4 re-derived from ten-allow/one-deliberate-deny |
 | **M12** no observability anywhere | **FIXED** | §6.1 (three signals + runbook); FR-028, FR-031, FR-032; SC-009 |
 | **M13** unconditional hot-path change, no revert | **FIXED** | FR-034 (time-boxed, `previewAllLazy` shape); US-17; S-16; shadow-DOM and iframe dataset rows; `indeterminate` degrades to a recorded pass |
@@ -1250,18 +1242,25 @@ S-01→FR-001 · S-02→FR-002 · S-03,S-04→FR-004 · S-05..S-08→FR-003 · S
 
 ## 15. What still needs an operator ruling before implementation
 
-Only **one** item is genuinely open, down from four:
+Only **one** item is genuinely open, down from four. Numbered 1–5 across all four categories so nothing is lost between them:
 
 1. **§12 A-3 — `browser_snapshot`'s manifest tier.** Option A (Tier 3, zero production edits, but the "default way to read a page" is search-only) versus Option B (Tier 2, one production edit, one preview line's tokens on every turn, and an amendment to ADR-071's deliberately-sized previewed set that needs **ADR-071's ratifier**, not just this spec's approval). **Recommendation: Option B.** Blocks Stream E's fixture-literal edit only; every other stream can proceed.
 
+**One cross-spec amendment is required of the D1 spec, and D2 cannot make it:**
+
+2. **D1 §14.2 rule 3's exemption set must grow from three to five.** It currently reads: *"The exemption is a closed, named set of three: `browser_screenshot`, `browser_get_text`, `browser_wait`. A tool that is neither leased nor exempt fails `TestWriteLease_EveryActionToolIsLeased`, which enumerates the registry."* Two of D2's six new tools must join that set, or that test goes red the moment they register:
+   - **`browser_snapshot`** — read-only. It mutates no page or tab state, so D1's own membership rule ("every tool that mutates page or tab state takes the lease") already exempts it in principle; the **closed list** is what needs updating, not the rule.
+   - **`browser_handle_dialog`** — FR-035. This one is *not* covered by D1's rule as written, because it does change state: it releases a blocked execution context. It is exempt for a different and stronger reason — **it is the recovery verb, and gating it behind the lease the wedge itself holds is a deadlock that defeats ADR D2.3's "the session cannot be left wedged"**. The full argument is at FR-035; D1 should carry the conclusion and the pointer, not re-derive it.
+   **Until D1 §14.2 is amended, D2's Stream C and Stream D cannot land green.** Flagged here as a tracked dependency rather than assumed, in the same spirit as D1's own "Required action in the D2 spec" note.
+
 Two further items are decided here and **overrulable** rather than open — flagged so the operator can reverse them cheaply if he disagrees:
 
-2. **§12 A-9 — `FSOpWrite` for `browser_upload_file`.** The named alternative is `FSOpSend` alone with tool policy as the sole gate. Reversing this is a one-line change plus a test-fixture path.
-3. **§12 A-12 — `browser_handle_dialog: allow` with `accept` defaulting to `false`.** Reversing to `ask` for the research agents is a seed-map edit with no code change.
+3. **§12 A-9 — `FSOpWrite` for `browser_upload_file`.** The named alternative is `FSOpSend` alone with tool policy as the sole gate. Reversing this is a one-line change plus a test-fixture path.
+4. **§12 A-12 — `browser_handle_dialog: allow` with `accept` defaulting to `false`.** Reversing to `ask` for the research agents is a seed-map edit with no code change.
 
 And one dependency is **outside this spec's control and must not be forgotten**:
 
-4. **Issue #659** (`AutoDenyAsk` not inherited by delegated subagents; OPEN, `priority:P1-high`, `area:agent-loop`). FR-029 holds `browser_upload_file`'s registration until it lands. §12 B-3 additionally notes that the `ask` prompt's *content* — path and target origin — is an approval-flow change riding on the same work, and without it the `ask` the operator ruled for is a yes/no with no facts.
+5. **Issue #659** (`AutoDenyAsk` not inherited by delegated subagents; OPEN, `priority:P1-high`, `area:agent-loop`). FR-029 holds `browser_upload_file`'s registration until it lands. §12 B-3 additionally notes that the `ask` prompt's *content* — path and target origin — is an approval-flow change riding on the same work, and without it the `ask` the operator ruled for is a yes/no with no facts.
 
 ---
 
