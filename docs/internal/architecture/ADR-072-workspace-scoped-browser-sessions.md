@@ -344,6 +344,173 @@ cap in item 1. Measure before building, not after.
 in D1.0, D1.1a, D1.2, D1.4, D2.9 and D2.11 have a named authority — a spec
 cannot resolve its own provenance.
 
+### D1.1b Sizing the pool — cap renderer processes, derive the rest
+
+**Measured on `omnipus-uat-swimlane` (2 dedicated cores, 3916 MB), one Chrome,
+12 processes, a handful of tabs:**
+
+```
+total RSS  1118 MB      <- what an earlier revision of this ADR reported
+total PSS   434 MB      <- the honest figure
+```
+
+**RSS over-counts by 2.6× here** and the earlier figure is retracted. Chrome's
+program code is file-backed and mapped once physically, but RSS charges it to
+every process — twelve times over in this sample. PSS divides it fairly, and
+PSS is what a capacity formula must use. (This is the same class of error as
+ADR §8's other entries: a number taken at face value without asking what it
+counted.)
+
+#### The unit is the renderer process, not the tab and not the instance
+
+Per-tab is meaningless as a planning unit, for two independent reasons:
+
+- **Page type varies more than 20×.** Published measurements (Chrome 149,
+  clean profile): an idle Wikipedia article ≈ 15 MB PSS; a Reddit feed ≈ 54 MB;
+  Gmail ≈ 120–180 MB; YouTube at 1080p ≈ 222–341 MB. Our own repo's measured
+  "74–268 MB per renderer" is a sample of the middle of that range, not a
+  ceiling.
+- **A tab is not a process.** Under site-per-process (default since Chrome 67)
+  every cross-site embed can claim its own renderer. Chromium's published
+  isolation overhead is 10–13%, and ~90% of pages embed a third party
+  (Web Almanac 2025). Same-site reuse collapses many embeds into few
+  processes, so the count is neither 1 nor the embed count — it must be
+  observed, not assumed.
+
+Renderer count is the only term we can bound in advance, so it is the term the
+cap is expressed in.
+
+#### Chrome already computes this, and its answer does not compose
+
+From `content/browser/renderer_host/render_process_host_impl.cc` (Chromium
+`main`):
+
+```cpp
+static constexpr size_t kEstimatedWebContentsMemoryUsage = 85;  // MB, 64-bit
+max_count  = base::SysInfo::AmountOfTotalPhysicalMemory().InMiB() / 2;
+max_count /= kEstimatedWebContentsMemoryUsage;
+max_count  = std::clamp(max_count, kMinRendererProcessCount /*3*/, kMaxRendererProcessCount);
+```
+
+So Google's own figures are **85 MB per renderer** and **half of RAM** as the
+budget. Adopt both rather than inventing our own.
+
+**But that limit is computed per browser process, from HOST memory, with no
+knowledge of sibling instances.** On the measured box it yields
+`3916 / 2 / 85 = 23` renderers — *per Chrome*. Four workspaces would each
+independently permit 23, i.e. **92 renderers ≈ 7.8 GB on a 3.9 GB machine**,
+every one of them sanctioned by Chrome. **The pool must impose its own bound;
+Chrome's does not add up.** This is the single most important consequence of
+going from one Chrome to N, and nothing in ADR-043 anticipates it.
+
+#### Decision
+
+1. **Bound renderers per instance** with `--renderer-process-limit=N`
+   (start N=4, tune once §D1.1c's measurement lands).
+2. **Derive the instance cap:**
+
+   ```
+   budget        = min(host_RAM, cgroup_limit) × 0.5      // Chrome's own policy
+   pool_budget   = budget − gateway_reserve
+   per_instance  = FIXED_FLOOR + (N × 85 MB)
+   max_browsers  = clamp(pool_budget / per_instance, 1, operator_ceiling)
+   ```
+
+   On the measured box with N=4 and a 200 MB placeholder floor: ≈ **3
+   browsers**. On a 32 GB developer machine: ≈ 20. No hardcoded default ships.
+3. **Gate admission on real pressure, not only the formula.** Refuse to grow
+   the pool when `cgroup memory.current / memory.max > 0.85`. The formula only
+   has to be approximately right if the pressure gate catches the tail — which
+   matters given the 20× page-type spread.
+
+**The security cost, stated rather than buried.** `--renderer-process-limit`
+means over-limit navigations reuse same-site processes, weakening site
+isolation for the pages beyond the cap. That is acceptable for agent-driven
+browsing of semi-trusted destinations and **is not acceptable if agents are
+pointed at arbitrary hostile URLs**. If that changes, this decision must be
+revisited.
+
+#### Three unknowns, all cheap, all required before Stream P
+
+- **`FIXED_FLOOR`** — the marginal cost of a *second* instance on `about:blank`,
+  in PSS. It will be materially below the first instance's, because code pages
+  are already resident. No trustworthy published figure exists for modern
+  headless Chrome; the literature simply does not have this number.
+- **Whether Chromium reads cgroup limits.** If `AmountOfTotalPhysicalMemory()`
+  returns host RAM inside a memory-capped container, Chrome sizes itself
+  against memory it cannot have. Unverified in either direction.
+- **Whether Linux memory-pressure signalling fires at all.** Chromium issue
+  40886605 is reported to say it has not since 2021 — unconfirmed, the tracker
+  requires sign-in. If true, Chrome will never self-discard on our servers and
+  the pool is the *only* thing between the host and the OOM killer.
+
+#### Vendor comparison, for calibration
+
+Browserless documents 4 GB → 5–10 concurrent sessions and rejects new work
+above 90% memory. Steel.dev gives each session a dedicated browser at ~200–500
+MB, "depending on page complexity". Kasm's 2 CPU / 4 GB row yields 8 sessions
+on a 64 GB agent — but Kasm sizes a whole Linux desktop, so it is an upper
+bound, not a comparable. **Our workspaces are the Steel shape — long-lived,
+arbitrary pages — not the Browserless shape of short stateless jobs.** Size
+against Steel.
+
+---
+
+### D1.1c The cap manages itself — no error, no button, no UI
+
+**Operator ruling, 2026-08-31: there is no "pool full" error surface and no UI
+change.** An earlier draft proposed a REST path and a close button; both are
+withdrawn.
+
+**What makes this safe: closing a browser is not destructive.** The logins live
+in the profile directory on disk, not in the process. A closed browser reopens
+signed in.
+
+**Policy.** When a workspace needs a browser and the cap is reached, evict the
+**least recently used** instance and start the new one. The evicted workspace
+reopens on next use, still signed in, paying only start-up latency.
+
+Two guards:
+
+- **Never evict an instance with a viewer attached** — someone is watching it.
+- **Never evict an instance with a tool call in flight** — an agent is mid-action.
+
+**When nothing is evictable** (every instance watched *and* busy): **exceed the
+cap by one and log a WARN naming the cap and the workspace.** The cap is a
+memory guard, not a correctness rule — a brief overshoot is recoverable, a
+refused browse breaks the product, and the WARN tells an operator their ceiling
+is too low for how they actually work. **The cap is therefore a soft target and
+must be documented as one**; a config field described as a hard limit that
+silently overshoots would be its own defect.
+
+---
+
+### D1.1d Three further rulings, 2026-08-31
+
+**A stuck dialog may be cleared even while a human holds control.**
+`browser_handle_dialog` is exempt from the write lease **and** from
+`controlledResult`. The reason is not convenience: a modal blocks every CDP
+command on that tab, including the live panel's own input injection — so the
+human at the wheel is *equally* stuck and has no button that works. Gating the
+one tool that can clear it leaves both parties frozen. This narrows ADR-038
+D6's exclusivity by exactly one tool, on a tool that cannot act on page content.
+
+**Boot terminates orphaned Chromes.** After a crash, a Chrome can survive with
+no gateway managing it — consuming memory outside the cap, invisibly, which
+makes the cap meaningless. Boot reconciles the ownership markers and terminates
+what it finds. **The guarantee is POSIX-only in practice:** identity is
+confirmed via `/proc/<pid>/exe`, which has no pure-Go macOS equivalent, so
+macOS clears the marker **without** terminating. Stated because a partial
+guarantee documented as a full one is worse than no guarantee.
+
+**Deleting a workspace deletes its browser profile.** The signed-in sessions of
+a deleted workspace do not linger on disk. This is irreversible and has no
+undo: deleting a workspace by mistake loses those logins. Accepted — the
+alternative (retain plus a separate purge action) leaves a departed client's
+live sessions on disk until somebody remembers, which is the worse failure.
+
+---
+
 ### D1.2 One browser per workspace — everyone on it shares it
 
 **Superseding operator ruling, 2026-08-31 (Daniel Piatkowski): every agent on a
@@ -998,6 +1165,7 @@ Kept because a retracted claim that leaves no trace gets re-derived.
 |---|---|---|
 | "`ReapIdleSessions`' only removal is `delete(m.sessions, sessionID)` — it never disposes a browser" (stated in commit `3667c06a`, and twice in the D1 spec marked *verified*) | **FALSE** | It collects `se.browserCancel` into `reapedBrowsers` (`pkg/tools/browser/manager.go:3027-3032`), executes the cancels (`:3123-3125`), and reaches `coord.ReleaseTab` via `releaseGlobalTab()`. Whole-Chrome idle close is still new work, but the disposal machinery is not absent — the gap is narrower than claimed |
 | "isolation exists (ADR-043 D2); this ADR re-keys it" | **FALSE by default** | `CaptureSharedContext: true` (`pkg/config/defaults.go:671`) makes `Register` return an empty context id and log *"per-agent browser-context isolation is OFF"* (`coordinator.go:349-359`). See D1.0a |
+| "Chrome's footprint is 1.15 GB; a second instance costs 400–500 MB" (stated to the operator, 2026-08-31) | **INFLATED 2.6×** | That was RSS, which charges shared program code to every process — 12 times over in that sample. Re-measured PSS on the same box, same moment: **434 MB**, not 1118. The marginal-cost estimate built on it is withdrawn; D1.1b requires the second-instance delta to be measured, not inferred |
 | "the tool is `web_serve`" | **FALSE** | `const ToolNameWebServe = "serve_web"` (`pkg/tools/web_serve.go:46`). Wrong in this ADR, its round-1 review, and root `CLAUDE.md` |
 | "`browser_snapshot` inherits `browser_get_text`'s redaction posture" | **FALSE** | `RegisterSensitiveValues` appears zero times in `pkg/tools/browser/`. See D2.11 |
 | "ADR-043 D3 is unchanged" | **FALSE** | Three gateway sites resolve a manager by agent id. See D1.0 |
