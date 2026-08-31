@@ -343,6 +343,17 @@ func scanColumn(q *query, a aggregate, rows []survivor) (*columnScan, string) {
 // priced at the key, so a column of a million identical values holds one string
 // and is charged for one.
 func (sc *columnScan) buffer(q *query, op string, v records.TypedValue, buf *columnBuffer) bool {
+	// The observed scale is tracked HERE as well as in observe(), because the
+	// population class never reaches observe() and Median is rendered at a
+	// declared scale derived from it. Without this line an even-count median
+	// over `decimal` values renders at 2 places where its own Average renders
+	// at 4 — two summaries of one column disagreeing about how precise that
+	// column is, which is worse than either scale on its own.
+	if v.Type == records.TypeInteger || v.Type == records.TypeDecimal {
+		if s := v.Number.Scale(); s > sc.maxScale {
+			sc.maxScale = s
+		}
+	}
 	if op == opUnique {
 		k := uniqueKey(q, v)
 		if sc.unique[k] {
