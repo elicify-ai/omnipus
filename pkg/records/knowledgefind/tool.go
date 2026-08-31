@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // ToolName is the one retrieval tool. There is no second.
@@ -133,6 +134,33 @@ func AdvertisedAggregateOps() []string {
 	}
 	return out
 }
+
+// ---------------------------------------------------------------------------
+// THE ORACLE, EXPORTED — SO A WRITER CAN REFUSE EXACTLY WHAT THIS READER DOES
+//
+// request.go's aggregate branch refuses `sum` over a text property, and that
+// refusal aborts the WHOLE find request rather than just the total. Anything
+// that WRITES a saved view therefore has to be able to ask the same question
+// before it writes, or it produces view files that cannot be served — which is
+// precisely what pkg/vaultimport did: it checked that a summary's property NAME
+// resolved and never asked its TYPE.
+//
+// These two functions exist so that the writer asks THIS table rather than
+// keeping a second copy of it. A second copy is how the writer and the reader
+// came to disagree in the first place, and the disagreement is invisible until
+// an operator opens a view and gets a refusal instead of rows.
+// ---------------------------------------------------------------------------
+
+// SummaryOpDefinedForType reports whether FR-150's op is defined over a
+// property of type t — the same predicate request.go gates every aggregate on.
+func SummaryOpDefinedForType(op string, t records.PropertyType) bool {
+	return opDefinedForType(op, t)
+}
+
+// SummaryOpsDefinedFor names the summaries type t DOES define, sorted, so a
+// caller refusing an op can name the alternatives the way this package's own
+// refusals do rather than leaving the reader to guess.
+func SummaryOpsDefinedFor(t records.PropertyType) []string { return opsDefinedFor(t) }
 
 // aggregateOpDescription is the glosses, folded into the one string JSON Schema
 // gives an enum-valued property.

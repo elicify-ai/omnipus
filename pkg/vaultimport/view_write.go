@@ -17,6 +17,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 )
 
 // Outcome is the three-way honesty contract SC-010/US-7 require of every
@@ -1348,6 +1349,71 @@ func aggregateOpNames() string {
 	return strings.Join(names, ", ")
 }
 
+// ---------------------------------------------------------------------------
+// A SUMMARY'S PROPERTY HAS A TYPE, AND UNTIL NOW NOBODY HERE ASKED WHAT IT WAS
+//
+// checkProperty answers ONE question: does this name resolve. That is the right
+// question for a column and for a sort. It is not enough for a summary, because
+// the query engine gates a summary on the property's TYPE as well:
+// knowledgefind's aggregate branch refuses an op that the property's type does
+// not define (FR-155, opsDefinedFor).
+//
+// And that refusal is not local. `refuse` aborts the WHOLE find request — not
+// just the total — so ONE undefined summary makes every row of the view
+// unreachable. A view carrying `sum` over a text property does not show a wrong
+// number and it does not show a blank total: it shows nothing at all, with a
+// refusal, and it does so for every caller for ever. Writing such a file is
+// strictly worse than dropping the summary and naming the loss, because the
+// loss is annotation-positioned (loss.go) and costs no rows, while the file
+// costs all of them.
+//
+// THE CHECK ASKS knowledgefind's OWN TABLE, and that is the load-bearing part
+// of this rather than the four lines below. Restating "sum is for numbers" here
+// would put a second copy of the op/type mapping in the writer, and a second
+// copy is the mechanism by which the writer and the reader drifted apart in the
+// first place — which is the defect this gate closes, not just this instance of
+// it. If FR-150 gains an op or moves one between domains, the importer follows
+// automatically because it never knew the mapping to begin with.
+//
+// WHAT IS DELIBERATELY NOT GATED, and why that is a scope line rather than an
+// oversight:
+//
+//   - An UNTYPED (folder-scoped) view. There is no record type to ask about, so
+//     there is no type to check against; the engine resolves such a property
+//     from whatever the notes themselves declare, which this importer cannot
+//     know at write time.
+//   - `formula.*` and `file.*`. Both resolve through knowledgefind's namespace
+//     rather than through a schema, and neither's op/type mapping is reachable
+//     from here without exporting more of that package's internals. The vault
+//     that motivated this gate carries exactly one such summary
+//     (`sum(formula.monthly_cost)`, a number-valued formula, which the engine
+//     accepts), so extending the gate there is a real but separate piece of
+//     work — recorded here rather than silently assumed away.
+// ---------------------------------------------------------------------------
+
+// summaryDefinedForType reports whether op is defined over the DECLARED type of
+// prop, and if it is not, the reason in the same words the engine would use.
+func (r leafResolver) summaryDefinedForType(op, prop string) (reason string, ok bool) {
+	if !r.typed() {
+		return "", true
+	}
+	if strings.HasPrefix(prop, formulaNamespace) || records.IsFileNamespace(prop) {
+		return "", true
+	}
+	p, found := r.schemas.Lookup(r.recordType, prop)
+	if !found {
+		// checkProperty has already refused this name and named its own
+		// reason; reaching here would mean the two disagree.
+		return "", true
+	}
+	if knowledgefind.SummaryOpDefinedForType(op, p.Type) {
+		return "", true
+	}
+	return fmt.Sprintf(
+		"%s is a %s property, and the summaries defined for %s are %s — a view carrying this one is REFUSED IN FULL by knowledge_find (the refusal aborts the whole request, not just the total), so it is dropped here and named instead. Declaring the property's real type with `knowledge_configure set schema %s property %s type=<…>` turns it back on",
+		prop, p.Type, p.Type, strings.Join(knowledgefind.SummaryOpsDefinedFor(p.Type), ", "), r.recordType, prop), false
+}
+
 func translateSummaries(raw any, r leafResolver) (nodes []*yaml.Node, losses []string) {
 	summ, ok := raw.(map[string]any)
 	if !ok {
@@ -1362,6 +1428,10 @@ func translateSummaries(raw any, r leafResolver) (nodes []*yaml.Node, losses []s
 		}
 		op := string(opVal)
 		if reason, ok := r.checkProperty(prop, true); !ok {
+			losses = append(losses, lossf(LossAggregates, "%s(%s) dropped — %s", op, prop, reason))
+			continue
+		}
+		if reason, ok := r.summaryDefinedForType(op, prop); !ok {
 			losses = append(losses, lossf(LossAggregates, "%s(%s) dropped — %s", op, prop, reason))
 			continue
 		}
