@@ -5,6 +5,11 @@
 - **Supersedes:** nothing. **Replaces** an earlier, unpushed draft that also
   claimed ADR-072 ("Region-aware transport for the live browser") — deleted in
   the same commit as this file lands. §7 records why.
+- **Amends:** **[[ADR-043]]** (one shared Chrome + per-agent browser contexts,
+  Accepted 2026-07-14). ADR-043's D2 — "the load-bearing decision" — keys each
+  CDP browser context by **agent**. This ADR **re-keys it to the conversation**.
+  The isolation primitive, its strength and its implementation are unchanged;
+  only the key changes. D1.0 states exactly what is preserved and what is not.
 - **Related:** ADR-038 (live browser panel, human takeover), ADR-041 (tabs),
   ADR-044 (single listener), ADR-057 (routing vs transcript session split),
   ADR-062 (WebRTC connectivity tiers)
@@ -36,6 +41,11 @@ default agent), opened the browser panel, browsed — so the tab was recorded
 against Mia — then switched the chat to Jim. Nothing moved the tab.
 
 ### 1.2 What the code actually does
+
+> **Read D1.0 with this section.** What follows explains the *mechanism* of the
+> reported defect. The per-agent split is deliberate (ADR-043 D2, Accepted) and
+> provides real cookie isolation; this ADR re-keys it, it does not delete it.
+
 
 `AgentLoop.BrowserManagers()` returns a **slice** — one `BrowserManager` per
 agent (`pkg/agent/loop.go`). Each manager owns its own `sessions` map
@@ -112,14 +122,55 @@ consequences, D2 is additive surface.
 
 ## D1 — Ownership
 
-**A browsing context belongs to a conversation. One browser manager serves the
-workspace.**
+**A browsing context belongs to a conversation. Isolation is preserved in full
+— it moves from the agent axis to the conversation axis.**
 
-Two changes, in this order:
+### D1.0 Reconciling with ADR-043 — read this before §1.2
+
+§1.2 below describes the per-agent split as the mechanism behind the reported
+defect. That is accurate but incomplete, and on its own it reads as though the
+split were an accident. **It is not.** ADR-043 D2 chose it deliberately, called
+it "the load-bearing decision", and recorded operator confirmation that
+"cookie/login isolation per agent is sufficient". It is implemented and working
+— `pkg/tools/browser/coordinator.go:105` holds a `cdp.BrowserContextID` per
+agent, created by raw CDP `CreateBrowserContext`, with `d2_spike_test.go`
+covering it.
+
+So this ADR is not removing isolation. It argues the **axis is wrong**.
+
+| | ADR-043 | This ADR |
+|---|---|---|
+| Isolation primitive | CDP browser context | **unchanged** |
+| Partitions cookies / localStorage / indexedDB | yes | **unchanged** |
+| Keyed by | the **agent** | the **conversation** |
+
+**What ADR-043 was protecting still holds.** Its concern is that one agent's
+logged-in state must not leak into another's unrelated work. Under
+conversation-keying a login obtained in chat X is invisible in chat Y — which
+is the same protection, expressed against the boundary a human actually
+recognises.
+
+**Why the agent is the wrong unit.** The human logs in first and *then* decides
+who to talk to. Case 3 is not an edge case; it is the ordinary way a person
+uses a shared browser. Keying on the agent makes the browser's contents depend
+on which colleague happened to be on screen at the moment a tab was opened —
+an implementation detail the operator has no reason to model, and, per §1.1,
+one the agents themselves misreport.
+
+**The behaviour change this accepts, stated plainly:** one agent present in two
+conversations now has **two cookie jars** — logged in to a site in one, logged
+out in the other. This follows directly from isolation tracking the human's
+session, and it is a deliberate consequence, not an oversight.
+
+**What does not change:** ADR-040's take-the-wheel model within a context;
+ADR-041's tab-set model; ADR-043 D1/D3/D4 (single Chrome, coordinator
+ownership, hot-reload survival) and its whole deferred escape hatch.
+
+### D1.1 The two changes
 
 1. **One `BrowserManager` per workspace**, shared by every agent, instead of
-   one per agent. Today the correct key would still be looked up in the wrong
-   book.
+   one per agent. The manager stops being the isolation boundary; the browser
+   context keyed by conversation becomes it.
 2. **Key browsing contexts by the routing session id** — the conversation —
    instead of the constant `"default"`.
 
@@ -319,6 +370,7 @@ The operator's three cases, which are the test plan:
 | 3 | Operator browses first, **then** asks an agent to take over | The tab was never owned by "whoever happened to be on screen"; any agent in that conversation sees it |
 | 4 | An agent delegates unattended background browsing | The sub-agent does not hijack the tab the operator is reading |
 | 5 | `browser_list_tabs` with no browsing context | Says so. Must not be indistinguishable from an empty tab set |
+| 5b | **Isolation survives the re-key (ADR-043 D2).** Log in to a site in conversation X; open the same site in conversation Y | Y is **logged out**. This is the amended ADR-043 guarantee and the test that proves isolation was moved rather than dropped |
 
 Case 2 and case 3 are the ones broken today; 1 works; 4 and 5 are the
 regressions this design must not introduce.
@@ -362,6 +414,33 @@ than a wrong answer, and are the ones worth writing tests for first.
 - **Idle reaping.** Session lifetime becomes conversation lifetime, not agent
   lifetime. Reaping rules need re-deriving, or a long chat pins a Chrome tab
   indefinitely.
+- **A behaviour change operators will notice (D1.0).** One agent in two
+  conversations gets two cookie jars. Someone will report this as a bug —
+  "Jim was logged in yesterday and isn't today" — so it needs to be in the
+  release notes, not only in this ADR.
+- **Context count scales with conversations, not agents.** ADR-043 sized the
+  hybrid at ~10 browser-using agents (≈1.5–2 GB). Conversations are unbounded
+  and longer-lived, so the reaping rule above stops being housekeeping and
+  becomes the thing that keeps memory finite.
+
+**D2 — gained**
+
+- An agent can complete a form, not merely read a page (D2.3).
+- Failures name a cause an agent can act on rather than "timeout" (D2.2).
+- Targeting survives a CSS redesign (D2.1).
+
+**D2 — lost / risked**
+
+- **A wedged tab is the new worst case.** A modal dialog blocks every
+  subsequent CDP command on that tab; dialog handling that half-works leaves
+  the session unable to answer at all. This is why criterion 12 tests that the
+  tab still responds, not that the dialog was dismissed.
+- **Per-action cost.** Full actionability (stability needs two consecutive
+  bounding-box reads) plus AX-tree resolution adds round trips to every click.
+  It must not turn a fast click into a slow one on pages that were fine.
+- **Surface growth.** Eleven tools become sixteen-ish. ADR-071 puts them all in
+  Tier 3 / search-only, so the manifest cost is bounded — but discoverability
+  now depends entirely on tool search returning the right verb.
 
 ---
 
@@ -377,6 +456,22 @@ and 3 broken. Rejected as documenting a defect rather than removing it.
 **Let `ReconcileTabs` adopt any untracked target.** Would make every agent
 silently absorb every other agent's tabs, including unattended delegated ones,
 with no ownership model at all. §1.4 has the mechanics.
+
+**Drop isolation entirely — one browser context for the workspace.** Simplest,
+and it would make handover trivial. Rejected: it discards ADR-043 D2 rather
+than amending it, and a scraping agent's login in one conversation would
+surface in an unrelated one. The operator confirmed isolation was wanted; only
+the axis was wrong.
+
+**Replace chromedp with playwright-go (D2).** Would deliver D2.1 and D2.2 for
+free. Rejected on Hard Constraint #1 (no new runtime dependency) and on the
+prior playwright-go evaluation's own finding: only those two benefits survived
+scrutiny, and both are implementable on chromedp.
+
+**Ship the missing verbs without actionability (D2).** Cheaper and visibly
+useful. Rejected: `select_option` and `press_key` on an element that is not yet
+enabled fail intermittently, and intermittent failure is the most expensive
+kind for an agent — it retries, succeeds sometimes, and learns nothing.
 
 ---
 
