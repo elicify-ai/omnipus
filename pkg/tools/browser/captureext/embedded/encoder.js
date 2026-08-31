@@ -164,6 +164,45 @@ const PING_BEACON_INTERVAL_MS = 15000;
 let expectedCaptureDims = null;
 // deviceScaleFactor of the captured tab — see the recapture control handler. 1 = CSS.
 let captureScale = 1;
+// CAPTURE_PIXEL_BUDGET caps the PHYSICAL pixels tabCapture is asked to
+// produce (CSS size x captureScale). Measured 2026-08-31 on the 2-core
+// hosted UAT box (performance-2x, no GPU): with a viewer attached, Chrome
+// sat at 150-192% of ONE core and the machine at 85-99%, which starved
+// input dispatch -- scroll arrived in bursts, clicks were dropped, and the
+// ICE consent checks missed their deadline ("ice-disconnected-timeout").
+// Video looked fine throughout, because one-way media tolerates a busy
+// machine and round-trip input does not.
+//
+// Encode cost scales with pixels, and the file's own history measures it:
+// the same scroll at a quarter of the pixels went 1 fps -> 18 fps. Nothing
+// bounded that input. live.go's ceiling is 33.2 MPx -- 36x this budget --
+// and it exists to stop a nonsense viewport, not to protect the encoder.
+//
+// 1280x720 is deliberately the same frame the capture already defaults to
+// (capW/capH below), so a normal panel is unaffected and only oversized or
+// Retina-doubled captures are clamped. Shrinking here is safe for input:
+// the server rescales every pointer event from the client's REPORTED
+// capture size into CSS space (live.go rescaleInputCoords), so a smaller
+// capture is a sharpness trade, never a click-goes-nowhere bug -- see the
+// long note on that contract above.
+const CAPTURE_PIXEL_BUDGET = 1280 * 720;
+
+// budgetedCaptureDims returns the physical capture size to request, clamped
+// to CAPTURE_PIXEL_BUDGET. Scaling is uniform (sqrt of the overshoot) so the
+// aspect ratio is preserved and the server-side coordinate rescale stays
+// proportional. Dimensions are rounded to even numbers because H.264 chroma
+// subsampling requires it. Pure function -- unit-tested without a browser.
+function budgetedCaptureDims(cssW, cssH, scale) {
+  const w0 = Math.max(2, Math.round(cssW * scale));
+  const h0 = Math.max(2, Math.round(cssH * scale));
+  const px = w0 * h0;
+  if (!(px > CAPTURE_PIXEL_BUDGET)) return { w: w0, h: h0, clamped: false };
+  const k = Math.sqrt(CAPTURE_PIXEL_BUDGET / px);
+  const w = Math.max(2, Math.round((w0 * k) / 2) * 2);
+  const h = Math.max(2, Math.round((h0 * k) / 2) * 2);
+  return { w: w, h: h, clamped: true };
+}
+
 // Tab id of the CURRENTLY captured tab — recorded at capture time so the
 // shutdown handler can tab-mute it. Tab-level mute (chrome.tabs.update
 // muted:true) only touches LOCAL speaker output; it is applied strictly
@@ -1334,7 +1373,13 @@ async function captureActiveTabStream() {
     }
   }
   lastPinnedCapDims = { w: capW, h: capH };
-  record('captureActiveTabStream: capture size ' + capW + 'x' + capH);
+  const capDims = budgetedCaptureDims(capW, capH, captureScale);
+  record(
+    'captureActiveTabStream: capture size ' +
+      capW + 'x' + capH + ' css x' + captureScale +
+      ' -> requesting ' + capDims.w + 'x' + capDims.h + ' physical' +
+      (capDims.clamped ? ' (CLAMPED to the ' + CAPTURE_PIXEL_BUDGET + 'px budget)' : '')
+  );
 
   // Self-consume: no processing constraints needed — tabCapture's defaults
   // are clean (AGC/EC/NS default OFF), unlike getDisplayMedia. See
@@ -1369,10 +1414,10 @@ async function captureActiveTabStream() {
         // both speak CSS); the tab's compositor surface is CSS x captureScale
         // physical px. Constrain to the physical size so tabCapture does not
         // throw away the Retina pixels — see the capture_scale handler.
-        minWidth: Math.round(capW * captureScale),
-        minHeight: Math.round(capH * captureScale),
-        maxWidth: Math.round(capW * captureScale),
-        maxHeight: Math.round(capH * captureScale),
+        minWidth: capDims.w,
+        minHeight: capDims.h,
+        maxWidth: capDims.w,
+        maxHeight: capDims.h,
         // Frame-rate floor/ceiling. Added 2026-08-13 while chasing a
         // metronomic 2fps that turned out to be the SSRF guard silently
         // blocking the local test page (what got measured was the static

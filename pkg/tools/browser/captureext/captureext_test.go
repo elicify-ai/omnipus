@@ -201,13 +201,45 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 	// four independent Contains checks, so a refactor that moved minWidth/
 	// minHeight to some OTHER, unrelated stream request would still fail
 	// this guard.
+	//
+	// UPDATED 2026-08-31: the four constraints are now pinned to capDims,
+	// the CAPTURE_PIXEL_BUDGET-clamped physical size, rather than to
+	// Math.round(capW * captureScale) inline. The guard's intent is
+	// unchanged and is now enforced as two checks: (1) min==max pinning of
+	// all four dimensions to ONE computed size inside this block, and (2)
+	// that size being derived from the tab's own capW/capH/captureScale.
+	// Splitting it this way keeps the letterbox protection while allowing
+	// the budget clamp to sit between the viewport and the request.
 	videoMandatoryBlock := regexp.MustCompile(
-		`chromeMediaSource:\s*'tab',\s*chromeMediaSourceId:\s*streamId,(?:\s*//[^\n]*)*\s*minWidth:\s*Math\.round\(capW \* captureScale\),\s*minHeight:\s*Math\.round\(capH \* captureScale\),\s*maxWidth:\s*Math\.round\(capW \* captureScale\),\s*maxHeight:\s*Math\.round\(capH \* captureScale\),`,
+		`chromeMediaSource:\s*'tab',\s*chromeMediaSourceId:\s*streamId,(?:\s*//[^\n]*)*\s*minWidth:\s*capDims\.w,\s*minHeight:\s*capDims\.h,\s*maxWidth:\s*capDims\.w,\s*maxHeight:\s*capDims\.h,`,
 	)
 	if !videoMandatoryBlock.MatchString(content) {
 		t.Error(
 			"encoder.js: expected chromeMediaSourceId immediately followed by minWidth/minHeight/maxWidth/maxHeight " +
-				"(all pinned to capW/capH x captureScale) in the SAME video.mandatory getUserMedia block — letterbox regression guard (W3 fix 5)",
+				"(all pinned min==max to the SAME capDims value) in the SAME video.mandatory getUserMedia block — " +
+				"letterbox regression guard (W3 fix 5)",
+		)
+	}
+
+	// (a2) …and capDims must still be derived from the captured tab's own
+	// viewport. Without this, (a) alone would pass if capDims were pinned to
+	// some constant, which is the same letterbox bug in a new shape.
+	if !strings.Contains(content, "const capDims = budgetedCaptureDims(capW, capH, captureScale);") {
+		t.Error(
+			"encoder.js: capDims must be computed as budgetedCaptureDims(capW, capH, captureScale) — the capture " +
+				"request has to track the tab's real viewport, clamped only by the pixel budget",
+		)
+	}
+
+	// (a3) the budget itself must stay a real bound. 1280x720 is the same
+	// frame the capture already defaults to, so a normal panel is untouched
+	// and only oversized/Retina-doubled captures are clamped. Measured
+	// 2026-08-31: an unclamped capture put Chrome at 150-192% of one core on
+	// the 2-core hosted box and starved input dispatch.
+	if !strings.Contains(content, "const CAPTURE_PIXEL_BUDGET = 1280 * 720;") {
+		t.Error(
+			"encoder.js: CAPTURE_PIXEL_BUDGET must remain declared as 1280 * 720 — removing or widening it " +
+				"restores the unbounded capture that saturated the 2-core UAT box (2026-08-31)",
 		)
 	}
 
