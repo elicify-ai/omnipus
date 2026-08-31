@@ -51,8 +51,8 @@ import (
 //
 // WHY YAML IS DECODED THROUGH JSON. The generated type carries `json:` tags
 // and no `yaml:` tags, because it was generated from a JSON-Schema contract.
-// yaml.v3 would lower-case the Go field names and silently miss `group_by`,
-// `schema_version` and every other multi-word key — producing a view that
+// yaml.v3 would lower-case the Go field names and silently miss
+// `property_config` and every other multi-word key — producing a view that
 // parsed cleanly and had lost half of itself. So the YAML is decoded to a
 // generic value, re-encoded as JSON, and unmarshalled into the generated type
 // with DisallowUnknownFields, which is what makes the contract's
@@ -65,79 +65,37 @@ const (
 	// (spec FR-015's restated rule), and both are written only by
 	// knowledge_configure.
 	ViewsDirName = "views"
-
-	// ViewVersion1 is the original view format: a flat, AND-only `filters`
-	// list in the seven-operator RecordFilter vocabulary, and a bare
-	// `group_by` name list with no direction.
-	ViewVersion1 = 1
-
-	// ViewVersion2 is the find grammar (ADR-068 D24.1, spec FR-018b): ONE
-	// `filter` tree of all/any/not over the ten SQL operators, `grouping`
-	// keys that carry a direction, an OPTIONAL `type`, plus `layout`,
-	// `formulas` and `property_config`.
-	ViewVersion2 = 2
-
-	// SupportedViewVersion is the version a WRITER emits.
-	//
-	// READ THIS BEFORE CHANGING IT. It is not "the version this release
-	// understands" — that is SupportedViewVersions, the SET {1, 2} (spec
-	// FR-018b). This constant answers a different and narrower question: what
-	// schema_version does the code that WRITES a view file stamp on it.
-	//
-	// It is 2 as of the change that made the only in-tree writer — the .base
-	// importer, pkg/vaultimport/view_write.go — emit VERSION-2 KEYS: one
-	// `filter` tree of all/any/not over the ten SQL operators, `grouping` keys
-	// carrying a direction, an optional `type`, and `layout`.
-	//
-	// THE CONSTANT AND THE WRITER MOVE TOGETHER OR NOT AT ALL. Bumping this
-	// alone would stamp `schema_version: 2` onto a file made of v1 keys, which
-	// the version partition below refuses on the very next load — the importer
-	// would produce views this loader rejects, silently, until somebody re-ran
-	// an import. Reverting the writer alone has the mirror failure. The guard
-	// is pkg/vaultimport's TestWrittenViews_LoadBackThroughTheRealLoader,
-	// which reloads every produced file through ParseView.
-	SupportedViewVersion = ViewVersion2
 )
 
-// SupportedViewVersions is the set of view schema_versions this release can
-// READ — {1, 2} per spec FR-018b.
+// ---------------------------------------------------------------------------
+// THERE IS ONE VIEW FORMAT AND IT CARRIES NO VERSION NUMBER
 //
-// A version-1 view is read under VERSION-1 SEMANTICS, VERBATIM. Nothing is
-// translated on load, and this is the single most important sentence in this
-// file. The obvious translation — v1's `contains` becoming v2's `LIKE '%…%'`
-// — turns whole-element membership into substring matching, so `labels
-// contains "in"` would newly match `indoor`, `printing` and `min`. That is
-// BROADENING, applied automatically, to files already on disk; and broadening
-// is the one thing this surface may never do (FR-105). Draft 10 of the spec
-// specified exactly that translation and Draft 11 withdrew it as review
-// finding F5. pkg/records/view_find_bridge.go's own header refuses the same
-// substitution by name.
+// A view is: ONE `filter` tree of all/any/not over the ten SQL operators —
+// the same grammar knowledge_find evaluates — `grouping` keys that each carry
+// a direction, an OPTIONAL `type`, plus `layout`, `formulas` and
+// `property_config`.
 //
-// So a v1 view using `contains` or `via` stays precisely as it is: loaded,
-// listed by knowledge_describe, NOT servable through knowledge_find, and the
-// reason named (ViewFindLoader.ServeRefusal). It becomes servable when an
-// operator explicitly migrates it through knowledge_configure, which refuses
-// any rewrite that would change the row set.
-func supportedViewVersions() []int { return []int{ViewVersion1, ViewVersion2} }
-
-// IsSupportedViewVersion reports whether this release can read a view file
-// declaring that schema_version.
-func IsSupportedViewVersion(v int) bool {
-	for _, s := range supportedViewVersions() {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func supportedViewVersionsText() string {
-	parts := make([]string, 0, 2)
-	for _, v := range supportedViewVersions() {
-		parts = append(parts, fmt.Sprintf("%d", v))
-	}
-	return strings.Join(parts, " and ")
-}
+// A SECOND, FLAT, AND-ONLY FORMAT USED TO LIVE HERE, behind a `schema_version`
+// key and a key partition that policed which spelling belonged to which
+// version. It stored `filters` (a flat AND-list in a separate seven-operator
+// vocabulary) and `group_by` (a bare name list with no direction). The whole
+// apparatus — the version constants, the supported-set, the partition, the
+// two parallel translators and the two parallel renderers — existed for ONE
+// purpose: keeping files written under the old format readable. No such file
+// was ever written outside this project's own tooling, and none exists on
+// disk, so the format is deleted rather than versioned around.
+//
+// THE RULE THAT PARTITION PROTECTED IS NOT DELETED, and a reader arriving from
+// the old comments should be clear which of the two went. A VIEW IS NEVER
+// BROADENED ON THE OPERATOR'S BEHALF (FR-105). The retired vocabulary's
+// `contains` meant whole-element membership, and the obvious rewrite to
+// `LIKE '%…%'` turns that into substring matching — `labels contains "in"`
+// newly matching `indoor`, `printing` and `min`. Spec Draft 10 specified that
+// translation and Draft 11 withdrew it as review finding F5. The prohibition
+// still stands and knowledge_configure still enforces it; what is gone is the
+// old format that made the mistranslation POSSIBLE. There is nothing left to
+// mistranslate here, which is a stronger guarantee than the guard was.
+// ---------------------------------------------------------------------------
 
 // ViewsDir returns <vault>/.omnipus-vault/views.
 func ViewsDir(vaultRoot string) string {
@@ -155,14 +113,13 @@ func ViewsDir(vaultRoot string) string {
 type ViewRejectionCode string
 
 const (
-	RejectViewUnreadable         ViewRejectionCode = "view_unreadable"
-	RejectViewInvalidYAML        ViewRejectionCode = "view_invalid_yaml"
-	RejectViewMissingVersion     ViewRejectionCode = "view_missing_version"
-	RejectViewUnsupportedVersion ViewRejectionCode = "view_unsupported_version"
-	RejectViewMissingName        ViewRejectionCode = "view_missing_name"
-	RejectViewMissingType        ViewRejectionCode = "view_missing_type"
-	RejectViewDuplicateName      ViewRejectionCode = "view_duplicate_name"
-	RejectViewUnknownKey         ViewRejectionCode = "view_unknown_key"
+	RejectViewUnreadable    ViewRejectionCode = "view_unreadable"
+	RejectViewInvalidYAML   ViewRejectionCode = "view_invalid_yaml"
+	RejectViewEmpty         ViewRejectionCode = "view_empty"
+	RejectViewMissingName   ViewRejectionCode = "view_missing_name"
+	RejectViewMissingType   ViewRejectionCode = "view_missing_type"
+	RejectViewDuplicateName ViewRejectionCode = "view_duplicate_name"
+	RejectViewUnknownKey    ViewRejectionCode = "view_unknown_key"
 	// RejectViewUnknownType is a view naming a record type the vault does not
 	// declare. Reported rather than dropped: a view that queries a type
 	// somebody deleted returns nothing, and "nothing" is indistinguishable
@@ -172,28 +129,15 @@ const (
 	// RejectViewUnknownProperty is a view naming a property the type does not
 	// declare — in a filter, a group_by, a sort, a select or an aggregate.
 	RejectViewUnknownProperty ViewRejectionCode = "view_unknown_property"
-	// RejectViewUnknownEnumValue is a filter literal that is not a member of
-	// the enum it is compared against.
-	RejectViewUnknownEnumValue ViewRejectionCode = "view_unknown_enum_value"
-	// RejectViewVersionKeyMismatch is a view setting a key that belongs to the
-	// OTHER schema_version — a v1 file with `filter:`/`grouping:`/`layout:`, or
-	// a v2 file with `filters:`/`group_by:`.
-	//
-	// Refused rather than preferred-one-silently. The two spellings mean two
-	// different things (v1's `filters` is a flat AND-list in a retired
-	// operator vocabulary; v2's `filter` is one tree in the find grammar), so
-	// a file carrying both is a file whose author disagrees with itself about
-	// which query it is. Picking either would answer a question nobody asked.
-	RejectViewVersionKeyMismatch ViewRejectionCode = "view_version_key_mismatch"
 	// RejectViewInvalidLayout is a `layout` outside the declared enum. The
 	// engine never reads layout — the SPA does — but an unrecognised value
 	// would render as the default table, which is precisely the silent
 	// flattening FR-109 exists to make impossible.
 	RejectViewInvalidLayout ViewRejectionCode = "view_invalid_layout"
-	// RejectViewFilterTooLarge is a v2 filter tree over FR-023c's bound: at
-	// most 64 leaves, at most 8 levels deep. The refusal names which bound.
+	// RejectViewFilterTooLarge is a filter tree over FR-023c's bound: at most
+	// 64 leaves, at most 8 levels deep. The refusal names which bound.
 	RejectViewFilterTooLarge ViewRejectionCode = "view_filter_too_large"
-	// RejectViewInvalidFilterNode is a v2 filter node that is neither a leaf
+	// RejectViewInvalidFilterNode is a filter node that is neither a leaf
 	// nor a combinator, or is both.
 	RejectViewInvalidFilterNode ViewRejectionCode = "view_invalid_filter_node"
 	// RejectViewInvalidFormula is a `formulas` entry that does not parse, does
@@ -204,81 +148,6 @@ const (
 	// position naming a formula the view does not declare.
 	RejectViewUnknownFormula ViewRejectionCode = "view_unknown_formula"
 )
-
-// ---------------------------------------------------------------------------
-// The version partition — which key belongs to which schema_version
-//
-// WHY THIS IS A PARTITION AND NOT A DENYLIST. A flat list of "keys to refuse"
-// cannot detect its own erosion: delete an entry and nothing fails, because
-// no test asserts the entry was ever there. A PARTITION can, because it is
-// checked against generated.ViewDef itself — every `json:` tag on the
-// generated wire type must appear in exactly one of the three sets below, and
-// every name in the three sets must be a real tag. Adding a wire key to
-// ViewDef.yaml without deciding which version owns it fails
-// TestView_EveryWireKeyIsVersionClassified BY NAME, at build time, instead of
-// silently becoming a key both versions accept.
-//
-// The classification is the contract's own (see ViewDef's description in
-// contracts/openapi.yaml, "WHICH KEYS BELONG TO WHICH VERSION").
-// ---------------------------------------------------------------------------
-
-// viewV1OnlyKeys are legal on schema_version 1 and REFUSED on 2.
-var viewV1OnlyKeys = map[string]struct{}{
-	"filters":  {}, // the flat, AND-only, seven-operator RecordFilter list
-	"group_by": {}, // a bare name list, no direction
-}
-
-// viewV2OnlyKeys are legal on schema_version 2 and REFUSED on 1.
-var viewV2OnlyKeys = map[string]struct{}{
-	"filter":          {}, // ONE VaultFilterNode tree
-	"grouping":        {}, // grouping keys that carry a direction
-	"layout":          {}, // FR-109
-	"formulas":        {}, // FR-140s
-	"property_config": {}, // display config; the engine never reads it
-}
-
-// viewSharedKeys mean the same thing in both versions.
-var viewSharedKeys = map[string]struct{}{
-	"schema_version": {},
-	"name":           {},
-	"type":           {},
-	"label":          {},
-	"sort":           {},
-	"properties":     {},
-	"aggregates":     {},
-	"limit":          {},
-	"disabled":       {},
-	"source":         {},
-	"untranslated":   {},
-}
-
-// foreignViewKeys lists, sorted, the keys present in a view file that belong
-// to a schema_version OTHER than the one the file declares.
-//
-// It reads the GENERIC decoded map rather than the decoded struct, and that is
-// load-bearing: a *[]RecordFilter that is nil is indistinguishable from a
-// `filters:` key that was written and decoded to nothing, so a struct-side
-// check would miss `filters: []` on a v2 view — an empty v1 list that
-// nonetheless says the author thought they were writing v1.
-func foreignViewKeys(top map[string]any, version int) []string {
-	var foreign map[string]struct{}
-	switch version {
-	case ViewVersion1:
-		foreign = viewV2OnlyKeys
-	case ViewVersion2:
-		foreign = viewV1OnlyKeys
-	default:
-		return nil
-	}
-	out := []string{}
-	for k := range top {
-		if _, bad := foreign[k]; bad {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
 
 // ViewRejection is one refused view file.
 type ViewRejection struct {
@@ -577,8 +446,8 @@ func ParseView(path string, data []byte) (*SavedView, *ViewRejection) {
 		}
 	}
 	if raw == nil {
-		return nil, reject(RejectViewMissingVersion, "",
-			"schema_version is missing; it is mandatory from the first release (ADR-068 D2), so this view is rejected and never applied")
+		return nil, reject(RejectViewEmpty, "",
+			"the view file is empty; a view must at least declare a `name`, so this file is rejected and never applied")
 	}
 	top, ok := raw.(map[string]any)
 	if !ok {
@@ -586,47 +455,11 @@ func ParseView(path string, data []byte) (*SavedView, *ViewRejection) {
 			"a view file must be a mapping of field name to value, found %T", raw)
 	}
 
-	// Read name and version out of the generic value FIRST, so every message
-	// below can name the view even when the strict decode is about to fail.
+	// Read the name out of the generic value FIRST, so every message below can
+	// name the view even when the strict decode is about to fail.
 	declaredName, _ := top["name"].(string)
 	declaredName = strings.TrimSpace(declaredName)
 
-	rawVersion, hasVersion := top["schema_version"]
-	if !hasVersion || rawVersion == nil {
-		return nil, reject(RejectViewMissingVersion, declaredName,
-			"schema_version is missing; it is mandatory from the first release (ADR-068 D2), so this view is rejected and never applied")
-	}
-	version, versionOK := rawVersion.(int)
-	if !versionOK {
-		return nil, reject(RejectViewUnsupportedVersion, declaredName,
-			"schema_version must be a whole number, found %v", rawVersion)
-	}
-	if !IsSupportedViewVersion(version) {
-		return nil, reject(RejectViewUnsupportedVersion, declaredName,
-			"schema_version is %d; this release understands version %s", version, supportedViewVersionsText())
-	}
-
-	// The version PARTITION, checked before the strict decode for the same
-	// reason the version itself is: a v1 file carrying `filter:` would decode
-	// cleanly (both keys exist on the one generated type) and then be
-	// evaluated as a v1 view whose tree is silently ignored. Refusing here
-	// names the key AND the version it belongs to, so the operator is told
-	// which of the two files they meant to write.
-	if foreign := foreignViewKeys(top, version); len(foreign) > 0 {
-		other := ViewVersion2
-		if version == ViewVersion2 {
-			other = ViewVersion1
-		}
-		return nil, reject(RejectViewVersionKeyMismatch, declaredName,
-			"this view declares schema_version %d but sets %s, which belong%s to schema_version %d; a view speaks one version's vocabulary or the other, never a mixture",
-			version, quoteJoin(foreign), plural(len(foreign)), other)
-	}
-
-	// The strict decode happens AFTER the version checks, deliberately: a key
-	// this release does not know inside a schema_version it does not know is
-	// an unsupported VERSION, and reporting "unknown key" would send the
-	// operator to fix the wrong thing. Same ordering, and the same reason, as
-	// ParseSchema.
 	jsonBytes, err := json.Marshal(raw)
 	if err != nil {
 		return nil, reject(RejectViewInvalidYAML, declaredName,
@@ -653,51 +486,35 @@ func ParseView(path string, data []byte) (*SavedView, *ViewRejection) {
 	}
 	def.Name = strings.TrimSpace(def.Name)
 
-	// `type` is OPTIONAL ON SCHEMA_VERSION 2 ONLY (spec FR-018b). An untyped
-	// v2 view queries every note in scope, resolving property names over the
-	// rows FR-021e keeps for every note — which is what four of the founder's
-	// eighteen bases do, scoping purely by folder and spanning record types.
+	// `type` is OPTIONAL (spec FR-018b). An untyped view queries every note in
+	// scope, resolving property names over the rows FR-021e keeps for every
+	// note — which is what four of the founder's eighteen bases do, scoping
+	// purely by folder and spanning record types.
 	//
-	// THE RELAXATION IS BY VERSION, NEVER UNCONDITIONAL. A version-1 view has
-	// no untyped semantics to fall back on: its `filters` are validated
-	// against one record type's schema and its comparator resolves literals in
-	// that type's domains. A v1 file with no `type` would load here and fail
-	// somewhere further in, which is the shape of failure this loader exists
-	// to prevent, so it stays rejected exactly as it always was.
-	//
-	// A `type:` that is PRESENT but blank is refused at either version. An
-	// empty string is not "untyped" — it is a typo for a type name, and
-	// treating it as the deliberate absence would turn a misspelling into a
-	// vault-wide query.
-	switch {
-	case def.Type == nil:
-		if version == ViewVersion1 {
+	// A `type:` that is PRESENT but blank is REFUSED. An empty string is not
+	// "untyped" — it is a typo for a type name, and treating it as the
+	// deliberate absence would turn a misspelling into a vault-wide query.
+	if def.Type != nil {
+		trimmedType := strings.TrimSpace(*def.Type)
+		if trimmedType == "" {
 			return nil, reject(RejectViewMissingType, def.Name,
-				"view %q declares schema_version 1 and no `type`, so there is no record type for it to query; schema_version 2 allows an untyped view that spans every note in scope",
+				"view %q declares an empty `type`, which is a typo rather than a deliberate absence; omit the key entirely for an untyped view that spans every note in scope",
 				def.Name)
 		}
-	case strings.TrimSpace(*def.Type) == "":
-		return nil, reject(RejectViewMissingType, def.Name,
-			"view %q declares an empty `type`, which is a typo rather than a deliberate absence; omit the key entirely for an untyped schema_version-2 view",
-			def.Name)
-	default:
-		trimmedType := strings.TrimSpace(*def.Type)
 		def.Type = &trimmedType
 	}
 
 	v := &SavedView{Def: def, SourcePath: path}
-	if version == ViewVersion2 {
-		if rej := parseCheckV2Shape(v, reject); rej != nil {
-			return nil, rej
-		}
+	if rej := parseCheckShape(v, reject); rej != nil {
+		return nil, rej
 	}
 	return v, nil
 }
 
-// parseCheckV2Shape is the FORMAT half of a version-2 view: the checks that
-// need no schema. Everything that needs one (property names, formula types)
-// is ValidateViewAgainstSchemas'.
-func parseCheckV2Shape(
+// parseCheckShape is the FORMAT half of a view: the checks that need no
+// schema. Everything that needs one (property names, formula types) is
+// ValidateViewAgainstSchemas'.
+func parseCheckShape(
 	v *SavedView,
 	reject func(ViewRejectionCode, string, string, ...any) *ViewRejection,
 ) *ViewRejection {
@@ -826,21 +643,6 @@ func viewLayoutNames() []string {
 	}
 }
 
-func quoteJoin(names []string) string {
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		out = append(out, fmt.Sprintf("`%s`", n))
-	}
-	return strings.Join(out, ", ")
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return "s"
-	}
-	return ""
-}
-
 // cleanJSONFieldError rewrites encoding/json's wording into the vocabulary an
 // operator is looking at. They are reading a YAML file; "json: unknown field"
 // sends them looking for JSON.
@@ -881,8 +683,8 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		}
 	}
 
-	// THE TYPE IS OPTIONAL ON SCHEMA_VERSION 2 (FR-018b) and required on 1.
-	// ParseView has already enforced that, so a nil here is an UNTYPED v2
+	// THE TYPE IS OPTIONAL (FR-018b). ParseView has already refused a `type:`
+	// that is present but blank, so a nil here is a deliberately UNTYPED
 	// view: it queries every note in scope and resolves property names over
 	// the rows FR-021e keeps for every note, which means there is no single
 	// schema to check its ordinary property names against. Those names are
@@ -929,19 +731,17 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 			v.Def.Name, name, where, sc.Type, joinOrNone(sc.PropertyNames()))
 	}
 
-	// checkV2Prop is checkProp's version-2 sibling. It is separate rather than
-	// a flag on checkProp for the reason FR-018b insists on throughout: a
-	// version-1 view must keep meaning EXACTLY what it meant, and the reserved
-	// namespaces (FR-018c) are a version-2 capability. A v1 view naming
-	// `file.mtime` in its sort was rejected as an undeclared property before
-	// this change and still is — accepting it here would quietly widen what a
-	// file already on disk is allowed to say.
+	// checkViewProp is the property-position checker for every position a view
+	// can name one: it resolves the reserved namespaces (FR-018c, `formula.`
+	// and `file.`) before falling back to the record type's own declarations,
+	// and it resolves BY NAME at query time on an untyped view (base == nil),
+	// where there is no schema to check against and nothing to refuse.
 	//
-	// `positional` distinguishes a COMPARISON position (filter, sort,
+	// `comparison` distinguishes a COMPARISON position (filter, sort,
 	// grouping, aggregate) from a DISPLAY one (`properties`). `file.file` is
 	// the whole note, renderable but not comparable (FR-130), so it is legal
 	// in one and refused in the other.
-	checkV2Prop := func(name, where string, comparison bool) *ViewRejection {
+	checkViewProp := func(name, where string, comparison bool) *ViewRejection {
 		switch {
 		case isViewFormulaRef(name):
 			ref := strings.TrimPrefix(name, viewFormulaNamespace)
@@ -974,58 +774,14 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		}
 	}
 
-	if v.Def.Filters != nil && base != nil {
-		for i, f := range *v.Def.Filters {
-			sc := base
-			for _, hop := range derefStrings(f.Via) {
-				prop, found := sc.Property(hop)
-				if !found {
-					return reject(RejectViewUnknownProperty,
-						"view %q follows relation %q in filter %d, which record type %q does not declare; declared: %s",
-						v.Def.Name, hop, i+1, sc.Type, joinOrNone(sc.PropertyNames()))
-				}
-				if prop.Type != TypeRelation && prop.Type != TypePerson {
-					return reject(RejectViewUnknownProperty,
-						"view %q follows %q in filter %d as a relation, but %q declares it as %s; only relation and person properties can be followed",
-						v.Def.Name, hop, i+1, sc.Type, prop.Type)
-				}
-				next, found := schemas.Get(prop.To)
-				if !found {
-					return reject(RejectViewUnknownType,
-						"view %q follows relation %q in filter %d to record type %q, which this vault does not declare; declared types: %s",
-						v.Def.Name, hop, i+1, prop.To, joinOrNone(schemas.Types()))
-				}
-				sc = next
-			}
-			if rej := checkProp(sc, f.Property, fmt.Sprintf("filter %d", i+1)); rej != nil {
-				return rej
-			}
-			if rej := validateViewFilterValues(v, sc, f, i+1, reject); rej != nil {
-				return rej
-			}
-		}
-	}
-	if base != nil {
-		for _, g := range derefStrings(v.Def.GroupBy) {
-			if rej := checkProp(base, g, "group_by"); rej != nil {
-				return rej
-			}
-		}
-	}
-
-	// ── version 2 ──────────────────────────────────────────────────────────
-	// The filter TREE and the directional grouping keys. Both are v2-only keys
-	// (ParseView refuses either on a v1 file), so this block simply does not
-	// run for a version-1 view — which is what keeps "v1 keeps meaning exactly
-	// what it meant" true here as well as in the parser.
 	if v.Def.Filter != nil {
-		if rej := checkViewFilterTreeProperties(*v.Def.Filter, "filter", checkV2Prop); rej != nil {
+		if rej := checkViewFilterTreeProperties(*v.Def.Filter, "filter", checkViewProp); rej != nil {
 			return rej
 		}
 	}
 	if v.Def.Grouping != nil {
 		for _, g := range *v.Def.Grouping {
-			if rej := checkV2Prop(g.Property, "grouping", true); rej != nil {
+			if rej := checkViewProp(g.Property, "grouping", true); rej != nil {
 				return rej
 			}
 			if g.Direction != nil && !g.Direction.Valid() {
@@ -1035,30 +791,15 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 			}
 		}
 	}
-
-	// ── shared positions ───────────────────────────────────────────────────
-	// sort / properties / aggregates exist in BOTH versions, so which checker
-	// applies is decided by the file's own declared version rather than by
-	// which other keys happen to be set.
-	v2 := v.Def.SchemaVersion == ViewVersion2
-	checkShared := func(name, where string, comparison bool) *ViewRejection {
-		if v2 {
-			return checkV2Prop(name, where, comparison)
-		}
-		if base == nil {
-			return nil
-		}
-		return checkProp(base, name, where)
-	}
 	if v.Def.Sort != nil {
 		for _, srt := range *v.Def.Sort {
-			if rej := checkShared(srt.Property, "sort", true); rej != nil {
+			if rej := checkViewProp(srt.Property, "sort", true); rej != nil {
 				return rej
 			}
 		}
 	}
 	for _, p := range derefStrings(v.Def.Properties) {
-		if rej := checkShared(p, "properties", false); rej != nil {
+		if rej := checkViewProp(p, "properties", false); rej != nil {
 			return rej
 		}
 	}
@@ -1071,7 +812,7 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 				// property name to complain about.
 				continue
 			}
-			if rej := checkShared(*a.Property, "aggregates", true); rej != nil {
+			if rej := checkViewProp(*a.Property, "aggregates", true); rej != nil {
 				return rej
 			}
 		}
@@ -1090,7 +831,7 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		}
 		sort.Strings(names) // deterministic: a map walk would report a random one
 		for _, name := range names {
-			if rej := checkShared(name, "property_config", false); rej != nil {
+			if rej := checkViewProp(name, "property_config", false); rej != nil {
 				return rej
 			}
 		}
@@ -1116,7 +857,7 @@ func viewFormulaNames(v *SavedView) []string {
 	return out
 }
 
-// validateViewFormulas re-checks a version-2 view's formulas on LOAD.
+// validateViewFormulas re-checks a view's formulas on LOAD.
 //
 // FR-140 puts the parser in the write path; this is the re-check that makes a
 // hand-edited file safe, and it is the same entry point knowledge_configure
@@ -1189,42 +930,6 @@ func checkViewFilterTreeProperties(
 	return nil
 }
 
-// validateViewFilterValues checks an enum literal against the declared set.
-//
-// Only enums are checked, and that is the honest boundary: an enum has a
-// CLOSED declared set this file can compare against, so a wrong value is
-// knowable here. Every other type's literal is checked by the comparator at
-// query time against rules (dates, integer bounds, decimal scale) that live in
-// filter.go and value.go, and re-deriving them here would be a second
-// implementation of the one thing this package already has exactly one of.
-func validateViewFilterValues(
-	v *SavedView,
-	sc *Schema,
-	f generated.RecordFilter,
-	position int,
-	reject func(ViewRejectionCode, string, ...any) *ViewRejection,
-) *ViewRejection {
-	if f.Values == nil {
-		return nil
-	}
-	prop, found := sc.Property(f.Property)
-	if !found || prop.Type != TypeEnum {
-		return nil
-	}
-	for _, val := range *f.Values {
-		if val.Enum == nil {
-			continue
-		}
-		if _, resolved := prop.ResolveEnum(*val.Enum); resolved {
-			continue
-		}
-		return reject(RejectViewUnknownEnumValue,
-			"view %q compares %s.%s against %q in filter %d, which is not one of its declared values; permitted: %s",
-			v.Def.Name, sc.Type, f.Property, *val.Enum, position, joinOrNone(prop.PermittedValues()))
-	}
-	return nil
-}
-
 // derefStrings reads an optional generated string list without every caller
 // writing the same nil check.
 func derefStrings(p *[]string) []string {
@@ -1243,62 +948,6 @@ func joinOrNone(names []string) string {
 		return "(none)"
 	}
 	return strings.Join(names, ", ")
-}
-
-// ViewFilterLiterals renders one filter clause's operand values as display
-// text, in the order they were declared.
-//
-// It lives here rather than in the renderer because RecordValue is a
-// seven-field tagged union and a consumer that reached into it directly would
-// have to know which field each type populates — knowledge every consumer
-// would then hold a slightly different version of. There is one reader of that
-// union, and it is this function.
-//
-// A relation or person value renders as its wikilink, which is what is written
-// on disk (D5.1) and therefore what an operator recognises.
-func ViewFilterLiterals(f generated.RecordFilter) []string {
-	if f.Values == nil {
-		return nil
-	}
-	out := make([]string, 0, len(*f.Values))
-	for _, v := range *f.Values {
-		if lit := viewFilterLiteral(v); lit != "" {
-			out = append(out, lit)
-		}
-	}
-	return out
-}
-
-func viewFilterLiteral(v generated.RecordValue) string {
-	switch PropertyType(v.Type) {
-	case TypeText:
-		return derefOrEmpty(v.Text)
-	case TypeEnum:
-		return derefOrEmpty(v.Enum)
-	case TypeDate:
-		return derefOrEmpty(v.Date)
-	case TypeInteger:
-		return derefOrEmpty(v.Integer)
-	case TypeDecimal:
-		return derefOrEmpty(v.Decimal)
-	case TypeRelation:
-		return refLink(v.Relation)
-	case TypePerson:
-		return refLink(v.Person)
-	default:
-		// An unrecognised tag renders as the tag itself rather than as
-		// nothing. A silently empty literal would make two different filters
-		// render identically, which is the one thing a display of a saved
-		// query must never do.
-		return "<" + string(v.Type) + ">"
-	}
-}
-
-func refLink(r *generated.RecordRef) string {
-	if r == nil {
-		return ""
-	}
-	return "[[" + r.Link + "]]"
 }
 
 func derefOrEmpty(p *string) string {

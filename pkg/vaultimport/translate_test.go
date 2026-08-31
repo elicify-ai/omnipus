@@ -1,7 +1,7 @@
-// Omnipus — the `and:`/`or:`/`not:` tree, under test. Version 2 of the view
-// format stores a TREE, so the property that matters here changed shape: it is
-// no longer "what does it refuse to translate PARTIALLY" alone, but "what does
-// it now translate WHOLE, and what does it still refuse".
+// Omnipus — the `and:`/`or:`/`not:` tree, under test. The view format stores a
+// TREE, so the property that matters here is not "what does it refuse to
+// translate PARTIALLY" alone, but "what does it translate WHOLE, and what does
+// it still refuse".
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

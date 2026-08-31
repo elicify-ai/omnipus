@@ -314,7 +314,7 @@ func frontmatterNote(typeName string, tags, links []string) string {
 // D: THE SEAM, PINNED — the production view loader cannot yet carry formulas
 //
 // Everything above works through a loader that implements ViewFormulaLoader.
-// The PRODUCTION loader, records.ViewFindLoader, does not: its translateViewV2
+// The PRODUCTION loader, records.ViewFindLoader, does not: its translateViewQuery
 // REFUSES any view declaring formulas outright (ServeRefusalFormula, "a
 // knowledge_find request carries no formulas"), and its Names() drops such a
 // view from the servable list. So a real vault's formula view never reaches
@@ -329,7 +329,7 @@ func frontmatterNote(typeName string, tags, links []string) string {
 //  1. give *ViewFindLoader a `Formulas(name string) (map[string]string, bool)`
 //     returning the SavedView's `Def.Formulas` — that alone satisfies
 //     knowledgefind.ViewFormulaLoader and wires the whole path;
-//  2. delete translateViewV2's ServeRefusalFormula branch, which exists only
+//  2. delete translateViewQuery's ServeRefusalFormula branch, which exists only
 //     because the REQUEST carries no formulas map. It does not need one: the
 //     loader hands the map over beside the request.
 //
@@ -344,7 +344,7 @@ func TestSeam_ProductionViewLoaderStillCannotCarryViewFormulas(t *testing.T) {
 	var loader any = records.NewViewFindLoader(records.NewViewSet())
 	if _, ok := loader.(ViewFormulaLoader); ok {
 		t.Fatal("records.ViewFindLoader now implements ViewFormulaLoader — the seam this test pins is CLOSED.\n" +
-			"That is the intended outcome, not a regression. Confirm translateViewV2's ServeRefusalFormula\n" +
+			"That is the intended outcome, not a regression. Confirm translateViewQuery's ServeRefusalFormula\n" +
 			"branch is gone too (a loader that carries formulas while the translator still refuses the view\n" +
 			"is a half-closed seam that looks closed), then DELETE this test.")
 	}

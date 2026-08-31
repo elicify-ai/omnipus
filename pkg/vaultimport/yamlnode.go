@@ -11,9 +11,10 @@ import "gopkg.in/yaml.v3"
 // WHY THIS FILE EXISTS
 //
 // records.ParseSchema and records.ParseView both read what this package
-// writes, and both care about exact wire shape (a schema_version that
-// decodes as a bare int, not a string; a `many:`/`required:` that decodes as
-// a bool). yaml.Marshal of a plain Go map[string]any sorts keys
+// writes, and both care about exact wire shape (a record schema's
+// `schema_version` that decodes as a bare int, not a string; a
+// `many:`/`required:` that decodes as a bool; a view's `limit` likewise).
+// yaml.Marshal of a plain Go map[string]any sorts keys
 // alphabetically and loses control over ordering — fine for a machine
 // reader, unreadable for the operator who has to open the file afterward
 // (`type` after `many` after `label`...).

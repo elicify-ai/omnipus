@@ -1,6 +1,6 @@
 title: ViewPropertyConfig
 description: >
-  Per-property presentation for one column of a schema_version-2 view
+  Per-property presentation for one column of a saved view
   (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base,
   which is display configuration rather than a projection list).
 

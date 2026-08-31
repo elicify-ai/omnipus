@@ -192,7 +192,6 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 	vo.Disabled = len(vo.DisablingLosses) > 0
 
 	pairs := []ordPair{
-		{Key: "schema_version", Value: records.SupportedViewVersion},
 		{Key: "name", Value: slug},
 	}
 	if resolvedType != "" {
@@ -409,15 +408,6 @@ func translateLayout(vraw map[string]any) (layout string, losses []string) {
 		return layout, []string{lossf(LossLayout,
 			"the Obsidian view asked for layout %q, which this release's view format has no value for; it imports as a table and the request is recorded here rather than lost",
 			layout)}
-	case !emitsLayoutKey():
-		if layout == string(generated.ViewDefLayoutTable) {
-			// The format's omitted-layout default IS table, so a table
-			// view loses nothing by the key being absent.
-			return layout, nil
-		}
-		return layout, []string{lossf(LossLayout,
-			"the Obsidian view asked for layout %q; the view file format this release writes (schema_version %d) has no `layout` field, so the view imports as a table and the request is recorded here rather than lost",
-			layout, records.SupportedViewVersion)}
 	case !renderedLayouts[layout]:
 		// Carried faithfully into the file, but the product draws only
 		// table and cards — so the operator is told, by name, that they
@@ -429,22 +419,10 @@ func translateLayout(vraw map[string]any) (layout string, losses []string) {
 	return layout, nil
 }
 
-// emitsLayoutKey reports whether the view-file format this importer WRITES
-// carries a `layout` field at all.
-//
-// `layout` is declared VERSION 2 ONLY on ViewDef, and this importer emits
-// records.SupportedViewVersion. Writing a v2-only key into a v1 file would
-// produce files the version partition in pkg/records/view.go refuses on the
-// very next load, so the version is asked, not assumed.
-//
-// It is a function rather than a constant expression so the branch it guards
-// is real code on both sides rather than something the compiler folds away.
-func emitsLayoutKey() bool { return records.SupportedViewVersion >= 2 }
-
 // emittedLayoutKey returns the value to write into the view file's `layout:`
 // key, or "" to omit it.
 func emittedLayoutKey(layout string) string {
-	if layout == "" || !emitsLayoutKey() || !knownLayouts[layout] {
+	if layout == "" || !knownLayouts[layout] {
 		return ""
 	}
 	return layout
@@ -532,7 +510,7 @@ func describeLeaf(l v2Leaf) string {
 // translator never harvests literals from at all — see translate.go).
 //
 // An empty resolved type with an empty conflict is NOT a failure any more: it
-// is an UNTYPED version-2 view (FR-018b).
+// is an UNTYPED view, which the format allows (FR-018b).
 func resolveViewType(viewLits, outerLits []string) (resolved, conflict string) {
 	vd := distinctSorted(viewLits)
 	if len(vd) == 1 {

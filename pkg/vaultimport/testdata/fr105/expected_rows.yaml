@@ -56,11 +56,12 @@ views:
     enabled: true
     # WAS THE BROADENING CASE, AND IS NOW THE PROOF THAT IT IS FIXED.
     #
-    # Under view format version 1 the folder clause had NO representation at
-    # all: the imported filters said only `type == "task"` — five rows where
-    # the Obsidian original says four — so the view had to import DISABLED.
-    # Version 2 carries it (FR-134: inFolder becomes file.folder = x OR
-    # file.folder LIKE 'x/%'), so the view is enabled and the row set below is
+    # Under the flat AND-only format this replaced, the folder clause had NO
+    # representation at all: the imported filters said only `type == "task"` —
+    # five rows where the Obsidian original says four — so the view had to
+    # import DISABLED. The view format carries it (FR-134: inFolder becomes
+    # file.folder = x OR file.folder LIKE 'x/%'), so the view is enabled and
+    # the row set below is
     # the assertion that the exclusion actually excludes.
     #
     # Four rows: every task except "Scratch idea", which lives in 99-Temp.

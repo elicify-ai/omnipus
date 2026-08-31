@@ -74,12 +74,12 @@ func TestLayout_IsReadFromTheBase(t *testing.T) {
 //
 // The measured failure: an Obsidian CARDS view imported as a table, recorded
 // NO loss at all, and scored CLEAN — a green number over an undetected loss.
-// Version 2 of the view format has a `layout` field and the product renders
-// cards (the contract says so in as many words: "ONLY table AND cards ARE
-// RENDERED"), so the honest outcome is now that the layout is CARRIED. Clean
-// is therefore correct here — but ONLY on the condition this test enforces:
-// the written file must actually say `layout: cards`. A clean import with no
-// layout key is the original failure wearing a new number.
+// The view format carries a `layout` field and the product renders cards (the
+// contract says so in as many words: "ONLY table AND cards ARE RENDERED"), so
+// the honest outcome is that the layout is CARRIED. Clean is therefore correct
+// here — but ONLY on the condition this test enforces: the written file must
+// actually say `layout: cards`. A clean import with no layout key is the
+// original failure wearing a new number.
 func TestLayout_CardsIsCarriedAndNeverSilentlyATable(t *testing.T) {
 	vo, written := layoutVault(t, "cards")
 
@@ -145,27 +145,6 @@ func TestLayout_UnrenderableLayoutsAreNamedIndividually(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestLayout_NeverWritesAKeyTheEmittedFormatHasNoField exists because the
-// tempting fix — always write `layout:` — produces files that load today and
-// are REJECTED the moment somebody gates v2-only keys by version, long after
-// the run that wrote them.
-//
-// The assertion is stated in terms of the emitted version, so it stays true
-// on both sides of that change rather than needing to be rewritten when
-// pkg/records starts emitting version 2.
-func TestLayout_NeverWritesAKeyTheEmittedFormatHasNoField(t *testing.T) {
-	_, written := layoutVault(t, "cards")
-	hasKey := strings.Contains(written, "\nlayout:")
-
-	switch {
-	case emitsLayoutKey() && !hasKey:
-		t.Errorf("the emitted view format is schema_version %d, which carries `layout`, but the written file does not:\n%s", records.SupportedViewVersion, written)
-	case !emitsLayoutKey() && hasKey:
-		t.Errorf("the emitted view format is schema_version %d, which has NO `layout` field, but the importer wrote one:\n%s", records.SupportedViewVersion, written)
-	}
-	t.Logf("emitted schema_version=%d, carries layout=%v", records.SupportedViewVersion, emitsLayoutKey())
 }
 
 // TestLayout_WrittenViewStillLoads is the round trip. Whatever the importer

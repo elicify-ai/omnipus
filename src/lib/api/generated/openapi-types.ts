@@ -4670,7 +4670,7 @@ export interface components {
             /**
              * @description "text" — prose, never validated. On the CURRENT query grammar (ruling R-B, the ten SQL operators of VaultFilterNode) a text property answers `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the only wildcards and they must be spelled. Full-text relevance retrieval is ADR-067's search surface, not this one.
              *
-             *     *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is the schema_version-1 view surface and is read verbatim under its own semantics (spec FR-018b). It is not the grammar of this property type; a v2 view or a knowledge_find request never speaks it.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
+             *     *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is RecordQueryRequest's own filter shape. The flat view format that also used it is deleted; a saved view and a knowledge_find request both speak the ten SQL operators above and nothing else.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
              * @example enum
              * @enum {string}
              */
@@ -4712,15 +4712,15 @@ export interface components {
              */
             unit?: string;
             /**
-             * @description Present exactly when this property is DERIVED: the expression, as source text, that computes it (FR-140..FR-148, ADR-068 D24.3). Absent means the property is STORED — read out of a note's frontmatter like every other one. A derived property is never written into a note and never read from one; nothing about it reaches SQL.
+             * @description DECLARED HERE, THIS KEY IS REFUSED, AND THE SCHEMA FILE IS REJECTED NAMING IT. It stays DEFINED in this contract so the refusal has something to be about: an author who writes `formula:` on a schema property gets one message at load, at authoring time, telling them where a formula actually goes. A key silently ignored is how a promise becomes a blank column.
              *
-             *     SOURCE TEXT, not a parse tree, for the same reason a view stores source (FR-141): it is human-diffable and it is comparable against the Obsidian original a vault was imported from.
+             *     WHY. Nothing evaluates it. A query reaches a formula only as `formula.<name>` (FR-140), and that name is served by a saved VIEW's `formulas:` map (ADR-068 D24.3, FR-140/FR-141). A schema property is read from the note's own frontmatter, where a computed value never appears — so a type-level formula would render BLANK on every row while the answer still reported itself COMPLETE. Measured, on a `plant` type declaring `double_height: height_cm * 2` over a note holding `height_cm: 12.5`: the column came back empty and the result said "COMPLETE: yes — 1 of 1 shown". A blank that claims completeness is indistinguishable from a note with no value, so the operator concludes their DATA is wrong rather than that the feature was never wired.
              *
-             *     `type` AND `many` ANNOTATE THE RESULT, and they are CHECKED, not trusted. FR-143a requires every formula to have ONE static type and ONE arity, inferred at load before any record is read — because a formula whose type varies per record compares FALSE under R-1's different-domains rule with NO problem reported, which is a silently wrong answer wearing a type system. So the loader infers the expression's type and arity and REFUSES the schema when they disagree with what the property declared, naming both. A declaration nothing checks is a promise, not a type.
+             *     REFUSED RATHER THAN WIRED, deliberately. The surface is specified nowhere: wiring it needs an ADR amendment saying where a type-level formula is addressed, whether a view formula of the same name shadows it, and what an unqualified `select` renders for it. Refusing is the reading that leaves the specification and the behaviour agreeing.
              *
-             *     REFUSED AT LOAD, each naming the property and the reason: an expression that does not parse (FR-140, naming the byte offset); one past FR-146's caps (64 nodes, depth 8 per formula; 16 formulas and 256 formula nodes per record type); one whose inferred type or arity contradicts `type` / `many`; one that produces a PRESENTATION value (`link()`, `icon()`, `format()`) — R-16 says a display value does not compare, so it cannot be a property; one on a `required` property, since nothing writes a derived value into a note and the requirement could never be satisfied; and one declaring `to` / `inverse` or a `relation` / `person` type, since a derived link is a presentation value rather than an edge the vault can target-check.
+             *     REFUSED AT LOAD, PER FILE. Only the schema file declaring it is rejected; every other record type in the vault goes on loading and answering. The query path deliberately does NOT raise this — a schema that loaded clean used to kill its whole record type on a query that had nothing to do with formulas.
              *
-             *     A FORMULA MAY NAME ONLY STORED PROPERTIES OF ITS OWN RECORD TYPE, `file.` metadata, and literals. Naming another derived property — including itself — is REFUSED naming both. That is stricter than a view's `formulas:` map, where `formula.<name>` cross-references are legal and FR-148 checks their graph for cycles, and the reason is that the evaluator resolves a bare property name against the RECORD, where a derived property has no stored value: accepted, such a reference would evaluate to absence on every record and report nothing. Refusing it also makes FR-148's cycle case unreachable by construction rather than by a check that has to keep working — a self-reference is the smallest cycle and it is refused by this same rule.
+             *     THE REMEDY, which the refusal states: delete `formula:` from this property and declare the same expression in a saved view's `formulas:` map, where a query reaches it as `formula.` + this property's name — or, if the value belongs on the note itself, drop `formula:` and keep this as an ordinary stored property that notes write.
              * @example amount * quantity
              */
             formula?: string;
@@ -5334,8 +5334,8 @@ export interface components {
         };
         /**
          * ViewGroupBy
-         * @description One grouping key of a schema_version-2 view (ADR-068 D24.1, spec FR-018b).
-         *     IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. A version-1 view's `group_by` is a bare list of property names with no direction field at all, so every `groupBy` direction in an imported Obsidian base was UNREPRESENTABLE ON THE WIRE — not merely untranslated. The founder's own vault carried 24 of them and every one was flattened to the default order in silence, which is the shape of failure this whole surface is written against: a view that imports without an error and then sorts its groups the wrong way, with nothing anywhere to say so.
+         * @description One grouping key of a saved view (ADR-068 D24.1, spec FR-018b).
+         *     IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. The retired flat view format grouped by a bare list of property names with no direction field at all, so every `groupBy` direction in an imported Obsidian base was UNREPRESENTABLE ON THE WIRE — not merely untranslated. The founder's own vault carried 24 of them and every one was flattened to the default order in silence, which is the shape of failure this whole surface is written against: a view that imports without an error and then sorts its groups the wrong way, with nothing anywhere to say so.
          */
         ViewGroupBy: {
             /**
@@ -5356,7 +5356,7 @@ export interface components {
         };
         /**
          * ViewPropertyConfig
-         * @description Per-property presentation for one column of a schema_version-2 view (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base, which is display configuration rather than a projection list).
+         * @description Per-property presentation for one column of a saved view (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base, which is display configuration rather than a projection list).
          *     PURE PRESENTATION. THE ENGINE NEVER READS THIS. Obsidian's own rule is kept verbatim and it is the rule that matters: a display name is NEVER usable in a filter, a sort, a grouping or a formula. Those positions name the PROPERTY, always — so renaming a column in the UI can never quietly change which records a view returns.
          */
         ViewPropertyConfig: {
@@ -5370,19 +5370,12 @@ export interface components {
          * ViewDef
          * @description A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
          *     A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
-         *     TWO VERSIONS LIVE IN THIS ONE SCHEMA, AND THE REASON IS THE ONE RULE THIS SURFACE WILL NOT BREAK (spec FR-018b, review finding F5). `SupportedViewVersion` is the SET {1, 2}. A version-1 view evaluates under VERSION-1 SEMANTICS, VERBATIM — nothing is auto-translated, because the obvious translation (`contains` becoming `LIKE %…%`) turns whole-element membership into substring matching: `labels contains "in"` would newly match `indoor`, `printing` and `min`. That is BROADENING, applied automatically, and broadening is the one thing an imported or migrated view may never do (FR-105). A v1 view using `contains` or `via` therefore stays exactly as it is — listed by knowledge_describe, not servable through knowledge_find, the reason named — until an operator EXPLICITLY migrates it through knowledge_configure, which refuses any rewrite that would change the row set.
-         *     WHICH KEYS BELONG TO WHICH VERSION, because a reader will otherwise assume the wrong one. Version 1 only: `filters` (the flat, AND-only RecordFilter list) and `group_by` (a bare name list). Version 2 only: `filter` (ONE VaultFilterNode tree), `grouping` (keys that carry a direction), `layout`, `formulas`, `property_config`. Shared: everything else. A view MUST NOT set a key belonging to the other version — that is a write-time and load-time refusal, not a silent preference.
-         *     WHY THE V2 KEYS ARE SPELLED DIFFERENTLY RATHER THAN REDEFINED IN PLACE. Spec FR-018b describes v2's tree as `filters` and v2's directional keys as `group_by`. Those two keys ALREADY EXIST ON DISK holding a v1 array and a v1 string list, and this schema declares `additionalProperties: false` — which pkg/records/view.go enforces with json DisallowUnknownFields. Redefining either key's TYPE in place would make every existing v1 file fail to decode, i.e. it would delete v1 readability in the same change that promises to preserve it. The alternative — one key holding a oneOf of both shapes — buys the spelling back at the cost of a union type on both generated sides. So v2 takes new names: `filter`, matching VaultFindRequest's own key for the same tree (which is FR-018b's actual point — ONE filter grammar, one spelling of it), and `grouping`.
+         *     THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER. A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL operators — the same grammar knowledge_find evaluates, so a view's filter needs no translation to be served — `grouping` keys that each carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and `property_config`.
+         *     THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored `filters` (a flat AND-list in a separate seven-operator vocabulary) and `group_by` (a bare name list with no direction). It was carried alongside this one only so files written under it stayed readable. Nothing was ever written under it outside this project's own tooling and no such file exists on disk, so it is deleted rather than versioned around: two formats in one schema is a permanent tax on every reader, and the second one had no remaining constituency.
+         *     The rule that partition existed to protect still holds, and it is the one rule this surface will not break: A VIEW IS NEVER BROADENED ON THE OPERATOR'S BEHALF (FR-105). The retired vocabulary's `contains` meant whole-element membership, and rewriting it as `LIKE '%…%'` would have turned that into substring matching — `labels contains "in"` newly matching `indoor`, `printing` and `min`. That translation was specified in spec Draft 10 and withdrawn in Draft 11 as review finding F5, and it is still prohibited: knowledge_configure refuses any rewrite that changes the row set. What is gone is the OLD FORMAT, not the prohibition.
          *     `untranslated` and `disabled` exist for the one-shot .base importer (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot translate is preserved VERBATIM in `untranslated` and reported, never approximated and never silently dropped — an approximation that looks like a translation is worse than an honest gap, because nobody reviews a filter that appears to have imported cleanly. Import is one-shot: `.base` files are never read on the query path (FR-102).
          */
         ViewDef: {
-            /**
-             * @description Declared version of the view format, mandatory for the same reason a record schema's is (D2): a format that breaks unannounced is worse when the files are machine-generated.
-             *
-             *     The supported set is {1, 2}. 1 is the flat, AND-only RecordFilter format, read verbatim under its own semantics and never rewritten on read. 2 is the find grammar (D24.1). WRITES EMIT 2; a file on disk is never upgraded as a side effect of being read.
-             * @example 2
-             */
-            schema_version: number;
             /**
              * @description View identifier, unique within the vault.
              * @example open-by-owner
@@ -5391,11 +5384,11 @@ export interface components {
             /**
              * @description The record type this view queries.
              *
-             *     OPTIONAL SINCE VERSION 2 (FR-018b). An UNTYPED view queries every note in scope — which is what four of the founder's eighteen bases do, scoping purely by folder and spanning record types. In an untyped view a property resolves BY NAME over the rows the index holds for every note (FR-021e): a note that CARRIES the key holds its value, parsed in the domain the name resolves to; a value that does not parse there is NON-CONFORMING and reported; and ONLY a note not carrying the key at all is ABSENT. A note whose file says `status: open` must never answer TRUE to `status IS NULL`. Two in-scope types declaring one name with DIFFERENT types REFUSE the query naming both declarations — loud, never a silent domain split. A name no in-scope type declares resolves in the TEXT domain over the raw values.
+             *     OPTIONAL (FR-018b). An UNTYPED view queries every note in scope — which is what four of the founder's eighteen bases do, scoping purely by folder and spanning record types. In an untyped view a property resolves BY NAME over the rows the index holds for every note (FR-021e): a note that CARRIES the key holds its value, parsed in the domain the name resolves to; a value that does not parse there is NON-CONFORMING and reported; and ONLY a note not carrying the key at all is ABSENT. A note whose file says `status: open` must never answer TRUE to `status IS NULL`. Two in-scope types declaring one name with DIFFERENT types REFUSE the query naming both declarations — loud, never a silent domain split. A name no in-scope type declares resolves in the TEXT domain over the raw values.
              *
              *     A declared type holding ZERO records is a VALID, EMPTY view (FR-018d) carrying the ordinary completeness verdict — "0 records, complete" — which is distinguishable from the silent empty this design exists to prevent. Six of the founder's eighteen bases reference types provisioned ahead of their data. A type NO schema declares is still rejected: that is drift, not provisioning.
              *
-             *     On a VERSION-1 view this field remains effectively required — a v1 view with no type has no record type to query and is rejected, as it always was.
+             *     A `type:` that is PRESENT but blank is REFUSED. An empty string is not "untyped" — it is a typo for a type name, and treating it as a deliberate absence would turn a misspelling into a vault-wide query. Omit the key entirely to mean untyped.
              * @example deal
              */
             type?: string;
@@ -5405,32 +5398,17 @@ export interface components {
              */
             label?: string;
             /**
-             * @description VERSION 1 ONLY. Filter clauses, combined with AND.
+             * @description The view's filter, as ONE VaultFilterNode tree — the same `all`/`any`/`not` combinators and ten SQL operators knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
              *
-             *     This is the flat, AND-only, seven-operator list that version-2 views replace with `filter`. It cannot express disjunction at all — seven filter groups in the founder's vault needed it and not one was expressible — and its `contains` and `via` leaves have no faithful equivalent in the find grammar. It is KEPT, unchanged and un-translated, so that every v1 view already on disk keeps meaning exactly what it meant (FR-018b). A version-2 view setting this key is REFUSED.
-             */
-            filters?: components["schemas"]["RecordFilter"][];
-            /**
-             * @description VERSION 2 ONLY. The view's filter, as ONE VaultFilterNode tree — the same `all`/`any`/`not` combinators and ten SQL operators knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
-             *
-             *     This is the whole point of version 2: the product spoke TWO filter languages, and the bridge between them refused two of the older one's leaves outright. Now there is one. Obsidian's `and`/`or`/ `not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as an escaped `LIKE '%…%'`; its relation traversal is the request's own join shape rather than a per-leaf `via`.
+             *     ONE FILTER GRAMMAR, ONE SPELLING OF IT. The product used to speak two filter languages and the bridge between them refused two of the older one's leaves outright. Obsidian's `and`/`or`/`not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as an escaped `LIKE '%…%'`; its relation traversal is the request's own join shape rather than a per-leaf hop.
              *
              *     FR-023c's bound applies to a view's tree identically to a request's: at most 64 leaves and depth 8, refused above either naming which.
              */
             filter?: components["schemas"]["VaultFilterNode"];
             /**
-             * @description VERSION 1 ONLY. Grouping properties, outermost first. Two levels (FR-027); a relation is a valid grouping property (FR-029).
+             * @description Grouping keys, outermost first, each carrying its own direction (FR-018b). Two levels (FR-027); grouping by a relation is supported (FR-029) and a record holding several values appears in every group it belongs to (FR-028).
              *
-             *     A bare name list with NO direction field — which is why every `groupBy` direction in an imported base was unrepresentable rather than merely untranslated. Version 2 uses `grouping`, whose entries carry one. A version-2 view setting this key is REFUSED.
-             * @example [
-             *       "owner"
-             *     ]
-             */
-            group_by?: string[];
-            /**
-             * @description VERSION 2 ONLY. Grouping keys, outermost first, each carrying its own direction (FR-018b). Two levels (FR-027); grouping by a relation is supported (FR-029) and a record holding several values appears in every group it belongs to (FR-028).
-             *
-             *     A version-1 view setting this key is REFUSED.
+             *     THE DIRECTION IS PART OF THE KEY, not an afterthought: a bare name list is why every `groupBy` direction in an imported base was unrepresentable rather than merely untranslated.
              */
             grouping?: components["schemas"]["ViewGroupBy"][];
             /** @description Sort keys, applied in order. */
@@ -5445,7 +5423,7 @@ export interface components {
              */
             properties?: string[];
             /**
-             * @description VERSION 2 ONLY. Per-property presentation, keyed by PROPERTY name (FR-018b) — Obsidian's top-level `properties` block, which is display configuration rather than a projection list.
+             * @description Per-property presentation, keyed by PROPERTY name (FR-018b) — Obsidian's top-level `properties` block, which is display configuration rather than a projection list.
              *
              *     PURE PRESENTATION; THE ENGINE NEVER READS IT. Obsidian's own rule is kept verbatim: a display name is never usable in a filter, a sort, a grouping or a formula, so renaming a column can never quietly change which records a view returns.
              */
@@ -5453,7 +5431,7 @@ export interface components {
                 [key: string]: components["schemas"]["ViewPropertyConfig"];
             };
             /**
-             * @description VERSION 2 ONLY. Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
+             * @description Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
              *
              *     ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
              *
@@ -5463,7 +5441,7 @@ export interface components {
              */
             layout?: "table" | "cards" | "board" | "calendar" | "gallery" | "map";
             /**
-             * @description VERSION 2 ONLY. Computed properties, keyed by name, each value the expression's SOURCE TEXT (FR-141) — human-diffable and directly comparable against the Obsidian original it was translated from. A formula is referenced from any property position as `formula.<name>`.
+             * @description Computed properties, keyed by name, each value the expression's SOURCE TEXT (FR-141) — human-diffable and directly comparable against the Obsidian original it was translated from. A formula is referenced from any property position as `formula.<name>`.
              *
              *     THE PARSER LIVES IN THE WRITE PATH AND ONLY THERE (FR-140). knowledge_configure and the importer parse an expression when it is written and REFUSE one that does not parse, naming the position and the reason; it is never stored. The view loader re-validates on load, so a hand-edited file is re-checked. knowledge_find accepts NO text expression anywhere — a query reaches a formula only as a reference to something already validated — which is what keeps both halves of ADR-068 O-3 true on the query path: no text language, no parser, and therefore no parse failure that could degrade into an empty result.
              *

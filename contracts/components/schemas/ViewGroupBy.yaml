@@ -1,9 +1,9 @@
 title: ViewGroupBy
 description: >
-  One grouping key of a schema_version-2 view (ADR-068 D24.1, spec FR-018b).
+  One grouping key of a saved view (ADR-068 D24.1, spec FR-018b).
 
-  IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. A
-  version-1 view's `group_by` is a bare list of property names with no
+  IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. The
+  retired flat view format grouped by a bare list of property names with no
   direction field at all, so every `groupBy` direction in an imported Obsidian
   base was UNREPRESENTABLE ON THE WIRE — not merely untranslated. The founder's
   own vault carried 24 of them and every one was flattened to the default

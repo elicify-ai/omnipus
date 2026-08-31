@@ -1,6 +1,6 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-31) — **revision 13**, applying **four founder rulings on D24's open decisions** and the findings of **two independent reviews of revision 12** (one line-level, one systemic; the systemic verdict was REVISE, and this revision is the response). The rulings: every note's properties are indexed, typed or not; the fifteen summaries extend `aggregates` under ONE name; relation `to:` stays effectively required, with the importer inferring targets; and set-empty vs remove-property are two explicit write actions. The largest corrections: revision 12's formula cost claim was wrong by a factor of ~64 (204.8M steps where 3.2M was the defined bound — now capped at 16M and stated), its v1→v2 view translation was itself the broadening it prohibited, formula cycles were an unspecified hang, and stat metadata went silently stale through the hash-equal sync skip. **What revision 13 changes is set out immediately below; the revision-12 block follows it.** *Revision 12 recorded the founder's ruling that **Obsidian Bases parity IS the goal** (**D24**, new — file metadata, formulas, all fifteen summaries, a `checkbox` type, a view format v2 with a real boolean tree, and the import contract that goes with them), earned by importing the founder's real vault: 18 `.base` files, **zero** translated clean.* *Revision 11 recorded the operator's ruling on **what a ranking evaluation is allowed to CONCLUDE when the query set it requires does not exist** (**D21.3a**, new), together with the anti-rigging clause that ruling depends on and one baseline correction this document owed the specification.* *Revision 10 recorded three operator rulings raised by the Stage 1 implementers who hit them while building the read path (**D16.6a**, new), together with the AC-8.10 wording defects the same reading exposed. **Two of the three were CONTRADICTIONS in the implementing specification, not under-specifications** — it required a statement in one place and failed the build for it in another — and the implementers emitted the required statement and reported the conflict upward rather than violating the guard quietly. the revision-10 block sits immediately below the revision-11 one.* *Revision 9 followed the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently; what revision 9 changed is set out below the revision-10 block.* *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
+- **Status:** Proposed (2026-08-31) — **revision 13, plus one founder amendment of the same date recorded at D24.1: THERE IS EXACTLY ONE VIEW FORMAT AND IT CARRIES NO VERSION NUMBER.** The flat AND-only predecessor is deleted outright rather than versioned around — no backward compatibility is owed, and no view file predates this project's own tooling, so nothing on disk needed migrating. Revision 13 itself applied **four founder rulings on D24's open decisions** and the findings of **two independent reviews of revision 12** (one line-level, one systemic; the systemic verdict was REVISE, and this revision is the response). The rulings: every note's properties are indexed, typed or not; the fifteen summaries extend `aggregates` under ONE name; relation `to:` stays effectively required, with the importer inferring targets; and set-empty vs remove-property are two explicit write actions. The largest corrections: revision 12's formula cost claim was wrong by a factor of ~64 (204.8M steps where 3.2M was the defined bound — now capped at 16M and stated), its translation between the two view formats was itself the broadening it prohibited, formula cycles were an unspecified hang, and stat metadata went silently stale through the hash-equal sync skip. **What revision 13 changes is set out immediately below; the revision-12 block follows it.** *Revision 12 recorded the founder's ruling that **Obsidian Bases parity IS the goal** (**D24**, new — file metadata, formulas, all fifteen summaries, a `checkbox` type, a view format with a real boolean tree, and the import contract that goes with them), earned by importing the founder's real vault: 18 `.base` files, **zero** translated clean.* *Revision 11 recorded the operator's ruling on **what a ranking evaluation is allowed to CONCLUDE when the query set it requires does not exist** (**D21.3a**, new), together with the anti-rigging clause that ruling depends on and one baseline correction this document owed the specification.* *Revision 10 recorded three operator rulings raised by the Stage 1 implementers who hit them while building the read path (**D16.6a**, new), together with the AC-8.10 wording defects the same reading exposed. **Two of the three were CONTRADICTIONS in the implementing specification, not under-specifications** — it required a statement in one place and failed the build for it in another — and the implementers emitted the required statement and reported the conflict upward rather than violating the guard quietly. the revision-10 block sits immediately below the revision-11 one.* *Revision 9 followed the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently; what revision 9 changed is set out below the revision-10 block.* *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
   - *Revision 6:* after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five new tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone. And **D16.6 is new**: SQLite's default semantics contradict **nine of the thirteen** comparison rules the spec's §8 oracle defines, eight of them silently — the strongest single consideration bearing on D16, which revision 5 omitted entirely while the implementing spec carried it.
   - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five new tools; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
@@ -49,10 +49,12 @@
     write/load naming the path — the active-set guard `pkg/records/frontmatter.go` already
     applies to YAML aliases, applied where it was omitted. Every formula gets ONE static type
     and arity, validated up front.
-  - **(h) Revision 12's v1→v2 view translation WAS the broadening it prohibited (D24.1).**
-    `contains` → `LIKE '%…%'` turns whole-element membership into substring matching —
-    `view_find_bridge.go`'s own header refuses exactly this substitution. v1 views now keep v1
-    semantics verbatim; migration is an explicit, refusal-guarded `knowledge_configure` act.
+  - **(h) Revision 12's translation between the two view formats WAS the broadening it
+    prohibited (D24.1).** `contains` → `LIKE '%…%'` turns whole-element membership into
+    substring matching — `view_find_bridge.go`'s own header refuses exactly this substitution.
+    A file written in the old format kept its own semantics verbatim; migration was an
+    explicit, refusal-guarded `knowledge_configure` act. **Superseded by the amendment at
+    D24.1: the old format is deleted, so there is nothing left to mistranslate.**
   - **(i) The AC-8.10 guard extension named one half of itself (D24.2; spec FR-135, test 39a).**
     The construct half was extended; the value-column denylist never gained `note_tags.tag`,
     `note_links.target`/`embed`, or the three stat columns — the exact two-thirds omission
@@ -78,9 +80,9 @@
   8 refused, ZERO clean) measured exactly how far the shipped model falls short.**
   - **(a) The view format adopts the find grammar (D24.1).** The product spoke two filter
     languages: `knowledge_find` already had `all`/`any`/`not` and the ten SQL operators; the
-    VIEW format was a flat AND-only list in the vocabulary ruling R-B retired. ViewDef v2 is
-    one grammar, plus `group_by` direction, optional `type` (folder-scoped views spanning
-    record types), valid empty views over provisioned types, and display config.
+    VIEW format was a flat AND-only list in the vocabulary ruling R-B retired. The view format
+    is now one grammar, plus a grouping direction, optional `type` (folder-scoped views
+    spanning record types), valid empty views over provisioned types, and display config.
   - **(b) Thirteen `file.*` virtual properties and the four file methods (D24.2)** — the gap
     the founder personally hit (`file.inFolder()` was inexpressible). Methods translate to
     ordinary filter leaves; no function grammar enters the query surface.
@@ -900,10 +902,10 @@ not put one there.
 
 ### D10 — Views are saved queries, stored as data
 
-> **Revision 12: the view FORMAT is superseded by D24.1 (ViewDef schema_version 2)** — the
-> filter half becomes `knowledge_find`'s own `all`/`any`/`not` tree, `group_by` gains a
-> direction, `type` becomes optional, and formulas/summaries/display config are added. The
-> grouping decisions below (two levels, relation grouping, multi-value fan-out) stand.
+> **Revision 12: the view FORMAT below is superseded by D24.1** — the filter half becomes
+> `knowledge_find`'s own `all`/`any`/`not` tree, the grouping keys gain a direction, `type`
+> becomes optional, and formulas/summaries/display config are added. The grouping decisions
+> below (two levels, relation grouping, multi-value fan-out) stand.
 
 A view is a declarative file (`.omnipus-vault/views/<name>.yaml`) naming a record type, filters,
 grouping, sort, and visible properties. Views are data an agent can author and a human can
@@ -2970,23 +2972,43 @@ and six bases reference forward-provisioned types holding zero notes.
 
 #### D24.1 — The view format becomes the find grammar: one filter language, a tree, and views that span types
 
-The deepest as-is defect was never a missing operator — it is that the product speaks **two
+The deepest as-is defect was never a missing operator — it is that the product spoke **two
 filter languages**. `knowledge_find`'s wire grammar (`VaultFilterNode`, hosted inline in
-`contracts/openapi.yaml`) already has `all`/`any`/`not` nesting and the ten SQL operators;
-the *view* format (`ViewDef`/`RecordFilter`) is a flat AND-only list speaking the seven-op
-vocabulary ruling R-B retired, and the bridge between them
-(`pkg/records/view_find_bridge.go::translateRecordFilter`) refuses `contains` and `via`
-outright. Views therefore cannot express disjunction at all — and seven filter groups in the
-founder's vault use it, one at a base's top level.
+`contracts/openapi.yaml`) already had `all`/`any`/`not` nesting and the ten SQL operators;
+the *view* format (`ViewDef`/`RecordFilter`) was a flat AND-only list speaking the seven-op
+vocabulary ruling R-B retired, and the bridge between them refused `contains` and `via`
+outright. Views therefore could not express disjunction at all — and seven filter groups in
+the founder's vault use it, one at a base's top level. *(The per-leaf translator this
+paragraph cited by name is gone with the format it read; `view_find_bridge.go` now deep-copies
+one tree and translates no operator at all.)*
 
-**ViewDef schema_version 2 adopts the find grammar wholesale:**
+**The view format adopts the find grammar wholesale:**
+
+> **AMENDED — founder ruling, 2026-08-31. THERE IS EXACTLY ONE VIEW FORMAT AND IT CARRIES NO
+> VERSION NUMBER.** This decision was originally written as a SECOND view format numbered 2,
+> read alongside the flat AND-only original. Two things retired that framing. First, the
+> product versions its RELEASES (v0.1 / v0.2 / v0.3), so a file format called "v2" reads as a
+> release and is a standing source of confusion. Second, the founder ruled that **no backward
+> compatibility is owed** — and with none owed there is no reason to carry two formats, since
+> the only purpose of the old one was keeping files written under it readable.
+>
+> **Nothing on disk was migrated, because there was nothing to migrate.** View files are
+> GENERATED by the importer into `<vault>/.omnipus-vault/views/`, and the founder's real
+> 757-note vault contains no such directory. No view file predates this tooling.
+>
+> So the old format is **deleted outright**, along with everything that existed only to keep
+> two of them apart: the `schema_version` key on a view, the supported-version set, the
+> key partition, the two parallel translators and the two parallel renderers. Read every
+> "version 2" below as "the view format" and every "version 1" as "the flat AND-only format
+> that no longer exists". **The prohibition the partition protected is NOT deleted** — see the
+> `contains` bullet below, which still stands.
 
 - **`filters` becomes one `VaultFilterNode` tree** — the same `all`/`any`/`not` combinators and
   ten SQL operators the query path already evaluates. Obsidian's `and`/`or`/`not` map 1:1. The
-  seven-op `RecordFilter` vocabulary is retired from the view surface; `contains` translates as
-  an escaped `LIKE '%…%'`, `via` as the request-level join shape the find grammar already
-  carries. The bridge's two untranslatable cases cease to exist.
-- **`group_by` entries carry a direction** — `{property, direction: asc|desc}` instead of a bare
+  seven-op `RecordFilter` vocabulary is retired from the view surface. (Revision 12 said
+  `contains` translates as an escaped `LIKE '%…%'` and `via` as a request-level join; revision
+  13 withdrew the `contains` half as the broadening it was — see the rewritten bullet below.)
+- **grouping entries carry a direction** — `{property, direction: asc|desc}` instead of a bare
   name list. 24 occurrences in the founder's vault were being silently flattened to the default
   order.
 - **`type` becomes OPTIONAL.** A view with no type queries every note in scope — which is what
@@ -3012,16 +3034,21 @@ founder's vault use it, one at a base's top level.
 - **A `layout` field** (`table`, `cards`; extensible — revision 13, FR-109): the importer reads
   each Obsidian view's `type` and carries it, so a cards view cannot silently become a table
   and score "clean". The engine never reads it; the SPA does.
-- **Version 1 views keep VERSION 1 SEMANTICS — nothing is auto-translated. REWRITTEN, revision
-  13:** revision 12 said v1 loads "translated to v2 semantics", with `contains` mapped to
-  `LIKE '%…%'` — which turns whole-element membership into substring matching (`labels contains
-  "in"` would newly match `indoor`, `printing`, `min`): **broadening, applied automatically, in
-  the revision that made broadening the one prohibited thing** — and
-  `pkg/records/view_find_bridge.go`'s own header refuses exactly that substitution by name. A
-  v1 view now evaluates verbatim under its recorded operators; one using `contains`/`via` stays
-  exactly as it is today (listed, not servable through find, reason named) until EXPLICITLY
-  migrated via `knowledge_configure`, which refuses any rewrite that would change the row set.
-  Writes emit v2; files on disk are never rewritten on read.
+- **A VIEW IS NEVER BROADENED ON THE OPERATOR'S BEHALF. REWRITTEN, revision 13; still binding
+  after the 2026-08-31 amendment:** revision 12 said a file in the old format loads
+  "translated", with `contains` mapped to `LIKE '%…%'` — which turns whole-element membership
+  into substring matching (`labels contains "in"` would newly match `indoor`, `printing`,
+  `min`): **broadening, applied automatically, in the revision that made broadening the one
+  prohibited thing** — and `pkg/records/view_find_bridge.go`'s own header refused exactly that
+  substitution by name. Revision 13 withdrew the translation and kept such a file verbatim,
+  listed but not servable, until EXPLICITLY migrated via `knowledge_configure`.
+
+  The 2026-08-31 amendment deletes the old format, which makes the hazard **structurally
+  absent rather than guarded**: a view carries one filter tree in one operator vocabulary, so
+  there is no mapping step in which a `contains` could be widened into a `LIKE`. The
+  prohibition itself still stands and is still enforced where a rewrite can still happen —
+  `knowledge_configure` refuses any migration that changes the row set. **Do not reintroduce an
+  operator-to-operator map in the view→find bridge; that is the shape of the defect.**
 
 Every one of these is a wire-format change and lands contract-first (Hard Constraint #8, D19):
 schema change, regenerated Go and TS artifacts, and the consuming code in the same commit.
@@ -3087,7 +3114,7 @@ schema version bumps; the store rebuilds itself (`NeedsFullIndex`, FR-020a).
 A formula language is an expression evaluator, and the obvious implementation — pushing
 expressions into SQL — is the one this design structurally forbids. Neither happens here.
 
-- **Where the parser lives: the WRITE path, and only there.** ViewDef v2 gains Obsidian's
+- **Where the parser lives: the WRITE path, and only there.** The view format gains Obsidian's
   top-level `formulas:` map (name → expression source text) and `summaries:` (custom summary
   formulas). The expression grammar is Obsidian's surface: arithmetic `+ - * / % ( )`, boolean
   `! && ||`, comparisons, and the closed function set (`if`, `toFixed`, `mean`, `round`,
@@ -3556,8 +3583,11 @@ which was itself one of the review findings):**
 - **A third named bound, B3** (100,000 values / 8 MB column buffer) and a backlink edge cap
   (200,000) join B1/B2 — more refusals to document and test, which is the price of Median,
   Unique and `file.backlinks` not being unbounded.
-- **The comparator keeps v1's operator set alive** for as long as unmigrated v1 views exist —
-  two vocabularies serviced until the health view's migration list empties.
+- ~~**The comparator keeps the retired operator set alive** for as long as unmigrated views in
+  the old format exist — two vocabularies serviced until the health view's migration list
+  empties.~~ **Withdrawn by the 2026-08-31 amendment at D24.1:** the old format is deleted, so
+  there is one operator vocabulary and no migration list to empty. This risk cost nothing in
+  the end because no file on disk was ever written in the old format.
 - **The importer stops being a translator and becomes an inferrer** — schema inference for
   untyped notes, `to:` target inference with an evidence threshold, enum evidence from filter
   literals — each with per-note/per-property reporting obligations (FR-104a/b, FR-108).

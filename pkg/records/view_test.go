@@ -91,23 +91,25 @@ func TestView_NoViewsDirectoryIsNotAnError(t *testing.T) {
 // avoid, and it is the reason the YAML is routed through JSON.
 //
 // generated.ViewDef carries `json:` tags and NO `yaml:` tags. A plain
-// yaml.Unmarshal into it lower-cases the Go field names, so `group_by`,
-// `schema_version` and `filters[].include_absent` all land nowhere — and the
+// yaml.Unmarshal into it lower-cases the Go field names, so `property_config`
+// — and every other multi-word key the format grows — lands nowhere, and the
 // view PARSES CLEANLY having silently lost half of itself, which is the exact
 // class of quiet wrong answer this whole layer exists to remove.
 //
 // MUTATION: replace the JSON round trip in ParseView with a direct
-// yaml.Unmarshal into generated.ViewDef and this test fails on GroupBy.
+// yaml.Unmarshal into generated.ViewDef and this test fails on PropertyConfig.
 func TestView_MultiWordKeysSurviveTheDecode(t *testing.T) {
 	root, schemas := viewFixtureSchemas(t, "")
 	root = writeVaultView(t, root, "by-state.yaml", `
-schema_version: 1
 name: by-state
 type: widget
 label: Widgets by state
-group_by: [state]
+grouping: [{property: state}]
 properties: [name, state, batch]
 limit: 25
+property_config:
+  state:
+    display_name: Stage
 `)
 	set, report, err := LoadViews(root, schemas)
 	if err != nil {
@@ -120,13 +122,15 @@ limit: 25
 	if !ok {
 		t.Fatalf("view 'by-state' did not load; names: %v", set.Names())
 	}
-	if v.Def.SchemaVersion != 1 {
-		t.Errorf("schema_version was dropped by the decode: got %d, want 1", v.Def.SchemaVersion)
+	if v.Def.PropertyConfig == nil {
+		t.Errorf("property_config was dropped by the decode. This is the multi-word-key trap: " +
+			"generated.ViewDef has json tags only, so a plain yaml.Unmarshal loses every " +
+			"snake_case field in silence.")
+	} else if cfg, ok := (*v.Def.PropertyConfig)["state"]; !ok || cfg.DisplayName == nil || *cfg.DisplayName != "Stage" {
+		t.Errorf("property_config[state] = %+v, want display_name Stage", cfg)
 	}
-	if v.Def.GroupBy == nil || len(*v.Def.GroupBy) != 1 || (*v.Def.GroupBy)[0] != "state" {
-		t.Errorf("group_by was dropped by the decode: got %v, want [state]. "+
-			"This is the multi-word-key trap: generated.ViewDef has json tags only, "+
-			"so a plain yaml.Unmarshal loses every snake_case field in silence.", v.Def.GroupBy)
+	if v.Def.Grouping == nil || len(*v.Def.Grouping) != 1 || (*v.Def.Grouping)[0].Property != "state" {
+		t.Errorf("grouping was dropped by the decode: got %+v, want one key on state", v.Def.Grouping)
 	}
 	if v.Def.Properties == nil || len(*v.Def.Properties) != 3 {
 		t.Errorf("properties was dropped: got %v", v.Def.Properties)
@@ -146,86 +150,75 @@ limit: 25
 // `additionalProperties: false`, and this is what makes that a rule rather
 // than a comment.
 //
-// MUTATION: delete `dec.DisallowUnknownFields()` from ParseView and this test
-// fails — the misspelled key is dropped in silence and the view loads with no
-// grouping at all.
+// The second case is the one that matters after the format collapsed to a
+// single version. `schema_version` used to be a MANDATORY key on every view
+// file; it no longer exists. A file still carrying it is refused, by name,
+// rather than loaded with the key quietly ignored — because a file written
+// against the retired format may also be carrying the retired `filters` and
+// `group_by`, and a loader that shrugged at the version stamp would run such
+// a file as an unfiltered, ungrouped view over the whole record type.
+//
+// MUTATION: delete `dec.DisallowUnknownFields()` from ParseView and both cases
+// fail — the key is dropped in silence and the view loads.
 func TestView_UnknownKeyIsRefusedNotDropped(t *testing.T) {
-	root, schemas := viewFixtureSchemas(t, "")
-	root = writeVaultView(t, root, "typo.yaml", `
-schema_version: 1
-name: typo
-type: widget
-group-by: [state]
-`)
-	set, report, err := LoadViews(root, schemas)
-	if err != nil {
-		t.Fatalf("LoadViews: %v", err)
-	}
-	if set.Len() != 0 {
-		t.Fatalf("a view with an unknown key must not load; it loaded as %v", set.Names())
-	}
-	if len(report.Rejections) != 1 {
-		t.Fatalf("expected exactly one rejection, got %v", report.Rejections)
-	}
-	rej := report.Rejections[0]
-	if rej.Code != RejectViewUnknownKey {
-		t.Errorf("expected %s, got %s (%s)", RejectViewUnknownKey, rej.Code, rej.Reason)
-	}
-	if !strings.Contains(rej.Reason, "group-by") {
-		t.Errorf("the rejection must name the offending key so the operator can find it; got %q", rej.Reason)
-	}
-	if strings.Contains(rej.Reason, "json") {
-		t.Errorf("the operator is reading a YAML file; the message must not send them looking for JSON: %q", rej.Reason)
+	for _, tc := range []struct{ name, body, key string }{
+		{"a misspelled key", "name: typo\ntype: widget\ngroup-by: [state]\n", "group-by"},
+		{"the retired schema_version stamp", "schema_version: 1\nname: typo\ntype: widget\n", "schema_version"},
+		{"the retired flat filters list", "name: typo\ntype: widget\nfilters: []\n", "filters"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, schemas := viewFixtureSchemas(t, "")
+			root = writeVaultView(t, root, "typo.yaml", tc.body)
+			set, report, err := LoadViews(root, schemas)
+			if err != nil {
+				t.Fatalf("LoadViews: %v", err)
+			}
+			if set.Len() != 0 {
+				t.Fatalf("a view with an unknown key must not load; it loaded as %v", set.Names())
+			}
+			if len(report.Rejections) != 1 {
+				t.Fatalf("expected exactly one rejection, got %v", report.Rejections)
+			}
+			rej := report.Rejections[0]
+			if rej.Code != RejectViewUnknownKey {
+				t.Errorf("expected %s, got %s (%s)", RejectViewUnknownKey, rej.Code, rej.Reason)
+			}
+			if !strings.Contains(rej.Reason, tc.key) {
+				t.Errorf("the rejection must name the offending key so the operator can find it; got %q", rej.Reason)
+			}
+			if strings.Contains(rej.Reason, "json") {
+				t.Errorf("the operator is reading a YAML file; the message must not send them looking for JSON: %q", rej.Reason)
+			}
+		})
 	}
 }
 
-// TestView_VersionIsMandatoryAndPinned covers both halves of ADR-068 D2's
-// rule as it applies to views.
-func TestView_VersionIsMandatoryAndPinned(t *testing.T) {
+// TestView_MalformedHeaderIsRefused covers the three ways a view file can fail
+// before any of its query is looked at.
+//
+// Each is refused rather than defaulted, and the distinction between the first
+// two is the point: an empty `type:` is a TYPO, and reading it as the
+// deliberate absence would turn a misspelled record type into a query over
+// every note in the vault.
+func TestView_MalformedHeaderIsRefused(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
 		want ViewRejectionCode
 	}{
 		{
-			name: "missing schema_version",
-			body: "name: v\ntype: widget\n",
-			want: RejectViewMissingVersion,
-		},
-		{
-			// 2 is now READABLE (FR-018b), so the future version this case
-			// pins moved up by one. The case itself must stay: a version this
-			// release does not know is rejected, never read as the nearest
-			// one it does.
-			name: "a future schema_version",
-			body: "schema_version: 3\nname: v\ntype: widget\n",
-			want: RejectViewUnsupportedVersion,
-		},
-		{
-			name: "version zero",
-			body: "schema_version: 0\nname: v\ntype: widget\n",
-			want: RejectViewUnsupportedVersion,
-		},
-		{
-			// A v2 view may omit `type`; a v1 view may not, and this is the
-			// pair that keeps the relaxation FROM leaking backwards.
-			name: "no type on schema_version 1",
-			body: "schema_version: 1\nname: v\n",
-			want: RejectViewMissingType,
-		},
-		{
-			name: "an empty type on schema_version 2 is a typo, not an untyped view",
-			body: "schema_version: 2\nname: v\ntype: \"  \"\n",
+			name: "an empty type is a typo, not an untyped view",
+			body: "name: v\ntype: \"  \"\n",
 			want: RejectViewMissingType,
 		},
 		{
 			name: "an empty file",
 			body: "",
-			want: RejectViewMissingVersion,
+			want: RejectViewEmpty,
 		},
 		{
 			name: "no name",
-			body: "schema_version: 1\ntype: widget\n",
+			body: "type: widget\n",
 			want: RejectViewMissingName,
 		},
 	}
@@ -251,7 +244,7 @@ func TestView_VersionIsMandatoryAndPinned(t *testing.T) {
 // which view runs depend on a filename.
 func TestView_DuplicateNameRejectsBothAndNamesBothPaths(t *testing.T) {
 	root, schemas := viewFixtureSchemas(t, "")
-	body := "schema_version: 1\nname: shared\ntype: widget\n"
+	body := "name: shared\ntype: widget\n"
 	root = writeVaultView(t, root, "a.yaml", body)
 	root = writeVaultView(t, root, "b.yaml", body)
 
@@ -291,63 +284,39 @@ func TestView_ValidationAgainstSchemas(t *testing.T) {
 	}{
 		{
 			name:       "a record type the vault no longer declares",
-			body:       "schema_version: 1\nname: v\ntype: gadget\n",
+			body:       "name: v\ntype: gadget\n",
 			wantCode:   RejectViewUnknownType,
 			mustNameds: []string{"gadget", "widget", "foundry"},
 		},
 		{
-			name:       "a property in group_by",
-			body:       "schema_version: 1\nname: v\ntype: widget\ngroup_by: [colour]\n",
+			name:       "a property in grouping",
+			body:       "name: v\ntype: widget\ngrouping: [{property: colour}]\n",
 			wantCode:   RejectViewUnknownProperty,
-			mustNameds: []string{"colour", "group_by", "name", "state", "maker", "batch"},
+			mustNameds: []string{"colour", "grouping", "name", "state", "maker", "batch"},
 		},
 		{
 			name:       "a property in sort",
-			body:       "schema_version: 1\nname: v\ntype: widget\nsort:\n  - {property: colour, direction: asc}\n",
+			body:       "name: v\ntype: widget\nsort:\n  - {property: colour, direction: asc}\n",
 			wantCode:   RejectViewUnknownProperty,
 			mustNameds: []string{"colour", "sort"},
 		},
 		{
 			name:       "a property in the displayed set",
-			body:       "schema_version: 1\nname: v\ntype: widget\nproperties: [name, colour]\n",
+			body:       "name: v\ntype: widget\nproperties: [name, colour]\n",
 			wantCode:   RejectViewUnknownProperty,
 			mustNameds: []string{"colour", "properties"},
 		},
 		{
 			name:       "a property in an aggregate",
-			body:       "schema_version: 1\nname: v\ntype: widget\naggregates:\n  - {op: sum, property: colour}\n",
+			body:       "name: v\ntype: widget\naggregates:\n  - {op: sum, property: colour}\n",
 			wantCode:   RejectViewUnknownProperty,
 			mustNameds: []string{"colour", "aggregates"},
 		},
 		{
-			name:       "a property in a filter",
-			body:       "schema_version: 1\nname: v\ntype: widget\nfilters:\n  - {property: colour, op: eq}\n",
+			name:       "a property in the filter tree",
+			body:       "name: v\ntype: widget\nfilter: {property: colour, op: \"IS NULL\"}\n",
 			wantCode:   RejectViewUnknownProperty,
-			mustNameds: []string{"colour", "filter 1"},
-		},
-		{
-			name: "an enum value outside the declared set",
-			body: "schema_version: 1\nname: v\ntype: widget\nfilters:\n" +
-				"  - {property: state, op: eq, values: [{type: enum, enum: pending}]}\n",
-			wantCode:   RejectViewUnknownEnumValue,
-			mustNameds: []string{"pending", "draft", "shipped", "withdrawn"},
-		},
-		{
-			name: "a via hop that is not a relation",
-			body: "schema_version: 1\nname: v\ntype: widget\nfilters:\n" +
-				"  - {property: name, op: eq, via: [batch]}\n",
-			wantCode:   RejectViewUnknownProperty,
-			mustNameds: []string{"batch", "relation"},
-		},
-		{
-			name: "a property checked against the RELATED type after a via hop (FR-009)",
-			body: "schema_version: 1\nname: v\ntype: widget\nfilters:\n" +
-				"  - {property: batch, op: eq, via: [maker]}\n",
-			wantCode: RejectViewUnknownProperty,
-			// `batch` is declared on widget and NOT on foundry. After the hop
-			// the check must run against foundry, so this must be refused —
-			// property names are scoped to their record type (FR-009).
-			mustNameds: []string{"batch", "foundry", "region"},
+			mustNameds: []string{"colour", "filter"},
 		},
 	}
 	for _, tc := range cases {
@@ -383,7 +352,7 @@ func TestView_ValidationAgainstSchemas(t *testing.T) {
 // that look fine and query nothing. The distinction is the point, so it is
 // asserted rather than assumed.
 func TestView_ValidationIsSkippedWithoutSchemas(t *testing.T) {
-	root := writeVaultView(t, "", "v.yaml", "schema_version: 1\nname: v\ntype: gadget\ngroup_by: [colour]\n")
+	root := writeVaultView(t, "", "v.yaml", "name: v\ntype: gadget\ngrouping: [{property: colour}]\n")
 	set, report, err := LoadViews(root, nil)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
@@ -399,7 +368,7 @@ func TestView_ValidationIsSkippedWithoutSchemas(t *testing.T) {
 // TestView_LookupIsExactNotFolded — two files side by side spelling a name two
 // ways are two views, and folding here would silently make them one.
 func TestView_LookupIsExactNotFolded(t *testing.T) {
-	root := writeVaultView(t, "", "a.yaml", "schema_version: 1\nname: Open-Deals\ntype: widget\n")
+	root := writeVaultView(t, "", "a.yaml", "name: Open-Deals\ntype: widget\n")
 	set, _, err := LoadViews(root, nil)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
@@ -415,7 +384,7 @@ func TestView_LookupIsExactNotFolded(t *testing.T) {
 // TestView_DisplayLabelFallsBackToName so no consumer invents its own
 // fallback and no two consumers invent different ones.
 func TestView_DisplayLabelFallsBackToName(t *testing.T) {
-	v, rej := ParseView("/v.yaml", []byte("schema_version: 1\nname: bare\ntype: widget\n"))
+	v, rej := ParseView("/v.yaml", []byte("name: bare\ntype: widget\n"))
 	if rej != nil {
 		t.Fatalf("unexpected rejection: %v", rej)
 	}
@@ -427,7 +396,7 @@ func TestView_DisplayLabelFallsBackToName(t *testing.T) {
 // TestView_NonViewFilesAreSkipped — the views directory may hold a README or a
 // dotfile, and neither is a view.
 func TestView_NonViewFilesAreSkipped(t *testing.T) {
-	root := writeVaultView(t, "", "real.yaml", "schema_version: 1\nname: real\ntype: widget\n")
+	root := writeVaultView(t, "", "real.yaml", "name: real\ntype: widget\n")
 	dir := ViewsDir(root)
 	for _, name := range []string{"README.md", ".hidden.yaml", "notes.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("not a view"), 0o644); err != nil {

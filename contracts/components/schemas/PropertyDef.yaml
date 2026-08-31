@@ -73,10 +73,10 @@ properties:
 
 
       *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY
-      in RecordFilter.yaml, which is the schema_version-1 view surface and is
-      read verbatim under its own semantics (spec FR-018b). It is not the
-      grammar of this property type; a v2 view or a knowledge_find request
-      never speaks it.*
+      in RecordFilter.yaml, which is RecordQueryRequest's own filter shape.
+      The flat view format that also used it is deleted; a saved view and a
+      knowledge_find request both speak the ten SQL operators above and
+      nothing else.*
       "enum" — one of a closed SET (`values`). The set is closed; it is not
       ordered — sorting is lexical over the folded value (D4, R-5), and an
       author who wants a domain order prefixes the values: `1-lead`,
@@ -164,50 +164,44 @@ properties:
     type: string
     minLength: 1
     description: >
-      Present exactly when this property is DERIVED: the expression, as source
-      text, that computes it (FR-140..FR-148, ADR-068 D24.3). Absent means the
-      property is STORED — read out of a note's frontmatter like every other
-      one. A derived property is never written into a note and never read from
-      one; nothing about it reaches SQL.
+      DECLARED HERE, THIS KEY IS REFUSED, AND THE SCHEMA FILE IS REJECTED
+      NAMING IT. It stays DEFINED in this contract so the refusal has something
+      to be about: an author who writes `formula:` on a schema property gets
+      one message at load, at authoring time, telling them where a formula
+      actually goes. A key silently ignored is how a promise becomes a blank
+      column.
 
 
-      SOURCE TEXT, not a parse tree, for the same reason a view stores source
-      (FR-141): it is human-diffable and it is comparable against the Obsidian
-      original a vault was imported from.
+      WHY. Nothing evaluates it. A query reaches a formula only as
+      `formula.<name>` (FR-140), and that name is served by a saved VIEW's
+      `formulas:` map (ADR-068 D24.3, FR-140/FR-141). A schema property is read
+      from the note's own frontmatter, where a computed value never appears —
+      so a type-level formula would render BLANK on every row while the answer
+      still reported itself COMPLETE. Measured, on a `plant` type declaring
+      `double_height: height_cm * 2` over a note holding `height_cm: 12.5`: the
+      column came back empty and the result said "COMPLETE: yes — 1 of 1
+      shown". A blank that claims completeness is indistinguishable from a note
+      with no value, so the operator concludes their DATA is wrong rather than
+      that the feature was never wired.
 
 
-      `type` AND `many` ANNOTATE THE RESULT, and they are CHECKED, not trusted.
-      FR-143a requires every formula to have ONE static type and ONE arity,
-      inferred at load before any record is read — because a formula whose type
-      varies per record compares FALSE under R-1's different-domains rule with
-      NO problem reported, which is a silently wrong answer wearing a type
-      system. So the loader infers the expression's type and arity and REFUSES
-      the schema when they disagree with what the property declared, naming
-      both. A declaration nothing checks is a promise, not a type.
+      REFUSED RATHER THAN WIRED, deliberately. The surface is specified
+      nowhere: wiring it needs an ADR amendment saying where a type-level
+      formula is addressed, whether a view formula of the same name shadows it,
+      and what an unqualified `select` renders for it. Refusing is the reading
+      that leaves the specification and the behaviour agreeing.
 
 
-      REFUSED AT LOAD, each naming the property and the reason: an expression
-      that does not parse (FR-140, naming the byte offset); one past FR-146's
-      caps (64 nodes, depth 8 per formula; 16 formulas and 256 formula nodes
-      per record type); one whose inferred type or arity contradicts `type` /
-      `many`; one that produces a PRESENTATION value (`link()`, `icon()`,
-      `format()`) — R-16 says a display value does not compare, so it cannot be
-      a property; one on a `required` property, since nothing writes a derived
-      value into a note and the requirement could never be satisfied; and one
-      declaring `to` / `inverse` or a `relation` / `person` type, since a
-      derived link is a presentation value rather than an edge the vault can
-      target-check.
+      REFUSED AT LOAD, PER FILE. Only the schema file declaring it is rejected;
+      every other record type in the vault goes on loading and answering. The
+      query path deliberately does NOT raise this — a schema that loaded clean
+      used to kill its whole record type on a query that had nothing to do with
+      formulas.
 
 
-      A FORMULA MAY NAME ONLY STORED PROPERTIES OF ITS OWN RECORD TYPE, `file.`
-      metadata, and literals. Naming another derived property — including
-      itself — is REFUSED naming both. That is stricter than a view's
-      `formulas:` map, where `formula.<name>` cross-references are legal and
-      FR-148 checks their graph for cycles, and the reason is that the
-      evaluator resolves a bare property name against the RECORD, where a
-      derived property has no stored value: accepted, such a reference would
-      evaluate to absence on every record and report nothing. Refusing it also
-      makes FR-148's cycle case unreachable by construction rather than by a
-      check that has to keep working — a self-reference is the smallest cycle
-      and it is refused by this same rule.
+      THE REMEDY, which the refusal states: delete `formula:` from this
+      property and declare the same expression in a saved view's `formulas:`
+      map, where a query reaches it as `formula.` + this property's name — or,
+      if the value belongs on the note itself, drop `formula:` and keep this as
+      an ordinary stored property that notes write.
     example: "amount * quantity"

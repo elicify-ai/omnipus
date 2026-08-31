@@ -21,14 +21,14 @@ import (
 // WHAT CHANGED HERE, AND WHY IT IS THE WHOLE POINT
 //
 // This file used to flatten a Base filter tree into an AND-only list of leaves,
-// because that is all schema_version 1 of the view format could store. Every
-// construct the flattening could not carry — an `or:` group, a multi-clause
-// `not:`, `file.inFolder(...)` — became a named loss in a ROW-SET-AFFECTING
-// position, and FR-105 then correctly disabled the view. Forty-eight of the
-// founder's forty-nine imported views were disabled for exactly that reason.
+// because an AND-only list was all the view format could store. Every construct
+// the flattening could not carry — an `or:` group, a multi-clause `not:`,
+// `file.inFolder(...)` — became a named loss in a ROW-SET-AFFECTING position,
+// and FR-105 then correctly disabled the view. Forty-eight of the founder's
+// forty-nine imported views were disabled for exactly that reason.
 //
-// Version 2 of the view format stores a TREE. So this file now builds one, and
-// the three constructs above are translations rather than losses:
+// The view format stores a TREE. So this file builds one, and the three
+// constructs above are translations rather than losses:
 //
 //	or:  [A, B]           ->  {any: [A, B]}
 //	not: [A, B]           ->  {not: {all: [A, B]}}   (Obsidian ANDs, then negates)

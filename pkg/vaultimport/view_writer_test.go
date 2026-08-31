@@ -1,6 +1,6 @@
-// Omnipus — the version-2 WRITER: the guard that the version stamped on a
-// produced view file and the KEYS in it are the same version, plus the
-// version-2 constructs the importer now carries instead of losing.
+// Omnipus — the view WRITER: the guard that every file this importer produces
+// loads back through the real loader, plus the grammar constructs it carries
+// into those files instead of losing.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -20,25 +20,25 @@ import (
 // ---------------------------------------------------------------------------
 // THE TRAP THIS FILE EXISTS TO CLOSE
 //
-// records.SupportedViewVersion says which schema_version a writer STAMPS on a
-// file. The version partition in pkg/records/view.go then refuses any file
-// whose KEYS belong to the other version. So the constant and this package's
-// writer are one decision with two halves, and moving either half alone
-// produces view files that are written successfully, reported as converted,
-// and REJECTED on the very next load — silently, until somebody re-runs an
-// import.
+// This package WRITES view files and pkg/records READS them, and the two can
+// drift apart in the one direction neither notices on its own: a key the
+// writer emits that the reader refuses. records.ParseView decodes with
+// DisallowUnknownFields, so a single stray key rejects the whole file — and
+// the import reports success anyway, because the rejection only happens the
+// next time somebody LOADS the vault. Written successfully, reported as
+// converted, dead on arrival.
 //
-// pkg/records cannot test the other half (it must not import the importer), so
-// the whole-loop assertion lives here: import a vault, then reload every file
+// pkg/records cannot test that half (it must not import the importer), so the
+// whole-loop assertion lives here: import a vault, then reload every file
 // through records.ParseView and records.ValidateViewAgainstSchemas — the real
 // loader, the same one the running product uses.
 // ---------------------------------------------------------------------------
 
-// v2WriterVault writes a small vault exercising the constructs version 2 added
-// — disjunction, multi-clause negation, a folder scope, a directional
+// viewWriterVault writes a small vault exercising the awkward corners of the
+// grammar — disjunction, multi-clause negation, a folder scope, a directional
 // grouping, an untyped view — imports it, and returns the vault root and the
 // report.
-func v2WriterVault(t *testing.T) (root string, rep *Report) {
+func viewWriterVault(t *testing.T) (root string, rep *Report) {
 	t.Helper()
 	root = t.TempDir()
 
@@ -100,16 +100,13 @@ views:
 	return root, rep
 }
 
-// TestWrittenViews_LoadBackThroughTheRealLoader is the tripwire named in
-// records.SupportedViewVersion's own comment.
+// TestWrittenViews_LoadBackThroughTheRealLoader is this file's tripwire.
 //
-// It fails if the writer's keys and the stamped version ever disagree — which
-// is exactly what bumping the constant without changing the writer (or the
-// reverse) produces, and which nothing else in either package would catch: the
-// import reports success either way, and the rejection only appears the next
-// time somebody loads the vault.
+// It fails if the writer ever emits a file the reader refuses, which nothing
+// else in either package would catch: the import reports success either way,
+// and the rejection only appears the next time somebody loads the vault.
 func TestWrittenViews_LoadBackThroughTheRealLoader(t *testing.T) {
-	root, rep := v2WriterVault(t)
+	root, rep := viewWriterVault(t)
 
 	if rep.ViewReload == nil {
 		t.Fatal("the import did not reload the views it wrote, so this assertion measures nothing")
@@ -136,26 +133,24 @@ func TestWrittenViews_LoadBackThroughTheRealLoader(t *testing.T) {
 		t.Fatal("no views loaded at all — a green result over an empty set")
 	}
 
-	// Every loaded view must declare the version the writer stamps, or the
-	// two halves have drifted apart in the one direction the loader cannot
-	// see (a file that happens to parse under both).
-	for _, v := range views.Views() {
-		if v.Def.SchemaVersion != records.SupportedViewVersion {
-			t.Errorf("view %q declares schema_version %d; the writer's constant is %d", v.Name(), v.Def.SchemaVersion, records.SupportedViewVersion)
-		}
-	}
-	t.Logf("%d views written and reloaded at schema_version %d", views.Len(), records.SupportedViewVersion)
+	t.Logf("%d views written and reloaded through the real loader", views.Len())
 }
 
-// TestWrittenViews_UseVersion2KeysOnly is the other side of the partition, read
-// off the bytes rather than through the loader.
+// TestWrittenViews_CarryNoRetiredKeys reads the same rule off the BYTES rather
+// than through the loader.
 //
-// The loader refuses a v2 file carrying `filters:` or `group_by:`, so a writer
-// that emitted one would be caught above — but only where a fixture happens to
-// produce that key. This asserts it over every produced file directly, so the
-// coverage does not depend on the fixture having the right shape.
-func TestWrittenViews_UseVersion2KeysOnly(t *testing.T) {
-	root, _ := v2WriterVault(t)
+// Three keys used to exist and no longer do: `schema_version`, and the flat
+// AND-only format's `filters` and `group_by`. The loader refuses all three as
+// unknown keys, so a writer that emitted one would be caught by the test above
+// — but only where a fixture happens to produce that key. This asserts it over
+// every produced file directly, so the coverage does not depend on the fixture
+// having the right shape.
+//
+// It is worth having because a retired key comes back the easy way: a merge of
+// any branch cut before the removal re-adds the emitting line as an ordinary,
+// conflict-free addition.
+func TestWrittenViews_CarryNoRetiredKeys(t *testing.T) {
+	root, _ := viewWriterVault(t)
 
 	dir := records.ViewsDir(root)
 	entries, err := os.ReadDir(dir)
@@ -174,25 +169,23 @@ func TestWrittenViews_UseVersion2KeysOnly(t *testing.T) {
 		if err := yaml.Unmarshal(data, &top); err != nil {
 			t.Fatalf("%s is not valid YAML: %v", e.Name(), err)
 		}
-		if top["schema_version"] != records.ViewVersion2 {
-			t.Errorf("%s stamps schema_version %v, want %d", e.Name(), top["schema_version"], records.ViewVersion2)
-		}
-		for _, v1Key := range []string{"filters", "group_by"} {
-			if _, present := top[v1Key]; present {
-				t.Errorf("%s carries the VERSION-1 key %q on a version-2 file; records.LoadViews refuses that mixture outright:\n%s", e.Name(), v1Key, data)
+		for _, retired := range []string{"schema_version", "filters", "group_by"} {
+			if _, present := top[retired]; present {
+				t.Errorf("%s carries the retired key %q; the view format has no such field, so records.LoadViews refuses the whole file as an unknown key:\n%s", e.Name(), retired, data)
 			}
 		}
 	}
 }
 
-// TestWrittenViews_CarryTheV2Constructs is the capability half: the four
-// things version 1 could not express, each written into a real file.
+// TestWrittenViews_CarryTheFullGrammar is the capability half: the four
+// constructs that are the whole reason the format looks the way it does, each
+// written into a real file.
 //
-// Without it, the two tests above would pass with a writer that emitted
-// version 2 and carried nothing new — a correct file format over the same
+// Without it, the two tests above would pass with a writer that produced
+// well-formed files carrying nothing — a valid file format over the same
 // losses, which is the shape of a green number that means nothing.
-func TestWrittenViews_CarryTheV2Constructs(t *testing.T) {
-	root, rep := v2WriterVault(t)
+func TestWrittenViews_CarryTheFullGrammar(t *testing.T) {
+	root, rep := viewWriterVault(t)
 
 	byName := map[string]ViewOutcome{}
 	for _, b := range rep.Bases {
@@ -225,7 +218,7 @@ func TestWrittenViews_CarryTheV2Constructs(t *testing.T) {
 		rendered := renderVerbatim(read("tasks--urgent-or-blocked")["filter"])
 		for _, want := range []string{"any:", "not:", "all:", "file.folder", "99-Temp", "priority", "status"} {
 			if !strings.Contains(rendered, want) {
-				t.Errorf("the written filter does not contain %q — version 1 lost this construct whole:\n%s", want, rendered)
+				t.Errorf("the written filter does not contain %q — a filter that loses this construct silently returns a different row set:\n%s", want, rendered)
 			}
 		}
 	})
@@ -238,7 +231,7 @@ func TestWrittenViews_CarryTheV2Constructs(t *testing.T) {
 		}
 		g, _ := grouping[0].(map[string]any)
 		if g["property"] != "status" || g["direction"] != "asc" {
-			t.Errorf("grouping key = %v, want status/asc — version 1's group_by had no direction field at all", g)
+			t.Errorf("grouping key = %v, want status/asc — a grouping key that loses its direction is silently re-sorted, which is the failure ViewGroupBy exists to end", g)
 		}
 	})
 
@@ -277,11 +270,11 @@ func TestWrittenViews_CarryTheV2Constructs(t *testing.T) {
 //
 // A view that loads is not a view anybody can use. The product applies a saved
 // view through records.NewViewFindLoader, so the untyped, folder-scoped view
-// this importer now writes has to come out of that bridge as a real request —
-// otherwise the twenty views the version bump "unlocked" are twenty files
-// nothing can run.
+// this importer writes has to come out of that bridge as a real request —
+// otherwise the twenty folder-scoped views in the founder's vault are twenty
+// files nothing can run.
 func TestWrittenViews_UntypedViewIsServableEndToEnd(t *testing.T) {
-	root, _ := v2WriterVault(t)
+	root, _ := viewWriterVault(t)
 
 	schemas, _, err := records.LoadSchemas(root)
 	if err != nil {

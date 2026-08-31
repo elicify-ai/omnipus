@@ -320,41 +320,34 @@ func TestTranslateBase_WrittenFileRecordsTheRefusal(t *testing.T) {
 	if _, present := clean["untranslated"]; present {
 		t.Errorf("a view with no losses carries an `untranslated` key: %v", clean)
 	}
-	if clean["schema_version"] != records.SupportedViewVersion {
-		t.Errorf("schema_version = %v, want %d", clean["schema_version"], records.SupportedViewVersion)
+	// There is ONE view format and it carries no version number, so the
+	// writer must not stamp one. A stray `schema_version` would be an unknown
+	// key, and records.LoadViews refuses those — every imported view would
+	// fail to load, long after the run that wrote them.
+	if _, present := clean["schema_version"]; present {
+		t.Errorf("the written view carries a `schema_version` key: %v — the view format has no such field, so the real loader refuses the file", clean)
 	}
 	if clean["source"] != "Decisions.base" {
 		t.Errorf("source = %v, want the base file it came from", clean["source"])
 	}
 
-	// FR-109 read from the other side. `layout` is a VERSION-2 key, so which
-	// files may carry it is decided by the version this writer emits — the
-	// version partition in pkg/records/view.go refuses a v1 file carrying a v2
-	// key on the very next load, which would turn every imported view into a
-	// load failure long after the run that wrote them.
-	for path, top := range files {
-		_, present := top["layout"]
-		if present && records.SupportedViewVersion < records.ViewVersion2 {
-			t.Errorf("%s carries a `layout` key on a schema_version-%d file; records.LoadViews refuses a v1 file with a v2 key, so every imported view would fail to load", path, records.SupportedViewVersion)
-		}
+	// FR-109 read from the other side: the layout the base asked for reaches
+	// the written file.
+	gallery := files["views/decisions--gallery.yaml"]
+	if gallery == nil {
+		t.Fatal("the cards view was not written")
 	}
-	if records.SupportedViewVersion >= records.ViewVersion2 {
-		gallery := files["views/decisions--gallery.yaml"]
-		if gallery == nil {
-			t.Fatal("the cards view was not written")
-		}
-		if gallery["layout"] != "cards" {
-			t.Errorf("the CARDS view was written with layout=%v — a cards view that silently becomes a table is the exact failure FR-109 exists to prevent", gallery["layout"])
-		}
+	if gallery["layout"] != "cards" {
+		t.Errorf("the CARDS view was written with layout=%v — a cards view that silently becomes a table is the exact failure FR-109 exists to prevent", gallery["layout"])
 	}
 }
 
-// TestTranslateBase_UntypedViewIsWrittenNotRefused is the version-2 flip that
-// unlocks the founder's twenty folder-scoped views.
+// TestTranslateBase_UntypedViewIsWrittenNotRefused covers the twenty
+// folder-scoped views in the founder's vault.
 //
-// Under version 1 a view asserting no `type == "..."` anywhere was REFUSED:
-// ViewDef required exactly one type and there was nothing to declare. FR-018b
-// makes `type` optional, so the same view is now WRITTEN untyped — it queries
+// A view asserting no `type == "..."` anywhere used to be REFUSED, because the
+// format required exactly one type and there was nothing to declare. FR-018b
+// makes `type` OPTIONAL, so the same view is WRITTEN untyped — it queries
 // every note in scope and resolves property names over the rows FR-021e keeps
 // for every note.
 //

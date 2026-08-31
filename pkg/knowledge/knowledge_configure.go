@@ -220,10 +220,13 @@ func (t *ConfigureTool) Parameters() map[string]any {
 					"required, and per-type: label, values, to, inverse, unit}). The seven " +
 					"property types are text, enum, relation, date, integer, decimal, person — " +
 					"there is no eighth and no built-in vocabulary; every type name, property " +
-					"name and enum value is this vault's own. write_view: schema_version " +
-					"(required), type (the record type queried), and optional label, filters, " +
-					"group_by, sort, properties, aggregates, limit. `name` is taken from `view`, " +
-					"not from this object.",
+					"name and enum value is this vault's own. write_view: an OPTIONAL type " +
+					"(the record type queried; omit it for a view that spans every note in " +
+					"scope), one optional `filter` tree of {all|any|not} over leaves of " +
+					"{property, op, value} in the ten SQL operators, and optional label, " +
+					"grouping ({property, direction}), sort, properties, aggregates, limit, " +
+					"layout, formulas and property_config. A view carries NO version key. " +
+					"`name` is taken from `view`, not from this object.",
 			},
 		},
 		"required": []string{"op"},

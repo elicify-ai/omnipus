@@ -317,13 +317,8 @@ func TestKnowledgeConfigure_WriteView_SuccessThenDelete(t *testing.T) {
 	write := tool.Execute(a4Ctx("mia", ws), map[string]any{
 		"collection": "kb", "op": "write_view", "view": "open-widgets",
 		"definition": map[string]any{
-			"schema_version": float64(1),
-			"type":           "widget",
-			"filters": []any{
-				map[string]any{"property": "status", "op": "eq", "values": []any{
-					map[string]any{"enum": "draft"},
-				}},
-			},
+			"type":   "widget",
+			"filter": map[string]any{"property": "status", "op": "=", "value": "draft"},
 		},
 	})
 	require.False(t, write.IsError, write.ForLLM)
@@ -358,9 +353,8 @@ func TestKnowledgeConfigure_WriteView_UnknownProperty_Refused(t *testing.T) {
 	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
 		"collection": "kb", "op": "write_view", "view": "bad-view",
 		"definition": map[string]any{
-			"schema_version": float64(1),
-			"type":           "widget",
-			"group_by":       []any{"nosuchproperty"},
+			"type":     "widget",
+			"grouping": []any{map[string]any{"property": "nosuchproperty"}},
 		},
 	})
 	require.True(t, res.IsError)

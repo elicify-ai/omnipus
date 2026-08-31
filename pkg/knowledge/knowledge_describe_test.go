@@ -62,13 +62,12 @@ properties:
   lead:   { type: person }
 `)
 	write(".omnipus-vault/views/shipped-by-maker.yaml", `
-schema_version: 1
 name: shipped-by-maker
 type: widget
 label: Shipped widgets by maker
-filters:
-  - {property: state, op: eq, values: [{type: enum, enum: shipped}]}
-group_by: [maker]
+filter: {property: state, op: "=", value: shipped}
+grouping:
+  - {property: maker}
 sort:
   - {property: weight, direction: desc}
 properties: [name, state, weight]
@@ -157,8 +156,8 @@ func TestDescribe_RenderedArtifact(t *testing.T) {
 		{"declared arity on a many property", "tags      enum many"},
 		{"a relation's target type", "maker     relation -> foundry"},
 		{"the saved view, by name and type", "shipped-by-maker  type widget"},
-		{"the view's filter, so it need not be opened", "filter state eq shipped"},
-		{"the view's grouping and sort", "group maker; sort weight desc"},
+		{"the view's filter, so it need not be opened", "filter state = shipped"},
+		{"the view's grouping and sort", "group maker asc; sort weight desc"},
 		{"the view's page size", "limit 50"},
 		{"the nudge that a view may already exist", "before inventing a filter"},
 		{"the templates directory", ".omnipus-vault/templates/"},

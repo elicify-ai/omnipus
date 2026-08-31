@@ -1,5 +1,5 @@
-// Omnipus — the version-2 checks that live on the SERVING side of the view
-// loader (ADR-068 D24.1; spec FR-018b, FR-018c, FR-105, FR-148).
+// Omnipus — the checks that live on the SERVING side of the view loader
+// (ADR-068 D24.1; spec FR-018b, FR-018c, FR-105, FR-148).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -13,13 +13,12 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// WHY THIS FILE IS SEPARATE FROM view_v2_test.go
+// WHY THIS FILE IS SEPARATE FROM view_format_test.go
 //
-// That file covers the LOADER: what a version-2 file may say and how a
-// malformed one is refused. This one covers what happens when a perfectly
-// valid version-2 view meets knowledge_find's request shape and does not
-// fit — the three seams where ViewDef can express something
-// VaultFindRequest cannot.
+// That file covers the LOADER: what a view file may say and how a malformed
+// one is refused. This one covers what happens when a perfectly valid view
+// meets knowledge_find's request shape and does not fit — the three seams
+// where ViewDef can express something VaultFindRequest cannot.
 //
 // Every one of those seams is refused WITH A REASON rather than served with
 // the difference dropped, and that is the whole content of this file. A
@@ -27,7 +26,7 @@ import (
 // flag all produce a query that runs, looks right, and answers a question
 // nobody asked.
 //
-// It carries its own fixture helpers on purpose. Sharing view_v2_test.go's
+// It carries its own fixture helpers on purpose. Sharing view_format_test.go's
 // would couple two files that are edited by different hands.
 // ---------------------------------------------------------------------------
 
@@ -79,7 +78,7 @@ func loadBridgeView(t *testing.T, root string, schemas *SchemaSet, body string) 
 // TestViewFindLoader_DescendingGroupIsRefusedNotFlattened.
 //
 // VaultFindRequest.group_by is a bare []string with NO direction field.
-// Serving a descending v2 grouping through it would reorder the groups
+// Serving a descending grouping through it would reorder the groups
 // ascending in silence — which is precisely the failure ViewGroupBy was added
 // to end: 24 real `groupBy` directions in the founder's vault were flattened
 // to the default and nothing anywhere said so.
@@ -91,7 +90,7 @@ func loadBridgeView(t *testing.T, root string, schemas *SchemaSet, body string) 
 func TestViewFindLoader_DescendingGroupIsRefusedNotFlattened(t *testing.T) {
 	mk := func(dir *generated.ViewGroupByDirection) *SavedView {
 		return &SavedView{Def: generated.ViewDef{
-			SchemaVersion: ViewVersion2, Name: "g", Type: ptr("lot"),
+			Name: "g", Type: ptr("lot"),
 			Grouping: ptr([]generated.ViewGroupBy{{Property: "state", Direction: dir}}),
 		}}
 	}
@@ -146,7 +145,6 @@ func TestViewFindLoader_DescendingGroupIsRefusedNotFlattened(t *testing.T) {
 func TestViewFindLoader_FormulaViewIsRefusedWithAReason(t *testing.T) {
 	root, schemas := bridgeFixture(t)
 	v, rej := loadBridgeView(t, root, schemas, `
-schema_version: 2
 name: calc
 type: lot
 formulas:
@@ -191,7 +189,7 @@ properties: [name, formula.doubled]
 // about the view is wrong.
 func TestViewFindLoader_DisabledViewIsNeverApplied(t *testing.T) {
 	v := &SavedView{Def: generated.ViewDef{
-		SchemaVersion: ViewVersion2, Name: "d", Type: ptr("lot"),
+		Name: "d", Type: ptr("lot"),
 		Disabled:     ptr(true),
 		Untranslated: ptr([]string{`!inFolder("99-Temp")`}),
 		Filter: &generated.VaultFilterNode{
@@ -215,35 +213,23 @@ func TestViewFindLoader_DisabledViewIsNeverApplied(t *testing.T) {
 			t.Fatal("Names() offers a disabled view")
 		}
 	}
-
-	// The flag is not version-scoped: a disabled VERSION-1 view is refused on
-	// the same grounds.
-	v1 := newTestView("d1", nil)
-	v1.Def.Disabled = ptr(true)
-	if _, ok := NewViewFindLoader(newSet(v1)).View("d1"); ok {
-		t.Fatal("a disabled version-1 view was served")
-	}
 }
 
 // ---------------------------------------------------------------------------
-// FR-018c — the reserved namespaces, and the version they are scoped to
+// FR-018c — the reserved namespaces
 // ---------------------------------------------------------------------------
 
-// TestView_ReservedNamespacesAreV2OnlyInAViewsPropertyPositions.
+// TestView_ReservedNamespacesInAViewsPropertyPositions.
 //
-// `file.*` is valid in every property position of a version-2 view. It is
-// NOT newly accepted on a version-1 file, and that scoping is deliberate
-// rather than an oversight: a v1 view naming `file.mtime` in its sort was
-// refused as an undeclared property before this change, and accepting it now
-// would widen what a file already on disk is allowed to say — the same class
-// of automatic change to an existing view that FR-018b prohibits for
-// operators.
-func TestView_ReservedNamespacesAreV2OnlyInAViewsPropertyPositions(t *testing.T) {
+// `file.*` is valid in every property position of a view, and the interesting
+// half is the boundary: a name INSIDE the namespace that is not one of the
+// thirteen is a typo rather than an extension point, and `file.file` — the
+// note itself — renders without comparing (FR-130).
+func TestView_ReservedNamespacesInAViewsPropertyPositions(t *testing.T) {
 	root, schemas := bridgeFixture(t)
 
-	t.Run("file.* is accepted in a version-2 filter and sort", func(t *testing.T) {
+	t.Run("file.* is accepted in a filter and a sort", func(t *testing.T) {
 		if _, rej := loadBridgeView(t, root, schemas, `
-schema_version: 2
 name: recent
 type: lot
 filter:
@@ -252,13 +238,13 @@ filter:
   value: "2026-01-01"
 sort: [{property: file.mtime, direction: desc}]
 `); rej != nil {
-			t.Fatalf("the reserved file namespace was rejected in a v2 view: %s", rej)
+			t.Fatalf("the reserved file namespace was rejected: %s", rej)
 		}
 	})
 
 	t.Run("a misspelling inside the namespace is refused, naming the real ones", func(t *testing.T) {
 		_, rej := loadBridgeView(t, root, schemas,
-			"schema_version: 2\nname: recent\ntype: lot\nsort: [{property: file.mtimes, direction: desc}]\n")
+			"name: recent\ntype: lot\nsort: [{property: file.mtimes, direction: desc}]\n")
 		if rej == nil {
 			t.Fatal("`file.mtimes` loaded; a name in the reserved namespace that is not one of the thirteen is a typo, not an extension point")
 		}
@@ -272,7 +258,7 @@ sort: [{property: file.mtime, direction: desc}]
 
 	t.Run("file.file renders but does not compare", func(t *testing.T) {
 		_, rej := loadBridgeView(t, root, schemas,
-			"schema_version: 2\nname: recent\ntype: lot\nsort: [{property: file.file, direction: desc}]\n")
+			"name: recent\ntype: lot\nsort: [{property: file.file, direction: desc}]\n")
 		if rej == nil {
 			t.Fatalf("`%s` is the note itself and is not a comparison target (FR-130); sorting on it must be refused", FileSelfProp)
 		}
@@ -280,19 +266,8 @@ sort: [{property: file.mtime, direction: desc}]
 			t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewUnknownProperty, rej.Reason)
 		}
 		if _, rej2 := loadBridgeView(t, root, schemas,
-			"schema_version: 2\nname: recent\ntype: lot\nproperties: [file.file, name]\n"); rej2 != nil {
+			"name: recent\ntype: lot\nproperties: [file.file, name]\n"); rej2 != nil {
 			t.Fatalf("`%s` must stay RENDERABLE in `properties`; the refusal is scoped to comparison positions: %s", FileSelfProp, rej2)
-		}
-	})
-
-	t.Run("version 1 is not newly permissive", func(t *testing.T) {
-		_, rej := loadBridgeView(t, root, schemas,
-			"schema_version: 1\nname: recent\ntype: lot\nsort: [{property: file.mtime, direction: desc}]\n")
-		if rej == nil {
-			t.Fatal("a version-1 view naming file.mtime loaded. That widens what an existing file on disk is allowed to say, automatically — the same class of change FR-018b withdrew for operators, arriving through a property namespace instead")
-		}
-		if rej.Code != RejectViewUnknownProperty {
-			t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewUnknownProperty, rej.Reason)
 		}
 	})
 }
@@ -301,16 +276,15 @@ sort: [{property: file.mtime, direction: desc}]
 // The tree is WALKED, not counted
 // ---------------------------------------------------------------------------
 
-// TestView_V2FilterTreeLeafPropertiesAreValidatedAtEveryDepth.
+// TestView_FilterTreeLeafPropertiesAreValidatedAtEveryDepth.
 //
 // Counting a tree's leaves and validating them are two different walks, and a
 // bound check that only counted would let an undeclared property three levels
 // down through. The refusal must also LOCATE the fault: "unknown property"
 // over a twelve-leaf disjunction sends the operator reading the whole file.
-func TestView_V2FilterTreeLeafPropertiesAreValidatedAtEveryDepth(t *testing.T) {
+func TestView_FilterTreeLeafPropertiesAreValidatedAtEveryDepth(t *testing.T) {
 	root, schemas := bridgeFixture(t)
 	_, rej := loadBridgeView(t, root, schemas, `
-schema_version: 2
 name: nested
 type: lot
 filter:
@@ -345,17 +319,16 @@ filter:
 // FR-148 — a formula reference cycle
 // ---------------------------------------------------------------------------
 
-// TestView_V2FormulaCycleIsRefusedAtLoad.
+// TestView_FormulaCycleIsRefusedAtLoad.
 //
 // `a: formula.b + 1` and `b: formula.a + 1` both PARSE cleanly. Nothing about
 // either expression is malformed; the fault is in the reference GRAPH, and an
 // evaluator that followed it would recurse forever. FR-148 requires the cycle
 // to be refused at write AND at load, so a hand-edited file cannot introduce
 // one.
-func TestView_V2FormulaCycleIsRefusedAtLoad(t *testing.T) {
+func TestView_FormulaCycleIsRefusedAtLoad(t *testing.T) {
 	root, schemas := bridgeFixture(t)
 	_, rej := loadBridgeView(t, root, schemas, `
-schema_version: 2
 name: looping
 type: lot
 formulas:

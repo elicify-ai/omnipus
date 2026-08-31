@@ -235,8 +235,8 @@ func (r *Report) disablingCausesByShape() []string {
 		label string
 		match func(string) bool
 	}{
-		{"disjunction (`or:`) — ViewDef schema_version 1 stores a FLAT AND-only clause list with no boolean tree at all, so an `or:` group cannot be partially carried", func(l string) bool { return strings.Contains(l, "or:") }},
-		{"multi-clause negation (`not:` wrapping more than one clause) — De Morgan turns it into a disjunction, which v1 cannot store", func(l string) bool { return strings.Contains(l, "not:") }},
+		{"disjunction (`or:`) — an `or:` group that could not be carried; a partial disjunction returns MORE rows than the base asked for, so it is refused whole", func(l string) bool { return strings.Contains(l, "or:") }},
+		{"multi-clause negation (`not:` wrapping more than one clause) — De Morgan turns it into a disjunction, and the same rule applies", func(l string) bool { return strings.Contains(l, "not:") }},
 		{"folder scoping (`file.inFolder(...)`) — a record filter compares declared properties; a note's FOLDER is not one", func(l string) bool { return strings.Contains(l, "file.") }},
 		{"computed property (`formula.*`) — the schema has no computed-property type", func(l string) bool { return strings.Contains(l, "formula.") }},
 		{"empty-string comparison (prop != \"\") — no type has an empty literal, and approximating it as is_absent would change which rows match", func(l string) bool { return strings.Contains(l, `!= ""`) || strings.Contains(l, `== ""`) }},

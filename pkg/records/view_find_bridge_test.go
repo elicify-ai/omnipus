@@ -1,7 +1,6 @@
 // Omnipus — tests for view_find_bridge.go's ViewDef -> VaultFindRequest
-// translation, oracled directly against each format's own documented
-// semantics (RecordFilter.Negate/IncludeAbsent; find's tool.go Parameters()
-// doc on `not:`/`<>`), never against the implementation under test.
+// carry-over, oracled against each format's own documented semantics, never
+// against the implementation under test.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -15,16 +14,13 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
-func newTestView(name string, filters []generated.RecordFilter) *SavedView {
-	def := generated.ViewDef{
-		Name:          name,
-		Type:          ptr("deal"),
-		SchemaVersion: 1,
+// newTestView builds a view directly, for the cases that are about the LOADER
+// rather than about a file. `filter` may be nil for a view with no query.
+func newTestView(name string, filter *generated.VaultFilterNode) *SavedView {
+	return &SavedView{
+		Def:        generated.ViewDef{Name: name, Type: ptr("deal"), Filter: filter},
+		SourcePath: name + ".yaml",
 	}
-	if filters != nil {
-		def.Filters = &filters
-	}
-	return &SavedView{Def: def, SourcePath: name + ".yaml"}
 }
 
 func newSet(views ...*SavedView) *ViewSet {
@@ -36,12 +32,12 @@ func newSet(views ...*SavedView) *ViewSet {
 }
 
 // TestViewFindLoader_MechanicalFieldsCarryOver proves the 1:1 fields
-// (type/group_by/sort/limit/properties/aggregates) survive translation
+// (type/grouping/sort/limit/properties/aggregates) survive the carry-over
 // unchanged, for a view with no filter.
 func TestViewFindLoader_MechanicalFieldsCarryOver(t *testing.T) {
 	def := generated.ViewDef{
-		Name: "open-deals", Type: ptr("deal"), SchemaVersion: 1,
-		GroupBy:    ptr([]string{"stage"}),
+		Name: "open-deals", Type: ptr("deal"),
+		Grouping:   ptr([]generated.ViewGroupBy{{Property: "stage"}}),
 		Properties: ptr([]string{"name", "amount"}),
 		Limit:      ptr(25),
 		Sort:       ptr([]generated.RecordSort{{Property: "amount", Direction: generated.RecordSortDirectionDesc}}),
@@ -74,111 +70,10 @@ func TestViewFindLoader_MechanicalFieldsCarryOver(t *testing.T) {
 	}
 }
 
-// TestViewFindLoader_FilterTable exercises translateRecordFilter's whole
-// negate/include_absent table against expected wire ops, oracled from
-// RecordFilter's own doc (default include_absent=true on negate) and find's
-// tool.go doc ("{not:{p,'=',v}} to include absent; {p,'<>',v} excludes").
-func TestViewFindLoader_FilterTable(t *testing.T) {
-	cases := []struct {
-		name    string
-		filter  generated.RecordFilter
-		wantOp  *generated.VaultFilterNodeOp // nil means the leaf is wrapped in `not`
-		wantNot bool
-	}{
-		{
-			name:   "eq positive",
-			filter: generated.RecordFilter{Property: "status", Op: generated.Eq, Values: ptr([]generated.RecordValue{{Type: "enum", Enum: ptr("won")}})},
-			wantOp: ptr(generated.Equal),
-		},
-		{
-			name:    "eq negated default include_absent=true wraps in not",
-			filter:  generated.RecordFilter{Property: "status", Op: generated.Eq, Negate: ptr(true), Values: ptr([]generated.RecordValue{{Type: "enum", Enum: ptr("won")}})},
-			wantNot: true,
-		},
-		{
-			name:   "eq negated include_absent=false becomes <>",
-			filter: generated.RecordFilter{Property: "status", Op: generated.Eq, Negate: ptr(true), IncludeAbsent: ptr(false), Values: ptr([]generated.RecordValue{{Type: "enum", Enum: ptr("won")}})},
-			wantOp: ptr(generated.LessThanGreaterThan),
-		},
-		{
-			name:   "gt negated exclude-absent becomes <=",
-			filter: generated.RecordFilter{Property: "amount", Op: generated.Gt, Negate: ptr(true), IncludeAbsent: ptr(false), Values: ptr([]generated.RecordValue{{Type: "integer", Integer: ptr("100")}})},
-			wantOp: ptr(generated.LessThanEqual),
-		},
-		{
-			name:   "gte negated exclude-absent becomes <",
-			filter: generated.RecordFilter{Property: "amount", Op: generated.Gte, Negate: ptr(true), IncludeAbsent: ptr(false), Values: ptr([]generated.RecordValue{{Type: "integer", Integer: ptr("100")}})},
-			wantOp: ptr(generated.LessThan),
-		},
-		{
-			name:   "is_absent positive becomes IS NULL",
-			filter: generated.RecordFilter{Property: "closed_at", Op: generated.IsAbsent},
-			wantOp: ptr(generated.ISNULL),
-		},
-		{
-			name:   "is_absent negated becomes IS NOT NULL regardless of include_absent",
-			filter: generated.RecordFilter{Property: "closed_at", Op: generated.IsAbsent, Negate: ptr(true)},
-			wantOp: ptr(generated.ISNOTNULL),
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			node, refusal := translateRecordFilter(tc.filter, "table-view", 1)
-			if refusal != nil {
-				t.Fatalf("translateRecordFilter(%+v) refused (%s), want a translation", tc.filter, refusal)
-			}
-			if tc.wantNot {
-				if node.Not == nil {
-					t.Fatalf("node = %+v, want a `not` wrapper", node)
-				}
-				return
-			}
-			if node.Op == nil || *node.Op != *tc.wantOp {
-				t.Fatalf("op = %v, want %v", node.Op, *tc.wantOp)
-			}
-		})
-	}
-}
-
-// TestViewFindLoader_ContainsIsUntranslatable proves the operator-vocabulary
-// gap this file's header documents: `contains` has no VaultFilterNodeOp
-// representation, so a view using it must be refused, never silently
-// dropped or substituted.
-func TestViewFindLoader_ContainsIsUntranslatable(t *testing.T) {
-	v := newTestView("tagged", []generated.RecordFilter{
-		{Property: "tags", Op: generated.Contains, Values: ptr([]generated.RecordValue{{Type: "text", Text: ptr("urgent")}})},
-	})
-	loader := NewViewFindLoader(newSet(v))
-
-	if _, ok := loader.View("tagged"); ok {
-		t.Fatal("View(\"tagged\") using `contains` = true, want false (untranslatable)")
-	}
-	for _, n := range loader.Names() {
-		if n == "tagged" {
-			t.Fatal("Names() lists an untranslatable view — View() and Names() must agree")
-		}
-	}
-}
-
-// TestViewFindLoader_ViaIsUntranslatable proves the second documented gap:
-// a relation-hop filter leaf has no per-leaf equivalent in find's grammar.
-func TestViewFindLoader_ViaIsUntranslatable(t *testing.T) {
-	v := newTestView("via-deals", []generated.RecordFilter{
-		{Property: "industry", Op: generated.Eq, Via: ptr([]string{"company"}),
-			Values: ptr([]generated.RecordValue{{Type: "text", Text: ptr("fintech")}})},
-	})
-	loader := NewViewFindLoader(newSet(v))
-
-	if _, ok := loader.View("via-deals"); ok {
-		t.Fatal("View(\"via-deals\") using `via` = true, want false (untranslatable)")
-	}
-}
-
 // TestViewFindLoader_UnknownNameRefused proves the ordinary "not declared at
-// all" case still reports ok=false, the same as an untranslatable one — the
-// two collapse to one bool by the interface's own shape (this file's header
-// explains why).
+// all" case reports ok=false, the same as an unservable one — the two collapse
+// to one bool by the ViewLoader interface's own shape (view_find_bridge.go's
+// header explains why, and why ServeRefusal exists alongside it).
 func TestViewFindLoader_UnknownNameRefused(t *testing.T) {
 	loader := NewViewFindLoader(newSet(newTestView("real-view", nil)))
 	if _, ok := loader.View("does-not-exist"); ok {
@@ -186,13 +81,29 @@ func TestViewFindLoader_UnknownNameRefused(t *testing.T) {
 	}
 }
 
-// TestViewFindLoader_MultiLeafAndsTogether proves a multi-clause view
-// becomes one `all` node, per ViewDef.Filters' own "combined with AND" doc.
-func TestViewFindLoader_MultiLeafAndsTogether(t *testing.T) {
-	v := newTestView("big-open-deals", []generated.RecordFilter{
-		{Property: "status", Op: generated.Eq, Values: ptr([]generated.RecordValue{{Type: "enum", Enum: ptr("open")}})},
-		{Property: "amount", Op: generated.Gte, Values: ptr([]generated.RecordValue{{Type: "integer", Integer: ptr("10000")}})},
-	})
+// TestViewFindLoader_FilterTreeIsCopiedNotAliased is what makes "the filter
+// half is a COPY, not a translation" a rule rather than a comment.
+//
+// A view's `filter` already IS find's VaultFilterNode, so the bridge hands the
+// request the same shape. The hazard is therefore not mistranslation — it is
+// SHARING: a request that pointed into the saved view's own tree would let
+// find's engine, which normalises a request in place, rewrite the in-memory
+// copy of a file on disk. Every subsequent use of that view would then run a
+// query nobody wrote, for as long as the process lived.
+//
+// A top-level `req.Filter != v.Def.Filter` check does not catch that on its
+// own: a one-level copy still shares the child SLICE, so this asserts
+// independence at DEPTH by mutating a grandchild of the request and requiring
+// the view to be unchanged.
+func TestViewFindLoader_FilterTreeIsCopiedNotAliased(t *testing.T) {
+	tree := &generated.VaultFilterNode{All: &[]generated.VaultFilterNode{
+		{Property: ptr("status"), Op: ptr(generated.Equal), Value: ptr("open")},
+		{Any: &[]generated.VaultFilterNode{
+			{Property: ptr("amount"), Op: ptr(generated.GreaterThanEqual), Value: ptr("10000")},
+			{Not: &generated.VaultFilterNode{Property: ptr("owner"), Op: ptr(generated.ISNULL)}},
+		}},
+	}}
+	v := newTestView("big-open-deals", tree)
 	loader := NewViewFindLoader(newSet(v))
 
 	req, ok := loader.View("big-open-deals")
@@ -201,6 +112,26 @@ func TestViewFindLoader_MultiLeafAndsTogether(t *testing.T) {
 	}
 	if req.Filter == nil || req.Filter.All == nil || len(*req.Filter.All) != 2 {
 		t.Fatalf("Filter = %+v, want an `all` node with 2 children", req.Filter)
+	}
+	if req.Filter == v.Def.Filter {
+		t.Fatal("the request's filter IS the view's own node; find normalises a request in place, so the view on disk's in-memory copy would be rewritten under it")
+	}
+
+	// Reach two levels down and change the request. The view must not move.
+	nested := (*req.Filter.All)[1]
+	if nested.Any == nil || len(*nested.Any) != 2 {
+		t.Fatalf("the nested `any` did not survive the copy: %+v", nested)
+	}
+	(*nested.Any)[0].Value = ptr("999999999")
+	(*req.Filter.All)[0].Property = ptr("hijacked")
+
+	original := *v.Def.Filter
+	if (*original.All)[0].Property == nil || *(*original.All)[0].Property != "status" {
+		t.Errorf("mutating the request rewrote the view's own leaf: %s", renderNode(original))
+	}
+	deepLeaf := (*(*original.All)[1].Any)[0]
+	if deepLeaf.Value == nil || *deepLeaf.Value != "10000" {
+		t.Errorf("mutating the request two levels down rewrote the view's own tree — the copy is shallow: %s", renderNode(original))
 	}
 }
 

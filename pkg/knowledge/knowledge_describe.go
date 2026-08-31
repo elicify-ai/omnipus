@@ -363,36 +363,32 @@ func renderViews(b *strings.Builder, d DescribeData) {
 // An agent that reads that believes the view is unconstrained and reasons from
 // there, and nothing downstream ever contradicts it.
 //
-// That is not hypothetical. This renderer read ONLY the version-1 vocabulary
-// (`filters`, `group_by`), and a version-2 view — whose filtering lives in
-// `filter`, a tree, and whose grouping lives in `grouping` — produced an EMPTY
-// parts list and was described as unfiltered. It is a version-2 file, which
-// FR-018b makes the version every writer emits.
+// That is not hypothetical, and the way it happened is the reason for every
+// mechanism below. A view's filtering lives in `filter` (a tree) and its
+// grouping in `grouping`; this renderer read NEITHER, because it had been
+// written against an earlier, flatter set of keys and nobody revisited it when
+// the format grew. It produced an EMPTY parts list and printed "every record
+// of this type, every property" over a filtered view. Nothing failed. The
+// output was well-formed, confident, and wrong.
 //
-// THE FIX IS STRUCTURAL, NOT A HABIT. Three independent mechanisms, each of
-// which catches the failure on its own:
+// THE FIX IS STRUCTURAL, NOT A HABIT. Two independent mechanisms, each of
+// which catches that failure on its own — because the renderer being CORRECT
+// today is exactly what was true before, and it did not help:
 //
-//  1. TWO RENDERERS, NOT ONE. renderViewBodyV1 is the version-1 vocabulary,
-//     unchanged and verbatim; renderViewBodyV2 is the version-2 one. They are
-//     deliberately NOT merged into a single renderer that reads whichever keys
-//     happen to be set: the two versions' `filters`/`filter` and
-//     `group_by`/`grouping` mean genuinely different things (a flat AND-list
-//     in a retired operator vocabulary versus one tree in the find grammar),
-//     and a renderer that approximated both would be free to drift into
-//     describing either one wrongly.
+//  1. A COVERAGE LEDGER. viewHeaderKeys and viewBodyKeys together declare
+//     every wire key this file accounts for. Any key the view actually
+//     carries that neither list claims is REPORTED in the output as a
+//     constraint this description cannot show. A key added to
+//     generated.ViewDef in the future and taught to nobody therefore surfaces
+//     as an explicit gap rather than as silence — and
+//     TestDescribeViews_EveryViewDefKeyIsAccountedFor fails at test time as
+//     well, by name. This is the mechanism that would have caught the
+//     original bug the day the key was added.
 //
-//  2. A COVERAGE LEDGER. Each version declares which wire keys it accounts
-//     for. Any key the view actually carries that its version's renderer does
-//     not account for is REPORTED in the output as a constraint this
-//     description cannot show. A key added to generated.ViewDef in the future
-//     and taught to nobody therefore surfaces as an explicit gap rather than
-//     as silence — and TestDescribeViews_EveryViewDefKeyIsAccountedFor fails
-//     at test time as well, by name.
-//
-//  3. THE UNFILTERED CLAIM IS GUARDED AT ITS SOURCE. The "every record of this
+//  2. THE UNFILTERED CLAIM IS GUARDED AT ITS SOURCE. The "every record of this
 //     type, every property" line is emitted only when the view declares
 //     NOTHING beyond its own identity. It is not reachable from "the renderer
-//     produced no parts", which is exactly the state the version-2 bug was in.
+//     produced no parts", which is exactly the state the original bug was in.
 //
 // Describing less than the whole truth is survivable. Describing a filtered
 // view as unfiltered is not.
@@ -406,37 +402,19 @@ func renderViews(b *strings.Builder, d DescribeData) {
 // clause when there is a loss to attribute. It is not a constraint, so it does
 // not belong in a constraint report.
 var viewHeaderKeys = []string{
-	"schema_version",
 	"name",
 	"type",
 	"label",
 	"source",
 }
 
-// viewV1BodyKeys is every wire key renderViewBodyV1 knows what to do with.
+// viewBodyKeys is every wire key renderViewClauses knows what to do with.
 //
-// ACCOUNTED FOR IS NOT THE SAME AS PRINTED. `disabled` is accounted for here
-// and prints only when it is true; `filters: []` is accounted for and prints
-// nothing, because an empty AND-list constrains nothing. What the ledger
-// asserts is that a human decided — not that text came out.
-var viewV1BodyKeys = []string{
-	"disabled",
-	"filters",
-	"group_by",
-	"sort",
-	"properties",
-	"aggregates",
-	"limit",
-	"untranslated",
-}
-
-// viewV2BodyKeys is every wire key renderViewBodyV2 knows what to do with.
-//
-// ADDING A KEY HERE IS A PROMISE THAT renderViewBodyV2 RENDERS IT. Listing a
+// ADDING A KEY HERE IS A PROMISE THAT renderViewClauses RENDERS IT. Listing a
 // key without rendering it re-opens the exact hole this file was written to
 // close, and mechanism 2 above cannot see the difference — it only sees that
 // somebody claimed the key.
-var viewV2BodyKeys = []string{
+var viewBodyKeys = []string{
 	"disabled",
 	"filter",
 	"grouping",
@@ -461,41 +439,26 @@ func (r *viewBodyRender) add(s string) { r.parts = append(r.parts, s) }
 // views apart without opening either file.
 //
 // The filter operator is rendered as the OPAQUE STRING the contract carries.
-// This renderer deliberately knows nothing about which operators exist: the
-// operator vocabulary is version-2's ten SQL spellings, and a renderer that
-// enumerated them would have to be found and changed again.
+// This renderer deliberately knows nothing about which operators exist — a
+// renderer that enumerated the ten SQL spellings would have to be found and
+// changed again the next time the contract grew one.
 func renderViewBody(v *records.SavedView) string {
 	if v == nil {
 		return ""
 	}
 	r := &viewBodyRender{}
 
-	var accounted []string
-	switch v.Def.SchemaVersion {
-	case records.ViewVersion1:
-		renderViewBodyV1(v, r)
-		accounted = viewV1BodyKeys
-	case records.ViewVersion2:
-		renderViewBodyV2(v, r)
-		accounted = viewV2BodyKeys
-	default:
-		// A version no renderer claims. Nothing is accounted for, so every
-		// key the file carries falls through to the gap report below. The
-		// loader refuses an unsupported version, so reaching here means a
-		// caller built a SavedView by hand — and inventing a description for
-		// a format this code does not understand is how the version-2 bug
-		// happened in the first place.
-		r.add(fmt.Sprintf("schema_version %d — this description does not understand this view format", v.Def.SchemaVersion))
-	}
+	renderViewClauses(v, r)
 
-	// Mechanism 2 — the coverage ledger.
-	if gaps := unaccountedViewKeys(v.Def, accounted); len(gaps) > 0 {
+	// Mechanism 1 — the coverage ledger. A key this renderer does not claim is
+	// REPORTED, never silently dropped.
+	if gaps := unaccountedViewKeys(v.Def, viewBodyKeys); len(gaps) > 0 {
 		r.add(fmt.Sprintf("!! %d declared key(s) this description cannot show (%s) — treat this view as CONSTRAINED in ways not shown here",
 			len(gaps), strings.Join(gaps, ", ")))
 	}
 
 	if len(r.parts) == 0 {
-		// Mechanism 3 — the unfiltered claim, made only when it is provably
+		// Mechanism 2 — the unfiltered claim, made only when it is provably
 		// true. The test is "this view declares nothing beyond its identity",
 		// NOT "the renderer produced no parts": the second is satisfied by a
 		// renderer that failed to read the file, which is the whole defect.
@@ -508,48 +471,11 @@ func renderViewBody(v *records.SavedView) string {
 	return "    " + strings.Join(r.parts, "; ") + "\n"
 }
 
-// renderViewBodyV1 is the version-1 vocabulary: a flat, AND-only `filters`
-// list in the seven-operator RecordFilter spelling, and a bare `group_by` name
-// list with no direction.
-//
-// IT IS UNCHANGED, AND CHANGING IT IS A REGRESSION. A version-1 file on disk
-// means exactly what it meant, verbatim, and its description must too — the
-// same rule pkg/records applies on load, for the same reason (translating v1's
-// `contains` into v2's `LIKE '%…%'` BROADENS, and broadening a view nobody
-// re-read is the failure FR-105 exists to prevent). The one clause that did
-// not exist before is `disabled`, which was dropped silently by both versions;
-// see renderViewDisabled.
-func renderViewBodyV1(v *records.SavedView, r *viewBodyRender) {
-	renderViewDisabled(v, r)
-	if v.Def.Filters != nil && len(*v.Def.Filters) > 0 {
-		clauses := make([]string, 0, len(*v.Def.Filters))
-		for _, f := range *v.Def.Filters {
-			clause := f.Property + " " + string(f.Op)
-			if lit := renderFilterLiterals(records.ViewFilterLiterals(f)); lit != "" {
-				clause += " " + lit
-			}
-			if f.Negate != nil && *f.Negate {
-				clause = "NOT(" + clause + ")"
-			}
-			if f.Via != nil && len(*f.Via) > 0 {
-				clause = strings.Join(*f.Via, "->") + "->" + clause
-			}
-			clauses = append(clauses, clause)
-		}
-		r.add("filter " + strings.Join(clauses, " AND "))
-	}
-	if v.Def.GroupBy != nil && len(*v.Def.GroupBy) > 0 {
-		r.add("group " + strings.Join(*v.Def.GroupBy, ", "))
-	}
-	renderViewSharedTail(v, r)
-	renderViewUntranslated(v, r)
-}
-
-// renderViewBodyV2 is the version-2 vocabulary (ADR-068 D24.1, FR-018b): ONE
+// renderViewClauses renders the view's query (ADR-068 D24.1, FR-018b): ONE
 // `filter` tree of all/any/not over the ten SQL operators, `grouping` keys
 // that each carry a direction, plus `layout`, `formulas` and
 // `property_config`.
-func renderViewBodyV2(v *records.SavedView, r *viewBodyRender) {
+func renderViewClauses(v *records.SavedView, r *viewBodyRender) {
 	renderViewDisabled(v, r)
 	if v.Def.Filter != nil {
 		r.add("filter " + renderViewFilterNode(*v.Def.Filter, 0))
@@ -608,13 +534,13 @@ func renderViewBodyV2(v *records.SavedView, r *viewBodyRender) {
 	renderViewUntranslated(v, r)
 }
 
-// renderViewSharedTail renders the keys viewSharedKeys makes identical in both
-// versions — `sort`, `properties`, `aggregates`, `limit`.
+// renderViewSharedTail renders the four keys that describe how the matched
+// rows are PRESENTED rather than which rows they are — `sort`, `properties`,
+// `aggregates`, `limit`.
 //
-// Sharing these is not the "one renderer that approximates both" this file
-// refuses. These four keys ARE the same key in both versions, carrying the
-// same generated types; what must stay separate is `filters`/`filter` and
-// `group_by`/`grouping`, which are different languages wearing similar names.
+// They are split out from renderViewClauses because they answer a different
+// question, and a reader scanning for "what does this view actually return"
+// should be able to stop before them.
 func renderViewSharedTail(v *records.SavedView, r *viewBodyRender) {
 	if v.Def.Sort != nil && len(*v.Def.Sort) > 0 {
 		keys := make([]string, 0, len(*v.Def.Sort))
@@ -642,14 +568,13 @@ func renderViewSharedTail(v *records.SavedView, r *viewBodyRender) {
 	}
 }
 
-// renderViewDisabled reports FR-105's kill switch, which BOTH versions used to
+// renderViewDisabled reports FR-105's kill switch, which this renderer used to
 // drop in silence.
 //
 // A disabled view is stored and REFUSED at serve time, so an agent that picks
 // one off this list has chosen a view that can never answer. That refusal is
 // at least loud when it arrives; the description that led the agent there was
-// not. This is the one clause a version-1 view renders today that it did not
-// render before, and it fires only on a view that actually sets the flag.
+// not. It fires only on a view that actually sets the flag.
 func renderViewDisabled(v *records.SavedView, r *viewBodyRender) {
 	if v.Def.Disabled != nil && *v.Def.Disabled {
 		r.add("DISABLED — stored but never applied; this view returns nothing")
@@ -668,7 +593,7 @@ func renderViewUntranslated(v *records.SavedView, r *viewBodyRender) {
 	}
 }
 
-// renderViewFilterNode renders one version-2 filter node as infix text a human
+// renderViewFilterNode renders one filter node as infix text a human
 // and a model read the same way: `(a AND b)`, `(a OR b)`, `NOT(a)`.
 //
 // EVERY SHAPE PRODUCES TEXT, including a malformed one. A node that is neither

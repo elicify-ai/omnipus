@@ -306,7 +306,7 @@ components:
       $ref: ./components/schemas/ViewPropertyConfig.yaml
     # ── ViewDef — ADR-068 D10 and D24.1, spec FR-018b/FR-018d, FR-105, FR-109 ───
     # HOSTED INLINE, NOT IN ITS OWN FILE, for the same mechanical reason
-    # VaultFindRequest is (see its note below): a schema_version-2 view's
+    # VaultFindRequest is (see its note below): a view's
     # `filter` IS the recursive VaultFilterNode, and oapi-codegen v2.7.0
     # INLINES a cross-file $ref at its use site — so a cross-file reference to
     # a recursive schema expands until the generator dies with a stack
@@ -325,42 +325,32 @@ components:
         A view naming a property or enum value that does not exist is REJECTED
         at write time (D15), not stored and discovered broken later.
 
-        TWO VERSIONS LIVE IN THIS ONE SCHEMA, AND THE REASON IS THE ONE RULE
-        THIS SURFACE WILL NOT BREAK (spec FR-018b, review finding F5).
-        `SupportedViewVersion` is the SET {1, 2}. A version-1 view evaluates
-        under VERSION-1 SEMANTICS, VERBATIM — nothing is auto-translated,
-        because the obvious translation (`contains` becoming `LIKE %…%`) turns
-        whole-element membership into substring matching: `labels contains
-        "in"` would newly match `indoor`, `printing` and `min`. That is
-        BROADENING, applied automatically, and broadening is the one thing an
-        imported or migrated view may never do (FR-105). A v1 view using
-        `contains` or `via` therefore stays exactly as it is — listed by
-        knowledge_describe, not servable through knowledge_find, the reason
-        named — until an operator EXPLICITLY migrates it through
-        knowledge_configure, which refuses any rewrite that would change the
-        row set.
+        THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER.
+        A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL
+        operators — the same grammar knowledge_find evaluates, so a view's
+        filter needs no translation to be served — `grouping` keys that each
+        carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and
+        `property_config`.
 
-        WHICH KEYS BELONG TO WHICH VERSION, because a reader will otherwise
-        assume the wrong one. Version 1 only: `filters` (the flat, AND-only
-        RecordFilter list) and `group_by` (a bare name list). Version 2 only:
-        `filter` (ONE VaultFilterNode tree), `grouping` (keys that carry a
-        direction), `layout`, `formulas`, `property_config`. Shared: everything
-        else. A view MUST NOT set a key belonging to the other version — that
-        is a write-time and load-time refusal, not a silent preference.
+        THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored
+        `filters` (a flat AND-list in a separate seven-operator vocabulary)
+        and `group_by` (a bare name list with no direction). It was carried
+        alongside this one only so files written under it stayed readable.
+        Nothing was ever written under it outside this project's own tooling
+        and no such file exists on disk, so it is deleted rather than
+        versioned around: two formats in one schema is a permanent tax on
+        every reader, and the second one had no remaining constituency.
 
-        WHY THE V2 KEYS ARE SPELLED DIFFERENTLY RATHER THAN REDEFINED IN PLACE.
-        Spec FR-018b describes v2's tree as `filters` and v2's directional keys
-        as `group_by`. Those two keys ALREADY EXIST ON DISK holding a v1 array
-        and a v1 string list, and this schema declares
-        `additionalProperties: false` — which pkg/records/view.go enforces with
-        json DisallowUnknownFields. Redefining either key's TYPE in place would
-        make every existing v1 file fail to decode, i.e. it would delete v1
-        readability in the same change that promises to preserve it. The
-        alternative — one key holding a oneOf of both shapes — buys the
-        spelling back at the cost of a union type on both generated sides. So
-        v2 takes new names: `filter`, matching VaultFindRequest's own key for
-        the same tree (which is FR-018b's actual point — ONE filter grammar,
-        one spelling of it), and `grouping`.
+        The rule that partition existed to protect still holds, and it is the
+        one rule this surface will not break: A VIEW IS NEVER BROADENED ON THE
+        OPERATOR'S BEHALF (FR-105). The retired vocabulary's `contains` meant
+        whole-element membership, and rewriting it as `LIKE '%…%'` would have
+        turned that into substring matching — `labels contains "in"` newly
+        matching `indoor`, `printing` and `min`. That translation was
+        specified in spec Draft 10 and withdrawn in Draft 11 as review finding
+        F5, and it is still prohibited: knowledge_configure refuses any
+        rewrite that changes the row set. What is gone is the OLD FORMAT, not
+        the prohibition.
 
         `untranslated` and `disabled` exist for the one-shot .base importer
         (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot
@@ -372,25 +362,8 @@ components:
       type: object
       additionalProperties: false
       required:
-        - schema_version
         - name
       properties:
-        schema_version:
-          type: integer
-          minimum: 1
-          maximum: 2
-          description: >
-            Declared version of the view format, mandatory for the same reason
-            a record schema's is (D2): a format that breaks unannounced is
-            worse when the files are machine-generated.
-
-
-            The supported set is {1, 2}. 1 is the flat, AND-only
-            RecordFilter format, read verbatim under its own semantics and
-            never rewritten on read. 2 is the find grammar (D24.1). WRITES
-            EMIT 2; a file on disk is never upgraded as a side effect of being
-            read.
-          example: 2
         name:
           type: string
           minLength: 1
@@ -403,7 +376,7 @@ components:
             The record type this view queries.
 
 
-            OPTIONAL SINCE VERSION 2 (FR-018b). An UNTYPED view queries every
+            OPTIONAL (FR-018b). An UNTYPED view queries every
             note in scope — which is what four of the founder's eighteen bases
             do, scoping purely by folder and spanning record types. In an
             untyped view a property resolves BY NAME over the rows the index
@@ -426,44 +399,28 @@ components:
             declares is still rejected: that is drift, not provisioning.
 
 
-            On a VERSION-1 view this field remains effectively required — a v1
-            view with no type has no record type to query and is rejected, as
-            it always was.
+            A `type:` that is PRESENT but blank is REFUSED. An empty string is
+            not "untyped" — it is a typo for a type name, and treating it as a
+            deliberate absence would turn a misspelling into a vault-wide
+            query. Omit the key entirely to mean untyped.
           example: "deal"
         label:
           type: string
           description: Human-readable title. Absent means render `name`.
           example: "Open deals by owner"
-        filters:
-          type: array
-          description: >
-            VERSION 1 ONLY. Filter clauses, combined with AND.
-
-
-            This is the flat, AND-only, seven-operator list that version-2
-            views replace with `filter`. It cannot express disjunction at all —
-            seven filter groups in the founder's vault needed it and not one
-            was expressible — and its `contains` and `via` leaves have no
-            faithful equivalent in the find grammar. It is KEPT, unchanged and
-            un-translated, so that every v1 view already on disk keeps meaning
-            exactly what it meant (FR-018b). A version-2 view setting this key
-            is REFUSED.
-          items:
-            $ref: "./components/schemas/RecordFilter.yaml"
-            x-go-type: RecordFilter
         filter:
           description: >
-            VERSION 2 ONLY. The view's filter, as ONE VaultFilterNode tree —
-            the same `all`/`any`/`not` combinators and ten SQL operators
+            The view's filter, as ONE VaultFilterNode tree — the same
+            `all`/`any`/`not` combinators and ten SQL operators
             knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
 
 
-            This is the whole point of version 2: the product spoke TWO filter
-            languages, and the bridge between them refused two of the older
-            one's leaves outright. Now there is one. Obsidian's `and`/`or`/
-            `not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as
-            an escaped `LIKE '%…%'`; its relation traversal is the request's
-            own join shape rather than a per-leaf `via`.
+            ONE FILTER GRAMMAR, ONE SPELLING OF IT. The product used to speak
+            two filter languages and the bridge between them refused two of
+            the older one's leaves outright. Obsidian's `and`/`or`/`not` map
+            1:1 onto `all`/`any`/`not`; its `contains` translates as an
+            escaped `LIKE '%…%'`; its relation traversal is the request's own
+            join shape rather than a per-leaf hop.
 
 
             FR-023c's bound applies to a view's tree identically to a
@@ -471,33 +428,19 @@ components:
             naming which.
           allOf:
             - $ref: "#/components/schemas/VaultFilterNode"
-        group_by:
-          type: array
-          maxItems: 2
-          description: >
-            VERSION 1 ONLY. Grouping properties, outermost first. Two levels
-            (FR-027); a relation is a valid grouping property (FR-029).
-
-
-            A bare name list with NO direction field — which is why every
-            `groupBy` direction in an imported base was unrepresentable rather
-            than merely untranslated. Version 2 uses `grouping`, whose entries
-            carry one. A version-2 view setting this key is REFUSED.
-          items:
-            type: string
-            minLength: 1
-          example: ["owner"]
         grouping:
           type: array
           maxItems: 2
           description: >
-            VERSION 2 ONLY. Grouping keys, outermost first, each carrying its
-            own direction (FR-018b). Two levels (FR-027); grouping by a
-            relation is supported (FR-029) and a record holding several values
-            appears in every group it belongs to (FR-028).
+            Grouping keys, outermost first, each carrying its own direction
+            (FR-018b). Two levels (FR-027); grouping by a relation is
+            supported (FR-029) and a record holding several values appears in
+            every group it belongs to (FR-028).
 
 
-            A version-1 view setting this key is REFUSED.
+            THE DIRECTION IS PART OF THE KEY, not an afterthought: a bare name
+            list is why every `groupBy` direction in an imported base was
+            unrepresentable rather than merely untranslated.
           items:
             $ref: "./components/schemas/ViewGroupBy.yaml"
             x-go-type: ViewGroupBy
@@ -520,7 +463,7 @@ components:
         property_config:
           type: object
           description: >
-            VERSION 2 ONLY. Per-property presentation, keyed by PROPERTY name
+            Per-property presentation, keyed by PROPERTY name
             (FR-018b) — Obsidian's top-level `properties` block, which is
             display configuration rather than a projection list.
 
@@ -549,7 +492,7 @@ components:
             - ViewDefLayoutGallery
             - ViewDefLayoutMap
           description: >
-            VERSION 2 ONLY. Which rendering this view asks for (FR-109). THE
+            Which rendering this view asks for (FR-109). THE
             ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
 
 
@@ -571,7 +514,7 @@ components:
         formulas:
           type: object
           description: >
-            VERSION 2 ONLY. Computed properties, keyed by name, each value the
+            Computed properties, keyed by name, each value the
             expression's SOURCE TEXT (FR-141) — human-diffable and directly
             comparable against the Obsidian original it was translated from.
             A formula is referenced from any property position as

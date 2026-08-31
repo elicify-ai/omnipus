@@ -494,13 +494,10 @@ type RecordWriteRequest = {
   properties: Array<RecordPropertyValue>;
 };
 type ViewDef = {
-  schema_version: number;
   name: string;
   type?: string | undefined;
   label?: string | undefined;
-  filters?: Array<RecordFilter> | undefined;
   filter?: VaultFilterNode | undefined;
-  group_by?: Array<string> | undefined;
   grouping?: Array<ViewGroupBy> | undefined;
   sort?: Array<RecordSort> | undefined;
   properties?: Array<string> | undefined;
@@ -4345,13 +4342,10 @@ export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
     .partial()
 );
 export const ViewDef: z.ZodType<ViewDef> = z.object({
-  schema_version: z.number().int().gte(1).lte(2),
   name: z.string().min(1),
   type: z.string().min(1).optional(),
   label: z.string().optional(),
-  filters: z.array(RecordFilter).optional(),
   filter: VaultFilterNode.optional(),
-  group_by: z.array(z.string().min(1)).max(2).optional(),
   grouping: z.array(ViewGroupBy).max(2).optional(),
   sort: z.array(RecordSort).optional(),
   properties: z.array(z.string().min(1)).optional(),
