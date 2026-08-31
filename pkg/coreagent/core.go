@@ -691,6 +691,15 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// tightened past the global ceiling to "deny": channels, providers,
 		// platform, most of agents (list_agents stays open), most of tasks
 		// (list_tasks/update_task/set_todos stay open), and workspaces.
+		//
+		// This sparseness is preserved across upgrades:
+		// backfillToolPolicyCatalogDrift (tool_policy_catalog_drift.go) fills
+		// a pre-existing agent's missing entries from THIS map's keys, never
+		// from the full catalog, so a name deliberately left out here keeps
+		// inheriting the ceiling. The corollary is the one to remember when
+		// editing this map: a tool that should sit BELOW the ceiling must be
+		// written out here explicitly, on the upgrade path exactly as on the
+		// fresh-install path.
 		return tightenGlobalCeiling(map[string]config.ToolPolicy{
 			// --- Channels ---
 			"enable_channel":    deny,
@@ -2049,6 +2058,22 @@ func SeedConfig(cfg *config.Config) bool {
 	// (SOUL.md, lazily materialized from JudgeDefaultRubric — ADR-052 FR-038)
 	// are operator-editable and therefore preserved across boots.
 	if seedSystemAgents(cfg, existing) {
+		modified = true
+	}
+
+	// Close the upgrade hole in CLAUDE.md hard constraint 6 (see
+	// tool_policy_catalog_drift.go's header). Every branch above either
+	// creates an agent with a fully-enumerated policy map or leaves an
+	// existing agent's map alone — which means an agent that predates a tool
+	// carries no entry for it, and pkg/tools resolves that silence to the
+	// GLOBAL ceiling's value (87 of the 93 global entries are "allow") rather
+	// than to the agent's own seeded posture. config.ValidateToolPolicyCoverage
+	// counts the global entry as coverage, so it never reports the gap and
+	// config.RepairIncompleteToolPolicyCoverage is never handed anything to
+	// repair. This fills those gaps — and only those gaps — so an upgraded
+	// install converges on the posture a fresh install of the same binary
+	// would have had.
+	if len(backfillToolPolicyCatalogDrift(cfg)) > 0 {
 		modified = true
 	}
 
