@@ -530,29 +530,29 @@ func w4BroadRequestFor(t *testing.T, s w4Served, slug string) generated.VaultFin
 // So every enabled view the founder's vault produces is SERVED, and the answer
 // must not be a refusal.
 //
-// ONE EXCEPTION IS ALLOWED, BY NAME AND WITH ITS REASON, because pretending it
-// is not there would be the same dishonesty one level up. `Most Connected`
-// groups DESCENDING; the view file records that faithfully, and a find request
-// has nowhere to ask for a group direction, so knowledge_find refuses rather
-// than silently reordering the groups ascending (ServeRefusalGroupDirection).
-// The report already names that loss and argues — correctly — that the importer
-// did its job and the gap is in the REQUEST model. What it does not do is stop
-// the view importing ENABLED, so this one still dies on first use.
+// THE LIST OF ALLOWED EXCEPTIONS IS EMPTY, and it is kept as an empty map
+// rather than deleted so that adding one is a visible, deliberate act.
 //
-// THAT IS AN OPEN DECISION, NOT A FIX MADE HERE. Storing it disabled would make
-// the report honest at the cost of repurposing FR-105's mechanism — which is
-// about ROW COUNTS — for a refusal that broadens nothing; dropping the grouping
-// instead would serve the right rows in the wrong shape. Both are design calls
-// above a translation change, and neither is made silently. The exception is
-// pinned to ONE named view so that a SECOND one cannot join it unnoticed.
+// It was not empty when this test was written: `Most Connected` groups
+// DESCENDING, and a find request had nowhere to ask for a group direction, so
+// knowledge_find refused it (ServeRefusalGroupDirection) while the view
+// imported ENABLED. That gap was closed by a SEPARATE change — the
+// `VaultFindGroupBy` contract and the descending-group serving path, neither of
+// which is this one's — and this test's own guard is what noticed: the
+// exception fired "on the list but now SERVES", which is the direction a
+// stale allowance has to fail in.
+//
+// So all 66 enabled views the founder's vault produces now serve. Two of them
+// are this change's (`Needs Daniel` and `Triage Queue` no longer import
+// enabled-and-broken; they import disabled with a named loss); the third was
+// somebody else's.
 func TestFixtureVault_EveryEnabledViewActuallyServes(t *testing.T) {
 	_, rep, s := w4Serve(t)
 
-	// The open case above, and nothing else. A view added to this map is a
-	// decision somebody has to make on purpose.
-	known := map[string]string{
-		"Most Connected": "group_direction_not_representable — a find request carries no group direction (see this test's header)",
-	}
+	// Empty, and it must stay that way unless somebody decides otherwise on
+	// purpose. A view added here is a promise this importer is choosing not to
+	// keep.
+	known := map[string]string{}
 
 	enabled, refused := 0, 0
 	for _, b := range rep.Bases {
@@ -587,5 +587,5 @@ func TestFixtureVault_EveryEnabledViewActuallyServes(t *testing.T) {
 	if enabled == 0 {
 		t.Fatal("no enabled view was served, so this test asserted nothing")
 	}
-	t.Logf("SERVED %d enabled view(s); %d refused, all of them on the named exception list", enabled, refused)
+	t.Logf("SERVED %d enabled view(s); %d refused (each on the named exception list)", enabled, refused)
 }
