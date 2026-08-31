@@ -337,6 +337,25 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 		inferred[p.Type] = provisionedProperties(p)
 	}
 
+	// An inferred enum's closed set is what the NOTES happen to hold, and the
+	// operator never declared it closed — this package did, by sampling. A
+	// base filtering on a value no note carries is the operator saying the
+	// value is legal, so it is admitted here.
+	//
+	// The position is the point, and it is the same one provisioning occupies:
+	// BEFORE writeSchemas and before NewSchemaIndex. Widening only the index
+	// would admit the clause at translation time and leave the written schema
+	// refusing the same value at query time — the view would translate
+	// cleanly and then match nothing, which is worse than the loss it
+	// replaced. See infer.go's header for the argument and its three
+	// containment clauses.
+	// The account of each one is stored ON the widened property
+	// (InferredProperty.EnumWidened), so the report asks this package for its
+	// own decisions with CollectEnumWidenings(inferred) — the same shape
+	// CollectNameEvidencedInferences already has — rather than this function
+	// threading a second list through.
+	WidenEnumsFromBases(inferred, baseRelPaths, parsedBases)
+
 	if write {
 		if writeErr := writeSchemas(inv.Root, inferred, provisionedByType); writeErr != nil {
 			return nil, writeErr
