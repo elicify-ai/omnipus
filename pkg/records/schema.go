@@ -7,6 +7,7 @@ package records
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -427,6 +428,18 @@ type Schema struct {
 	// detect that a schema changed, because schemas live under a directory the
 	// note scanner does not walk and therefore have no manifest entry.
 	Fingerprint string
+
+	// Formulas holds the VALIDATED declarations of this type's derived
+	// properties, nil when it declares none.
+	//
+	// It exists so a formula declared in a file is REACHABLE. A FormulaSet is
+	// produced only by ValidateFormulaSet (see its header), so holding one here
+	// is the load-time proof that every formula in this schema parsed, fitted
+	// FR-146's caps and carries the ONE static type FR-143a requires — and it
+	// is the thing NewFormulaEvaluator takes. Without it a caller would have to
+	// re-validate to evaluate, and a second validation path is a second set of
+	// rules waiting to disagree with this one.
+	Formulas *FormulaSet
 }
 
 // PropertyNames lists declared property names in declaration order — what
@@ -795,7 +808,193 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 	if len(sc.PropertyOrder) == 0 {
 		return nil, reject(RejectNoProperties, recordType, "the schema declares no properties")
 	}
+
+	// FR-140's load half, and it runs LAST because it needs every property: a
+	// formula is typed against the record type's other declarations, so it
+	// cannot be checked while they are still being read.
+	if err := validateSchemaFormulas(sc); err != nil {
+		return nil, reject(RejectBadProperty, recordType, "%v", err)
+	}
 	return sc, nil
+}
+
+// ---------------------------------------------------------------------------
+// Derived properties — FR-140..FR-148 at LOAD time
+//
+// A formula that is only checked when somebody evaluates it is a formula whose
+// faults surface as an empty answer. FR-140 puts the parser on the write and
+// load paths and nowhere else, so a schema file declaring a broken formula is
+// REFUSED here — before a single record is read — naming the property.
+//
+// Everything below routes through ValidateFormulaSet, which is the one
+// implementation of FR-140's parse, FR-146's caps, FR-148's cycle walk and
+// FR-143a's static typing. Nothing here re-states those rules; what it adds is
+// the two things only a SCHEMA can say.
+//
+//	1. WHAT A FORMULA MAY NAME. A view's formulas may cross-reference each
+//	   other as `formula.<name>`; a record type's may not name another derived
+//	   property, itself included. The evaluator resolves a bare property name
+//	   against the RECORD (FormulaCandidate.FormulaProperty), and a derived
+//	   property has no stored value there — so such a reference would type
+//	   clean, evaluate to absence on every record, and report nothing. That is
+//	   the exact silent-wrong-answer shape FR-143a exists to remove, so it is
+//	   refused. It also makes FR-148's cycle unreachable BY CONSTRUCTION rather
+//	   than by a check that has to keep working: a self-reference is the
+//	   smallest cycle and this rule refuses it.
+//
+//	2. THAT `type` AND `many` ARE CHECKED. They annotate the RESULT — the code
+//	   already assumed as much (finalize refuses a `relation` formula and tells
+//	   the author to declare it `text`), but nothing compared the annotation to
+//	   what the expression actually produces. An unchecked annotation is a
+//	   promise, and a `decimal`-declared formula yielding text is precisely the
+//	   R-1 silent FALSE that FR-143a was written against.
+// ---------------------------------------------------------------------------
+
+// validateSchemaFormulas validates every derived property of one record type and
+// stores the result on the schema. It returns nil for a schema with none.
+func validateSchemaFormulas(sc *Schema) error {
+	sources := map[string]string{}
+	derived := make([]string, 0, len(sc.PropertyOrder))
+	for _, name := range sc.PropertyOrder {
+		p := sc.Properties[name]
+		if p == nil || p.Formula == "" {
+			continue
+		}
+		sources[name] = p.Formula
+		derived = append(derived, name)
+	}
+	if len(derived) == 0 {
+		return nil
+	}
+
+	// Rule 1 — a derived property may not name another derived property.
+	//
+	// It runs BEFORE ValidateFormulaSet so the operator gets this sentence
+	// rather than "`total` is not a property this view can type", which is
+	// true, useless, and points at the wrong file. An expression that does not
+	// parse is skipped here and reported by ValidateFormulaSet, which knows the
+	// byte offset.
+	for _, name := range derived {
+		root, perr := ParseFormula(sources[name])
+		if perr != nil {
+			continue
+		}
+		for _, ref := range formulaPropertyRefs(root) {
+			if _, isDerived := sources[ref]; !isDerived {
+				continue
+			}
+			if ref == name {
+				return fmt.Errorf("property %q: its formula names itself (`%s`), which is FR-148's smallest cycle; a formula may name only STORED properties of this record type, `file.` metadata and literals", name, ref)
+			}
+			return fmt.Errorf("property %q: its formula names %q, which is itself a derived property; a formula may name only STORED properties of this record type, `file.` metadata and literals — a derived property has no value on the record, so this would evaluate to absence on every note and report nothing", name, ref)
+		}
+	}
+
+	// Rules 2..6 — parse, caps, cycles and static typing, through the ONE
+	// implementation. It is given the STORED properties only, which is what
+	// makes rule 1 above enforceable rather than advisory: with the derived
+	// ones absent from the environment, a reference to one cannot type.
+	stored := &Schema{
+		SchemaVersion: sc.SchemaVersion,
+		Type:          sc.Type,
+		Properties:    map[string]*Property{},
+	}
+	for _, name := range sc.PropertyOrder {
+		if p := sc.Properties[name]; p != nil && p.Formula == "" {
+			stored.Properties[name] = p
+			stored.PropertyOrder = append(stored.PropertyOrder, name)
+		}
+	}
+	set, ferrs := ValidateFormulaSet(sources, stored)
+	if len(ferrs) > 0 {
+		// Every refusal, not the first: an author fixing four formulas one
+		// round-trip at a time is an author who stops using formulas, which is
+		// ValidateFormulaSet's own stated reason for returning them all.
+		msgs := make([]string, 0, len(ferrs))
+		for _, e := range ferrs {
+			msgs = append(msgs, schemaFormulaRefusal(e))
+		}
+		return errors.New(strings.Join(msgs, "; "))
+	}
+
+	// Rule 7 — the declared type and arity must be what the expression
+	// produces (FR-143a).
+	for _, name := range derived {
+		p := sc.Properties[name]
+		d, ok := set.Get(name)
+		if !ok {
+			// Unreachable: ValidateFormulaSet returned no errors, so every
+			// source is in the set. Refused rather than assumed, because the
+			// alternative is a derived property with no declaration behind it.
+			return fmt.Errorf("property %q: its formula validated but produced no declaration", name)
+		}
+		want, ok := FormulaPropertyType(d.Type)
+		if !ok {
+			return fmt.Errorf("property %q: its formula produces a %s value, which does not compare at all (R-16/FR-147) and therefore cannot be a property; `link()`, `icon()`, `format()` and `asLink()` are for display, so use one in a view's `formulas:` map instead", name, d.Type)
+		}
+		if want != p.Type {
+			return fmt.Errorf("property %q declares type %s but its formula produces %s; `type` on a derived property annotates the RESULT and is checked (FR-143a), because a declaration nothing checks compares FALSE on the records it is wrong about and reports nothing — declare it `%s` or change the expression", name, p.Type, d.Type, want)
+		}
+		declaredMany := d.Arity == ArityMany
+		if declaredMany != p.Many {
+			return fmt.Errorf("property %q declares `many: %t` but its formula produces %s; arity is part of the ONE static declaration FR-143a requires, so it is checked the same way the type is", name, p.Many, d.Arity)
+		}
+	}
+
+	sc.Formulas = set
+	return nil
+}
+
+// schemaFormulaRefusal relabels one FormulaError for a schema file.
+//
+// FormulaError.Formula is the formula's name in a VIEW; here it is the property
+// name, so the rendered sentence has to say "property" instead of "formula" or
+// it sends the operator to look for a view they never wrote. The rest of the
+// formatting — the byte position, the expected set — is reused verbatim rather
+// than re-implemented, so a change to it reaches both surfaces.
+func schemaFormulaRefusal(e *FormulaError) string {
+	if e == nil {
+		return "the formula was refused for a reason the loader lost"
+	}
+	if e.Formula == "" {
+		// A whole-set fault: FR-146's per-view formula count or node budget.
+		// Its wording says "view" because that is the surface the cap was
+		// written for; a record type's derived properties are held to the same
+		// numbers, and saying so is more honest than paraphrasing the cap.
+		return fmt.Sprintf("this record type's derived properties: %s (FR-146's per-view caps bound a record type's formulas too)", e.Error())
+	}
+	relabelled := *e
+	relabelled.Formula = ""
+	return fmt.Sprintf("property %q: %s", e.Formula, relabelled.Error())
+}
+
+// formulaPropertyRefs lists the bare property names an expression reads, sorted.
+//
+// It is formulaRefs' sibling: that one collects `formula.<name>` references for
+// FR-148's cycle walk, this one collects RefProperty, which is what a schema's
+// rule 1 is stated over. They are two walks rather than one parameterised walk
+// because a caller wanting both would have to sort out which kind each name
+// came from, and the two kinds live in different namespaces.
+func formulaPropertyRefs(root FormulaNode) []string {
+	seen := map[string]bool{}
+	stack := []FormulaNode{root}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n == nil {
+			continue
+		}
+		if r, ok := n.(*Ref); ok && r.Kind == RefProperty {
+			seen[r.Name] = true
+		}
+		stack = append(stack, n.children()...)
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +1054,7 @@ var propertyDeclKeys = map[string]declKey{
 	"to":       {kind: declKeyParsed},
 	"inverse":  {kind: declKeyParsed},
 	"unit":     {kind: declKeyParsed},
+	"formula":  {kind: declKeyParsed},
 
 	// `scale` USED to live here as a declKeyRefused entry. It is now simply
 	// UNKNOWN, and that is the correct answer rather than a loosening: it was
@@ -1029,6 +1229,7 @@ type propertyDecl struct {
 	To       string      `yaml:"to"`
 	Inverse  string      `yaml:"inverse"`
 	Unit     string      `yaml:"unit"`
+	Formula  string      `yaml:"formula"`
 }
 
 func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) {
@@ -1065,7 +1266,25 @@ func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) 
 		To:         strings.TrimSpace(decl.To),
 		Inverse:    strings.TrimSpace(decl.Inverse),
 		Unit:       strings.TrimSpace(decl.Unit),
+		Formula:    strings.TrimSpace(decl.Formula),
 		RecordType: recordType,
+	}
+
+	// FR-140: a DERIVED property is one that declares an expression. The key's
+	// PRESENCE is what decides that, not whether the decoded string came back
+	// non-empty — `formula: ""` and `formula: "   "` are an author declaring a
+	// derived property and giving it nothing, which is precisely the state
+	// NewFormulaProperty exists to refuse. Reading presence off the decoded
+	// value alone would turn the first of those two into a silently STORED
+	// property, which is the silent-drop class this whole section closes.
+	//
+	// mappingValue does not follow `<<`, so the decoded value is consulted too:
+	// a formula contributed by a merge key is declared just as much as one
+	// written inline.
+	if decl.Formula != "" || mappingValue(node, "formula") != nil {
+		if p.Formula == "" {
+			return nil, errFormulaExpressionMissing()
+		}
 	}
 
 	// `values` is enum-only. This check sits OUTSIDE the type switch below on
@@ -1195,10 +1414,24 @@ func (p *Property) finalize() error {
 // declaration with nothing behind it, and it would compare happily.
 func NewFormulaProperty(decl Property) (*Property, error) {
 	if strings.TrimSpace(decl.Formula) == "" {
-		return nil, fmt.Errorf("a formula property must carry its expression; without it there is a declared type with nothing behind it, which compares as though it were real")
+		return nil, errFormulaExpressionMissing()
 	}
 	decl.Formula = strings.TrimSpace(decl.Formula)
 	return NewProperty(decl)
+}
+
+// errFormulaExpressionMissing is the ONE rule NewFormulaProperty adds on top of
+// NewProperty, held in one place so the schema LOADER enforces the identical
+// rule in the identical words.
+//
+// The loader cannot simply call NewFormulaProperty — parseProperty has already
+// built the Property and ParseSchema already wraps the failure with the
+// property's name, so routing through it would name the property twice and
+// re-run finalize a second time. What must not diverge is the RULE, and this is
+// it: everything else a formula property must satisfy lives in finalize, which
+// both paths already run.
+func errFormulaExpressionMissing() error {
+	return fmt.Errorf("a formula property must carry its expression; without it there is a declared type with nothing behind it, which compares as though it were real")
 }
 
 // NewProperty builds a Property from a hand-written declaration — the path a

@@ -302,6 +302,7 @@ type PropertyDef = {
   to?: string | undefined;
   inverse?: string | undefined;
   unit?: string | undefined;
+  formula?: string | undefined;
 };
 type EnumValueDef = {
   value: string;
@@ -4092,6 +4093,7 @@ export const PropertyDef: z.ZodType<PropertyDef> = z.object({
   to: z.string().min(1).optional(),
   inverse: z.string().min(1).optional(),
   unit: z.string().optional(),
+  formula: z.string().min(1).optional(),
 });
 export const RecordType: z.ZodType<RecordType> = z.object({
   schema_version: z.number().int().gte(1),

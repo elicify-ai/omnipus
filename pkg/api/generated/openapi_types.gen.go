@@ -11931,6 +11931,17 @@ type PromptGuardUpdateResponseAppliedLevel string
 // Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
 // ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
 type PropertyDef struct {
+	// Formula Present exactly when this property is DERIVED: the expression, as source text, that computes it (FR-140..FR-148, ADR-068 D24.3). Absent means the property is STORED — read out of a note's frontmatter like every other one. A derived property is never written into a note and never read from one; nothing about it reaches SQL.
+	//
+	// SOURCE TEXT, not a parse tree, for the same reason a view stores source (FR-141): it is human-diffable and it is comparable against the Obsidian original a vault was imported from.
+	//
+	// `type` AND `many` ANNOTATE THE RESULT, and they are CHECKED, not trusted. FR-143a requires every formula to have ONE static type and ONE arity, inferred at load before any record is read — because a formula whose type varies per record compares FALSE under R-1's different-domains rule with NO problem reported, which is a silently wrong answer wearing a type system. So the loader infers the expression's type and arity and REFUSES the schema when they disagree with what the property declared, naming both. A declaration nothing checks is a promise, not a type.
+	//
+	// REFUSED AT LOAD, each naming the property and the reason: an expression that does not parse (FR-140, naming the byte offset); one past FR-146's caps (64 nodes, depth 8 per formula; 16 formulas and 256 formula nodes per record type); one whose inferred type or arity contradicts `type` / `many`; one that produces a PRESENTATION value (`link()`, `icon()`, `format()`) — R-16 says a display value does not compare, so it cannot be a property; one on a `required` property, since nothing writes a derived value into a note and the requirement could never be satisfied; and one declaring `to` / `inverse` or a `relation` / `person` type, since a derived link is a presentation value rather than an edge the vault can target-check.
+	//
+	// A FORMULA MAY NAME ONLY STORED PROPERTIES OF ITS OWN RECORD TYPE, `file.` metadata, and literals. Naming another derived property — including itself — is REFUSED naming both. That is stricter than a view's `formulas:` map, where `formula.<name>` cross-references are legal and FR-148 checks their graph for cycles, and the reason is that the evaluator resolves a bare property name against the RECORD, where a derived property has no stored value: accepted, such a reference would evaluate to absence on every record and report nothing. Refusing it also makes FR-148's cycle case unreachable by construction rather than by a check that has to keep working — a self-reference is the smallest cycle and it is refused by this same rule.
+	Formula *string `json:"formula,omitempty"`
+
 	// Inverse Name of the DERIVED reverse direction (D5). The inverse is computed from the index and is NEVER stored in any file (FR-032) — the hand-maintained reverse list is the field that drifts the first time anyone forgets.
 	Inverse *string `json:"inverse,omitempty"`
 

@@ -160,3 +160,54 @@ properties:
       metadata rather than glued into the property name (D3). Absent means
       unitless.
     example: "minutes"
+  formula:
+    type: string
+    minLength: 1
+    description: >
+      Present exactly when this property is DERIVED: the expression, as source
+      text, that computes it (FR-140..FR-148, ADR-068 D24.3). Absent means the
+      property is STORED — read out of a note's frontmatter like every other
+      one. A derived property is never written into a note and never read from
+      one; nothing about it reaches SQL.
+
+
+      SOURCE TEXT, not a parse tree, for the same reason a view stores source
+      (FR-141): it is human-diffable and it is comparable against the Obsidian
+      original a vault was imported from.
+
+
+      `type` AND `many` ANNOTATE THE RESULT, and they are CHECKED, not trusted.
+      FR-143a requires every formula to have ONE static type and ONE arity,
+      inferred at load before any record is read — because a formula whose type
+      varies per record compares FALSE under R-1's different-domains rule with
+      NO problem reported, which is a silently wrong answer wearing a type
+      system. So the loader infers the expression's type and arity and REFUSES
+      the schema when they disagree with what the property declared, naming
+      both. A declaration nothing checks is a promise, not a type.
+
+
+      REFUSED AT LOAD, each naming the property and the reason: an expression
+      that does not parse (FR-140, naming the byte offset); one past FR-146's
+      caps (64 nodes, depth 8 per formula; 16 formulas and 256 formula nodes
+      per record type); one whose inferred type or arity contradicts `type` /
+      `many`; one that produces a PRESENTATION value (`link()`, `icon()`,
+      `format()`) — R-16 says a display value does not compare, so it cannot be
+      a property; one on a `required` property, since nothing writes a derived
+      value into a note and the requirement could never be satisfied; and one
+      declaring `to` / `inverse` or a `relation` / `person` type, since a
+      derived link is a presentation value rather than an edge the vault can
+      target-check.
+
+
+      A FORMULA MAY NAME ONLY STORED PROPERTIES OF ITS OWN RECORD TYPE, `file.`
+      metadata, and literals. Naming another derived property — including
+      itself — is REFUSED naming both. That is stricter than a view's
+      `formulas:` map, where `formula.<name>` cross-references are legal and
+      FR-148 checks their graph for cycles, and the reason is that the
+      evaluator resolves a bare property name against the RECORD, where a
+      derived property has no stored value: accepted, such a reference would
+      evaluate to absence on every record and report nothing. Refusing it also
+      makes FR-148's cycle case unreachable by construction rather than by a
+      check that has to keep working — a self-reference is the smallest cycle
+      and it is refused by this same rule.
+    example: "amount * quantity"
