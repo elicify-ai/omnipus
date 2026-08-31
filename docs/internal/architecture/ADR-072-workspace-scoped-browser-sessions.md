@@ -409,6 +409,19 @@ substitutes.
 individually; together they are the difference between an agent that can read
 a page and one that can complete a form.
 
+**Where the dialog listener can live (found 2026-08-31).**
+`installTargetListenerLocked` (`manager.go:2578-2590`) attaches to `se.tabs[0]`
+only — correct for its own purpose, because `Target` discovery is
+browser-global. But `Page.javascriptDialogOpening` is **per target**. A
+tab-0-only listener misses a dialog on tab 2 entirely, and that tab is then
+wedged with no record of why. The listener must be per-tab.
+
+**`browser_upload_file` cannot use the `PathHandle` mediation the other
+filesystem tools use.** `SetUploadFiles` hands Chrome an absolute host path and
+*Chrome* performs the read, so the `os.Root` TOCTOU-hardness is structurally
+unavailable — only `RealPath()` applies. The residual window is stated rather
+than hidden, and `AllowedRoots` confinement is the control that remains.
+
 **Dialog handling carries a specific hazard** worth stating: a modal dialog
 blocks every subsequent CDP command on that tab. Whatever is built must
 guarantee the session cannot be left wedged — the failure mode is not a bad
@@ -429,14 +442,22 @@ is built twice.
 
 ### D2.5 Telling the agent the supported route — issue #242
 
+> **Name correction (2026-08-31, found during spec drafting):** the tool is
+> registered as **`serve_web`** (`pkg/tools/web_serve.go:46`,
+> `const ToolNameWebServe = "serve_web"`; corroborated by
+> `manifest.go:152`). This ADR, its round-1 review **and root `CLAUDE.md`** all
+> said `web_serve`. Shipping that string in the error would have sent agents
+> hunting for a tool that does not exist — the precise failure D2.5 exists to
+> remove. The acceptance criterion asserts the literal.
+
 `browser_navigate` rejects `file://` deliberately (`manager.go:673-681` —
 "file:// would bypass Landlock restrictions"). The agent is told only:
 
 > `browser: file:// URLs are blocked for security reasons`
 
-That is a dead end. The supported route exists one tool away — `web_serve`
+That is a dead end. The supported route exists one tool away — `serve_web`
 mints a `/preview/<agent>/<token>/` http URL that `browser_navigate` accepts —
-and nothing in the tool surface mentions it. `grep` for `file://`, `web_serve`
+and nothing in the tool surface mentions it. `grep` for `file://`, `serve_web`
 or `preview` in `tools.go` returns nothing.
 
 **Decision:** name the supported route in **the error message**, not only in
@@ -491,10 +512,14 @@ not a manifest gate, and is filed separately as **#665**.
 
 ### D2.8 Tier assignment (ADR-071)
 
-ADR-071 fixes Tier 3 as an enumerated, closed 63-name list whose stated
-property is that promoting a name out "must force a re-decision rather than
-leave a stale entry". The six new tools must be added to it explicitly; the
-ADR-071 list edit is a required change, not an implication.
+**Corrected 2026-08-31.** ADR-071's *prose* describes Tier 3 as a closed
+enumerated list; the *code* treats it as the residual —
+`ToolManifestVisibility` (`pkg/tools/manifest.go:243-251`) returns
+`ManifestSearchOnly` for anything lazy outside the 7-name previewed set. So
+five of the six new tools become Tier 3 with **zero production edits**. The
+count is also **62**, not 63 (`write_agent_metadata` retired), so ADR-071's
+prose is already one ahead of its own fixture. The real edit sites are the
+pinned literals in `manifest_test.go`.
 
 | Tool | Tier | Why |
 |---|---|---|
@@ -513,8 +538,17 @@ therefore need an explicit, literal, wildcard-free entry for **every** agent in
 | `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_handle_dialog`, `browser_snapshot` | allow | allow | deny | deny |
 | `browser_upload_file` | **ask** | **ask** | deny | deny |
 
-Mirrors today's seed exactly (browser surface to Jim and Ray; Mia and Ava
-deny-by-default least-privilege), confirmed by the operator on 2026-08-31.
+**Corrected 2026-08-31:** the table above omits two agents that hold the full
+browser surface today — `IDExplorer` (`pkg/coreagent/core.go:756-760`) and
+`IDResearcher` (`:782-786`). They need the same parity entries.
+
+Two further corrections from the same pass: **Mia and Ava need no edit at
+all** — `denyAllThenOverride` gives them deny for free once the names are in
+`allStaticToolNames`; and because `ValidateToolPolicyCoverage` is OR-based,
+the single `pkg/config/defaults.go:276-287` edit closes the **boot-abort**
+risk for every agent. The per-agent edits are posture, not coverage. That
+distinction matters: a spec that treats them as coverage will over-scope the
+work and under-test the posture.
 
 `browser_upload_file` is seeded **ask**, not allow: it is the only browser tool
 that carries a local file across the boundary into a remote site. Every other
@@ -556,11 +590,27 @@ rather than a line under Consequences.
 - **Repudiation.** With a shared context, "which agent acted as the signed-in
   user" must remain answerable. **Decision:** an audit event on browsing-context
   creation, and on an agent's first use of a context it did not establish.
-- **Information disclosure.** D2.4's accessibility snapshot returns full page
-  structure — on a signed-in page that includes account identifiers and form
-  values. **Decision:** it inherits `browser_get_text`'s redaction posture and
-  passes through the same `RegisterSensitiveValues` path. A snapshot tool that
-  bypasses redaction would be a quieter leak than the text tool it replaces.
+- **Information disclosure — corrected 2026-08-31, the earlier text was
+  wrong.** An earlier revision said the snapshot "inherits `browser_get_text`'s
+  redaction posture and passes through the same `RegisterSensitiveValues`
+  path". **There is no such posture to inherit.** `RegisterSensitiveValues`
+  appears **zero** times in `pkg/tools/browser/`; `browser_get_text`'s entire
+  treatment is a 64,000-character cap. And the replacer only substitutes
+  registered *credential plaintexts* — it would not touch account identifiers
+  or form values even if it were wired in.
+
+  It is worse than a missing inheritance: it is a **widening**.
+  `browser_get_text` uses `chromedp.Text` (innerText, which never contains
+  input values), whereas an accessibility node carries `Value`
+  (`cdproto/accessibility/types.go:206`) — which **is** the field's value. So
+  the snapshot can expose what a user typed into a form, including a card
+  number or a password field, where the existing text tool structurally could
+  not.
+
+  **Decision (operator ruling required — see §6):** the snapshot omits values
+  by default for `text`/`search`/`combobox`/`password` roles, with an explicit
+  `include_values` opt-in, and the sensitive-value replacer wired in as defence
+  in depth rather than as the primary control.
 
 ## 3. Acceptance criteria
 
@@ -592,7 +642,7 @@ regressions this design must not introduce.
 | 11 | An agent can attach a file to a file input |
 | 12 | A page calling `alert()`/`confirm()` does not wedge the session. **The tab must still answer CDP afterwards** — this is the acceptance test, not that the dialog was dismissed |
 | 13 | An agent can read a page as structure (roles + names + actionable handles) without vision and without already knowing a CSS selector |
-| 14 | `browser_navigate` on a `file://` URL returns an error **naming `web_serve` as the supported route** |
+| 14 | `browser_navigate` on a `file://` URL returns an error **naming `serve_web` as the supported route** |
 | 15 | **Boot survives the new tools (Hard Constraint #6).** A fresh install boots with all six D2 tools registered and **no policy-coverage abort** |
 | 16 | **Two writers, one context (D2.10).** Two agents on one workspace issue `browser_navigate` concurrently — neither observes the other's mid-navigation state, and neither errors; the loser gets `{"deferred": true, …}` |
 | 17 | **Unattended work is signed out (D1.2).** A delegated sub-turn with no viewer attached opens a site the operator is signed into on that workspace — it is **logged out**, and the failure names the reason |
@@ -715,7 +765,7 @@ Genuinely open:
   first-come. Two agents browsing steadily on one workspace will interleave;
   nothing guarantees either makes progress. Acceptable for the human-takeover
   workload this panel exists for (ADR-038), unexamined for anything else.
-- **Does the preview URL need re-keying?** `web_serve` mints
+- **Does the preview URL need re-keying?** `serve_web` mints
   `/preview/<agent>/<token>/` per **agent** while the browsing context is per
   **workspace**. Whether a preview minted by one agent should be reachable from
   a tab another agent drives is not decided; the token is the credential
