@@ -18,6 +18,7 @@
 package vaultimport
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -206,6 +207,7 @@ func sortedInferredNames(m map[string]InferredProperty) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
 
