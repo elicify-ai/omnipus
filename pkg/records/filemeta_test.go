@@ -854,3 +854,88 @@ func TestFileMeta_SplitLinkRowsPartitionsByEmbed(t *testing.T) {
 		t.Fatalf("display text was dropped: %+v", links[1])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// THE TWO TABLES OF THIRTEEN
+//
+// The formula layer (formula_parse.go) holds its OWN table of the thirteen —
+// `fileVirtualProperties`, `fileManyProperties`, `fileMethodNames` — typed in
+// FormulaType, because it answers a different question (what does an expression
+// evaluate to?) than this file's table (what does a comparison compare?).
+//
+// Two tables of one closed set drift silently: a fourteenth property added to
+// one, or a `many` flag changed in one, produces no error anywhere — the
+// formula path and the filter path simply start disagreeing about what
+// `file.tags` is. This test is the only thing that makes such an edit loud, and
+// it is deliberately a CORRESPONDENCE assertion rather than a copy, so the one
+// place the two tables legitimately differ has to be written down.
+// ---------------------------------------------------------------------------
+
+func TestFileMeta_TheTwoTablesOfThirteenAgree(t *testing.T) {
+	if len(fileVirtualProperties) != len(fileProperties) {
+		t.Fatalf("the formula layer knows %d file properties, this layer knows %d",
+			len(fileVirtualProperties), len(fileProperties))
+	}
+	for name := range fileVirtualProperties {
+		if _, ok := fileProperties[name]; !ok {
+			t.Errorf("the formula layer declares %q and the comparison layer does not", name)
+		}
+	}
+	for name := range fileProperties {
+		if _, ok := fileVirtualProperties[name]; !ok {
+			t.Errorf("the comparison layer declares %q and the formula layer does not", name)
+		}
+	}
+
+	for name, prop := range fileProperties {
+		wantMany := fileManyProperties[name]
+		if prop.Many != wantMany {
+			t.Errorf("%s: this layer says many=%v, the formula layer says many=%v", name, prop.Many, wantMany)
+		}
+
+		// The type correspondence. The `link` row is the one place the two
+		// tables deliberately DISAGREE, and the reason is in fileProperties'
+		// header: `relation` compares by resolved record identity, and an
+		// ordinary wikilink has none, so this layer carries a link as the text
+		// of its target. The formula layer has no such constraint and keeps
+		// `link`. Neither is wrong; the divergence just has to be intentional.
+		var want PropertyType
+		switch fileVirtualProperties[name] {
+		case FormulaText, FormulaLink, FormulaPresentation:
+			want = TypeText
+		case FormulaDate:
+			want = TypeDate
+		case FormulaNumber:
+			want = TypeInteger
+		default:
+			t.Errorf("%s: the formula layer types it %q, which has no comparison-layer counterpart",
+				name, fileVirtualProperties[name])
+			continue
+		}
+		if prop.Type != want {
+			t.Errorf("%s: formula type %q maps to %s, but this layer declares %s",
+				name, fileVirtualProperties[name], want, prop.Type)
+		}
+	}
+
+	// file.file is the presentation row, and it must be the ONLY one — that is
+	// what keeps "presentation never compares" a one-line rule.
+	for name, ft := range fileVirtualProperties {
+		if ft == FormulaPresentation && name != FileSelfProp {
+			t.Errorf("%s types as presentation; only file.file may", name)
+		}
+	}
+	if fileVirtualProperties[FileSelfProp] != FormulaPresentation {
+		t.Errorf("file.file types as %q in the formula layer, want presentation", fileVirtualProperties[FileSelfProp])
+	}
+
+	// And the four methods.
+	if len(fileMethodNames) != len(FileMethods) {
+		t.Fatalf("the parser admits %d file methods, this layer defines %d", len(fileMethodNames), len(FileMethods))
+	}
+	for _, m := range FileMethods {
+		if !fileMethodNames[string(m)] {
+			t.Errorf("the parser does not admit file.%s()", m)
+		}
+	}
+}
