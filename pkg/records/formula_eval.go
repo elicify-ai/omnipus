@@ -615,7 +615,15 @@ func fvalFromResult(res FormulaResult) fval {
 		case FormulaLink:
 			out.items = append(out.items, fitem{link: v.Link})
 		case FormulaBoolean:
-			out.items = append(out.items, fitem{flag: FoldEqual(v.Text, "true")})
+			// v.Bool, NOT a text comparison — the THIRD instance of the defect
+			// materialize and fvalFromPropertyValue each carry a note about.
+			// TypedValue is a tagged union: materialize writes a boolean as
+			// {Type: TypeCheckbox, Bool: …} and leaves Text EMPTY, so
+			// `FoldEqual(v.Text, "true")` was false for every value it ever
+			// saw. A formula referencing a boolean sibling therefore read it as
+			// `false` on every record, whatever it evaluated to — no refusal,
+			// no problem entry, just the complement of the intended row set.
+			out.items = append(out.items, fitem{flag: v.Bool})
 		}
 	}
 	return out

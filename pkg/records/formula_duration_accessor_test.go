@@ -345,3 +345,50 @@ func TestFormula_AnAccessorDoesNotStealAFormulaName(t *testing.T) {
 		t.Errorf("`formula.length * 2` must reference the formula `length`; got refs %v", decl.Refs)
 	}
 }
+
+// TestFormula_ABooleanSurvivesBeingReferencedByAnotherFormula is a regression
+// test for the third instance of a defect this package had already found and
+// fixed TWICE.
+//
+// `TypedValue` is a tagged union and a `checkbox` populates Bool, leaving Text
+// empty. Two places in formula_eval.go say so in their comments — materialize's
+// FormulaBoolean case and fvalFromPropertyValue's — each recording that reading
+// Text "made every checkbox a formula read false". fvalFromResult, the third
+// place that lifts a boolean, was still reading Text.
+//
+// The consequence is the silent kind: a formula referencing a BOOLEAN sibling
+// read it as `false` on every record, whatever it evaluated to. No refusal, no
+// problem entry, no wrong type — just the complement of the intended row set,
+// which is the exact failure R-18 and FR-143a exist to remove one layer up.
+func TestFormula_ABooleanSurvivesBeingReferencedByAnotherFormula(t *testing.T) {
+	schema := formulaFixtureSchema()
+	amount := schema.Properties["amount"]
+
+	set, errs := ValidateFormulaSet(map[string]string{
+		"big":      "amount > 10",
+		"reported": "if(formula.big, 1, 2)",
+		"negated":  "!formula.big",
+	}, schema)
+	if len(errs) != 0 {
+		t.Fatalf("the set must validate: %v", formulaErrorMessages(errs))
+	}
+
+	e := NewFormulaEvaluator(set, testComparator(), formulaTestNow())
+	e.Begin(fixtureCandidate{props: map[string]PropertyValue{
+		"amount": numberValue(t, amount, "20"),
+	}})
+
+	// 20 > 10, so `big` is TRUE. Everything below follows from that by hand.
+	big, _ := e.Evaluate("big")
+	if vals := big.Values(); len(vals) != 1 || !vals[0].Bool {
+		t.Fatalf("amount 20 > 10 must be true; got %v", vals)
+	}
+	reported, _ := e.Evaluate("reported")
+	if got := renderNumber(t, reported); got != "1" {
+		t.Errorf("`if(formula.big, 1, 2)` with big TRUE must be 1; got %s — a boolean read through a formula reference lost its value", got)
+	}
+	negated, _ := e.Evaluate("negated")
+	if vals := negated.Values(); len(vals) != 1 || vals[0].Bool {
+		t.Errorf("`!formula.big` with big TRUE must be false; got %v", vals)
+	}
+}
