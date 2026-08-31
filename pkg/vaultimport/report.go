@@ -53,10 +53,13 @@ type Report struct {
 	Types          []TypeSchemaSummary
 	Ambiguities    []AmbiguousInference
 	RelationSplits []RelationSplitReport
-	Bases          []BaseOutcome
-	SchemaReload   *records.SchemaLoadReport
-	ViewReload     *records.ViewLoadReport
-	Validation     ValidationSummary
+	// TypeInference is FR-104b's per-note account of every note that
+	// arrived carrying no `type:` key.
+	TypeInference TypeInferenceReport
+	Bases         []BaseOutcome
+	SchemaReload  *records.SchemaLoadReport
+	ViewReload    *records.ViewLoadReport
+	Validation    ValidationSummary
 }
 
 // Render writes the full, human-readable report.
@@ -91,15 +94,26 @@ func (r *Report) Render(w io.Writer) {
 		}
 	}
 
-	fmt.Fprintf(w, "\n-- %d relation properties with split or unresolved link targets --\n", len(r.RelationSplits))
+	fmt.Fprintf(w, "\n-- %d relation properties whose link targets were not unanimous (FR-104a) --\n", len(r.RelationSplits))
 	for _, s := range r.RelationSplits {
-		switch {
-		case len(s.ByType) == 0:
-			fmt.Fprintf(w, "  %s.%s: no link resolved to any known record type (unresolved=%d) — declared %s, not relation (FR-034 requires `to:`, and there was no evidence for one)\n",
-				s.RecordType, s.Property, s.Unresolved, s.Declared)
+		switch s.Rule {
+		case RelationUnresolved:
+			fmt.Fprintf(w, "  %s.%s: NOT TYPED — no link resolved to any known record type (unresolved=%d); declared text.\n",
+				s.RecordType, s.Property, s.Unresolved)
+			fmt.Fprintf(w, "      fix: %s\n", s.Remedy)
+		case RelationSupermajority:
+			fmt.Fprintf(w, "  %s.%s: declared relation, to=%s — %d of %d resolved links (>= 2/3), unresolved=%d.\n",
+				s.RecordType, s.Property, s.MajorityType, s.MajorityCount, s.ResolvedTotal, s.Unresolved)
+			fmt.Fprintf(w, "      minority (these links WILL be reported as relation_type_mismatch, which is correct): %s\n",
+				strings.Join(s.Minority, ", "))
+		case RelationNoMajority:
+			fmt.Fprintf(w, "  %s.%s: NOT TYPED — the evidence is genuinely mixed, no target type reached 2/3 of %d resolved links (unresolved=%d); declared text.\n",
+				s.RecordType, s.Property, s.ResolvedTotal, s.Unresolved)
+			fmt.Fprintf(w, "      evidence: %s\n", strings.Join(s.Minority, ", "))
+			fmt.Fprintf(w, "      fix: %s\n", s.Remedy)
 		default:
-			fmt.Fprintf(w, "  %s.%s: targets resolve to %v (unresolved=%d) — declared relation, to=%s (plurality)\n",
-				s.RecordType, s.Property, s.ByType, s.Unresolved, plurality(s.ByType))
+			fmt.Fprintf(w, "  %s.%s: %v (unresolved=%d) — declared %s\n",
+				s.RecordType, s.Property, s.ByType, s.Unresolved, s.Declared)
 		}
 	}
 
@@ -114,9 +128,21 @@ func (r *Report) Render(w io.Writer) {
 			if v.ResolvedType != "" {
 				fmt.Fprintf(w, " (type=%s)", v.ResolvedType)
 			}
+			if v.Layout != "" {
+				fmt.Fprintf(w, " (layout=%s)", v.Layout)
+			}
+			if v.Disabled {
+				fmt.Fprint(w, "  [DISABLED — stored, never applied]")
+			}
 			fmt.Fprintln(w)
 			if v.Status == OutcomeRefused {
 				fmt.Fprintf(w, "        reason: %s\n", v.RefusedReason)
+			}
+			if v.Disabled {
+				fmt.Fprintf(w, "        FR-105: %d loss(es) sit where the ROW SET is decided, so applying this view would return MORE rows than the Obsidian original. It is stored disabled rather than imported broadened:\n", len(v.DisablingLosses))
+				for _, l := range v.DisablingLosses {
+					fmt.Fprintf(w, "          -> %s\n", l)
+				}
 			}
 			for _, l := range v.Losses {
 				fmt.Fprintf(w, "        lost: %s\n", l)
@@ -136,6 +162,34 @@ func (r *Report) Render(w io.Writer) {
 			fmt.Fprintf(w, "  %s\n", rej.String())
 		}
 	}
+
+	ti := r.TypeInference
+	fmt.Fprintf(w, "\n-- %d notes arrived with no `type:` — every one has a recorded outcome (FR-104b) --\n", len(ti.Notes))
+	fmt.Fprintf(w, "  %d typed by this run, %d left as is because the shape matched several types, %d left as is because it matched none",
+		ti.Written, ti.Ambiguous, ti.NoMatch)
+	if ti.WriteErrors > 0 {
+		fmt.Fprintf(w, ", %d could not be written", ti.WriteErrors)
+	}
+	fmt.Fprintln(w, ".")
+	for _, n := range ti.Notes {
+		fmt.Fprintf(w, "  %s: %s\n", n.RelPath, n.Reason)
+	}
+
+	fmt.Fprintln(w, "\n-- FR-105: the broadening prohibition, applied --")
+	produced, disabled := 0, 0
+	for _, b := range r.Bases {
+		for _, vv := range b.Views {
+			if vv.Status == OutcomeRefused {
+				continue
+			}
+			produced++
+			if vv.Disabled {
+				disabled++
+			}
+		}
+	}
+	fmt.Fprintf(w, "  %d view files written, of which %d are DISABLED because a loss sits where the row set is decided.\n", produced, disabled)
+	fmt.Fprintf(w, "  %d are enabled and every clause they carry has a faithful mapping — an enabled imported view NEVER returns more rows than its Obsidian original.\n", produced-disabled)
 
 	v := r.Validation
 	fmt.Fprintln(w, "\n-- Validation over every note, against the schemas just written --")
@@ -225,19 +279,6 @@ func (r *Report) systemicGaps() []string {
 		out = append(out, "none found — every `.base` file translated without a systemic gap")
 	}
 	return out
-}
-
-// plurality returns the highest-count key in a type->count map, for the
-// report line only (the importer's own decision was already made in
-// inferRelationTarget; this just re-derives the same answer for display).
-func plurality(byType map[string]int) string {
-	best, bestCount := "", 0
-	for t, c := range byType {
-		if c > bestCount || (c == bestCount && t < best) {
-			best, bestCount = t, c
-		}
-	}
-	return best
 }
 
 func sortedGroupKeys(m map[string]*TypeGroup) []string {

@@ -88,6 +88,14 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 		typeSummaries = append(typeSummaries, summary)
 	}
 
+	// FR-104b (founder ruling): untyped notes are not left stranded. This
+	// runs AFTER every schema is inferred — the shapes it matches against
+	// are the schemas this run just produced — and BEFORE validation, so a
+	// note whose `type:` was written this run is validated as the record it
+	// has just become rather than reported as "not a record at all" by the
+	// same run that typed it.
+	typeInference := InferTypesForUntypedNotes(notes, inferred, write)
+
 	schemaDir := records.SchemaDir(inv.Root)
 	if write {
 		for t, props := range inferred {
@@ -167,11 +175,17 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 	}
 	valReport := records.Validate(schemaSet, recs, records.ValidateOptions{ReportUndeclaredProperties: true})
 
+	// The discriminator check ran BEFORE FR-104b wrote anything, so its
+	// counts describe the vault as it ARRIVED. The validation summary must
+	// describe the vault as it now IS, or the report contradicts the files
+	// this run wrote — so the typed/untyped split is re-derived here rather
+	// than carried over.
+	postDisc := CheckTypeDiscriminator(notes)
 	vs := ValidationSummary{
-		TotalNotes:       disc.TotalNotes,
-		NotesWithoutType: disc.WithoutType,
-		NotesWithType:    disc.WithType,
-		NotRecordsAtAll:  disc.WithoutType,
+		TotalNotes:       postDisc.TotalNotes,
+		NotesWithoutType: postDisc.WithoutType,
+		NotesWithType:    postDisc.WithType,
+		NotRecordsAtAll:  postDisc.WithoutType,
 	}
 	for _, rr := range valReport.Records {
 		if !rr.Recognised {
@@ -203,6 +217,7 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 		Ambiguities:    ambiguities,
 		RelationSplits: relationSplits,
 		Bases:          baseOutcomes,
+		TypeInference:  typeInference,
 		SchemaReload:   schemaReload,
 		ViewReload:     viewReload,
 		Validation:     vs,

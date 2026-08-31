@@ -5,6 +5,7 @@
 package vaultimport
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -325,26 +326,79 @@ type AmbiguousExample struct {
 }
 
 // RelationSplitReport is one relation property whose link targets did not
-// converge cleanly on one record type — either a real split (several
-// resolved types, no ≥90% majority) or total non-resolution (every target
-// dangling or pointing at a non-record note).
+// converge UNANIMOUSLY on one record type — a supermajority with a named
+// minority, a genuine mix with no majority at all, or total non-resolution.
+//
+// FR-104a (founder ruling, ADR-068 revision 13 D24.6 ruling 3) is what this
+// type reports on, and the shape of the report is the requirement: a
+// supermajority declares `to:` AND names the minority, because those
+// minority links ARE type mismatches and D5/FR-034's
+// `relation_type_mismatch` finding is the right place for them to surface.
 type RelationSplitReport struct {
 	RecordType string
 	Property   string
 	// ByType is target-type -> count of resolved links, sorted for display
 	// by the caller. Empty when nothing resolved at all.
 	ByType map[string]int
+	// ResolvedTotal is the denominator FR-104a's 2/3 test used — every link
+	// that resolved to SOME record type. Unresolved links are deliberately
+	// not in it: a dangling link is not evidence for or against any type.
+	ResolvedTotal int
 	// Unresolved is how many link targets matched no known note at all.
 	Unresolved int
+	// MajorityType and MajorityCount are the winning target type and its
+	// count. MajorityType is empty when no type reached the threshold.
+	MajorityType  string
+	MajorityCount int
+	// Minority names every resolved target type OTHER than MajorityType
+	// with its count, sorted — FR-104a's "minority reported by name". When
+	// no majority was reached this holds every resolved type, which is the
+	// whole evidence set the operator needs to choose from.
+	Minority []string
+	// Rule names WHICH of FR-104a's branches decided this property, so a
+	// reader is never left inferring the rule from the numbers.
+	Rule RelationRule
 	// Declared is what this property ended up declared as: "relation" (a
-	// plurality target existed, so `to:` FR-034 could be satisfied) or
-	// "text" (no resolved target of ANY kind existed, so there was no
-	// evidence to put behind a mandatory `to:` at all — schema.go's
-	// finalize() REJECTS a relation with `to: ""` outright, so this is not
-	// optional: a relation with zero resolvable evidence cannot be declared
-	// a relation, full stop).
+	// unanimous or supermajority target existed, so FR-034's mandatory
+	// `to:` has real evidence behind it) or "text" (the evidence was
+	// genuinely mixed or absent — schema.go's finalize() REJECTS a relation
+	// with `to: ""` outright, so a relation with no majority cannot be
+	// declared a relation at all).
 	Declared string
+	// Remedy is the one-line knowledge_configure edit that settles the
+	// question once the operator decides. Set only when Declared == "text";
+	// FR-104a requires the report to NAME the fix, not merely the problem.
+	Remedy string
 }
+
+// RelationRule names which FR-104a branch decided a relation's `to:`.
+type RelationRule string
+
+const (
+	// RelationUnanimous: every link that resolved pointed at ONE type.
+	RelationUnanimous RelationRule = "unanimous"
+	// RelationSupermajority: one type held at least 2/3 of the resolved
+	// links; `to:` is declared and the minority is named.
+	RelationSupermajority RelationRule = "supermajority"
+	// RelationNoMajority: the evidence is genuinely mixed — no type reached
+	// 2/3 — so the property is declared `text` and the remedy is named.
+	// THIS BRANCH IS THE WHOLE POINT OF THE RULING. Before it, a plurality
+	// won outright: `contact.related` was declared `to: task` on 2 of 5
+	// resolved links, and nothing in the run said where guessing had to
+	// stop.
+	RelationNoMajority RelationRule = "no-majority"
+	// RelationUnresolved: no link resolved to any record type at all.
+	RelationUnresolved RelationRule = "unresolved"
+)
+
+// relationSupermajorityNum/Den are FR-104a's threshold, as an exact integer
+// ratio rather than a float: the test is `count/total >= 2/3`, evaluated as
+// `3*count >= 2*total`, so 2 of 3 passes and 4 of 7 does not, on every
+// platform, with no rounding to argue about.
+const (
+	relationSupermajorityNum = 2
+	relationSupermajorityDen = 3
+)
 
 // InferSchema classifies every property of one type group. It never returns
 // an error: every property gets a declaration, and every ambiguity is
@@ -566,25 +620,36 @@ func isDecimal(s string) bool {
 	return err == nil
 }
 
-// inferRelationTarget resolves a relation property's `to:` from its observed
-// link targets.
+// inferRelationTarget resolves a relation property's `to:` from what its
+// links ACTUALLY point at — FR-104a, the founder's ruling of 2026-08-31.
 //
-// FR-034 (schema.go's Property.finalize) makes `to:` MANDATORY on a
-// `relation` property — a schema declaring one with no `to:` is REJECTED
-// entirely at load time, not merely validated more loosely. That changes
-// what "do not guess" has to mean here relative to every other property:
-// leaving `to:` blank is not a safe, conservative fallback the way
-// defaulting an ambiguous scalar property to `text` is — it produces a
-// schema file that does not load AT ALL, taking the whole record type down
-// with it. So the rule this function follows is: return the PLURALITY
-// target type whenever ANY link resolved to ANY known record type at all
-// (even a weak plurality), and report the full split whenever it is not
-// unanimous — "reported, not guessed" is satisfied by the report, not by
-// silence. Only when NOTHING resolved (`resolvedTotal == 0`, every link
-// either dangling or pointing at a non-record note) is there truly no
-// evidence to put behind ANY `to:`; that case returns ("", report) and
-// classifyProperty falls back to declaring the property `text` instead of
-// an unrepresentable relation.
+// THE RULE, STATED SO TWO IMPLEMENTATIONS AGREE:
+//
+//	unanimous          every resolved link points at ONE type  -> declare it
+//	supermajority      one type holds >= 2/3 of resolved links -> declare it,
+//	                   and NAME the minority (those links are real type
+//	                   mismatches; D5/FR-034's relation_type_mismatch finding
+//	                   is where they belong, now visible instead of buried)
+//	otherwise          declare `text`, SAY a relation could not be typed, and
+//	                   name the one-line knowledge_configure edit that fixes
+//	                   it once the operator decides
+//
+// WHAT THIS REPLACED, AND WHY THE THRESHOLD EXISTS. The previous rule was
+// "return the PLURALITY whenever ANY link resolved to ANY record type at
+// all (even a weak plurality), and report the split". Run against the
+// founder's vault that produced `contact.related` -> `to: task` on a
+// 2-of-5 plurality: a declaration with 60% of the evidence against it,
+// emitted with the same confidence as a unanimous one. The old comment
+// argued the REPORT made that honest. It did not: the schema on disk says
+// `to: task` either way, validation then reports every non-task link as a
+// mismatch, and the operator is left reading 3 findings caused by the
+// importer's own guess. 2/3 is where guessing has to stop.
+//
+// FR-034 has not moved: a `relation` with no `to:` is REJECTED at load
+// time, taking the whole record type down with it. So "no majority" cannot
+// mean "declare a relation and leave `to:` blank" — it means declare the
+// property `text`, which is exactly what classifyProperty does with the
+// empty string this function returns.
 func inferRelationTarget(recordType string, po *PropertyObservation, names *NameIndex) (string, *RelationSplitReport) {
 	byType := map[string]int{}
 	unresolved := 0
@@ -607,34 +672,96 @@ func inferRelationTarget(recordType string, po *PropertyObservation, names *Name
 			resolvedTotal++
 		}
 	}
+
+	rep := &RelationSplitReport{
+		RecordType:    recordType,
+		Property:      po.Name,
+		ByType:        byType,
+		ResolvedTotal: resolvedTotal,
+		Unresolved:    unresolved,
+	}
+
 	if resolvedTotal == 0 {
-		return "", &RelationSplitReport{
-			RecordType: recordType, Property: po.Name,
-			ByType: byType, Unresolved: unresolved, Declared: "text",
-		}
+		rep.Rule = RelationUnresolved
+		rep.Declared = "text"
+		rep.Remedy = relationRemedy(recordType, po.Name, nil)
+		return "", rep
 	}
-	var bestType string
-	bestCount := 0
-	for t, c := range byType {
-		if c > bestCount || (c == bestCount && t < bestType) {
-			bestType, bestCount = t, c
-		}
-	}
+
+	bestType, bestCount := highestCount(byType)
+	rep.MajorityType, rep.MajorityCount = bestType, bestCount
+
 	if len(byType) == 1 {
-		// Unanimous among every link that resolved at all — nothing to
-		// report beyond the schema itself.
+		// Unanimous among every link that resolved at all. Nothing to
+		// report beyond the schema itself, which is why this is the one
+		// branch that returns a nil report.
 		return bestType, nil
 	}
-	// A real split: more than one resolved target type. `to:` is set to the
-	// plurality regardless of how thin it is — FR-034 leaves no room for
-	// "leave it blank because the plurality is weak", and a weak plurality
-	// is exactly what the returned RelationSplitReport exists to surface.
-	// A wikilink resolving to the wrong declared target type is exactly
-	// what D5/FR-034's `relation_type_mismatch` finding exists to report at
-	// validation time, not something this importer needs to prevent by
-	// refusing to pick.
-	return bestType, &RelationSplitReport{
-		RecordType: recordType, Property: po.Name,
-		ByType: byType, Unresolved: unresolved, Declared: "relation",
+
+	rep.Minority = minorityCounts(byType, bestType)
+
+	// FR-104a's threshold, in exact integer arithmetic (see the constants).
+	if relationSupermajorityDen*bestCount >= relationSupermajorityNum*resolvedTotal {
+		rep.Rule = RelationSupermajority
+		rep.Declared = "relation"
+		return bestType, rep
 	}
+
+	rep.Rule = RelationNoMajority
+	rep.Declared = "text"
+	rep.MajorityType, rep.MajorityCount = "", 0
+	rep.Minority = minorityCounts(byType, "")
+	rep.Remedy = relationRemedy(recordType, po.Name, sortedTypeNames(byType))
+	return "", rep
+}
+
+// highestCount returns the type with the most resolved links, breaking a tie
+// by name so the answer does not depend on Go's randomised map iteration
+// order — the previous implementation's tie-break compared against an empty
+// initial string, which no name is ever less than, making a tie resolve to
+// whichever key the runtime happened to visit first.
+func highestCount(byType map[string]int) (string, int) {
+	best, bestCount := "", 0
+	for _, t := range sortedTypeNames(byType) {
+		if byType[t] > bestCount {
+			best, bestCount = t, byType[t]
+		}
+	}
+	return best, bestCount
+}
+
+func sortedTypeNames(byType map[string]int) []string {
+	out := make([]string, 0, len(byType))
+	for t := range byType {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// minorityCounts renders every resolved type other than `majority` as
+// "<type> x<count>", sorted. With an empty majority it renders every type —
+// the no-majority branch's whole evidence set.
+func minorityCounts(byType map[string]int, majority string) []string {
+	var out []string
+	for _, t := range sortedTypeNames(byType) {
+		if t == majority {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s x%d", t, byType[t]))
+	}
+	return out
+}
+
+// relationRemedy is FR-104a's "names the one-line knowledge_configure edit"
+// — the report must hand the operator the fix, not just the problem.
+func relationRemedy(recordType, property string, candidates []string) string {
+	if len(candidates) == 0 {
+		return fmt.Sprintf(
+			"no link resolved to a record type, so there is no candidate to propose; once you know the target, one edit settles it: knowledge_configure set schema %s property %s type=relation to=<target-type>",
+			recordType, property)
+	}
+	return fmt.Sprintf(
+		"the evidence is genuinely mixed (%s); pick one and it is a one-line edit: knowledge_configure set schema %s property %s type=relation to=<%s>",
+		strings.Join(candidates, " | "), recordType, property, strings.Join(candidates, "|"))
 }
