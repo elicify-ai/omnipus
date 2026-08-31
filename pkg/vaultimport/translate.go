@@ -719,10 +719,16 @@ func reduceTypedNode(n *rawNode, recordType string, andPos bool) *rawNode {
 }
 
 // reduceTypedAny applies the equivalence to ONE deferred disjunction.
+//
+// AN UNTYPED VIEW NEEDS NO SEPARATE GUARD HERE, and one used to be written
+// above precisely because it looks like it does. Every typedBranch carries a
+// NON-EMPTY record type by construction (translateOr's case 3 is only reached
+// when every branch named one), so `recordType == ""` matches no branch, falls
+// to the no-survivor path below, and is refused there with the same verbatim.
+// The explicit early return was an equivalent mutant — deleting it changed no
+// behaviour and no test — so it is gone rather than left as an untested branch
+// that reads like it is load-bearing.
 func reduceTypedAny(n *rawNode, recordType string) *rawNode {
-	if recordType == "" {
-		return lostNode(n.Verbatim)
-	}
 	kept := make([]*rawNode, 0, len(n.Branches))
 	for _, b := range n.Branches {
 		if b.RecordType != recordType {
@@ -737,6 +743,8 @@ func reduceTypedAny(n *rawNode, recordType string) *rawNode {
 		kept = append(kept, b.Remainder)
 	}
 	if len(kept) == 0 {
+		// No branch survives, so the effective filter is FALSE — which also
+		// catches the untyped view, whose empty record type matches nothing.
 		return lostNode(n.Verbatim)
 	}
 	return anyNode(kept, n.Verbatim)

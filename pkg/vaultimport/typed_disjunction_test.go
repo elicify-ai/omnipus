@@ -164,35 +164,89 @@ func TestTypedDisjunction_TheFourStoppingCasesStayLost(t *testing.T) {
     - or:
         - type == "content"
         - type == "brand-kit"`
+	// NOT `contentOuter` NESTED. Both of contentOuter's branches are bare type
+	// literals, so its reduction is the TRUE case, which the nil-check in
+	// reduceTypedNode's any/not arm catches whether or not AND-position is
+	// tracked at all. This shape reduces to a REAL node instead, so it
+	// separates the two guards: without the AND-position rule it would be
+	// carried, and `any(draft, published)` is not what an unreduced group
+	// means.
 	nestedInAnOr := `filters:
   or:
     - or:
-        - type == "content"
-        - type == "brand-kit"
-    - status == "draft"`
+        - and:
+            - type == "content"
+            - status == "draft"
+        - and:
+            - type == "brand-kit"
+            - status == "final"
+    - status == "published"`
 
 	for _, tc := range []struct {
 		name, src, recordType, why string
+		// wantExact is the whole rendered tree when the refusal is expected to
+		// replace it outright, rather than merely appear somewhere inside it.
+		wantExact string
 	}{
-		{"an untyped view cannot reduce", contentOuter, "",
-			"with no type asserted the disjunction really does span two domains"},
-		{"no branch survives the view's type", contentOuter, "task",
-			"the effective filter is FALSE; emitting an unmatchable view is a different decision"},
-		{"under a negation", notWrapped, "content",
-			"refused by translateNot rather than carried somewhere unproved"},
-		{"outside AND-position", nestedInAnOr, "content",
-			"a node reducing to TRUE inside an any: would make the whole disjunction true"},
+		{
+			name: "an untyped view cannot reduce", src: contentOuter, recordType: "",
+			why: "with no type asserted the disjunction really does span two domains",
+		},
+		{
+			name: "no branch survives the view's type", src: contentOuter, recordType: "task",
+			why: "the effective filter is FALSE; emitting an unmatchable view is a different decision",
+		},
+		{
+			// EXACT, not "contains": translateNot must refuse the WHOLE `not:`
+			// block, so the tree is one lost node. A tree of `not(LOST)` would
+			// also contain "LOST" while meaning the group was carried into a
+			// negation and only refused underneath it.
+			name: "under a negation", src: notWrapped, recordType: "content",
+			why:       "refused by translateNot rather than carried somewhere unproved",
+			wantExact: "LOST",
+		},
+		{
+			name: "outside AND-position", src: nestedInAnOr, recordType: "content",
+			why:       "a reduction is only conditioned on `type == T` where it is conjoined with it",
+			wantExact: "any(LOST,leaf(status|shape=0|op==|val=published))",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ReduceTypedDisjunctions(tree(t, tc.src), tc.recordType)
 			r := renderRaw(got.Root)
-			if !strings.Contains(r, "LOST") {
+			if tc.wantExact != "" {
+				if r != tc.wantExact {
+					t.Fatalf("tree:\n got  %s\n want %s\n(%s)", r, tc.wantExact, tc.why)
+				}
+			} else if !strings.Contains(r, "LOST") {
 				t.Fatalf("expected a loss (%s), got %s", tc.why, r)
 			}
 			if strings.Contains(r, "typedAny") {
 				t.Fatalf("a deferred node escaped the reduction into the resolution pass: %s", r)
 			}
 		})
+	}
+}
+
+// TestTypedDisjunction_ABareTypeLiteralBranchIsTRUENotEmpty pins the encoding
+// that the rest of the reduction rests on.
+//
+// A branch that is nothing but `type == T` is TRUE under T, so the WHOLE
+// disjunction is true and contributes no constraint — the reduction must return
+// "nothing", not a disjunction with an empty member. The two are easy to
+// confuse because `anyNode` collapses a one-element list, which makes the wrong
+// encoding look right whenever exactly one branch survives. Here TWO survive,
+// so they cannot be confused.
+func TestTypedDisjunction_ABareTypeLiteralBranchIsTRUENotEmpty(t *testing.T) {
+	tautology := `filters:
+  or:
+    - type == "decision"
+    - and:
+        - type == "decision"
+        - status == "accepted"`
+	got := ReduceTypedDisjunctions(tree(t, tautology), "decision")
+	if r := renderRaw(got.Root); r != "-" {
+		t.Fatalf("a disjunction with a TRUE branch must contribute nothing, got %s", r)
 	}
 }
 
