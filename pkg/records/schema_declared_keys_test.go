@@ -125,20 +125,16 @@ var contractKeyProbes = map[string]contractKeyProbe{
 	"inverse":  {base: "type: relation, to: company", extra: "inverse: deals"},
 	"unit":     {base: "type: integer", extra: "unit: minutes"},
 
-	// `type` AND `formula` ON ONE PROPERTY IS DELIBERATE, not an oversight in
-	// this probe. A formula is computed, so it is fair to read the pair as a
-	// contradiction — it is not. FR-143a requires every formula to have ONE
-	// static type, inferred before any record is read, and `type` is where the
-	// author DECLARES that result type; the loader infers the expression's own
-	// type and REFUSES the schema when the two disagree. So the base here has
-	// to be a type the expression actually produces: `1 + 1` is a number, and
-	// a number's comparator type is `decimal` (FormulaPropertyType), which is
-	// why this base is `decimal` and not `text` or `integer`.
+	// `formula` IS A REFUSED KEY, and this probe lands in the `withErr != ""`
+	// arm below: the refusal has to NAME it. That is the whole point of it
+	// being published-and-refused rather than absent — a schema property
+	// cannot carry a formula (nothing evaluates one; see propertyDeclKeys'
+	// entry), but the contract defines the key, so an author who wrote it gets
+	// told where a formula belongs instead of "unknown key".
 	//
-	// Do not "fix" this by dropping the base type. A formula property with no
-	// type is refused by NewProperty like any other property, and a formula
-	// with an UNCHECKED declared type is the R-1 silent-FALSE that FR-143a
-	// exists to remove.
+	// The base stays a valid declaration on purpose. If it were malformed the
+	// row would go red for the wrong reason, and a later edit that quietly
+	// stopped refusing `formula` would still look refused.
 	"formula": {base: "type: decimal", extra: "formula: 1 + 1"},
 }
 

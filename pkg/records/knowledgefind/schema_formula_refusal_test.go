@@ -1,5 +1,5 @@
-// Omnipus — a formula declared on a SCHEMA property is refused, never answered
-// with a blank column (ADR-068 D24.3 / FR-140 / FR-141).
+// Omnipus — a schema-property formula is refused by the LOADER, so it never
+// reaches a query (ADR-068 D24.3 / FR-140 / FR-141).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -20,22 +20,30 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// WHAT THESE TESTS PIN
+// WHAT THESE TESTS PIN, AND WHAT THEY USED TO PIN
 //
-// Before this change, a schema-declared formula LOADED, VALIDATED and then
-// rendered as an empty column in an answer that called itself COMPLETE. That is
-// the one failure mode this whole surface is written against: an operator
-// reading a blank `double_height` next to a populated `height_cm` concludes
-// their notes are wrong, not that the feature was never wired.
+// This file used to assert that Find REFUSED every query over a record type
+// whose schema declared `formula:` on a property, because the loader accepted
+// such a schema and nothing evaluated the result. Two correct halves that did
+// not agree: the file loaded clean, and then the whole record type was dead at
+// query time — discovered later, by somebody else, on a query that had nothing
+// to do with formulas.
 //
-// The refusal is asserted through Find, on the rendered text a model actually
-// reads — not on the helper that builds it. A test over refuseSchemaDeclaredFormulas
-// alone would keep passing if the call site were deleted, which is precisely the
-// shape of green that produced the defect.
+// The refusal now happens where the mistake is, in records/schema.go's
+// propertyDeclKeys, when the FILE loads. So there is nothing left for this
+// package to refuse, and refuseSchemaDeclaredFormulas is deleted rather than
+// kept as a second guard — an unreachable refusal is a branch that cannot be
+// told apart from a working one by any test.
+//
+// What this file holds now is the SEAM, from the query side: that the loader
+// really does keep such a schema out of the SchemaSet, and that the cost of it
+// doing so is exactly one record type. Both are measured through Find, on the
+// rendered text a model actually reads.
 // ---------------------------------------------------------------------------
 
 // The fixture vault declares one record type WITH a derived property and one
-// without, so the blast radius of the refusal is measured rather than asserted.
+// without, in the same vault, so the blast radius is measured rather than
+// asserted.
 const derivedTypeYAML = `
 schema_version: 1
 type: plant
@@ -55,11 +63,9 @@ properties:
   slots:  { type: integer }
 `
 
-// formulaVault loads the schemas above through records.LoadSchemas — the
-// production path — and indexes one note of each type.
-func formulaVault(t *testing.T) Deps {
+// formulaVaultRoot writes both schemas into a fresh vault and returns its root.
+func formulaVaultRoot(t *testing.T) string {
 	t.Helper()
-
 	root := t.TempDir()
 	dir := records.SchemaDir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -70,15 +76,22 @@ func formulaVault(t *testing.T) Deps {
 			t.Fatalf("WriteFile(%s): %v", name, err)
 		}
 	}
+	return root
+}
+
+// formulaVault loads the vault above through records.LoadSchemas — the
+// production path, rejections and all — and indexes one note of each type.
+//
+// It deliberately does NOT fail on a non-OK report: the whole point is that
+// `plant.yaml` IS rejected and `bed.yaml` is not, and a helper that insisted on
+// a clean load could not express the state under test.
+func formulaVault(t *testing.T) (Deps, *records.SchemaLoadReport) {
+	t.Helper()
+
+	root := formulaVaultRoot(t)
 	set, report, err := records.LoadSchemas(root)
 	if err != nil {
 		t.Fatalf("LoadSchemas: %v", err)
-	}
-	if !report.OK() {
-		// The whole point of the refusal below is that the LOADER accepts this
-		// schema. A rejection here would mean the gap has moved and these tests
-		// are asserting against a vault that no longer exists.
-		t.Fatalf("the fixture schemas were rejected by the loader: %v", report.Rejections)
 	}
 
 	store, err := propindex.Open(context.Background(), filepath.Join(t.TempDir(), "properties.db"), propindex.Options{})
@@ -107,138 +120,96 @@ func formulaVault(t *testing.T) Deps {
 		text.hits[path] = TextHit{Path: path, SourceHash: rows.SourceHash, Score: 1}
 	}
 
-	return Deps{Schemas: set, Store: store, Text: text, Epoch: 4211}
+	return Deps{Schemas: set, Store: store, Text: text, Epoch: 4211}, report
 }
 
-// TestSchemaDeclaredFormula_IsRefusedNamingTheRemedy is the behavioural proof.
-func TestSchemaDeclaredFormula_IsRefusedNamingTheRemedy(t *testing.T) {
-	d := formulaVault(t)
+// TestSchemaFormula_TheLoaderKeepsItOutOfTheSchemaSet is the seam, asserted
+// from this side. If the loader ever starts ACCEPTING a schema-property formula
+// again, this fails here — where the consequence is, rather than in the loader's
+// own tests only.
+func TestSchemaFormula_TheLoaderKeepsItOutOfTheSchemaSet(t *testing.T) {
+	d, report := formulaVault(t)
+
+	if report.OK() {
+		t.Fatalf("the loader ACCEPTED a schema declaring a formula property. Nothing evaluates one, so " +
+			"`double_height` would render blank on every row of an answer calling itself COMPLETE")
+	}
+	if got := report.RejectedTypes(); len(got) != 1 || got[0] != "plant" {
+		t.Fatalf("exactly the offending record type must be rejected; RejectedTypes() = %v", got)
+	}
+	if _, ok := d.Schemas.Get("plant"); ok {
+		t.Fatalf("the rejected record type is in the SchemaSet, so a query would still be answered from it")
+	}
+}
+
+// TestSchemaFormula_TheOffendingTypeIsSimplyUNKNOWNToAQuery states plainly what
+// an operator now sees when they query the type whose schema was rejected.
+//
+// It is NOT a formula-shaped refusal any more, and that is correct: from the
+// query's point of view `plant` is a record type this vault does not declare
+// (FR-005) — its notes are ordinary notes. The vault-level report is where the
+// reason lives, and it names the file.
+func TestSchemaFormula_TheOffendingTypeIsSimplyUNKNOWNToAQuery(t *testing.T) {
+	d, _ := formulaVault(t)
 	typ := "plant"
 	sel := []string{"species", "height_cm", "double_height"}
 
 	resp, err := Find(context.Background(), d, generated.VaultFindRequest{Type: &typ, Select: &sel})
 	if err == nil {
-		t.Fatalf("a query over a record type declaring a formula property was ANSWERED, not refused.\n"+
-			"Rendered:\n%s", Render(resp))
+		t.Fatalf("a query naming a record type the loader rejected was ANSWERED.\nRendered:\n%s", Render(resp))
 	}
-
 	rendered := Render(resp)
 
-	// It must not have answered. A refusal that still ships rows is the
-	// half-reachable state, wearing a warning.
+	// The one thing that must never happen: rows, with a blank derived column,
+	// under a COMPLETE banner. Every other outcome is honest; this one is not.
 	if len(resp.Rows) != 0 {
-		t.Errorf("the refusal returned %d row(s); a refusal evaluates nothing", len(resp.Rows))
-	}
-	if !resp.Refused {
-		t.Errorf("the response is not marked refused, so a caller cannot tell it from a partial answer:\n%s", rendered)
+		t.Errorf("the refusal returned %d row(s)", len(resp.Rows))
 	}
 	if resp.Complete {
-		t.Errorf("the refusal reports itself COMPLETE:\n%s", rendered)
+		t.Errorf("a query that could not be answered reports itself COMPLETE:\n%s", rendered)
 	}
-
-	// The message must carry everything an author needs to act without opening
-	// another file: which property, which file, and where the formula belongs
-	// instead.
-	for _, want := range []string{
-		`"double_height"`,
-		"plant.yaml",
-		"`formulas:` map",
-		FormulaNamespace + "double_height",
-		"FR-140/FR-141",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("the refusal an author reads does not mention %q.\nRendered:\n%s", want, rendered)
-		}
+	if !strings.Contains(rendered, "plant") {
+		t.Errorf("the refusal does not name the type that was asked for:\n%s", rendered)
 	}
 }
 
-// TestSchemaDeclaredFormula_RefusesEvenWhenTheQueryNeverNamesIt.
-//
-// The refusal is a property of the TYPE, not of the argument list, because a
-// query that merely selects `species` over the same type is answered from a
-// schema whose derived property is a lie the operator has not hit YET. Refusing
-// only the queries that name it is how a broken schema stays in a vault for
-// months.
-func TestSchemaDeclaredFormula_RefusesEvenWhenTheQueryNeverNamesIt(t *testing.T) {
-	d := formulaVault(t)
-	typ := "plant"
-	sel := []string{"species"}
-
-	resp, err := Find(context.Background(), d, generated.VaultFindRequest{Type: &typ, Select: &sel})
-	if err == nil {
-		t.Fatalf("a query over the offending type was answered because it did not name the derived "+
-			"property.\nRendered:\n%s", Render(resp))
-	}
-}
-
-// TestSchemaDeclaredFormula_OtherRecordTypesAreUnaffected bounds the blast
-// radius to exactly what a per-schema load rejection would cost.
-func TestSchemaDeclaredFormula_OtherRecordTypesAreUnaffected(t *testing.T) {
-	d := formulaVault(t)
+// TestSchemaFormula_OtherRecordTypesStillLoadAndStillAnswer is the blast-radius
+// measurement: a second record type in the SAME vault, in a file next to the
+// rejected one, loads and answers with its data intact.
+func TestSchemaFormula_OtherRecordTypesStillLoadAndStillAnswer(t *testing.T) {
+	d, _ := formulaVault(t)
 	typ := "bed"
 	sel := []string{"name", "slots"}
 
 	resp, err := Find(context.Background(), d, generated.VaultFindRequest{Type: &typ, Select: &sel})
 	if err != nil {
-		t.Fatalf("a record type declaring no formula was refused: %v", err)
+		t.Fatalf("a record type declaring no formula was refused because a NEIGHBOURING file declared "+
+			"one: %v", err)
+	}
+	if !resp.Complete {
+		t.Errorf("the unaffected type's answer is not complete:\n%s", Render(resp))
 	}
 	if len(resp.Rows) != 1 {
 		t.Fatalf("expected the one indexed bed, got %d row(s):\n%s", len(resp.Rows), Render(resp))
 	}
-	if rendered := Render(resp); !strings.Contains(rendered, "East wall") {
+	if rendered := Render(resp); !strings.Contains(rendered, "East wall") || !strings.Contains(rendered, "6") {
 		t.Errorf("the unaffected type's answer lost its data:\n%s", rendered)
 	}
 }
 
-// TestSchemaDeclaredFormula_UntypedQueryIsNotRefused.
+// TestSchemaFormula_AnUntypedQueryIsUnaffected.
 //
-// An untyped query resolves no typed property at all (FR-018d), so it cannot
-// reach a derived one and there is nothing to refuse. Refusing it would take
-// the whole vault down for one schema file.
-func TestSchemaDeclaredFormula_UntypedQueryIsNotRefused(t *testing.T) {
-	d := formulaVault(t)
+// An untyped word query spans the whole vault. One rejected schema file must
+// not take it down — that would turn a per-file fault into a vault-wide one,
+// which is the cost the load-time refusal was chosen to avoid.
+func TestSchemaFormula_AnUntypedQueryIsUnaffected(t *testing.T) {
+	d, _ := formulaVault(t)
 	words := "plant"
 	if st, ok := d.Text.(*stubText); ok {
 		st.only = []string{"garden/plant-1.md"}
 	}
 
 	if _, err := Find(context.Background(), d, generated.VaultFindRequest{Words: &words}); err != nil {
-		t.Fatalf("an untyped query was refused because some OTHER record type declares a formula: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// THE SEAM, PINNED — the loader still ACCEPTS what the query path refuses
-//
-// The right home for this refusal is records.validateSchemaFormulas, so
-// LoadSchemas rejects the file once, when the operator writes it, instead of on
-// every query forever. That function is in pkg/records/schema.go, outside this
-// change's ownership, so the refusal lives in find.go meanwhile.
-//
-// This test fails THE DAY THE LOADER STARTS REFUSING, so nobody has to remember
-// to come back and remove the duplicate.
-// ---------------------------------------------------------------------------
-
-func TestSeam_SchemaLoaderStillAcceptsAPropertyFormula(t *testing.T) {
-	root := t.TempDir()
-	dir := records.SchemaDir(root)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "plant.yaml"), []byte(derivedTypeYAML), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	_, report, err := records.LoadSchemas(root)
-	if err != nil {
-		t.Fatalf("LoadSchemas: %v", err)
-	}
-	if !report.OK() {
-		t.Fatalf("records.LoadSchemas now REJECTS a schema-property formula: %v\n"+
-			"That is the intended outcome, not a regression — the refusal has reached the loader, where it "+
-			"costs one message at authoring time instead of one per query. Delete refuseSchemaDeclaredFormulas\n"+
-			"and its call site in find.go, delete this test, and keep the behavioural tests above only if\n"+
-			"they still describe something the loader does not.",
-			report.Rejections)
+		t.Fatalf("an untyped query was refused because one schema file in the vault was rejected: %v", err)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -155,12 +154,6 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	// project.go degrades rather than panicking.
 	q.resolve = d.Resolve
 	echo := q.echo()
-
-	// A SCHEMA-DECLARED FORMULA IS REFUSED, BEFORE ANY RETRIEVAL. See the block
-	// above refuseSchemaDeclaredFormulas for the ruling and its cost.
-	if r := refuseSchemaDeclaredFormulas(q.schema); r != nil {
-		return refusalResponse(req, echo, r), r
-	}
 
 	// THE PLATFORM GATE, BEFORE ANY RETRIEVAL.
 	//
@@ -610,146 +603,21 @@ func queryNow(d Deps) time.Time {
 }
 
 // ---------------------------------------------------------------------------
-// SCHEMA-DECLARED FORMULAS: REFUSED, NOT HALF-WIRED
+// SCHEMA-DECLARED FORMULAS: REFUSED BY THE LOADER, SO NOT A CASE HERE
 //
-// A formula can be declared on a schema PROPERTY (`height_cm: {type: decimal,
-// formula: "..."}"`). It parses, it fits FR-146's caps, its declared type is
-// checked against what the expression produces, and the validated FormulaSet is
-// stored on records.Schema.Formulas. All of that works.
+// This file used to carry refuseSchemaDeclaredFormulas, which refused EVERY
+// query over a record type whose schema declared `formula:` on a property. That
+// refusal has moved to where the mistake is — records/schema.go's
+// propertyDeclKeys refuses the key at load, per file, so such a schema never
+// enters the SchemaSet and q.schema can no longer hold a derived property.
 //
-// NOTHING EVALUATES IT. The one live NewFormulaEvaluator below is built from
-// the saved VIEW's formula set, and candidate.value routes a property by its
-// NAME: `file.*` to the file metadata, `formula.*` to the evaluator, everything
-// else to the record's stored rows. A derived property is declared under its
-// bare name, so it took the stored route and came back ABSENT. Measured, before
-// this change, on a `plant` type declaring `double_height: height_cm * 2` over a
-// note with `height_cm: 12.5`:
-//
-//	COMPLETE: yes — 1 of 1 shown
-//	garden/p.md  p  species Monstera  height_cm 12.5  double_height
-//
-// A blank column in an answer that calls itself COMPLETE is the worst available
-// outcome: it is indistinguishable from a note that simply has no value, so the
-// operator concludes their data is wrong rather than that the feature is
-// unwired. That is why this is refused rather than left as a known gap.
-//
-// ── THE RULING: refuse (option b), and why not wire it (option a) ───────────
-//
-// Wiring is the better end state and it is NOT reachable from this file. Three
-// changes are needed and none of them is here:
-//
-//  1. candidate.value must route a declared property carrying a Formula to an
-//     evaluator instead of to storedValue (pkg/records/knowledgefind/candidate.go);
-//  2. the candidate must hold TWO evaluators, or one merged set — a view formula
-//     and a schema formula can share a name while living in different namespaces
-//     (`formula.age` and `age`), so merging them by name would silently shadow
-//     one with the other in the wrong direction (same file);
-//  3. records.FormulaEvaluator.evalRef must resolve a derived reference, or the
-//     constraint below stands and a formula still may not name another.
-//
-// Doing only what this file can do — folding the schema's sources into the map
-// handed to parse — would publish each formula as `formula.<name>` while the
-// BARE name went on returning absence. Two spellings of one property, one of
-// which lies, is more half-reachable than the state being fixed, not less.
-//
-// ── THE SPEC GAP, PLAINLY ──────────────────────────────────────────────────
-//
-// ADR-068 D24.3 and FR-140/FR-141 put a formula in a saved view's `formulas:`
-// map and nowhere else. FR-140 is explicit that "a query reaches a formula only
-// as `formula.<name>`", and a schema property has no such address. So a
-// schema-property formula is specified NOWHERE: the loader that accepts one is
-// ahead of the specification, not behind it. Refusing it is the reading that
-// leaves the specification and the behaviour agreeing; wiring it needs an ADR
-// amendment that says where a type-level formula is addressed, whether a view
-// formula of the same name shadows it, and what a `select` with no `select`
-// argument renders for it.
-//
-// ── DOES THE STORED-PROPERTY-ONLY CONSTRAINT RELAX? NO. ────────────────────
-//
-// It does not, and it would not have even under option (a) without change 3
-// above. schema.go's rule 1 refuses a derived property that names another
-// derived property, because FormulaEvaluator.evalRef resolves a bare name
-// against the RECORD, where a derived property has no stored value — so the
-// reference would evaluate to absence on every note and report nothing. Routing
-// the QUERY's reads through the evaluator does not change what evalRef does
-// with a reference INSIDE an expression. The constraint stands.
-//
-// ── WHERE THIS REFUSAL SITS, AND WHAT THAT COSTS ───────────────────────────
-//
-// The right place is the LOADER: records.validateSchemaFormulas returning an
-// error, so LoadSchemas rejects the file and the operator hears about it once,
-// at the moment they write it, rather than on every query. That function is in
-// pkg/records/schema.go, which this change does not own, so the refusal is
-// raised at the earliest point this file controls instead — before any
-// retrieval, for every query over the offending type, carrying the message a
-// load refusal would carry. The blast radius is deliberately the same as a load
-// rejection's: the type is unqueryable until the schema is fixed, and other
-// types are untouched. Moving it into the loader is a follow-up that should
-// DELETE this function, not duplicate it.
+// The guard is not kept "just in case": an unreachable second refusal is a
+// branch no test can distinguish from a working one. What remains true, and is
+// what the rest of this file relies on, is the routing rule itself — a query
+// reaches a formula ONLY as `formula.<name>` (FR-140), resolved by namespace.go
+// against the saved VIEW's formula set below. A bare property name always means
+// the record's STORED value.
 // ---------------------------------------------------------------------------
-
-// schemaDeclaredFormulas lists one record type's derived properties in
-// declaration order — the order the operator will read them in the file.
-func schemaDeclaredFormulas(sc *records.Schema) []string {
-	if sc == nil {
-		return nil
-	}
-	var out []string
-	for _, name := range sc.PropertyOrder {
-		if p := sc.Properties[name]; p != nil && p.Formula != "" {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// refuseSchemaDeclaredFormulas refuses every query over a record type that
-// declares a formula on one of its properties, naming each one and its file.
-//
-// It returns nil — the overwhelmingly common case — for a type that declares
-// none, and for the untyped multi-type query, which cannot name a typed
-// property at all and therefore cannot reach one of these.
-func refuseSchemaDeclaredFormulas(sc *records.Schema) *RefusalError {
-	derived := schemaDeclaredFormulas(sc)
-	if len(derived) == 0 {
-		return nil
-	}
-
-	noun, pronoun := "the formula property", "it"
-	if len(derived) > 1 {
-		noun, pronoun = "the formula properties", "them"
-	}
-	where := sc.SourcePath
-	if where == "" {
-		where = "this record type's schema file"
-	}
-	quoted := make([]string, 0, len(derived))
-	for _, name := range derived {
-		quoted = append(quoted, strconv.Quote(name))
-	}
-
-	p := problem(generated.UnsupportedParameter,
-		fmt.Sprintf("record type %q declares %s %s in %s, and a formula declared on a SCHEMA property is "+
-			"evaluated by nothing: the query path wires only a saved view's formulas, so %s would render "+
-			"BLANK on every row while the answer still reported itself complete. "+
-			"ADR-068 D24.3 and FR-140/FR-141 put a formula in a view's `formulas:` map and nowhere else — "+
-			"a schema-property formula is specified nowhere, so it is refused here rather than answered "+
-			"with a column that silently lies.",
-			sc.Type, noun, strings.Join(quoted, ", "), where, pronoun),
-		fmt.Sprintf("remove `formula:` from %s in %s, and declare the same expression in a saved view's "+
-			"`formulas:` map, where a query reaches it as %s%s. Until the schema is fixed, every query "+
-			"over %q is refused; queries over other record types are unaffected.",
-			strings.Join(quoted, ", "), where, FormulaNamespace, derived[0], sc.Type))
-	p.Property = str(derived[0])
-	permitted := make([]string, 0, len(sc.PropertyOrder))
-	for _, name := range sc.PropertyOrder {
-		if pr := sc.Properties[name]; pr != nil && pr.Formula == "" {
-			permitted = append(permitted, name)
-		}
-	}
-	p.Permitted = &permitted
-	return refuse(p, nil)
-}
 
 // viewFormulas reads the named view's `formulas:` map, when the loader carries
 // one. Everything about it is optional and every absence means the same,

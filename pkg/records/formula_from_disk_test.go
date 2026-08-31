@@ -1,4 +1,4 @@
-// Omnipus — a formula declared in a SCHEMA FILE, loaded and evaluated.
+// Omnipus — a formula declared in a SCHEMA FILE is refused when the file loads.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -9,45 +9,62 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ---------------------------------------------------------------------------
-// WHY THIS FILE EXISTS
+// WHY THIS FILE EXISTS, AND WHAT IT USED TO SAY
 //
-// The formula engine — parser, static typing, caps, cycle walk, evaluator —
-// was built, tested and COMPLETELY UNREACHABLE. Nine files of machinery and a
-// `Property.Formula` field existed; `propertyDeclKeys` had no `formula` entry,
-// so every schema file that declared one was REFUSED as an unknown key:
+// It used to assert the OPPOSITE: that a schema file declaring
+// `total: {type: decimal, formula: amount * quantity}` loaded, validated and
+// produced an evaluable FormulaSet on Schema.Formulas. That was true, and it
+// was half a feature. NOTHING evaluated the result — a query routes a bare
+// property name to the record's STORED values, where a derived property has
+// none, so the column rendered BLANK on every row while the answer reported
+// itself COMPLETE. A blank column in a complete answer is indistinguishable
+// from a note that has no value, which is why it is the worst available
+// outcome: the operator concludes their data is wrong.
 //
-//	schema_bad_property: property "total": unknown key "formula" in a property
-//	declaration; it carries only `inverse`, `label`, `many`, `required`, `to`,
-//	`type`, `unit`, `values`
+// The surface is specified nowhere — FR-140 says a query reaches a formula only
+// as `formula.<name>`, served by a saved VIEW's `formulas:` map (FR-141,
+// ADR-068 D24.3), and a schema property has no such address. So the loader is
+// now the refusal point, and these tests hold the refusal: it happens when the
+// FILE is read, it names the property and the remedy, and it costs exactly one
+// schema file rather than the vault.
 //
-// Every existing formula test constructs its subject in Go. Not one loads a
-// formula from a file, which is exactly why nothing failed while the feature
-// could not be reached at all. THIS FILE IS THE ONE THAT GOES THROUGH DISK: it
-// writes YAML into a vault, calls the ordinary loader, and evaluates the result
-// over a record parsed from note bytes. If the declaration path breaks again,
-// the failure lands here rather than in a report that quietly has no column.
+// The load-time VALIDATION that used to sit behind the acceptance (parse,
+// FR-146 caps, FR-148 cycles, FR-143a typing) was deleted with the acceptance,
+// deliberately, along with the tests that guarded it — it could no longer be
+// reached from any caller, and diagnosing the syntax of an expression that is
+// refused for being in the wrong FILE sends the author to fix the wrong thing.
+// The engine itself is untouched and is still reached where a formula belongs:
+// ValidateFormulaSet on the view load path (view.go::validateViewFormulas) and
+// on the query path (knowledgefind/namespace.go).
 // ---------------------------------------------------------------------------
 
-// writeSchemaFile puts one schema file in a fresh vault and returns the vault
-// root, so every test here goes through LoadSchemas rather than ParseSchema.
-// The distinction matters: LoadSchemas is what a real vault uses, and a check
-// that only ever ran against the inner function would not notice the outer one
-// dropping the result.
-func writeSchemaFile(t *testing.T, name, body string) string {
+// writeVault puts the named schema files in a fresh vault and returns its root,
+// so every test here goes through LoadSchemas rather than ParseSchema. The
+// distinction matters: LoadSchemas is what a real vault uses, and a check that
+// only ever ran against the inner function would not notice the outer one
+// dropping the result — or, for the per-file claim below, continuing past it.
+func writeVault(t *testing.T, files map[string]string) string {
 	t.Helper()
 	vault := t.TempDir()
 	dir := SchemaDir(vault)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("creating the schema directory: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-		t.Fatalf("writing %s: %v", name, err)
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
 	}
 	return vault
+}
+
+// writeSchemaFile is writeVault for the one-file case.
+func writeSchemaFile(t *testing.T, name, body string) string {
+	t.Helper()
+	return writeVault(t, map[string]string{name: body})
 }
 
 // loadOneSchema loads a vault that must contain exactly one accepted schema.
@@ -67,8 +84,8 @@ func loadOneSchema(t *testing.T, vault, recordType string) *Schema {
 	return sc
 }
 
-// loadRejection loads a vault whose schema must be REFUSED and returns the
-// refusal. It fails loudly on an acceptance, because "no rejection" is the
+// loadRejection loads a vault whose single schema must be REFUSED and returns
+// the refusal. It fails loudly on an acceptance, because "no rejection" is the
 // result this whole file exists to distinguish from a working feature.
 func loadRejection(t *testing.T, vault string) SchemaRejection {
 	t.Helper()
@@ -93,150 +110,10 @@ func rejectionText(r *SchemaLoadReport) string {
 	return strings.Join(out, " | ")
 }
 
-// diskCandidate is a FormulaCandidate over a REAL record: the property values
-// come from ResolveProperty against the note's own frontmatter, not from a map
-// a test filled in by hand. That is the difference between proving the engine
-// computes and proving the whole path — file to schema to record to value —
-// actually joins up.
-type diskCandidate struct {
-	rec    Record
-	schema *Schema
-}
-
-func (c diskCandidate) FormulaProperty(name string) (PropertyValue, bool) {
-	p, ok := c.schema.Property(name)
-	if !ok {
-		return PropertyValue{}, false
-	}
-	return ResolveProperty(c.rec, p), true
-}
-
-func (c diskCandidate) FormulaFileProperty(string) (PropertyValue, bool) {
-	return PropertyValue{}, false
-}
-
-// TestFormula_DeclaredOnDiskLoadsAndComputes is the exit proof: a formula
-// written in a YAML file, loaded by the ordinary loader, evaluated over a
-// record parsed from note bytes.
-func TestFormula_DeclaredOnDiskLoadsAndComputes(t *testing.T) {
-	vault := writeSchemaFile(t, "invoice.yaml", `schema_version: 1
-type: invoice
-properties:
-  amount:
-    type: decimal
-    many: false
-    required: true
-  quantity:
-    type: integer
-    many: false
-    required: true
-  total:
-    type: decimal
-    many: false
-    required: false
-    formula: amount * quantity
-`)
-	sc := loadOneSchema(t, vault, "invoice")
-
-	t.Run("the declaration reaches the Property", func(t *testing.T) {
-		p, ok := sc.Property("total")
-		if !ok {
-			t.Fatalf("the derived property did not load")
-		}
-		if p.Formula != "amount * quantity" {
-			t.Fatalf("Property.Formula must carry the SOURCE the file declared (FR-141); got %q", p.Formula)
-		}
-		if p.Type != TypeDecimal || p.Many {
-			t.Fatalf("the declared result shape must survive the load; got type=%s many=%t", p.Type, p.Many)
-		}
-	})
-
-	t.Run("the schema carries a validated set, so the formula is reachable without re-validating", func(t *testing.T) {
-		if sc.Formulas == nil {
-			t.Fatalf("Schema.Formulas is nil, so nothing can evaluate a formula this schema declares")
-		}
-		if got := sc.Formulas.Names(); len(got) != 1 || got[0] != "total" {
-			t.Fatalf("Formulas.Names() = %v, want [total]", got)
-		}
-		d, ok := sc.Formulas.Get("total")
-		if !ok {
-			t.Fatalf("the validated set does not contain `total`")
-		}
-		// FR-143a: ONE static type and arity, settled before any record is read.
-		if d.Type != FormulaNumber || d.Arity != ArityOne {
-			t.Fatalf("static declaration = %s/%s, want number/one", d.Type, d.Arity)
-		}
-	})
-
-	t.Run("it computes over a real record", func(t *testing.T) {
-		// A note, as it would sit in the vault.
-		rec := ParseRecord("Invoices/INV-0001.md", []byte(`---
-type: invoice
-amount: 12.50
-quantity: 4
----
-
-# INV-0001
-`))
-		if rec.ParseError != "" {
-			t.Fatalf("the fixture note must parse: %s", rec.ParseError)
-		}
-
-		e := NewFormulaEvaluator(sc.Formulas, Comparator{}, time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC))
-		e.Begin(diskCandidate{rec: rec, schema: sc})
-		res, ok := e.Evaluate("total")
-		if !ok {
-			t.Fatalf("the loaded formula did not evaluate")
-		}
-		if len(res.Problems) != 0 {
-			t.Fatalf("unexpected problems: %+v", res.Problems)
-		}
-		if res.Absent {
-			t.Fatalf("both operands are present, so the result must be too")
-		}
-		vals := res.Values()
-		if len(vals) != 1 {
-			t.Fatalf("a scalar formula must produce exactly one value; got %d", len(vals))
-		}
-		// The oracle is arithmetic, not the implementation: 12.50 × 4 = 50.
-		// Compared as an exact decimal so a trailing-zero rendering
-		// (`50.0000000000`) neither passes nor fails on presentation.
-		want, err := ParseDecimal("50")
-		if err != nil {
-			t.Fatalf("building the expected value: %v", err)
-		}
-		if vals[0].Number.Cmp(want) != 0 {
-			t.Fatalf("12.50 * 4 = %s, want 50", vals[0].Number)
-		}
-	})
-
-	t.Run("an absent operand yields absence, not zero (FR-145)", func(t *testing.T) {
-		// The guard that makes the previous subtest mean something: if the
-		// candidate wiring were broken and every operand resolved to nothing,
-		// a formula returning zero would look like a plausible total. It must
-		// return ABSENCE instead.
-		rec := ParseRecord("Invoices/INV-0002.md", []byte("---\ntype: invoice\nquantity: 4\n---\n"))
-		e := NewFormulaEvaluator(sc.Formulas, Comparator{}, time.Now())
-		e.Begin(diskCandidate{rec: rec, schema: sc})
-		res, ok := e.Evaluate("total")
-		if !ok {
-			t.Fatalf("the loaded formula did not evaluate")
-		}
-		if !res.Absent {
-			t.Fatalf("a missing `amount` must make the total ABSENT, not %v", res.Values())
-		}
-	})
-}
-
-// TestFormula_MalformedOnDiskIsRefusedAtLoad holds FR-140's load half: the
-// refusal happens when the FILE is read, and it names the property.
-//
-// The table is the point. Each row is a different way a formula declaration can
-// be wrong, and every one of them has to be caught by the loader rather than by
-// whoever eventually evaluates it — a fault found at evaluation time surfaces
-// as an empty column, which nobody reads as a defect.
-func TestFormula_MalformedOnDiskIsRefusedAtLoad(t *testing.T) {
-	const preamble = `schema_version: 1
+// invoicePreamble is a valid two-property record type. Every fixture below adds
+// a third property to it, so the ONLY difference between an accepted vault and
+// a refused one is the `formula` key.
+const invoicePreamble = `schema_version: 1
 type: invoice
 properties:
   amount:
@@ -248,197 +125,194 @@ properties:
     many: false
     required: true
 `
+
+// TestSchemaFormula_IsRefusedAtLoadNamingTheRemedy is the exit proof for the
+// authoring moment: the message an operator reads the instant they save the
+// file.
+func TestSchemaFormula_IsRefusedAtLoadNamingTheRemedy(t *testing.T) {
+	vault := writeSchemaFile(t, "invoice.yaml", invoicePreamble+
+		"  total:\n    type: decimal\n    many: false\n    required: false\n    formula: amount * quantity\n")
+
+	set, report, err := LoadSchemas(vault)
+	if err != nil {
+		t.Fatalf("LoadSchemas: %v", err)
+	}
+	if report.OK() {
+		t.Fatalf("a schema declaring a formula property was ACCEPTED at load. " +
+			"It would then render that column BLANK on every row of an answer calling itself COMPLETE")
+	}
+	if len(report.Rejections) != 1 {
+		t.Fatalf("expected one rejection, got %d: %s", len(report.Rejections), rejectionText(report))
+	}
+	rej := report.Rejections[0]
+
+	if rej.Code != RejectBadProperty {
+		t.Errorf("code = %q, want %q — the fault is in one property declaration, and a report groups by that",
+			rej.Code, RejectBadProperty)
+	}
+	if rej.Type != "invoice" {
+		t.Errorf("the refusal must carry the record type so a report can group by it; got %q", rej.Type)
+	}
+	if len(rej.Paths) != 1 || filepath.Base(rej.Paths[0]) != "invoice.yaml" {
+		t.Errorf("the refusal must name the file the author has to open; Paths = %v", rej.Paths)
+	}
+	if _, ok := set.Get("invoice"); ok {
+		t.Errorf("the refused record type is still in the SchemaSet, so queries would go on using a " +
+			"declaration the loader rejected")
+	}
+
+	// THE MESSAGE. Each of these is something the author cannot act without.
+	// They are asserted on the rendered rejection, which is what a report
+	// prints, not on the reason string alone.
+	rendered := rej.String()
+	for _, want := range []string{
+		`"total"`,                 // which property
+		"`formula`",               // which key on it
+		"invoice.yaml",            // which file
+		"BLANK",                   // what would otherwise happen
+		"COMPLETE",                // ...and why that is the dangerous part
+		"FR-140",                  // the requirement that settles the address
+		"ADR-068 D24.3",           // and the decision
+		"`formulas:` map",         // where it belongs instead
+		"`formula.`",              // how a query then reaches it
+		"stored property",         // the other legitimate fix
+		"every other record type", // the blast radius, stated to the author
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the refusal an author reads does not mention %q.\nRendered:\n%s", want, rendered)
+		}
+	}
+
+	// REQUIREMENT: `formula` stays a KNOWN key. Dropping it from
+	// propertyDeclKeys would also refuse this schema — for the wrong reason,
+	// telling an author whose SPELLING is right and whose PLACEMENT is wrong
+	// that we have never heard of the key.
+	if strings.Contains(rendered, "unknown key") {
+		t.Errorf("`formula` fell through to the generic unknown-key refusal. It is a key the contract "+
+			"publishes; calling it unknown tells the author to check their spelling when the fix is to "+
+			"move the expression.\nRendered:\n%s", rendered)
+	}
+}
+
+// TestSchemaFormula_RefusalCostsOneFileNotTheVault is the blast-radius
+// measurement: one bad schema file, one rejection, every other record type in
+// the same vault still loaded.
+func TestSchemaFormula_RefusalCostsOneFileNotTheVault(t *testing.T) {
+	vault := writeVault(t, map[string]string{
+		"invoice.yaml": invoicePreamble +
+			"  total:\n    type: decimal\n    many: false\n    required: false\n    formula: amount * quantity\n",
+		"customer.yaml": `schema_version: 1
+type: customer
+properties:
+  name:
+    type: text
+    many: false
+    required: true
+  seats:
+    type: integer
+    many: false
+    required: false
+`,
+	})
+
+	set, report, err := LoadSchemas(vault)
+	if err != nil {
+		t.Fatalf("LoadSchemas: %v", err)
+	}
+	if len(report.Rejections) != 1 {
+		t.Fatalf("expected exactly one rejection — the offending file only; got %d: %s",
+			len(report.Rejections), rejectionText(report))
+	}
+	if base := filepath.Base(report.Rejections[0].Paths[0]); base != "invoice.yaml" {
+		t.Errorf("the wrong file was rejected: %s", base)
+	}
+	if got := set.Types(); len(got) != 1 || got[0] != "customer" {
+		t.Fatalf("the untouched record type must still load; SchemaSet holds %v", got)
+	}
+	// Loaded, and loaded INTACT — a set that held the type but had dropped its
+	// properties would satisfy the check above and answer nothing.
+	sc, _ := set.Get("customer")
+	if p, ok := sc.Property("seats"); !ok || p.Type != TypeInteger {
+		t.Errorf("the unaffected record type lost its declarations: %+v", sc.PropertyOrder)
+	}
+	if report.OK() {
+		t.Errorf("report.OK() must be false while any file is rejected")
+	}
+}
+
+// TestSchemaFormula_EveryWayOfWritingTheKeyIsRefused.
+//
+// The refusal is on the KEY's presence, checked before the declaration is
+// decoded, so it cannot be walked around by writing the expression somewhere
+// yaml.v3 would still deliver it. Each row here is a spelling that a check on
+// the decoded VALUE would have missed.
+func TestSchemaFormula_EveryWayOfWritingTheKeyIsRefused(t *testing.T) {
 	cases := []struct {
 		name string
 		decl string
-		// want are substrings the refusal must contain. "total" is in every
-		// row on purpose: a refusal that does not name the property leaves the
-		// operator diffing a schema file by eye.
-		want []string
 	}{
 		{
-			name: "an expression that does not parse",
-			decl: "    formula: amount *\n",
-			want: []string{"total", "position"},
+			name: "written inline",
+			decl: "  total:\n    type: decimal\n    formula: amount * quantity\n",
 		},
 		{
-			name: "an unknown function",
-			decl: "    formula: frobnicate(amount)\n",
-			want: []string{"total", "frobnicate"},
+			name: "written with no expression at all",
+			// `formula: ""` is an author declaring a derived property and
+			// giving it nothing. It must get the PLACEMENT message, not
+			// "carry its expression" — the latter says an expression would
+			// have worked here, and none would.
+			decl: "  total:\n    type: decimal\n    formula: \"\"\n",
 		},
 		{
-			name: "an operand the record type does not declare",
-			decl: "    formula: amount * nonesuch\n",
-			want: []string{"total", "nonesuch"},
+			name: "contributed by a `<<` merge",
+			decl: "  total:\n    <<: {formula: amount * quantity}\n    type: decimal\n",
 		},
 		{
-			name: "an empty expression",
-			decl: "    formula: \"\"\n",
-			want: []string{"total", "must carry its expression"},
-		},
-		{
-			name: "a self-reference, FR-148's smallest cycle",
-			decl: "    formula: total + 1\n",
-			want: []string{"total", "itself"},
-		},
-		{
-			name: "if() branches that disagree, FR-143a",
-			decl: "    formula: if(amount > 1, 1, \"x\")\n",
-			want: []string{"total"},
-		},
-		{
-			name: "a declared type the expression does not produce",
-			// The expression yields text; the property says decimal.
-			decl: "    formula: \"\\\"fifty\\\"\"\n",
-			want: []string{"total", "decimal", "text"},
-		},
-		{
-			name: "a presentation value, which does not compare at all (R-16)",
-			decl: "    formula: icon(\"star\")\n",
-			// "does not compare" is asserted, not merely the word
-			// "presentation". R-16 is its OWN refusal, and the weaker
-			// assertion could not tell it apart from the ordinary
-			// type-mismatch message, which also contains "presentation" —
-			// verified by mutation: disabling the R-16 branch left the weaker
-			// version of this row green.
-			want: []string{"total", "presentation", "does not compare"},
-		},
-		{
-			name: "a required derived property, which nothing could ever satisfy",
-			decl: "    formula: amount * quantity\n",
-			want: []string{"total", "required"},
+			name: "contributed by a `<<` merge from a SEQUENCE of sources",
+			// A different branch of declaredKeys from the row above: `<<`
+			// accepts a list of mappings, and a walk that only handled the
+			// single-mapping form would let this one through.
+			decl: "  total:\n    <<: [{formula: amount * quantity}]\n    type: decimal\n",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			required := "false"
-			if strings.Contains(tc.name, "required derived") {
-				required = "true"
-			}
-			body := preamble + "  total:\n    type: decimal\n    many: false\n    required: " + required + "\n" + tc.decl
-			vault := writeSchemaFile(t, "invoice.yaml", body)
-			rej := loadRejection(t, vault)
+			rej := loadRejection(t, writeSchemaFile(t, "invoice.yaml", invoicePreamble+tc.decl))
 			if rej.Code != RejectBadProperty {
 				t.Errorf("code = %q, want %q", rej.Code, RejectBadProperty)
 			}
-			if rej.Type != "invoice" {
-				t.Errorf("the refusal must carry the record type so a report can group by it; got %q", rej.Type)
-			}
-			for _, want := range tc.want {
+			for _, want := range []string{`"total"`, "`formula`", "`formulas:` map"} {
 				if !strings.Contains(rej.Reason, want) {
 					t.Errorf("the refusal must contain %q; got %q", want, rej.Reason)
 				}
 			}
+			if strings.Contains(rej.Reason, "carry its expression") {
+				t.Errorf("the refusal says an expression was missing, which tells the author that "+
+					"supplying one would work here. It would not.\nGot: %q", rej.Reason)
+			}
 		})
 	}
+}
 
-	t.Run("a formula naming another derived property is refused naming both", func(t *testing.T) {
-		vault := writeSchemaFile(t, "invoice.yaml", preamble+
-			"  total:\n    type: decimal\n    many: false\n    required: false\n    formula: amount * quantity\n"+
-			"  doubled:\n    type: decimal\n    many: false\n    required: false\n    formula: total * 2\n")
-		rej := loadRejection(t, vault)
-		for _, want := range []string{"doubled", "total", "derived"} {
-			if !strings.Contains(rej.Reason, want) {
-				t.Errorf("the refusal must contain %q; got %q", want, rej.Reason)
-			}
-		}
-	})
+// TestSchemaFormula_AStoredPropertyIsUntouched is the control every refusal
+// test above needs: a bug that refused EVERY schema file would make all of them
+// pass. This is the one that would then fail.
+func TestSchemaFormula_AStoredPropertyIsUntouched(t *testing.T) {
+	sc := loadOneSchema(t, writeSchemaFile(t, "invoice.yaml", invoicePreamble), "invoice")
 
-	t.Run("a declared arity the expression does not produce", func(t *testing.T) {
-		// ARITY IS THE HALF THAT GETS FORGOTTEN. FR-143a requires ONE static
-		// type AND ONE static arity; the table above only ever exercises the
-		// type, so a build that checked the type and dropped the arity check
-		// would pass every row in it. (It did: this subtest exists because
-		// disabling the arity comparison left the whole suite green.)
-		//
-		// `list()` produces MANY numbers; the property declares a scalar.
-		vault := writeSchemaFile(t, "invoice.yaml", `schema_version: 1
-type: invoice
-properties:
-  amount:
-    type: decimal
-    many: false
-    required: true
-  quantity:
-    type: integer
-    many: false
-    required: true
-  total:
-    type: decimal
-    many: false
-    required: false
-    formula: list(amount, quantity)
-`)
-		rej := loadRejection(t, vault)
-		if rej.Code != RejectBadProperty {
-			t.Errorf("code = %q, want %q", rej.Code, RejectBadProperty)
+	if got := len(sc.PropertyOrder); got != 2 {
+		t.Fatalf("the ordinary schema lost properties: %v", sc.PropertyOrder)
+	}
+	// No schema file can produce a DERIVED Property any more, so nothing
+	// downstream has to ask whether a schema property might be computed.
+	for _, name := range sc.PropertyOrder {
+		if p := sc.Properties[name]; p.Formula != "" {
+			t.Errorf("the loader produced a derived property %q (formula %q); a schema file cannot "+
+				"declare one at all", name, p.Formula)
 		}
-		for _, want := range []string{"total", "many", "arity"} {
-			if !strings.Contains(rej.Reason, want) {
-				t.Errorf("the refusal must contain %q; got %q", want, rej.Reason)
-			}
-		}
-	})
-
-	t.Run("the same formula IS accepted once the declared arity matches", func(t *testing.T) {
-		// The control for the row above: it must be the ARITY that was
-		// refused, not `list()` itself. Without this, deleting `list` from the
-		// grammar would make that row pass for the wrong reason.
-		vault := writeSchemaFile(t, "invoice.yaml", `schema_version: 1
-type: invoice
-properties:
-  amount:
-    type: decimal
-    many: false
-    required: true
-  quantity:
-    type: integer
-    many: false
-    required: true
-  total:
-    type: decimal
-    many: true
-    required: false
-    formula: list(amount, quantity)
-`)
-		sc := loadOneSchema(t, vault, "invoice")
-		d, ok := sc.Formulas.Get("total")
-		if !ok {
-			t.Fatalf("the validated set does not contain `total`")
-		}
-		if d.Arity != ArityMany {
-			t.Fatalf("arity = %s, want many", d.Arity)
-		}
-	})
-
-	t.Run("FR-146's node cap is applied at load", func(t *testing.T) {
-		// maxFormulaNodes is 64. `amount + amount + ...` builds one BinaryOp
-		// per additional operand, so 40 operands is 40 refs + 39 operators =
-		// 79 nodes: past the cap and nowhere near the 4 KiB source bound, so
-		// it is the NODE cap that has to fire.
-		expr := strings.TrimSuffix(strings.Repeat("amount + ", 40), " + ")
-		vault := writeSchemaFile(t, "invoice.yaml", preamble+
-			"  total:\n    type: decimal\n    many: false\n    required: false\n    formula: "+expr+"\n")
-		rej := loadRejection(t, vault)
-		for _, want := range []string{"total", "nodes"} {
-			if !strings.Contains(rej.Reason, want) {
-				t.Errorf("the refusal must contain %q; got %q", want, rej.Reason)
-			}
-		}
-	})
-
-	t.Run("a stored property is untouched by any of this", func(t *testing.T) {
-		// The control. Every row above is a refusal, so a bug that refused
-		// EVERY schema would make this whole test pass. This is the row that
-		// would then fail.
-		vault := writeSchemaFile(t, "invoice.yaml", preamble)
-		sc := loadOneSchema(t, vault, "invoice")
-		if sc.Formulas != nil {
-			t.Fatalf("a schema with no derived properties must carry no formula set; got %d", sc.Formulas.Len())
-		}
-		if p, ok := sc.Property("amount"); !ok || p.Formula != "" {
-			t.Fatalf("a stored property must carry no formula; got %+v", p)
-		}
-	})
+	}
+	if p, ok := sc.Property("amount"); !ok || p.Type != TypeDecimal || !p.Required {
+		t.Errorf("a stored declaration did not survive the load: %+v", p)
+	}
 }
