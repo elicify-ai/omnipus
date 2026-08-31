@@ -62,12 +62,36 @@ const (
 	// refused with the reason named. Having it in the type system is what makes
 	// that refusal STATIC — the author is told at write time, not per record.
 	FormulaPresentation FormulaType = "presentation"
+	// FormulaDuration is the SPAN between two dates — what `dateA - dateB`
+	// produces, per the pinned snapshot's "When subtracting two dates, the
+	// result is a Duration type (not a number)".
+	//
+	// It is deliberately a DEAD END in the type system, and that is the design
+	// rather than an omission. A duration has no PropertyType (see
+	// FormulaPropertyType), so it cannot be compared, cannot be stored and
+	// cannot be a formula's declared result; the only thing it can do is have
+	// `.days`/`.hours`/`.minutes`/`.seconds`/`.milliseconds` read from it. That
+	// mirrors the snapshot exactly — "Duration does NOT support .round(),
+	// .floor(), .ceil() directly; access a numeric field first" — and it means
+	// every other use is a NAMED refusal at write time rather than a value
+	// nobody can render.
+	FormulaDuration FormulaType = "duration"
 	// FormulaAbsent is the type of a branch that is not there. It arises from
 	// exactly one construct — a two-argument `if()` — and it is what FR-143a
 	// means by "or one branch be absent": it agrees with everything, and the
 	// other branch decides the formula's type.
 	FormulaAbsent FormulaType = "absent"
 )
+
+// isTypeNames is the closed argument set of `isType`.
+//
+// The snapshot's signature is `any.isType(type): boolean` and does not
+// enumerate the type names, so this set is the three the founder's vault and
+// this package can BOTH answer honestly: `number` and `string` are the two
+// domains a scalar property can be in, and `list` is arity. A name outside the
+// set is refused BY NAME listing the three — the alternative, answering `false`
+// to an unknown type name, is a guard that silently never fires.
+var isTypeNames = map[string]bool{"number": true, "string": true, "list": true}
 
 // FormulaArity mirrors a property's arity: a formula produces one value or a
 // list of them. FR-143a: "Arity is single unless built by `list()` or a `many`
@@ -125,6 +149,10 @@ const FormulaDefaultScale int32 = 10
 //     value does not compare, and giving it one would be the bug.
 //   - ABSENT has no comparator type because absence is a STATE, not a type; the
 //     comparator already expresses it as PropertyValue.State (R-3).
+//   - DURATION has no comparator type because it has no wire type either: there
+//     is no `duration` PropertyType, so there is nothing for the comparator to
+//     compare against and nothing for a view to store. It is read through
+//     `.days` and its siblings, and every other use is refused at write time.
 //
 // FR-004c's `TypeCheckbox` has landed in schema.go, so the boolean case names
 // the constant. It was a string literal while the constant was still in flight;
@@ -266,16 +294,7 @@ func inferNode(n FormulaNode, env FormulaEnv) (inferred, *FormulaError) {
 		return inferBinary(node, env)
 
 	case *FieldAccess:
-		recv, err := inferNode(node.Receiver, env)
-		if err != nil {
-			return inferred{}, err
-		}
-		// `.hour` is defined on a date and nothing else.
-		if recv.typ != FormulaDate {
-			return inferred{}, newFormulaError(FormulaErrType, node.Offset, "a date",
-				"`.%s` is defined on a date, but its receiver is %s", node.Field, recv.typ)
-		}
-		return inferred{typ: FormulaNumber, arity: ArityOne, scale: 0}, nil
+		return inferFieldAccess(node, env)
 
 	case *Call:
 		return inferCall(node, env)
@@ -322,6 +341,36 @@ func inferRef(node *Ref, env FormulaEnv) (inferred, *FormulaError) {
 		scale = FormulaDefaultScale
 	}
 	return inferred{typ: typ, arity: arity, scale: scale}, nil
+}
+
+// inferFieldAccess types a parenless accessor against accessorFields' table.
+//
+// The receiver check is the point. `.days` reads a DURATION; `due.days`, where
+// `due` is a date, is refused naming what the receiver actually is — because
+// the alternative is an accessor that reads a field the receiver does not have
+// and produces a number anyway, which is a wrong answer with no error.
+func inferFieldAccess(node *FieldAccess, env FormulaEnv) (inferred, *FormulaError) {
+	recv, err := inferNode(node.Receiver, env)
+	if err != nil {
+		return inferred{}, err
+	}
+	rule, ok := accessorFields[node.Field]
+	if !ok {
+		return inferred{}, newFormulaError(FormulaErrUnknownReference, node.Offset, accessorFieldList(),
+			"`.%s` is not a field the formula grammar defines", node.Field)
+	}
+	if rule.requiresMany {
+		if recv.arity != ArityMany {
+			return inferred{}, newFormulaError(FormulaErrType, node.Offset, rule.receiverPhrase,
+				"`.%s` counts the elements of a LIST, but its receiver is a single %s", node.Field, recv.typ)
+		}
+		return inferred{typ: rule.result, arity: ArityOne, scale: rule.scale}, nil
+	}
+	if recv.typ != rule.receiver && recv.typ != FormulaAbsent {
+		return inferred{}, newFormulaError(FormulaErrType, node.Offset, rule.receiverPhrase,
+			"`.%s` is defined on %s, but its receiver is %s", node.Field, rule.receiverPhrase, recv.typ)
+	}
+	return inferred{typ: rule.result, arity: ArityOne, scale: rule.scale}, nil
 }
 
 func inferUnary(node *UnaryOp, env FormulaEnv) (inferred, *FormulaError) {
@@ -374,6 +423,13 @@ func inferBinary(node *BinaryOp, env FormulaEnv) (inferred, *FormulaError) {
 		return inferred{typ: FormulaBoolean, arity: ArityOne}, nil
 
 	case "+", "-", "*", "/", "%":
+		// The pinned snapshot: "When subtracting two dates, the result is a
+		// Duration type (not a number)." This is the ONLY producer of a
+		// duration, which is what keeps the type a closed dead end rather than
+		// something that can leak into arbitrary arithmetic.
+		if node.Op == "-" && left.typ == FormulaDate && right.typ == FormulaDate {
+			return inferred{typ: FormulaDuration, arity: ArityOne}, nil
+		}
 		if err := requireNumberOperands(node, left, right); err != nil {
 			return inferred{}, err
 		}
@@ -417,6 +473,16 @@ func inferComparison(node *BinaryOp, left, right inferred) (inferred, *FormulaEr
 				"a comparable value",
 				"R-16: a presentation value does not compare — `link()`, `icon()`, `format()` and `file.asLink()` produce something to DISPLAY, and the %s side of `%s` is one", side.name, node.Op)
 		}
+		// A duration has no comparator domain (FormulaPropertyType gives it no
+		// PropertyType), so a comparison over one would reach the comparator
+		// with nothing to compare and answer FALSE with a runtime problem. The
+		// author is told at WRITE time instead, with the remedy, because a
+		// duration comparison has an obvious faithful rewrite.
+		if side.got.typ == FormulaDuration {
+			return inferred{}, newFormulaError(FormulaErrType, node.Offset,
+				"a comparable value",
+				"a duration does not compare — read `.days` (or `.hours`, `.minutes`, `.seconds`, `.milliseconds`) from it and compare that number; the %s side of `%s` is a duration", side.name, node.Op)
+		}
 	}
 	if left.typ != FormulaAbsent && right.typ != FormulaAbsent && left.typ != right.typ {
 		return inferred{}, newFormulaError(FormulaErrType, node.Offset,
@@ -450,6 +516,10 @@ func requireNumberOperands(node *BinaryOp, left, right inferred) *FormulaError {
 	check := func(side string, got inferred) *FormulaError {
 		if got.typ == FormulaNumber || got.typ == FormulaAbsent {
 			return nil
+		}
+		if got.typ == FormulaDuration {
+			return newFormulaError(FormulaErrType, node.Offset, "a number",
+				"a duration is not a number — read `.days`, `.hours`, `.minutes`, `.seconds` or `.milliseconds` from it first, and `%s`'s %s operand is a duration", node.Op, side)
 		}
 		return newFormulaError(FormulaErrType, node.Offset, "a number",
 			"`%s` is arithmetic and is defined over numbers, but its %s operand is %s", node.Op, side, got.typ)
@@ -508,9 +578,15 @@ func inferCall(node *Call, env FormulaEnv) (inferred, *FormulaError) {
 		args = append(args, got)
 	}
 
+	if err := refuseDurationArgument(node, args); err != nil {
+		return inferred{}, err
+	}
+
 	switch node.Name {
 	case "if":
 		return inferIf(node, args)
+	case "isType":
+		return inferIsType(node)
 	case "list":
 		return inferList(node, args)
 	case "toFixed":
@@ -563,6 +639,61 @@ func inferCall(node *Call, env FormulaEnv) (inferred, *FormulaError) {
 		return inferred{typ: FormulaBoolean, arity: ArityOne}, nil
 	}
 	return inferred{}, unknownFunctionError(node.Offset, node.Name)
+}
+
+// durationTolerantFunctions are the three functions a duration may legally be an
+// argument of.
+//
+// `if` and `list` merely CARRY their operands — a duration in either is still a
+// duration, and formula_set.go refuses a formula whose declared result is one,
+// so nothing escapes. `isType` inspects a type rather than using a value. Every
+// other function would have to do something WITH a duration, and there is
+// nothing it can do: `toFixed`/`round`/`mean` want a number and already refuse
+// it, while `format`/`link`/`icon`/`contains` would render it — through a text
+// conversion this package does not define, which is how a duration would come
+// out as the empty string with no error.
+var durationTolerantFunctions = map[string]bool{"if": true, "list": true, "isType": true}
+
+func refuseDurationArgument(node *Call, args []inferred) *FormulaError {
+	if durationTolerantFunctions[node.Name] {
+		return nil
+	}
+	for i, a := range args {
+		if a.typ != FormulaDuration {
+			continue
+		}
+		pos := node.Offset
+		if i < len(node.Args) {
+			pos = node.Args[i].Pos()
+		}
+		return newFormulaError(FormulaErrType, pos, "a number, or another value this function is defined over",
+			"`%s` has no meaning over a duration — read `.days`, `.hours`, `.minutes`, `.seconds` or `.milliseconds` from it first; argument %d is a duration",
+			callDisplayName(node), i+1)
+	}
+	return nil
+}
+
+// inferIsType types `x.isType("number")`.
+//
+// The type NAME must be a literal, for the same reason `toFixed`'s scale must
+// be (FR-144): a guard whose predicate is computed per record is not a
+// declaration, and this one exists precisely to be a declaration the author can
+// read. The RESULT is a plain boolean — never absent — because that is what
+// makes it a usable guard: `isType` answers a question ABOUT a value, including
+// the question "is there one", so propagating absence through it would make
+// `!cost.isType("number")` absent on exactly the records it was written to
+// catch.
+func inferIsType(node *Call) (inferred, *FormulaError) {
+	lit, ok := node.Args[1].(*TextLit)
+	if !ok {
+		return inferred{}, newFormulaError(FormulaErrType, node.Args[1].Pos(), isTypeNameList(),
+			"`isType`'s type name must be written literally — a type name computed per record is not something the author or this checker can read")
+	}
+	if !isTypeNames[lit.Value] {
+		return inferred{}, newFormulaError(FormulaErrType, lit.Offset, isTypeNameList(),
+			"`isType(%q)` names a type this grammar does not test for", lit.Value)
+	}
+	return inferred{typ: FormulaBoolean, arity: ArityOne}, nil
 }
 
 // inferIf is FR-143a's headline rule: the branches must AGREE, or one be absent.
@@ -708,6 +839,7 @@ func FormulaTypeNames() []string {
 	names := []string{
 		string(FormulaNumber), string(FormulaText), string(FormulaDate),
 		string(FormulaBoolean), string(FormulaLink), string(FormulaPresentation),
+		string(FormulaDuration),
 	}
 	sort.Strings(names)
 	return names

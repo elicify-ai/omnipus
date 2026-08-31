@@ -248,6 +248,22 @@ func ValidateFormulaSet(sources map[string]string, schema *Schema) (*FormulaSet,
 		d.Type, d.Arity, d.Scale = typ, arity, scale
 		env.Formulas[name] = d
 		trees[name] = d
+
+		// A formula's RESULT may not be a duration. `date - date` produces one,
+		// and reading `.days` from it is what a base actually does; a bare
+		// duration has no PropertyType, so it can be neither compared nor
+		// stored nor rendered, and returning it would be a column that is
+		// silently always empty. It is registered in `env` first, so a sibling
+		// formula reading `.days` off this one still types and the author gets
+		// ONE refusal about the real fault rather than a second about an
+		// unresolved reference.
+		if typ == FormulaDuration {
+			errs = append(errs, &FormulaError{
+				Formula: name, Offset: d.Root.Pos(), Code: FormulaErrType,
+				Reason:   "the formula's result is a duration, and a duration is not something a view can show, sort or compare — subtracting two dates gives a span, not a number",
+				Expected: "a number read from the duration: `.days`, `.hours`, `.minutes`, `.seconds` or `.milliseconds` (for example `(date(due) - today()).days`)",
+			})
+		}
 	}
 
 	if len(errs) > 0 {

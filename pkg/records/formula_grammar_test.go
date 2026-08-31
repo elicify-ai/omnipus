@@ -26,6 +26,13 @@ func TestFormula_GrammarIsTheSnapshot(t *testing.T) {
 		// toFixed, mean, round, date, today, now, format, list, link, icon,
 		// contains, the .time()/.date()/.hour accessors, and the four file
 		// methods."
+		//
+		// Plus the constructs FR-143's SNAPSHOT carries that its one-sentence
+		// summary did not enumerate: the duration type produced by subtracting
+		// two dates and its five fields, `list.length`, and `isType`. They are
+		// covered in depth in formula_duration_accessor_test.go; they appear
+		// here so this list stays the single place the closed surface is
+		// written down.
 		for _, src := range []string{
 			// arithmetic and parentheses
 			"amount + 1", "amount - 1", "amount * 2", "amount / 2",
@@ -49,6 +56,13 @@ func TestFormula_GrammarIsTheSnapshot(t *testing.T) {
 			`contains(name, "cme")`,
 			// the accessors, in both the method and function spellings
 			"due.time()", "due.date()", "due.hour",
+			// the duration type and its five fields, and `list.length` — the
+			// same pinned snapshot, transcribed in formula_duration_accessor_test.go
+			"(today() - due).days", "(today() - due).hours", "(today() - due).minutes",
+			"(today() - due).seconds", "(today() - due).milliseconds",
+			"sizes.length", "file.backlinks.length",
+			// `any.isType(type): boolean`
+			`amount.isType("number")`, `name.isType("string")`, `sizes.isType("list")`,
 			"toFixed(amount, 2)", "amount.toFixed(2)",
 			// the four file methods
 			`file.hasTag("project")`,
@@ -75,7 +89,10 @@ func TestFormula_GrammarIsTheSnapshot(t *testing.T) {
 			{"amount ? 1 : 2", "a ternary is not in the set — if() is"},
 			{"amount++", "no increment operator"},
 			{`amount |> round`, "no pipeline operator"},
-			{"amount.length", "no `.length` accessor"},
+			{"amount.length", "`.length` counts a LIST — a scalar has none"},
+			{"due.days", "`.days` reads a duration, not a date"},
+			{"today() - due", "a duration is not a result a view can show"},
+			{`amount.isType("date")`, "isType's type names are a closed set of three"},
 			{"file.author", "not one of FR-130's thirteen"},
 			{"file.tags()", "`file.tags` is a property, not a method"},
 			{"note.amount", "no dotted property paths"},

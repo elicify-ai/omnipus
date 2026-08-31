@@ -35,7 +35,7 @@ import (
 //	+ -
 //	* / %
 //	unary ! -
-//	postfix .method(...) and .hour
+//	postfix .method(...) and the parenless accessors (.hour, .days, .length, …)
 //	literals, references, ( … )
 //
 // Reordering that ladder changes what stored formulas MEAN, so it is asserted
@@ -61,6 +61,11 @@ var formulaFunctions = map[string]struct{ min, max int }{
 	"icon":     {1, 1},
 	"contains": {2, 2},
 	"time":     {1, 1},
+
+	// isType is the snapshot's `any.isType(type): boolean`. The receiver is the
+	// first argument, exactly as it is for every other method (see Call's
+	// documentation), so the arity counts two.
+	"isType": {2, 2},
 
 	// FR-134's four file methods. They carry the `file.` prefix in the node so
 	// nothing can call `hasTag(x)` bare — the receiver is not optional, it is
@@ -107,8 +112,63 @@ var fileManyProperties = map[string]bool{
 	"file.backlinks": true, "file.properties": true,
 }
 
-// accessorFields is the parenless postfix set. FR-143's snapshot documents one.
-var accessorFields = map[string]bool{"hour": true}
+// accessorRule is one parenless postfix accessor: what it may be read FROM and
+// what it produces.
+//
+// The receiver requirement is the whole value of the table. `.days` is defined
+// on a DURATION and nothing else, so `due.days` — reading `.days` off a date,
+// which is the mistake somebody makes within a minute of learning the accessor
+// exists — is a REFUSAL naming the receiver's type, not a silent zero.
+type accessorRule struct {
+	// receiver is the type this accessor is defined on. Empty means the
+	// accessor is defined by ARITY instead — `.length` is the only one, and it
+	// reads a LIST of anything.
+	receiver FormulaType
+	// requiresMany says the receiver must be a list.
+	requiresMany bool
+	// result is the accessor's static result type.
+	result FormulaType
+	// scale is the DECLARED scale a number result carries (FR-144). It is 0 for
+	// an accessor that can only ever be a whole number and FormulaDefaultScale
+	// for one that can be fractional — `.days` of 3 days 5 hours is 3.2083…,
+	// and rounding it here would be an invented answer rather than a declared
+	// one. Upstream's own remedy for a whole number is `.days.round(0)`, which
+	// this grammar parses unchanged.
+	scale int32
+	// receiverPhrase is what a refusal says the receiver should have been.
+	receiverPhrase string
+}
+
+// accessorFields is the parenless postfix set.
+//
+// FR-143's sentence documents `.hour`. The other six come from the SAME pinned
+// snapshot (the Bases syntax reference as fetched 2026-08-30) — its "Duration
+// Type" table lists `duration.days`, `.hours`, `.minutes`, `.seconds` and
+// `.milliseconds` as "Total <unit> in duration", and its "List Functions"
+// section lists `list.length`. They were missing from the transcription, not
+// from the snapshot: the founder's own eighteen `.base` files use `.days`
+// sixty-five times and `.length` once, so a grammar without them cannot read a
+// real vault at all.
+//
+// `string.length` is in the snapshot too and is deliberately NOT here. JavaScript
+// counts UTF-16 code units, Go counts bytes or runes, and the three disagree on
+// every non-BMP character; a length that quietly means one of three things is
+// worse than a refusal that names the gap. A list length has no such ambiguity.
+var accessorFields = map[string]accessorRule{
+	"hour":         {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+	"days":         {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
+	"hours":        {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
+	"minutes":      {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
+	"seconds":      {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
+	"milliseconds": {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
+	"length":       {requiresMany: true, result: FormulaNumber, scale: 0, receiverPhrase: "a list"},
+}
+
+// isAccessorField reports whether a name is one of the parenless accessors.
+func isAccessorField(name string) bool {
+	_, ok := accessorFields[name]
+	return ok
+}
 
 // ParseFormula parses one expression into a tree, or refuses naming the byte
 // position and the reason (FR-140).
@@ -254,7 +314,7 @@ func (p *formulaParser) parsePostfix() (FormulaNode, *FormulaError) {
 			}
 			continue
 		}
-		if !accessorFields[name.text] {
+		if !isAccessorField(name.text) {
 			return nil, newFormulaError(FormulaErrUnknownReference, name.offset, accessorFieldList(),
 				"`.%s` is not a field the formula grammar defines", name.text)
 		}
@@ -358,7 +418,13 @@ func (p *formulaParser) parseIdentPath() (FormulaNode, *FormulaError) {
 	}
 
 	// No `(`: a reference, possibly with a trailing parenless accessor.
-	if len(segs) > 1 && accessorFields[segs[last]] {
+	//
+	// `formula.<name>` is excluded, because a formula is allowed to be CALLED
+	// `length` (or `days`, or `hour`). Without the exclusion the accessor rule
+	// steals the name: `formula.length` would resolve its receiver as the bare
+	// word `formula`, which is not a value, and the author would be told to
+	// "name the formula you mean" about an expression that already did.
+	if len(segs) > 1 && isAccessorField(segs[last]) && !(len(segs) == 2 && segs[0] == "formula") {
 		recv, err := p.reference(segs[:last], offsets[0], strings.Join(segs[:last], "."))
 		if err != nil {
 			return nil, err
@@ -469,6 +535,16 @@ func accessorFieldList() string {
 	names := make([]string, 0, len(accessorFields))
 	for n := range accessorFields {
 		names = append(names, "."+n)
+	}
+	sort.Strings(names)
+	return "one of " + strings.Join(names, ", ")
+}
+
+// isTypeNameList renders isType's closed argument set for a refusal.
+func isTypeNameList() string {
+	names := make([]string, 0, len(isTypeNames))
+	for n := range isTypeNames {
+		names = append(names, `"`+n+`"`)
 	}
 	sort.Strings(names)
 	return "one of " + strings.Join(names, ", ")

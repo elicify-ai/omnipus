@@ -257,9 +257,14 @@ type fitem struct {
 // the same: `list()` is present and empty (R-3's empty list is a value), while
 // an absent operand is absence.
 type fval struct {
-	typ     FormulaType
-	absent  bool
-	items   []fitem
+	typ    FormulaType
+	absent bool
+	items  []fitem
+	// many is the value's ARITY, carried alongside the items because the two
+	// are not the same question. A `many` property holding one element is still
+	// a list, and `isType("list")` has to say so; `len(items)` cannot tell that
+	// apart from a scalar, and an absent list has no items at all.
+	many    bool
 	rounded bool
 }
 
@@ -274,6 +279,17 @@ func boolVal(b bool) fval { return fval{typ: FormulaBoolean, items: []fitem{{fla
 func textVal(s string) fval { return fval{typ: FormulaText, items: []fitem{{text: s}}} }
 
 func dateVal(d DateValue) fval { return fval{typ: FormulaDate, items: []fitem{{date: d}}} }
+
+// durationVal carries a duration as an exact rational number of SECONDS.
+//
+// Seconds rather than nanoseconds because `.days` and `.minutes` then divide by
+// exact integers, and exact rather than time.Duration because time.Duration is
+// an int64 of nanoseconds that overflows at ±292 years — a range two file dates
+// in one vault can genuinely straddle, and an overflow there is a wrong number
+// rather than an error.
+func durationVal(seconds *big.Rat) fval {
+	return fval{typ: FormulaDuration, items: []fitem{{num: seconds}}}
+}
 
 func displayVal(s string) fval { return fval{typ: FormulaPresentation, items: []fitem{{text: s}}} }
 
@@ -377,21 +393,88 @@ func (e *FormulaEvaluator) eval(n FormulaNode) (fval, []ComparisonProblem) {
 		return e.evalBinary(node)
 
 	case *FieldAccess:
-		recv, problems := e.eval(node.Receiver)
-		if recv.absent {
-			return absentOf(FormulaNumber), problems
-		}
-		it, ok := recv.single()
-		if !ok {
-			return absentOf(FormulaNumber), problems
-		}
-		// `.hour` — the only parenless accessor FR-143's snapshot documents.
-		return numberVal(new(big.Rat).SetInt64(int64(it.date.Instant.UTC().Hour()))), problems
+		return e.evalFieldAccess(node)
 
 	case *Call:
 		return e.evalCall(node)
 	}
 	return fval{absent: true}, nil
+}
+
+// durationDivisors converts the internal seconds rational into each of the
+// snapshot's five duration fields. The snapshot calls every one of them "Total
+// <unit> in duration", so these are QUOTIENTS, not calendar components: a
+// duration of one and a half days is 1.5 `.days`, never 1.
+var durationDivisors = map[string]*big.Rat{
+	"days":         big.NewRat(86400, 1),
+	"hours":        big.NewRat(3600, 1),
+	"minutes":      big.NewRat(60, 1),
+	"seconds":      big.NewRat(1, 1),
+	"milliseconds": big.NewRat(1, 1000),
+}
+
+// evalFieldAccess evaluates a parenless accessor.
+//
+// Absence propagates (R-14) for every accessor including `.length`: a list that
+// is not there has no count, and answering 0 would be the "absence is zero"
+// coercion R-14 exists to forbid. An EMPTY list is a different thing — it is
+// present, and its length is 0.
+func (e *FormulaEvaluator) evalFieldAccess(node *FieldAccess) (fval, []ComparisonProblem) {
+	recv, problems := e.eval(node.Receiver)
+	rule, known := accessorFields[node.Field]
+	if !known {
+		// Unreachable through ParseFormula, which refuses an unknown accessor.
+		// It is an absent value rather than a panic because R-11's "total and
+		// never panics" covers everything a hand-built tree can reach.
+		return fval{absent: true}, problems
+	}
+	if recv.absent {
+		return absentOf(rule.result), problems
+	}
+	if node.Field == "length" {
+		return numberVal(new(big.Rat).SetInt64(int64(len(recv.items)))), problems
+	}
+	it, ok := recv.single()
+	if !ok {
+		return absentOf(rule.result), problems
+	}
+	if node.Field == "hour" {
+		return numberVal(new(big.Rat).SetInt64(int64(it.date.Instant.UTC().Hour()))), problems
+	}
+	div, ok := durationDivisors[node.Field]
+	if !ok || it.num == nil {
+		return absentOf(rule.result), problems
+	}
+	return numberVal(new(big.Rat).Quo(it.num, div)), problems
+}
+
+// nanosPerSecond is written as a decimal integer rather than as 1e9 on purpose:
+// `1e9` is an untyped FLOAT constant in Go, and formula_no_float_test.go refuses
+// a floating-point literal anywhere on this path. The constant is exact either
+// way; the test is guarding the habit, not this line.
+const nanosPerSecond = 1000000000
+
+// instantNanos is a date's instant as an exact nanosecond count since the Unix
+// epoch, in big.Int so the subtraction that follows cannot overflow.
+func instantNanos(d DateValue) *big.Int {
+	t := d.Instant.UTC()
+	n := new(big.Int).SetInt64(t.Unix())
+	n.Mul(n, big.NewInt(nanosPerSecond))
+	return n.Add(n, big.NewInt(int64(t.Nanosecond())))
+}
+
+// evalDateDifference is the duration's one producer: `dateA - dateB`.
+func evalDateDifference(left, right fval, problems []ComparisonProblem) (fval, []ComparisonProblem) {
+	if left.absent || right.absent {
+		return absentOf(FormulaDuration), problems
+	}
+	l, lok := left.single()
+	r, rok := right.single()
+	if !lok || !rok {
+		return absentOf(FormulaDuration), problems
+	}
+	nanos := new(big.Int).Sub(instantNanos(l.date), instantNanos(r.date))
+	return durationVal(new(big.Rat).SetFrac(nanos, big.NewInt(nanosPerSecond))), problems
 }
 
 func (e *FormulaEvaluator) evalRef(node *Ref) (fval, []ComparisonProblem) {
@@ -413,7 +496,12 @@ func (e *FormulaEvaluator) evalRef(node *Ref) (fval, []ComparisonProblem) {
 		if !ok {
 			return fval{typ: fileVirtualProperties[node.Name], absent: true}, nil
 		}
-		return fvalFromPropertyValue(fileVirtualProperties[node.Name], pv)
+		v, problems := fvalFromPropertyValue(fileVirtualProperties[node.Name], pv)
+		// The arity of a `file.*` property is FR-130's declaration, not
+		// whatever this candidate happens to hold: a note with one backlink
+		// still has a LIST of backlinks.
+		v.many = fileManyProperties[node.Name]
+		return v, problems
 	}
 
 	if e.candidate == nil {
@@ -427,7 +515,9 @@ func (e *FormulaEvaluator) evalRef(node *Ref) (fval, []ComparisonProblem) {
 	if !tok {
 		return fval{absent: true}, nil
 	}
-	return fvalFromPropertyValue(typ, pv)
+	v, problems := fvalFromPropertyValue(typ, pv)
+	v.many = pv.Property != nil && pv.Property.Many
+	return v, problems
 }
 
 // fvalFromPropertyValue lifts a resolved property into the formula value model.
@@ -503,9 +593,11 @@ func textOfTypedValue(v TypedValue) string {
 
 func fvalFromResult(res FormulaResult) fval {
 	if res.Absent {
-		return absentOf(res.Type)
+		v := absentOf(res.Type)
+		v.many = res.Arity == ArityMany
+		return v
 	}
-	out := fval{typ: res.Type, rounded: res.Rounded}
+	out := fval{typ: res.Type, rounded: res.Rounded, many: res.Arity == ArityMany}
 	if res.Type == FormulaPresentation {
 		for _, t := range res.texts {
 			out.items = append(out.items, fitem{text: t})
@@ -573,6 +665,9 @@ func (e *FormulaEvaluator) evalBinary(node *BinaryOp) (fval, []ComparisonProblem
 		return boolVal(l.flag || r.flag), problems
 
 	case "+", "-", "*", "/", "%":
+		if node.Op == "-" && left.typ == FormulaDate && right.typ == FormulaDate {
+			return evalDateDifference(left, right, problems)
+		}
 		return e.evalArithmetic(node, left, right, problems)
 	}
 	return e.evalComparison(node, left, right, problems)
@@ -712,6 +807,8 @@ func (e *FormulaEvaluator) evalCall(node *Call) (fval, []ComparisonProblem) {
 	}
 
 	switch node.Name {
+	case "isType":
+		return evalIsType(args), problems
 	case "list":
 		return e.evalList(args), problems
 	case "toFixed", "round":
@@ -778,7 +875,7 @@ func (e *FormulaEvaluator) evalIf(node *Call) (fval, []ComparisonProblem) {
 }
 
 func (e *FormulaEvaluator) evalList(args []fval) fval {
-	out := fval{typ: FormulaAbsent}
+	out := fval{typ: FormulaAbsent, many: true}
 	for _, a := range args {
 		if a.absent {
 			continue
@@ -857,6 +954,45 @@ func evalDateFn(args []fval) fval {
 		}
 	}
 	return absentOf(FormulaDate)
+}
+
+// evalIsType is the snapshot's `any.isType(type)`, answered against THIS
+// package's type model rather than against JavaScript's.
+//
+// The translation is exact where the two models line up and refuses where they
+// do not (inferIsType admits only `number`, `string` and `list`). Three cases
+// are worth stating because a reader will otherwise assume the JavaScript
+// answer:
+//
+//   - ABSENT is FALSE, not absent. `undefined.isType("number")` is false
+//     upstream, and this is the one place absence must not propagate: the guard
+//     `if(cost.isType("number"), …)` is WRITTEN to catch the missing value, and
+//     an absent answer would send `!cost.isType("number")` absent on exactly
+//     the records it was written for.
+//   - NON-CONFORMING is FALSE. A `cost:` of "TBD" under a declared `decimal`
+//     arrives here as absence (R-4), and false is also what upstream answers
+//     for a string held in a number-ish property.
+//   - A LIST IS ONLY A LIST. A `many` property of numbers answers false to
+//     `isType("number")` and true to `isType("list")`, because upstream's value
+//     for it is an array — the same reading R-9 already takes.
+func evalIsType(args []fval) fval {
+	want, ok := args[1].single()
+	if !ok {
+		return boolVal(false)
+	}
+	subject := args[0]
+	if subject.absent {
+		return boolVal(false)
+	}
+	switch want.text {
+	case "list":
+		return boolVal(subject.many)
+	case "number":
+		return boolVal(!subject.many && subject.typ == FormulaNumber)
+	case "string":
+		return boolVal(!subject.many && subject.typ == FormulaText)
+	}
+	return boolVal(false)
 }
 
 func evalContains(args []fval) fval {
