@@ -295,14 +295,16 @@ ADR-071 independently removed most of the cost the issue cited: all twelve
 compressed manifest.
 
 **Decision: close #456.** A gate for a state that shipping installs do not
-enter is machinery without a payer.
+enter is machinery without a payer. Closed 2026-08-31.
 
 **The one real exception, recorded so it is not rediscovered as a surprise:**
 linux/arm64 archives carry no `chromium/` payload, because Chrome-for-Testing
 publishes no linux-arm64 build (`scripts/install.sh:26-29`) — and the managed
 download cannot rescue it for the same reason. Those hosts depend on a system
-Chrome. If ARM Linux becomes a supported target, this is a real gap, but it
-wants a build-and-distribution answer, not a manifest gate.
+Chrome, which is itself gated behind `TrustPathChrome` (seeded `false`). The
+managed download cannot rescue it either — it fetches from the same upstream
+that has no linux-arm64 build. This wants a build-and-distribution answer,
+not a manifest gate, and is filed separately as **#665**.
 
 ---
 
