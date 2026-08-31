@@ -6,8 +6,11 @@
 package vaultimport
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // leafKind is what parseLeaf decided about one expression string.
@@ -24,6 +27,11 @@ type parsedLeaf struct {
 	Kind        leafKind
 	TypeLiteral string
 	Filter      RawLeaf
+	// Reason is why an untranslatable expression could not be read, in words
+	// the operator can act on. It is EMPTY for the shapes whose diagnosis is
+	// written somewhere better informed than here — see
+	// untranslatableExpressionReason.
+	Reason string
 }
 
 // RawLeaf is one translated filter leaf BEFORE its literal is tagged against
@@ -174,7 +182,7 @@ func parseLeaf(expr string) parsedLeaf {
 		return parsedLeaf{Kind: leafUntranslatable}
 	}
 	if reUntranslatableMarker.MatchString(s) {
-		return parsedLeaf{Kind: leafUntranslatable}
+		return parsedLeaf{Kind: leafUntranslatable, Reason: untranslatableExpressionReason(s)}
 	}
 
 	if m := reContains.FindStringSubmatch(s); m != nil {
@@ -354,4 +362,58 @@ func formulaCompareLeaf(name, op, rhsRaw string) (parsedLeaf, bool) {
 	return parsedLeaf{Kind: leafFilter, Filter: RawLeaf{
 		Property: name, Op: wireOp, Values: []string{lit}, Negate: op == "!=",
 	}}, true
+}
+
+// ---------------------------------------------------------------------------
+// SAYING WHY A FUNCTION EXPRESSION WENT — WITHOUT WRITING A SECOND PARSER
+//
+// `date(close_date).year == today().year` is an ordinary "closing this year"
+// filter, and reUntranslatableMarker used to refuse it in SILENCE: the loss
+// line carried the operator's own text and no diagnosis at all, so the founder
+// was told a clause went and never why. That is the FR-107 defect, not the
+// refusal — the refusal is correct and stays.
+//
+// The temptation here is to teach this file what `date(x).year` MEANS, so it
+// can translate it. That is how a codebase ends up with two parsers for one
+// syntax, which then disagree, and the disagreement surfaces as a view that
+// returns the wrong rows rather than as a compile error. This product has
+// exactly ONE expression parser — records.ParseFormula — so the diagnosis is
+// asked of that one and quoted verbatim. Nothing here decides what an
+// expression means; it decides only which of two sentences to print.
+//
+// WHAT THE ANSWER IS TODAY, and why the view stays disabled: `.year` and
+// `.month` are not in the grammar. They are not an oversight either — FR-143
+// PINS the grammar to the Obsidian syntax reference as fetched 2026-08-30, and
+// adopting a newer snapshot is a spec revision with its own diff, never a
+// silent code change. So Deals.base's "Closing This Month" is a FEATURE GAP for
+// the founder to decide on, and this function's whole job is to make sure he
+// reads it as one.
+// ---------------------------------------------------------------------------
+
+// filterIsNotAnExpression is the shared opening of both sentences below, and it
+// is deliberately one literal: report.go's closed gap table classifies a loss
+// by matching substrings of the reason this importer wrote, so a sentence that
+// exists in two spellings is a gap shape that catches half its own cases.
+const filterIsNotAnExpression = "a view's filter compares a PROPERTY against a literal, and this clause is an EXPRESSION"
+
+// untranslatableExpressionReason explains an expression the leaf patterns could
+// not read, or returns "" for the shapes whose diagnosis belongs elsewhere.
+//
+// The `formula.` namespace is the deliberate hole. A `formula.<name>` clause
+// that cannot be built is refused by buildFormulaLeafNode, which knows the
+// base's formula set and the view's record type and can therefore say something
+// specific ("the base file declares no formula named X", "operator > is not
+// defined on a LIST"). Printing this file's generic sentence on top of that
+// would name the wrong gap — a formula problem reported as a function-call
+// problem — so the formula namespace is left exactly as it was found.
+func untranslatableExpressionReason(expr string) string {
+	if strings.Contains(expr, formulaNamespace) {
+		return ""
+	}
+	if _, err := records.ParseFormula(expr); err != nil {
+		return fmt.Sprintf("%s. Handed to the formula grammar — the ONE expression parser this product has, so that this refusal is the grammar's own and not a second parser's opinion — it is refused there too: %s",
+			filterIsNotAnExpression, err)
+	}
+	return fmt.Sprintf("%s. The formula grammar reads it, but a filter leaf holds a property, an operator and a literal: the only way an expression reaches one is as a `formula.<name>` the base declares in its `formulas:` block, and this clause names none",
+		filterIsNotAnExpression)
 }

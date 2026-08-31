@@ -84,6 +84,11 @@ type rawNode struct {
 	// (sub)tree, used when this node — or anything under it — has to be
 	// reported as a loss instead of translated.
 	Verbatim string
+	// Reason is why a rawKindLost subtree could not be translated, in the
+	// words the operator reads. It is EMPTY for a loss whose diagnosis is
+	// only knowable later, against a schema — those are explained by the
+	// resolution pass instead (view_write.go), never twice.
+	Reason string
 }
 
 // leafShape is WHICH Obsidian filter idiom a leaf came from. The shape is kept
@@ -172,6 +177,14 @@ func lostNode(verbatim string) *rawNode {
 	return &rawNode{Kind: rawKindLost, Verbatim: verbatim}
 }
 
+// lostNodeWithReason is lostNode plus the diagnosis, for the losses this file
+// can already explain at parse time. Keeping the two constructors apart is what
+// stops an empty reason being passed by accident at the dozen call sites that
+// genuinely have none.
+func lostNodeWithReason(verbatim, reason string) *rawNode {
+	return &rawNode{Kind: rawKindLost, Verbatim: verbatim, Reason: reason}
+}
+
 // reFileMethod matches the three file METHODS that translate to a filter.
 // `file.asLink()` is deliberately absent: records.TranslateFileMethod refuses
 // it by name, and routing it there gives the operator that named refusal
@@ -223,7 +236,7 @@ func translateLeafExpr(expr string) TreeTranslation {
 	case leafFilter:
 		return TreeTranslation{Root: nodeFromRawLeaf(parsed.Filter, s)}
 	default:
-		return TreeTranslation{Root: lostNode(s)}
+		return TreeTranslation{Root: lostNodeWithReason(s, parsed.Reason)}
 	}
 }
 

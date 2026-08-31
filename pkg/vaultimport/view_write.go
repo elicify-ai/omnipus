@@ -355,12 +355,94 @@ func (r leafResolver) typed() bool { return r.recordType != "" }
 //	     operator wrote deliberately — reported instead of guessed.
 //	not  same: half of a negation is a different exclusion, not a partial one.
 func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFilterNode, []string) {
+	node, losses := r.resolveTree(n, pos)
+	return node, renderLosses(losses)
+}
+
+// ---------------------------------------------------------------------------
+// A LOSS IS AN EXPRESSION AND A REASON, AND THEY HAVE TO TRAVEL SEPARATELY
+//
+// They used to be glued together the moment a loss was made, as one rendered
+// string. That is why a clause could be dropped with NO stated reason: `!=`
+// desugars into a TREE NEGATION over an `=` leaf (nodeFromRawLeaf, and it must
+// — `{not: {p,=,v}}` keeps the records where `p` is absent and `{p,<>,v}` drops
+// them), so when the leaf underneath cannot be built, the failure is a CHILD's
+// and the thing that must be NAMED is the PARENT's text. Reporting the parent
+// meant throwing the child's whole diagnosis away. Six clauses across three of
+// the founder's bases were reported as gone with nothing said about why.
+//
+// Keeping the two halves apart until the last moment lets the wrapper report
+// its own expression AND the child's reason, which is the FR-107 answer:
+//
+//	[view filter] realm != "personal" — property "realm" is not declared in …
+//
+// WHAT THIS DELIBERATELY DOES NOT DO. It changes no node, no loss count and no
+// loss position — only the words. That restraint is the point rather than
+// modesty: `not:` is where a narrowing becomes a BROADENING. A multi-clause
+// `not:` "loses nothing" only because Obsidian ANDs then negates, and the
+// negation has no absence rule of its own downstream (knowledge_find evaluates
+// `!inner.matched` flat; FR-008's absent-rescue lives on the negative
+// OPERATORS in records.PreparedFilter.MatchValue and never reaches a
+// COMBINATOR). So a clause that is safely narrower on its own is not safely
+// narrower under a negation, and nothing may become newly translatable here
+// without a proof at the TREE level. Improving a sentence needs no such proof.
+// ---------------------------------------------------------------------------
+
+// resolvedLoss is one named loss before it is rendered: the EXPRESSION the base
+// file carried, and separately the diagnosis of why it went.
+type resolvedLoss struct {
+	Pos    LossPosition
+	Expr   string
+	Reason string
+}
+
+// render writes the loss the way the report reads it — `[position] expression`
+// with the reason after a " — " separator when there is one. A loss with no
+// reason renders exactly as it always did; splitLossLine then reports no
+// reason, and report.go classifies it from the expression's shape.
+func (l resolvedLoss) render() string {
+	if l.Reason == "" {
+		return lossf(l.Pos, "%s", l.Expr)
+	}
+	return lossf(l.Pos, "%s — %s", l.Expr, l.Reason)
+}
+
+func renderLosses(in []resolvedLoss) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, l := range in {
+		out = append(out, l.render())
+	}
+	return out
+}
+
+// joinReasons gathers the diagnoses of the children a combinator lost, in the
+// order they were written, without repeating one. A child that had no reason
+// contributes nothing rather than an empty clause.
+func joinReasons(in []resolvedLoss) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range in {
+		if l.Reason == "" || seen[l.Reason] {
+			continue
+		}
+		seen[l.Reason] = true
+		out = append(out, l.Reason)
+	}
+	return strings.Join(out, "; ")
+}
+
+// resolveTree is resolve's body, working in unrendered losses so that a
+// combinator can report its OWN expression with its CHILD's reason.
+func (r leafResolver) resolveTree(n *rawNode, pos LossPosition) (*generated.VaultFilterNode, []resolvedLoss) {
 	if n == nil {
 		return nil, nil
 	}
 	switch n.Kind {
 	case rawKindLost:
-		return nil, []string{lossf(pos, "%s", n.Verbatim)}
+		return nil, []resolvedLoss{{Pos: pos, Expr: n.Verbatim, Reason: n.Reason}}
 
 	case rawKindPrebuilt:
 		return n.Prebuilt, nil
@@ -368,15 +450,15 @@ func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFil
 	case rawKindLeaf:
 		node, reason, ok := buildV2LeafNode(r, n.Leaf)
 		if !ok {
-			return nil, []string{lossf(LossFilterLeaf, "%s — %s", describeLeaf(n.Leaf), reason)}
+			return nil, []resolvedLoss{{Pos: LossFilterLeaf, Expr: describeLeaf(n.Leaf), Reason: reason}}
 		}
 		return node, nil
 
 	case rawKindAll:
 		var kids []generated.VaultFilterNode
-		var losses []string
+		var losses []resolvedLoss
 		for _, k := range n.Kids {
-			child, childLosses := r.resolve(k, pos)
+			child, childLosses := r.resolveTree(k, pos)
 			losses = append(losses, childLosses...)
 			if child != nil {
 				kids = append(kids, *child)
@@ -394,17 +476,19 @@ func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFil
 	case rawKindAny, rawKindNot:
 		var kids []generated.VaultFilterNode
 		for _, k := range n.Kids {
-			child, childLosses := r.resolve(k, pos)
+			child, childLosses := r.resolveTree(k, pos)
 			if child == nil || len(childLosses) > 0 {
-				// The group's own verbatim is reported, not the child's — a
-				// reader has to see which `or:`/`not:` block went missing, and
-				// a half-named group reads as if the rest survived.
-				return nil, []string{lossf(pos, "%s", n.Verbatim)}
+				// The group's own verbatim is what is NAMED, not the child's —
+				// a reader has to see which `or:`/`not:` block went missing,
+				// and a half-named group reads as if the rest survived. The
+				// child's REASON rides along, because "which" and "why" are
+				// two different questions and only the first was ever answered.
+				return nil, []resolvedLoss{{Pos: pos, Expr: n.Verbatim, Reason: joinReasons(childLosses)}}
 			}
 			kids = append(kids, *child)
 		}
 		if len(kids) == 0 {
-			return nil, []string{lossf(pos, "%s", n.Verbatim)}
+			return nil, []resolvedLoss{{Pos: pos, Expr: n.Verbatim}}
 		}
 		if n.Kind == rawKindNot {
 			inner := kids[0]
@@ -416,7 +500,7 @@ func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFil
 		}
 		return &generated.VaultFilterNode{Any: &kids}, nil
 	}
-	return nil, []string{lossf(pos, "%s", n.Verbatim)}
+	return nil, []resolvedLoss{{Pos: pos, Expr: n.Verbatim, Reason: n.Reason}}
 }
 
 // ---------------------------------------------------------------------------
