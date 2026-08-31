@@ -315,6 +315,10 @@ const (
 // knownNarrowingGrounds is the closed set of arguments this importer accepts
 // as establishing the subset direction.
 var knownNarrowingGrounds = map[narrowingGround]bool{
+	// The zero value is listed EXPLICITLY rather than left to fall out of the
+	// map, so the closed set states on its own that "no ground given" is not
+	// an argument — a reader does not have to infer it from an absence.
+	narrowingGroundUnstated:         false,
 	narrowingGroundAbsentElseBranch: true,
 }
 
