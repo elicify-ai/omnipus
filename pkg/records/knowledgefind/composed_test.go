@@ -239,6 +239,15 @@ func (g composedViews) View(name string) (generated.VaultFindRequest, bool) {
 
 func (g composedViews) Names() []string { return []string{composedView} }
 
+// The interface is SATISFIABLE, asserted at compile time — without this, the
+// negative result in TestSeam_ProductionViewLoaderStillCannotCarryViewFormulas
+// could mean "nothing can implement ViewFormulaLoader" rather than "the
+// production loader does not yet".
+var (
+	_ ViewLoader        = composedViews{}
+	_ ViewFormulaLoader = composedViews{}
+)
+
 func (g composedViews) Formulas(name string) (map[string]string, bool) {
 	if name != composedView {
 		return nil, false
