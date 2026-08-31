@@ -131,11 +131,11 @@ func pathsCannotUseSection(mode string) string {
 	var sb strings.Builder
 	sb.WriteString("### Paths you cannot use\n")
 
-	switch {
-	case mode == "off":
+	switch mode {
+	case "off":
 		sb.WriteString("- No sandbox is active (sandbox.mode = off) — nothing below is kernel-enforced. Treat the workspace boundary as a rule the operator expects you to follow, not a guarantee the system will stop you from breaking it.\n")
 		sb.WriteString("- Stay inside the workspace above. Avoid `/dev/tty` and other TTY devices, and avoid system paths (`/etc`, `/usr`, `/root`, `$HOME` outside workspace) unless the operator has explicitly asked you to touch them.\n\n")
-	case mode == "fallback" || mode == "unknown" || mode == "<unknown>":
+	case "fallback", "unknown", "<unknown>":
 		sb.WriteString("- Enforcement here is APPLICATION-level, not kernel-level — the items below are rules to follow, not guarantees the system will stop a violation.\n")
 		sb.WriteString("- Everything outside the workspace above should be treated as denied unless explicitly allow-listed.\n")
 		sb.WriteString("- Treat `/dev/tty` and other TTY devices as off-limits.\n")

@@ -60,13 +60,13 @@ func TestAgentDelete_CascadeDeletesSoleOwnedSessionAndUploads(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
-	sessStore, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if err != nil {
-		t.Fatalf("test setup: open session store: %v", err)
+	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if storeErr != nil {
+		t.Fatalf("test setup: open session store: %v", storeErr)
 	}
-	meta, err := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
-	if err != nil {
-		t.Fatalf("test setup: create session: %v", err)
+	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
+	if metaErr != nil {
+		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
 
@@ -121,13 +121,13 @@ func TestAgentDelete_PreservesSharedSession(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
-	sessStore, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if err != nil {
-		t.Fatalf("test setup: open session store: %v", err)
+	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if storeErr != nil {
+		t.Fatalf("test setup: open session store: %v", storeErr)
 	}
-	meta, err := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
-	if err != nil {
-		t.Fatalf("test setup: create session: %v", err)
+	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
+	if metaErr != nil {
+		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
 	// A mid-conversation agent switch makes this a MULTI-agent (joined)
@@ -341,13 +341,13 @@ func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
-	sessStore, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if err != nil {
-		t.Fatalf("test setup: open session store: %v", err)
+	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if storeErr != nil {
+		t.Fatalf("test setup: open session store: %v", storeErr)
 	}
-	meta, err := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
-	if err != nil {
-		t.Fatalf("test setup: create session: %v", err)
+	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
+	if metaErr != nil {
+		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
 	if err := sessStore.Close(); err != nil {
