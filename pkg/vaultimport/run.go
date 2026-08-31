@@ -354,6 +354,21 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 	// own decisions with CollectEnumWidenings(inferred) — the same shape
 	// CollectNameEvidencedInferences already has — rather than this function
 	// threading a second list through.
+	// A `.base` formula wrapping a bare property name in `date()` is the
+	// operator saying that property IS a date — the same base-file-as-evidence
+	// move as FR-018d provisioning and the enum widening below, one level
+	// down. It runs BEFORE the widening because both read `inferred`, and a
+	// property's TYPE has to settle before a literal is judged against it.
+	//
+	// It takes `notes` rather than a count captured earlier ON PURPOSE:
+	// InferredProperty.ObservedCount is frozen by CollectTypeGroups above,
+	// BEFORE InferTypesForUntypedNotes writes `type:` into untyped notes. A
+	// note that JOINS a record type mid-run is invisible to that count, and
+	// promoting its property text->date on stale evidence could invalidate the
+	// very note this run just typed — the one bar this package admits no
+	// exception to.
+	TypePropertiesFromBaseFormulas(inferred, notes, baseRelPaths, parsedBases)
+
 	WidenEnumsFromBases(inferred, baseRelPaths, parsedBases)
 
 	if write {
@@ -467,17 +482,18 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 		// it belongs to, so this reads the same source the written schema was
 		// built from — a widening that reached the schema and not this list
 		// is not expressible.
-		EnumWidenings:  CollectEnumWidenings(inferred),
-		Provisioned:    provisioned,
-		Types:          typeSummaries,
-		Ambiguities:    ambiguities,
-		RelationSplits: relationSplits,
-		AritySplits:    aritySplits,
-		Bases:          baseOutcomes,
-		TypeInference:  typeInference,
-		SchemaReload:   schemaReload,
-		ViewReload:     viewReload,
-		Validation:     vs,
+		EnumWidenings:    CollectEnumWidenings(inferred),
+		FormulaEvidenced: CollectFormulaEvidencedTypes(inferred),
+		Provisioned:      provisioned,
+		Types:            typeSummaries,
+		Ambiguities:      ambiguities,
+		RelationSplits:   relationSplits,
+		AritySplits:      aritySplits,
+		Bases:            baseOutcomes,
+		TypeInference:    typeInference,
+		SchemaReload:     schemaReload,
+		ViewReload:       viewReload,
+		Validation:       vs,
 	}, nil
 }
 
