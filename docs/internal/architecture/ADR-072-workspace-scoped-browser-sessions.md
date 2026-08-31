@@ -205,6 +205,51 @@ propagating);
 ADR-041's tab-set model; ADR-043 D1/D3/D4 (single Chrome, coordinator
 ownership, hot-reload survival) and its whole deferred escape hatch.
 
+#### D1.0a — the isolation being re-keyed is OFF by default. Read this first.
+
+Found during spec grilling, 2026-08-31. **Everything above describes moving an
+isolation boundary from the agent axis to the workspace axis. On a default
+install there is no boundary to move.**
+
+- `pkg/config/defaults.go:671` seeds **`CaptureSharedContext: true`**.
+- In that mode `BrowserCoordinator.Register`
+  (`pkg/tools/browser/coordinator.go:349-359`) returns an **empty**
+  `browserCtxID` and logs its own warning verbatim: *"shared default-context
+  capture mode is ON (tools.browser.capture_shared_context) — per-agent
+  browser-context isolation is OFF"*.
+- So ADR-043 D2's per-agent CDP browser context — "the load-bearing decision",
+  the thing D1.0 above says is preserved and merely re-keyed — **does not exist
+  on a fresh install today.**
+
+The word `capture_shared_context` appeared **zero** times in this ADR and in
+both specs before this note.
+
+**What this does and does not change.**
+
+- It does **not** change the direction. Workspace-keyed is still the right
+  axis, and the operator ruling stands.
+- It **does** change the claim. D1 is not "preserve isolation, move its key".
+  It is "**turn the isolation on, and key it by workspace**". The acceptance
+  criteria are affected: 5b (log in on workspace X, be logged out on Y) is
+  **unsatisfiable on a default install** until this is resolved, and would have
+  been written as a passing test over a product that has no isolation at all.
+
+**And the documented escape hatch no longer exists.** `defaults.go`'s own
+comment says an operator "who needs real cross-agent cookie isolation can set
+this false; **the JPEG browser_screencast fallback keeps working either way**".
+ADR-061 deleted the JPEG screencast path in full, with a CI guard
+(`scripts/check-no-jpeg-screencast.sh`) to stop it returning. So the comment
+directs an operator to a trade-off that is no longer available: **today you can
+have cross-agent cookie isolation, or a live video panel, but not both.**
+
+**Consequence for this ADR:** D1 must decide the default, not inherit it. The
+options are to flip `CaptureSharedContext` to false (restoring isolation and
+losing capture in whatever way ADR-047/061 left it), to make WebRTC capture work
+against a non-default browser context, or to state plainly that isolation is
+opt-in and correct criterion 5b accordingly. **This is an operator decision and
+is not taken here.** The stale comment is a separate defect and is filed
+independently.
+
 ### D1.1 The two changes
 
 1. **One `BrowserManager` per workspace**, shared by every agent, instead of
