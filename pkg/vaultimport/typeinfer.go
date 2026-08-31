@@ -130,8 +130,8 @@ func InferTypesForUntypedNotes(notes []NoteRecord, inferred map[string][]Inferre
 			case 0:
 				rep.NoMatch++
 				out.Reason = fmt.Sprintf(
-					"left as is: no inferred type declares every one of its %d propert%s and has all of its own required properties present. It is still fully indexed (FR-021e) and reachable through an untyped view.",
-					len(keys), plural(len(keys), "y", "ies"))
+					"left as is: it carries [%s], and no inferred type declares all of those AND has every one of its own required properties present on this note. It is still fully indexed (FR-021e) and reachable through an untyped view.",
+					strings.Join(keys, ", "))
 			case 1:
 				out.Inferred = out.Candidates[0]
 				if !write {
@@ -158,8 +158,8 @@ func InferTypesForUntypedNotes(notes []NoteRecord, inferred map[string][]Inferre
 			default:
 				rep.Ambiguous++
 				out.Reason = fmt.Sprintf(
-					"left as is: its shape matches %d inferred types (%s) equally well, and picking one would be a coin toss written into your own file. One edit settles it: add `type: <one of those>` to the note, or narrow the schemas with knowledge_configure.",
-					len(out.Candidates), strings.Join(out.Candidates, ", "))
+					"left as is: it carries [%s] — every one of which %d inferred types declare (%s), so nothing in this note's frontmatter tells them apart and picking one would be a coin toss written into your own file. One edit settles it: add `type: <one of those>` to the note, or narrow the schemas with knowledge_configure.",
+					strings.Join(keys, ", "), len(out.Candidates), strings.Join(out.Candidates, ", "))
 			}
 		}
 		rep.Notes = append(rep.Notes, out)

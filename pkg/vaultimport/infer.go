@@ -340,16 +340,26 @@ type RelationSplitReport struct {
 	// ByType is target-type -> count of resolved links, sorted for display
 	// by the caller. Empty when nothing resolved at all.
 	ByType map[string]int
-	// ResolvedTotal is the denominator FR-104a's 2/3 test used — every link
-	// that resolved to SOME record type. Unresolved links are deliberately
-	// not in it: a dangling link is not evidence for or against any type.
+	// ResolvedTotal is every link that resolved to SOME record type.
 	ResolvedTotal int
+	// LinkTotal is every wikilink value observed for this property —
+	// resolved, resolved-to-a-non-record, and dangling alike. IT IS THE
+	// DENOMINATOR THE 2/3 TEST USES, and the choice is deliberate; see
+	// inferRelationTarget's header for the reasoning and for the reading of
+	// FR-104a it turns on.
+	LinkTotal int
 	// Unresolved is how many link targets matched no known note at all.
 	Unresolved int
 	// MajorityType and MajorityCount are the winning target type and its
 	// count. MajorityType is empty when no type reached the threshold.
 	MajorityType  string
 	MajorityCount int
+	// StrictFrac is what the majority's share WOULD have been counting only
+	// resolved targets — the narrower reading of FR-104a's wording. It is
+	// carried so the report can show both numbers and nobody has to take
+	// this package's word for which reading was applied.
+	StrictNumerator   int
+	StrictDenominator int
 	// Minority names every resolved target type OTHER than MajorityType
 	// with its count, sorted — FR-104a's "minority reported by name". When
 	// no majority was reached this holds every resolved type, which is the
@@ -626,13 +636,37 @@ func isDecimal(s string) bool {
 // THE RULE, STATED SO TWO IMPLEMENTATIONS AGREE:
 //
 //	unanimous          every resolved link points at ONE type  -> declare it
-//	supermajority      one type holds >= 2/3 of resolved links -> declare it,
-//	                   and NAME the minority (those links are real type
+//	supermajority      one type holds >= 2/3 of the property's LINKS -> declare
+//	                   it, and NAME the minority (those links are real type
 //	                   mismatches; D5/FR-034's relation_type_mismatch finding
 //	                   is where they belong, now visible instead of buried)
 //	otherwise          declare `text`, SAY a relation could not be typed, and
 //	                   name the one-line knowledge_configure edit that fixes
 //	                   it once the operator decides
+//
+// WHICH DENOMINATOR — READ THIS BEFORE "CORRECTING" IT. FR-104a's wording is
+// "a supermajority (>= 2/3 of RESOLVED targets)", and the same requirement
+// states the purpose the threshold exists for: to stop the one guess this
+// run was observed making, `contact.related` -> `to: task` "on a 2-of-5
+// plurality".
+//
+// Those two halves of FR-104a disagree, and the vault settles which is meant.
+// `contact.related` holds FIVE wikilink values: two resolve to `task`, one to
+// `person`, and two resolve to nothing at all. Counting RESOLVED targets only,
+// task holds 2 of 3 — which clears 2/3 exactly, and the property is declared
+// `to: task` again. The threshold would have been added, and the guess it was
+// written to stop would have survived it. Counting the property's LINKS, task
+// holds 2 of 5, and it is refused, which is the outcome the requirement
+// describes in words.
+//
+// So the denominator is every link value: resolved, resolved-to-a-non-record,
+// and dangling alike. That is also the reading that makes sense on its own
+// terms — a link pointing at nothing is evidence that this property is not a
+// reliably typed relation, and dropping those links from the denominator
+// inflates confidence in exactly the properties where the vault is messiest.
+// BOTH ratios are carried on the report (StrictNumerator/StrictDenominator)
+// and printed, so a reader can see what the narrower reading would have said
+// without taking this comment's word for it.
 //
 // WHAT THIS REPLACED, AND WHY THE THRESHOLD EXISTS. The previous rule was
 // "return the PLURALITY whenever ANY link resolved to ANY record type at
@@ -654,11 +688,13 @@ func inferRelationTarget(recordType string, po *PropertyObservation, names *Name
 	byType := map[string]int{}
 	unresolved := 0
 	resolvedTotal := 0
+	linkTotal := 0
 	for _, v := range po.Values {
 		link, ok := records.ParseWikilink(v.Text)
 		if !ok {
 			continue
 		}
+		linkTotal++
 		types, found := names.Resolve(link.Target)
 		if !found {
 			unresolved++
@@ -678,6 +714,7 @@ func inferRelationTarget(recordType string, po *PropertyObservation, names *Name
 		Property:      po.Name,
 		ByType:        byType,
 		ResolvedTotal: resolvedTotal,
+		LinkTotal:     linkTotal,
 		Unresolved:    unresolved,
 	}
 
@@ -690,18 +727,23 @@ func inferRelationTarget(recordType string, po *PropertyObservation, names *Name
 
 	bestType, bestCount := highestCount(byType)
 	rep.MajorityType, rep.MajorityCount = bestType, bestCount
+	rep.StrictNumerator, rep.StrictDenominator = bestCount, resolvedTotal
 
-	if len(byType) == 1 {
-		// Unanimous among every link that resolved at all. Nothing to
-		// report beyond the schema itself, which is why this is the one
-		// branch that returns a nil report.
+	if len(byType) == 1 && unresolved == 0 {
+		// Unanimous: every link this property holds resolved, and every
+		// one of them pointed at the same type. Nothing to report beyond
+		// the schema itself, which is why this is the one branch that
+		// returns a nil report.
+		rep.Rule = RelationUnanimous
 		return bestType, nil
 	}
 
 	rep.Minority = minorityCounts(byType, bestType)
 
-	// FR-104a's threshold, in exact integer arithmetic (see the constants).
-	if relationSupermajorityDen*bestCount >= relationSupermajorityNum*resolvedTotal {
+	// FR-104a's threshold, in exact integer arithmetic (see the constants),
+	// over the property's LINKS — see this function's header on why that is
+	// the denominator and not the resolved subset.
+	if relationSupermajorityDen*bestCount >= relationSupermajorityNum*linkTotal {
 		rep.Rule = RelationSupermajority
 		rep.Declared = "relation"
 		return bestType, rep

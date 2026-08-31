@@ -102,14 +102,20 @@ func (r *Report) Render(w io.Writer) {
 				s.RecordType, s.Property, s.Unresolved)
 			fmt.Fprintf(w, "      fix: %s\n", s.Remedy)
 		case RelationSupermajority:
-			fmt.Fprintf(w, "  %s.%s: declared relation, to=%s — %d of %d resolved links (>= 2/3), unresolved=%d.\n",
-				s.RecordType, s.Property, s.MajorityType, s.MajorityCount, s.ResolvedTotal, s.Unresolved)
-			fmt.Fprintf(w, "      minority (these links WILL be reported as relation_type_mismatch, which is correct): %s\n",
-				strings.Join(s.Minority, ", "))
+			fmt.Fprintf(w, "  %s.%s: declared relation, to=%s — %d of %d links (>= 2/3); %d of those links resolved, %d dangled.\n",
+				s.RecordType, s.Property, s.MajorityType, s.MajorityCount, s.LinkTotal, s.ResolvedTotal, s.Unresolved)
+			if len(s.Minority) > 0 {
+				fmt.Fprintf(w, "      minority (these links WILL be reported as relation_type_mismatch, which is correct): %s\n",
+					strings.Join(s.Minority, ", "))
+			} else {
+				fmt.Fprintf(w, "      no conflicting target type; the shortfall is %d link(s) that resolved to nothing.\n", s.Unresolved)
+			}
 		case RelationNoMajority:
-			fmt.Fprintf(w, "  %s.%s: NOT TYPED — the evidence is genuinely mixed, no target type reached 2/3 of %d resolved links (unresolved=%d); declared text.\n",
-				s.RecordType, s.Property, s.ResolvedTotal, s.Unresolved)
+			fmt.Fprintf(w, "  %s.%s: NOT TYPED — no target type reached 2/3 of this property's %d links (%d resolved, %d dangled); declared text.\n",
+				s.RecordType, s.Property, s.LinkTotal, s.ResolvedTotal, s.Unresolved)
 			fmt.Fprintf(w, "      evidence: %s\n", strings.Join(s.Minority, ", "))
+			fmt.Fprintf(w, "      counting only RESOLVED targets it would have been %d of %d — the narrower reading of FR-104a; see inferRelationTarget for why the wider one is applied.\n",
+				s.StrictNumerator, s.StrictDenominator)
 			fmt.Fprintf(w, "      fix: %s\n", s.Remedy)
 		default:
 			fmt.Fprintf(w, "  %s.%s: %v (unresolved=%d) — declared %s\n",
