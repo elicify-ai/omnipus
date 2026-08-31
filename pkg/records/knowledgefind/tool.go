@@ -48,6 +48,114 @@ The loop: call knowledge_describe first (property names are declared per record 
 
 Every answer opens with its completeness verdict, names each record it could not evaluate and the fix for it, and ends with the calls to make next. An unknown property, operator or value is refused with the valid ones listed — never as zero results, so an empty answer means the vault is empty.`
 
+// ---------------------------------------------------------------------------
+// THE ADVERTISED SUMMARY OPS — ONE LIST, NOT A SECOND ONE
+//
+// This block previously advertised four ops — count, sum, min, max — while
+// request.go accepted fifteen (generated.VaultFindAggregateOp.Valid()). Eleven
+// working, tested, contract-defined summaries were therefore invisible to the
+// only caller that matters. A model that guessed `median` happened to succeed;
+// a provider doing strict structured output against the advertised enum could
+// not emit it at all, so three quarters of FR-150..FR-155 was dead in practice.
+//
+// WHAT CAUSED IT was a hand-copied list, so the fix is not a longer hand-copied
+// list. Two properties make the drift structural rather than remembered:
+//
+//  1. Every entry below names a GENERATED CONSTANT, never a string literal.
+//     Rename or delete a member in the contract and this file stops compiling.
+//  2. TestAdvertisedAggregateOpsMatchTheAcceptedEnum reads the generated enum's
+//     members out of the generated source itself and fails, naming the missing
+//     ops, if this table and that enum ever differ in either direction. That
+//     test is what catches an ADDED member, which the compiler cannot see.
+//
+// WHY A TABLE IN THIS PACKAGE RATHER THAN A LIST FROM THE GENERATED ONE: the
+// generated package exposes no iterable list of members — oapi-codegen emits
+// the constants and a `Valid()` switch and nothing else, and Go has no
+// reflection over constants. So there is no runtime expression that enumerates
+// the enum. The closest thing to a single source of truth is therefore the
+// generated CONSTANTS (compile-checked here) plus a test that enumerates the
+// generated SOURCE (drift-checked there); the glosses have to live somewhere
+// hand-written regardless, because the contract carries no per-member text.
+// ---------------------------------------------------------------------------
+
+// aggregateOpDoc is one advertised summary: the generated enum member, and the
+// half-line that tells a model what distinguishes it from its neighbours.
+//
+// A model that can see `median` but cannot tell it from `avg` is barely better
+// off than one that cannot see it, so the gloss is part of the fix rather than
+// a nicety.
+type aggregateOpDoc struct {
+	op   generated.VaultFindAggregateOp
+	help string
+}
+
+// aggregateOpCatalog is the fifteen, in TEACHING order rather than alphabetical
+// order: the one that needs no property, then the number domain, then the date
+// domain, then checkboxes, then the two defined for every type.
+var aggregateOpCatalog = []aggregateOpDoc{
+	{generated.VaultFindAggregateOpCount, "rows evaluated, the one op that needs no property"},
+	{generated.VaultFindAggregateOpSum, "exact total of a number property"},
+	{generated.VaultFindAggregateOpAvg, "arithmetic mean, rounded, with the label naming the scale"},
+	{generated.VaultFindAggregateOpMedian, "middle value, an even count averaging the two middle ones"},
+	{generated.VaultFindAggregateOpStddev, "POPULATION standard deviation (divisor n)"},
+	{generated.VaultFindAggregateOpMin, "smallest value, numbers or dates"},
+	{generated.VaultFindAggregateOpMax, "largest value, numbers or dates"},
+	{generated.VaultFindAggregateOpRange, "max minus min, rendered as a duration over dates"},
+	{generated.VaultFindAggregateOpEarliest, "earliest date, the date domain's name for min"},
+	{generated.VaultFindAggregateOpLatest, "latest date, the date domain's name for max"},
+	{generated.VaultFindAggregateOpChecked, "checkbox values that are true"},
+	{generated.VaultFindAggregateOpUnchecked, "checkbox values that are false, an ABSENT checkbox counting toward neither"},
+	{generated.VaultFindAggregateOpEmpty, "rows carrying NO value for the property, defined for every type"},
+	{generated.VaultFindAggregateOpFilled, "rows carrying one, defined for every type"},
+	{generated.VaultFindAggregateOpUnique, "DISTINCT values, by the comparator's equality (3 and 3.0 are one)"},
+}
+
+// aggregateOpSeparator divides one gloss from the next.
+//
+// It is deliberately NOT a semicolon: the glosses themselves read as clauses,
+// and a semicolon between them made "count — rows evaluated; the ONLY op that
+// takes no property; sum — ..." ambiguous about where one op ended and the next
+// began. A separator that appears nowhere inside a gloss is what makes the list
+// parseable by eye, and TestEveryAdvertisedAggregateOpCarriesAGloss holds that
+// property.
+const aggregateOpSeparator = " · "
+
+// AdvertisedAggregateOps is the enum the model receives, in catalogue order.
+//
+// It is exported because the drift guard has to be able to ask what was
+// advertised without re-deriving it from the rendered schema, and a guard that
+// re-derives its own oracle is a guard that agrees with itself.
+func AdvertisedAggregateOps() []string {
+	out := make([]string, 0, len(aggregateOpCatalog))
+	for _, d := range aggregateOpCatalog {
+		out = append(out, string(d.op))
+	}
+	return out
+}
+
+// aggregateOpDescription is the glosses, folded into the one string JSON Schema
+// gives an enum-valued property.
+//
+// JSON Schema has no per-member description — `enum` is a bare array of values
+// — and the alternatives (a oneOf of const branches, or `x-`extensions) are
+// either hostile to strict structured output or dropped by every provider that
+// forwards a schema. So the glosses ride in the property's own description,
+// derived from the same table as the enum so the two cannot disagree.
+func aggregateOpDescription() string {
+	var b strings.Builder
+	b.WriteString("The reduction. ")
+	for i, d := range aggregateOpCatalog {
+		if i > 0 {
+			b.WriteString(aggregateOpSeparator)
+		}
+		b.WriteString(string(d.op))
+		b.WriteString(" — ")
+		b.WriteString(d.help)
+	}
+	b.WriteString(". Every op except count needs a property.")
+	return b.String()
+}
+
 // Parameters is the JSON Schema the model sees.
 //
 // The per-parameter text carries the operation detail the description
@@ -135,12 +243,18 @@ func Parameters() map[string]any {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"op":       map[string]any{"type": "string", "enum": []string{"count", "sum", "min", "max"}},
+						"op": map[string]any{
+							"type":        "string",
+							"enum":        AdvertisedAggregateOps(),
+							"description": aggregateOpDescription(),
+						},
 						"property": map[string]any{"type": "string"},
 					},
 					"required": []string{"op"},
 				},
-				"description": "Totals over the full evaluated set, never the page shown. Each states its own scope.",
+				"description": "Totals over the full evaluated set, never the page shown. Each states its own scope. " +
+					"An op is scoped to the property's DOMAIN — a summary the type does not define is refused " +
+					"naming the ones it does, never answered with a zero.",
 			},
 			"explain": map[string]any{
 				"type":        "boolean",
