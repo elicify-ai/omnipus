@@ -736,6 +736,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
 			overrides["recall_conversation"] = allow
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			overrides["ToolSearch"] = allow
 		case IDExplorer:
 			// File + memory exploration (internal context): read-only
 			// filesystem, persistent memory, plus interactive/visual
@@ -761,6 +766,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			} {
 				overrides[b] = allow
 			}
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			overrides["ToolSearch"] = allow
 		case IDResearcher:
 			// External-source research: web search/fetch, read-only file
 			// access (for fetched/local docs), persistent memory, plus
@@ -787,6 +797,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			} {
 				overrides[b] = allow
 			}
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			overrides["ToolSearch"] = allow
 		}
 		return denyAllThenOverride(overrides)
 	}
@@ -844,6 +859,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// must be able to find the plan she owns in order to stop it. See
 			// coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -894,6 +914,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// once an operator approves the "ask" above — and would then need
 			// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -967,6 +992,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// directly on his critical path. See coreAgentSeed's ROSTER
 			// VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -1097,6 +1127,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// necessarily mint this turn. He is also the heaviest delegator.
 			// See coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
@@ -1134,12 +1169,20 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"read_file":       allow,
 			"list_directory":  allow,
 			"inspect_session": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent, including
+			// System Agents, needs ToolSearch to reach ANY tiered (lazy/
+			// search-only) tool at all — seeded here as real data rather than
+			// the retired compositor.go hardcoded force-allow.
+			"ToolSearch": allow,
 		})
 	case IDPlanSupervisor:
 		// ADR-055 / plan-supervisor-spec FR-008. PlanSupervisor's grant is
-		// EXACTLY ONE tool. Naming plan_correct here is not belt-and-braces:
-		// denyAllThenOverride stamps an explicit deny for every catalog name
-		// first, and a per-agent deny BEATS the global "allow" ceiling under
+		// EXACTLY TWO tools: plan_correct (its role-specific grant) and
+		// ToolSearch (the structural floor every agent gets — see the
+		// "Structural floor" comment on the ToolSearch entry below). Naming
+		// plan_correct here is not belt-and-braces: denyAllThenOverride
+		// stamps an explicit deny for every catalog name first, and a
+		// per-agent deny BEATS the global "allow" ceiling under
 		// strictest-wins — so an unnamed tool ships denied to PlanSupervisor
 		// itself and the correction loop would be dead on arrival on every
 		// fresh install.
@@ -1188,13 +1231,19 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     opposite of "one correction per wake".
 		//
 		// TestPlanSupervisorSeed_ExactlyPlanCorrect asserts this as a
-		// COMPLEMENT (allow for plan_correct, deny for every other name in
-		// allStaticToolNames) rather than as a list, so a tool added to the
-		// catalog later can never silently land in PlanSupervisor's allow set.
-		// A future change that genuinely wants a second grant must amend that
-		// test deliberately — the complement failing is the guard working.
+		// COMPLEMENT (allow for plan_correct AND ToolSearch, deny for every
+		// other name in allStaticToolNames) rather than as a list, so a tool
+		// added to the catalog later can never silently land in
+		// PlanSupervisor's allow set. ToolSearch is the one deliberate,
+		// uniform exception to "exactly one role-specific tool": every agent
+		// needs it to reach ANY tiered (lazy/search-only) tool at all — a
+		// structural floor, not a role-specific grant, and it applies even to
+		// the most locked-down agent in the system. A future change that
+		// genuinely wants a THIRD grant must amend that test deliberately —
+		// the complement failing is the guard working.
 		return denyAllThenOverride(map[string]config.ToolPolicy{
 			"plan_correct": allow,
+			"ToolSearch":   allow,
 		})
 	default:
 		return denyAllThenOverride(nil)
@@ -2015,10 +2064,12 @@ func toolPolicyMapsEqual(a, b map[string]config.ToolPolicy) bool {
 // custom/subagent/subagent_3p agent (FR-008, FR-022). Every new agent starts
 // fully-enumerated and deny-by-default (via denyAllThenOverride) — there is
 // no DefaultPolicy field and no allow-by-default fallback. Only a narrow,
-// conservative read-only surface is allowed out of the box; the operator
-// opts in explicitly (via the tool picker or tools.builtin.policies) for
-// anything else, including bash and every system-management tool
-// (create_agent, set_config, add_mcp_server, …), which all stay denied.
+// conservative read-only surface is allowed out of the box (plus the
+// structural ToolSearch floor every agent gets — CLAUDE.md constraint 6, see
+// the "ToolSearch" entry below); the operator opts in explicitly (via the
+// tool picker or tools.builtin.policies) for anything else, including bash
+// and every system-management tool (create_agent, set_config,
+// add_mcp_server, …), which all stay denied.
 //
 // Callers should embed this into config.AgentConfig.Tools when constructing a
 // new agent via the REST API or create_agent tool.
@@ -2060,6 +2111,11 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"recall_memory":       allow,
 				"run_retrospective":   allow,
 				"recall_conversation": allow,
+				// Structural floor (CLAUDE.md constraint 6): every agent needs
+				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+				// seeded here as real data rather than the retired compositor.go
+				// hardcoded force-allow.
+				"ToolSearch": allow,
 			}),
 		},
 	}

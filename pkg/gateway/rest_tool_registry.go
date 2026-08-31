@@ -158,9 +158,17 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 // FR-028, FR-086: effective_policy for SPA badge rendering.
 // Gap 3: manifest_tier tags each tool as "full" (always-callable), "compressed"
 // (lazy — listed in manifest, loaded on demand via the `tools` infra tool), or
-// "infra" (always-callable discovery tool `tools` that drives the manifest
-// mechanism itself). Infra tools are force-included even when FilterToolsByPolicy
-// would drop them for a deny-default agent, mirroring the loop's runtime force-include.
+// "infra" (the discovery tool `tools` that drives the manifest mechanism
+// itself). The infra tool's effective_policy is resolved through the SAME
+// FilterToolsByPolicy call as every other tool — it is seeded "allow" as real
+// policy data for every agent (pkg/coreagent/core.go), so it is present here
+// when actually allowed and correctly absent when an operator has denied it.
+// There used to be a second pass here that unconditionally force-included
+// infra tools with a hardcoded "allow" regardless of what FilterToolsByPolicy
+// resolved, mirroring a runtime force-allow that also existed in the agent
+// loop and gateway approval gate. Both were CLAUDE.md hard-constraint-6
+// violations (a hardcoded allow with no real policy data behind it) and have
+// been removed — this panel now shows the tool's true effective policy.
 func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Request, agentID string) {
 	cfg := a.agentLoop.GetConfig()
 
@@ -220,9 +228,6 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		allTools := agentInstance.Tools.GetAll()
 		filtered, policyMap := tools.FilterToolsByPolicy(allTools, agentType, policyCfg)
 
-		// Track which tools are already included so infra force-include can dedup.
-		included := make(map[string]struct{}, len(filtered))
-
 		for _, t := range filtered {
 			name := t.Name()
 			// This fallback is provably dead today: FilterToolsByPolicy always
@@ -251,28 +256,6 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
 				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy(effectivePolicy),
 				ManifestTier:     tier,
-			})
-			included[name] = struct{}{}
-		}
-
-		// Force-include infra tools that FilterToolsByPolicy may have dropped for a
-		// deny-default agent. At runtime the agent loop always makes the `tools`
-		// infra tool callable when registered, regardless of policy. The panel must
-		// reflect this so operators can see the complete callable surface.
-		for _, t := range allTools {
-			name := t.Name()
-			if _, alreadyIncluded := included[name]; alreadyIncluded {
-				continue
-			}
-			if tools.ToolManifestTier(name) != tools.ManifestInfra {
-				continue
-			}
-			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg, cfg.Sandbox.ToolPolicies)
-			toolEntries = append(toolEntries, toolsEntry{
-				Name:             name,
-				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
-				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy("allow"),
-				ManifestTier:     gen.AgentToolsResponseToolsManifestTierInfra,
 			})
 		}
 	}

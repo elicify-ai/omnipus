@@ -1226,7 +1226,9 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Ava and Mia are deny-by-default; `ToolSearch` is not in their explicit allow-list.
+	// Ava and Mia are deny-by-default overall, but `ToolSearch` is a structural
+	// floor BOTH explicitly seed "allow" for (pkg/coreagent/core.go) — every
+	// agent needs it to reach any tiered/lazy tool at all.
 	for _, agentID := range []string{"ava", "mia"} {
 		t.Run(agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
@@ -1240,10 +1242,15 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 			)
 
 			// Post-unification (#438): the single authoritative resolver
-			// (tools.EffectiveToolPolicy via FilterToolsByPolicy) force-allows infra
-			// UNCONDITIONALLY, so even a deny-default agent already has `ToolSearch`
-			// authorized in the snapshot here. We capture it to prove the fix holds
-			// at the resolver layer (no longer requiring ensureInfraToolsExecutable).
+			// (tools.EffectiveToolPolicy via FilterToolsByPolicy) resolves
+			// ToolSearch through the SAME global×agent merge as every other
+			// static builtin tool — no special case (the former unconditional
+			// infra force-allow was a CLAUDE.md hard-constraint-6 violation and
+			// has been removed). Even a deny-default agent already has
+			// `ToolSearch` authorized in the snapshot here, because it is
+			// seeded "allow" as real, explicit policy data. We capture it to
+			// prove the fix holds at the resolver layer (no longer requiring
+			// ensureInfraToolsExecutable).
 			rawVerdict, rawAllowed := policyMap["ToolSearch"]
 
 			// ensureInfraToolsExecutable is now an idempotent backstop; calling it
@@ -1283,12 +1290,15 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 }
 
 // TestEnsureInfraToolsExecutable_IdempotentAfterUnifiedResolver verifies the
-// post-unification (#438) invariant. The single authoritative resolver
-// (tools.EffectiveToolPolicy via FilterToolsByPolicy) now force-allows infra
-// tools UNCONDITIONALLY, so `ToolSearch` is already present in policyMap as
-// "allow" after the filter — even for a deny-default agent (Ava). Therefore
-// ensureInfraToolsExecutable is an idempotent no-op: it must not double-add the
-// tool nor change the "allow" verdict.
+// post-unification (#438) invariant. ToolSearch resolves through the SAME
+// global×agent merge as every other static builtin tool (the former
+// unconditional infra force-allow inside tools.EffectiveToolPolicy was a
+// CLAUDE.md hard-constraint-6 violation and has been removed) and is seeded
+// "allow" as real, explicit data for every agent (pkg/coreagent/core.go), so
+// `ToolSearch` is already present in policyMap as "allow" after the filter —
+// even for a deny-default agent (Ava), because that is its real resolved
+// policy. Therefore ensureInfraToolsExecutable is an idempotent no-op: it
+// must not double-add the tool nor change the "allow" verdict.
 //
 // The OBSERVABLE behavior on the non-compressed path (ToolSearch never surfaced to
 // the model) is preserved by stripInfraToolDefs, asserted in
@@ -1302,9 +1312,10 @@ func TestEnsureInfraToolsExecutable_IdempotentAfterUnifiedResolver(t *testing.T)
 	allTools := ava.Tools.GetAll()
 	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, ava.LoadToolPolicy())
 
-	// Unified resolver already force-allowed infra, even for deny-default Ava.
+	// ToolSearch resolves "allow" from its own real seeded policy entry, even
+	// for deny-default Ava.
 	require.Equal(t, "allow", policyMap["ToolSearch"],
-		"unified resolver must force-allow ToolSearch for a deny-default agent")
+		"ToolSearch must resolve allow from its own seeded policy entry for a deny-default agent")
 	before := len(policyFiltered)
 
 	out := ensureInfraToolsExecutable(ava.Tools, policyFiltered, policyMap)
@@ -2249,29 +2260,30 @@ func TestLoadTool_LiveToggle_CompressedDefsWork(t *testing.T) {
 
 // TestLoadTool_UncompressedDefs_LoadToolNotSentToModel proves that in uncompressed
 // mode (Compressed=false), the ToolSearch infra tool does NOT appear in the provider
-// defs surfaced to the model — for ANY agent, REGARDLESS of its default policy.
+// defs surfaced to the model — for ANY agent, regardless of whether its own seeded
+// policy data allows or denies it.
 //
-// Post-unification (#438): the single authoritative resolver now force-allows
-// infra UNCONDITIONALLY, so ToolSearch IS present in policyFiltered for every
-// agent. The observable behavior (ToolSearch never surfaced when compression is
-// off) is preserved by stripInfraToolDefs on the non-compressed defs path in
-// runTurn. This is NOT byte-for-byte the old behavior in every case:
-//   - deny-default agents: the old filter ALSO dropped ToolSearch uncompressed, so
-//     the surfaced set is unchanged.
-//   - allow-default agents: the OLD path SENT ToolSearch uncompressed (allow-default
-//     kept it); the new path strips it. This is a deliberate, narrow change —
-//     ToolSearch has no function in an uncompressed turn (no manifest block tells
-//     the model to use it), so removing it is correct.
+// Post-unification (#438): ToolSearch resolves through the SAME global×agent
+// merge as every other static builtin tool (compositor.go's former
+// unconditional infra force-allow was a CLAUDE.md hard-constraint-6 violation
+// and has been removed). It is seeded "allow" as real, explicit data for
+// every agent (pkg/coreagent/core.go), so it IS present in policyFiltered for
+// every seeded agent below — not because of a bypass, but because that is its
+// real resolved policy. The observable behavior (ToolSearch never surfaced
+// when compression is off) is preserved by stripInfraToolDefs on the
+// non-compressed defs path in runTurn, independent of whatever policy value
+// ToolSearch actually resolved to.
 //
-// The test mirrors the real path (ToolsToProviderDefs(stripInfraToolDefs(...)))
-// and covers both default-policy classes.
+// The test mirrors the real path (ToolsToProviderDefs(stripInfraToolDefs(...))).
 func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 	cfg := newUncompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Subgroup 1: the 4 seeded core agents are deny-default; ToolSearch is not in
-	// their allow-list. Old behavior already excluded it — surfaced set unchanged.
+	// The 4 seeded core agents are deny-default overall, but ToolSearch is a
+	// structural floor every one of them seeds "allow" explicitly
+	// (pkg/coreagent/core.go) — so it resolves "allow" and is present in the
+	// filtered slice like any other allowed tool.
 	for _, agentID := range []string{"mia", "jim", "ava", "ray"} {
 		t.Run("deny-default/"+agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
@@ -2284,11 +2296,12 @@ func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 				agentInst.LoadToolPolicy(),
 			)
 
-			// Unified resolver keeps ToolSearch in the filtered slice (force-allow)...
+			// ToolSearch resolves "allow" from its own real seeded policy entry.
 			require.Equal(t, "allow", policyMap["ToolSearch"],
-				"agent %q: resolver force-allows ToolSearch", agentID)
+				"agent %q: ToolSearch must resolve allow from its own seeded policy entry", agentID)
 
-			// ...but the real uncompressed path strips it before surfacing.
+			// ...but the real uncompressed path strips it before surfacing,
+			// regardless of its resolved policy.
 			uncompressedDefs := tools.ToolsToProviderDefs(stripInfraToolDefs(policyFiltered))
 			for _, d := range uncompressedDefs {
 				assert.NotEqual(t, "ToolSearch", d.Function.Name,
@@ -2297,38 +2310,36 @@ func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 		})
 	}
 
-	// Subgroup 2: an ALLOW-DEFAULT agent. The OLD uncompressed path SENT ToolSearch
-	// for an allow-default agent (allow-default kept it through the filter); the NEW
-	// path strips it. We synthesize the allow-default policy directly so the case is
-	// hermetic (no dependency on a seeded allow-default agent). ToolSearch must be
-	// registered to be force-allowed; we borrow Ava's registry (ToolSearch is always
-	// registered) and apply an allow-default ToolPolicyCfg.
-	t.Run("allow-default/synthetic", func(t *testing.T) {
+	// An agent whose OWN policy explicitly allows ToolSearch (mirroring real
+	// seeded data — pkg/coreagent/core.go grants it to every agent) still
+	// must not see it surfaced uncompressed: stripInfraToolDefs strips it
+	// unconditionally, independent of the resolved policy value. This used to
+	// synthesize an EMPTY ToolPolicyCfg and rely on compositor.go's
+	// unconditional infra force-allow to put ToolSearch in policyFiltered —
+	// that bypass is gone (CLAUDE.md hard constraint 6), so the cfg here
+	// carries a real, explicit "ToolSearch": allow entry instead. We borrow
+	// Ava's registry (ToolSearch is always registered there).
+	t.Run("explicit-allow/synthetic", func(t *testing.T) {
 		ava, ok := al.registry.GetAgent("ava")
 		require.True(t, ok)
 		allTools := ava.Tools.GetAll()
 
-		// An empty ToolPolicyCfg is enough here: ToolSearch's infra force-allow
-		// (ManifestInfra) short-circuits BEFORE the global×agent merge, so its
-		// resolution is unconditional regardless of any policy configuration —
-		// there is no more "allow-default" config concept to synthesize
-		// (CLAUDE.md hard constraint 6), but the force-allow behavior this
-		// subtest actually exercises is unaffected by that removal.
-		allowDefault := &tools.ToolPolicyCfg{}
-		policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, allowDefault)
+		explicitAllow := &tools.ToolPolicyCfg{
+			Policies: map[string]config.ToolPolicy{"ToolSearch": config.ToolPolicyAllow},
+		}
+		policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, explicitAllow)
 
-		// ToolSearch is force-allowed regardless of policy (it would have been SENT
-		// uncompressed under the old code).
+		// ToolSearch resolves "allow" from its own real seeded policy entry.
 		require.Equal(t, "allow", policyMap["ToolSearch"],
-			"allow-default: ToolSearch is allow in the filtered set")
+			"explicit-allow: ToolSearch is allow in the filtered set")
 		require.Contains(t, toolNameSet(policyFiltered), "ToolSearch",
-			"allow-default: ToolSearch present in policyFiltered (old code would send it)")
+			"explicit-allow: ToolSearch present in policyFiltered")
 
-		// The new uncompressed path strips it regardless of the allow-default policy.
+		// The uncompressed path strips it regardless of the resolved policy.
 		uncompressedDefs := tools.ToolsToProviderDefs(stripInfraToolDefs(policyFiltered))
 		for _, d := range uncompressedDefs {
 			assert.NotEqual(t, "ToolSearch", d.Function.Name,
-				"allow-default: ToolSearch must NOT be surfaced uncompressed (stripped regardless of default policy)")
+				"explicit-allow: ToolSearch must NOT be surfaced uncompressed (stripped regardless of resolved policy)")
 		}
 	})
 }

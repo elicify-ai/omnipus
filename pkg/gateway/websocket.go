@@ -46,12 +46,13 @@ import (
 // FilterToolsByPolicy uses at defs-assembly time — so the gateway exec gate and
 // the loop's sent-defs view can never drift. It builds the resolver inputs (the
 // sandbox global floor + the agent's builtin policy) from cfg. The primitive
-// encapsulates, in order: (1) infra force-allow (ToolSearch → allow,
-// unconditional — infra tools are registration-gated, not policy-gated, so they
-// stay executable for EVERY agent including deny-by-default Ava/Mia/Ray, or
-// every lazy tool becomes unreachable at exec time), (2) the scope gate, and
-// (3) global×agent strictest-wins (deny > ask > allow). The tools that ToolSearch
-// *loads* stay independently policy-gated when they are actually called.
+// encapsulates, in order: (1) the scope gate, and (2) global×agent
+// strictest-wins (deny > ask > allow). ToolSearch resolves through this same
+// merge as every other static builtin tool — it is seeded "allow" as real,
+// explicit data for every agent (pkg/coreagent/core.go), not a code-level
+// force-allow (there used to be one here; it was a CLAUDE.md hard-constraint-6
+// violation and has been removed). The tools that ToolSearch *loads* stay
+// independently policy-gated when they are actually called.
 //
 // BEHAVIOR CHANGE (intentional): this does NOT preserve the OLD gateway exec
 // gate verdict byte-for-byte. The old gateway resolved policy by EXACT-MATCH
@@ -76,12 +77,11 @@ import (
 // policy snapshot from the registry; both paths funnel through
 // tools.EffectiveToolPolicy so they agree on the wildcard-aware verdict.
 func resolveApprovalToolPolicy(cfg *config.Config, toolName, agentID string) string {
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		return "allow"
-	}
 	if cfg == nil {
-		// No config to build a floor from: an infra tool was already handled
-		// above; everything else defaults to interactive approval.
+		// No config to build a floor from: no seeded policy data of any kind
+		// (CLAUDE.md hard constraint 6 — no code-level fallback), so this
+		// defaults to interactive approval rather than a language-level allow
+		// or deny.
 		return "ask"
 	}
 	// No default-policy fallback (CLAUDE.md hard constraint 6): only explicit

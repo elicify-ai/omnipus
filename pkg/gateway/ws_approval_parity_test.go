@@ -74,6 +74,13 @@ type parityCase struct {
 // removed default. Without an explicit entry a tool fails closed to "deny"
 // (tools.resolveEffectivePolicyWith), which would silently break jim's
 // allow-by-default parity case.
+//
+// "ToolSearch" likewise carries its own explicit "allow" entry on both
+// agents, mirroring the real seeded data every agent now carries
+// (pkg/coreagent/core.go) — it used to resolve "allow" via compositor.go's
+// unconditional infra force-allow (removed; a CLAUDE.md hard-constraint-6
+// violation), so the parity cases that exercise it need the same real data a
+// live seed would provide.
 func buildParityConfig() *config.Config {
 	return &config.Config{
 		Sandbox: config.OmnipusSandboxConfig{
@@ -94,6 +101,7 @@ func buildParityConfig() *config.Config {
 								"send_message_blocked": config.ToolPolicyAllow, // global deny must still win
 								"send_message":         config.ToolPolicyDeny,  // explicit — replaces the removed deny-default
 								"exec":                 config.ToolPolicyDeny,  // explicit — replaces the removed deny-default
+								"ToolSearch":           config.ToolPolicyAllow, // structural floor every real seed grants
 							},
 						},
 					},
@@ -107,6 +115,7 @@ func buildParityConfig() *config.Config {
 								"exec":       config.ToolPolicyDeny,
 								"fetch_url":  config.ToolPolicyAsk,
 								"search_web": config.ToolPolicyAllow, // explicit — replaces the removed allow-default
+								"ToolSearch": config.ToolPolicyAllow, // structural floor every real seed grants
 							},
 						},
 					},
@@ -121,7 +130,7 @@ func parityCases() []parityCase {
 		// ava: mostly-deny fixture (Ava-like) — every tool below has an
 		// explicit Policies entry in buildParityConfig; none rely on a
 		// default any more (CLAUDE.md hard constraint 6).
-		{"ava/ToolSearch(infra)", "ToolSearch", tools.ScopeGeneral, "ava", "custom", "allow"},
+		{"ava/ToolSearch(seeded allow)", "ToolSearch", tools.ScopeGeneral, "ava", "custom", "allow"},
 		{"ava/allowed", "search_web", tools.ScopeGeneral, "ava", "custom", "allow"},
 		{"ava/denied-unlisted", "send_message", tools.ScopeGeneral, "ava", "custom", "deny"},
 		{"ava/ask", "fetch_url", tools.ScopeGeneral, "ava", "custom", "ask"},
@@ -130,7 +139,7 @@ func parityCases() []parityCase {
 		{"ava/global-deny-floor-wins", "send_message_blocked", tools.ScopeGeneral, "ava", "custom", "deny"},
 
 		// jim: mostly-allow fixture (Jim-like) — same note as above.
-		{"jim/ToolSearch(infra)", "ToolSearch", tools.ScopeGeneral, "jim", "custom", "allow"},
+		{"jim/ToolSearch(seeded allow)", "ToolSearch", tools.ScopeGeneral, "jim", "custom", "allow"},
 		{"jim/unlisted-allow", "search_web", tools.ScopeGeneral, "jim", "custom", "allow"},
 		{"jim/explicit-deny", "exec", tools.ScopeCore, "jim", "custom", "deny"},
 		{"jim/explicit-ask", "fetch_url", tools.ScopeGeneral, "jim", "custom", "ask"},

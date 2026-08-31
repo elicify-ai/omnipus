@@ -4901,9 +4901,13 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // authoritative primitive (tools.EffectiveToolPolicy) AND the SAME live policy
 // snapshot (the agent instance's LoadToolPolicy) that the agent loop's
 // FilterToolsByPolicy uses at defs-assembly time, so the two can never diverge.
-// It encapsulates, in order: (1) infra force-allow (ToolSearch → allow,
-// unconditional), (2) the scope gate (fail-closed for unknown scopes), and
-// (3) global×agent strictest-wins (deny > ask > allow, god-mode, wildcards).
+// It encapsulates, in order: (1) the scope gate (fail-closed for unknown
+// scopes), and (2) global×agent strictest-wins (deny > ask > allow, god-mode,
+// wildcards). ToolSearch resolves through this same merge as every other
+// static builtin tool — it is seeded "allow" as real, explicit data for every
+// agent (pkg/coreagent/core.go), not a code-level force-allow (there used to
+// be an unconditional infra fast-path here; it was a CLAUDE.md
+// hard-constraint-6 violation and has been removed).
 //
 // BEHAVIOR CHANGE (intentional): this ALIGNS the exec gate to the agent loop's
 // wildcard-aware verdict. The OLD gateway resolver matched policy keys by
@@ -4921,12 +4925,6 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // the exec gate was already surfaced to the model, so it is not an unknown-scope
 // tool — ScopeGeneral imposes no extra restriction beyond the policy merge).
 func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string {
-	// Infra fast-path: force-allow regardless of agent/config resolution so the
-	// gate behaves correctly even before the registry/config are wired.
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		return "allow"
-	}
-
 	// Preferred path: resolve through the agent instance's LIVE policy snapshot
 	// (LoadToolPolicy — the same *ToolPolicyCfg, including any GodMode flag, that
 	// FilterToolsByPolicy receives) and the tool's real scope, so this verdict
@@ -8761,14 +8759,16 @@ turnLoop:
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
 		} else {
 			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
-			// before surfacing defs to the model. The unified resolver
-			// (tools.EffectiveToolPolicy) force-allows infra UNCONDITIONALLY, so
-			// ToolSearch is now present in policyFilteredTools even when
-			// compression is off; but ToolSearch exists only to drive the
-			// compressed manifest mechanism and has no function when compression is
-			// off, so the model never sees it here regardless of what the agent's
-			// tool-policy map resolves for it (see stripInfraToolDefs for the
-			// mostly-deny vs. mostly-allow behavior note) (#438).
+			// before surfacing defs to the model. ToolSearch resolves through the
+			// same global×agent merge as every other static builtin tool and is
+			// seeded "allow" as real, explicit data for every agent
+			// (pkg/coreagent/core.go), so it is typically present in
+			// policyFilteredTools even when compression is off; but ToolSearch
+			// exists only to drive the compressed manifest mechanism and has no
+			// function when compression is off, so the model never sees it here
+			// regardless of what the agent's tool-policy map resolves for it (see
+			// stripInfraToolDefs for the mostly-deny vs. mostly-allow behavior
+			// note) (#438).
 			providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(policyFilteredTools))
 		}
 
@@ -13252,22 +13252,18 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 }
 
 // resolveSingleToolPolicy loads the current policy pointer and resolves the
-// effective policy for toolName using FilterToolsByPolicy. Returns "" if the
-// tool is not found in the agent's registered tools.
+// effective policy for toolName using FilterToolsByPolicy. Returns "deny" if
+// the tool is not found in the agent's registered tools or has no policy
+// entry on either side.
+//
+// The unified `ToolSearch` infra tool used to get an unconditional
+// registration-gated force-allow here (bypassing FilterToolsByPolicy
+// entirely) because no seeded agent named it in its own tool-policy override
+// map — a CLAUDE.md hard-constraint-6 violation. ToolSearch is now seeded
+// "allow" as real, explicit data for every agent (pkg/coreagent/core.go), so
+// it resolves correctly through the same FilterToolsByPolicy call as every
+// other tool below; the force-allow shortcut has been removed.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
-	// The unified `ToolSearch` infra tool is registration-gated, not policy-gated:
-	// it only exists on the agent when compressed mode or MCP discovery is on,
-	// and when present it MUST always be executable — it drives the manifest
-	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a
-	// registered infra tool as "allow" regardless of what the agent's own
-	// tool-policy map resolves for it.
-	// (Without this, resolveToolPolicyAtExec re-derives livePolicy="deny" for a
-	// deny-by-default agent and overrides the filter-time allow — the live bug.)
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		if _, ok := ts.agent.Tools.Get(toolName); ok {
-			return "allow"
-		}
-	}
 	allTools := ts.agent.Tools.GetAll()
 	_, pmap := tools.FilterToolsByPolicy(allTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 	p, ok := pmap[toolName]
