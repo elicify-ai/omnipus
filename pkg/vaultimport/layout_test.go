@@ -69,38 +69,33 @@ func TestLayout_IsReadFromTheBase(t *testing.T) {
 	}
 }
 
-// TestLayout_CardsCannotImportClean is FR-109's whole point, stated as the
-// failure it prevents.
+// TestLayout_CardsIsCarriedAndNeverSilentlyATable is FR-109's whole point,
+// stated as the failure it prevents.
 //
-// A cards view that imports as a table with NO loss recorded scores CLEAN
-// under W7's exit criterion — a green number over an undetected loss, which
-// is the precise failure ADR-068 is written against. So: a cards view MUST
-// carry a named loss, and that loss MUST be an annotation (it changes how
-// rows are drawn, never which rows there are), so the view stays ENABLED.
-func TestLayout_CardsCannotImportClean(t *testing.T) {
+// The measured failure: an Obsidian CARDS view imported as a table, recorded
+// NO loss at all, and scored CLEAN — a green number over an undetected loss.
+// Version 2 of the view format has a `layout` field and the product renders
+// cards (the contract says so in as many words: "ONLY table AND cards ARE
+// RENDERED"), so the honest outcome is now that the layout is CARRIED. Clean
+// is therefore correct here — but ONLY on the condition this test enforces:
+// the written file must actually say `layout: cards`. A clean import with no
+// layout key is the original failure wearing a new number.
+func TestLayout_CardsIsCarriedAndNeverSilentlyATable(t *testing.T) {
 	vo, written := layoutVault(t, "cards")
 
-	if vo.Status == OutcomeConverted {
-		t.Fatalf("a CARDS view imported CLEAN — this is the exact failure FR-109 exists to prevent. Written file:\n%s", written)
+	if !strings.Contains(written, "layout: cards") {
+		t.Fatalf("a CARDS view was imported without `layout: cards` in the file — this is the exact failure FR-109 exists to prevent. Written file:\n%s", written)
 	}
-	if len(vo.Losses) == 0 {
-		t.Fatal("a CARDS view imported with no named loss at all")
+	if vo.Layout != "cards" {
+		t.Errorf("the report records layout %q for a cards view", vo.Layout)
 	}
-
-	var layoutLoss string
 	for _, l := range vo.Losses {
 		if pos, ok := parseLossPosition(l); ok && pos == LossLayout {
-			layoutLoss = l
+			t.Errorf("a cards view recorded a layout loss even though the layout was carried: %q", l)
 		}
 	}
-	if layoutLoss == "" {
-		t.Fatalf("a CARDS view recorded losses but none at the layout position: %v", vo.Losses)
-	}
-	if !strings.Contains(layoutLoss, "cards") {
-		t.Errorf("the layout loss does not name the layout that was asked for: %q", layoutLoss)
-	}
 	if vo.Disabled {
-		t.Errorf("a CARDS view was DISABLED. A layout changes how rows are DRAWN, never which rows exist, so it is an annotation loss (FR-106) and the view must still be applicable. Disabling losses: %v", vo.DisablingLosses)
+		t.Errorf("a CARDS view was DISABLED. A layout changes how rows are DRAWN, never which rows exist. Disabling losses: %v", vo.DisablingLosses)
 	}
 }
 
@@ -133,7 +128,10 @@ func TestLayout_TableLosesNothing(t *testing.T) {
 // something we cannot draw" sends nobody anywhere; "this view wanted a
 // calendar" is actionable.
 func TestLayout_UnrenderableLayoutsAreNamedIndividually(t *testing.T) {
-	for _, layout := range []string{"cards", "board", "calendar", "gallery", "map", "list"} {
+	// `cards` is deliberately absent: the contract lists table and cards as
+	// the two layouts this product RENDERS, so a cards view is carried rather
+	// than named as a loss. It has its own test above.
+	for _, layout := range []string{"board", "calendar", "gallery", "map", "list"} {
 		t.Run(layout, func(t *testing.T) {
 			vo, _ := layoutVault(t, layout)
 			var found bool

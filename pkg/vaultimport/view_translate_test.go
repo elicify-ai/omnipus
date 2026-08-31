@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
@@ -81,9 +82,10 @@ views:
     summaries:
       priority: avg
 
-  # (3) UNSUPPORTED OPERATOR IN A FILTER. The standing FR-105 example: drop
-  # the folder exclusion and the view quietly includes every scratch note.
-  # Expected: DISABLED.
+  # (3) THE STANDING FR-105 EXAMPLE, WHICH NOW TRANSLATES. Under version 1
+  # the folder exclusion had no representation and the view was disabled to
+  # stop it quietly including every scratch note. Version 2 carries it
+  # (FR-134), so the exclusion is real. Expected: CONVERTED, enabled.
   - type: table
     name: Live only
     filters:
@@ -92,9 +94,10 @@ views:
         - not:
             - file.inFolder("99-Temp")
 
-  # (4) A CARDS VIEW. The rendering is real and this release's view file
-  # format cannot carry it, so it is a NAMED loss — never a clean import.
-  # Expected: CONVERTED WITH NAMED LOSSES, ENABLED (layout is an annotation).
+  # (4) A CARDS VIEW. Version 2 has a layout field and the product renders
+  # cards, so the rendering is CARRIED and nothing is lost. It is here as the
+  # control for FR-109: a cards view may only import clean when the layout it
+  # asked for is actually written into the file.
   - type: cards
     name: Gallery
 
@@ -160,8 +163,8 @@ func TestTranslateBase_TheFourOutcomes(t *testing.T) {
 		{"Board", OutcomeConvertedWithLosses, false, "table", []LossPosition{
 			LossProperties, LossProperties, LossSort, LossGroupBy, LossAggregates,
 		}},
-		{"Live only", OutcomeConvertedWithLosses, true, "table", []LossPosition{LossViewFilter}},
-		{"Gallery", OutcomeConvertedWithLosses, false, "cards", []LossPosition{LossLayout}},
+		{"Live only", OutcomeConverted, false, "table", nil},
+		{"Gallery", OutcomeConverted, false, "cards", nil},
 		{"Archived", OutcomeConvertedWithLosses, true, "table", []LossPosition{LossFilterLeaf}},
 		{"Listing", OutcomeConvertedWithLosses, false, "list", []LossPosition{LossLayout}},
 	}
@@ -278,19 +281,33 @@ func TestTranslateBase_WrittenFileRecordsTheRefusal(t *testing.T) {
 		files[pv.RelPath] = top
 	}
 
-	live := files["views/decisions--live-only.yaml"]
-	if live == nil {
+	arch := files["views/decisions--archived.yaml"]
+	if arch == nil {
 		t.Fatalf("the disabled view was not written at all; produced: %v", keysOf(files))
 	}
-	if live["disabled"] != true {
-		t.Errorf("the disabled view's file does not carry `disabled: true` — anything reading the file would apply it: %v", live)
+	if arch["disabled"] != true {
+		t.Errorf("the disabled view's file does not carry `disabled: true` — anything reading the file would apply it: %v", arch)
 	}
-	untranslated, _ := live["untranslated"].([]any)
+	untranslated, _ := arch["untranslated"].([]any)
 	if len(untranslated) == 0 {
 		t.Error("the disabled view's file records no `untranslated` entries — FR-101 requires the refused expression verbatim")
 	}
-	if !strings.Contains(renderVerbatim(untranslated), "99-Temp") {
-		t.Errorf("the refused folder exclusion is not preserved verbatim: %v", untranslated)
+	if !strings.Contains(renderVerbatim(untranslated), "archived") {
+		t.Errorf("the refused truthy test is not preserved verbatim: %v", untranslated)
+	}
+
+	// The standing FR-105 example NOW TRANSLATES, and the file has to prove
+	// it: the folder exclusion must be present as a real `file.folder` node,
+	// not merely absent from `untranslated`.
+	liveOnly := files["views/decisions--live-only.yaml"]
+	if liveOnly == nil {
+		t.Fatal("the folder-excluding view was not written")
+	}
+	if _, present := liveOnly["untranslated"]; present {
+		t.Errorf("the folder exclusion is still reported lost: %v", liveOnly["untranslated"])
+	}
+	if rendered := renderVerbatim(liveOnly["filter"]); !strings.Contains(rendered, "file.folder") || !strings.Contains(rendered, "99-Temp") {
+		t.Errorf("the written filter does not exclude the folder the base excluded:\n%s", rendered)
 	}
 
 	clean := files["views/decisions--accepted.yaml"]
@@ -310,24 +327,49 @@ func TestTranslateBase_WrittenFileRecordsTheRefusal(t *testing.T) {
 		t.Errorf("source = %v, want the base file it came from", clean["source"])
 	}
 
-	// FR-109 read from the other side: `layout` is a VERSION-2 key and this
-	// writer emits version 1, so it must NOT appear in the file — the
-	// rendering survives as the named loss instead. A v1 file carrying a v2
-	// key is refused by records.LoadViews on the very next load.
+	// FR-109 read from the other side. `layout` is a VERSION-2 key, so which
+	// files may carry it is decided by the version this writer emits — the
+	// version partition in pkg/records/view.go refuses a v1 file carrying a v2
+	// key on the very next load, which would turn every imported view into a
+	// load failure long after the run that wrote them.
 	for path, top := range files {
-		if _, present := top["layout"]; present && records.SupportedViewVersion < records.ViewVersion2 {
+		_, present := top["layout"]
+		if present && records.SupportedViewVersion < records.ViewVersion2 {
 			t.Errorf("%s carries a `layout` key on a schema_version-%d file; records.LoadViews refuses a v1 file with a v2 key, so every imported view would fail to load", path, records.SupportedViewVersion)
+		}
+	}
+	if records.SupportedViewVersion >= records.ViewVersion2 {
+		gallery := files["views/decisions--gallery.yaml"]
+		if gallery == nil {
+			t.Fatal("the cards view was not written")
+		}
+		if gallery["layout"] != "cards" {
+			t.Errorf("the CARDS view was written with layout=%v — a cards view that silently becomes a table is the exact failure FR-109 exists to prevent", gallery["layout"])
 		}
 	}
 }
 
-// TestTranslateBase_RefusesAViewItCannotTypeAtAll covers the third arm of
-// the three-way contract: not every view becomes a file.
-func TestTranslateBase_RefusesAViewItCannotTypeAtAll(t *testing.T) {
+// TestTranslateBase_UntypedViewIsWrittenNotRefused is the version-2 flip that
+// unlocks the founder's twenty folder-scoped views.
+//
+// Under version 1 a view asserting no `type == "..."` anywhere was REFUSED:
+// ViewDef required exactly one type and there was nothing to declare. FR-018b
+// makes `type` optional, so the same view is now WRITTEN untyped — it queries
+// every note in scope and resolves property names over the rows FR-021e keeps
+// for every note.
+//
+// This is only safe because the clause that SCOPES such a view — the folder
+// filter — now translates too. An untyped view whose folder filter had been
+// dropped would be the whole vault, and that case is still caught: the dropped
+// clause is a row-set loss and the view disables.
+func TestTranslateBase_UntypedViewIsWrittenNotRefused(t *testing.T) {
 	pb, err := ParseBaseFile([]byte(`
+filters:
+  and:
+    - file.inFolder("01-Areas")
 views:
   - type: table
-    name: Untyped
+    name: Everything in Areas
     filters:
       and:
         - status == "accepted"
@@ -335,21 +377,30 @@ views:
 	if err != nil {
 		t.Fatalf("ParseBaseFile: %v", err)
 	}
-	outcome, produced := TranslateBase(pb, "Untyped.base", decisionSchema(), NewSlugRegistry())
-	if outcome.Status != OutcomeRefused {
-		t.Errorf("base status = %s, want REFUSED", outcome.Status)
+	outcome, produced := TranslateBase(pb, "Areas.base", decisionSchema(), NewSlugRegistry())
+	if outcome.Status != OutcomeConverted {
+		t.Fatalf("base status = %s, want CONVERTED; view: %+v", outcome.Status, outcome.Views)
 	}
-	if len(produced) != 0 {
-		t.Errorf("a refused view produced %d files", len(produced))
+	if len(produced) != 1 {
+		t.Fatalf("an untyped view produced %d files, want 1", len(produced))
 	}
-	if len(outcome.Views) != 1 || outcome.Views[0].Status != OutcomeRefused {
-		t.Fatalf("view outcomes = %+v", outcome.Views)
+	v := outcome.Views[0]
+	if v.ResolvedType != "" {
+		t.Errorf("ResolvedType = %q, want empty — this view declares no type", v.ResolvedType)
 	}
-	if !strings.Contains(outcome.Views[0].RefusedReason, "type") {
-		t.Errorf("the refusal does not say what was missing: %q", outcome.Views[0].RefusedReason)
+	if v.Disabled {
+		t.Errorf("the untyped view is disabled; losses: %v", v.DisablingLosses)
 	}
-	if outcome.Views[0].Disabled {
-		t.Error("a REFUSED view is not a DISABLED view — nothing was written for it to disable")
+
+	var top map[string]any
+	if err := yaml.Unmarshal(produced[0].Bytes, &top); err != nil {
+		t.Fatalf("the untyped view file is not valid YAML: %v", err)
+	}
+	if _, present := top["type"]; present {
+		t.Errorf("an untyped view was written with a `type` key: %v", top["type"])
+	}
+	if rendered := renderVerbatim(top["filter"]); !strings.Contains(rendered, "01-Areas") {
+		t.Errorf("the folder scope did not reach the written filter:\n%s", rendered)
 	}
 }
 
@@ -377,62 +428,90 @@ views:
 	}
 }
 
-// TestBuildFilterLeaf_RefusesWhatWouldBroadenOrMisfire pins the per-clause
+// TestBuildV2Leaf_RefusesWhatWouldBroadenOrMisfire pins the per-clause
 // refusals that need the schema to make. Each `want` is a substring of the
 // reason a human reads in the report.
-func TestBuildFilterLeaf_RefusesWhatWouldBroadenOrMisfire(t *testing.T) {
-	schemas := decisionSchema()
+func TestBuildV2Leaf_RefusesWhatWouldBroadenOrMisfire(t *testing.T) {
+	typed := leafResolver{recordType: "decision", schemas: decisionSchema()}
+	untyped := leafResolver{schemas: decisionSchema()}
 	cases := []struct {
 		name string
-		leaf RawLeaf
+		res  leafResolver
+		leaf v2Leaf
 		want string
 	}{
 		{
 			name: "a truthy test on a checkbox would return more rows",
-			leaf: RawLeaf{Property: "archived", Op: "is_absent", Negate: true, Truthy: true},
+			res:  typed,
+			leaf: v2Leaf{Property: "archived", Shape: shapeTruthy},
 			want: "MORE rows",
 		},
 		{
 			name: "a truthy test on an integer would return more rows",
-			leaf: RawLeaf{Property: "priority", Op: "is_absent", Negate: true, Truthy: true},
+			res:  typed,
+			leaf: v2Leaf{Property: "priority", Shape: shapeTruthy},
 			want: "MORE rows",
 		},
 		{
+			name: "a truthy test on TEXT would return more rows — the empty string is a VALUE for text",
+			res:  typed,
+			leaf: v2Leaf{Property: "rationale", Shape: shapeTruthy},
+			want: "MORE rows",
+		},
+		{
+			name: "a truthy test in an untyped view has no type to rule the falsy values out",
+			res:  untyped,
+			leaf: v2Leaf{Property: "anything", Shape: shapeTruthy},
+			want: "UNTYPED",
+		},
+		{
 			name: "an ordered comparison on a list is undefined",
-			leaf: RawLeaf{Property: "labels", Op: "gte", Values: []string{"urgent"}},
+			res:  typed,
+			leaf: v2Leaf{Property: "labels", Shape: shapeCompare, Op: generated.GreaterThanEqual, Value: "urgent"},
 			want: "many-valued",
 		},
 		{
-			name: "equality on text is undefined",
-			leaf: RawLeaf{Property: "rationale", Op: "eq", Values: []string{"because"}},
-			want: "text property",
-		},
-		{
 			name: "contains on a scalar non-text property is undefined",
-			leaf: RawLeaf{Property: "priority", Op: "contains", Values: []string{"3"}},
+			res:  typed,
+			leaf: v2Leaf{Property: "priority", Shape: shapeContains, Value: "3"},
 			want: "`contains` is not defined",
 		},
 		{
 			name: "an enum literal the schema does not declare",
-			leaf: RawLeaf{Property: "status", Op: "eq", Values: []string{"superseded"}},
+			res:  typed,
+			leaf: v2Leaf{Property: "status", Shape: shapeCompare, Op: generated.Equal, Value: "superseded"},
 			want: "declared enum values",
 		},
 		{
 			name: "an undeclared property",
-			leaf: RawLeaf{Property: "nowhere", Op: "eq", Values: []string{"x"}},
+			res:  typed,
+			leaf: v2Leaf{Property: "nowhere", Shape: shapeCompare, Op: generated.Equal, Value: "x"},
 			want: "not declared",
 		},
 		{
-			name: "a checkbox literal has no version-1 wire representation",
-			leaf: RawLeaf{Property: "archived", Op: "eq", Values: []string{"true"}},
-			want: "checkbox",
+			// FR-041a / FR-007a, the empty-string trap. `IS NULL` also matches
+			// a record that never declared the property, which the Obsidian
+			// comparison does not.
+			name: "prop == \"\" would admit every record that never declared it",
+			res:  typed,
+			leaf: v2Leaf{Property: "decided", Shape: shapeIsEmpty},
+			want: "MORE rows",
+		},
+		{
+			// The other half of the same trap: on TEXT the empty string stays
+			// a PRESENT value (FR-007a), so `IS NOT NULL` admits a record the
+			// Obsidian filter excludes.
+			name: "prop != \"\" on a TEXT property would admit the empty string",
+			res:  typed,
+			leaf: v2Leaf{Property: "rationale", Shape: shapeIsSet},
+			want: "TEXT property",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			node, reason, ok := buildFilterLeafNode("decision", tc.leaf, schemas)
+			node, reason, ok := buildV2LeafNode(tc.res, tc.leaf)
 			if ok {
-				t.Fatalf("the clause was ACCEPTED and emitted %v — it must be refused as a named loss so its view disables", node)
+				t.Fatalf("the clause was ACCEPTED and emitted %+v — it must be refused as a named loss so its view disables", node)
 			}
 			if !strings.Contains(reason, tc.want) {
 				t.Errorf("reason = %q, want it to contain %q", reason, tc.want)
@@ -441,16 +520,57 @@ func TestBuildFilterLeaf_RefusesWhatWouldBroadenOrMisfire(t *testing.T) {
 	}
 }
 
-// TestBuildFilterLeaf_AcceptsTheTruthyTestWhereItIsFaithful is the other
-// half: for a type whose every present value is truthy, "has a value" IS the
-// truthy test, and refusing it would disable views for no reason.
-func TestBuildFilterLeaf_AcceptsTheTruthyTestWhereItIsFaithful(t *testing.T) {
-	schemas := decisionSchema()
-	for _, prop := range []string{"status", "decided", "owner", "rationale"} {
-		leaf := RawLeaf{Property: prop, Op: "is_absent", Negate: true, Truthy: true}
-		if _, reason, ok := buildFilterLeafNode("decision", leaf, schemas); !ok {
-			t.Errorf("the truthy test on %q was refused (%s) — an empty string is already absent (FR-007a), so \"has a value\" and \"is truthy\" agree on this type", prop, reason)
-		}
+// TestBuildV2Leaf_AcceptsWhatIsFaithful is the other half. Refusing a clause
+// that HAS a faithful translation disables views for no reason, which is its
+// own kind of wrong answer — so both directions are asserted.
+func TestBuildV2Leaf_AcceptsWhatIsFaithful(t *testing.T) {
+	typed := leafResolver{recordType: "decision", schemas: decisionSchema()}
+	cases := []struct {
+		name  string
+		res   leafResolver
+		leaf  v2Leaf
+		wantP string
+		wantO generated.VaultFilterNodeOp
+		wantV string
+	}{
+		{"truthy on an enum — an empty enum is already absent (FR-007a)",
+			typed, v2Leaf{Property: "status", Shape: shapeTruthy}, "status", generated.ISNOTNULL, ""},
+		{"truthy on a date", typed, v2Leaf{Property: "decided", Shape: shapeTruthy}, "decided", generated.ISNOTNULL, ""},
+		{"truthy on a person", typed, v2Leaf{Property: "owner", Shape: shapeTruthy}, "owner", generated.ISNOTNULL, ""},
+		{"`!prop` is a strict subset of Obsidian's falsy test, so it needs no type",
+			leafResolver{schemas: decisionSchema()}, v2Leaf{Property: "whatever", Shape: shapeFalsy}, "whatever", generated.ISNULL, ""},
+		{"`prop != \"\"` on a non-text type is FR-007a's mechanical translation",
+			typed, v2Leaf{Property: "decided", Shape: shapeIsSet}, "decided", generated.ISNOTNULL, ""},
+		{"contains on a many property is element-wise equality (R-9)",
+			typed, v2Leaf{Property: "labels", Shape: shapeContains, Value: "urgent"}, "labels", generated.Equal, "urgent"},
+		{"contains on text is an anchored LIKE with the operand escaped",
+			typed, v2Leaf{Property: "rationale", Shape: shapeContains, Value: "a_b%c"}, "rationale", generated.LIKE, `%a\_b\%c%`},
+		{"equality on text is defined in version 2",
+			typed, v2Leaf{Property: "rationale", Shape: shapeCompare, Op: generated.Equal, Value: "because"}, "rationale", generated.Equal, "because"},
+		{"a checkbox literal has a version-2 representation — the value is lexical",
+			typed, v2Leaf{Property: "archived", Shape: shapeCompare, Op: generated.Equal, Value: "true"}, "archived", generated.Equal, "true"},
+		{"an enum literal is canonicalised to the declared spelling",
+			typed, v2Leaf{Property: "status", Shape: shapeCompare, Op: generated.Equal, Value: "ACCEPTED"}, "status", generated.Equal, "accepted"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			node, reason, ok := buildV2LeafNode(tc.res, tc.leaf)
+			if !ok {
+				t.Fatalf("the clause was REFUSED (%s) — refusing a faithful translation disables a view for no reason", reason)
+			}
+			if node.Property == nil || *node.Property != tc.wantP {
+				t.Errorf("property = %v, want %q", node.Property, tc.wantP)
+			}
+			if node.Op == nil || *node.Op != tc.wantO {
+				t.Errorf("op = %v, want %q", node.Op, string(tc.wantO))
+			}
+			switch {
+			case tc.wantV == "" && node.Value != nil:
+				t.Errorf("value = %q, want none", *node.Value)
+			case tc.wantV != "" && (node.Value == nil || *node.Value != tc.wantV):
+				t.Errorf("value = %v, want %q", node.Value, tc.wantV)
+			}
+		})
 	}
 }
 
@@ -460,7 +580,7 @@ func TestBuildFilterLeaf_AcceptsTheTruthyTestWhereItIsFaithful(t *testing.T) {
 func TestTruthyPartition_CoversEveryType(t *testing.T) {
 	for _, pt := range records.PropertyTypes {
 		if _, ok := truthyFalsyLiterals[pt]; !ok {
-			t.Errorf("property type %q is not classified in truthyFalsyLiterals — buildFilterLeafNode cannot tell whether \"has a value\" is broader than \"is truthy\" for it", pt)
+			t.Errorf("property type %q is not classified in truthyFalsyLiterals — buildV2LeafNode cannot tell whether \"has a value\" is broader than \"is truthy\" for it", pt)
 		}
 	}
 	declared := map[records.PropertyType]bool{}

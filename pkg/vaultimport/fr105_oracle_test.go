@@ -64,14 +64,27 @@ func fr105Fixture(t *testing.T) (root string, rep *Report) {
 	root = t.TempDir()
 	src := filepath.Join("testdata", "fr105")
 	for _, sub := range []string{"notes", "bases"} {
-		err := filepath.Walk(filepath.Join(src, sub), func(path string, info os.FileInfo, err error) error {
+		// THE NOTES LAND AT THE VAULT ROOT, not under a `notes/` folder, and
+		// the difference is load-bearing now that folder filters translate:
+		// Obsidian's `file.inFolder("99-Temp")` is a path from the VAULT ROOT,
+		// so a fixture that nested the notes one level deeper would make the
+		// clause match nothing and the hand-derived oracle wrong about a
+		// layout detail rather than about semantics. The oracle's own header
+		// states the layout it was derived against ("Scratch idea ... 99-Temp?
+		// YES"), and this is what makes the tree on disk match it.
+		base := filepath.Join(src, sub)
+		relRoot := base
+		if sub == "bases" {
+			relRoot = src
+		}
+		err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 			if info.IsDir() {
 				return nil
 			}
-			rel, relErr := filepath.Rel(src, path)
+			rel, relErr := filepath.Rel(relRoot, path)
 			if relErr != nil {
 				return relErr
 			}
@@ -113,22 +126,37 @@ func fr105LoadOracle(t *testing.T) fr105ExpectedRowsFile {
 	return out
 }
 
+// fr105Note is one fixture note: the parsed record, plus the VAULT-RELATIVE
+// path the file.* layer resolves its metadata from.
+type fr105Note struct {
+	Rec     records.Record
+	RelPath string
+}
+
 // fr105Notes reads every note in the imported vault back off disk through
 // the product's own parser, keyed by filename stem.
-func fr105Notes(t *testing.T, root string) map[string]records.Record {
+func fr105Notes(t *testing.T, root string) map[string]fr105Note {
 	t.Helper()
 	inv, err := ScanVault(root)
 	if err != nil {
 		t.Fatalf("re-scanning the imported vault: %v", err)
 	}
-	out := map[string]records.Record{}
+	out := map[string]fr105Note{}
 	for _, abs := range inv.Notes {
 		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}
+		// Relative to the SCAN's own root, not the caller's: on macOS a temp
+		// dir is reached through /var and resolves to /private/var, and
+		// relativising against the unresolved spelling yields a path full of
+		// `..` segments whose "folder" is nothing the view ever names.
+		rel, relErr := filepath.Rel(inv.Root, abs)
+		if relErr != nil {
+			t.Fatalf("relativising %s: %v", abs, relErr)
+		}
 		stem := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
-		out[stem] = records.ParseRecord(abs, data)
+		out[stem] = fr105Note{Rec: records.ParseRecord(abs, data), RelPath: filepath.ToSlash(rel)}
 	}
 	return out
 }
@@ -140,38 +168,48 @@ func fr105Notes(t *testing.T, root string) map[string]records.Record {
 // product's own comparator, including FR-008's absence rule (a tree `not`
 // over a leaf is the product's Filter.Negate, which is what that field is
 // documented to mean).
-func fr105EvalNode(t *testing.T, n generated.VaultFilterNode, schema *records.Schema, rec records.Record) bool {
+func fr105EvalNode(t *testing.T, n generated.VaultFilterNode, schema *records.Schema, note fr105Note) bool {
 	t.Helper()
 	switch {
 	case n.All != nil:
 		for _, child := range *n.All {
-			if !fr105EvalNode(t, child, schema, rec) {
+			if !fr105EvalNode(t, child, schema, note) {
 				return false
 			}
 		}
 		return true
 	case n.Any != nil:
 		for _, child := range *n.Any {
-			if fr105EvalNode(t, child, schema, rec) {
+			if fr105EvalNode(t, child, schema, note) {
 				return true
 			}
 		}
 		return false
 	case n.Not != nil:
 		inner := *n.Not
-		if inner.Property == nil {
-			t.Fatalf("this fixture's evaluator handles `not` only over a LEAF; it was given a nested combinator. Extend the evaluator rather than loosening the assertion.")
+		if inner.Property != nil {
+			// A `not` over a LEAF is the product's own Filter.Negate, which is
+			// what that field is documented to mean and what carries FR-008's
+			// absence rule.
+			return fr105MatchLeaf(t, inner, true, schema, note)
 		}
-		return fr105MatchLeaf(t, inner, true, schema, rec)
+		// A `not` over a COMBINATOR is ordinary boolean negation of the
+		// subtree — there is no leaf for Filter.Negate to attach to. FR-134's
+		// folder translation produces exactly this shape (`not` over an
+		// `any` of two file.folder leaves), and both of those leaves compare a
+		// value that is PRESENT for every note (file.folder is "" at the vault
+		// root, a present empty text value), so no absence rule applies inside
+		// it.
+		return !fr105EvalNode(t, inner, schema, note)
 	case n.Property != nil:
-		return fr105MatchLeaf(t, n, false, schema, rec)
+		return fr105MatchLeaf(t, n, false, schema, note)
 	default:
 		t.Fatalf("filter node is neither a combinator nor a leaf: %+v", n)
 		return false
 	}
 }
 
-func fr105MatchLeaf(t *testing.T, n generated.VaultFilterNode, negate bool, schema *records.Schema, rec records.Record) bool {
+func fr105MatchLeaf(t *testing.T, n generated.VaultFilterNode, negate bool, schema *records.Schema, note fr105Note) bool {
 	t.Helper()
 	if n.Op == nil {
 		t.Fatalf("leaf on %q carries no operator", *n.Property)
@@ -187,7 +225,26 @@ func fr105MatchLeaf(t *testing.T, n generated.VaultFilterNode, negate bool, sche
 	if n.Values != nil {
 		f.Literals = *n.Values
 	}
-	res, err := f.Match(schema, rec)
+
+	// A `file.*` leaf resolves through the PRODUCT's own file-metadata layer
+	// (records.ResolveFileProperty over records.FilePropertySchema) and is then
+	// decided by the SAME comparator as every other leaf — which is the whole
+	// design of FR-130: the comparator cannot tell a file property from a
+	// declared one, so there is no second set of rules here for this test to
+	// get wrong.
+	if records.IsFileNamespace(f.Property) {
+		left, err := records.ResolveFileProperty(f.Property, records.FileMeta{Path: note.RelPath})
+		if err != nil {
+			t.Fatalf("the product refused a file property the importer wrote (%s): %v", f.Property, err)
+		}
+		res, matchErr := f.MatchValue(records.Comparator{}, records.FilePropertySchema(), left)
+		if matchErr != nil {
+			t.Fatalf("the product's comparator refused a file filter the importer wrote (%s %s %q): %v", f.Property, f.Op, f.Literal, matchErr)
+		}
+		return res.Matched
+	}
+
+	res, err := f.Match(schema, note.Rec)
 	if err != nil {
 		t.Fatalf("the product's comparator refused a filter the importer wrote (%s %s %q): %v", f.Property, f.Op, f.Literal, err)
 	}
@@ -196,7 +253,7 @@ func fr105MatchLeaf(t *testing.T, n generated.VaultFilterNode, negate bool, sche
 
 // fr105RowsFor applies one request to every note of the view's record type and
 // returns the matching notes' stems, sorted.
-func fr105RowsFor(t *testing.T, req generated.VaultFindRequest, schemas *records.SchemaSet, notes map[string]records.Record) []string {
+func fr105RowsFor(t *testing.T, req generated.VaultFindRequest, schemas *records.SchemaSet, notes map[string]fr105Note) []string {
 	t.Helper()
 	if req.Type == nil {
 		t.Fatal("the bridge produced a request with no record type")
@@ -206,11 +263,11 @@ func fr105RowsFor(t *testing.T, req generated.VaultFindRequest, schemas *records
 		t.Fatalf("the bridge produced a request for record type %q, which the vault does not declare", *req.Type)
 	}
 	var out []string
-	for stem, rec := range notes {
-		if rec.TypeName() != *req.Type {
+	for stem, note := range notes {
+		if note.Rec.TypeName() != *req.Type {
 			continue
 		}
-		if req.Filter == nil || fr105EvalNode(t, *req.Filter, schema, rec) {
+		if req.Filter == nil || fr105EvalNode(t, *req.Filter, schema, note) {
 			out = append(out, stem)
 		}
 	}

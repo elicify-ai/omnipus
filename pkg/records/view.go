@@ -80,22 +80,23 @@ const (
 	// SupportedViewVersion is the version a WRITER emits.
 	//
 	// READ THIS BEFORE CHANGING IT. It is not "the version this release
-	// understands" any more — that is SupportedViewVersions, the SET {1, 2}
-	// (spec FR-018b). This constant answers a different and narrower
-	// question: what schema_version does the code that WRITES a view file
-	// stamp on it.
+	// understands" — that is SupportedViewVersions, the SET {1, 2} (spec
+	// FR-018b). This constant answers a different and narrower question: what
+	// schema_version does the code that WRITES a view file stamp on it.
 	//
-	// It is still 1, and that is a fact about the writer, not a hedge. The
-	// only in-tree writer is the .base importer
-	// (pkg/vaultimport/view_write.go), and it emits VERSION-1 KEYS —
-	// `filters` and a bare `group_by`. Bumping this constant without
-	// changing that writer would stamp `schema_version: 2` onto a file made
-	// of v1 keys, which the version partition below refuses on the very next
-	// load: the importer would produce views this loader rejects, and it
-	// would do so silently until somebody re-ran an import. FR-018b's "writes
-	// emit 2" lands when the writer emits v2 keys, in the same change, not
-	// before.
-	SupportedViewVersion = ViewVersion1
+	// It is 2 as of the change that made the only in-tree writer — the .base
+	// importer, pkg/vaultimport/view_write.go — emit VERSION-2 KEYS: one
+	// `filter` tree of all/any/not over the ten SQL operators, `grouping` keys
+	// carrying a direction, an optional `type`, and `layout`.
+	//
+	// THE CONSTANT AND THE WRITER MOVE TOGETHER OR NOT AT ALL. Bumping this
+	// alone would stamp `schema_version: 2` onto a file made of v1 keys, which
+	// the version partition below refuses on the very next load — the importer
+	// would produce views this loader rejects, silently, until somebody re-ran
+	// an import. Reverting the writer alone has the mirror failure. The guard
+	// is pkg/vaultimport's TestWrittenViews_LoadBackThroughTheRealLoader,
+	// which reloads every produced file through ParseView.
+	SupportedViewVersion = ViewVersion2
 )
 
 // SupportedViewVersions is the set of view schema_versions this release can

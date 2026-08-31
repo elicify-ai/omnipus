@@ -53,22 +53,38 @@ views:
 
   # Scratch.base outer filter: type == "task" AND NOT file.inFolder("99-Temp")
   scratch--all-but-temp:
-    enabled: false
-    # THE BROADENING CASE, and the reason FR-105 exists. The folder clause has
-    # no translation, so the imported filters say only `type == "task"` — five
-    # rows. The Obsidian original says four: "Scratch idea" lives in 99-Temp.
-    # An imported view that returned it would be returning MORE rows than its
-    # original while looking entirely correct, so the view imports DISABLED.
+    enabled: true
+    # WAS THE BROADENING CASE, AND IS NOW THE PROOF THAT IT IS FIXED.
+    #
+    # Under view format version 1 the folder clause had NO representation at
+    # all: the imported filters said only `type == "task"` — five rows where
+    # the Obsidian original says four — so the view had to import DISABLED.
+    # Version 2 carries it (FR-134: inFolder becomes file.folder = x OR
+    # file.folder LIKE 'x/%'), so the view is enabled and the row set below is
+    # the assertion that the exclusion actually excludes.
+    #
+    # Four rows: every task except "Scratch idea", which lives in 99-Temp.
     rows:
       - Draft the ADR
       - Retire the plurality rule
       - Ship the importer
       - Write the oracle
-    # What the translated filters WOULD have matched had the view been left
-    # enabled — the measured broadening, one row wide.
+
+  scratch--shipping-only:
+    enabled: false
+    # THE BROADENING CASE, replacing the one version 2 fixed. `file.name` is a
+    # PROPERTY, not one of FR-134's four methods, so `file.name.contains("Ship")`
+    # has no translation and never will have one through the method path.
+    #
+    # Obsidian: type == "task" AND NOT inFolder("99-Temp") AND the file name
+    # contains "Ship" — one row.
+    rows:
+      - Ship the importer
+    # With the untranslatable clause dropped, the remaining filters are the
+    # outer ones alone: every task outside 99-Temp. Four rows where the
+    # original has one — the measured broadening, three rows wide.
     rows_if_wrongly_enabled:
       - Draft the ADR
       - Retire the plurality rule
-      - Scratch idea
       - Ship the importer
       - Write the oracle

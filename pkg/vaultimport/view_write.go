@@ -1,6 +1,7 @@
 // Omnipus — assembling one translated Base view into a
-// records.ParseView-shaped YAML file, and the three-way per-base/per-view
-// outcome this whole importer exists to report honestly (see doc.go).
+// records.ParseView-shaped VERSION-2 YAML file, and the three-way
+// per-base/per-view outcome this whole importer exists to report honestly
+// (see doc.go).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -132,59 +133,50 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 
 	viewTrans := TranslateFilterTree(vraw["filters"])
 
+	// THE TYPE IS NOW OPTIONAL (FR-018b). A view that asserts no `type ==`
+	// anywhere is written UNTYPED — it queries every note in scope, resolving
+	// property names over the rows FR-021e keeps for every note. That is the
+	// only expressible reading of the founder's folder-scoped bases, and it is
+	// faithful precisely BECAUSE the folder clause that scopes them now
+	// translates too (FR-134): an untyped view whose folder filter was dropped
+	// would be the whole vault, which is the broadening FR-105 forbids — and
+	// that case is caught by the dropped clause being a row-set loss, not by
+	// refusing the view.
 	resolvedType, conflict := resolveViewType(viewTrans.TypeLiterals, outer.TypeLiterals)
-	if resolvedType == "" {
+	if conflict != "" {
 		vo.Status = OutcomeRefused
-		if conflict != "" {
-			vo.RefusedReason = "cannot determine one record type: " + conflict
-		} else {
-			vo.RefusedReason = "no `type == \"...\"` equality found anywhere in this view's own filter or the base's outer filter, so there is no single record type to declare — ViewDef requires exactly one `type:`"
-		}
+		vo.RefusedReason = "cannot determine one record type: " + conflict
 		return vo, nil
 	}
-	if !schemas.HasType(resolvedType) {
+	if resolvedType != "" && !schemas.HasType(resolvedType) {
 		vo.Status = OutcomeRefused
 		vo.RefusedReason = fmt.Sprintf("resolved record type %q has no inferred schema — no note in the vault carries `type: %s`", resolvedType, resolvedType)
 		return vo, nil
 	}
 	vo.ResolvedType = resolvedType
 
-	var losses []string
-	for _, l := range outer.Lost {
-		losses = append(losses, lossf(LossBaseOuterFilter, "%s", l))
-	}
-	for _, l := range viewTrans.Lost {
-		losses = append(losses, lossf(LossViewFilter, "%s", l))
-	}
+	res := leafResolver{recordType: resolvedType, schemas: schemas}
 
-	allLeaves := make([]RawLeaf, 0, len(outer.Leaves)+len(viewTrans.Leaves))
-	allLeaves = append(allLeaves, outer.Leaves...)
-	allLeaves = append(allLeaves, viewTrans.Leaves...)
+	outerNode, losses := res.resolve(outer.Root, LossBaseOuterFilter)
+	viewNode, viewLosses := res.resolve(viewTrans.Root, LossViewFilter)
+	losses = append(losses, viewLosses...)
 
-	var filterNodes []*yaml.Node
-	for _, rl := range allLeaves {
-		node, reason, ok := buildFilterLeafNode(resolvedType, rl, schemas)
-		if !ok {
-			losses = append(losses, lossf(LossFilterLeaf, "%s — %s", describeLeaf(rl), reason))
-			continue
-		}
-		filterNodes = append(filterNodes, node)
-	}
+	filterNode := conjoin(outerNode, viewNode)
 
 	layout, layoutLosses := translateLayout(vraw)
 	vo.Layout = layout
 	losses = append(losses, layoutLosses...)
 
-	groupBy, groupLosses := translateGroupBy(vraw["groupBy"], resolvedType, schemas)
+	grouping, groupLosses := translateGrouping(vraw["groupBy"], res)
 	losses = append(losses, groupLosses...)
 
-	propsOut, propLosses := translateOrder(vraw["order"], resolvedType, schemas)
+	propsOut, propLosses := translateOrder(vraw["order"], res)
 	losses = append(losses, propLosses...)
 
-	sortOut, sortLosses := translateSort(vraw["sort"], resolvedType, schemas)
+	sortOut, sortLosses := translateSort(vraw["sort"], res)
 	losses = append(losses, sortLosses...)
 
-	aggOut, aggLosses := translateSummaries(vraw["summaries"], resolvedType, schemas)
+	aggOut, aggLosses := translateSummaries(vraw["summaries"], res)
 	losses = append(losses, aggLosses...)
 
 	// FR-105, THE BROADENING PROHIBITION. Every loss is classified by the
@@ -202,7 +194,9 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 	pairs := []ordPair{
 		{Key: "schema_version", Value: records.SupportedViewVersion},
 		{Key: "name", Value: slug},
-		{Key: "type", Value: resolvedType},
+	}
+	if resolvedType != "" {
+		pairs = append(pairs, ordPair{Key: "type", Value: resolvedType})
 	}
 	if name != "" {
 		pairs = append(pairs, ordPair{Key: "label", Value: name})
@@ -213,11 +207,11 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 	if layoutKey := emittedLayoutKey(layout); layoutKey != "" {
 		pairs = append(pairs, ordPair{Key: "layout", Value: layoutKey})
 	}
-	if len(filterNodes) > 0 {
-		pairs = append(pairs, ordPair{Key: "filters", Value: seq(filterNodes...)})
+	if filterNode != nil {
+		pairs = append(pairs, ordPair{Key: "filter", Value: filterNodeYAML(*filterNode)})
 	}
-	if len(groupBy) > 0 {
-		pairs = append(pairs, ordPair{Key: "group_by", Value: groupBy})
+	if len(grouping) > 0 {
+		pairs = append(pairs, ordPair{Key: "grouping", Value: seq(grouping...)})
 	}
 	if len(sortOut) > 0 {
 		pairs = append(pairs, ordPair{Key: "sort", Value: seq(sortOut...)})
@@ -250,6 +244,112 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 		vo.Status = OutcomeConverted
 	}
 	return vo, &ProducedView{RelPath: relPath, Bytes: bytes}
+}
+
+// conjoin ANDs the base's outer filter with the view's own — which is exactly
+// what Obsidian does, and the one place the two trees meet.
+func conjoin(a, b *generated.VaultFilterNode) *generated.VaultFilterNode {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	}
+	kids := []generated.VaultFilterNode{*a, *b}
+	return &generated.VaultFilterNode{All: &kids}
+}
+
+// ---------------------------------------------------------------------------
+// Resolving the intermediate tree against the view's record type
+// ---------------------------------------------------------------------------
+
+// leafResolver carries the two things a leaf needs to become a real filter
+// node: which record type the view queries (EMPTY for an untyped view) and the
+// inferred schemas to check it against.
+type leafResolver struct {
+	recordType string
+	schemas    *SchemaIndex
+}
+
+// typed reports whether this view declares a record type, and therefore whether
+// a property's declared type is knowable at all.
+func (r leafResolver) typed() bool { return r.recordType != "" }
+
+// resolve turns one intermediate subtree into a real VaultFilterNode, plus the
+// named losses it produced.
+//
+// The FR-105 posture per combinator, stated once:
+//
+//	all  a child that could not be resolved is DROPPED and its loss named.
+//	     Dropping a conjunct BROADENS, which is why that loss sits in a
+//	     row-set-affecting position and disables the whole view.
+//	any  a child that could not be resolved loses the WHOLE group. Keeping
+//	     the rest would narrow the view to one side of an "either" the
+//	     operator wrote deliberately — reported instead of guessed.
+//	not  same: half of a negation is a different exclusion, not a partial one.
+func (r leafResolver) resolve(n *rawNode, pos LossPosition) (*generated.VaultFilterNode, []string) {
+	if n == nil {
+		return nil, nil
+	}
+	switch n.Kind {
+	case rawKindLost:
+		return nil, []string{lossf(pos, "%s", n.Verbatim)}
+
+	case rawKindPrebuilt:
+		return n.Prebuilt, nil
+
+	case rawKindLeaf:
+		node, reason, ok := buildV2LeafNode(r, n.Leaf)
+		if !ok {
+			return nil, []string{lossf(LossFilterLeaf, "%s — %s", describeLeaf(n.Leaf), reason)}
+		}
+		return node, nil
+
+	case rawKindAll:
+		var kids []generated.VaultFilterNode
+		var losses []string
+		for _, k := range n.Kids {
+			child, childLosses := r.resolve(k, pos)
+			losses = append(losses, childLosses...)
+			if child != nil {
+				kids = append(kids, *child)
+			}
+		}
+		switch len(kids) {
+		case 0:
+			return nil, losses
+		case 1:
+			return &kids[0], losses
+		default:
+			return &generated.VaultFilterNode{All: &kids}, losses
+		}
+
+	case rawKindAny, rawKindNot:
+		var kids []generated.VaultFilterNode
+		for _, k := range n.Kids {
+			child, childLosses := r.resolve(k, pos)
+			if child == nil || len(childLosses) > 0 {
+				// The group's own verbatim is reported, not the child's — a
+				// reader has to see which `or:`/`not:` block went missing, and
+				// a half-named group reads as if the rest survived.
+				return nil, []string{lossf(pos, "%s", n.Verbatim)}
+			}
+			kids = append(kids, *child)
+		}
+		if len(kids) == 0 {
+			return nil, []string{lossf(pos, "%s", n.Verbatim)}
+		}
+		if n.Kind == rawKindNot {
+			inner := kids[0]
+			if len(kids) > 1 {
+				all := kids
+				inner = generated.VaultFilterNode{All: &all}
+			}
+			return &generated.VaultFilterNode{Not: &inner}, nil
+		}
+		return &generated.VaultFilterNode{Any: &kids}, nil
+	}
+	return nil, []string{lossf(pos, "%s", n.Verbatim)}
 }
 
 // ---------------------------------------------------------------------------
@@ -333,16 +433,9 @@ func translateLayout(vraw map[string]any) (layout string, losses []string) {
 // carries a `layout` field at all.
 //
 // `layout` is declared VERSION 2 ONLY on ViewDef, and this importer emits
-// records.SupportedViewVersion, which is the only version the loader in
-// pkg/records accepts. Writing a v2-only key into a v1 file would produce
-// files that load today (the loader gates on version but not yet on
-// per-version keys) and are REJECTED the moment somebody implements that
-// gate — turning every imported view into a load failure long after the run
-// that wrote them.
-//
-// So the version is asked, not assumed. When pkg/records starts emitting and
-// accepting version 2, this returns true and translateLayout carries the key
-// instead of reporting it as a loss, with no other change here.
+// records.SupportedViewVersion. Writing a v2-only key into a v1 file would
+// produce files the version partition in pkg/records/view.go refuses on the
+// very next load, so the version is asked, not assumed.
 //
 // It is a function rather than a constant expression so the branch it guards
 // is real code on both sides rather than something the compiler folds away.
@@ -361,12 +454,12 @@ func emittedLayoutKey(layout string) string {
 // FR-105 — WHERE "has a value" IS NOT "is truthy"
 //
 // Obsidian's bare-property filter (`archived`) is a JavaScript truthy test.
-// Our nearest operator is `is_absent` negated, which asks a DIFFERENT
-// question: does this record have a value at all. The two agree exactly when
-// every value a property can hold is truthy, and they part company on the
-// falsy-but-present ones — `false` on a checkbox, `0` on a number. There the
-// negated `is_absent` matches a record Obsidian's own filter rejects, which
-// is the broadening FR-105 forbids by name.
+// Our nearest operator is `IS NOT NULL`, which asks a DIFFERENT question: does
+// this record have a value at all. The two agree exactly when every value a
+// property can hold is truthy, and they part company on the falsy-but-present
+// ones — `false` on a checkbox, `0` on a number, `""` on a TEXT property.
+// There the `IS NOT NULL` matches a record Obsidian's own filter rejects,
+// which is the broadening FR-105 forbids by name.
 //
 // So the answer is decided PER DECLARED TYPE, as a partition over
 // records.PropertyTypes rather than as a list of the dangerous ones. A list
@@ -375,9 +468,17 @@ func emittedLayoutKey(layout string) string {
 // failure, reintroduced by an omission. TestTruthyPartition_CoversEveryType
 // fails by name instead.
 //
-// The empty string is not on this map anywhere, deliberately: FR-007a makes
-// an empty string ABSENT, so `""` is falsy AND absent, and the two questions
-// still agree on it.
+// TEXT IS ON THE DANGEROUS SIDE, and it moved there with the version-2 writer.
+// FR-007a makes `""` ABSENT for every NON-text type — so on those, "has a
+// value" and "is truthy" agree about it. For `text` the same requirement says
+// the opposite in as many words: *"For text, `""` remains a PRESENT empty
+// string"*, which VaultFilterNode's own contract restates for the operator
+// (R-3: "an empty string, an empty list and a zero are all VALUES, not
+// absence"). So `IS NOT NULL` matches a text property holding `""` and
+// Obsidian's bare truthy test does not. Version 1 classified text as safe on
+// the strength of the first half of FR-007a alone; that was wrong, and it is
+// corrected here rather than carried forward into a format that can finally
+// express the distinction.
 // ---------------------------------------------------------------------------
 
 // truthyFalsyLiterals maps each declared property type to the present-but-
@@ -387,8 +488,8 @@ var truthyFalsyLiterals = map[records.PropertyType]string{
 	records.TypeCheckbox: "false",
 	records.TypeInteger:  "0",
 	records.TypeDecimal:  "0, 0.0",
+	records.TypeText:     `the empty string ""`,
 
-	records.TypeText:     "",
 	records.TypeEnum:     "",
 	records.TypeDate:     "",
 	records.TypeRelation: "",
@@ -416,11 +517,11 @@ func falsyLiteralsFor(t records.PropertyType) string {
 	return "a present but falsy value"
 }
 
-func describeLeaf(rl RawLeaf) string {
-	if len(rl.Values) > 0 {
-		return fmt.Sprintf("%s %s %v", rl.Property, rl.Op, rl.Values)
+func describeLeaf(l v2Leaf) string {
+	if l.Source != "" {
+		return l.Source
 	}
-	return fmt.Sprintf("%s %s", rl.Property, rl.Op)
+	return l.Property
 }
 
 // resolveViewType finds the single `type == "X"` this view unconditionally
@@ -429,6 +530,9 @@ func describeLeaf(rl RawLeaf) string {
 // always wins over an outer filter that only narrows to a set (Content.base's
 // outer `or: [type == "content", type == "brand-kit"]`, which the OR
 // translator never harvests literals from at all — see translate.go).
+//
+// An empty resolved type with an empty conflict is NOT a failure any more: it
+// is an UNTYPED version-2 view (FR-018b).
 func resolveViewType(viewLits, outerLits []string) (resolved, conflict string) {
 	vd := distinctSorted(viewLits)
 	if len(vd) == 1 {
@@ -460,140 +564,323 @@ func distinctSorted(ss []string) []string {
 	return out
 }
 
-func buildFilterLeafNode(recordType string, rl RawLeaf, schemas *SchemaIndex) (*yaml.Node, string, bool) {
-	prop, ok := schemas.Lookup(recordType, rl.Property)
-	if !ok {
-		return nil, fmt.Sprintf("property %q is not declared in the %q schema (never observed on a %s note)", rl.Property, recordType, recordType), false
+// buildV2LeafNode turns one intermediate leaf into a real filter node, or
+// refuses it by name.
+//
+// It is the ONE place a property's declared type decides an operator, and every
+// refusal below is a refusal because the available operator would return MORE
+// rows than the Obsidian expression, never merely different ones.
+func buildV2LeafNode(r leafResolver, l v2Leaf) (*generated.VaultFilterNode, string, bool) {
+	var prop InferredProperty
+	if r.typed() {
+		p, ok := r.schemas.Lookup(r.recordType, l.Property)
+		if !ok {
+			return nil, fmt.Sprintf("property %q is not declared in the %q schema (never observed on a %s note)", l.Property, r.recordType, r.recordType), false
+		}
+		prop = p
 	}
-	if rl.Truthy && truthyAdmitsAFalsyValue(prop.Type) {
-		// FR-105, the exact broadening this flag exists to stop. Obsidian's
-		// bare `%s` matches only records whose value is TRUTHY; the negated
-		// `is_absent` it would otherwise become matches every record that
-		// HAS a value, `false` and `0` included. More rows, silently.
+
+	switch l.Shape {
+	case shapeFalsy:
+		// `!prop`. Obsidian's falsy test catches absent, `false`, `0` and `""`;
+		// `IS NULL` catches absent (and, under FR-007a, `""` on every non-text
+		// type). Ours is a strict SUBSET, so it can only ever return FEWER
+		// rows — the direction FR-105 permits — and it needs no declared type
+		// to be safe, which is why an untyped view may carry it.
+		return opNode(l.Property, generated.ISNULL), "", true
+
+	case shapeTruthy:
+		if !r.typed() {
+			return nil, "the bare truthy test cannot be translated in an UNTYPED view: `has a value` is broader than `is truthy` for a checkbox, a number or a text property, and with no declared type there is nothing to rule those out", false
+		}
+		if truthyAdmitsAFalsyValue(prop.Type) {
+			return nil, fmt.Sprintf(
+				"the bare truthy test has no faithful translation on a %s property — our nearest operator is `IS NOT NULL`, which also matches a record whose %s is present and FALSY (%s), so it would return MORE rows than the Obsidian original",
+				prop.Type, l.Property, falsyLiteralsFor(prop.Type)), false
+		}
+		return opNode(l.Property, generated.ISNOTNULL), "", true
+
+	case shapeIsSet:
+		// `prop != ""`. FR-007a rules this translation in as many words: for
+		// every NON-text type the empty string IS the absent state, so
+		// Obsidian's idiomatic "is set" becomes `IS NOT NULL`.
+		//
+		// It is safe under BOTH readings of what Obsidian does with a property
+		// that is not there at all. If `undefined != ""` is TRUE (JavaScript's
+		// own answer), Obsidian returns the set-plus-absent notes and ours
+		// returns only the set ones — narrower. If Obsidian instead reads an
+		// absent property as `""`, the two sets are identical. Neither reading
+		// makes ours the larger set, which is the only question FR-105 asks.
+		if !r.typed() {
+			return nil, "an UNTYPED view cannot carry `!= \"\"`: on a text property the empty string is a PRESENT value (FR-007a), so `IS NOT NULL` would match a record the Obsidian filter excludes, and with no declared type there is nothing to rule that out", false
+		}
+		if prop.Type == records.TypeText {
+			return nil, fmt.Sprintf(
+				"`%s != \"\"` has no faithful translation on a TEXT property: FR-007a keeps `\"\"` a PRESENT value for text, so `IS NOT NULL` would also match a record whose %s is the empty string — a record the Obsidian filter excludes",
+				l.Property, l.Property), false
+		}
+		return opNode(l.Property, generated.ISNOTNULL), "", true
+
+	case shapeIsEmpty:
+		// `prop == ""`. `IS NULL` also matches a record that never declared the
+		// property at all, which Obsidian's comparison does not, so it returns
+		// MORE rows. There is no other operator to reach for: no non-text type
+		// has an empty literal to compare against (FR-007a).
 		return nil, fmt.Sprintf(
-			"the bare truthy test `%s` has no faithful translation on a %s property — our nearest operator is \"has a value\", which also matches a record whose %s is present and FALSY (%s), so it would return MORE rows than the Obsidian original",
-			rl.Property, prop.Type, rl.Property, falsyLiteralsFor(prop.Type)), false
-	}
-	if prop.Many && rl.Op != "contains" && rl.Op != "is_absent" {
-		// §8 R-13: `contains` and `is_absent` are the only two operators
-		// defined against a many-valued property. Emitting anything else
-		// produces a clause the engine refuses per record at query time,
-		// which reads as an empty view rather than as a translation this
-		// importer could not make.
-		return nil, fmt.Sprintf("operator %q is not defined on many-valued property %q (only contains/is_absent are defined for a list)", rl.Op, rl.Property), false
-	}
-	if rl.Op == "contains" {
-		if prop.Type != records.TypeText && !prop.Many {
-			return nil, fmt.Sprintf("`contains` is not defined on %q (declared %s, not many-valued and not text)", rl.Property, prop.Type), false
-		}
-	} else if rl.Op != "is_absent" && prop.Type == records.TypeText {
-		return nil, fmt.Sprintf("operator %q is not defined on text property %q (only contains/is_absent are defined for text)", rl.Op, rl.Property), false
-	}
+			"`%s == \"\"` has no faithful translation: `IS NULL` also matches a record that never declared %s, which the Obsidian comparison does not, so it would return MORE rows than the original",
+			l.Property, l.Property), false
 
-	pairs := []ordPair{{Key: "property", Value: rl.Property}, {Key: "op", Value: rl.Op}}
-	if rl.Negate {
-		pairs = append(pairs, ordPair{Key: "negate", Value: true})
-	}
-	if len(rl.Values) > 0 {
-		valNodes := make([]*yaml.Node, 0, len(rl.Values))
-		for _, raw := range rl.Values {
-			vn, reason, ok := buildValueNode(prop, raw)
-			if !ok {
-				return nil, reason, false
-			}
-			valNodes = append(valNodes, vn)
+	case shapeContains:
+		if !r.typed() {
+			return nil, "`contains` cannot be translated in an UNTYPED view: it is element membership on a many property and substring matching on a text one, and those are two different operators", false
 		}
-		pairs = append(pairs, ordPair{Key: "values", Value: seq(valNodes...)})
+		if prop.Many {
+			// R-9: `=` is element-wise on a many property, which is exactly
+			// Obsidian's list `.contains`.
+			value := l.Value
+			if prop.Type == records.TypeEnum {
+				canonical, ok := canonicalEnumValue(prop, value)
+				if !ok {
+					return nil, fmt.Sprintf("value %q is not one of %q's declared enum values (%s)", value, prop.Name, strings.Join(prop.EnumValues, ", ")), false
+				}
+				value = canonical
+			}
+			return valueNode(l.Property, generated.Equal, value), "", true
+		}
+		if prop.Type == records.TypeText {
+			// Substring. `LIKE` is anchored to the WHOLE value, so the
+			// substring is spelled with wildcards, and the literal is ESCAPED
+			// — an unescaped `_` in the operand is a single-character wildcard
+			// and would match notes the operator never asked for.
+			return valueNode(l.Property, generated.LIKE, "%"+escapeLikeOperand(l.Value)+"%"), "", true
+		}
+		return nil, fmt.Sprintf("`contains` is not defined on %q (declared %s, not many-valued and not text)", l.Property, prop.Type), false
+
+	case shapeCompare:
+		if r.typed() {
+			if prop.Many && isOrderingOp(l.Op) {
+				// §8 R-13: the four ordering operators are UNDEFINED against a
+				// many property. Emitting one produces a clause the engine
+				// refuses per record at query time, which reads as an empty
+				// view rather than as a translation this importer could not
+				// make.
+				return nil, fmt.Sprintf("operator %q is not defined on many-valued property %q (spec §8 R-13 leaves the ordering operators undefined for a list)", string(l.Op), l.Property), false
+			}
+			if prop.Type == records.TypeEnum {
+				canonical, ok := canonicalEnumValue(prop, l.Value)
+				if !ok {
+					return nil, fmt.Sprintf("value %q is not one of %q's declared enum values (%s)", l.Value, prop.Name, strings.Join(prop.EnumValues, ", ")), false
+				}
+				return valueNode(l.Property, l.Op, canonical), "", true
+			}
+			if prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
+				// A relation is compared by TARGET (spec §8 R-8), which is what
+				// a wikilink's inside is.
+				link := l.Value
+				if w, ok := records.ParseWikilink(l.Value); ok {
+					link = w.Target
+				}
+				return valueNode(l.Property, l.Op, link), "", true
+			}
+		}
+		return valueNode(l.Property, l.Op, l.Value), "", true
 	}
-	return orderedMap(pairs...), "", true
+	return nil, "this importer has no translation for that expression shape", false
 }
 
-func buildValueNode(prop InferredProperty, raw string) (*yaml.Node, string, bool) {
-	switch prop.Type {
-	case records.TypeText:
-		return orderedMap(ordPair{Key: "type", Value: "text"}, ordPair{Key: "text", Value: raw}), "", true
-	case records.TypeEnum:
-		for _, v := range prop.EnumValues {
-			if records.FoldKey(v) == records.FoldKey(raw) {
-				return orderedMap(ordPair{Key: "type", Value: "enum"}, ordPair{Key: "enum", Value: v}), "", true
-			}
-		}
-		return nil, fmt.Sprintf("value %q is not one of %q's declared enum values (%s)", raw, prop.Name, strings.Join(prop.EnumValues, ", ")), false
-	case records.TypeDate:
-		return orderedMap(ordPair{Key: "type", Value: "date"}, ordPair{Key: "date", Value: raw}), "", true
-	case records.TypeInteger:
-		return orderedMap(ordPair{Key: "type", Value: "integer"}, ordPair{Key: "integer", Value: raw}), "", true
-	case records.TypeDecimal:
-		return orderedMap(ordPair{Key: "type", Value: "decimal"}, ordPair{Key: "decimal", Value: raw}), "", true
-	case records.TypeRelation, records.TypePerson:
-		link := raw
-		if w, ok := records.ParseWikilink(raw); ok {
-			link = w.Target
-		}
-		field := "relation"
-		if prop.Type == records.TypePerson {
-			field = "person"
-		}
-		ref := orderedMap(ordPair{Key: "link", Value: link}, ordPair{Key: "resolved", Value: false})
-		return orderedMap(ordPair{Key: "type", Value: string(prop.Type)}, ordPair{Key: field, Value: ref}), "", true
-	case records.TypeCheckbox:
-		// `checkbox` is FR-004c's eighth property type and RecordValue —
-		// the version-1 filter-literal wire type this importer writes — still
-		// carries only the original seven. There is no field to put `true`
-		// in, so the clause is refused BY NAME and its view disables, rather
-		// than being dropped (which would broaden it) or coerced into a text
-		// literal (which would compare "true" against a boolean and match
-		// nothing, an empty view dressed as a working one).
-		return nil, fmt.Sprintf("property %q is declared `checkbox`, which the version-%d view file format has no filter-literal representation for (RecordValue carries the original seven types)", prop.Name, records.SupportedViewVersion), false
+func isOrderingOp(op generated.VaultFilterNodeOp) bool {
+	switch op {
+	case generated.LessThan, generated.LessThanEqual, generated.GreaterThan, generated.GreaterThanEqual:
+		return true
 	}
-	return nil, fmt.Sprintf("property %q is declared %q, a type this importer has no filter-literal representation for", prop.Name, prop.Type), false
+	return false
 }
 
-func translateGroupBy(raw any, recordType string, schemas *SchemaIndex) (groupBy []string, losses []string) {
+func canonicalEnumValue(prop InferredProperty, raw string) (string, bool) {
+	for _, v := range prop.EnumValues {
+		if records.FoldKey(v) == records.FoldKey(raw) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func opNode(property string, op generated.VaultFilterNodeOp) *generated.VaultFilterNode {
+	p, o := property, op
+	return &generated.VaultFilterNode{Property: &p, Op: &o}
+}
+
+func valueNode(property string, op generated.VaultFilterNodeOp, value string) *generated.VaultFilterNode {
+	n := opNode(property, op)
+	v := value
+	n.Value = &v
+	return n
+}
+
+// escapeLikeOperand makes a literal safe as a LIKE operand. It mirrors
+// pkg/records/filemeta.go's escapeLikeLiteral, which is unexported and is the
+// canonical statement of the rule; the order matters (`\` first, or the two
+// wildcard escapes would themselves be escaped).
+func escapeLikeOperand(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
+// ---------------------------------------------------------------------------
+// Rendering a filter tree as the YAML records.ParseView reads back
+// ---------------------------------------------------------------------------
+
+// filterNodeYAML renders one VaultFilterNode as a key-ordered YAML mapping.
+//
+// The keys are the generated type's own `json:` tags, and they have to be
+// exactly those: ParseView decodes the file through encoding/json with
+// DisallowUnknownFields, so a near-miss spelling is a REJECTED view rather
+// than a silently ignored key.
+func filterNodeYAML(n generated.VaultFilterNode) *yaml.Node {
+	var pairs []ordPair
+	if n.Property != nil {
+		pairs = append(pairs, ordPair{Key: "property", Value: *n.Property})
+	}
+	if n.Op != nil {
+		pairs = append(pairs, ordPair{Key: "op", Value: string(*n.Op)})
+	}
+	if n.Value != nil {
+		pairs = append(pairs, ordPair{Key: "value", Value: *n.Value})
+	}
+	if n.Values != nil {
+		pairs = append(pairs, ordPair{Key: "values", Value: *n.Values})
+	}
+	if n.All != nil {
+		pairs = append(pairs, ordPair{Key: "all", Value: filterChildrenYAML(*n.All)})
+	}
+	if n.Any != nil {
+		pairs = append(pairs, ordPair{Key: "any", Value: filterChildrenYAML(*n.Any)})
+	}
+	if n.Not != nil {
+		pairs = append(pairs, ordPair{Key: "not", Value: filterNodeYAML(*n.Not)})
+	}
+	return orderedMap(pairs...)
+}
+
+func filterChildrenYAML(children []generated.VaultFilterNode) *yaml.Node {
+	nodes := make([]*yaml.Node, 0, len(children))
+	for _, c := range children {
+		nodes = append(nodes, filterNodeYAML(c))
+	}
+	return seq(nodes...)
+}
+
+// ---------------------------------------------------------------------------
+// The non-filter halves of a view
+// ---------------------------------------------------------------------------
+
+// checkProperty answers whether a property name may appear in a view file this
+// importer writes, in a COMPARISON position (a filter, a grouping key, a sort
+// key, an aggregate target) or a DISPLAY one (`properties`).
+//
+// It mirrors records.ValidateViewAgainstSchemas' own checkV2Prop, and it has to:
+// a name that check rejects makes the loader refuse the WHOLE view file, so a
+// name this importer cannot vouch for must become a named loss here instead.
+//
+// An UNTYPED view checks nothing outside the reserved namespaces, which is not
+// an oversight — FR-018b resolves an untyped view's ordinary property names
+// over FR-021e's raw rows at query time, so there is no name the loader would
+// refuse and therefore none this function may.
+func (r leafResolver) checkProperty(name string, comparison bool) (reason string, ok bool) {
+	switch {
+	case strings.HasPrefix(name, "formula."):
+		// FR-140's formulas are a version-2 capability this importer does not
+		// yet carry — see doc.go's gap note. A `formula.x` reference with no
+		// `formulas:` block beside it makes the loader refuse the whole file
+		// (RejectViewUnknownFormula), so it must be a loss here.
+		return fmt.Sprintf("computed property %q dropped — this importer does not yet carry a base's `formulas:` block, so there is nothing for the reference to resolve against", name), false
+	case records.IsFileNamespace(name):
+		if !records.IsFileProperty(name) {
+			return fmt.Sprintf("%q is not one of the reserved file properties (%s)", name, strings.Join(records.FilePropertyNames, ", ")), false
+		}
+		if comparison && name == records.FileSelfProp {
+			return fmt.Sprintf("%q is the note itself and is not a comparison target", name), false
+		}
+		return "", true
+	case !r.typed():
+		return "", true
+	default:
+		if _, found := r.schemas.Lookup(r.recordType, name); !found {
+			return fmt.Sprintf("not a declared property of %q", r.recordType), false
+		}
+		return "", true
+	}
+}
+
+// translateGrouping carries the Base's `groupBy` — INCLUDING its direction,
+// which version 1 had no field for and therefore dropped on all 24 of the
+// founder's grouped views.
+func translateGrouping(raw any, r leafResolver) (nodes []*yaml.Node, losses []string) {
 	gb, ok := raw.(map[string]any)
 	if !ok {
 		return nil, nil
 	}
 	prop, _ := gb["property"].(string)
-	dir, _ := gb["direction"].(string)
 	if prop == "" {
 		return nil, nil
 	}
-	if strings.HasPrefix(prop, "formula.") {
-		return nil, []string{lossf(LossGroupBy, "grouping by computed property %q dropped — this vault's `.base` formulas have no representation (no computed/derived property type exists)", prop)}
+	if reason, ok := r.checkProperty(prop, true); !ok {
+		return nil, []string{lossf(LossGroupBy, "grouping by %q dropped — %s", prop, reason)}
 	}
-	if _, ok := schemas.Lookup(recordType, prop); !ok {
-		return nil, []string{lossf(LossGroupBy, "grouping by %q dropped — not a declared property of %q", prop, recordType)}
+	pairs := []ordPair{{Key: "property", Value: prop}}
+	dir := strings.ToLower(strings.TrimSpace(stringOf(gb["direction"])))
+	switch dir {
+	case "":
+		// No direction declared. ViewGroupBy leaves it optional and the reader
+		// states the default, so omitting the key carries the same fact.
+	case string(generated.ViewGroupByDirectionAsc):
+		pairs = append(pairs, ordPair{Key: "direction", Value: dir})
+	case string(generated.ViewGroupByDirectionDesc):
+		// CARRIED, and the consequence NAMED. The view file is faithful — the
+		// direction is what the operator asked for, and rewriting it to
+		// ascending would be the silent flattening FR-109 exists to stop, one
+		// field over. But knowledge_find's own request carries no group
+		// direction, so pkg/records' view->find bridge refuses to SERVE a
+		// descending grouping (ServeRefusalGroupDirection) rather than
+		// reordering it silently. That refusal is invisible at import time, so
+		// it is reported here: an imported view nobody can apply must not
+		// score CLEAN.
+		pairs = append(pairs, ordPair{Key: "direction", Value: dir})
+		losses = append(losses, lossf(LossGroupBy,
+			"grouping %q DESCENDING is carried into the view file faithfully, but a knowledge_find request has no group direction, so applying this view is refused until it does (ServeRefusalGroupDirection) — the groups are not silently reordered ascending",
+			prop))
+	default:
+		losses = append(losses, lossf(LossGroupBy, "direction %q on %q dropped — the only declared group directions are asc and desc", dir, prop))
 	}
-	groupBy = []string{prop}
-	if dir != "" {
-		losses = append(losses, lossf(LossGroupBy, "direction %q on %q dropped — group_by has no sort-direction field on the wire (ViewDef.group_by is a bare property list)", dir, prop))
-	}
-	return groupBy, losses
+	return []*yaml.Node{orderedMap(pairs...)}, losses
 }
 
-func translateOrder(raw any, recordType string, schemas *SchemaIndex) (props []string, losses []string) {
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// translateOrder carries the Base view's `order:` as the view's display
+// `properties`.
+//
+// `file.name` is now CARRIED rather than skipped. Version 1 dropped every
+// `file.*` column on the grounds that the note's identity is always shown
+// anyway; version 2 has the reserved namespace (FR-018c/FR-130), so the column
+// the operator actually asked for is written down instead of assumed.
+func translateOrder(raw any, r leafResolver) (props []string, losses []string) {
 	ord, ok := raw.([]any)
 	if !ok {
 		return nil, nil
 	}
 	for _, o := range ord {
-		s, _ := o.(string)
-		s = strings.TrimSpace(s)
+		s := strings.TrimSpace(stringOf(o))
 		if s == "" {
 			continue
 		}
-		if s == "file.name" || strings.HasPrefix(s, "file.") {
-			// The note's own identity/path is always shown regardless of
-			// `properties:` — nothing queryable is lost by not naming it.
-			continue
-		}
-		if strings.HasPrefix(s, "formula.") {
-			losses = append(losses, lossf(LossProperties, "column %q dropped — computed/formula properties have no representation", s))
-			continue
-		}
-		if _, ok := schemas.Lookup(recordType, s); !ok {
-			losses = append(losses, lossf(LossProperties, "column %q dropped — not a declared property of %q", s, recordType))
+		if reason, ok := r.checkProperty(s, false); !ok {
+			losses = append(losses, lossf(LossProperties, "column %q dropped — %s", s, reason))
 			continue
 		}
 		props = append(props, s)
@@ -601,7 +888,7 @@ func translateOrder(raw any, recordType string, schemas *SchemaIndex) (props []s
 	return props, losses
 }
 
-func translateSort(raw any, recordType string, schemas *SchemaIndex) (nodes []*yaml.Node, losses []string) {
+func translateSort(raw any, r leafResolver) (nodes []*yaml.Node, losses []string) {
 	srt, ok := raw.([]any)
 	if !ok {
 		return nil, nil
@@ -611,44 +898,43 @@ func translateSort(raw any, recordType string, schemas *SchemaIndex) (nodes []*y
 		if !ok {
 			continue
 		}
-		prop, _ := sm["property"].(string)
-		dir, _ := sm["direction"].(string)
+		prop := stringOf(sm["property"])
 		if prop == "" {
 			continue
 		}
-		if strings.HasPrefix(prop, "formula.") {
-			losses = append(losses, lossf(LossSort, "sorting by computed property %q dropped — formulas have no representation", prop))
+		if reason, ok := r.checkProperty(prop, true); !ok {
+			losses = append(losses, lossf(LossSort, "sorting by %q dropped — %s", prop, reason))
 			continue
 		}
-		if _, ok := schemas.Lookup(recordType, prop); !ok {
-			losses = append(losses, lossf(LossSort, "sorting by %q dropped — not a declared property of %q", prop, recordType))
-			continue
+		dir := strings.ToLower(strings.TrimSpace(stringOf(sm["direction"])))
+		if dir != string(generated.RecordSortDirectionDesc) {
+			// RecordSort.Direction is REQUIRED on the wire and has exactly two
+			// values, so an absent or unrecognised direction is written as the
+			// ascending default rather than as an empty string the reader
+			// would have to interpret.
+			dir = string(generated.RecordSortDirectionAsc)
 		}
-		nodes = append(nodes, orderedMap(ordPair{Key: "property", Value: prop}, ordPair{Key: "direction", Value: strings.ToLower(strings.TrimSpace(dir))}))
+		nodes = append(nodes, orderedMap(ordPair{Key: "property", Value: prop}, ordPair{Key: "direction", Value: dir}))
 	}
 	return nodes, losses
 }
 
 var supportedAggregateOps = map[string]string{"sum": "sum", "min": "min", "max": "max", "count": "count"}
 
-func translateSummaries(raw any, recordType string, schemas *SchemaIndex) (nodes []*yaml.Node, losses []string) {
+func translateSummaries(raw any, r leafResolver) (nodes []*yaml.Node, losses []string) {
 	summ, ok := raw.(map[string]any)
 	if !ok {
 		return nil, nil
 	}
 	for _, prop := range sortedKeys(summ) {
-		opRaw, _ := summ[prop].(string)
+		opRaw := stringOf(summ[prop])
 		op, known := supportedAggregateOps[strings.ToLower(strings.TrimSpace(opRaw))]
 		if !known {
 			losses = append(losses, lossf(LossAggregates, "summary %q on %q dropped — unsupported aggregate (only sum/min/max/count exist; there is deliberately no avg)", opRaw, prop))
 			continue
 		}
-		if strings.HasPrefix(prop, "formula.") {
-			losses = append(losses, lossf(LossAggregates, "%s(%s) dropped — formulas have no representation", op, prop))
-			continue
-		}
-		if _, ok := schemas.Lookup(recordType, prop); !ok {
-			losses = append(losses, lossf(LossAggregates, "%s(%s) dropped — not a declared property of %q", op, prop, recordType))
+		if reason, ok := r.checkProperty(prop, true); !ok {
+			losses = append(losses, lossf(LossAggregates, "%s(%s) dropped — %s", op, prop, reason))
 			continue
 		}
 		nodes = append(nodes, orderedMap(ordPair{Key: "op", Value: op}, ordPair{Key: "property", Value: prop}))

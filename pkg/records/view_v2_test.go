@@ -584,14 +584,24 @@ func TestView_UnsupportedVersionIsRefusedNamingWhatIsSupported(t *testing.T) {
 		}
 	}
 
-	// SupportedViewVersion is the WRITER's constant and is deliberately still
-	// 1: the only in-tree writer (pkg/vaultimport/view_write.go) emits v1 KEYS,
-	// and stamping 2 onto a v1-shaped file makes the version partition below
-	// refuse it on the very next load. This assertion is the tripwire for
-	// bumping the constant alone — see view.go's comment on it.
-	if SupportedViewVersion != ViewVersion1 {
-		t.Errorf("SupportedViewVersion = %d. If the importer now emits v2 KEYS this is correct and this assertion should move with it; if it does not, the importer is producing files this loader rejects",
-			SupportedViewVersion)
+	// SupportedViewVersion is the WRITER's constant, and it is 2: the only
+	// in-tree writer (pkg/vaultimport/view_write.go) emits VERSION-2 KEYS — one
+	// `filter` tree, `grouping` with a direction, an optional `type`, `layout`.
+	//
+	// The constant and the writer moved in the same change, which is the only
+	// way they may move: stamping a version onto a file made of the OTHER
+	// version's keys makes the version partition below refuse it on the very
+	// next load, and it would do so silently until somebody re-ran an import.
+	// This assertion is one half of the tripwire; the other half cannot live
+	// here (pkg/records must not import the importer) and is
+	// pkg/vaultimport's TestWrittenViews_LoadBackThroughTheRealLoader, which
+	// reloads every produced file through ParseView.
+	if SupportedViewVersion != ViewVersion2 {
+		t.Errorf("SupportedViewVersion = %d, want %d. Change this only together with pkg/vaultimport/view_write.go — the constant says what KEYS the writer emits, and the two disagreeing produces views this loader rejects",
+			SupportedViewVersion, ViewVersion2)
+	}
+	if !IsSupportedViewVersion(SupportedViewVersion) {
+		t.Errorf("the version the writer stamps (%d) is not one this release can READ — every file it writes would be rejected on load", SupportedViewVersion)
 	}
 }
 
