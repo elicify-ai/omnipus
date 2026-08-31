@@ -129,6 +129,7 @@ func (r *Report) Render(w io.Writer) {
 	}
 
 	r.renderProvisioned(w)
+	r.renderEnumWidenings(w)
 	r.renderNameEvidenced(w)
 
 	fmt.Fprintf(w, "\n-- %d record types inferred --\n", len(r.Types))
@@ -922,6 +923,40 @@ var reQuotedType = regexp.MustCompile(`record type "([^"]*)"`)
 //     whole report on an edge case nothing here controls. The founder's only
 //     window into his import must not close because one entry came back empty
 //     — the entry is named as unaccounted-for instead.
+//
+// renderEnumWidenings prints every inferred enum whose closed set met a
+// literal the operator's own `.base` files filter on and no note carries.
+//
+// This section is the CONDITION the widening rule exists under, not a
+// footnote to it. Admitting the literal is defensible only because the
+// operator is told: unreported, a mistyped filter matches nothing forever and
+// looks perfectly healthy, which is worse than the disabled view it replaced.
+// A widening that reached the written schema and not this page would be the
+// silent-widening defect the rule was approved on the promise of avoiding.
+//
+// Placed straight after the provisioned types because it is the same kind of
+// claim one level down — the base file as evidence — and an operator auditing
+// what this run took on the strength of a `.base` reads both together.
+func (r *Report) renderEnumWidenings(w io.Writer) {
+	if len(r.EnumWidenings) == 0 {
+		return
+	}
+	var widened, refused int
+	for _, e := range r.EnumWidenings {
+		if e.Refused {
+			refused++
+			continue
+		}
+		widened++
+	}
+	fmt.Fprintf(w, "\n-- %d enum(s) met a `.base` filter on a value no note carries (%d widened, %d refused) --\n",
+		len(r.EnumWidenings), widened, refused)
+	fmt.Fprint(w, "  Each value below is the operator's own word for a legal value, taken from a filter rather than from an observation. Check them: a value that is a typo makes its view match nothing, in Obsidian too.\n")
+	for _, e := range r.EnumWidenings {
+		renderProvisionedEntry(w, e.RecordType+"."+e.Property, e.ReportLines())
+	}
+}
+
 func (r *Report) renderProvisioned(w io.Writer) {
 	if len(r.Provisioned) == 0 {
 		return

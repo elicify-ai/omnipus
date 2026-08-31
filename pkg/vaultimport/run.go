@@ -456,12 +456,18 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 	}
 
 	return &Report{
-		VaultRoot:      inv.Root,
-		DryRun:         !write,
-		Discriminator:  disc,
-		LoadProblems:   loadProblems,
-		RejectedTypes:  rejectedTypes,
-		NameEvidenced:  nameEvidenced,
+		VaultRoot:     inv.Root,
+		DryRun:        !write,
+		Discriminator: disc,
+		LoadProblems:  loadProblems,
+		RejectedTypes: rejectedTypes,
+		NameEvidenced: nameEvidenced,
+		// Asked for HERE rather than captured from WidenEnumsFromBases's
+		// return value, deliberately. Every account is stored on the property
+		// it belongs to, so this reads the same source the written schema was
+		// built from — a widening that reached the schema and not this list
+		// is not expressible.
+		EnumWidenings:  CollectEnumWidenings(inferred),
 		Provisioned:    provisioned,
 		Types:          typeSummaries,
 		Ambiguities:    ambiguities,
