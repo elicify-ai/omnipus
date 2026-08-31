@@ -213,7 +213,7 @@ ownership, hot-reload survival) and its whole deferred escape hatch.
 2. **Key browsing contexts by the workspace id** instead of the constant
    `"default"`. `tools.ToolWorkspaceID(ctx)` already carries it to every tool
    (`pkg/tools/base.go:241-251`), so this needs no new plumbing — the same
-   situation as the session keys in §2.1.
+   situation as the session keys in D1.3.
 
 ### D1.2 Unattended delegated work gets its own context
 
