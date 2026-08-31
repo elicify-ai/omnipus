@@ -603,9 +603,9 @@ func TestFileMeta_MethodsTranslateToOrdinaryLeaves(t *testing.T) {
 	}
 	for _, tc := range evalCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			got, err := fmMatchNode(tc.node, schema, tc.meta)
-			if err != nil {
-				t.Fatalf("fmMatchNode: %v", err)
+			got, merr := fmMatchNode(tc.node, schema, tc.meta)
+			if merr != nil {
+				t.Fatalf("fmMatchNode: %v", merr)
 			}
 			if got != tc.want {
 				t.Fatalf("matched = %v, want %v", got, tc.want)
@@ -646,8 +646,8 @@ func TestFileMeta_LikeOperandIsEscaped(t *testing.T) {
 	if matched {
 		t.Fatal(`inFolder("Q1_2026") matched a note in "Q1x2026" — the underscore reached LIKE unescaped`)
 	}
-	real := FileMeta{Path: "Q1_2026/note.md", BacklinksDerived: true}
-	matched, err = fmMatchNode(node, schema, real)
+	inside := FileMeta{Path: "Q1_2026/note.md", BacklinksDerived: true}
+	matched, err = fmMatchNode(node, schema, inside)
 	if err != nil {
 		t.Fatalf("fmMatchNode: %v", err)
 	}
