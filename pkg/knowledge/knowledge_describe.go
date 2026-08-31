@@ -20,8 +20,11 @@ package knowledge
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
@@ -350,15 +353,174 @@ func renderViews(b *strings.Builder, d DescribeData) {
 	renderViewRejections(b, d.ViewReport)
 }
 
+// ---------------------------------------------------------------------------
+// RENDERING A SAVED VIEW — AND THE ONE THING THIS RENDERER MAY NEVER DO
+//
+// A saved view is read by a model that is deciding whether to reuse it. So the
+// single worst output this file can produce is not a blank line or an ugly
+// one: it is a CONFIDENT WRONG ONE — "every record of this type, every
+// property" printed over a view that in fact returns a narrow, filtered slice.
+// An agent that reads that believes the view is unconstrained and reasons from
+// there, and nothing downstream ever contradicts it.
+//
+// That is not hypothetical. This renderer read ONLY the version-1 vocabulary
+// (`filters`, `group_by`), and a version-2 view — whose filtering lives in
+// `filter`, a tree, and whose grouping lives in `grouping` — produced an EMPTY
+// parts list and was described as unfiltered. It is a version-2 file, which
+// FR-018b makes the version every writer emits.
+//
+// THE FIX IS STRUCTURAL, NOT A HABIT. Three independent mechanisms, each of
+// which catches the failure on its own:
+//
+//  1. TWO RENDERERS, NOT ONE. renderViewBodyV1 is the version-1 vocabulary,
+//     unchanged and verbatim; renderViewBodyV2 is the version-2 one. They are
+//     deliberately NOT merged into a single renderer that reads whichever keys
+//     happen to be set: the two versions' `filters`/`filter` and
+//     `group_by`/`grouping` mean genuinely different things (a flat AND-list
+//     in a retired operator vocabulary versus one tree in the find grammar),
+//     and a renderer that approximated both would be free to drift into
+//     describing either one wrongly.
+//
+//  2. A COVERAGE LEDGER. Each version declares which wire keys it accounts
+//     for. Any key the view actually carries that its version's renderer does
+//     not account for is REPORTED in the output as a constraint this
+//     description cannot show. A key added to generated.ViewDef in the future
+//     and taught to nobody therefore surfaces as an explicit gap rather than
+//     as silence — and TestDescribeViews_EveryViewDefKeyIsAccountedFor fails
+//     at test time as well, by name.
+//
+//  3. THE UNFILTERED CLAIM IS GUARDED AT ITS SOURCE. The "every record of this
+//     type, every property" line is emitted only when the view declares
+//     NOTHING beyond its own identity. It is not reachable from "the renderer
+//     produced no parts", which is exactly the state the version-2 bug was in.
+//
+// Describing less than the whole truth is survivable. Describing a filtered
+// view as unfiltered is not.
+// ---------------------------------------------------------------------------
+
+// viewHeaderKeys are accounted for by renderViews' HEAD line, or are
+// provenance that cannot change what a view returns.
+//
+// `source` is here rather than in a body renderer deliberately: it names the
+// file an imported view came from (FR-102) and is quoted by the `untranslated`
+// clause when there is a loss to attribute. It is not a constraint, so it does
+// not belong in a constraint report.
+var viewHeaderKeys = []string{
+	"schema_version",
+	"name",
+	"type",
+	"label",
+	"source",
+}
+
+// viewV1BodyKeys is every wire key renderViewBodyV1 knows what to do with.
+//
+// ACCOUNTED FOR IS NOT THE SAME AS PRINTED. `disabled` is accounted for here
+// and prints only when it is true; `filters: []` is accounted for and prints
+// nothing, because an empty AND-list constrains nothing. What the ledger
+// asserts is that a human decided — not that text came out.
+var viewV1BodyKeys = []string{
+	"disabled",
+	"filters",
+	"group_by",
+	"sort",
+	"properties",
+	"aggregates",
+	"limit",
+	"untranslated",
+}
+
+// viewV2BodyKeys is every wire key renderViewBodyV2 knows what to do with.
+//
+// ADDING A KEY HERE IS A PROMISE THAT renderViewBodyV2 RENDERS IT. Listing a
+// key without rendering it re-opens the exact hole this file was written to
+// close, and mechanism 2 above cannot see the difference — it only sees that
+// somebody claimed the key.
+var viewV2BodyKeys = []string{
+	"disabled",
+	"filter",
+	"grouping",
+	"sort",
+	"properties",
+	"aggregates",
+	"limit",
+	"layout",
+	"formulas",
+	"property_config",
+	"untranslated",
+}
+
+// viewBodyRender accumulates one view's description.
+type viewBodyRender struct {
+	parts []string
+}
+
+func (r *viewBodyRender) add(s string) { r.parts = append(r.parts, s) }
+
 // renderViewBody renders a view's query in one line, so a reader can tell two
 // views apart without opening either file.
 //
 // The filter operator is rendered as the OPAQUE STRING the contract carries.
 // This renderer deliberately knows nothing about which operators exist: the
-// operator vocabulary is being replaced with SQL's, and a renderer that
-// enumerated the old set would have to be found and changed again.
+// operator vocabulary is version-2's ten SQL spellings, and a renderer that
+// enumerated them would have to be found and changed again.
 func renderViewBody(v *records.SavedView) string {
-	var parts []string
+	if v == nil {
+		return ""
+	}
+	r := &viewBodyRender{}
+
+	var accounted []string
+	switch v.Def.SchemaVersion {
+	case records.ViewVersion1:
+		renderViewBodyV1(v, r)
+		accounted = viewV1BodyKeys
+	case records.ViewVersion2:
+		renderViewBodyV2(v, r)
+		accounted = viewV2BodyKeys
+	default:
+		// A version no renderer claims. Nothing is accounted for, so every
+		// key the file carries falls through to the gap report below. The
+		// loader refuses an unsupported version, so reaching here means a
+		// caller built a SavedView by hand — and inventing a description for
+		// a format this code does not understand is how the version-2 bug
+		// happened in the first place.
+		r.add(fmt.Sprintf("schema_version %d — this description does not understand this view format", v.Def.SchemaVersion))
+	}
+
+	// Mechanism 2 — the coverage ledger.
+	if gaps := unaccountedViewKeys(v.Def, accounted); len(gaps) > 0 {
+		r.add(fmt.Sprintf("!! %d declared key(s) this description cannot show (%s) — treat this view as CONSTRAINED in ways not shown here",
+			len(gaps), strings.Join(gaps, ", ")))
+	}
+
+	if len(r.parts) == 0 {
+		// Mechanism 3 — the unfiltered claim, made only when it is provably
+		// true. The test is "this view declares nothing beyond its identity",
+		// NOT "the renderer produced no parts": the second is satisfied by a
+		// renderer that failed to read the file, which is the whole defect.
+		if beyond := populatedViewKeysBeyond(v.Def, viewHeaderKeys); len(beyond) > 0 {
+			return fmt.Sprintf("    !! this view CONSTRAINS its result (%s) and this description cannot show how — do NOT treat it as unfiltered\n",
+				strings.Join(beyond, ", "))
+		}
+		return "    every record of this type, every property\n"
+	}
+	return "    " + strings.Join(r.parts, "; ") + "\n"
+}
+
+// renderViewBodyV1 is the version-1 vocabulary: a flat, AND-only `filters`
+// list in the seven-operator RecordFilter spelling, and a bare `group_by` name
+// list with no direction.
+//
+// IT IS UNCHANGED, AND CHANGING IT IS A REGRESSION. A version-1 file on disk
+// means exactly what it meant, verbatim, and its description must too — the
+// same rule pkg/records applies on load, for the same reason (translating v1's
+// `contains` into v2's `LIKE '%…%'` BROADENS, and broadening a view nobody
+// re-read is the failure FR-105 exists to prevent). The one clause that did
+// not exist before is `disabled`, which was dropped silently by both versions;
+// see renderViewDisabled.
+func renderViewBodyV1(v *records.SavedView, r *viewBodyRender) {
+	renderViewDisabled(v, r)
 	if v.Def.Filters != nil && len(*v.Def.Filters) > 0 {
 		clauses := make([]string, 0, len(*v.Def.Filters))
 		for _, f := range *v.Def.Filters {
@@ -374,20 +536,95 @@ func renderViewBody(v *records.SavedView) string {
 			}
 			clauses = append(clauses, clause)
 		}
-		parts = append(parts, "filter "+strings.Join(clauses, " AND "))
+		r.add("filter " + strings.Join(clauses, " AND "))
 	}
 	if v.Def.GroupBy != nil && len(*v.Def.GroupBy) > 0 {
-		parts = append(parts, "group "+strings.Join(*v.Def.GroupBy, ", "))
+		r.add("group " + strings.Join(*v.Def.GroupBy, ", "))
 	}
+	renderViewSharedTail(v, r)
+	renderViewUntranslated(v, r)
+}
+
+// renderViewBodyV2 is the version-2 vocabulary (ADR-068 D24.1, FR-018b): ONE
+// `filter` tree of all/any/not over the ten SQL operators, `grouping` keys
+// that each carry a direction, plus `layout`, `formulas` and
+// `property_config`.
+func renderViewBodyV2(v *records.SavedView, r *viewBodyRender) {
+	renderViewDisabled(v, r)
+	if v.Def.Filter != nil {
+		r.add("filter " + renderViewFilterNode(*v.Def.Filter, 0))
+	}
+	if v.Def.Grouping != nil && len(*v.Def.Grouping) > 0 {
+		keys := make([]string, 0, len(*v.Def.Grouping))
+		for _, g := range *v.Def.Grouping {
+			// The contract states the omitted direction MEANS asc rather than
+			// declaring a JSON Schema default, so the effective order is asc
+			// and printing it is reporting what happens, not inventing a
+			// declaration. (The LOADER must not fill it in; a description of
+			// the resulting behaviour is a different job.)
+			dir := string(generated.ViewGroupByDirectionAsc)
+			if g.Direction != nil && *g.Direction != "" {
+				dir = string(*g.Direction)
+			}
+			keys = append(keys, g.Property+" "+dir)
+		}
+		r.add("group " + strings.Join(keys, ", "))
+	}
+	renderViewSharedTail(v, r)
+	if v.Def.Layout != nil {
+		layout := string(*v.Def.Layout)
+		// FR-109: only `table` and `cards` are drawn. A layout this product
+		// cannot draw is NAMED, because the failure that put this field in the
+		// contract was an Obsidian cards view importing as a table, recording
+		// no loss, and scoring clean.
+		if !viewLayoutIsRendered(*v.Def.Layout) {
+			layout += " (this product does not draw this layout; it shows as a table)"
+		}
+		r.add("layout " + layout)
+	}
+	if v.Def.Formulas != nil && len(*v.Def.Formulas) > 0 {
+		names := sortedMapKeys(*v.Def.Formulas)
+		out := make([]string, 0, len(names))
+		for _, n := range names {
+			// Rendered as SOURCE TEXT, which is what is stored (FR-141), so
+			// what a reader sees here is directly comparable against the file.
+			out = append(out, n+" = "+collapseWhitespace((*v.Def.Formulas)[n]))
+		}
+		r.add("formula " + strings.Join(out, ", "))
+	}
+	if v.Def.PropertyConfig != nil && len(*v.Def.PropertyConfig) > 0 {
+		names := sortedMapKeys(*v.Def.PropertyConfig)
+		out := make([]string, 0, len(names))
+		for _, n := range names {
+			cfg := (*v.Def.PropertyConfig)[n]
+			if cfg.DisplayName != nil && *cfg.DisplayName != "" {
+				out = append(out, n+" as "+quoteDisplay(*cfg.DisplayName))
+				continue
+			}
+			out = append(out, n)
+		}
+		r.add("display " + strings.Join(out, ", "))
+	}
+	renderViewUntranslated(v, r)
+}
+
+// renderViewSharedTail renders the keys viewSharedKeys makes identical in both
+// versions — `sort`, `properties`, `aggregates`, `limit`.
+//
+// Sharing these is not the "one renderer that approximates both" this file
+// refuses. These four keys ARE the same key in both versions, carrying the
+// same generated types; what must stay separate is `filters`/`filter` and
+// `group_by`/`grouping`, which are different languages wearing similar names.
+func renderViewSharedTail(v *records.SavedView, r *viewBodyRender) {
 	if v.Def.Sort != nil && len(*v.Def.Sort) > 0 {
 		keys := make([]string, 0, len(*v.Def.Sort))
 		for _, s := range *v.Def.Sort {
 			keys = append(keys, s.Property+" "+string(s.Direction))
 		}
-		parts = append(parts, "sort "+strings.Join(keys, ", "))
+		r.add("sort " + strings.Join(keys, ", "))
 	}
 	if v.Def.Properties != nil && len(*v.Def.Properties) > 0 {
-		parts = append(parts, "show "+strings.Join(*v.Def.Properties, ", "))
+		r.add("show " + strings.Join(*v.Def.Properties, ", "))
 	}
 	if v.Def.Aggregates != nil && len(*v.Def.Aggregates) > 0 {
 		aggs := make([]string, 0, len(*v.Def.Aggregates))
@@ -398,23 +635,232 @@ func renderViewBody(v *records.SavedView) string {
 			}
 			aggs = append(aggs, s)
 		}
-		parts = append(parts, "totals "+strings.Join(aggs, ", "))
+		r.add("totals " + strings.Join(aggs, ", "))
 	}
 	if v.Def.Limit != nil {
-		parts = append(parts, fmt.Sprintf("limit %d", *v.Def.Limit))
+		r.add(fmt.Sprintf("limit %d", *v.Def.Limit))
 	}
+}
+
+// renderViewDisabled reports FR-105's kill switch, which BOTH versions used to
+// drop in silence.
+//
+// A disabled view is stored and REFUSED at serve time, so an agent that picks
+// one off this list has chosen a view that can never answer. That refusal is
+// at least loud when it arrives; the description that led the agent there was
+// not. This is the one clause a version-1 view renders today that it did not
+// render before, and it fires only on a view that actually sets the flag.
+func renderViewDisabled(v *records.SavedView, r *viewBodyRender) {
+	if v.Def.Disabled != nil && *v.Def.Disabled {
+		r.add("DISABLED — stored but never applied; this view returns nothing")
+	}
+}
+
+// renderViewUntranslated reports FR-101's preserved-but-unapplied expressions.
+func renderViewUntranslated(v *records.SavedView, r *viewBodyRender) {
 	if v.Def.Untranslated != nil && len(*v.Def.Untranslated) > 0 {
 		// FR-101 — an imported expression nobody could translate is preserved
 		// verbatim and REPORTED. An approximation that looks like a
 		// translation is worse than an honest gap, because nobody reviews a
 		// filter that appears to have imported cleanly.
-		parts = append(parts, fmt.Sprintf("%d expression(s) from %s NOT translated and NOT applied",
+		r.add(fmt.Sprintf("%d expression(s) from %s NOT translated and NOT applied",
 			len(*v.Def.Untranslated), nonEmpty(derefString(v.Def.Source), "the imported file")))
 	}
-	if len(parts) == 0 {
-		return "    every record of this type, every property\n"
+}
+
+// renderViewFilterNode renders one version-2 filter node as infix text a human
+// and a model read the same way: `(a AND b)`, `(a OR b)`, `NOT(a)`.
+//
+// EVERY SHAPE PRODUCES TEXT, including a malformed one. A node that is neither
+// a leaf nor a combinator renders as a named placeholder rather than as an
+// empty string, because two different filters that render identically — or a
+// filter that renders as nothing — is the failure mode this whole file is
+// written against.
+func renderViewFilterNode(n generated.VaultFilterNode, depth int) string {
+	// The loader bounds a stored tree at FR-023c's depth 8. This cap is not
+	// that bound restated; it is a guard against a hand-built cyclic tree
+	// (`Not` is a pointer) turning a description into a stack overflow.
+	const maxRenderDepth = 32
+	if depth > maxRenderDepth {
+		return "<filtering nested deeper than this description renders>"
 	}
-	return "    " + strings.Join(parts, "; ") + "\n"
+	switch {
+	case n.All != nil:
+		return renderViewFilterChildren(*n.All, " AND ", depth)
+	case n.Any != nil:
+		return renderViewFilterChildren(*n.Any, " OR ", depth)
+	case n.Not != nil:
+		return "NOT(" + renderViewFilterNode(*n.Not, depth+1) + ")"
+	case n.Property != nil || n.Op != nil:
+		return renderViewFilterLeaf(n)
+	default:
+		return "<unreadable filter node>"
+	}
+}
+
+func renderViewFilterChildren(children []generated.VaultFilterNode, joiner string, depth int) string {
+	if len(children) == 0 {
+		// An empty combinator is not "no filtering" — it is a node whose
+		// meaning this description cannot state, and saying so is the only
+		// safe rendering.
+		return "<empty filter group>"
+	}
+	out := make([]string, 0, len(children))
+	for _, c := range children {
+		out = append(out, renderViewFilterNode(c, depth+1))
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return "(" + strings.Join(out, joiner) + ")"
+}
+
+func renderViewFilterLeaf(n generated.VaultFilterNode) string {
+	prop := "<no property>"
+	if n.Property != nil && *n.Property != "" {
+		prop = *n.Property
+	}
+	op := "<no operator>"
+	if n.Op != nil && *n.Op != "" {
+		op = string(*n.Op)
+	}
+	leaf := prop + " " + op
+	switch {
+	case n.Values != nil && len(*n.Values) > 0:
+		leaf += " " + renderFilterLiterals(*n.Values)
+	case n.Value != nil:
+		leaf += " " + *n.Value
+	}
+	return leaf
+}
+
+// viewLayoutIsRendered reports whether the SPA draws this layout. FR-109
+// declares six and draws two; the other four exist so an import can RECORD
+// what the original asked for.
+func viewLayoutIsRendered(l generated.ViewDefLayout) bool {
+	return l == generated.ViewDefLayoutTable || l == generated.ViewDefLayoutCards
+}
+
+// ---------------------------------------------------------------------------
+// The coverage ledger — mechanisms 2 and 3
+// ---------------------------------------------------------------------------
+
+// viewDefWireKeys returns every `json:` key generated.ViewDef declares.
+//
+// It reads the GENERATED TYPE by reflection rather than a transcription of it,
+// which is the whole point: a key added to ViewDef.yaml appears here without
+// anybody remembering to add it, so it can be caught unaccounted for instead
+// of silently becoming a key this renderer drops.
+func viewDefWireKeys() []string {
+	t := reflect.TypeOf(generated.ViewDef{})
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		if key := jsonTagName(t.Field(i).Tag.Get("json")); key != "" {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// populatedViewKeys returns the `json:` keys this view actually declares.
+//
+// An EMPTY list or map is not populated: `filters: []` narrows nothing, and
+// reporting it as an unshown constraint would be a false alarm. `disabled:
+// false` is likewise not populated, on the contract's own words — "Omitted is
+// identical to false".
+func populatedViewKeys(def generated.ViewDef) []string {
+	v := reflect.ValueOf(def)
+	t := v.Type()
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		key := jsonTagName(t.Field(i).Tag.Get("json"))
+		if key == "" {
+			continue
+		}
+		if viewFieldDeclaresSomething(v.Field(i)) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func viewFieldDeclaresSomething(f reflect.Value) bool {
+	if f.Kind() == reflect.Ptr {
+		if f.IsNil() {
+			return false
+		}
+		return viewFieldDeclaresSomething(f.Elem())
+	}
+	switch f.Kind() {
+	case reflect.Slice, reflect.Map:
+		return f.Len() > 0
+	case reflect.Bool:
+		// `disabled: false` is identical to omitted (ViewDef.Disabled's own
+		// contract text), so it declares nothing.
+		return f.Bool()
+	default:
+		return !f.IsZero()
+	}
+}
+
+// unaccountedViewKeys is the gap: keys the view declares that its version's
+// renderer never claimed. Header keys are always accounted for.
+func unaccountedViewKeys(def generated.ViewDef, accounted []string) []string {
+	known := map[string]struct{}{}
+	for _, k := range viewHeaderKeys {
+		known[k] = struct{}{}
+	}
+	for _, k := range accounted {
+		known[k] = struct{}{}
+	}
+	var out []string
+	for _, k := range populatedViewKeys(def) {
+		if _, ok := known[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// populatedViewKeysBeyond returns the declared keys outside the given set.
+// It is what stands between a silent renderer and the words "every record".
+func populatedViewKeysBeyond(def generated.ViewDef, allowed []string) []string {
+	ok := map[string]struct{}{}
+	for _, k := range allowed {
+		ok[k] = struct{}{}
+	}
+	var out []string
+	for _, k := range populatedViewKeys(def) {
+		if _, fine := ok[k]; !fine {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func jsonTagName(tag string) string {
+	name, _, _ := strings.Cut(tag, ",")
+	if name == "-" {
+		return ""
+	}
+	return name
+}
+
+func sortedMapKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// collapseWhitespace folds a multi-line source expression onto the single line
+// a view body occupies, without dropping any of it.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func renderFilterLiterals(out []string) string {
