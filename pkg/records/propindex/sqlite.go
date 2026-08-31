@@ -27,7 +27,16 @@ const driverName = "sqlite"
 // `user_version` and a mismatch causes a full rebuild rather than a migration:
 // the index is DERIVED, so re-deriving it is always cheaper and always more
 // correct than teaching it to translate itself (FR-020a).
-const schemaVersion = 1
+// Revision 2 (ADR-068 D24 / FR-131, FR-021e): three stat columns on `notes`,
+// two new child tables (note_tags, note_links), and a raw property row for
+// every frontmatter key of every note rather than only of typed ones. Every one
+// of those is a change to what a note CONTRIBUTES, so an index written by
+// version 1 holds less than a version-2 reader expects — and the difference is
+// invisible at read time (a note with no tags and a note indexed before tags
+// existed look identical). Hence the bump: the mismatch drops the tables and
+// re-derives, which is always cheaper and always more correct than teaching a
+// derived index to translate itself.
+const schemaVersion = 2
 
 // Index is the SQLite properties index.
 type Index struct {
@@ -116,7 +125,10 @@ CREATE TABLE IF NOT EXISTS notes (
 	record_type TEXT    NOT NULL,
 	record_id   BLOB    NOT NULL,
 	source_hash TEXT    NOT NULL,
-	indexed_at  INTEGER NOT NULL
+	indexed_at  INTEGER NOT NULL,
+	mtime       BLOB,
+	ctime       BLOB,
+	size        BLOB
 );
 CREATE UNIQUE INDEX IF NOT EXISTS notes_by_path ON notes(path);
 CREATE INDEX IF NOT EXISTS notes_narrowing ON notes(record_type, kind, path);
@@ -153,6 +165,24 @@ CREATE TABLE IF NOT EXISTS note_tasks (
 	status  TEXT    NOT NULL,
 	text    BLOB    NOT NULL,
 	PRIMARY KEY (note_id, line)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS note_tags (
+	note_id INTEGER NOT NULL,
+	elem    INTEGER NOT NULL,
+	tag     BLOB    NOT NULL,
+	PRIMARY KEY (note_id, elem)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS note_links (
+	note_id INTEGER NOT NULL,
+	elem    INTEGER NOT NULL,
+	target  BLOB    NOT NULL,
+	heading BLOB    NOT NULL,
+	display BLOB    NOT NULL,
+	raw     BLOB    NOT NULL,
+	embed   INTEGER NOT NULL,
+	PRIMARY KEY (note_id, elem)
 ) WITHOUT ROWID;
 `
 
@@ -203,6 +233,8 @@ func (ix *Index) init(ctx context.Context) error {
 
 func (ix *Index) dropAll(ctx context.Context) error {
 	const drop = `
+DROP TABLE IF EXISTS note_links;
+DROP TABLE IF EXISTS note_tags;
 DROP TABLE IF EXISTS note_tasks;
 DROP TABLE IF EXISTS note_relations;
 DROP TABLE IF EXISTS note_props;
@@ -288,15 +320,22 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 		if err := ix.deleteChildren(ctx, tx, id); err != nil {
 			return err
 		}
-		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ? WHERE note_id = ?`
+		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ? WHERE note_id = ?`
 		if _, err := ix.execTx(ctx, tx, PhaseWrite, q,
-			rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now, id); err != nil {
+			rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
+			nanoTimeColumn(rows.MtimeNanos),
+			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
+			sizeColumn(rows.Size, rows.StatKnown()),
+			id); err != nil {
 			return fmt.Errorf("propindex: updating %q: %w", rows.Path, err)
 		}
 	} else {
-		const q = `INSERT INTO notes (path, kind, record_type, record_id, source_hash, indexed_at) VALUES (?, ?, ?, ?, ?, ?)`
+		const q = `INSERT INTO notes (path, kind, record_type, record_id, source_hash, indexed_at, mtime, ctime, size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		res, err := ix.execTx(ctx, tx, PhaseWrite, q,
-			rows.Path, rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now)
+			rows.Path, rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
+			nanoTimeColumn(rows.MtimeNanos),
+			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
+			sizeColumn(rows.Size, rows.StatKnown()))
 		if err != nil {
 			return fmt.Errorf("propindex: inserting %q: %w", rows.Path, err)
 		}
@@ -332,6 +371,24 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 			id, t.Line, t.Status, []byte(t.Text),
 		); err != nil {
 			return fmt.Errorf("propindex: task at %s:%d: %w", rows.Path, t.Line, err)
+		}
+	}
+
+	const insTag = `INSERT INTO note_tags (note_id, elem, tag) VALUES (?, ?, ?)`
+	for _, g := range rows.Tags {
+		if _, err := ix.execTx(ctx, tx, PhaseWrite, insTag,
+			id, g.Elem, []byte(g.Tag),
+		); err != nil {
+			return fmt.Errorf("propindex: tag %q of %q: %w", g.Tag, rows.Path, err)
+		}
+	}
+
+	const insLink = `INSERT INTO note_links (note_id, elem, target, heading, display, raw, embed) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	for _, l := range rows.Links {
+		if _, err := ix.execTx(ctx, tx, PhaseWrite, insLink,
+			id, l.Elem, []byte(l.Target), []byte(l.Heading), []byte(l.Display), []byte(l.Raw), boolInt(l.Embed),
+		); err != nil {
+			return fmt.Errorf("propindex: link to %q in %q: %w", l.Target, rows.Path, err)
 		}
 	}
 	return nil
@@ -377,6 +434,8 @@ func (ix *Index) deleteChildren(ctx context.Context, tx *sql.Tx, id int64) error
 		`DELETE FROM note_props WHERE note_id = ?`,
 		`DELETE FROM note_relations WHERE note_id = ?`,
 		`DELETE FROM note_tasks WHERE note_id = ?`,
+		`DELETE FROM note_tags WHERE note_id = ?`,
+		`DELETE FROM note_links WHERE note_id = ?`,
 	} {
 		if _, err := ix.execTx(ctx, tx, PhaseWrite, q, id); err != nil {
 			return fmt.Errorf("propindex: clearing child rows: %w", err)
@@ -507,7 +566,16 @@ func (ix *Index) CountCandidates(ctx context.Context, sel Selector) (int, error)
 	return n, nil
 }
 
+// candidateColumns carries the PARENT row's stat metadata alongside its
+// properties.
+//
+// mtime/ctime/size ride on `notes`, so adding them to this SELECT costs no
+// extra rows: it is one more column on a row that was already being read, not a
+// second child in the join. That distinction is the whole of FR-131's assembly
+// rule — the tags and links, which ARE children, get their own statements
+// below.
 const candidateColumns = `n.note_id, n.path, n.record_type, n.record_id, n.source_hash, ` +
+	`n.mtime, n.ctime, n.size, ` +
 	`p.prop, p.elem, p.state, p.vtype, p.v_text, p.v_num, p.v_time, p.v_link, p.v_raw, p.quoted`
 
 // Candidates streams the narrowed population, one record at a time.
@@ -569,11 +637,13 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 			id                              int64
 			path, recordType, sourceHash    string
 			recordID                        []byte
+			mtime, ctime, size              []byte
 			prop, vtype                     sql.NullString
 			elem, state, quoted             sql.NullInt64
 			vText, vNum, vTime, vLink, vRaw []byte
 		)
 		if err := rows.Scan(&id, &path, &recordType, &recordID, &sourceHash,
+			&mtime, &ctime, &size,
 			&prop, &elem, &state, &vtype, &vText, &vNum, &vTime, &vLink, &vRaw, &quoted); err != nil {
 			return fmt.Errorf("propindex: reading a candidate row: %w", err)
 		}
@@ -599,6 +669,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 				RecordType: recordType,
 				RecordID:   string(recordID),
 				SourceHash: sourceHash,
+				File:       decodeFileMeta(mtime, ctime, size),
 				Props:      map[string]StoredProp{},
 			}
 			curID = id
@@ -727,6 +798,118 @@ func (ix *Index) Relations(ctx context.Context, sel Selector, visit func(Relatio
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("propindex: the relation stream ended early: %w", err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// THE PER-CHILD STREAMS — FR-131's named assembly strategy
+//
+// READ THIS BEFORE ADDING A JOIN. `note_props`, `note_tags` and `note_links`
+// are three children of one parent, and the obvious way to assemble a note from
+// all three is three LEFT JOINs in one statement. That statement returns their
+// CARTESIAN PRODUCT: a note with 30 properties, 10 tags and 40 links yields
+// 30 x 10 x 40 = 12,000 rows where it yields 30 today. At B1's 50,000-candidate
+// ceiling that is not a slowdown, it is a hang — and every aggregate computed
+// over it is wrong by the same factor, which is exactly the defect D16.6 fixed
+// once already (COUNT(*) returned 2 and SUM returned 200 where the truth was 1
+// and 100).
+//
+// So each child table is streamed by its OWN statement under the SAME narrowing
+// WHERE clause, and the caller assembles per note in Go. That is the pattern
+// Tasks and Relations already follow; Tags and Links join them unchanged.
+// TestSQLGate_NoStatementJoinsTwoChildTables enforces it mechanically, because
+// a comment cannot stop the next person from writing the convenient join.
+// ---------------------------------------------------------------------------
+
+// Tags streams the note_tags child table within the same narrowing.
+//
+// It yields the rows behind `file.tags` (FR-130). The rows arrive grouped by
+// note in every access path the planner can choose — note_tags is WITHOUT ROWID
+// and keyed on (note_id, elem) — but the caller is not required to depend on
+// that: assembling into a map keyed by Path is correct whatever order they come
+// in, and no ORDER BY is emitted (ruling R-A forbids one).
+func (ix *Index) Tags(ctx context.Context, sel Selector, visit func(TagHit) error) (err error) {
+	where, args := narrowing("n", sel)
+	q := `SELECT n.path, n.source_hash, g.elem, g.tag ` +
+		`FROM notes AS n JOIN note_tags AS g ON g.note_id = n.note_id` + where
+
+	rows, err := ix.query(ctx, PhaseRead, q, args...)
+	if err != nil {
+		return fmt.Errorf("propindex: streaming tags: %w", err)
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("propindex: closing the tag stream: %w", cerr)
+		}
+	}()
+
+	for rows.Next() {
+		var (
+			hit TagHit
+			tag []byte
+		)
+		if err := rows.Scan(&hit.Path, &hit.SourceHash, &hit.Tag.Elem, &tag); err != nil {
+			return fmt.Errorf("propindex: reading a tag row: %w", err)
+		}
+		hit.Tag.Tag = string(tag)
+		if err := visit(hit); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("propindex: the tag stream ended early: %w", err)
+	}
+	return nil
+}
+
+// Links streams the note_links child table within the same narrowing.
+//
+// It yields the rows behind `file.links` and `file.embeds` — ONE stream for
+// both, partitioned in Go on the `embed` flag (records.SplitLinkRows). Two
+// streams would be two statements over the same table differing only in a
+// predicate on `embed`, and `embed` is a value column: a predicate on it is a
+// comparison, and comparisons are the Go comparator's (ruling R-A, FR-135).
+//
+// It is also the edge stream FR-132's backlinks are derived from. The inverse
+// direction is computed in Go over what this yields and is stored nowhere,
+// which is FR-032's precedent applied unchanged.
+func (ix *Index) Links(ctx context.Context, sel Selector, visit func(LinkHit) error) (err error) {
+	where, args := narrowing("n", sel)
+	q := `SELECT n.path, n.source_hash, l.elem, l.target, l.heading, l.display, l.raw, l.embed ` +
+		`FROM notes AS n JOIN note_links AS l ON l.note_id = n.note_id` + where
+
+	rows, err := ix.query(ctx, PhaseRead, q, args...)
+	if err != nil {
+		return fmt.Errorf("propindex: streaming links: %w", err)
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("propindex: closing the link stream: %w", cerr)
+		}
+	}()
+
+	for rows.Next() {
+		var (
+			hit                           LinkHit
+			target, heading, display, raw []byte
+			embed                         int64
+		)
+		if err := rows.Scan(&hit.Path, &hit.SourceHash, &hit.Link.Elem,
+			&target, &heading, &display, &raw, &embed); err != nil {
+			return fmt.Errorf("propindex: reading a link row: %w", err)
+		}
+		hit.Link.Target = string(target)
+		hit.Link.Heading = string(heading)
+		hit.Link.Display = string(display)
+		hit.Link.Raw = string(raw)
+		hit.Link.Embed = embed == 1
+		if err := visit(hit); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("propindex: the link stream ended early: %w", err)
 	}
 	return nil
 }

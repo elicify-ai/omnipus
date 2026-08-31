@@ -131,10 +131,63 @@ type NoteRows struct {
 	// UNKNOWN freshness, which is flagged, never assumed fresh.
 	SourceHash string
 
+	// Size, MtimeNanos, CtimeNanos and HasCtime are the file's stat AS THE WALK
+	// OBSERVED IT — FR-131's three new `notes` columns, backing `file.size`,
+	// `file.mtime` and `file.ctime`.
+	//
+	// THEY ARE SET BY THE INDEXER, NOT BY BuildNoteRows. This package derives
+	// rows from BYTES and does no filesystem walking (see this file's header),
+	// and the caller that read the note already holds the os.FileInfo —
+	// re-stat'ing here would be a second syscall per note for a value the caller
+	// has. propindex.StatFile / StatFromInfo produce a FileMeta and
+	// NoteRows.SetFileMeta copies it onto these four fields, so no caller has to
+	// remember the encoding.
+	//
+	// THEY ARE NOT DERIVED FROM SourceHash AND THEY MOVE INDEPENDENTLY OF IT.
+	// That is FR-136: `git checkout`, rsync, `touch` and an iCloud resync all
+	// change the stat and leave the bytes identical, so a sync that skips on
+	// hash equality alone freezes `file.mtime` at the last CONTENT change — and
+	// `sort by file.mtime desc`, the commonest Bases view there is, then returns
+	// a plausible, WRONG, stable ordering with no error anywhere. Store's
+	// RefreshNoteStat exists so that skip can correct them without re-parsing.
+	//
+	// A ZERO MtimeNanos IS UNKNOWN, NOT 1970. All three columns go to NULL for a
+	// row whose walk carried no stat, which reads back as absent — rather than
+	// planting the epoch on every such note and sorting them all to the front
+	// forever. Writers should carry the walk's stat on every UpsertNote; the
+	// honest NULL is the safety net, not the plan.
+	//
+	// HasCtime is FR-133 in a struct field: Linux without statx birth-time
+	// support, a filesystem that records none, and every platform whose stat
+	// structure has no birth field all leave it false, and `file.ctime` is then
+	// ABSENT. It is NEVER the POSIX inode-change time that shares the name.
+	Size       int64
+	MtimeNanos int64
+	CtimeNanos int64
+	HasCtime   bool
+
 	Props     []PropRow
 	Relations []RelationRow
 	Tasks     []TaskRow
+	// Tags and Links are the body projections behind `file.tags`, `file.links`
+	// and `file.embeds` (body.go). They live in their OWN child tables and are
+	// streamed by their OWN statements — never joined to note_props or to each
+	// other, which is FR-131's named assembly strategy and D16.6's fan-out
+	// defect kept shut.
+	Tags  []TagRow
+	Links []LinkRow
 }
+
+// StatKnown reports whether the indexer supplied a stat for this note at all.
+//
+// It reads MtimeNanos rather than carrying a fifth flag, and the cost of that is
+// stated rather than hidden: a file whose real modification time is exactly
+// 1970-01-01T00:00:00Z is indistinguishable from one that was never stat'ed, and
+// is stored as unknown. The alternative — a flag a caller can forget to set
+// while the three numbers are already filled in — writes a CONFIDENT 1970
+// instead of an honest absence, and that is not the direction this package errs
+// in.
+func (r NoteRows) StatKnown() bool { return r.MtimeNanos != 0 }
 
 // SourceHash computes the freshness token for a note's bytes.
 //
@@ -189,11 +242,33 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 		RecordID:   rec.ID(),
 		SourceHash: hash,
 		Tasks:      ExtractTasks(src),
+		Tags:       ExtractTags(rec, src),
+		Links:      ExtractLinks(src),
 	}
 	if schema == nil {
+		// FR-021e, founder ruling 1: "can you not just fix them, use common
+		// sense". THIS USED TO BE AN EARLY RETURN, and the early return was the
+		// defect. A note with no matching schema contributed a bare `notes` row
+		// and NO property rows — so a note whose file plainly says
+		// `status: open` answered TRUE to `status IS NULL` in any untyped view.
+		// The index held less than the vault did, and said nothing about it.
+		//
+		// Storage is now UNCONDITIONAL. Interpretation stays a query-time
+		// question (FR-018b's untyped-view resolution rule); what happens here
+		// is only that the frontmatter is written down.
+		rows.Props = rawFrontmatterRows(rec, nil)
 		return rows
 	}
 	rows.RecordType = schema.Type
+
+	// The same rule applies to a TYPED note's undeclared keys. A `contact` note
+	// that also carries `status: open`, where the contact type declares no
+	// `status`, is in exactly the position the ruling is about: the key is on
+	// disk and an untyped view names it. Declared properties are appended below
+	// and are never duplicated here — rawFrontmatterRows skips every key the
+	// schema declares, because two rows for one (note_id, prop, elem) is a
+	// primary-key collision, not a merge.
+	rows.Props = rawFrontmatterRows(rec, schema)
 
 	for _, name := range schema.PropertyOrder {
 		prop, ok := schema.Property(name)
@@ -258,6 +333,97 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 		}
 	}
 	return rows
+}
+
+// RawPropertyType is the `vtype` a raw frontmatter row carries: none.
+//
+// It is the empty string rather than a "raw" or "unknown" spelling on purpose.
+// StoredProp.Type is a records.PropertyType, and the set of those is CLOSED
+// (schema.go); inventing an eighth value here so that a row with NO declared
+// type could name one would put a non-type into a type-shaped field, where the
+// first thing any switch does with it is fall through a default arm. Empty says
+// what is true: nothing declared this key, so it has no declared type, and
+// FR-018b's untyped-view resolution decides the domain at QUERY time.
+const RawPropertyType records.PropertyType = ""
+
+// rawFrontmatterRows is FR-021e: every frontmatter key of every note, stored.
+//
+// WHAT IT WRITES, and why each choice is the one that keeps the ruling true:
+//
+//   - ONE STATE ROW PER KEY, unconditionally — including for a key whose value
+//     is an explicit null. The state row is what makes `file.properties` (the
+//     note's frontmatter KEY SET) a real thing to read: a key present with no
+//     value is still a key the note carries, and dropping its row would make
+//     `file.properties` disagree with the file.
+//   - THE STATE ITSELF still follows R-3. `status:` with nothing after it is
+//     StateAbsent — FR-007's rule that a key with no value is not a value —
+//     while `status: open` is StatePresent. The ruling is that a note SAYING
+//     `status: open` must never answer TRUE to `status IS NULL`; it is not that
+//     a bare key must answer FALSE, and quietly promoting an empty key to
+//     "present" here would break R-3 in the act of satisfying the ruling.
+//   - VALUE ROWS HOLD THE SOURCE TEXT, in v_text and v_raw both, with the
+//     quoting flag the parser saw. No typed column is filled, because no type
+//     was declared and guessing one is the failure D3 names: a date stored as
+//     free text, silently unmatchable.
+//   - A KEY THE SCHEMA DECLARES IS SKIPPED. Its typed rows are written by the
+//     caller's own loop; writing a raw row for it too would collide on the
+//     (note_id, prop, elem) primary key and fail the whole note's transaction.
+//
+// A mapping-valued key gets its state row and no value rows: the key is present
+// (so it appears in `file.properties` and is not absent), and a mapping has no
+// scalar text that any comparison could be made against. Same for a list
+// element that is itself a list or a mapping — it is skipped, and its siblings
+// keep their SOURCE positions, so an element index still names the line the
+// operator can go and look at.
+func rawFrontmatterRows(rec records.Record, schema *records.Schema) []PropRow {
+	if !rec.Frontmatter.Present || len(rec.Frontmatter.Keys) == 0 {
+		return nil
+	}
+	var out []PropRow
+	for _, key := range rec.Frontmatter.Keys {
+		if schema != nil {
+			if _, declared := schema.Property(key); declared {
+				continue
+			}
+		}
+		n, ok := rec.Frontmatter.Get(key)
+		if !ok {
+			continue
+		}
+
+		state := records.StatePresent
+		if n.Kind == records.KindNull {
+			state = records.StateAbsent
+		}
+		out = append(out, PropRow{
+			Prop:  key,
+			Elem:  StateRowElem,
+			State: state,
+			Type:  RawPropertyType,
+		})
+
+		elements := []records.Node{n}
+		if n.Kind == records.KindSequence {
+			elements = n.Items
+		} else if n.Kind != records.KindScalar {
+			continue
+		}
+		for i, el := range elements {
+			if el.Kind != records.KindScalar {
+				continue
+			}
+			out = append(out, PropRow{
+				Prop:   key,
+				Elem:   i,
+				State:  records.StatePresent,
+				Type:   RawPropertyType,
+				Text:   el.Text,
+				Raw:    el.Text,
+				Quoted: el.Quoted,
+			})
+		}
+	}
+	return out
 }
 
 // nonConformingEvidence extracts what the file held and what was expected, from

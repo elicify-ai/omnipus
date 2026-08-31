@@ -169,6 +169,19 @@ type Candidate struct {
 	// disagreement, not which side is behind.
 	SourceHash string
 
+	// File is FR-131's stat metadata, decoded from the three `notes` columns:
+	// `file.mtime`, `file.ctime` and `file.size`.
+	//
+	// It rides on the PARENT row, so it costs no extra rows in the candidate
+	// stream. Every comparison over it happens in the Go comparator, like every
+	// other comparison — the columns exist so the values can be RETRIEVED, never
+	// so a predicate can mention them (FR-135, and the column half of AC-8.10's
+	// guard names all three by name).
+	//
+	// A note whose walk carried no stat has a zero FileMeta: `Known` false,
+	// which is ABSENT, not 1970.
+	File FileMeta
+
 	// Props is keyed by property name. PropOrder preserves the schema's
 	// declaration order so a report reads the way the operator wrote it.
 	Props     map[string]StoredProp
@@ -198,6 +211,27 @@ type TaskHit struct {
 	Path       string
 	SourceHash string
 	Task       TaskRow
+}
+
+// TagHit is one tag with the note context a renderer needs — FR-130's
+// `file.tags`, streamed by its own statement (FR-131).
+type TagHit struct {
+	Path       string
+	SourceHash string
+	Tag        TagRow
+}
+
+// LinkHit is one outgoing wikilink or embed with its owning note.
+//
+// ONE hit type for both `file.links` and `file.embeds`: the two differ only by
+// TagRow's sibling flag `LinkRow.Embed`, and partitioning them in Go
+// (records.SplitLinkRows) keeps `embed` out of every predicate. It is also the
+// edge FR-132's backlinks are derived from — the inverse direction is computed
+// over this stream and stored nowhere.
+type LinkHit struct {
+	Path       string
+	SourceHash string
+	Link       LinkRow
 }
 
 // RelationHit is one relation edge with its owning record.
@@ -238,6 +272,28 @@ type Store interface {
 	// reachability is computed in Go over the edges rather than by asking SQLite
 	// to decide anything about them.
 	Relations(ctx context.Context, sel Selector, visit func(RelationHit) error) error
+
+	// Tags streams the note_tags child table within the same narrowing —
+	// FR-130's `file.tags`.
+	//
+	// Links streams note_links, behind `file.links`, `file.embeds` and (by
+	// derivation) `file.backlinks`.
+	//
+	// THEY ARE SEPARATE METHODS FOR A REASON, and it is FR-131's named assembly
+	// strategy rather than an accident of interface design. `note_props`,
+	// `note_tags` and `note_links` are three children of one parent, and joining
+	// them in one statement returns their CARTESIAN PRODUCT — 30 properties x
+	// 10 tags x 40 links is 12,000 rows for a note that yields 30 today. At
+	// B1's 50,000-candidate ceiling that is a hang, and every aggregate over it
+	// is wrong by the same factor. D16.6 fixed this exact fan-out once already.
+	//
+	// So each child is streamed by its OWN statement under the SAME narrowing,
+	// and a caller that wants a whole note assembles the streams in Go, keyed by
+	// Path. A future convenience method that returns "everything about a note"
+	// must be built that way too — never by adding a second child to the
+	// candidate join.
+	Tags(ctx context.Context, sel Selector, visit func(TagHit) error) error
+	Links(ctx context.Context, sel Selector, visit func(LinkHit) error) error
 
 	// NeedsFullIndex reports that the store holds nothing usable and the caller
 	// must re-derive it from the notes — a fresh file, or one written by an
