@@ -307,8 +307,8 @@ func TestFormula_ViewBudgetCapsAreEnforced(t *testing.T) {
 		// `amount + 1` is three nodes: the reference, the literal, the operator.
 		// Sixteen of them is 48. To reach exactly 256 across 16 formulas each
 		// formula needs 16 nodes: a chain of 8 additions over 9 leaves is
-		// 9 + 8 = 17, so use 15 leaves in a BALANCED shape instead — depth 8 is
-		// the other cap and a left-leaning chain would hit it first.
+		// 9 + 8 = 17, so use 15 leaves in a BALANCED shape instead — the DEPTH
+		// cap is the other bound and a left-leaning chain leans on it needlessly.
 		at256 := map[string]string{}
 		for i := 0; i < 16; i++ {
 			at256[fmt.Sprintf("f%02d", i)] = balancedSum(16)
@@ -358,21 +358,34 @@ func TestFormula_ViewBudgetCapsAreEnforced(t *testing.T) {
 		}
 	})
 
-	t.Run("depth 8 is accepted and depth 9 is refused", func(t *testing.T) {
+	t.Run("the depth cap is accepted exactly AT its value and refused one over", func(t *testing.T) {
+		// The boundary is expressed against maxFormulaDepth rather than against
+		// a literal, because this subtest asserts that the cap is EXACT — that
+		// its value and its enforcement never drift apart. It was written when
+		// the cap was 8 and hard-coded 8/9; the cap is now 16, and a boundary
+		// test that has to be rewritten every time the policy is retuned is a
+		// test that will eventually be deleted instead. The DERIVATION of the
+		// number lives in formula_depth_cap_test.go, which is where a change to
+		// the policy has to argue for itself.
+		//
 		// A left-leaning chain of additions: `1 + 1` is depth 2, and each
-		// further `+ 1` adds one level. Depth 8 therefore needs 7 additions.
-		depth8 := "1" + strings.Repeat(" + 1", 7)
-		if got := FormulaDepth(mustParse(t, depth8)); got != 8 {
-			t.Fatalf("the fixture is wrong: %q is depth %d, want 8", depth8, got)
+		// further `+ 1` adds one level, so depth d needs d-1 additions.
+		atCap := "1" + strings.Repeat(" + 1", maxFormulaDepth-1)
+		if got := FormulaDepth(mustParse(t, atCap)); got != maxFormulaDepth {
+			t.Fatalf("the fixture is wrong: %q is depth %d, want %d", atCap, got, maxFormulaDepth)
 		}
-		if _, errs := ValidateFormulaSet(map[string]string{"f": depth8}, schema); len(errs) != 0 {
-			t.Fatalf("FR-146 caps depth at 8, so exactly 8 must be accepted. Got: %v", formulaErrorMessages(errs))
+		if _, errs := ValidateFormulaSet(map[string]string{"f": atCap}, schema); len(errs) != 0 {
+			t.Fatalf("FR-146 caps depth at %d, so exactly %d must be accepted. Got: %v",
+				maxFormulaDepth, maxFormulaDepth, formulaErrorMessages(errs))
 		}
 
-		depth9 := "1" + strings.Repeat(" + 1", 8)
-		_, errs := ValidateFormulaSet(map[string]string{"f": depth9}, schema)
+		overCap := "1" + strings.Repeat(" + 1", maxFormulaDepth)
+		if got := FormulaDepth(mustParse(t, overCap)); got != maxFormulaDepth+1 {
+			t.Fatalf("the fixture is wrong: %q is depth %d, want %d", overCap, got, maxFormulaDepth+1)
+		}
+		_, errs := ValidateFormulaSet(map[string]string{"f": overCap}, schema)
 		if !hasCode(errs, FormulaErrTooLarge) {
-			t.Fatalf("FR-146: depth 9 must be refused; got %v", formulaErrorCodes(errs))
+			t.Fatalf("FR-146: depth %d must be refused; got %v", maxFormulaDepth+1, formulaErrorCodes(errs))
 		}
 		if msg := formulaMessageWithCode(errs, FormulaErrTooLarge); !strings.Contains(msg, "nests") {
 			t.Errorf("FR-146: the refusal must say it is the DEPTH cap, not one of the other two; got:\n  %s", msg)
