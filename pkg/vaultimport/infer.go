@@ -158,6 +158,13 @@ type PropertyObservation struct {
 	// property contributes each element), each tagged with the note it came
 	// from so an ambiguity report can name real examples.
 	Values []observedValue
+	// TemplateNotes are the `type: template` notes that declared this key
+	// for this record type without any note of the type carrying it — see
+	// applyTemplateDeclarations. It is PROVENANCE, not a count: a property
+	// resting on a template rather than on notes is a different claim, and
+	// the report has to be able to say which one it is making. Empty for
+	// every property real notes declare, which is almost all of them.
+	TemplateNotes []string
 }
 
 // Many is the arity this importer declares: the shape the MAJORITY of the
@@ -384,7 +391,154 @@ func CollectTypeGroups(notes []NoteRecord) map[string]*TypeGroup {
 			collectNodeValues(po, node, n.RelPath)
 		}
 	}
+	applyTemplateDeclarations(groups, notes)
 	return groups
+}
+
+// ---------------------------------------------------------------------------
+// A TEMPLATE NOTE IS A PROPERTY DECLARATION
+//
+// A property can be REAL and still be invisible to a pass that reads only
+// values, because "no note of this type has filled it in yet" and "this type
+// has no such property" look identical from inside the frontmatter. The
+// importer used to report the second when the truth was the first, and the
+// bill on the founder's vault was ten named losses across three `.base`
+// files: `legal-entity.registration_renewal_date`, `legal-entity.
+// last_refreshed`, `invoice.amount` and `round.target` were each filtered on
+// or displayed by a base he wrote, and each was refused with "never observed
+// on a <type> note".
+//
+// The evidence that settles it was already in the vault, in his own hand.
+// `03-Reference/Ops-Templates/Template — legal-entity.md` is a note with
+// `type: template` and `template_type: legal-entity`, and its frontmatter
+// lists — blank, ready to fill in — every property a legal-entity note
+// carries, `last_refreshed` and `registration_renewal_date` among them. That
+// is not an inference about a name or a shape. It is the operator writing
+// down what this record type IS.
+//
+// THIS IS THE SAME MOVE FR-018d MADE ONE LEVEL UP (see run.go): a `.base`
+// file naming a record type no note carries DECLARES that type, because the
+// operator wrote the base. A template naming a property no note carries
+// declares that property, for the same reason and on stronger evidence — a
+// base file says "I filter this type by X", a template says "an X note has
+// these properties", which is the schema question itself.
+//
+// WHAT IT MAY DO, AND THE FOUR THINGS IT MAY NOT
+//
+// It may add a property NAME to a record type that already exists. That is
+// the whole of it. In particular:
+//
+//   - It never contributes a VALUE. The founder's connected-account template
+//     writes `status: active`; that is a DEFAULT for the next note, not an
+//     observation of an existing one, and admitting it would put `active`
+//     into an inferred enum's closed set on the strength of a file that is
+//     not a record of that type. Only the key crosses over.
+//   - It never touches a property real notes carry. Data wins, always, and
+//     the counts (`DeclaredCount`, `PresentNonEmptyCount`) stay exactly what
+//     the notes of the type made them, so `required`, `many` and FR-104b's
+//     tie-break weight are computed from real notes and nothing else.
+//   - It never invents a record type. A `template_type` naming a type no
+//     note carries is skipped here and left to FR-018d provisioning, which
+//     decides that question from the `.base` files. Two rules creating the
+//     same type would be two answers to one question.
+//   - It never brings `template_type`/`template_kind` across. Those describe
+//     the template file; they are not properties of the thing it templates.
+//
+// WHY THE ADDED PROPERTY CANNOT INVALIDATE A NOTE. It arrives with zero
+// values, so it takes classifyWithNoValues — `required` is false because
+// PresentNonEmptyCount is 0 against a NoteCount above 0, `many` is false
+// because there is no arity evidence, and the type is `text`, or `date` when
+// the name is on that function's closed list. Every note of the type is
+// silent on this key, and an absent value is checked against nothing. The
+// acceptance bar (a note this run typed is never reported invalid by the same
+// run) is untouched by arithmetic, not by luck.
+//
+// WHY IT CANNOT BROADEN A VIEW (FR-105). Declaring a property can only turn a
+// clause the translator DROPPED into one it translates. A dropped clause is
+// the broadening this project refuses — `and: [a, b]` losing `b` matches more
+// rows than the original — so restoring it moves in the narrowing direction
+// at the leaf. And at the view: a restored clause under a `not:` inverts, so
+// the question is whether the restored translation is EQUIVALENT to Obsidian's
+// or merely a subset. It is not decided here. Whatever type the property ends
+// up with, view_write.go's leaf builder judges each filter position on its own
+// terms and refuses the ones it cannot translate faithfully — that is exactly
+// what keeps `last_refreshed != ""` a named loss on `text` after this change,
+// where `registration_renewal_date != ""` translates on `date`. This function
+// widens the set of properties that reach that judgement; it does not widen
+// the judgement.
+// ---------------------------------------------------------------------------
+
+// templateRecordType is the `type:` a template note declares, and
+// templateTypeKey / templateKindKey are the two scaffolding keys such a note
+// carries about ITSELF rather than about the record it templates.
+const (
+	templateRecordType = "template"
+	templateTypeKey    = "template_type"
+	templateKindKey    = "template_kind"
+)
+
+// applyTemplateDeclarations adds every property name a template note declares
+// to the record type its `template_type` names, for types that already exist.
+//
+// It runs as a SECOND pass, after every note has been grouped, because it has
+// to know whether a record type exists at all before it can decline to invent
+// one — and the template may be read before the notes it templates.
+func applyTemplateDeclarations(groups map[string]*TypeGroup, notes []NoteRecord) {
+	for i := range notes {
+		n := &notes[i]
+		if n.Rec.TypeName() != templateRecordType {
+			continue
+		}
+		target := templateTargetType(n.Rec)
+		if target == "" || target == templateRecordType {
+			continue
+		}
+		g, ok := groups[target]
+		if !ok {
+			// No note carries this type. Declaring it from a template is
+			// FR-018d provisioning's question, not this one.
+			continue
+		}
+		for _, key := range n.Rec.Frontmatter.Keys {
+			if !templateDonatesKey(key) {
+				continue
+			}
+			if _, observed := g.Props[key]; observed {
+				// Real notes of the type already speak for this property.
+				continue
+			}
+			// g.prop registers the name with a zero observation: no value,
+			// no arity, and a DeclaredCount that stays 0 because no note of
+			// THIS type wrote the key. classifyWithNoValues takes it from
+			// here, and TemplateNotes is how the report says where the key
+			// came from instead of claiming a note declared it.
+			po := g.prop(key)
+			po.TemplateNotes = append(po.TemplateNotes, n.RelPath)
+		}
+	}
+}
+
+// templateTargetType reads the record type a template note templates, or ""
+// when it names none. A blank or non-scalar `template_type` names nothing.
+func templateTargetType(rec records.Record) string {
+	n, ok := rec.Frontmatter.Get(templateTypeKey)
+	if !ok || n.Kind != records.KindScalar {
+		return ""
+	}
+	return strings.TrimSpace(n.Text)
+}
+
+// templateDonatesKey reports whether one of a template's frontmatter keys is
+// a property of the record it templates. The two scaffolding keys and the
+// three reserved keys CollectTypeGroups already excludes are the whole of the
+// exclusion list.
+func templateDonatesKey(key string) bool {
+	switch key {
+	case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced,
+		templateTypeKey, templateKindKey:
+		return false
+	}
+	return true
 }
 
 // collectNodeValues flattens one frontmatter value into a property's
@@ -879,10 +1033,11 @@ func classifyWithNoValues(recordType string, po *PropertyObservation, ip Inferre
 		ip.Type = records.TypeDate
 		ip.Kind = ClassifyDateFromName
 		ip.NameEvidenced = &NameEvidencedInference{
-			RecordType:     recordType,
-			Property:       po.Name,
-			Type:           records.TypeDate,
-			DeclaringNotes: po.DeclaredCount,
+			RecordType:         recordType,
+			Property:           po.Name,
+			Type:               records.TypeDate,
+			DeclaringNotes:     po.DeclaredCount,
+			DeclaringTemplates: append([]string(nil), po.TemplateNotes...),
 		}
 		return ip
 	}
@@ -972,6 +1127,59 @@ type NameEvidencedInference struct {
 	// all — every one of them leaving it blank, which is the whole reason
 	// this branch ran.
 	DeclaringNotes int
+	// DeclaringTemplates are the `type: template` notes that named this
+	// property for this record type when NO note of the type wrote the key
+	// at all (applyTemplateDeclarations). It is the second legitimate
+	// history a name-evidenced guess can have, and it exists because the
+	// first one — "notes declared it and left it blank" — became false for
+	// some entries the moment templates were read, and a report that keeps
+	// asserting it is a report that lies about its own evidence.
+	DeclaringTemplates []string
+}
+
+// ReportLines renders one name-evidenced guess, first line first, INCLUDING
+// any contradiction between the entry and its own premise.
+//
+// It lives here, next to the rule that produces the entry, for the reason
+// ProvisionedType.ReportLines states about itself: the same account is read
+// by the operator in the run report, and a second spelling of it elsewhere is
+// how two accounts of one decision drift apart. It also puts the premise
+// check beside the premise — this section asserts that something DECLARED the
+// key and left it blank, and when the payload says nothing did, that is the
+// impossible case and it is named rather than narrated as fine.
+//
+// The record-type half of the check stays in the report renderer: whether the
+// type is among the ones this run inferred is a question about the whole
+// report, which one inference cannot see.
+func (n NameEvidencedInference) ReportLines() []string {
+	var where string
+	switch {
+	case n.DeclaringNotes > 0 && len(n.DeclaringTemplates) > 0:
+		where = fmt.Sprintf("declared by %d note(s), every one blank, and named by %s",
+			n.DeclaringNotes, joinTemplateNotes(n.DeclaringTemplates))
+	case n.DeclaringNotes > 0:
+		where = fmt.Sprintf("declared by %d note(s), every one blank", n.DeclaringNotes)
+	case len(n.DeclaringTemplates) > 0:
+		where = fmt.Sprintf("declared by no %s note — named, and left blank, by %s, which is where the operator writes what a %s note carries",
+			n.RecordType, joinTemplateNotes(n.DeclaringTemplates), n.RecordType)
+	default:
+		where = "declared by nothing at all"
+	}
+	lines := []string{fmt.Sprintf("%s.%s -> %s (%s)", n.RecordType, n.Property, n.Type, where)}
+	if n.DeclaringNotes <= 0 && len(n.DeclaringTemplates) == 0 {
+		lines = append(lines, fmt.Sprintf(
+			"CONTRADICTION — nothing declares `%s`: no note of this type wrote the key and no template names it, so there was no key here to type from a name. The premise of this whole section fails for this entry; file it rather than trusting the type.",
+			n.Property))
+	}
+	return lines
+}
+
+// joinTemplateNotes renders the template paths a guess rests on.
+func joinTemplateNotes(paths []string) string {
+	if len(paths) == 1 {
+		return "the template `" + paths[0] + "`"
+	}
+	return "the templates `" + strings.Join(paths, "`, `") + "`"
 }
 
 // CollectNameEvidencedInferences gathers every name-based type decision an
