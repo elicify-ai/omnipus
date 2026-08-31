@@ -252,7 +252,7 @@ func TestEnumWidening_StopsAtTheCeilingThatMakesAPropertyAnEnumAtAll(t *testing.
 	b.WriteString("filters:\n  and:\n    - type == \"task\"\nviews:\n  - type: table\n    name: Many\n    filters:\n      or:\n")
 	for i := 0; i < enumMaxDistinct+5; i++ {
 		b.WriteString("        - status == \"novel-state-")
-		b.WriteString(string(rune('a' + i)))
+		b.WriteRune(rune('a' + i))
 		b.WriteString("\"\n")
 	}
 	inferred, widenings := widenFrom(t, b.String())
