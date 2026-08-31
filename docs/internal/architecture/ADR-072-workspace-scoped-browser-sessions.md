@@ -1,4 +1,4 @@
-# ADR-072 — The browser belongs to the conversation, not to the agent
+# ADR-072 — Browser tools: conversation-scoped, and usable by an agent
 
 - **Status:** Proposed
 - **Date:** 2026-08-31
@@ -103,6 +103,15 @@ because that precondition looks like the fix and isn't.
 
 ## 2. Decision
 
+Two decision areas. **D1** fixes who owns the browser; **D2** fixes what an
+agent can do with it. They ship independently and are separated here so each
+can be reviewed on its own — D1 is an ownership change with real concurrency
+consequences, D2 is additive surface.
+
+---
+
+## D1 — Ownership
+
 **A browsing context belongs to a conversation. One browser manager serves the
 workspace.**
 
@@ -154,6 +163,149 @@ also stop claiming "shared" unless and until it is true.
 
 ---
 
+## D2 — Capability
+
+**The agent-facing tool surface is completed: how an agent finds an element,
+when it is safe to act on it, and the verbs it can use.**
+
+### D2.0 What we ship today
+
+Eleven tools: `browser_navigate`, `browser_click`, `browser_type`,
+`browser_get_text`, `browser_screenshot`, `browser_evaluate`, `browser_wait`,
+and the four tab tools (`list`/`switch`/`open`/`close`).
+
+A prior playwright-go evaluation (cited in issue #569) concluded that swapping
+the engine was not worth it, and that **role selectors and auto-waiting were
+the only benefits that survived scrutiny — both implementable on chromedp**.
+This ADR takes that conclusion and adds what a survey of the actual tool
+surface shows is also missing.
+
+### D2.1 Element selection by role and accessible name — issue #569
+
+Today an agent resolves a target by **CSS selector** or by our own visible-text
+matcher (`pkg/tools/browser/text_selector.go` — `resolveTextTarget`,
+`has-text`/`text-is`, `data-omnipus-tsel`). The CDP Accessibility domain is
+unused: `getFullAXTree` / `queryAXTree` appear nowhere in `pkg/` or `src/`.
+
+An LLM reasons about a page as *"the Submit button"*, i.e. role + accessible
+name. Making it translate that into CSS is where avoidable action failures and
+retries come from, and CSS is the least stable thing on a page that A/B tests.
+
+**Decision:** add role + accessible-name selection alongside CSS and text
+(additive, not a replacement), sourced from the CDP Accessibility domain
+rather than a reimplemented accname computation, exposed through the same
+target-resolution seam the text selectors already use so every action tool
+inherits it. Deterministic ordering plus an index affordance on multi-match,
+mirroring the existing text-selector behaviour.
+
+### D2.2 Actionability — currently one quarter built, unfiled
+
+Playwright waits for an element to be **visible, stable, enabled and
+hit-testable** before acting. We do the first only:
+`tools.go:257` (click) and `:461` (type) prepend `chromedp.WaitVisible`;
+`:685` uses `WaitReady` for text. Nothing checks enabled-ness, nothing checks
+that the element has stopped moving, nothing checks that the click will
+actually land on it rather than on an overlay.
+
+Issue #569 says this deserves its own issue. **It was never filed** — verified
+against all open and closed issues. It is folded in here.
+
+**Decision:** complete the actionability contract in the shared pre-action
+path, so every action tool inherits it: visible → stable (two consecutive
+identical bounding boxes) → enabled → hit-testable (the element is what a
+click at that point would reach). On timeout the failure must name **which**
+condition was not met — "not clickable, covered by another element" is
+actionable by an agent; "timeout" is not.
+
+### D2.3 Missing verbs
+
+Verified absent from `pkg/tools/browser/` (non-test): zero occurrences of
+`select_option`, `file_upload`, `hover`, `press_key`, or dialog handling.
+
+| Tool | Why an agent needs it |
+|---|---|
+| `browser_select_option` | **A dropdown cannot be used at all today.** `<select>` does not respond to click+type |
+| `browser_press_key` | No Enter to submit, no Tab to advance, no Escape to dismiss |
+| `browser_hover` | Menus that open on hover are unreachable |
+| `browser_upload_file` | Any flow with an attachment dead-ends |
+| Dialog handling | A page calling `alert()`/`confirm()` blocks the whole session with no way out |
+
+`browser_type` covers text entry but not discrete key events; the two are not
+substitutes.
+
+**Decision:** add the four tools and dialog handling. Each is small
+individually; together they are the difference between an agent that can read
+a page and one that can complete a form.
+
+**Dialog handling carries a specific hazard** worth stating: a modal dialog
+blocks every subsequent CDP command on that tab. Whatever is built must
+guarantee the session cannot be left wedged — the failure mode is not a bad
+result, it is a browser that stops answering.
+
+### D2.4 Reading a page as structure
+
+An agent reads a page today via `browser_screenshot` (pixels, needing vision)
+or `browser_get_text` (requires already knowing a CSS selector). Neither gives
+the structure an agent needs to decide **what is on the page and what it can
+do next**.
+
+**Decision:** add an accessibility-tree snapshot — roles, accessible names,
+and the handles needed to act on them — as the default way an agent reads a
+page. This shares its source with D2.1: the same AX tree that answers "what is
+here" answers "which node did you mean". Build them together or the second one
+is built twice.
+
+### D2.5 Telling the agent the supported route — issue #242
+
+`browser_navigate` rejects `file://` deliberately (`manager.go:673-681` —
+"file:// would bypass Landlock restrictions"). The agent is told only:
+
+> `browser: file:// URLs are blocked for security reasons`
+
+That is a dead end. The supported route exists one tool away — `web_serve`
+mints a `/preview/<agent>/<token>/` http URL that `browser_navigate` accepts —
+and nothing in the tool surface mentions it. `grep` for `file://`, `web_serve`
+or `preview` in `tools.go` returns nothing.
+
+**Decision:** name the supported route in **the error message**, not only in
+the tool description. The error is the moment the agent needs the answer; a
+description read hundreds of tokens earlier is not.
+
+### D2.6 Explicitly out of scope
+
+- **Replacing chromedp with playwright-go.** The prior evaluation found only
+  two benefits worth having, and D2.1/D2.2 deliver both without an engine swap
+  or a new runtime dependency (Hard Constraint #1).
+- **Network interception, frame targeting, drag-and-drop, cookie/storage
+  manipulation.** Real Playwright features, no demonstrated agent need yet.
+  Deliberately deferred rather than forgotten.
+
+### D2.7 Capability gating — issue #456 is closed as redundant
+
+#456 asked that `browser_*` be gated out of the manifest when no Chromium is
+available. **Chromium is not fetched on demand in any shipping configuration:**
+the Linux and macOS release archives bundle it (`scripts/install.sh` verifies
+`chrome.sha256` and aborts the install on mismatch), and
+`docker/Dockerfile.heavy` bakes Chrome-for-Testing in at build time. The
+managed download in `exec_resolver.go` is step 4 of the resolver ladder — the
+fallback for bare-binary and hand-built installs, not the normal path.
+
+ADR-071 independently removed most of the cost the issue cited: all twelve
+`browser_*` tools are now Tier 3 / search-only, so they occupy no line in the
+compressed manifest.
+
+**Decision: close #456.** A gate for a state that shipping installs do not
+enter is machinery without a payer.
+
+**The one real exception, recorded so it is not rediscovered as a surprise:**
+linux/arm64 archives carry no `chromium/` payload, because Chrome-for-Testing
+publishes no linux-arm64 build (`scripts/install.sh:26-29`) — and the managed
+download cannot rescue it for the same reason. Those hosts depend on a system
+Chrome. If ARM Linux becomes a supported target, this is a real gap, but it
+wants a build-and-distribution answer, not a manifest gate.
+
+---
+
 ## 3. Acceptance criteria
 
 The operator's three cases, which are the test plan:
@@ -168,6 +320,23 @@ The operator's three cases, which are the test plan:
 
 Case 2 and case 3 are the ones broken today; 1 works; 4 and 5 are the
 regressions this design must not introduce.
+
+### D2 — capability
+
+| # | Requirement |
+|---|---|
+| 6 | An agent can target an element as role + accessible name, on a page whose CSS classes are generated/unstable |
+| 7 | Every action tool inherits the same actionability wait. A click on a disabled, moving, or covered element **fails with which condition was unmet** — not "timeout" |
+| 8 | An agent can complete a form containing a `<select>` — impossible today |
+| 9 | An agent can press Enter, Tab and Escape as discrete key events |
+| 10 | An agent can open a hover-triggered menu |
+| 11 | An agent can attach a file to a file input |
+| 12 | A page calling `alert()`/`confirm()` does not wedge the session. **The tab must still answer CDP afterwards** — this is the acceptance test, not that the dialog was dismissed |
+| 13 | An agent can read a page as structure (roles + names + actionable handles) without vision and without already knowing a CSS selector |
+| 14 | `browser_navigate` on a `file://` URL returns an error **naming `web_serve` as the supported route** |
+
+Criteria 7 and 12 are the two whose failure mode is silent or wedging rather
+than a wrong answer, and are the ones worth writing tests for first.
 
 ---
 
