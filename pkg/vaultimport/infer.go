@@ -59,6 +59,12 @@ const (
 	// nameEvidencedDate for the rule and for why this is the one place in
 	// this file a name is allowed to decide anything.
 	ClassifyDateFromName ClassifyKind = "date_from_name_no_values_observed"
+	// ClassifyDateFromFormula: not one value was ever observed for this
+	// property either, but this time the vault DID say what it is — a
+	// `.base` file's own formula applies `date()` to it, which is the
+	// operator's written statement about his own property rather than this
+	// package's reading of English. See TypePropertiesFromBaseFormulas.
+	ClassifyDateFromFormula ClassifyKind = "date_from_base_formula_no_values_observed"
 )
 
 // Tunable inference thresholds, stated here (not buried in a condition) so a
@@ -646,6 +652,11 @@ type InferredProperty struct {
 	// this property holds one value or a list. `many:` follows the majority
 	// and the minority is named here.
 	AritySplit *AritySplitReport
+	// FormulaEvidenced is set when the vault held NO value for this property
+	// anywhere and its type was read from a `.base` file's own FORMULA
+	// instead — a stronger evidence class than NameEvidenced, and reported
+	// separately for that reason. See TypePropertiesFromBaseFormulas.
+	FormulaEvidenced *FormulaEvidencedType
 	// EnumWidened is set when this property's closed set met a literal the
 	// operator's own `.base` files filter on and no note carries — whether
 	// the set grew or the growth was refused at enumMaxDistinct. See
@@ -2032,4 +2043,520 @@ func joinBaseFiles(vs []string) string {
 		return "a base"
 	}
 	return strings.Join(vs, ", ")
+}
+
+// ---------------------------------------------------------------------------
+// TYPING A PROPERTY FROM A `.base` FILE'S OWN FORMULA
+//
+// THE EVIDENCE, in the founder's vault, verbatim. `CRM.base` declares:
+//
+//	days_since_refresh: if(last_refreshed, (today() - date(last_refreshed)).days, "")
+//
+// and `last_refreshed` is inferred `text`, because ONE note of the whole vault
+// declares the key and that note leaves it blank. Two of the view "Entities —
+// Refresh Due"'s three clauses are then lost and the view is DISABLED:
+// `last_refreshed != ""` has no faithful translation on a text property
+// (FR-007a keeps `""` a PRESENT value there, so `IS NOT NULL` would BROADEN),
+// and `formula.days_since_refresh > 365` fails to type because translate.go's
+// W2 guard-dropping rewrite is proved for a scalar `date` and for nothing else.
+//
+// BOTH LOSSES ARE THE SAME ROOT CAUSE, and the operator already answered the
+// question the run is guessing at: he wrapped the property in `date()`. No
+// note carries a value, so the notes CANNOT say what the type is — the base
+// can, and it does.
+//
+// WHY `date(x)` IS EVIDENCE AND MOST FUNCTIONS ARE NOT. The bar is the one
+// dateNameExact states for names and it is the same bar: a wrong declaration
+// REJECTS the operator's first real note, which is worse than the lost filter
+// the rule exists to recover. So the function has to be one whose every
+// accepted operand type denotes the SAME concept:
+//
+//	date(x)    ADMITTED. It is a date CONSTRUCTOR. inferCall accepts exactly
+//	           `text` and `date` for it, and `text` is accepted there as the
+//	           SERIALISED SPELLING of a date, not as a second meaning — there
+//	           is no reading of `date(x)` under which x is a quantity, a state
+//	           or a piece of prose. Calling it is the operator saying "this
+//	           holds a calendar date".
+//	time(x)    ADMITTED, on strictly stronger ground than its sibling.
+//	           inferCall accepts ONLY `date` for it, so a text receiver is a
+//	           type error the operator would already have been shown. It fires
+//	           on nothing in the founder's vault, and that is deliberately not
+//	           the test applied here: `date` and `time` are the same
+//	           conversion written two ways, and admitting the LOOSER of the
+//	           pair while refusing the STRICTER would be a rule about which
+//	           spelling the operator happened to pick. Which one carried a
+//	           declaration is recorded on FormulaEvidence.Function, so the
+//	           report never has to say `date()` about a `time()`.
+//
+// REJECTED, each with the reason:
+//
+//	format(x), link(x), icon(x)
+//	           accept ANYTHING (inferCall returns `presentation` without
+//	           inspecting the operand). Evidence of nothing.
+//	contains(x, y), file.hasLink(x)
+//	           defined over more than one operand type, and those types mean
+//	           genuinely different things. Not evidence.
+//	if(P, …)   THE ONE THAT LOOKS LIKE EVIDENCE AND IS NOT. It is the whole
+//	           reason these views are disabled, so it is tempting to read the
+//	           guard as a declaration. It is not: Obsidian reads a bare `P`
+//	           there as a JavaScript truthiness test, which is exactly as
+//	           meaningful over a string, a number or a checkbox. Typing P from
+//	           its appearance in a guard would be typing it from the fact that
+//	           the operator tested whether it was filled in.
+//	today() - x
+//	           STRONGER evidence than `date(x)` in principle, and deliberately
+//	           NOT implemented. `today()` is unambiguously a date and
+//	           inferBinary types `date - date` as the only non-numeric `-`, so
+//	           a bare property subtracted from `today()` can only be a date.
+//	           Two measurements keep it out and both are on the founder's
+//	           vault. (a) `-` on its own is NOT evidence — it is defined over
+//	           numbers as well as dates — so the rule only exists once the
+//	           OTHER operand has been proved a date, which is a second type
+//	           inference carrying its own failure modes. (b) It would recover
+//	           nothing here: the four base formulas that subtract a bare
+//	           property (`Deals.age`, `Deals.is_stale`, `Inbox-Triage.age`,
+//	           `Hiring.age_in_stage`) name `created` and `updated`, and those
+//	           are either already typed `date` from hundreds of real ISO
+//	           values or not declared on the record type at all — clause 1
+//	           refuses the second group and clause 3 the first. A rule that
+//	           cannot fire cannot be measured, and this file does not carry
+//	           rules whose behaviour is asserted rather than observed.
+//	(a - b).days, x.hours, …
+//	           REFUSED one level further down, for the same reason. A duration
+//	           accessor proves its RECEIVER is a duration, and in every real
+//	           formula that receiver is a subtraction rather than a bare
+//	           property — so the accessor adds nothing the `-` rule above did
+//	           not already have to prove. `P.days` on a bare property appears
+//	           nowhere in this vault.
+//	date(P) INSIDE A VIEW FILTER, e.g. `date(close_date).year == today().year`
+//	           OUT OF SCOPE, deliberately. This rule reads a base's
+//	           `formulas:` block and nothing else. The one clause of that
+//	           shape in this vault is refused by the grammar anyway (`.year`
+//	           is outside FR-143's pinned snapshot), so admitting it would
+//	           change no view; and a filter clause is somewhere the translator
+//	           already forms its own judgement, which is exactly where a
+//	           second reader of the same text starts to disagree with it.
+//
+// THE FOUR CONTAINMENT CLAUSES, which are what make this safe rather than
+// merely plausible. Every one is checked in typeEligibleForFormulaEvidence:
+//
+//  1. THE PROPERTY MUST ALREADY BE DECLARED for the record type. This rule
+//     never invents a property — creating a vocabulary and re-reading one are
+//     different questions, and the second belongs to FR-018d provisioning and
+//     to the template rule. (Same clause WidenEnumsFromBases states.)
+//  2. NO NOTE THIS RUN WILL VALIDATE AS THE RECORD TYPE MAY CARRY A VALUE FOR
+//     IT. This is the clause that makes the invariant hold rather than merely
+//     be hoped for: `date` is a STRICTER declaration than `text`
+//     (records.TypeDate accepts six ISO layouts; `text` accepts every string),
+//     so it can only invalidate a note through a value — and there are none.
+//     A property with values was typed FROM those values, and data beats a
+//     base file exactly as data beats a name.
+//
+//     IT IS ASKED OF THE NOTES, NOT OF `InferredProperty.ObservedCount`, AND
+//     THE DIFFERENCE IS THE WHOLE CLAUSE. ObservedCount is frozen by
+//     CollectTypeGroups at the top of Run; FR-104b's InferTypesForUntypedNotes
+//     then writes `type:` into untyped notes AFTER inference and BEFORE
+//     validation, so a note can JOIN a record type carrying values inference
+//     never counted. Gating on the frozen count reads "no values" off a
+//     population that is not final yet, and this vault has 27 untyped notes
+//     feeding that path. The promotion would then make a note invalid against
+//     the schema the SAME run wrote — the one outcome this package admits no
+//     exception to. noValueJoinsRecordType asks the final population instead;
+//     TestFormulaEvidence_ANoteThatJOINSTheTypeIsSeenByTheGate forces the
+//     frozen-count version to fire so its zero is measured, not assumed.
+//  3. IT MUST CURRENTLY BE `text`. The rule only ever strengthens the
+//     fallback. It never overrules `enum`, `relation`, `checkbox` or an
+//     already-inferred `date`, and it never fires twice.
+//  4. IT MUST BE SINGLE-VALUED. `many` is decided by the arity of what the
+//     notes wrote, and translate.go's W2 excludes a `many` date on its own
+//     argument (an empty list is present-and-falsy in JavaScript). A rule that
+//     produced a `many` date would be handing W2 a case it refuses anyway.
+//
+// AND THE DIRECTION THAT IS NOT ABOUT NOTES: can a filter that was REFUSED now
+// translate to something WIDER than Obsidian? The only clause shape whose
+// translation changes is `P != ""` / `P == ""`, which FR-007a re-reads on a
+// date as `IS NOT NULL` / `IS NULL`. Clause 2 settles it: with zero values,
+// `IS NOT NULL` matches NO record of the type, so the imported view returns
+// zero rows there — at or below the Obsidian original on every reading of it,
+// which is the FR-105 direction that matters. It is checked on the real vault
+// against the independent expected-row-set oracle, not argued here.
+//
+// WHERE THIS RUNS: after every schema is inferred and provisioned, and BEFORE
+// writeSchemas and NewSchemaIndex — the same position, for the same reason,
+// that WidenEnumsFromBases occupies. A type that reached the index but not the
+// written schema would let the clause translate and then be refused by
+// `records` at query time: a view that imports clean and returns an error.
+// ---------------------------------------------------------------------------
+
+// FormulaEvidence is one `.base` formula that carried a type declaration.
+type FormulaEvidence struct {
+	// Base is the `.base` file's path, relative to the vault root.
+	Base string
+	// Formula is the key in that file's `formulas:` block.
+	Formula string
+	// Source is the expression EXACTLY as the operator wrote it, so the
+	// report quotes his text rather than this package's rewrite of it.
+	Source string
+	// Function is the conversion that carried the declaration — `date` or
+	// `time`, the two entries of dateEvidencingFunctions. It is recorded
+	// because the report names the call the founder is being asked to check,
+	// and a report that says `date()` about a `time()` sends him looking for
+	// text that is not in his file.
+	Function string
+}
+
+// dateEvidencingFunctions is the closed set of formula functions whose
+// application to a BARE property name is read as the operator declaring that
+// property a date.
+//
+// It is a map rather than a condition so the whole of it is visible at once.
+// Adding an entry is a decision to take on the terms this section's header
+// states — every accepted operand type of the function must denote the same
+// concept — and never a convenience.
+var dateEvidencingFunctions = map[string]bool{
+	"date": true,
+	"time": true,
+}
+
+// FormulaEvidencedType is one property this package typed from a `.base`
+// file's own formula because the vault held no value for it anywhere.
+//
+// It is the honesty payload for this rule, on the same contract as
+// AmbiguousInference, NameEvidencedInference and EnumWidening: a guess is
+// acceptable when it is REPORTED and correctable in one edit. It is a
+// DIFFERENT and stronger evidence class than NameEvidencedInference — a name
+// is this package's reading of English, a formula is the operator's own
+// written statement about his own property — and it is reported separately so
+// the founder can see which of the two decided each type.
+type FormulaEvidencedType struct {
+	RecordType string
+	Property   string
+	// Type is what the formula was read as. Only records.TypeDate is ever
+	// produced today; the field is here so a reader of the report does not
+	// have to know that.
+	Type records.PropertyType
+	// Was is the declaration this replaced — always records.TypeText, by
+	// clause 3, and carried so the report states the change rather than only
+	// the outcome.
+	Was records.PropertyType
+	// Evidence is every base formula that applied `date()` to this property
+	// under a view resolving to this record type, sorted by base then
+	// formula. All of them are named: the founder overrules the type in one
+	// edit, but he fixes a MISTAKEN formula in the base file, and he cannot
+	// do that without being told which file and which key.
+	Evidence []FormulaEvidence
+}
+
+// ReportLines renders one formula-evidenced type, first line first.
+//
+// It lives beside the rule that produces it for the reason
+// NameEvidencedInference.ReportLines states about itself: the same account is
+// what the operator reads in the run report, and a second spelling of it
+// elsewhere is how two accounts of one decision drift apart.
+func (f FormulaEvidencedType) ReportLines() []string {
+	lines := make([]string, 0, len(f.Evidence)+2)
+	lines = append(lines, fmt.Sprintf("%s.%s -> %s (was %s; no note of this type carries a value for it)",
+		f.RecordType, f.Property, f.Type, f.Was))
+	for _, e := range f.Evidence {
+		lines = append(lines, fmt.Sprintf("evidence: %s declares `%s: %s`, which reads `%s` through %s()",
+			e.Base, e.Formula, e.Source, f.Property, e.Function))
+	}
+	lines = append(lines, fmt.Sprintf(
+		"overrule it in a single edit: knowledge_configure set schema %s property %s type=text",
+		f.RecordType, f.Property))
+	return lines
+}
+
+// CollectFormulaEvidencedTypes gathers every formula-based type decision an
+// import made, in a stable order, ready for the run report to print.
+//
+// Same shape as CollectNameEvidencedInferences and CollectEnumWidenings, so
+// the report renders all of this package's honesty payloads the same way and
+// asks this package for its own decisions rather than having them threaded
+// through by the caller.
+func CollectFormulaEvidencedTypes(inferred map[string][]InferredProperty) []FormulaEvidencedType {
+	var out []FormulaEvidencedType
+	for _, props := range inferred {
+		for _, p := range props {
+			if p.FormulaEvidenced != nil {
+				out = append(out, *p.FormulaEvidenced)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RecordType != out[j].RecordType {
+			return out[i].RecordType < out[j].RecordType
+		}
+		return out[i].Property < out[j].Property
+	})
+	return out
+}
+
+// TypePropertiesFromBaseFormulas re-reads as `date` every value-less `text`
+// property that a `.base` file's own formula applies `date()` or `time()` to,
+// MUTATING `inferred` in place, and returns the account of every property it
+// touched.
+//
+// It must run after every schema is inferred and provisioned, and BEFORE both
+// writeSchemas and NewSchemaIndex — see this section's header for why the
+// position is load-bearing rather than incidental.
+//
+// `notes` is the note set as it stands AFTER FR-104b has written `type:` into
+// what it could decide, and passing it is the whole of containment clause 2.
+// The count frozen on InferredProperty at inference time answers a question
+// about a population that is not final yet; see the clause.
+func TypePropertiesFromBaseFormulas(
+	inferred map[string][]InferredProperty,
+	notes []NoteRecord,
+	relPaths []string,
+	parsed map[string]*ParsedBase,
+) []FormulaEvidencedType {
+	// recordType -> property -> the evidence gathered for it.
+	byType := map[string]map[string][]FormulaEvidence{}
+
+	// Clause 2's population, computed ONCE from the final note set rather
+	// than per candidate, and built over EVERY property every note carries
+	// rather than only the ones evidence is later found for — so the gate
+	// cannot be narrowed by an error in the evidence walk.
+	valued := valuedPropertiesByType(notes)
+
+	for _, rel := range relPaths {
+		pb := parsed[rel]
+		if pb == nil || len(pb.FormulaNames) == 0 {
+			continue
+		}
+
+		// Which properties this base's formulas read as dates, and on whose
+		// authority. Computed once per base: the `formulas:` block is one
+		// block, and TranslateFormulas type-checks all of it against every
+		// view's record type, so the evidence is the base's, not a view's.
+		dated := map[string][]FormulaEvidence{}
+		for _, name := range pb.FormulaNames {
+			src, readable := pb.Formulas[name]
+			if !readable {
+				// A formula whose value was not a scalar string. The
+				// translator refuses it by name; this rule cannot read a
+				// source that does not exist.
+				continue
+			}
+			root, perr := records.ParseFormula(src)
+			if perr != nil {
+				// An unparseable formula is already a NAMED loss on every
+				// view that uses it. Reading a type out of text this product
+				// could not parse would be inventing evidence.
+				continue
+			}
+			carried := datePropertyArguments(root)
+			for _, prop := range sortedStringKeys(carried) {
+				dated[prop] = append(dated[prop], FormulaEvidence{
+					Base: rel, Formula: name, Source: strings.TrimSpace(src),
+					Function: carried[prop],
+				})
+			}
+		}
+		if len(dated) == 0 {
+			continue
+		}
+
+		outer := TranslateFilterTree(pb.Filters)
+		for _, vraw := range pb.Views {
+			viewTrans := TranslateFilterTree(vraw["filters"])
+			rt, conflict := resolveViewType(viewTrans.TypeLiterals, outer.TypeLiterals)
+			if conflict != "" || rt == "" {
+				// An UNTYPED view (FR-018b) queries every note in scope, so a
+				// property name in it is not scoped to one record type and a
+				// declaration cannot be attributed to one schema. The same
+				// clause WidenEnumsFromBases states, for the same reason.
+				continue
+			}
+			for _, prop := range sortedStringKeys(dated) {
+				if !typeEligibleForFormulaEvidence(inferred[rt], prop, valued[rt]) {
+					continue
+				}
+				byProp := byType[rt]
+				if byProp == nil {
+					byProp = map[string][]FormulaEvidence{}
+					byType[rt] = byProp
+				}
+				byProp[prop] = appendUnseenFormulaEvidence(byProp[prop], dated[prop])
+			}
+		}
+	}
+
+	var out []FormulaEvidencedType
+	for _, rt := range sortedStringKeys(byType) {
+		for _, prop := range sortedStringKeys(byType[rt]) {
+			idx := indexOfProperty(inferred[rt], prop)
+			if idx < 0 {
+				continue
+			}
+			evidence := byType[rt][prop]
+			sort.Slice(evidence, func(i, j int) bool {
+				if evidence[i].Base != evidence[j].Base {
+					return evidence[i].Base < evidence[j].Base
+				}
+				return evidence[i].Formula < evidence[j].Formula
+			})
+			fe := FormulaEvidencedType{
+				RecordType: rt,
+				Property:   prop,
+				Type:       records.TypeDate,
+				Was:        inferred[rt][idx].Type,
+				Evidence:   evidence,
+			}
+			inferred[rt][idx].Type = records.TypeDate
+			inferred[rt][idx].Kind = ClassifyDateFromFormula
+			stored := fe
+			inferred[rt][idx].FormulaEvidenced = &stored
+			out = append(out, fe)
+		}
+	}
+	return out
+}
+
+// typeEligibleForFormulaEvidence is the four containment clauses, in one
+// place, so a reviewer reads them together rather than reconstructing them
+// from the call site. See this section's header for the argument behind each.
+func typeEligibleForFormulaEvidence(props []InferredProperty, name string, valued map[string]bool) bool {
+	p, ok := findInferredProperty(props, name)
+	if !ok {
+		return false // (1) never invents a property
+	}
+	if valued[records.FoldKey(name)] {
+		return false // (2) data beats a base file, as data beats a name
+	}
+	if p.Type != records.TypeText {
+		return false // (3) only ever strengthens the fallback
+	}
+	return !p.Many // (4) W2 refuses a `many` date anyway
+}
+
+// valuedPropertiesByType answers containment clause 2 over the FINAL note set:
+// for each record type, which of its properties any note carries a genuine
+// value for.
+//
+// THE POPULATION IS THE POINT. It reads `notes` as they stand when the rule
+// runs, which is AFTER FR-104b's InferTypesForUntypedNotes has written `type:`
+// into the untyped notes it could decide. Those notes are validated by this
+// same run, so they can be invalidated by this rule, so they have to be
+// counted by it. `InferredProperty.ObservedCount` cannot answer this: it is
+// frozen by CollectTypeGroups before those notes had a type at all.
+//
+// "A genuine value" is decided by collectNodeValues — the same function
+// CollectTypeGroups counts through — rather than re-tested here. The empty
+// string, the explicit null, the empty list and the nested mapping all have
+// settled dispositions in that function, and a second copy of them is how two
+// answers to one question start to disagree.
+//
+// Property names are FOLDED. The inferred schema keys on the spelling the
+// notes used, so a note writing `Last_Refreshed:` against a schema saying
+// `last_refreshed` would slip an exact match — and slipping this gate means
+// being promoted, which is the direction that can invalidate a note.
+func valuedPropertiesByType(notes []NoteRecord) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for i := range notes {
+		rec := notes[i].Rec
+		rt := rec.TypeName()
+		if rt == "" {
+			// An untyped note is validated as no record type at all, so no
+			// schema this rule can change is applied to it.
+			continue
+		}
+		for _, key := range rec.Frontmatter.Keys {
+			var po PropertyObservation
+			po.Name = key
+			collectNodeValues(&po, rec.Frontmatter.Values[key], notes[i].RelPath)
+			if po.PresentNonEmptyCount == 0 {
+				continue
+			}
+			byProp := out[rt]
+			if byProp == nil {
+				byProp = map[string]bool{}
+				out[rt] = byProp
+			}
+			byProp[records.FoldKey(key)] = true
+		}
+	}
+	return out
+}
+
+// appendUnseenFormulaEvidence adds evidence not already recorded — one base's
+// formulas are read once per VIEW that resolves to a type, and two views of
+// one type would otherwise record the same formula twice.
+func appendUnseenFormulaEvidence(have, add []FormulaEvidence) []FormulaEvidence {
+	for _, e := range add {
+		seen := false
+		for _, h := range have {
+			if h.Base == e.Base && h.Formula == e.Formula {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			have = append(have, e)
+		}
+	}
+	return have
+}
+
+// datePropertyArguments returns, keyed by property name and sorted, the BARE
+// property references an expression applies a dateEvidencingFunctions call to,
+// with the function that carried each.
+//
+// BARE is the whole restriction. `date(x)` says x is a date; `date(x + "-01")`
+// says something about an expression OVER x, and `date(file.name)` is not
+// about a property at all. Anything but a single RefProperty argument answers
+// no, which keeps this a reading of what the operator wrote rather than an
+// inference about it.
+//
+// One property reached through BOTH `date()` and `time()` in one expression
+// keeps the FIRST spelling in sorted order, deterministically, rather than
+// reporting the property twice: the two calls are one declaration, and the
+// founder is being pointed at a formula, not at a call count.
+//
+// The walk is ITERATIVE for the reason records.countNodes is: it runs on a
+// freshly parsed tree, BEFORE FR-146's depth cap has been applied to it, so it
+// must survive the tree that cap exists to refuse.
+func datePropertyArguments(root records.FormulaNode) map[string]string {
+	found := map[string]string{}
+	stack := []records.FormulaNode{root}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n == nil {
+			continue
+		}
+		if call, ok := n.(*records.Call); ok && dateEvidencingFunctions[call.Name] && len(call.Args) == 1 {
+			if ref, isRef := call.Args[0].(*records.Ref); isRef && ref.Kind == records.RefProperty {
+				if prev, seen := found[ref.Name]; !seen || call.Name < prev {
+					found[ref.Name] = call.Name
+				}
+			}
+		}
+		stack = append(stack, formulaChildren(n)...)
+	}
+	return found
+}
+
+// formulaChildren is records.FormulaNode's operands, in source order.
+//
+// The `records` package has this as an unexported method on a closed
+// interface, so a reader outside it re-states the shape. The node set is
+// closed by FR-143 — a new node kind is a specification revision, not a code
+// change — so this switch cannot silently fall behind: a kind added there
+// arrives with its own spec diff. A kind this switch does not know contributes
+// no children, which costs a rule that does not fire, never one that fires on
+// a tree it misread.
+func formulaChildren(n records.FormulaNode) []records.FormulaNode {
+	switch node := n.(type) {
+	case *records.UnaryOp:
+		return []records.FormulaNode{node.Operand}
+	case *records.BinaryOp:
+		return []records.FormulaNode{node.Left, node.Right}
+	case *records.Call:
+		return node.Args
+	case *records.FieldAccess:
+		return []records.FormulaNode{node.Receiver}
+	}
+	return nil
 }
