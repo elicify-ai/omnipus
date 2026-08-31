@@ -590,6 +590,16 @@ views:
 	if !strings.Contains(string(produced[0].Bytes), "limit: 5") {
 		t.Fatalf("the view's `limit: 5` never reached the written file:\n%s", produced[0].Bytes)
 	}
+	// Through the REAL loader, not a substring check: a `limit:` key the view
+	// loader rejects would take the whole file down, which is worse than the
+	// silent drop it replaces.
+	v, rej := records.ParseView("/v/.omnipus-vault/views/x.yaml", produced[0].Bytes)
+	if rej != nil {
+		t.Fatalf("the written view is rejected by the real loader: %s\n%s", rej.String(), produced[0].Bytes)
+	}
+	if v.Def.Limit == nil || *v.Def.Limit != 5 {
+		t.Fatalf("limit did not survive the round trip: %v", v.Def.Limit)
+	}
 	if vo.Status != OutcomeConverted {
 		t.Fatalf("carrying a limit faithfully is not a loss; status=%s losses=%v", vo.Status, vo.Losses)
 	}
