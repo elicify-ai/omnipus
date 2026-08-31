@@ -17,8 +17,16 @@ import (
 // query so one response is internally consistent. A fixed instant is also what
 // makes the date assertions below checkable at all — a test calling time.Now()
 // asserts nothing about a formula and everything about the clock.
+//
+// THE DATE IS DELIBERATELY IN THE PAST, AND THAT IS NOT COSMETIC. The first
+// version of this fixture was the day it was written. A mutation replacing the
+// snapshot with time.Now() then SURVIVED the whole suite, because every
+// assertion about `today()` was comparing the fixture against a clock that
+// agreed with it. A fixture that happens to match the environment is a fixture
+// that tests the environment. Any instant far from "now" restores the
+// discrimination; this one is arbitrary beyond being unmistakably not today.
 func formulaTestNow() time.Time {
-	return time.Date(2026, 8, 31, 14, 30, 0, 0, time.UTC)
+	return time.Date(2019, 3, 7, 14, 30, 0, 0, time.UTC)
 }
 
 // fixtureCandidate is a hand-built candidate: property name → resolved value.
@@ -275,9 +283,14 @@ func TestFormula_AbsencePropagatesAndArithmeticIsExact(t *testing.T) {
 					i, gotNow, gotToday, firstNow, firstToday)
 			}
 		}
-		// And the snapshot is the instant that was PASSED IN, not a clock read.
-		if firstToday != "2026-08-31" {
-			t.Errorf("today() rendered %s, want 2026-08-31 — the evaluator must use the instant it was given", firstToday)
+		// And the snapshot is the instant that was PASSED IN, not a clock
+		// read. The fixture date is years in the past precisely so this
+		// assertion can tell the two apart — see formulaTestNow.
+		if firstToday != "2019-03-07" {
+			t.Errorf("today() rendered %s, want 2019-03-07 — the evaluator must use the instant it was GIVEN, not read the clock", firstToday)
+		}
+		if !strings.HasPrefix(firstNow, "2019-03-07T14:30:00") {
+			t.Errorf("now() rendered %s, want the 2019-03-07T14:30:00Z instant the evaluator was given", firstNow)
 		}
 	})
 
@@ -320,6 +333,47 @@ func TestFormula_AbsencePropagatesAndArithmeticIsExact(t *testing.T) {
 		res, _ = e.Evaluate("top")
 		if got := renderNumber(t, res); got != "4" {
 			t.Fatalf("the second candidate rendered %s, want 4 — Begin() must clear the memo, or every candidate receives the first one's values with no error anywhere", got)
+		}
+	})
+
+	t.Run("FR-011a — contains() folds through FoldKey, not through ToLower", func(t *testing.T) {
+		// value.go's executed table is the oracle here:
+		//
+		//	pair                 strings.ToLower   cases.Fold
+		//	straße / STRASSE     false             TRUE
+		//
+		// The discriminating direction is the one with ß in the NEEDLE. Full
+		// folding maps ß to `ss`, so FoldKey("STRAßE") is "strasse" and finds
+		// it inside "hauptstrasse 5". strings.ToLower performs only SIMPLE
+		// folding — a rune-for-rune map — so it produces "straße", which is not
+		// in the haystack at all.
+		//
+		// A needle of "STRASSE" would NOT discriminate: both functions send it
+		// to "strasse". This case is written the way it is because the obvious
+		// one passes under either implementation, and a mutation swapping
+		// FoldKey for ToLower survived the suite until this case existed.
+		name := schema.Properties["name"]
+		c := fixtureCandidate{props: map[string]PropertyValue{
+			"name": textValue(name, "Hauptstrasse 5"),
+		}}
+		res := evalOne(t, `contains(name, "STRAßE")`, c)
+		if res.Absent || len(res.Values()) == 0 {
+			t.Fatal("contains() must produce a value")
+		}
+		if res.Values()[0].Raw != "true" {
+			t.Errorf("FR-011a: contains(\"Hauptstrasse 5\", \"STRAßE\") answered %s, want true. A false means the formula layer folds with the standard library instead of FoldKey, and text comparison here would disagree with text comparison everywhere else in the package",
+				res.Values()[0].Raw)
+		}
+
+		// The control, from the same table's third row: Turkish dotted İ must
+		// NOT fold to i. A wrong MATCH is the failure direction nobody notices,
+		// because it looks like a feature.
+		c = fixtureCandidate{props: map[string]PropertyValue{
+			"name": textValue(name, "istanbul"),
+		}}
+		res = evalOne(t, `contains(name, "İSTANBUL")`, c)
+		if res.Values()[0].Raw != "false" {
+			t.Errorf("FR-011a/AC-8.9e: contains(\"istanbul\", \"İSTANBUL\") answered true. Dotted İ and plain i are different letters in Turkish; folding them together is the classic Turkish-I bug, and strings.ToLower is what produces it")
 		}
 	})
 
