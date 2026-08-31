@@ -1391,6 +1391,27 @@ func aggregateOpNames() string {
 //     work — recorded here rather than silently assumed away.
 // ---------------------------------------------------------------------------
 
+// summaryTypeGapToken is the phrase report.go's closed gap table classifies
+// this loss by, DECLARED HERE — in the file that emits it — rather than written
+// out a second time over there.
+//
+// READ THIS BEFORE REWORDING THE MESSAGE BELOW. report.go recognises a loss by
+// matching SUBSTRINGS of the sentence this package writes, so improving a
+// message for the founder can silently empty a bucket in the summary that reads
+// it, ACROSS AN OWNERSHIP BOUNDARY, with nothing failing to say so. Three
+// separate agents hit that coupling in one day on three unrelated changes; each
+// stopped and asked, and none of them could have known from this side that
+// there was anything to ask about.
+//
+// Naming the token here is the smallest thing that changes that. report.go's
+// row refers to this constant instead of repeating the phrase, so the coupling
+// is a symbol a compiler and a reader can both see, and
+// TestSummaryGate_TheEmittedLossCarriesTheTokenReportGoClassifiesBy fails in
+// THIS package if the emitted sentence stops containing it. Reword freely
+// around it; keep the token in the sentence, or change the constant and let the
+// classifier follow.
+const summaryTypeGapToken = "and the summaries defined for"
+
 // summaryDefinedForType reports whether op is defined over the DECLARED type of
 // prop, and if it is not, the reason in the same words the engine would use.
 func (r leafResolver) summaryDefinedForType(op, prop string) (reason string, ok bool) {
@@ -1410,7 +1431,7 @@ func (r leafResolver) summaryDefinedForType(op, prop string) (reason string, ok 
 		return "", true
 	}
 	return fmt.Sprintf(
-		"%s is a %s property, and the summaries defined for %s are %s — a view carrying this one is REFUSED IN FULL by knowledge_find (the refusal aborts the whole request, not just the total), so it is dropped here and named instead. Declaring the property's real type with `knowledge_configure set schema %s property %s type=<…>` turns it back on",
+		"%s is a %s property, "+summaryTypeGapToken+" %s are %s — a view carrying this one is REFUSED IN FULL by knowledge_find (the refusal aborts the whole request, not just the total), so it is dropped here and named instead. Declaring the property's real type with `knowledge_configure set schema %s property %s type=<…>` turns it back on",
 		prop, p.Type, p.Type, strings.Join(knowledgefind.SummaryOpsDefinedFor(p.Type), ", "), r.recordType, prop), false
 }
 

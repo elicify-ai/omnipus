@@ -132,6 +132,36 @@ func TestSummaryGate_DoesNotFireOnAPropertyCheckPropertyAlreadyRefused(t *testin
 	}
 }
 
+// TestSummaryGate_TheEmittedLossCarriesTheTokenReportGoClassifiesBy is the half
+// of the report/importer coupling that the report's own anti-drift guard cannot
+// see, and it lives HERE, in the package that writes the sentence, because that
+// is where the edit that breaks it will be made.
+//
+// report.go recognises a loss by matching a substring of this message. Its
+// TestGapTokens_StillExistInTheEmittingSource catches a token whose sentence has
+// disappeared entirely; it cannot catch a sentence REWORDED so the token no
+// longer appears in the loss the importer actually emits, because the constant
+// would still be declared and still be a literal. That is the direction three
+// separate changes drifted in one day, each silently moving real losses into
+// UNCLASSIFIED. This test closes it from the emitting side: reword the message
+// however you like, and either keep the token in it or change the constant.
+func TestSummaryGate_TheEmittedLossCarriesTheTokenReportGoClassifiesBy(t *testing.T) {
+	r := gateResolver("thing", InferredProperty{Name: "prose", Type: records.TypeText})
+	_, losses := translateSummaries(map[string]any{"prose": "Sum"}, r)
+	if len(losses) != 1 {
+		t.Fatalf("losses = %v, want exactly 1", losses)
+	}
+	if !strings.Contains(losses[0], summaryTypeGapToken) {
+		t.Fatalf("the emitted loss no longer contains %q, so report.go's gap table will file it as UNCLASSIFIED and the founder's work list stops explaining it:\n  %s",
+			summaryTypeGapToken, losses[0])
+	}
+	// And the end-to-end statement, which is what actually matters: the loss
+	// this importer writes is one the report can place.
+	if k := classifyLoss(losses[0]); k != gapSummaryUndefinedForType {
+		t.Errorf("classifyLoss put the emitted loss in kind %v, want gapSummaryUndefinedForType (%v). A loss the report cannot place is a loss the summary stops explaining.", k, gapSummaryUndefinedForType)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // THE ACCEPTANCE STATEMENT, THROUGH THE REAL LOADERS
 // ---------------------------------------------------------------------------

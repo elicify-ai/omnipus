@@ -525,6 +525,10 @@ const (
 	gapUndeclaredProperty
 	gapEnumLiteral
 	gapEmptyStringOnText
+	// gapSummaryUndefinedForType is, like gapGroupDirection and
+	// gapBaseFunction, a shape where the importer did the RIGHT thing. It is
+	// counted so the founder can see the trade, not so anyone files it.
+	gapSummaryUndefinedForType
 	gapBaseFunction
 	gapReasonDiscarded
 	gapUnclassified
@@ -539,6 +543,31 @@ const (
 // of a loss line only, and TestGapTokens_StillExistInTheEmittingSource fails
 // when one of them is no longer a string literal anywhere in the code that
 // emits losses.
+//
+// ---------------------------------------------------------------------------
+// A LOSS MESSAGE IS AN INTERFACE BETWEEN TWO FILES, AND NOTHING TYPE-CHECKS IT
+//
+// Recorded here because it has now happened three times in one day, to three
+// agents working on three unrelated changes: improving a loss sentence — which
+// is strictly better for the founder, and needs no permission from this file —
+// silently empties the bucket that classified it, and the only visible symptom
+// is a count moving into UNCLASSIFIED in a report nobody diffs. All three
+// stopped and asked; none of them could have seen from the emitting side that
+// there was anything to ask about. The behaviour was right three times and the
+// design did not improve, which is why this note exists.
+//
+// The anti-drift guard catches the OTHER direction (a token whose sentence is
+// gone) and it cannot catch this one, because a reworded sentence usually still
+// contains SOME literal somewhere.
+//
+// gapSummaryUndefinedForType below is the first row that does not have the
+// problem: its token is a named constant declared in the file that EMITS the
+// message (view_write.go's summaryTypeGapToken), so the coupling is a symbol
+// rather than a coincidence of prose, and a test in the emitting package fails
+// if the sentence stops carrying it. That pattern generalises to every row
+// here; adopting it row by row, as each is next touched, is cheaper than one
+// migration and is what would stop a fourth occurrence.
+// ---------------------------------------------------------------------------
 type gapShape struct {
 	kind gapKind
 	// label is the one-line entry in the FR-105 work list.
@@ -617,6 +646,13 @@ var gapShapes = []gapShape{
 		kind:   gapEmptyStringOnText,
 		label:  "empty-string comparison on a TEXT property (`prop != \"\"`) — `\"\"` is a PRESENT value for text, so `IS NOT NULL` would admit rows the base excludes",
 		tokens: []string{"has no faithful translation on a TEXT property"},
+	},
+	{
+		kind:  gapSummaryUndefinedForType,
+		label: "summary a property's TYPE does not define (`sum` over text) — dropped at import because the query engine refuses the WHOLE request over it",
+		// The token is the emitting file's own constant, not a copy of its
+		// prose. See the note on this struct.
+		tokens: []string{summaryTypeGapToken},
 	},
 	{
 		kind:   gapUndeclaredProperty,
@@ -1226,6 +1262,10 @@ func (r *Report) narrate(k gapKind, t *gapTally) string {
 	case gapOtherCombinator:
 		return fmt.Sprintf("COMBINATOR GROUP DROPPED WHOLE (%d): an `or:`/`not:` block lost as a unit although its branches do NOT disagree about the record type, so one of its leaves could not be built. The group reports its own verbatim rather than the failing leaf's reason, so this report cannot say which leaf — a reporting gap to file under FR-107, separate from the drop. Example: %q",
 			t.Count, t.Example)
+
+	case gapSummaryUndefinedForType:
+		return fmt.Sprintf("SUMMARY A PROPERTY'S TYPE DOES NOT DEFINE (%d across %d base(s)): the base asks for a total — `Sum`, typically — over a property this vault declares as text. NOTHING IS BROKEN HERE, AND THERE IS NOTHING TO FILE; read the three facts before deciding otherwise. (1) The property really is text: either real notes hold prose in it, or no note carries it at all and it was declared from a base file, where `text` is the only declaration that cannot REJECT the first note you write. (2) knowledge_find really does refuse `sum` over text, by name, listing what the type does define (FR-155) — it does not compute a wrong number and it does not return a blank total. (3) That refusal aborts the WHOLE request, so a view carrying such a summary returns no rows at all rather than a table with one empty cell. Dropping the summary at import is therefore the correct trade and it is a cheap one: the COLUMN is kept, every row is kept, and the view imports ENABLED — only the total goes. The remedy is one operator edit, `knowledge_configure set schema <type> property <name> type=decimal`, and it is right that it waits until a real note exists to justify the type. Example: %q",
+			t.Count, len(t.Bases), t.Example)
 
 	case gapUndeclaredProperty:
 		return fmt.Sprintf("PROPERTY THE INFERRED SCHEMA DOES NOT DECLARE (%d across %d base(s)): the base filters on or displays a property that no sampled note of that record type carried, so this run inferred no such property to filter against. This is an INFERENCE gap, not a model gap — the property is real in the founder's base file and simply never appeared on a note. Example: %q",
