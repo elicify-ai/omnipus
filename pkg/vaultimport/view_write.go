@@ -1338,14 +1338,18 @@ func translateGrouping(raw any, r leafResolver) (nodes []*yaml.Node, losses []st
 		// ascending would be the silent flattening FR-109 exists to stop, one
 		// field over. But knowledge_find's own request carries no group
 		// direction, so pkg/records' view->find bridge refuses to SERVE a
-		// descending grouping (ServeRefusalGroupDirection) rather than
-		// reordering it silently. That refusal is invisible at import time, so
-		// it is reported here: an imported view nobody can apply must not
-		// score CLEAN.
+		// The direction is carried into the view file, and a knowledge_find
+		// request can now ASK for it — VaultFindRequest.group_by[].direction
+		// landed with the group-direction work, and the bridge serves such a
+		// view instead of refusing it. So nothing is lost here any more.
+		//
+		// This used to append a LossGroupBy saying the view was "refused until
+		// [the request] does". That sentence outlived the refusal it described
+		// by exactly one commit, which is the shape this package keeps getting
+		// wrong: a loss line is a claim about ANOTHER component, and it goes
+		// stale silently when that component changes. The `default:` arm below
+		// is still a real loss — an unknown spelling is genuinely dropped.
 		pairs = append(pairs, ordPair{Key: "direction", Value: dir})
-		losses = append(losses, lossf(LossGroupBy,
-			"grouping %q DESCENDING is carried into the view file faithfully, but a knowledge_find request has no group direction, so applying this view is refused until it does (ServeRefusalGroupDirection) — the groups are not silently reordered ascending",
-			prop))
 	default:
 		losses = append(losses, lossf(LossGroupBy, "direction %q on %q dropped — the only declared group directions are asc and desc", dir, prop))
 	}

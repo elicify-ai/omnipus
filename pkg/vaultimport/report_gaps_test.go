@@ -893,7 +893,9 @@ func TestSystemicGaps_DoNotAccuseThisImporterWhenTheCauseIsSomewhereElse(t *test
 		gapFormulaOperandUntyped:     "the paragraph names the type inference as the cause and says the formula needs no change",
 		gapFormulaArithmeticOverText: "the paragraph names the vault's own values and the formula TYPE SYSTEM, not this importer",
 		gapFormulaTooBig:             "an FR-146 policy cap is a decision to take, not a defect to file",
-		gapGroupDirection:            "the importer carried the direction faithfully; the block is in the find request",
+		// gapGroupDirection is RETIRED — the find request can ask for a group
+		// direction now, so the importer emits no such loss and this entry would
+		// fail the vacuity check below rather than assert anything.
 	}
 	for kind, why := range external {
 		tally := tallies[kind]

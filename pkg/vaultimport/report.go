@@ -517,8 +517,16 @@ const (
 	gapFormulaOperandUntyped
 	gapFormulaArithmeticOverText
 	gapFormulaTooBig
-	// gapGroupDirection is not a translation gap at all: the import kept the
-	// direction and the QUERY cannot ask for it.
+	// gapGroupDirection is RETIRED and nothing can produce it. It described a
+	// view that recorded a descending grouping the QUERY could not ask for.
+	// VaultFindRequest.group_by[].direction now exists, the bridge serves such
+	// a view instead of refusing it, and view_write.go no longer emits the
+	// loss — so the shape matched a sentence that had ceased to exist.
+	//
+	// The kind is kept rather than deleted so an older report still decodes,
+	// the same way ServeRefusalFormula was retired. Its shape row is gone,
+	// which is what TestGapTokens_StillExistInTheEmittingSource requires: a
+	// shape may not match on a literal the emitting source no longer carries.
 	gapGroupDirection
 	gapMixedTypeDisjunction
 	gapOtherCombinator
@@ -636,11 +644,6 @@ var gapShapes = []gapShape{
 		// then refused for size. The per-formula and per-view caps differ only
 		// in which number was exceeded.
 		tokens: []string{"FR-146 caps one formula at", "FR-146 caps a view at"},
-	},
-	{
-		kind:   gapGroupDirection,
-		label:  "grouping direction carried into the view file but not requestable — a find request has no group direction",
-		tokens: []string{"the groups are not silently reordered ascending"},
 	},
 	{
 		kind:   gapEmptyStringOnText,

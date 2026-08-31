@@ -165,7 +165,7 @@ func TestTranslateBase_TheFourOutcomes(t *testing.T) {
 	}{
 		{"Accepted", OutcomeConverted, false, "table", nil},
 		{"Board", OutcomeConvertedWithLosses, false, "table", []LossPosition{
-			LossProperties, LossProperties, LossSort, LossGroupBy, LossAggregates,
+			LossProperties, LossProperties, LossSort, LossAggregates,
 		}},
 		{"Live only", OutcomeConverted, false, "table", nil},
 		{"Gallery", OutcomeConverted, false, "cards", nil},
