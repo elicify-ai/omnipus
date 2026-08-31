@@ -126,6 +126,17 @@ func (c *candidate) storedValue(prop *records.Property) (records.PropertyValue, 
 		c.memo[prop.Name] = v
 		return v, nil
 	}
+	// A RAW FRONTMATTER ROW carries no declared type, so it has no typed column
+	// to decode from and StoredProp.Typed would refuse it — "a date element was
+	// indexed with no value in its typed column" — for every note whose own type
+	// does not declare this name. That refusal is correct for a TYPED row and
+	// wrong here: FR-021e stores these rows precisely so an untyped query can
+	// read them, and the contract says the value is "parsed in the domain the
+	// name resolves to", with a value that does not parse there reported as
+	// NON-CONFORMING rather than as a broken index.
+	if sp.Type == propindex.RawPropertyType && prop.Type != propindex.RawPropertyType {
+		return c.rawValue(prop, sp)
+	}
 	v, err := sp.Typed(prop)
 	if err != nil {
 		return records.PropertyValue{}, err
@@ -133,6 +144,58 @@ func (c *candidate) storedValue(prop *records.Property) (records.PropertyValue, 
 	v.Property = prop
 	c.memo[prop.Name] = v
 	return v, nil
+}
+
+// rawValue parses one note's RAW frontmatter rows under the declaration the
+// untyped namespace settled on.
+//
+// It goes through records.ParseValue — the same parser the validator and the
+// index writer use — so an untyped query and a typed one read one value the
+// same way. Nothing here re-implements a type: the only thing this function
+// decides is that the SOURCE TEXT is what gets parsed, because a raw row is all
+// source text by construction.
+//
+// A value that does not parse in the resolved domain is NON-CONFORMING, and its
+// CONFORMING SIBLINGS are kept — the same rule records.ResolveProperty applies
+// to a declared `many` property, and for the same reason: dropping the whole
+// property would delete values the note demonstrably contains.
+func (c *candidate) rawValue(prop *records.Property, sp propindex.StoredProp) (records.PropertyValue, error) {
+	pv := records.PropertyValue{Property: prop, State: sp.State}
+	if sp.State != records.StatePresent {
+		c.memo[prop.Name] = pv
+		return pv, nil
+	}
+	for _, e := range sp.Elems {
+		n := records.Node{Kind: records.KindScalar, Text: e.Raw, Quoted: e.Quoted}
+		// FR-007a: outside `text`, a blank scalar is ABSENT, not a value. The
+		// predicate is records' own, so this cannot drift from the typed path.
+		if records.AbsentByEmptyString(prop, n) {
+			continue
+		}
+		v, verr := records.ParseValue(prop, n)
+		if verr != nil {
+			pv.State = records.StateNonConforming
+			pv.Findings = append(pv.Findings, records.Finding{
+				RecordPath: c.rows.Path,
+				RecordType: c.rows.RecordType,
+				Property:   prop.Name,
+				Reason:     verr.Reason,
+				Expected:   verr.Expected,
+				Got:        verr.Got,
+				Permitted:  verr.Permitted,
+				Code:       verr.Code,
+			})
+			continue
+		}
+		pv.Values = append(pv.Values, v)
+		pv.SourceIndex = append(pv.SourceIndex, e.SourcePos)
+	}
+	if len(pv.Values) == 0 && len(pv.Findings) == 0 {
+		// Every element was blank-and-absent, so the property holds no value.
+		pv.State = records.StateAbsent
+	}
+	c.memo[prop.Name] = pv
+	return pv, nil
 }
 
 // fileValue resolves one of FR-130's virtual properties.

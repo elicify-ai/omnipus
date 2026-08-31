@@ -59,6 +59,21 @@ const (
 	// showed zero rows because the problem list was long would be technically
 	// within budget and useless — the caller would see only what failed.
 	minRenderedRows = 3
+
+	// minRenderedProblems is the same floor for the OTHER unbounded list.
+	//
+	// trimToBudget used to remove rows and only rows, so the budget was a cap on
+	// half the response. The problem list has no cap of its own — the freshness
+	// loop appends one entry per stale row directly, bypassing recordProblems'
+	// dedup, and that dedup keys on record+code+property anyway, so distinct
+	// records never collapse. With limit=200 over a stale corpus the response ran
+	// to roughly two hundred problem lines against a stated hard cap of 4,000
+	// bytes, and the one budget test used a fixture with `Problems: []`.
+	//
+	// The floor is three for the same reason the row floor is: a reader has to
+	// see the KIND of thing that went wrong, and a response that reported only
+	// "200 problems not shown" would name nothing to act on.
+	minRenderedProblems = 3
 )
 
 // Render projects the response into the compact text a model reads (FR-072).
@@ -361,4 +376,35 @@ func trimToBudget(resp *generated.VaultFindResponse) {
 		}
 		resp.ElidedSummary = &s
 	}
+
+	trimProblemsToBudget(resp)
+}
+
+// trimProblemsToBudget is the same trim for the other unbounded list.
+//
+// It runs AFTER the rows because rows are the answer and problems are the
+// caveat: a response that dropped every row to make room for two hundred
+// freshness lines would be within budget and would have thrown away what the
+// caller asked for. The elision is STATED — a problem list silently cut short
+// is the same class of defect as a silently truncated row set, and it is worse
+// here because a reader who sees three problems concludes there are three.
+func trimProblemsToBudget(resp *generated.VaultFindResponse) {
+	kept := resp.Problems
+	omitted := 0
+	for len(kept) > minRenderedProblems && len(Render(*resp)) > ResponseBudgetBytes {
+		kept = kept[:len(kept)-1]
+		omitted++
+		trimmed := make([]generated.RecordProblem, 0, len(kept)+1)
+		trimmed = append(trimmed, kept...)
+		trimmed = append(trimmed, problemsElided(omitted))
+		resp.Problems = trimmed
+	}
+}
+
+// problemsElided names what the budget removed, and what to do to see it.
+func problemsElided(n int) generated.RecordProblem {
+	return problem(generated.ScopeTruncated,
+		fmt.Sprintf("%d further problem(s) not shown — the response budget is %d bytes",
+			n, ResponseBudgetBytes),
+		"re-run with a smaller limit, or narrow the query, to see the rest")
 }

@@ -137,6 +137,15 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 		return refusalResponse(req, rawEcho(req), ref), ref
 	}
 
+	// BEFORE THE VIEW IS EXPANDED, not after. applyView gates on
+	// `req.Type == nil`, so a present-but-blank `type` is non-nil, silently
+	// discards the view's own `type:` and then resolves to no schema — running
+	// the view's filter against EVERY note in the vault and presenting it as
+	// the view's answer, marked complete.
+	if r := checkBlankNarrowing(req); r != nil {
+		return refusalResponse(req, rawEcho(req), r), r
+	}
+
 	if r := applyView(&req, d.Views); r != nil {
 		return refusalResponse(req, rawEcho(req), r), r
 	}
@@ -186,6 +195,56 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	return findRecords(ctx, d, q, echo)
 }
 
+// checkBlankNarrowing refuses a present-but-BLANK `type` or `kind`.
+//
+// The contract already rules on this for a saved view's own `type:` — "An empty
+// string is not 'untyped' — it is a typo for a type name, and treating it as a
+// deliberate absence would turn a misspelling into a vault-wide query" — and
+// the same sentence is true of the argument. Two code paths disagreed about it:
+// applyView treated blank as PRESENT (so the view's narrowing was discarded)
+// and resolveType treated it as ABSENT (so nothing narrowed at all). Refusing
+// is what makes the two agree, and it is the reading the contract already took.
+func checkBlankNarrowing(req generated.VaultFindRequest) *RefusalError {
+	blank := func(argument, value, remedy string) *RefusalError {
+		p := problem(generated.UnsupportedParameter,
+			fmt.Sprintf("%s was given as %q, which is not a name; a blank %s is a typo for one, "+
+				"never a deliberate absence", argument, value, argument),
+			remedy)
+		return refuse(p, nil)
+	}
+	if req.Type != nil && strings.TrimSpace(*req.Type) == "" {
+		return blank("type", *req.Type,
+			"omit type entirely to search every note, or name a declared record type — "+
+				"call knowledge_describe to see them")
+	}
+	if req.Kind != nil && strings.TrimSpace(string(*req.Kind)) == "" {
+		return blank("kind", string(*req.Kind),
+			"omit kind entirely to use the default, or name one of: "+
+				strings.Join([]string{KindNote, KindRecord, KindTask, KindAttachment}, ", "))
+	}
+	return nil
+}
+
+// ViewRefusalReporter is the OPTIONAL half of ViewLoader that explains an
+// ok=false: the view EXISTS and cannot be carried through this request shape.
+//
+// ViewLoader.View is (VaultFindRequest, bool) with no field for a reason, so a
+// view stored `disabled`, one grouping in descending order and one declaring
+// `formulas` all arrive here indistinguishable from a name nobody ever defined
+// — and applyView then told the caller "no saved view named X; defined: <every
+// other view>", which is flatly false about a view knowledge_configure wrote
+// successfully and knowledge_describe still lists.
+//
+// It is a separate interface for the same reason ViewFormulaLoader is: widening
+// ViewLoader would silently un-satisfy an existing implementation at a wiring
+// site nobody would see. records.ViewFindLoader already carries exactly this
+// method (ServeRefusal), whose own header says "knowledge_describe and
+// knowledge_configure hold a *ViewFindLoader and can ask" — this is find
+// asking.
+type ViewRefusalReporter interface {
+	ServeRefusal(name string) (records.ViewServeRefusal, bool)
+}
+
 // applyView expands a saved view UNDER the caller's own arguments, so `filter`
 // refines the view rather than replacing it (spec 4.1.2: "a saved view, applied
 // first; filter refines it").
@@ -201,6 +260,19 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 	}
 	view, ok := loader.View(name)
 	if !ok {
+		// EXISTS-BUT-UNSERVABLE IS NOT "DOES NOT EXIST". Asking first is what
+		// stops this refusal making a false statement about a view the operator
+		// wrote, saw accepted, and can still read back through
+		// knowledge_describe.
+		if reporter, isReporter := loader.(ViewRefusalReporter); isReporter {
+			if refusal, unservable := reporter.ServeRefusal(name); unservable {
+				p := problem(generated.UnsupportedParameter,
+					fmt.Sprintf("the saved view %q exists but cannot be run through knowledge_find: %s (%s)",
+						name, refusal.Reason, refusal.Code),
+					refusal.Remedy)
+				return refuse(p, nil)
+			}
+		}
 		names := loader.Names()
 		sort.Strings(names)
 		p := problem(generated.UnknownView,
@@ -236,6 +308,13 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 	}
 	if req.Aggregate == nil {
 		req.Aggregate = view.Aggregate
+	}
+	// THE VIEW'S OWN PAGE SIZE. It was computed by the bridge
+	// (translateViewMechanical copies def.Limit into the request), rendered by
+	// knowledge_describe and documented — and then dropped here, so a `limit: 5`
+	// view returned fifty rows while three surfaces stated five.
+	if req.Limit == nil {
+		req.Limit = view.Limit
 	}
 	switch {
 	case view.Filter == nil:
@@ -273,6 +352,31 @@ func checkCursor(cursor string, epoch int64) *RefusalError {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// THE TWO BOUND REMEDIES, STATED ONCE
+//
+// B2's remedy used to end "or ask for a total instead", and the refusal's NEXT
+// block issued exactly that call: `knowledge_find aggregate=[{op:count}]`. It
+// is a GUARANTEED LOOP. B2 is counted inside the store's flush, unconditionally
+// on every Accepted verdict, with no exemption parameter on Candidates — so an
+// aggregate-only query streams the identical candidates through the identical
+// counter and receives the identical refusal, with the identical advice. B1 is
+// worse still: it is a COUNT taken before any candidate is read, so an
+// aggregate-only re-run does not even reach a different code path.
+//
+// Both remedies now name only things that change the number that fired.
+// ---------------------------------------------------------------------------
+const (
+	// narrowedCandidateRemedy answers B1, which counts the narrowed candidate
+	// POPULATION. A filter does not change that number, so it is not offered.
+	narrowedCandidateRemedy = "narrow the scope to a collection or path, or narrow the kind"
+
+	// candidateCapRemedy answers B2, which counts SURVIVORS. Both a tighter
+	// filter and a narrower scope reduce it.
+	candidateCapRemedy = "add or tighten a filter, or narrow the scope to a collection or path — " +
+		"an aggregate-only query streams the same candidates through the same bound and is refused the same way"
+)
+
 // findRecords is the note/record path: narrow, bound, stream, decide in Go.
 func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.VaultFindResponse, error) {
 	sel := q.selector(d.PathPrefix)
@@ -282,6 +386,10 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// never the union: a caller who asked for both and received either is being
 	// told something false about their vault.
 	var wordPaths map[string]TextHit
+	// wordHits keeps the hits IN RANK ORDER as well as by path. The map is what
+	// the typed half intersects against; the slice is what the text-only path
+	// below returns when there is no typed half to intersect with.
+	var wordHits []TextHit
 	var wordsTruncated bool
 	if q.words != "" {
 		// FIX F6 (code review A): ask for ONE MORE than the fanout. A real
@@ -311,6 +419,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			wordsTruncated = true
 			hits = hits[:fanout]
 		}
+		wordHits = hits
 		wordPaths = make(map[string]TextHit, len(hits))
 		for _, h := range hits {
 			wordPaths[h.Path] = h
@@ -351,6 +460,17 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	if d.Store == nil {
+		// PLAIN WORDS STILL WORK WITH NO PROPERTIES INDEX, because that is what
+		// the platform posture promises in as many words: propindex_stub.go's
+		// header says "What keeps working on such a build: knowledge_read, and
+		// the plain-word half of knowledge_find". It did not. Every non-explain
+		// query, a bare `words` one included, was refused here — and the
+		// platform gate never named a capability either, because a words-only
+		// query has none, so the caller received a generic "the properties
+		// index is not open" for a question bleve alone could answer.
+		if q.textOnlyServable() {
+			return textOnlyResponse(d, q, echo, wordHits, wordsTruncated), nil
+		}
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so no record can be read",
 			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
@@ -379,7 +499,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		ref := refuse(problem(generated.EvaluationBoundExceeded,
 			fmt.Sprintf("this query would evaluate %s %s; the limit is %s",
 				group3(total), subject, group3(propindex.BoundNarrowedCandidates)),
-			"narrow the scope to a collection or path, or narrow the kind"), nil)
+			narrowedCandidateRemedy), nil)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -435,7 +555,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			ref := refuse(problem(generated.CandidateCapExceeded,
 				fmt.Sprintf("this query matched more than %s records; the limit is %s",
 					group3(propindex.BoundSurvivors), group3(propindex.BoundSurvivors)),
-				"add or tighten a filter, or ask for a total instead"), err)
+				candidateCapRemedy), err)
 			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 		}
 		ref := refuse(problem(generated.IndexUnavailable,
@@ -513,6 +633,15 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 			return propindex.Rejected, nil
 		}
 		hit, hasText = h, true
+	}
+
+	// kind=record is the THIRD narrowing, and it is applied here rather than in
+	// the Selector because "any declared record type" is not one of the three
+	// things ruling R-A lets the store decide. A note with no `type:` is an
+	// ordinary note (FR-005) and carries no RecordID/RecordType, so the test is
+	// the column itself.
+	if e.q.kind == KindRecord && c.RecordType == "" {
+		return propindex.Rejected, nil
 	}
 
 	// The near/hops half is the SECOND intersection, same shape as words: an
@@ -657,6 +786,114 @@ func (e *evaluation) recordProblems(ps []generated.RecordProblem) {
 		e.seenProblem[key] = true
 		e.problems = append(e.problems, p)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// THE PLAIN-WORD HALF, WITH NO PROPERTIES INDEX — FR-020h
+// ---------------------------------------------------------------------------
+
+// textOnlyServable reports whether this query can be answered by the text index
+// ALONE.
+//
+// It is deliberately a whitelist of "names nothing the properties index owns",
+// not a blacklist. Every argument below reaches a stored row: a typed filter, a
+// record type, kind=record's record_type column, kind=attachment's kind column,
+// a graph walk, a join, a grouping, a summary, a sort key and a rendered column
+// are all decoded from candidates this build has none of. Answering any of them
+// from a text ranking would be the silent broadening the platform gate exists
+// to refuse — so anything outside this shape still gets the refusal.
+func (q *query) textOnlyServable() bool {
+	return q.words != "" &&
+		q.kind == KindNote &&
+		q.filter == nil &&
+		q.recordType == "" &&
+		q.near == "" &&
+		len(q.join) == 0 &&
+		len(q.groupBy) == 0 &&
+		len(q.aggregates) == 0 &&
+		len(q.sort) == 0 &&
+		len(q.selectCols) == 0
+}
+
+// textOnlyResponse answers a words-only query out of the text index.
+//
+// TWO THINGS IT DELIBERATELY DOES NOT DO. It reports NO index state — there is
+// only one index on such a build, so "N of M returned records agree across both
+// indexes" would be a freshness claim with nothing behind it, and a false
+// reassurance is worse than a missing line. And it renders NO cells: a column
+// is a decoded property value, and there are no property rows here.
+func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated bool) generated.VaultFindResponse {
+	// FR-060's workspace scope is the caller's, already resolved, and it is
+	// applied again here rather than trusted: TextSearcher.Search states that
+	// it answers "within the caller's already-resolved scope", and a prefix
+	// test costs nothing next to returning a path the agent may not see.
+	scoped := make([]TextHit, 0, len(hits))
+	for _, h := range hits {
+		if d.PathPrefix != "" && !strings.HasPrefix(h.Path, d.PathPrefix) {
+			continue
+		}
+		scoped = append(scoped, h)
+	}
+
+	evaluated := len(scoped)
+	offset := cursorOffset(q.cursor)
+	page := scoped
+	switch {
+	case offset > 0 && offset < len(page):
+		page = page[offset:]
+	case offset >= len(page) && offset > 0:
+		page = nil
+	}
+	if len(page) > q.limit {
+		page = page[:q.limit]
+	}
+
+	rows := make([]generated.VaultFindRow, 0, len(page))
+	for _, h := range page {
+		rows = append(rows, generated.VaultFindRow{
+			Path:  h.Path,
+			Title: titleOf(h.Path),
+			Cells: []generated.VaultFindCell{},
+			Joins: []generated.VaultFindJoin{},
+		})
+	}
+
+	problems := []generated.RecordProblem{}
+	if truncated {
+		problems = append(problems, problem(generated.TextSearchTruncated,
+			fmt.Sprintf("the text index holds more than %s matches for %q; only the top-ranked %s were returned",
+				group3(textFanout(q.limit)), q.words, group3(textFanout(q.limit))),
+			"add more words to narrow the ranking — a typed `filter` is not available on this build"))
+	}
+
+	resp := generated.VaultFindResponse{
+		Complete:  true,
+		Refused:   false,
+		QueryEcho: echo,
+		Counts: generated.VaultFindCounts{
+			Selected: evaluated, Evaluated: evaluated, Shown: len(rows),
+		},
+		Rows:     rows,
+		Totals:   []generated.VaultFindTotal{},
+		Problems: problems,
+		Next:     []generated.VaultFindAction{},
+	}
+	applied := q.limit
+	resp.LimitApplied = &applied
+	if q.clamped {
+		resp.LimitClamped = boolPtr(true)
+		asked := q.limitAsked
+		resp.LimitRequested = &asked
+	}
+
+	trimToBudget(&resp)
+	finishVerdict(&resp, q)
+	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
+		c := encodeCursor(consumed, d.Epoch)
+		resp.NextCursor = &c
+	}
+	resp.Next = nextActions(q, &resp)
+	return resp
 }
 
 // group3 renders a count with thousands separators, for a refusal message.

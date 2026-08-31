@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -181,8 +182,10 @@ func Parameters() map[string]any {
 			"kind": map[string]any{
 				"type": "string",
 				"enum": []string{KindNote, KindRecord, KindTask, KindAttachment},
-				"description": "Default note. Use task to get CHECKBOX LINES rather than notes — each row " +
-					"carries its path, line number, open/done and text.",
+				"description": "Default note. record narrows note to the notes that DECLARE a record type, " +
+					"which is what to use before a typed follow-up. task returns CHECKBOX LINES rather than " +
+					"notes — each row carries its path, line number, open/done and text. attachment returns " +
+					"non-note files.",
 			},
 			"filter": map[string]any{
 				"type": "object",
@@ -338,12 +341,112 @@ func decodeRequest(raw []byte) (generated.VaultFindRequest, *RefusalError) {
 		return req, refuse(p, nil)
 	}
 
+	// THE SAME CHECK, ONE LEVEL DOWN. The probe above is top-level only, and
+	// the second pass is a plain Unmarshal with no DisallowUnknownFields — so
+	// an extra key on a filter LEAF vanished exactly the way `where:` used to
+	// vanish at the top. VaultFilterNode has six optional pointer fields, so
+	// `{"property":"status","op":"=","value":"open","negate":true}` decoded
+	// cleanly and the caller received the exact complement of what they asked
+	// for, with a "complete" verdict. records.ParseView already uses
+	// DisallowUnknownFields for this reason; this is find's equivalent.
+	if r := checkFilterNodeKeys(probe["filter"]); r != nil {
+		return req, r
+	}
+
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return req, refuse(problem(generated.UnsupportedParameter,
 			fmt.Sprintf("the arguments did not match the expected shape: %v", err),
 			"check the argument types; call knowledge_describe if you are unsure what a property holds"), err)
 	}
 	return req, nil
+}
+
+// filterNodeKeys is the closed set of keys a filter node may carry, READ OFF
+// THE GENERATED TYPE rather than written out here.
+//
+// A hand-written list would be a second copy of the contract, and the day
+// VaultFilterNode gains a field this file would start refusing it. Reflection
+// over the json tags is the one expression that cannot drift.
+func filterNodeKeys() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf(generated.VaultFilterNode{})
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// checkFilterNodeKeys walks the filter tree as RAW JSON and refuses any key a
+// filter node does not declare, naming it and where it sat.
+//
+// The walk is ITERATIVE. A recursive one would descend as deep as the caller's
+// own JSON, and this runs before FR-023c's depth bound has been measured.
+func checkFilterNodeKeys(root json.RawMessage) *RefusalError {
+	if len(root) == 0 {
+		return nil
+	}
+	accepted := filterNodeKeys()
+	names := make([]string, 0, len(accepted))
+	for name := range accepted {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	type framed struct {
+		raw   json.RawMessage
+		where string
+	}
+	stack := []framed{{raw: root, where: "filter"}}
+	for len(stack) > 0 {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		var node map[string]json.RawMessage
+		if err := json.Unmarshal(f.raw, &node); err != nil {
+			// Not an object. The shape refusal belongs to buildNode and to the
+			// generated type's own decode, both of which say it better than a
+			// key check could.
+			continue
+		}
+		var unknown []string
+		for name := range node {
+			if !accepted[name] {
+				unknown = append(unknown, name)
+			}
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			p := problem(generated.UnsupportedParameter,
+				fmt.Sprintf("%s is not part of a filter node at %s; a node carries only: %s",
+					strings.Join(quoteAll(unknown), ", "), f.where, strings.Join(names, ", ")),
+				"a leaf is {property, op, value} (or values for IN); negate a leaf with "+
+					"{not: {...}}, which is a node of its own")
+			permitted := append([]string{}, names...)
+			p.Permitted = &permitted
+			return refuse(p, nil)
+		}
+
+		for _, key := range []string{"all", "any"} {
+			child, ok := node[key]
+			if !ok {
+				continue
+			}
+			var kids []json.RawMessage
+			if err := json.Unmarshal(child, &kids); err != nil {
+				continue
+			}
+			for i, kid := range kids {
+				stack = append(stack, framed{raw: kid, where: fmt.Sprintf("%s.%s[%d]", f.where, key, i)})
+			}
+		}
+		if child, ok := node["not"]; ok {
+			stack = append(stack, framed{raw: child, where: f.where + ".not"})
+		}
+	}
+	return nil
 }
 
 // unknownParameterRemedy points at the argument that does the job, for the

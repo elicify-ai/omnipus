@@ -196,11 +196,16 @@ func TestNamespaceRefusals_NameWhatWouldHaveWorked(t *testing.T) {
 			req:    generated.VaultFindRequest{Type: &typeName, Filter: leaf(records.FileSelfProp)},
 			wantIn: []string{"file.file", "display and formula operand only"},
 		},
-		{
-			name:   "a typed property with no record type names both escapes",
-			req:    generated.VaultFindRequest{Filter: leaf("species")},
-			wantIn: []string{"species", "no record type was given", "file.*"},
-		},
+		// "a typed property with no record type" IS NO LONGER A REFUSAL, and the
+		// case was deleted rather than weakened. FR-018b/FR-021e and the
+		// ViewDef contract both say an untyped query resolves an ordinary name
+		// BY NAME over the rows the index holds for every note — so
+		// `{filter: species = x}` with no `type` now resolves in plant's own
+		// text domain and runs. The one refusal that survives in the untyped
+		// namespace is the SPLIT DOMAIN — two in-scope types declaring one name
+		// differently — and it is exercised in
+		// TestUntypedQuery_RefusesTwoConflictingDeclarations, which needs a
+		// second fixture schema this ladder's corpus does not carry.
 		{
 			name:     "a formula the view does not define lists the ones it does",
 			req:      generated.VaultFindRequest{View: viewName(composedView), Filter: leaf("formula.aeg")},

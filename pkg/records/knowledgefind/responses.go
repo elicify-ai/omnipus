@@ -88,8 +88,17 @@ func refusalActions(r *RefusalError) []generated.VaultFindAction {
 	case generated.UnknownProperty, generated.UnknownEnumValue, generated.UnknownRecordType:
 		out = append(out, generated.VaultFindAction{Label: "describe", Call: "knowledge_describe"})
 	case generated.EvaluationBoundExceeded, generated.CandidateCapExceeded:
-		out = append(out, generated.VaultFindAction{
-			Label: "total", Call: "knowledge_find aggregate=[{op:count}] (an aggregate-only query returns no rows)"})
+		// NO "ask for a total instead" ACTION. It used to offer
+		// `knowledge_find aggregate=[{op:count}]`, and that call is a guaranteed
+		// loop: B1 is a COUNT taken before any candidate is read, and B2 is
+		// counted inside the store's flush on every Accepted verdict with no
+		// exemption for an aggregate-only query — so the same two bounds fire on
+		// the same numbers and return this same refusal with this same advice.
+		// A response that affirmatively instructs a loop is worse than one that
+		// offers only orientation, so orientation is what it offers; the remedy
+		// prose (narrowedCandidateRemedy / candidateCapRemedy) names the things
+		// that actually reduce the count.
+		out = append(out, generated.VaultFindAction{Label: "describe", Call: "knowledge_describe"})
 	case generated.StaleCursor:
 		out = append(out, generated.VaultFindAction{Label: "restart", Call: "knowledge_find (without cursor)"})
 	default:
@@ -353,8 +362,8 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 				"evaluate against — %s cannot be honoured here and would otherwise be silently ignored",
 				strings.Join(bad, ", ")),
 			"drop "+strings.Join(bad, ", ")+
-				", or run kind=record (or the default kind=note) first to find the matching notes, "+
-				"then re-run kind=task scoped by type"), nil)
+				", or run kind=record (which narrows to the notes that declare a record type) "+
+				"first to find the matching notes, then re-run kind=task scoped by type"), nil)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 

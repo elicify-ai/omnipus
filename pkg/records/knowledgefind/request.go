@@ -27,6 +27,16 @@ const (
 	MaxHops = 2
 	// MaxGroupLevels is FR-027's.
 	MaxGroupLevels = 2
+
+	// MaxFilterLeaves and MaxFilterDepth are FR-023c, the bound on the ONE
+	// input whose cost multiplies against the candidate bound. They were
+	// enforced on a saved VIEW (records/view.go's measureViewFilterTree) and on
+	// nothing else, so a caller-supplied 400-leaf tree over 40,000 candidates
+	// passed B1 and then ran 16M comparisons where the requirement budgets
+	// 3.2M. The numbers are the view's numbers, because a view and a request
+	// are the same tree evaluated by the same comparator.
+	MaxFilterLeaves = 64
+	MaxFilterDepth  = 8
 )
 
 // AcceptedParameters is the closed set of argument names, in the order the tool
@@ -38,8 +48,21 @@ var AcceptedParameters = []string{
 	"group_by", "sort", "select", "aggregate", "explain", "limit", "cursor", "detail",
 }
 
-// Kind values. `record` is a synonym for `note` narrowed to notes that declare a
-// type; the store's own kind column only ever holds note or attachment.
+// Kind values.
+//
+// `record` narrows `note` to the notes that DECLARE a record type — the rows
+// whose record_type is non-empty. It used to be a synonym that narrowed
+// NOTHING: it mapped to the same propindex.KindNote as `note`, left
+// Selector.RecordType empty, and had no consumer anywhere in the tree, while
+// the kind=task refusal actively steered callers to it. Advertised and inert is
+// the one outcome that is not acceptable, so it narrows.
+//
+// The narrowing is applied in Go, over the candidate's own RecordType
+// (evaluation.visit), NOT by a Selector field: ruling R-A keeps the store told
+// only a record type, a note kind and a path prefix, and "any declared type" is
+// not one of the three.
+//
+// The store's own kind column only ever holds note or attachment.
 const (
 	KindNote       = "note"
 	KindRecord     = "record"
@@ -94,6 +117,12 @@ type query struct {
 	// record type's own schema, FR-130's `file.*` and the view's `formula.*`.
 	// It is built once, in parse, and every property position reads it.
 	ns *namespace
+
+	// set is every record type in scope. It is what the UNTYPED namespace
+	// resolves an ordinary property name against (FR-018b): with no `type`
+	// there is no single schema to ask, so the question becomes "which in-scope
+	// types declare this name, and do they agree".
+	set *records.SchemaSet
 }
 
 type sortKey struct {
@@ -117,9 +146,16 @@ func parse(req generated.VaultFindRequest, set *records.SchemaSet, formulas map[
 	q := &query{
 		kind:  KindNote,
 		limit: DefaultLimit,
+		set:   set,
 	}
 
-	if req.Kind != nil && *req.Kind != "" {
+	// A PRESENT-BUT-BLANK `type` or `kind` never reaches here: Find refuses it
+	// before a saved view is expanded (checkBlankNarrowing). That ordering is
+	// load-bearing rather than tidy — applyView gates on `req.Type == nil`, so
+	// a blank string is non-nil, discards the view's own `type:` and then
+	// resolves to no schema, running the view's filter against every note in
+	// the vault and presenting it as the view's answer.
+	if req.Kind != nil {
 		q.kind = string(*req.Kind)
 		switch q.kind {
 		case KindNote, KindRecord, KindTask, KindAttachment:
@@ -234,7 +270,10 @@ func (q *query) applyLimit(req generated.VaultFindRequest) *RefusalError {
 
 // resolveType is FR-024 for the record type itself.
 func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaSet) *RefusalError {
-	if req.Type == nil || *req.Type == "" {
+	// Blank is REFUSED upstream, in checkBlankNarrowing, not tolerated here.
+	// Tolerating it was half of the asymmetry that let a blank `type` discard a
+	// saved view's own narrowing while still reading as "untyped" downstream.
+	if req.Type == nil {
 		return nil
 	}
 	q.recordType = *req.Type
@@ -275,6 +314,11 @@ func (q *query) applyFilter(req generated.VaultFindRequest) *RefusalError {
 	// the one query shape it was designed for. A leaf naming a TYPED property
 	// with no type given is still refused — by namespace.resolve, which says so
 	// per leaf and names both escapes rather than refusing the whole filter.
+	// FR-023c BEFORE anything is prepared. The bound is on the tree the caller
+	// sent, so it is measured on the wire shape rather than on the built one.
+	if r := checkFilterTreeBounds(*req.Filter); r != nil {
+		return r
+	}
 	n, r := buildNode(*req.Filter, q.namespace())
 	if r != nil {
 		return r
@@ -373,7 +417,31 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 				p.Property = str(s.Property)
 				return refuse(p, nil)
 			}
-			desc := s.Direction != nil && string(*s.Direction) == "desc"
+			// THE DIRECTION IS VALIDATED, not pattern-matched against "desc".
+			//
+			// `desc := *s.Direction == "desc"` alone means every other spelling
+			// — `descending`, `DESC`, `down`, `""` — sorts ASCENDING with
+			// nothing said, so an agent-authored "top 10 deals" view with
+			// `direction: descending` and `limit: 10` returns the ten SMALLEST
+			// and reports itself complete. The generated enum already knows
+			// which two spellings exist; nothing was asking it. This project
+			// already refuses the same mistake for a GROUPING direction
+			// (records.ServeRefusalGroupDirection) — the asymmetry was the
+			// defect, not the strictness.
+			if s.Direction != nil && !s.Direction.Valid() {
+				p := problem(generated.UnsupportedParameter,
+					fmt.Sprintf("sort names direction %q on %q, which is not a sort direction",
+						string(*s.Direction), s.Property),
+					`use "asc" or "desc", or omit direction — omitted means asc`)
+				p.Property = str(s.Property)
+				permitted := []string{
+					string(generated.VaultFindSortDirectionAsc),
+					string(generated.VaultFindSortDirectionDesc),
+				}
+				p.Permitted = &permitted
+				return refuse(p, nil)
+			}
+			desc := s.Direction != nil && *s.Direction == generated.VaultFindSortDirectionDesc
 			q.sort = append(q.sort, sortKey{property: s.Property, desc: desc, prop: prop})
 			q.touched = append(q.touched, s.Property)
 		}
@@ -474,7 +542,12 @@ func (q *query) selector(pathPrefix string) propindex.Selector {
 // is the narrowing they will fix first.
 func (q *query) capabilities() []records.PropertyIndexCapability {
 	var caps []records.PropertyIndexCapability
-	if q.filter != nil || q.recordType != "" {
+	// kind=record is in this list because it narrows on the candidate's own
+	// record_type — a typed narrowing, answerable only from the properties
+	// index. Leaving it out would let it degrade to "every note" on a build
+	// where that index cannot exist, which is the silent-broadening shape this
+	// gate exists to refuse.
+	if q.filter != nil || q.recordType != "" || q.kind == KindRecord {
 		caps = append(caps, records.CapabilityTypedFilter)
 	}
 	if len(q.join) > 0 || q.near != "" {

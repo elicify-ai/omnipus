@@ -408,11 +408,46 @@ func finishVerdict(resp *generated.VaultFindResponse, q *query) {
 
 	if len(reasons) == 0 {
 		resp.Complete = true
-		resp.CompleteReason = nil
+		// A COMPLETE, ZERO-ROW UNTYPED ANSWER SAYS WHAT IT RESOLVED.
+		//
+		// An untyped query cannot refuse a misspelled property: FR-018b makes
+		// every name legal there, and one no type declares resolves in the text
+		// domain. So `stauts = "open"` is a valid query that correctly matches
+		// nothing — and "0 records matched, complete" is precisely the shape
+		// this surface exists to make trustworthy. The name cannot be refused;
+		// the answer can carry the fact that nothing in scope declares it, which
+		// is what turns a confident zero into a checkable one.
+		resp.CompleteReason = undeclaredNameNote(q, resp.Counts.Evaluated)
 		return
 	}
 	resp.Complete = false
 	resp.CompleteReason = str(strings.Join(reasons, "; "))
+}
+
+// undeclaredNameNote returns the header line for a zero-row answer that named a
+// property no in-scope record type declares, and nil for every other answer —
+// including a zero-row one whose names all resolved to a declaration, where "0
+// records matched" is already the whole truth.
+//
+// There is no `q.schema != nil` guard here and there must not be one: a TYPED
+// query never reaches resolveUntyped, so its undeclared list is empty by
+// construction and the guard would be a branch no test could distinguish from a
+// working one.
+func undeclaredNameNote(q *query, evaluated int) *string {
+	if evaluated > 0 {
+		// The name matched real rows, so the vault plainly does carry it. There
+		// is nothing to caveat, and a note here would be the noise that trains a
+		// reader to skip the header line.
+		return nil
+	}
+	names := q.namespace().undeclared
+	if len(names) == 0 {
+		return nil
+	}
+	return str(fmt.Sprintf("0 records matched; no record type in scope declares %s, so %s compared as text "+
+		"over the raw frontmatter — check the spelling with knowledge_describe",
+		strings.Join(quoteAll(names), ", "),
+		map[bool]string{true: "it was", false: "they were"}[len(names) == 1]))
 }
 
 // nextActions is FR-126: every response ends with calls the caller can issue.

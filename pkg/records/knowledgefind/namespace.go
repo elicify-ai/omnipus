@@ -68,26 +68,50 @@ func isFormulaNamespace(name string) bool {
 type namespace struct {
 	// schema is the record type the query named. NIL IS LEGAL and is the
 	// untyped multi-type view (FR-018d): a query with no `type` still resolves
-	// `file.*` and `formula.*`, because neither is scoped to a record type.
+	// `file.*` and `formula.*`, because neither is scoped to a record type —
+	// AND, since the untyped-view rule below, every ordinary property name too.
 	schema *records.Schema
+	// set is every record type in scope. It is read ONLY when schema is nil,
+	// and it is what makes the untyped resolution rule executable: a name has
+	// to be looked up across the declarations of every in-scope type before it
+	// can be said to belong to one domain, to two, or to none.
+	set *records.SchemaSet
 	// formulas is the saved view's validated formula set, nil when the view
 	// declared none or no view was named.
 	formulas *records.FormulaSet
 	// composite is schema ∪ file.* ∪ formula.*, for records.Filter.Prepare.
+	// In an untyped query it also gains each name resolveUntyped has settled,
+	// because Prepare and renderProperties both read declarations off it.
 	composite *records.Schema
 	// formulaProps holds ONE stable *Property per formula. Stable because the
 	// comparator reads the declaration off the operand and the memo keys on the
 	// name: two pointers for one formula would be two declarations that could
 	// drift.
 	formulaProps map[string]*records.Property
+	// untypedProps memoises resolveUntyped, for the same reason formulaProps is
+	// stable: one name must produce ONE declaration for the whole query, or a
+	// filter leaf and a sort key naming it could compare under different rules.
+	untypedProps map[string]*records.Property
+	// undeclared is the names this untyped query resolved that NO in-scope type
+	// declares, in first-mention order.
+	//
+	// It exists so a zero-row answer can say so. An untyped query cannot refuse
+	// a misspelled property — by rule, every name is legal there and resolves in
+	// the text domain — so `stauts = "open"` returns "0 records matched,
+	// complete", which is the one shape this whole surface is written against.
+	// The name cannot be refused, but the answer can carry the fact that nothing
+	// declared it.
+	undeclared []string
 }
 
 // newNamespace builds the composite for one query.
-func newNamespace(schema *records.Schema, formulas *records.FormulaSet) *namespace {
+func newNamespace(schema *records.Schema, set *records.SchemaSet, formulas *records.FormulaSet) *namespace {
 	ns := &namespace{
 		schema:       schema,
+		set:          set,
 		formulas:     formulas,
 		formulaProps: map[string]*records.Property{},
+		untypedProps: map[string]*records.Property{},
 	}
 
 	composite := &records.Schema{
@@ -170,18 +194,7 @@ func (ns *namespace) resolve(position, name string) (*records.Property, *Refusal
 	}
 
 	if ns.schema == nil {
-		// FR-018d's untyped view reaching for a typed property. The message
-		// names BOTH escapes, because "add a type" is only one of them and the
-		// other is frequently what the caller wanted.
-		p := problem(generated.UnsupportedParameter,
-			fmt.Sprintf("%s names the property %q, but no record type was given, so there is nothing to "+
-				"resolve it against", position, name),
-			"add type=<record type>, or name a file.* property (or a view formula), neither of which needs one")
-		p.Property = str(name)
-		permitted := append([]string(nil), records.FileFilterablePropertyNames...)
-		permitted = append(permitted, ns.formulaNames()...)
-		p.Permitted = &permitted
-		return nil, refuse(p, nil)
+		return ns.resolveUntyped(position, name)
 	}
 
 	prop, ok := ns.schema.Property(name)
@@ -196,6 +209,186 @@ func (ns *namespace) resolve(position, name string) (*records.Property, *Refusal
 		return nil, refuse(p, nil)
 	}
 	return prop, nil
+}
+
+// ---------------------------------------------------------------------------
+// THE UNTYPED VIEW — FR-018b, FR-018d, FR-021e
+//
+// This used to be a flat refusal: "no record type was given, so there is
+// nothing to resolve it against". Three components of this system said
+// otherwise, and they were right.
+//
+//   - THE CONTRACT (ViewDef.type, verbatim): "In an untyped view a property
+//     resolves BY NAME over the rows the index holds for every note (FR-021e):
+//     a note that CARRIES the key holds its value, parsed in the domain the
+//     name resolves to ... Two in-scope types declaring one name with DIFFERENT
+//     types REFUSE the query naming both declarations — loud, never a silent
+//     domain split. A name no in-scope type declares resolves in the TEXT
+//     domain over the raw values."
+//   - THE STORAGE (propindex's rawFrontmatterRows): every frontmatter key of
+//     every note is already written down, precisely so this can be answered.
+//   - THE IMPORTER (leafResolver.checkProperty's `case !r.typed(): return "",
+//     true`): it writes untyped views for folder-scoped bases and records NO
+//     loss, because it was told this works.
+//
+// So the resolver is what moved. The alternative — making the contract match
+// the resolver — would have forced the importer to refuse the folder-scoped
+// views the founder's vault is full of.
+//
+// WHAT IS DELIBERATELY NOT DONE HERE: nothing is pushed into a Selector, and
+// no statement changes. Ruling R-A is untouched — an untyped name resolves to
+// a *records.Property and every comparison over it still happens in the Go
+// comparator, exactly as a declared one does.
+// ---------------------------------------------------------------------------
+
+// untypedDeclaration is one in-scope type's declaration of a name, kept beside
+// the type that made it so a conflict refusal can quote both sides.
+type untypedDeclaration struct {
+	recordType string
+	prop       *records.Property
+}
+
+// resolveUntyped settles one ordinary property name for a query that named no
+// record type.
+func (ns *namespace) resolveUntyped(position, name string) (*records.Property, *RefusalError) {
+	if p, ok := ns.untypedProps[name]; ok {
+		return p, nil
+	}
+
+	decls := ns.declarationsOf(name)
+	if r := ns.refuseSplitDomain(position, name, decls); r != nil {
+		return nil, r
+	}
+
+	prop := untypedProperty(name, decls)
+	if len(decls) == 0 {
+		ns.undeclared = append(ns.undeclared, name)
+	}
+	ns.untypedProps[name] = prop
+	// The composite is what records.Filter.Prepare validates the leaf against
+	// and what renderProperties decodes from, so a name resolved here has to
+	// land in it or the leaf would be prepared against a schema that has never
+	// heard of it.
+	ns.composite.Properties[name] = prop
+	return prop, nil
+}
+
+// declarationsOf collects every in-scope declaration of one name, in stable
+// record-type order.
+func (ns *namespace) declarationsOf(name string) []untypedDeclaration {
+	var out []untypedDeclaration
+	for _, typeName := range ns.set.Types() {
+		sc, ok := ns.set.Get(typeName)
+		if !ok || sc == nil {
+			continue
+		}
+		if prop, ok := sc.Property(name); ok {
+			out = append(out, untypedDeclaration{recordType: typeName, prop: prop})
+		}
+	}
+	return out
+}
+
+// refuseSplitDomain is the contract's loud case.
+//
+// TWO DECLARATIONS DISAGREE when their comparison-relevant shape disagrees:
+// the declared type, the declared arity, or — for a link-valued property — the
+// target type. All three decide which rule of §8 a comparison runs under, so
+// picking one of them and proceeding would be exactly the silent domain split
+// the requirement forbids. An enum's VALUE SET is not in that list: two `enum`
+// declarations are one domain, and their sets are unioned below.
+func (ns *namespace) refuseSplitDomain(position, name string, decls []untypedDeclaration) *RefusalError {
+	if len(decls) < 2 {
+		return nil
+	}
+	first := decls[0]
+	for _, d := range decls[1:] {
+		if sameUntypedDomain(first.prop, d.prop) {
+			continue
+		}
+		p := problem(generated.TypeMismatch,
+			fmt.Sprintf("%s names %q, which two in-scope record types declare differently: %s declares it %s "+
+				"and %s declares it %s. An untyped query will not split one name across two domains",
+				position, name,
+				first.recordType, describeDeclaration(first.prop),
+				d.recordType, describeDeclaration(d.prop)),
+			fmt.Sprintf("add type=%s or type=%s to pick one domain, or rename the property in one of them",
+				first.recordType, d.recordType))
+		p.Property = str(name)
+		conflicting := []string{first.recordType, d.recordType}
+		p.Permitted = &conflicting
+		return refuse(p, nil)
+	}
+	return nil
+}
+
+// sameUntypedDomain reports whether two declarations of one name compare under
+// the same rules.
+func sameUntypedDomain(a, b *records.Property) bool {
+	if a.Type != b.Type || a.Many != b.Many {
+		return false
+	}
+	if a.Type == records.TypeRelation || a.Type == records.TypePerson {
+		return a.To == b.To
+	}
+	return true
+}
+
+// describeDeclaration renders one declaration the way an operator wrote it, for
+// the conflict refusal.
+func describeDeclaration(p *records.Property) string {
+	out := string(p.Type)
+	if p.Many {
+		out = "many " + out
+	}
+	if (p.Type == records.TypeRelation || p.Type == records.TypePerson) && p.To != "" {
+		out += " to " + p.To
+	}
+	return out
+}
+
+// untypedProperty builds the ONE declaration an untyped query compares a name
+// under.
+//
+// NO DECLARATION AT ALL is the contract's text fallback, and its arity is
+// `many` deliberately. A raw frontmatter key can hold a scalar or a list and
+// nothing declares which — so a `many` declaration answers `=`, `<>`, `IN` and
+// `LIKE` element-wise over both shapes (R-9/R-13), while a scalar declaration
+// would mark every list-valued key NON-CONFORMING per record and exclude it.
+// The cost is that the four ORDERING operators are refused over an undeclared
+// name, with R-13's own message naming the remedy — a loud refusal rather than
+// a per-record exclusion, which is the right direction to be wrong in.
+func untypedProperty(name string, decls []untypedDeclaration) *records.Property {
+	if len(decls) == 0 {
+		return &records.Property{Name: name, Type: records.TypeText, Many: true}
+	}
+	base := decls[0].prop
+	prop := &records.Property{
+		Name: name,
+		Type: base.Type,
+		Many: base.Many,
+		To:   base.To,
+		Unit: base.Unit,
+	}
+	if base.Type != records.TypeEnum {
+		return prop
+	}
+	// EVERY declared value of every in-scope type, in declaration order, first
+	// spelling wins. A note of either type then holds a value the shared
+	// declaration admits; a value NO type declares is still non-conforming and
+	// still reported, which is the behaviour a single-type query already has.
+	seen := map[string]bool{}
+	for _, d := range decls {
+		for _, v := range d.prop.Values {
+			key := records.FoldKey(v.Name)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			prop.Values = append(prop.Values, v)
+		}
+	}
+	return prop
 }
 
 // resolveFile is FR-130's namespace, with FR-024's posture applied inside it.
@@ -323,7 +516,7 @@ func (q *query) touchedFileProperties() map[string]bool {
 // to guard a query built before one was attached.
 func (q *query) namespace() *namespace {
 	if q.ns == nil {
-		q.ns = newNamespace(q.schema, nil)
+		q.ns = newNamespace(q.schema, q.set, nil)
 	}
 	return q.ns
 }
@@ -341,7 +534,7 @@ func (q *query) namespace() *namespace {
 // an empty result either — it is a refusal naming the formula and the position.
 func (q *query) buildNamespace(sources map[string]string) *RefusalError {
 	if len(sources) == 0 {
-		q.ns = newNamespace(q.schema, nil)
+		q.ns = newNamespace(q.schema, q.set, nil)
 		return nil
 	}
 
@@ -362,6 +555,6 @@ func (q *query) buildNamespace(sources map[string]string) *RefusalError {
 		return refuse(p, nil)
 	}
 
-	q.ns = newNamespace(q.schema, set)
+	q.ns = newNamespace(q.schema, q.set, set)
 	return nil
 }

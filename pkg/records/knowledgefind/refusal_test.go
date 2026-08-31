@@ -264,13 +264,26 @@ func TestRefusal_EveryRefusalNamesItsRemedy(t *testing.T) {
 	f.plant(1, "growing", "41.25")
 
 	cases := map[string]generated.VaultFindRequest{
-		"unknown property":  req(withType("plant"), withFilter(leaf("nope", "=", "x"))),
-		"unknown type":      req(withType("shrub")),
-		"unsupported op":    req(withType("plant"), withFilter(leaf("condition", "BETWEEN", "a"))),
-		"empty like":        req(withType("plant"), withFilter(leaf("species", "LIKE", "%"))),
-		"ordering on many":  req(withType("plant"), withFilter(leaf("labels", ">=", "a"))),
-		"bad enum value":    req(withType("plant"), withFilter(leaf("condition", "=", "nope"))),
-		"filter without ty": req(withFilter(leaf("condition", "=", "growing"))),
+		"unknown property": req(withType("plant"), withFilter(leaf("nope", "=", "x"))),
+		"unknown type":     req(withType("shrub")),
+		"unsupported op":   req(withType("plant"), withFilter(leaf("condition", "BETWEEN", "a"))),
+		"empty like":       req(withType("plant"), withFilter(leaf("species", "LIKE", "%"))),
+		"ordering on many": req(withType("plant"), withFilter(leaf("labels", ">=", "a"))),
+		"bad enum value":   req(withType("plant"), withFilter(leaf("condition", "=", "nope"))),
+		// "filter without type" WAS HERE and is deliberately gone: an untyped
+		// filter is no longer a refusal. FR-018b/FR-021e make an ordinary name
+		// resolve BY NAME over the rows the index holds for every note, so
+		// `condition = growing` with no `type` now resolves in plant's own enum
+		// domain and runs — see TestUntypedQuery_* in
+		// query_path_defects_test.go. The remedy-carrying invariant this table
+		// enforces is unaffected; it simply has one fewer refusal to enforce it
+		// on.
+		"blank type": func() generated.VaultFindRequest {
+			blank := ""
+			r := req(withFilter(leaf("condition", "=", "growing")))
+			r.Type = &blank
+			return r
+		}(),
 	}
 	for name, r := range cases {
 		t.Run(name, func(t *testing.T) {

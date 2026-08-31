@@ -12,6 +12,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,86 @@ type node struct {
 	leaf records.PreparedFilter
 	// text is how this node renders in the QUERY: echo (FR-122).
 	text string
+}
+
+// ---------------------------------------------------------------------------
+// FR-023c — THE FILTER TREE IS BOUNDED
+//
+// Every other input to a query is bounded: page size, hops, group levels,
+// candidates, survivors, response bytes. The filter — the one input whose cost
+// MULTIPLIES against the candidate bound — was bounded only when it arrived on
+// a saved VIEW (records/view.go's measureViewFilterTree), i.e. only for the
+// source a human had already reviewed. A caller-supplied 400-leaf tree over
+// 40,000 candidates passed B1 and then ran 16M comparisons where FR-023c
+// budgets 3.2M.
+//
+// IT IS MEASURED BEFORE IT IS BUILT, for two reasons. The refusal can then
+// quote the real total rather than "more than 64" — which is what FR-024's
+// pattern asks for and what tells the caller how far over they are. And nothing
+// is PREPARED for a tree that is about to be refused: preparing a leaf is a
+// schema lookup and a literal parse per leaf, so a 10,000-leaf tree would
+// otherwise pay for all of them on the way to being rejected.
+//
+// The walk is ITERATIVE, over an explicit stack. A recursive one would grow the
+// Go stack proportionally to a caller-controlled input on the way to reporting
+// a number nobody needs precisely.
+// ---------------------------------------------------------------------------
+
+// measureFilterTree returns the tree's leaf count and its maximum depth.
+//
+// A node that is neither a well-formed combinator nor a leaf is COUNTED as a
+// leaf and not complained about here: buildNode owns the shape refusals, with
+// the wording the spec gives them, and a second opinion on the same node is how
+// two refusals for one mistake come to disagree.
+func measureFilterTree(root generated.VaultFilterNode) (leaves, depth int) {
+	type framed struct {
+		node  generated.VaultFilterNode
+		depth int
+	}
+	stack := []framed{{node: root, depth: 1}}
+	for len(stack) > 0 {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if f.depth > depth {
+			depth = f.depth
+		}
+		switch {
+		case f.node.All != nil:
+			for _, c := range *f.node.All {
+				stack = append(stack, framed{node: c, depth: f.depth + 1})
+			}
+		case f.node.Any != nil:
+			for _, c := range *f.node.Any {
+				stack = append(stack, framed{node: c, depth: f.depth + 1})
+			}
+		case f.node.Not != nil:
+			stack = append(stack, framed{node: *f.node.Not, depth: f.depth + 1})
+		default:
+			leaves++
+		}
+	}
+	return leaves, depth
+}
+
+// checkFilterTreeBounds is FR-023c's refusal, naming which bound was exceeded
+// and the count it reached.
+func checkFilterTreeBounds(root generated.VaultFilterNode) *RefusalError {
+	leaves, depth := measureFilterTree(root)
+	if leaves > MaxFilterLeaves {
+		return refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("the filter tree has %d leaves; FR-023c caps a filter at %d, because the leaf "+
+				"count multiplies against the %s candidates the index will evaluate",
+				leaves, MaxFilterLeaves, group3(propindex.BoundNarrowedCandidates)),
+			"split the question into two knowledge_find calls, or replace a long chain of "+
+				"{property,'=',v} leaves with one {property,'IN',[...]}"), nil)
+	}
+	if depth > MaxFilterDepth {
+		return refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("the filter tree is %d levels deep; FR-023c caps a filter at %d",
+				depth, MaxFilterDepth),
+			"flatten it — nested all/any of the same kind merge into one, and two nots cancel"), nil)
+	}
+	return nil
 }
 
 // buildNode converts one wire node, refusing anything ambiguous.
