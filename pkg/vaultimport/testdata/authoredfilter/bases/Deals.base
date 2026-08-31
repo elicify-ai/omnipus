@@ -1,0 +1,15 @@
+filters:
+  and:
+    - type == "deal"
+views:
+  - type: table
+    name: Closing This Month
+    filters:
+      and:
+        - close_date != ""
+        - date(close_date).year == today().year
+        - date(close_date).month == today().month
+    order:
+      - file.name
+      - stage
+      - close_date

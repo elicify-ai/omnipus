@@ -62,6 +62,25 @@ type ViewOutcome struct {
 	// OutputRelPath is the vault-relative view file path, set only when a
 	// file was produced (Converted or ConvertedWithLosses).
 	OutputRelPath string
+	// AuthoredFormulas names every formula this importer WROTE INTO THE
+	// OPERATOR'S FILE that the operator did not write — one per filter clause
+	// that was a whole expression rather than a property/operator/literal leaf
+	// — together with the clause it stands for and why a leaf could not hold
+	// that clause directly.
+	//
+	// IT IS REPORTED, NOT MERELY RECORDED, and that is a condition of the
+	// mechanism existing at all. A file the operator owns gaining a definition
+	// he never authored is a new surface, and a new surface nobody is told
+	// about is indistinguishable from a bug. The same text is written into the
+	// produced view file's own header comment (authoredFormulaHeader), which
+	// is the surface that survives: a console report scrolls away, and an
+	// operator comparing this view against the `.base` file it came from is
+	// holding the file.
+	//
+	// Like FormulaRewrites it is deliberately NOT a loss — nothing was
+	// dropped, so recording it as one would disable a view whose translation
+	// is complete.
+	AuthoredFormulas []string
 	// FormulaRewrites names every carried formula whose SOURCE this importer
 	// changed on the way in, and what changed.
 	//
@@ -218,6 +237,18 @@ func translateOneView(
 
 	res := leafResolver{recordType: resolvedType, schemas: schemas, formulas: formulasFor(resolvedType), schema: schemaForType(schemas, resolvedType)}
 
+	// FR-140 — THE AUTHORED-FORMULA PASS, and it must run BEFORE resolution.
+	// It is the only thing in this file that adds to the view's `formulas:`
+	// block, and every later step reads that block: collectFormulaRefs walks
+	// the RESOLVED trees, buildFormulaLeafNode resolves a reference against
+	// res.formulas, and formulasYAML writes the sources. So the trees are
+	// rewritten and the resolver extended here, once, and nothing downstream
+	// needs to know an expression was ever there.
+	authored := synthesiseFilterFormulas(&res, pb, baseRelPath, vraw, outer.Root, viewTrans.Root)
+	outer.Root = authored.rewrite(outer.Root)
+	viewTrans.Root = authored.rewrite(viewTrans.Root)
+	vo.AuthoredFormulas = authored.Notes
+
 	outerNode, losses := res.resolve(outer.Root, LossBaseOuterFilter)
 	viewNode, viewLosses := res.resolve(viewTrans.Root, LossViewFilter)
 	losses = append(losses, viewLosses...)
@@ -310,7 +341,8 @@ func translateOneView(
 
 	top := orderedMap(pairs...)
 	body, err := marshalDoc(top)
-	bytes := append([]byte(formulaRewriteHeader(vo.FormulaRewrites)), body...)
+	header := authoredFormulaHeader(vo.AuthoredFormulas) + formulaRewriteHeader(vo.FormulaRewrites)
+	bytes := append([]byte(header), body...)
 	if err != nil {
 		vo.Status = OutcomeRefused
 		vo.RefusedReason = fmt.Sprintf("internal: could not render the translated view as YAML: %v", err)
@@ -1733,6 +1765,336 @@ func formulaLiteralFits(decl records.FormulaDecl, literal string) (string, bool)
 		return "", true
 	}
 	return fmt.Sprintf("this importer does not compare against a %s-valued formula (%q); the comparison is recorded here rather than written as a clause that could not match", decl.Type, decl.Name), false
+}
+
+// ---------------------------------------------------------------------------
+// FR-140 — THE IMPORTER AUTHORS A FORMULA, AND THE CONTAINMENT IS THE FEATURE
+//
+// `date(close_date).year == today().year` is an ordinary "closing this year"
+// filter and it is not a filter LEAF: a leaf holds a property, an operator and
+// a literal, and this clause is an expression on BOTH sides. The one place an
+// expression may live in a view is a `formula.<name>` the view declares
+// (FR-140), so carrying the clause means writing a formula into the operator's
+// file that the operator did not write.
+//
+// THAT WAS RULED AGAINST ONCE, AND THE RULING WAS RIGHT AT THE TIME: an
+// importer inventing a definition in somebody's file is a new surface, and a
+// new surface needs its own decision rather than arriving as a side effect of
+// closing one view. The decision has since been taken — it is ALLOWED, under
+// containment — and the containment is enumerated here so that a later reader
+// can check each condition rather than take this comment's word for it.
+//
+//	1. THE GRAMMAR READS IT AND IT TYPES AS A TRUTH VALUE. Nothing here parses
+//	   anything: records.ParseFormula and records.ValidateFormulaSet decide,
+//	   which are the same functions the view LOADER runs on the file afterwards
+//	   (view.go::validateViewFormulas). An expression that types as a number,
+//	   a date, a text value or a list is refused by name — a filter leaf over
+//	   an authored formula is `= true` and nothing else, because any other
+//	   literal would be this importer choosing a threshold the operator never
+//	   wrote.
+//	2. THE NAME CANNOT COLLIDE. It is taken from a reserved namespace
+//	   (`imported__filter_`) and is additionally CHECKED against every name the
+//	   base declares — carried, refused and unreadable alike — so a collision
+//	   is a refusal, never a silent shadowing. FormulaTranslation.Declared then
+//	   consults the operator's own set FIRST, so even a wrong answer here
+//	   cannot make an authored formula win over one he wrote.
+//	3. IT IS REPORTED. Every authored formula produces a note naming the
+//	   clause it stands for, carried on the view's outcome and written into the
+//	   produced file's header comment. See ViewOutcome.AuthoredFormulas.
+//	4. IT FITS FR-146's PER-VIEW BUDGET, OR NOTHING IS WRITTEN. The budget is
+//	   16 formulas, 64 nodes each, 256 nodes in total, and it is applied to
+//	   exactly the map this view will emit — the closure of the formulas it
+//	   already references, plus the authored ones. Over budget, EVERY authored
+//	   formula for the view is refused and each clause becomes a named loss:
+//	   a refusal, never a truncation, because a view carrying half the clauses
+//	   the operator wrote returns more rows than the one he wrote.
+//	5. IT IS A POSITIVE CONJUNCT. translate.go's containsLost treats an
+//	   undecided expression as lost, so an `or:` or a `not:` holding one is
+//	   lost whole and an authored formula can never sit under a negation.
+//
+// WHAT THE CLOCK DOES, because it is the failure with no symptom. The formula
+// is stored as SOURCE (FR-141) and evaluated per query against Deps.Now, so
+// `today()` means today when the VIEW RUNS. If any part of this pipeline
+// resolved it to a date at import time the view would keep answering a
+// question about the afternoon it was imported, correctly-looking and wrong.
+// That is asserted with two clocks and a DIFFERENCE, not described — see
+// pkg/vaultimport/authored_formula_clock_test.go.
+//
+// WHAT IS NOT CLAIMED. Our `date()` reads a note's date as UTC and Obsidian
+// reads it in the operator's local zone, so a close date on the first or last
+// day of a month can fall on different sides of `.month` in the two systems.
+// That divergence is not created here — it is a property of every date formula
+// this importer already carries (`is_overdue`, `days_until_due`) — but it is
+// the reason this path is confined to a clause the operator can read back
+// verbatim in the produced file and check for himself.
+// ---------------------------------------------------------------------------
+
+// authoredFormulaPrefix is the reserved namespace for a formula this importer
+// wrote. Condition 2 above: it is a namespace AND a checked collision, not one
+// or the other.
+const authoredFormulaPrefix = "imported__filter_"
+
+// maxAuthoredFormulaNameProbes bounds the search for a free name. It is far
+// above FR-146's 16-formula cap on purpose: the search only ever runs out when
+// a base has genuinely occupied the namespace, and then the refusal names it.
+const maxAuthoredFormulaNameProbes = 64
+
+// authoredFormulas is one view's decisions about its expression clauses: what
+// each rawKindExpression node becomes, and what the operator is told.
+type authoredFormulas struct {
+	// replace maps each expression node to the node that stands in its place —
+	// a real formula leaf, or a loss carrying the refusal.
+	replace map[*rawNode]*rawNode
+	// Notes is the reporting payload, in the order the formulas were authored.
+	Notes []string
+}
+
+// rewrite returns a COPY of the tree with every decided expression node
+// replaced.
+//
+// It copies rather than mutating because a base's OUTER filter tree is shared
+// by every view in the file: translateOneView is called once per view against
+// the same `outer`, and a rewrite applied in place would leak one view's
+// authored formula into the next view's tree, under a name that view never
+// declared.
+func (a authoredFormulas) rewrite(n *rawNode) *rawNode {
+	if n == nil {
+		return nil
+	}
+	if repl, decided := a.replace[n]; decided {
+		return repl
+	}
+	if len(n.Kids) == 0 && len(n.Branches) == 0 {
+		return n
+	}
+	out := *n
+	if len(n.Kids) > 0 {
+		out.Kids = make([]*rawNode, len(n.Kids))
+		for i, k := range n.Kids {
+			out.Kids[i] = a.rewrite(k)
+		}
+	}
+	if len(n.Branches) > 0 {
+		out.Branches = make([]typedBranch, len(n.Branches))
+		for i, b := range n.Branches {
+			out.Branches[i] = typedBranch{RecordType: b.RecordType, Remainder: a.rewrite(b.Remainder)}
+		}
+	}
+	return &out
+}
+
+// collectExpressionNodes finds every undecided expression node, in tree order.
+//
+// The order is what makes the authored names deterministic — the same `.base`
+// file imports to the same `imported__filter_N` on every run, so re-importing a
+// vault produces a diff of the clauses that changed and nothing else.
+func collectExpressionNodes(trees ...*rawNode) []*rawNode {
+	var out []*rawNode
+	var walk func(*rawNode)
+	walk = func(n *rawNode) {
+		if n == nil {
+			return
+		}
+		if n.Kind == rawKindExpression {
+			out = append(out, n)
+			return
+		}
+		for _, k := range n.Kids {
+			walk(k)
+		}
+		for _, b := range n.Branches {
+			walk(b.Remainder)
+		}
+	}
+	for _, t := range trees {
+		walk(t)
+	}
+	return out
+}
+
+// synthesiseFilterFormulas decides every expression clause in one view, and
+// extends the resolver's formula set with the ones it authored.
+func synthesiseFilterFormulas(res *leafResolver, pb *ParsedBase, baseRelPath string, vraw map[string]any, trees ...*rawNode) authoredFormulas {
+	nodes := collectExpressionNodes(trees...)
+	if len(nodes) == 0 {
+		return authoredFormulas{}
+	}
+	out := authoredFormulas{replace: make(map[*rawNode]*rawNode, len(nodes))}
+	refuse := func(n *rawNode, why string) {
+		out.replace[n] = lostNodeWithReason(n.Verbatim, expressionNotCarriedAsFormula(why))
+	}
+
+	if res.schema == nil {
+		// An UNTYPED view. SchemaFormulaEnv refuses every property operand
+		// when there is no schema, so the expression would be refused at
+		// validation anyway — refusing it here says WHY in terms the operator
+		// can act on (give the view a record type) instead of quoting a
+		// parser about a property it could not look up.
+		for _, n := range nodes {
+			refuse(n, "this view declares no record type, so a formula naming one of its properties has nothing to type that property against — every property operand is refused, and an authored formula would be refused with it")
+		}
+		return out
+	}
+
+	taken := takenFormulaNames(pb, res.formulas)
+	accepted := map[string]string{}
+	notes := map[string]string{}
+	byName := map[string]*rawNode{}
+	var order []string
+
+	for _, n := range nodes {
+		expr := n.Verbatim
+		name, free := authoredFormulaName(taken)
+		if !free {
+			refuse(n, fmt.Sprintf("no free name is left in this importer's reserved `%s` namespace — the base already occupies every one this importer probes, and shadowing a formula the operator wrote is not an option it has", authoredFormulaPrefix))
+			continue
+		}
+		set, errs := records.ValidateFormulaSet(map[string]string{name: expr}, res.schema)
+		if len(errs) > 0 {
+			refuse(n, fmt.Sprintf("the grammar reads it, but validating it as a formula of record type %q is refused: %s", res.recordType, errs[0].Error()))
+			continue
+		}
+		decl, ok := set.Get(name)
+		if !ok {
+			refuse(n, "it validated as a formula and then could not be read back, which is this importer's own defect and not a property of the clause")
+			continue
+		}
+		if decl.Arity == records.ArityMany {
+			refuse(n, "it produces a LIST, and the leaf that would compare an authored formula compares one truth value — a list has no single truth value to compare")
+			continue
+		}
+		if decl.Type != records.FormulaBoolean {
+			refuse(n, fmt.Sprintf("it types as %s, not as a truth value. The leaf that carries an authored formula is `= true` and nothing else: any other literal would be this importer choosing a threshold the operator never wrote", decl.Type))
+			continue
+		}
+		taken[name] = true
+		accepted[name] = expr
+		byName[name] = n
+		order = append(order, name)
+		notes[name] = fmt.Sprintf(
+			"formula %q was AUTHORED BY THE IMPORTER — you did not write it. It stands for the `.base` filter clause `%s`, which is an EXPRESSION on both sides; a view's filter leaf holds a property, an operator and a literal, so the clause is carried as a computed property this view declares and the leaf compares it to `true`. The source written into `formulas:` below is your clause verbatim, and `today()` in it is still a CALL, evaluated when the view runs. The name is in this importer's reserved `%s` namespace and was checked against every formula %s declares, so it shadows none of yours",
+			name, expr, authoredFormulaPrefix, baseFileLabel(baseRelPath))
+	}
+
+	if len(accepted) == 0 {
+		return out
+	}
+
+	// FR-146's budget, applied to EXACTLY the map this view will emit.
+	budget := map[string]string{}
+	for _, n := range res.formulas.Closure(collectFormulaRefs(vraw, trees...)) {
+		budget[n] = res.formulas.Sources[n]
+	}
+	for name, src := range accepted {
+		budget[name] = src
+	}
+	set, errs := records.ValidateFormulaSet(budget, res.schema)
+	if len(errs) > 0 {
+		// REFUSED, NEVER TRUNCATED. Writing the authored formulas that happen
+		// to fit and dropping the rest would leave a view whose filter is
+		// missing a conjunct — strictly MORE rows than the Obsidian original,
+		// which is the one direction FR-105 forbids. So the whole authored set
+		// goes and every clause becomes a named loss, which disables the view.
+		why := fmt.Sprintf("carrying it would put this view over FR-146's per-view formula budget (at most 16 formulas, 64 nodes each, 256 nodes in total, because every formula is evaluated once per candidate): %s. The budget is a REFUSAL and never a truncation — writing the clauses that fit and dropping the rest would leave a filter missing a conjunct, which returns MORE rows than the original", errs[0].Error())
+		for _, name := range order {
+			refuse(byName[name], why)
+		}
+		return authoredFormulas{replace: out.replace}
+	}
+
+	res.formulas = res.formulas.WithAuthored(accepted, notes, set)
+	for _, name := range order {
+		n := byName[name]
+		out.replace[n] = &rawNode{
+			Kind:     rawKindLeaf,
+			Verbatim: n.Verbatim,
+			Leaf: v2Leaf{
+				Property: formulaNamespace + name,
+				Shape:    shapeCompare,
+				Op:       generated.Equal,
+				Value:    "true",
+				Source:   n.Verbatim,
+			},
+		}
+		out.Notes = append(out.Notes, notes[name])
+	}
+	return out
+}
+
+// takenFormulaNames is every formula name this base has spoken for — carried,
+// refused, and declared-but-unreadable alike.
+//
+// ALL THREE COUNT. A formula this importer could not carry still occupies its
+// name in the operator's file, and authoring one that collides with it would
+// make the produced view refer to a definition the operator would reasonably
+// read as his own.
+func takenFormulaNames(pb *ParsedBase, ft FormulaTranslation) map[string]bool {
+	taken := map[string]bool{}
+	if pb != nil {
+		for _, n := range pb.FormulaNames {
+			taken[n] = true
+		}
+	}
+	for n := range ft.Sources {
+		taken[n] = true
+	}
+	for n := range ft.Refused {
+		taken[n] = true
+	}
+	return taken
+}
+
+// authoredFormulaName returns the first free name in the reserved namespace.
+func authoredFormulaName(taken map[string]bool) (string, bool) {
+	for i := 1; i <= maxAuthoredFormulaNameProbes; i++ {
+		name := fmt.Sprintf("%s%d", authoredFormulaPrefix, i)
+		if !taken[name] {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// baseFileLabel names the `.base` file in a sentence the operator reads.
+func baseFileLabel(baseRelPath string) string {
+	if baseRelPath == "" {
+		return "this base file"
+	}
+	return "`" + baseRelPath + "`"
+}
+
+// authoredFormulaHeader renders the authored-formula notes as the produced
+// file's opening comment.
+//
+// THE FILE IS THE SURFACE THAT SURVIVES. The same argument schema_write.go
+// makes for provisioning and formulaRewriteHeader makes for a rewritten source
+// applies with more force here, because this is not a changed definition but a
+// NEW one: an operator opening a view file he owns must be able to see, without
+// diffing anything, that a definition in it is not his.
+func authoredFormulaHeader(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# GENERATED BY `omnipus records import`.\n")
+	b.WriteString("#\n")
+	b.WriteString("# THIS VIEW DECLARES A FORMULA THE IMPORTER WROTE, WHICH YOU DID NOT.\n")
+	b.WriteString("# Your `.base` file filtered on a whole expression. A view's filter leaf holds\n")
+	b.WriteString("# a property, an operator and a literal, so the expression is carried as a\n")
+	b.WriteString("# computed property this view declares, and the leaf compares it to `true`.\n")
+	b.WriteString("# Nothing was approximated: the source below is your clause verbatim, read by\n")
+	b.WriteString("# the same grammar that evaluates it, and refused rather than reshaped when it\n")
+	b.WriteString("# did not fit.\n")
+	b.WriteString("#\n")
+	for _, n := range notes {
+		for _, wrapped := range wrapComment(n, 76) {
+			b.WriteString("# ")
+			b.WriteString(wrapped)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("#\n")
+	return b.String()
 }
 
 // collectFormulaRefs gathers every `formula.<name>` this view names, in any

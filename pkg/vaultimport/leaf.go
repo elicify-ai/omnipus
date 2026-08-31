@@ -381,13 +381,15 @@ func formulaCompareLeaf(name, op, rhsRaw string) (parsedLeaf, bool) {
 // asked of that one and quoted verbatim. Nothing here decides what an
 // expression means; it decides only which of two sentences to print.
 //
-// WHAT THE ANSWER IS TODAY, and why the view stays disabled: `.year` and
-// `.month` are not in the grammar. They are not an oversight either — FR-143
-// PINS the grammar to the Obsidian syntax reference as fetched 2026-08-30, and
-// adopting a newer snapshot is a spec revision with its own diff, never a
-// silent code change. So Deals.base's "Closing This Month" is a FEATURE GAP for
-// the founder to decide on, and this function's whole job is to make sure he
-// reads it as one.
+// WHAT THE ANSWER IS TODAY. `.year` and `.month` ARE in the grammar — FR-143's
+// own revision clause was exercised on 2026-09-01 (PIN REVISION 1) and the Date
+// type field family was adopted whole, with its diff. So the second sentence
+// below is the one Deals.base's "Closing This Month" now reaches, and it is no
+// longer the end of the road: an expression the grammar reads and types as a
+// TRUTH VALUE is carried as a formula this importer AUTHORS for the view. What
+// this function still writes is the refusal for everything outside that narrow
+// shape — see expressionFilterCandidate for the boundary and
+// expressionNotCarriedAsFormula for the sentence.
 // ---------------------------------------------------------------------------
 
 // filterIsNotAnExpression is the shared opening of both sentences below, and it
@@ -414,6 +416,94 @@ func untranslatableExpressionReason(expr string) string {
 		return fmt.Sprintf("%s. Handed to the formula grammar — the ONE expression parser this product has, so that this refusal is the grammar's own and not a second parser's opinion — it is refused there too: %s",
 			filterIsNotAnExpression, err)
 	}
-	return fmt.Sprintf("%s. The formula grammar reads it, but a filter leaf holds a property, an operator and a literal: the only way an expression reaches one is as a `formula.<name>` the base declares in its `formulas:` block, and this clause names none",
-		filterIsNotAnExpression)
+	return expressionNotCarriedAsFormula(fileNamespaceExpressionRefusal)
 }
+
+// fileNamespaceExpressionRefusal is the one reason parseLeaf itself can give
+// for declining to author a formula: the clause is written in the `file.`
+// namespace.
+//
+// It is a REFUSAL RATHER THAN A GAP. FR-134 already gives `file.inFolder`,
+// `file.hasTag` and `file.hasLink` a normative translation, built by
+// records.TranslateFileMethod and emitted as ordinary filter leaves
+// (translate.go's reFileMethod). Authoring a formula for a `file.*` expression
+// would give this product a SECOND translation of the same file metadata —
+// two paths that can disagree about one question, with the disagreement
+// surfacing as a view returning the wrong rows rather than as a build failure.
+// One translation per construct is worth more than one more imported clause.
+const fileNamespaceExpressionRefusal = "it is written in the `file.` namespace, whose meaning is FR-134's normative translation (`file.inFolder`, `file.hasTag`, `file.hasLink`, emitted as ordinary filter leaves) rather than a formula this importer invents — carrying it as a formula would give this product two different translations of the same file metadata, free to disagree"
+
+// expressionNotCarriedAsFormula is the sentence for an expression the grammar
+// READS and this importer still would not carry, naming which of the
+// containment conditions it failed.
+//
+// It opens with filterIsNotAnExpression for the same reason every sentence in
+// this file does: report.go's closed gap table classifies a loss by matching
+// substrings of the reason the importer wrote, so the shared opening is the
+// coupling that keeps these losses in the `.base`-expression bucket instead of
+// falling into UNCLASSIFIED.
+func expressionNotCarriedAsFormula(why string) string {
+	return fmt.Sprintf("%s. The formula grammar reads it, but a filter leaf holds a property, an operator and a literal, and the only way an expression reaches one is as a `formula.<name>` the view declares. This importer WILL author that formula for such a clause (FR-140), under conditions it keeps deliberately narrow, and this clause fails one of them: %s",
+		filterIsNotAnExpression, why)
+}
+
+// ---------------------------------------------------------------------------
+// WHAT MAY BECOME AN AUTHORED FORMULA, DECIDED IN TWO PLACES
+//
+// expressionFilterCandidate decides only what can be decided from ONE
+// EXPRESSION STRING — it has no schema, no record type, no formula set and no
+// budget. It admits a clause into the candidate pool; it never accepts one.
+// Everything that needs context is decided in view_write.go's
+// synthesiseFilterFormulas: the static TYPE (which must be a truth value), the
+// per-view FR-146 budget, and the name's freedom from collision with a formula
+// the operator wrote.
+//
+// The two namespaces excluded here are excluded for two different reasons and
+// neither is "we did not get round to it":
+//
+//	formula.   Already a computed property. A `formula.<name>` clause that
+//	           cannot be built is diagnosed by buildFormulaLeafNode, which
+//	           knows the base's formula set and can say something specific;
+//	           wrapping one formula inside another this importer wrote would
+//	           bury that diagnosis under a name the operator never saw.
+//	file.      FR-134 owns it. See fileNamespaceExpressionRefusal.
+// ---------------------------------------------------------------------------
+
+// expressionFilterCandidate reports whether one filter expression is a
+// CANDIDATE for the authored-formula path.
+//
+// IT IS EXACTLY THE MARKER BRANCH'S OWN CONDITION, NARROWED, and it is written
+// that way on purpose. parseLeaf refuses a marker-matched expression; this
+// function names the subset of those refusals that may instead become a
+// formula, so the candidate pool can never be WIDER than what parseLeaf was
+// already refusing. Nothing that used to translate as a leaf can start
+// travelling this path, and nothing outside the function/field shapes the
+// marker enumerates can enter it — a bare `true`, a `type != "x"` set
+// difference and a `.contains` on the discriminator are all refused before
+// they get here, by the same code that always refused them.
+//
+// translate.go, not parseLeaf, is where this is consulted: the answer produces
+// a rawKindExpression node, which is a TREE-level object, and parseLeaf's
+// contract — one expression string in, one leaf-or-refusal out — is left as it
+// was.
+func expressionFilterCandidate(expr string) bool {
+	s := strings.TrimSpace(expr)
+	if s == "" {
+		return false
+	}
+	if !reUntranslatableMarker.MatchString(s) {
+		return false
+	}
+	if strings.Contains(s, formulaNamespace) || strings.Contains(s, fileNamespacePrefix) {
+		return false
+	}
+	if _, err := records.ParseFormula(s); err != nil {
+		return false
+	}
+	return true
+}
+
+// fileNamespacePrefix is FR-130's reserved prefix for a file-metadata property.
+// records.IsFileNamespace answers for a whole property NAME; this is a
+// substring test over an expression, which is a different question.
+const fileNamespacePrefix = "file."

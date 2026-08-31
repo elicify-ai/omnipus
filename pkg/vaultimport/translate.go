@@ -71,6 +71,18 @@ const (
 	rawKindAll
 	rawKindAny
 	rawKindNot
+	// rawKindExpression is a whole EXPRESSION the formula grammar reads,
+	// waiting for the one decision this file cannot make: whether to AUTHOR a
+	// formula for it. See leaf.go's leafExpression and view_write.go's
+	// synthesiseFilterFormulas.
+	//
+	// IT COUNTS AS LOST UNTIL IT IS DECIDED (containsLost below), which is what
+	// confines the authored-formula path to a POSITIVE CONJUNCT. Inside an
+	// `or:` or a `not:` the group is lost whole exactly as it was before, so
+	// an authored formula can never appear under a negation — where
+	// knowledge_find evaluates a bare `!inner.matched` with no absence rule of
+	// its own, and a clause that is safely narrower on its own stops being so.
+	rawKindExpression
 	// rawKindTypedAny is a disjunction EVERY branch of which asserts exactly
 	// one `type == "X"` — the shape that used to be lost whole as a
 	// "mixed-type disjunction".
@@ -279,6 +291,26 @@ func translateLeafExpr(expr string) TreeTranslation {
 			Kind:     rawKindLeaf,
 			Leaf:     v2Leaf{Property: m[1], Shape: shape, Source: s},
 			Verbatim: s,
+		}}
+	}
+
+	// AN EXPRESSION THE GRAMMAR READS IS DEFERRED, NOT REFUSED — the one
+	// clause shape that may become a formula this importer AUTHORS. It is
+	// checked HERE, ahead of parseLeaf, for the same reason the marker check
+	// runs first inside parseLeaf: `date(close_date).year == today().year`
+	// also matches the ordinary compare pattern, and letting it reach that
+	// pattern would build a leaf against a property called
+	// `date(close_date).year`. expressionFilterCandidate is exactly the marker
+	// branch's own condition, narrowed, so nothing that used to translate as a
+	// leaf can be diverted here. See view_write.go's authored-formula header.
+	if expressionFilterCandidate(s) {
+		// The Reason is what this node reports if it is never DECIDED — a belt
+		// against a future walk that forgets to rewrite it. Both decided paths
+		// replace the node outright.
+		return TreeTranslation{Root: &rawNode{
+			Kind:     rawKindExpression,
+			Verbatim: s,
+			Reason:   expressionNotCarriedAsFormula("it was never put to the formula budget, which is this importer's own defect and not a property of the clause"),
 		}}
 	}
 
@@ -803,6 +835,16 @@ func containsLost(n *rawNode) bool {
 	if n.Kind == rawKindLost {
 		return true
 	}
+	// AN UNDECIDED EXPRESSION COUNTS AS LOST HERE, and that is the whole
+	// containment of the authored-formula path rather than an oversight. Only
+	// a POSITIVE CONJUNCT survives to be decided: an `or:` or a `not:` holding
+	// one is lost as a unit, exactly as it was before this path existed. The
+	// alternative — deciding the expression first and letting the group see the
+	// answer — would put an authored formula under a negation, and `not:` is
+	// where every approximate translation in this importer stops being safe.
+	if n.Kind == rawKindExpression {
+		return true
+	}
 	for _, k := range n.Kids {
 		if containsLost(k) {
 			return true
@@ -1080,6 +1122,71 @@ type FormulaTranslation struct {
 	// where the formula is USED, because a source that no longer matches the
 	// `.base` file must not be discoverable only by diffing two files.
 	Rewritten map[string]string
+
+	// Authored is the set of formulas THIS IMPORTER wrote, which the operator
+	// never did — one per filter clause that was a whole expression rather
+	// than a property/operator/literal leaf. It is kept SEPARATE from Set for
+	// two reasons, and both matter:
+	//
+	//   1. Declared consults Set FIRST, so nothing about resolving the
+	//      operator's own formulas changes shape because this field exists.
+	//   2. A name in here is one the operator must be TOLD about (it appears
+	//      in a file he owns and did not write); a name in Set is one he
+	//      already knows. Merging them would lose that distinction, which is
+	//      the whole of the reporting requirement.
+	//
+	// It is nil on every view where nothing was authored, which is almost all
+	// of them.
+	Authored *records.FormulaSet
+	// AuthoredNotes explains, per authored name, the clause it stands for and
+	// why a filter leaf could not hold that clause directly. It is what the
+	// produced view file's header comment and the view's own outcome carry.
+	AuthoredNotes map[string]string
+}
+
+// WithAuthored returns a copy carrying importer-authored formulas alongside the
+// operator's own.
+//
+// `set` is the validated set the AUTHORED sources were checked in — the same
+// call that applied FR-146's per-view caps — so a name reaching Declared
+// through this path has been through records.ValidateFormulaSet exactly as one
+// reaching it through TranslateFormulas has. There is no second, looser
+// validation anywhere.
+func (ft FormulaTranslation) WithAuthored(sources map[string]string, notes map[string]string, set *records.FormulaSet) FormulaTranslation {
+	if len(sources) == 0 {
+		return ft
+	}
+	out := ft
+	out.Sources = make(map[string]string, len(ft.Sources)+len(sources))
+	for n, s := range ft.Sources {
+		out.Sources[n] = s
+	}
+	for n, s := range sources {
+		out.Sources[n] = s
+	}
+	out.Authored = set
+	out.AuthoredNotes = make(map[string]string, len(notes))
+	for n, why := range notes {
+		out.AuthoredNotes[n] = why
+	}
+	return out
+}
+
+// AuthoredNames lists the importer-authored formulas, sorted.
+func (ft FormulaTranslation) AuthoredNames() []string {
+	out := make([]string, 0, len(ft.AuthoredNotes))
+	for n := range ft.AuthoredNotes {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IsAuthored reports whether a name is one this importer wrote rather than one
+// the operator's `.base` file declared.
+func (ft FormulaTranslation) IsAuthored(name string) bool {
+	_, ok := ft.AuthoredNotes[name]
+	return ok
 }
 
 // FormulaNames lists the carried formulas, sorted.
@@ -1108,7 +1215,7 @@ func (ft FormulaTranslation) FormulaNames() []string {
 // second is a file records.ValidateViewAgainstSchemas refuses WHOLE
 // (RejectViewUnknownFormula) rather than one clause of.
 func (ft FormulaTranslation) Closure(names []string) []string {
-	if ft.Set == nil {
+	if ft.Set == nil && ft.Authored == nil {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -1117,7 +1224,7 @@ func (ft FormulaTranslation) Closure(names []string) []string {
 		if seen[n] {
 			return
 		}
-		decl, ok := ft.Set.Get(n)
+		decl, ok := ft.Declared(n)
 		if !ok {
 			return
 		}
@@ -1137,12 +1244,25 @@ func (ft FormulaTranslation) Closure(names []string) []string {
 	return out
 }
 
-// Declared reports one carried formula's declaration.
+// Declared reports one carried formula's declaration — the operator's own
+// first, then one this importer authored.
+//
+// THE ORDER IS THE POINT. An authored name is namespaced so it cannot collide
+// with the operator's (view_write.go's authoredFormulaName checks, and refuses
+// rather than shadows), but consulting Set first means that even if that check
+// were ever wrong, the operator's own declaration is the one that wins.
 func (ft FormulaTranslation) Declared(name string) (records.FormulaDecl, bool) {
-	if ft.Set == nil {
-		return records.FormulaDecl{}, false
+	if ft.Set != nil {
+		if d, ok := ft.Set.Get(name); ok {
+			return d, true
+		}
 	}
-	return ft.Set.Get(name)
+	if ft.Authored != nil {
+		if _, mine := ft.AuthoredNotes[name]; mine {
+			return ft.Authored.Get(name)
+		}
+	}
+	return records.FormulaDecl{}, false
 }
 
 // RefusalFor explains why a formula is not available, in the operator's own
