@@ -232,6 +232,34 @@ login will fail rather than silently act as the operator. That failure must
 name the reason ("this ran unattended and has no signed-in session"), or it
 becomes the class of invisible failure this ADR exists to remove.
 
+#### D1.2a — two structural changes this requires, which an earlier revision missed
+
+Spec drafting (2026-08-31) found that "keyed by transcript session id,
+therefore signed out" **does not follow from the code as it stands**. Recorded
+here because the failure mode is silent: without both changes below, the
+unattended sub-turn is fully signed in and every obvious test still passes.
+
+1. **`BrowserManager.browserCtxID` is a single field** (`manager.go:381`),
+   applied to every session the manager bootstraps via
+   `chromedp.WithExistingBrowserContext(m.browserCtxID)` (`manager.go:1369`).
+   A second entry in `m.sessions` under a transcript key therefore reuses the
+   **same CDP browser context** — same cookies. **Required:** the single field
+   becomes a per-key map, and the unattended key gets its own
+   coordinator-owned browser context. This is a structural change, not
+   configuration.
+
+2. **There is no discriminator for "unattended".** `spawnSubTurn` *inherits*
+   the parent's workspace (`pkg/agent/subturn.go:1323`,
+   `WorkspaceID: parentTS.opts.WorkspaceID`), so a delegated child lands in the
+   parent's jar by default. `ToolDelegationDepth` is not the signal — it is set
+   only by `task_executor.go`, and is 0 for a `delegate`-spawned sub-turn. There
+   is also no viewer-count accessor for the "no viewer attached" half of the
+   definition. **Required:** both are new seams.
+
+This corrects D1.3's claim that "no new identity concept is introduced". The
+two *keys* exist and already reach every tool; the *discriminator* between
+attended and unattended does not, and must be built.
+
 ### D1.3 The keys already exist and already mean the right thing
 
 Tool context already carries both, and ADR-057 already gave them exactly the
@@ -248,8 +276,12 @@ key. An earlier revision of this ADR chose it; D1.0 records why that was
 replaced. It is listed here only so a reader who finds it in the git history
 knows it was considered and rejected, not overlooked.
 
-No new identity concept is introduced: both keys already exist and already
-reach every tool.
+Both keys already exist and already reach every tool
+(`pkg/tools/base.go:243-252`). **But see D1.2a:** the *discriminator* between
+an attended and an unattended turn does not exist and must be built, and the
+manager's single browser-context field must become per-key. An earlier
+revision of this section claimed "no new identity concept is introduced",
+which was wrong.
 
 Every browser tool already takes a session id on every call: `defaultSessionID`
 is passed at **9 call sites in `tools.go`** and **14 across
