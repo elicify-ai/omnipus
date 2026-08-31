@@ -7,14 +7,21 @@
 // WHY THIS FILE EXISTS
 //
 // reader.go answers the two read questions pkg/knowledge asks of the derived
-// properties index. Nothing anywhere ever asked the write question: walk a
-// collection's notes, parse each against its declared record type, and put the
-// resulting rows in the store. find_tool.go's own buildDeps says so in words —
-// "PRODUCTION GAP ... nothing in this tree currently WRITES to the properties
-// index outside a test harness" — and the consequence is that on a fresh
-// install the store is always empty, so every knowledge_find call that reaches
-// it refuses with "the properties index is not open, so no record can be
-// read", and check_integrity's typed sweep is in the same state.
+// properties index. Before this file, nothing anywhere asked the write
+// question: walk a collection's notes, parse each against its declared record
+// type, and put the resulting rows in the store. find_tool.go's buildDeps used
+// to say so in words — "PRODUCTION GAP ... nothing in this tree currently
+// WRITES to the properties index outside a test harness" — and the consequence
+// was that on a fresh install the store stayed empty, so every knowledge_find
+// call that reached it refused with "the properties index is not open, so no
+// record can be read", with check_integrity's typed sweep in the same state.
+//
+// THAT QUOTE IS HISTORY, NOT A LIVE FINDING. Do not go looking for it in
+// find_tool.go: this file closed the gap it describes, and the comment was
+// corrected in place on 2026-08-31 after a reader took the stale wording for
+// a present-tense defect. pkg/gateway/knowledge_lifecycle.go has called
+// vaultprops.Sync after every text-index reconcile since 2026-08-30
+// (commit 015afa0e).
 //
 // This file is that write path. It lives here rather than in
 // pkg/records/propindex for the same reason reader.go does: building a row

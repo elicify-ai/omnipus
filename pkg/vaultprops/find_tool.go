@@ -191,14 +191,29 @@ func (t *FindTool) buildDeps(ctx context.Context, col knowledge.ScopedCollection
 	// WRONG mental model here; every non-explain, non-cursor-error query
 	// reaches the store.
 	//
-	// PRODUCTION GAP, recorded rather than silently worked around: nothing
-	// in this tree currently WRITES to the properties index outside a test
-	// harness — propindex.IndexNote / Store.UpsertNote have no caller in
-	// pkg/gateway's KnowledgeLifecycle or anywhere else that runs on a real
-	// mount/sync. Until an indexer wires that write path, every
-	// knowledge_find call on a real install reaches this refusal, not only
-	// the typed-filter ones. That gap is orthogonal to this wave
-	// (registration + policy seeding) and is not fixed here.
+	// THE PRODUCTION WRITER EXISTS — this paragraph used to say it did not,
+	// and that stale sentence was read as a live defect on 2026-08-31 and
+	// reported as "the properties index has no production writer". It is
+	// dated here so the next reader can check it rather than trust it.
+	//
+	// Wired 2026-08-30 in commit 015afa0e ("feat(records): build the
+	// properties-index sync pipeline", Stage 4/Wave 2.5):
+	// pkg/gateway/knowledge_lifecycle.go defaults its `propsSync` hook to
+	// vaultprops.Sync, and calls it UNCONDITIONALLY after every text-index
+	// reconcile — on a brand-new mount and on every later one alike. Sync
+	// writes through Store.UpsertNote (two call sites in sync.go: the
+	// attachment row and the note row). So on a real install the store is
+	// populated by the same lifecycle that builds the text index, and the
+	// refusal described above is the store-unopenable case, NOT the
+	// steady state.
+	//
+	// ONE HALF OF THE OLD CLAIM IS STILL TRUE, and collapsing the two would
+	// swap one wrong comment for another: propindex.IndexNote — the ordering
+	// wrapper in pkg/records/propindex/store.go — genuinely has no caller
+	// outside pkg/records/propindex/ordering_test.go. Sync calls
+	// Store.UpsertNote directly rather than going through it. That is a real
+	// observation about IndexNote's reachability and nothing more; it does
+	// not mean the index goes unwritten.
 	store, closeStore := openFindStore(ctx, t.home, col.Root)
 	if closeStore != nil {
 		closers = append(closers, closeStore)
