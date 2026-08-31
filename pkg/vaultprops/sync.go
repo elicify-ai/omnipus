@@ -123,6 +123,90 @@ type SyncOptions struct {
 type storedNoteState struct {
 	kind string
 	hash string
+	// declaredType and schemaFP are the schema half of the freshness test —
+	// the type the note's own frontmatter declared when this row was written,
+	// and the fingerprint of the schema that was in force for it then. See
+	// schemaUnchanged below for what they are compared against and why.
+	declaredType string
+	schemaFP     string
+}
+
+// ---------------------------------------------------------------------------
+// THE SECOND FRESHNESS TOKEN — WHY A CONTENT HASH IS NOT ENOUGH
+//
+// A row in this index is derived from TWO things: the note's bytes, and the
+// schema its `type:` names. Sync compared only the first, and schema files live
+// under `.omnipus-vault/records/`, which the note walk does not visit — so
+// creating, editing or deleting a record type moved no note's bytes, matched
+// every hash, and changed nothing.
+//
+// The failure that produced is the exact shape this repository's own
+// false-green doc is about. An operator with 412 notes already carrying
+// `type: company` runs `knowledge_configure create_record_type company`; the
+// next reconcile reports 412 unchanged; `knowledge_find type=company` returns
+// ZERO rows and says COMPLETE — no error, no problem entry, no staleness flag,
+// and permanent until each note's bytes happen to change or the index file is
+// deleted by hand. `edit_record_type` was silently ineffective the same way.
+//
+// WHAT WAS CONSIDERED AND WHY THIS WON.
+//
+//   - A generation counter bumped on any schema write, compared per sync. One
+//     integer, but it invalidates the WHOLE index for a change to ONE type: on
+//     a large vault, adding a property to `contact` re-parses every note of
+//     every type. It also needs a writer — the schema-authoring tool — to
+//     remember to bump it, and a freshness token that a second component has to
+//     maintain is a freshness token that eventually is not.
+//   - A targeted re-index driven by knowledge_configure: the tool knows which
+//     type it just changed and could ask for those notes to be re-derived. It
+//     is precise, but it is only correct while every schema change goes through
+//     that tool. Schemas are plain YAML files an operator edits directly, and a
+//     hand-edited schema would be exactly as silently ineffective as before.
+//   - What is implemented: the row records the two inputs it was derived from,
+//     and the skip test compares BOTH. It needs no writer to cooperate (a
+//     hand-edited schema file is caught, because the fingerprint is of the FILE),
+//     it costs one extra comparison per walked note, and it re-derives every
+//     note the changed type governs and not one note it does not.
+//
+// A FULL RE-INDEX WAS NOT NECESSARY, and the reason it was avoidable is that
+// the walk already knows the DECLARED type of each stored row without reading
+// the note: it is on the row. Without that, the only way to learn which notes a
+// changed schema governs would be to re-parse every note's frontmatter — which
+// is the work the hash-equal skip exists to avoid, so it would have been a full
+// re-index wearing a different name.
+// ---------------------------------------------------------------------------
+
+// schemaUnchanged reports whether the schema that governs a stored row is still
+// the one that produced it.
+//
+// A row whose note declares no type at all is never affected by a schema
+// change, and neither is an attachment: both stored "" for the declared type,
+// which resolves to "" here and compares equal to the "" they stored.
+//
+// A note declaring a type NOBODY HAS DEFINED is the case that matters most and
+// the one an implementation is likeliest to get wrong. It is an ordinary note
+// (FR-005) and its row stored fingerprint "" — a real, comparable state meaning
+// "derived with no schema". The moment a schema for that type exists the
+// fingerprint is non-empty, the comparison fails, and the note is re-derived as
+// the record it has been claiming to be all along.
+func schemaUnchanged(schemas *records.SchemaSet, prev storedNoteState) bool {
+	return prev.schemaFP == currentSchemaFingerprint(schemas, prev.declaredType)
+}
+
+// currentSchemaFingerprint is the fingerprint of the schema in force RIGHT NOW
+// for one declared type, or "" if that type declares no schema.
+//
+// records.Schema.Fingerprint is the content hash of the schema FILE, which is
+// what FR-015 defines it for — so an operator hand-editing the YAML is caught
+// exactly like a change made through knowledge_configure.
+func currentSchemaFingerprint(schemas *records.SchemaSet, declaredType string) string {
+	if declaredType == "" || schemas == nil {
+		return ""
+	}
+	sc, ok := schemas.Get(declaredType)
+	if !ok {
+		return ""
+	}
+	return sc.Fingerprint
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +337,25 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 	// that opens the text index (both live under knowledge.IndexDirFor's one
 	// directory) — created here too so Sync is correct when called on its
 	// own, e.g. from a test or a future standalone re-index command.
-	if mkErr := os.MkdirAll(filepath.Dir(idxPath), 0o700); mkErr != nil {
+	//
+	// FR-032, and it happens HERE rather than at the end of the function.
+	// Tightening the permissions used to be the LAST thing Sync did, so every
+	// early return between opening the index and reaching it — an unreadable
+	// schema directory, a failed scan, a store that cannot be listed, a write
+	// error, a cancelled context — left the file at whatever the umask
+	// produced, and left it there permanently if the sync never went on to
+	// succeed. The index holds the same note content as the text index; it must
+	// not be readable to anyone but its owner at any point, including while a
+	// sync is failing. propindex.Open does the same for the FILE, before the
+	// driver creates it.
+	idxDir := filepath.Dir(idxPath)
+	if mkErr := os.MkdirAll(idxDir, 0o700); mkErr != nil {
 		return stats, fmt.Errorf("vaultprops: creating the index directory: %w", mkErr)
+	}
+	// MkdirAll does nothing to a directory that already exists, so an
+	// already-loose one is tightened explicitly.
+	if chErr := os.Chmod(idxDir, 0o700); chErr != nil {
+		return stats, fmt.Errorf("vaultprops: setting permissions on the index directory: %w", chErr)
 	}
 
 	store, err := propindex.Open(ctx, idxPath, propindex.Options{Recorder: opts.Recorder})
@@ -308,8 +409,11 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 	// would make the removal pass delete rows this very call just wrote, and
 	// would re-parse and re-write every note on every single reconcile.
 	previous := make(map[string]storedNoteState, stats.Scanned)
-	if err := store.AllPaths(ctx, func(path, kind, hash string) error {
-		previous[path] = storedNoteState{kind: kind, hash: hash}
+	if err := store.AllPaths(ctx, func(n propindex.IndexedNote) error {
+		previous[n.Path] = storedNoteState{
+			kind: n.Kind, hash: n.SourceHash,
+			declaredType: n.DeclaredType, schemaFP: n.SchemaFingerprint,
+		}
 		return nil
 	}); err != nil {
 		return stats, fmt.Errorf("vaultprops: listing the previously indexed paths: %w", err)
@@ -399,12 +503,19 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		}
 
 		hash := propindex.SourceHash(src)
-		if prev, had := previous[entry.RelPath]; had && prev.kind == propindex.KindNote && prev.hash == hash {
-			// CONTENT is unchanged — the note is not re-parsed and its
+		if prev, had := previous[entry.RelPath]; had && prev.kind == propindex.KindNote &&
+			prev.hash == hash && schemaUnchanged(schemas, prev) {
+			// BOTH DERIVATION INPUTS are unchanged — the note's bytes and the
+			// schema its `type:` names — so the note is not re-parsed and its
 			// property, relation and task rows are left exactly as they are.
-			// STAT is a separate question (FR-136): this is the branch a `git
-			// checkout`, an rsync, a `touch` or an iCloud resync lands in, and
-			// before this refresh existed it was where file.mtime and
+			// The schema half of that test is not optional: without it a newly
+			// created record type never reached the notes that already declare
+			// it, and every query for that type answered zero and said
+			// complete (see this file's "SECOND FRESHNESS TOKEN" note).
+			//
+			// STAT is a third, separate question (FR-136): this is the branch a
+			// `git checkout`, an rsync, a `touch` or an iCloud resync lands in,
+			// and before this refresh existed it was where file.mtime and
 			// file.size went to freeze.
 			stats.Unchanged++
 			if err := refreshStatIfDrifted(ctx, store, entry, &stats); err != nil {
@@ -469,16 +580,10 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		stats.Removed++
 	}
 
-	// FR-032, mirroring knowledge.enforceIndexPermissions for the bleve
-	// index: the properties index holds the same note content, under the
-	// same $OMNIPUS_HOME, and must not be left world- or group-readable under
-	// a permissive umask.
-	if err := os.Chmod(idxPath, 0o600); err != nil {
-		return stats, fmt.Errorf("vaultprops: setting permissions on the properties index: %w", err)
-	}
-	if err := os.Chmod(filepath.Dir(idxPath), 0o700); err != nil {
-		return stats, fmt.Errorf("vaultprops: setting permissions on the index directory: %w", err)
-	}
+	// FR-032 is enforced at the TOP of this function and inside
+	// propindex.Open, not here. It used to be here, and being here was the
+	// defect: a chmod on the success path protects nothing on any of the paths
+	// that fail. Do not move it back.
 
 	return stats, nil
 }

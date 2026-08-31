@@ -131,6 +131,51 @@ type NoteRows struct {
 	// UNKNOWN freshness, which is flagged, never assumed fresh.
 	SourceHash string
 
+	// ---------------------------------------------------------------------
+	// DeclaredType and SchemaFingerprint are THE SECOND INPUT THIS ROW WAS
+	// DERIVED FROM, written down. Read them together; neither answers the
+	// question on its own.
+	//
+	// A row is a function of two things: the note's BYTES and the SCHEMA its
+	// `type:` names. Only the first had a freshness token, and the consequence
+	// was the worst shape of defect this project has a name for. Schema files
+	// live under a directory the note walk does not visit, so declaring a new
+	// record type moves no note's bytes and therefore no note's hash: an
+	// operator with 412 notes already carrying `type: company` who created the
+	// `company` type got 412 hash-matched skips, and `knowledge_find
+	// type=company` then returned ZERO rows and reported COMPLETE. Permanently,
+	// with no error, no problem entry and no staleness flag. `edit_record_type`
+	// was silently ineffective by the same mechanism.
+	//
+	// WHY BOTH FIELDS. SchemaFingerprint alone cannot be compared, because to
+	// know which schema governs a note you must know the type the note
+	// declares — and reading that means re-parsing the note's frontmatter,
+	// which is precisely the work the hash-equal skip exists to avoid. So the
+	// DECLARED type is stored too, and the indexer's freshness test becomes:
+	// the bytes have not moved AND the schema now registered for the type this
+	// row already says the note declares still has the fingerprint this row was
+	// built from.
+	//
+	// That test is exact in both directions. It re-derives every note the
+	// changed type governs and NOT ONE note it does not, so a schema edit costs
+	// a re-index proportional to that type rather than a re-index of the vault.
+	//
+	// DeclaredType IS NOT RecordType. RecordType is the type a note RESOLVED
+	// to, and it is "" for a note declaring a type nobody has defined — FR-005,
+	// an ordinary note, and the majority state of a real vault mid-authoring.
+	// DeclaredType is what the note's frontmatter SAYS, resolved or not, and it
+	// is the only one of the two that can find the notes a newly created type
+	// is about to start governing.
+	//
+	// SchemaFingerprint is records.Schema.Fingerprint — the content hash of the
+	// schema file, which FR-015 already defines for exactly this purpose — or
+	// "" when no schema matched. "" is therefore a real, comparable state: it
+	// says "this row was derived with no schema", and it stops agreeing the
+	// moment one exists.
+	// ---------------------------------------------------------------------
+	DeclaredType      string
+	SchemaFingerprint string
+
 	// Size, MtimeNanos, CtimeNanos and HasCtime are the file's stat AS THE WALK
 	// OBSERVED IT — FR-131's three new `notes` columns, backing `file.size`,
 	// `file.mtime` and `file.ctime`.
@@ -249,6 +294,15 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 		Tasks:      ExtractTasks(src),
 		Tags:       ExtractTags(rec, src),
 		Links:      ExtractLinks(src),
+		// The two derivation inputs, recorded together with the rows they
+		// produced. They are set HERE, in the one function that has both the
+		// note and the schema in hand, so they cannot drift from what was
+		// actually used — see the fields' own comment for why the freshness
+		// test needs both.
+		DeclaredType: rec.TypeName(),
+	}
+	if schema != nil {
+		rows.SchemaFingerprint = schema.Fingerprint
 	}
 	if schema == nil {
 		// FR-021e, founder ruling 1: "can you not just fix them, use common

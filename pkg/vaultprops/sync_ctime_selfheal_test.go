@@ -65,9 +65,9 @@ func TestFileMeta_StatRefreshFillsCtimeForARowIndexedWithoutOne(t *testing.T) {
 
 	var kind, hash string
 	var found bool
-	if err := store.AllPaths(context.Background(), func(p, k, h string) error {
-		if p == notePath {
-			kind, hash, found = k, h, true
+	if err := store.AllPaths(context.Background(), func(n propindex.IndexedNote) error {
+		if n.Path == notePath {
+			kind, hash, found = n.Kind, n.SourceHash, true
 		}
 		return nil
 	}); err != nil {

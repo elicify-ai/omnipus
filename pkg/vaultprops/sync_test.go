@@ -197,10 +197,10 @@ func TestSync_AttachmentIsIndexedByNameNeverOpened(t *testing.T) {
 	defer func() { _ = store.Close() }()
 	var hash string
 	found := false
-	if err := store.AllPaths(context.Background(), func(path, kind, sourceHash string) error {
-		if path == "Photos/fern.png" {
+	if err := store.AllPaths(context.Background(), func(n propindex.IndexedNote) error {
+		if n.Path == "Photos/fern.png" {
 			found = true
-			hash = sourceHash
+			hash = n.SourceHash
 		}
 		return nil
 	}); err != nil {
@@ -515,8 +515,8 @@ func assertPathsIndexed(t *testing.T, home, root string, want map[string]bool) {
 	defer func() { _ = store.Close() }()
 
 	present := map[string]bool{}
-	if err := store.AllPaths(context.Background(), func(path, kind, sourceHash string) error {
-		present[path] = true
+	if err := store.AllPaths(context.Background(), func(n propindex.IndexedNote) error {
+		present[n.Path] = true
 		return nil
 	}); err != nil {
 		t.Fatalf("AllPaths: %v", err)

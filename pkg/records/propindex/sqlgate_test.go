@@ -490,6 +490,18 @@ var valueColumns = map[string]string{
 	"mtime":       "FR-135: stat metadata is a comparison target, and `file.mtime` is a date under R-7 — the Go comparator's",
 	"ctime":       "FR-135, and FR-133 on top of it: absence here is a PLATFORM fact, and SQL's NULL semantics get absence wrong (R-2/R-3)",
 	"size":        "FR-135: `file.size` is an integer comparison under R-1, decided in Go over exact decimal digits",
+	// The two derivation tokens. They are read ONLY by the indexer's own
+	// maintenance walk (AllPaths, which emits no WHERE clause at all) and
+	// compared in Go against the schema set that is currently loaded. They are
+	// classified as value columns deliberately, and the classification is a
+	// real constraint rather than a formality: `declared_type` looks exactly
+	// like a narrowing column and is not one. Narrowing on it would answer
+	// `type=company` with every note that CLAIMS to be a company whether or not
+	// a `company` type exists, which is FR-005 inverted — `record_type` is the
+	// column that says what a note actually resolved to, and it is the only one
+	// a query may narrow on.
+	"declared_type": "the type a note's frontmatter CLAIMS, resolved or not; narrowing on it would answer `type=` with notes of an undeclared type (FR-005). Compared in Go by the indexer only",
+	"schema_fp":     "the fingerprint of the schema this row was derived from; the indexer compares it in Go against the loaded schema set, and no query has any business mentioning it",
 
 	// note_tasks.
 	"line":   "a source line number; a renderer's coordinate, not a filter target",

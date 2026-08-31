@@ -11,6 +11,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +39,17 @@ const driverName = "sqlite"
 // existed look identical). Hence the bump: the mismatch drops the tables and
 // re-derives, which is always cheaper and always more correct than teaching a
 // derived index to translate itself.
-const schemaVersion = 2
+//
+// Revision 3: `declared_type` and `schema_fp` on `notes` — the second input a
+// row was derived from, written down. A row is derived from the note's BYTES
+// and from the SCHEMA its `type:` names, and until this revision only the first
+// was recorded, so a schema that changed had nothing to compare against and the
+// rows it governs were never re-derived (see the header comment on
+// NoteRows.SchemaFingerprint). A version-2 file cannot be upgraded in place
+// because nothing in it says which schema produced which row — the only honest
+// answer is "unknown", and the only correct response to unknown is to
+// re-derive. Hence the bump rather than an ALTER TABLE.
+const schemaVersion = 3
 
 // Index is the SQLite properties index.
 type Index struct {
@@ -62,18 +75,236 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open(driverName, path)
+	// FR-032, and it is done BEFORE the driver ever touches the file: SQLite
+	// creates a missing database with 0666 & umask (0644 on a default umask),
+	// and it copies the database file's own mode onto the journal and WAL files
+	// it writes beside it. Creating the file ourselves, owner-only, closes the
+	// window for all three at once instead of chmod'ing afterwards and hoping
+	// nothing read it in between.
+	if err := precreateOwnerOnly(path); err != nil {
+		return nil, err
+	}
+
+	dsn, err := indexDSN(path)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("propindex: open %q: %w", path, err)
 	}
-	// One connection. The index is a single file with a rollback journal, so a
-	// reader and a writer cannot coexist on it; serialising here turns what
-	// would be an intermittent SQLITE_BUSY into a queue. A Candidates stream
-	// therefore holds the connection for its duration — bounded by B1 — and a
-	// concurrent index write waits behind it.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	// THE POOL IS NOT A LOCK, AND USING IT AS ONE DEADLOCKED THE TOOL.
+	//
+	// This used to be SetMaxOpenConns(1), reasoning that a reader and a writer
+	// cannot coexist on one rollback-journalled file so serialising here turns
+	// an intermittent SQLITE_BUSY into a queue. Both halves of that were wrong.
+	//
+	// It did not serialise anything meaningful: knowledge_find and the indexer
+	// hold SEPARATE *sql.DB handles on the same file (find_tool.go's
+	// openFindStore, sync.go's own Open), so the pool never stood between the
+	// reader and the writer that actually contend.
+	//
+	// And it deadlocked the one caller it did stand between: the streams below
+	// hold their connection across the visit callback, and knowledge_find's
+	// relation resolver issues a point lookup FROM INSIDE that callback (the
+	// same store is wired to Deps.Store and to the resolver). The nested read
+	// waited for a connection only the stream could return, and database/sql
+	// waits until the context is done — so the turn hung, with no error and no
+	// partial answer.
+	//
+	// The correct serialiser for a file-backed database is SQLite's own
+	// locking plus busy_timeout, which is what protects the multi-handle case
+	// already. journal_mode=WAL (see indexDSN) is what makes that cheap: a
+	// reader no longer blocks the writer at all. The pool is therefore left
+	// unbounded — in practice it grows to the nesting depth of the reads in
+	// flight, which is two — and only the idle count is capped so an
+	// occasional nested read does not keep a second file handle open forever.
+	db.SetMaxOpenConns(0)
+	db.SetMaxIdleConns(2)
 
+	ix := &Index{db: db, path: path, rec: opts.Recorder}
+	if err := ix.init(ctx); err != nil {
+		if !isCorruptionError(err) {
+			if cerr := db.Close(); cerr != nil {
+				return nil, fmt.Errorf("%w (and closing the database failed: %v)", err, cerr)
+			}
+			return nil, err
+		}
+		// THE SELF-HEAL `synchronous` WAS ALWAYS PREDICATED ON.
+		//
+		// The durability setting is justified by "a derived index has nothing
+		// to lose in a crash — it rebuilds", and that sentence is only true if
+		// something detects the file needs rebuilding. Nothing did: a torn
+		// write left a file SQLite refuses to open, the caller logged the open
+		// failure at Debug and proceeded with no store, and every later query
+		// refused with "the properties index is not open" — permanently, until
+		// an operator who had no way to know deleted the file by hand.
+		//
+		// Deleting it is already the documented, supported way to ask for a
+		// rebuild (FR-020a). Doing it here on a CORRUPTION error only — never
+		// on a permission or disk error, which deleting would not fix and
+		// which discarding data over would be reckless — turns a permanent
+		// silent refusal into a rebuild the caller is told about through
+		// NeedsFullIndex.
+		slog.Warn("propindex: the properties index is corrupt; discarding it and rebuilding from the notes",
+			"path", path, "error", err)
+		if cerr := db.Close(); cerr != nil {
+			return nil, fmt.Errorf("propindex: discarding a corrupt index at %q: closing it failed: %w", path, cerr)
+		}
+		rebuilt, rerr := rebuildAfterCorruption(ctx, path, opts)
+		if rerr != nil {
+			return nil, fmt.Errorf("propindex: the index at %q is corrupt (%v) and could not be rebuilt: %w",
+				path, err, rerr)
+		}
+		return rebuilt, nil
+	}
+	return ix, nil
+}
+
+// indexDSN renders the connection string, pragmas included.
+//
+// THE PRAGMAS LIVE IN THE DSN RATHER THAN IN init BECAUSE THEY ARE
+// PER-CONNECTION. `busy_timeout`, `synchronous` and `foreign_keys` are
+// properties of a connection, not of the file, so executing them once against
+// whichever connection the pool happened to hand out was correct only while the
+// pool held exactly one. It no longer does (see Open), and a second connection
+// configured with none of them — busy_timeout 0, so the first contention fails
+// instantly instead of waiting — would be invisible from the outside. The
+// driver applies every `_pragma` to every connection it opens, and surfaces a
+// failure at connect time rather than silently skipping it.
+//
+// `journal_mode` is a property of the FILE and persists once set, but it is
+// listed here for the same reason the others are: so the whole configuration is
+// one thing to read.
+//
+//   - journal_mode=WAL — readers and the writer stop excluding each other. That
+//     is what makes an unbounded pool safe, and it is also what fixes the
+//     cross-handle case the old comment described but did not address: a long
+//     reconcile overlapping a long query used to convert to SQLITE_BUSY after
+//     five seconds.
+//   - synchronous=NORMAL — was OFF. In WAL mode NORMAL is the documented safe
+//     setting: a crash can lose the most recent commits, and cannot corrupt the
+//     file. The index is derived, so losing recent commits costs a re-index of
+//     those notes, which is the trade the OFF setting was reaching for; losing
+//     the FILE was never part of that trade, and the self-heal above is not a
+//     licence to keep courting it.
+//   - _txlock=immediate — every write here begins deferred, reads, then writes,
+//     which in WAL mode can fail on upgrade with SQLITE_BUSY_SNAPSHOT, a code
+//     busy_timeout does NOT retry. Taking the write lock at BEGIN puts the wait
+//     back under busy_timeout where it belongs. Only BeginTx is affected, and
+//     nothing but the three write methods begins a transaction.
+func indexDSN(path string) (string, error) {
+	// The driver splits a DSN at its first '?' and treats the remainder as the
+	// query string, so a path containing one would silently open a DIFFERENT,
+	// shorter path with a garbage query — a wrong answer, refused by name
+	// rather than delivered.
+	if strings.Contains(path, "?") {
+		return "", fmt.Errorf(
+			"propindex: the properties index path %q contains a '?', which cannot be expressed as a "+
+				"database connection string; move $OMNIPUS_HOME to a path without one", path)
+	}
+	q := url.Values{}
+	for _, pragma := range []string{
+		"busy_timeout(5000)",
+		"journal_mode(WAL)",
+		"synchronous(NORMAL)",
+		"foreign_keys(OFF)",
+	} {
+		q.Add("_pragma", pragma)
+	}
+	q.Set("_txlock", "immediate")
+	return path + "?" + q.Encode(), nil
+}
+
+// precreateOwnerOnly creates the index file at 0600 if it does not exist, and
+// tightens it if it does.
+//
+// Both halves matter. The create closes FR-032's window on a fresh install —
+// SQLite would otherwise create it 0644 under a default umask, and the journal
+// and WAL files it derives from that mode with it. The chmod repairs a file an
+// earlier build already left loose, and it happens here rather than at the end
+// of a sync so that a sync which fails half way does not leave the file
+// readable to everyone until the next successful one.
+func precreateOwnerOnly(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("propindex: preparing the index file %q: %w", path, err)
+	}
+	fi, statErr := f.Stat()
+	if cerr := f.Close(); cerr != nil {
+		return fmt.Errorf("propindex: preparing the index file %q: %w", path, cerr)
+	}
+	if statErr != nil {
+		return fmt.Errorf("propindex: reading the mode of the index file %q: %w", path, statErr)
+	}
+	// Only tighten what is actually loose. A file already owner-only needs no
+	// syscall, and — more to the point — a correctly-permissioned file this
+	// process does not own would otherwise fail an unnecessary chmod and take
+	// the whole open down with it. A file that IS loose and cannot be tightened
+	// still fails, loudly: serving an index of the operator's notes that
+	// everyone on the host can read is not a degraded mode worth having.
+	if fi.Mode().Perm()&0o077 == 0 {
+		return nil
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("propindex: restricting the index file %q to its owner: %w", path, err)
+	}
+	return nil
+}
+
+// isCorruptionError reports whether err says the FILE is unusable, as opposed
+// to the environment being unusable.
+//
+// It is deliberately narrow. Discarding an index over a permission error or a
+// full disk would destroy data to fix nothing, so only SQLite's own two
+// verdicts about the bytes count: SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
+// The driver renders both as text; the codes are matched as well as the
+// wording so a driver that starts phrasing them differently does not silently
+// turn the self-heal off.
+func isCorruptionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"database disk image is malformed",
+		"file is not a database",
+		"file is encrypted or is not a database",
+		"malformed database schema",
+		"(11)",
+		"(26)",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// rebuildAfterCorruption removes a corrupt index and its companions and opens a
+// fresh one in its place.
+//
+// The WAL and shared-memory files are removed too: leaving them beside a new
+// database is how a rebuild inherits the very pages that were corrupt.
+func rebuildAfterCorruption(ctx context.Context, path string, opts Options) (Store, error) {
+	for _, companion := range []string{path, path + "-journal", path + "-wal", path + "-shm"} {
+		if err := os.Remove(companion); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("removing %q: %w", companion, err)
+		}
+	}
+	if err := precreateOwnerOnly(path); err != nil {
+		return nil, err
+	}
+	dsn, err := indexDSN(path)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("reopening %q: %w", path, err)
+	}
+	db.SetMaxOpenConns(0)
+	db.SetMaxIdleConns(2)
 	ix := &Index{db: db, path: path, rec: opts.Recorder}
 	if err := ix.init(ctx); err != nil {
 		if cerr := db.Close(); cerr != nil {
@@ -119,16 +350,18 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 
 const ddl = `
 CREATE TABLE IF NOT EXISTS notes (
-	note_id     INTEGER PRIMARY KEY,
-	path        TEXT    NOT NULL,
-	kind        TEXT    NOT NULL,
-	record_type TEXT    NOT NULL,
-	record_id   BLOB    NOT NULL,
-	source_hash TEXT    NOT NULL,
-	indexed_at  INTEGER NOT NULL,
-	mtime       BLOB,
-	ctime       BLOB,
-	size        BLOB
+	note_id       INTEGER PRIMARY KEY,
+	path          TEXT    NOT NULL,
+	kind          TEXT    NOT NULL,
+	record_type   TEXT    NOT NULL,
+	record_id     BLOB    NOT NULL,
+	source_hash   TEXT    NOT NULL,
+	indexed_at    INTEGER NOT NULL,
+	mtime         BLOB,
+	ctime         BLOB,
+	size          BLOB,
+	declared_type TEXT    NOT NULL DEFAULT '',
+	schema_fp     TEXT    NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS notes_by_path ON notes(path);
 CREATE INDEX IF NOT EXISTS notes_narrowing ON notes(record_type, kind, path);
@@ -187,18 +420,9 @@ CREATE TABLE IF NOT EXISTS note_links (
 `
 
 func (ix *Index) init(ctx context.Context) error {
-	// A derived index has nothing to lose in a crash — it rebuilds — so paying
-	// for durability on every write buys nothing and costs the whole indexing
-	// pass. The busy timeout matters more: it is what a second process waits on.
-	for _, pragma := range []string{
-		"PRAGMA busy_timeout = 5000",
-		"PRAGMA synchronous = OFF",
-		"PRAGMA foreign_keys = OFF",
-	} {
-		if _, err := ix.exec(ctx, PhaseOpen, pragma); err != nil {
-			return fmt.Errorf("propindex: %s: %w", pragma, err)
-		}
-	}
+	// The pragmas are NOT set here. They are per-connection, and this function
+	// runs on exactly one of them — see indexDSN, which hands them to the
+	// driver so every connection it opens carries the same configuration.
 
 	var have int
 	if err := ix.queryRow(ctx, PhaseOpen, "PRAGMA user_version").Scan(&have); err != nil {
@@ -320,22 +544,24 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 		if err := ix.deleteChildren(ctx, tx, id); err != nil {
 			return err
 		}
-		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ? WHERE note_id = ?`
+		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ?, declared_type = ?, schema_fp = ? WHERE note_id = ?`
 		if _, err := ix.execTx(ctx, tx, PhaseWrite, q,
 			rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
 			nanoTimeColumn(rows.MtimeNanos),
 			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
 			sizeColumn(rows.Size, rows.StatKnown()),
+			rows.DeclaredType, rows.SchemaFingerprint,
 			id); err != nil {
 			return fmt.Errorf("propindex: updating %q: %w", rows.Path, err)
 		}
 	} else {
-		const q = `INSERT INTO notes (path, kind, record_type, record_id, source_hash, indexed_at, mtime, ctime, size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		const q = `INSERT INTO notes (path, kind, record_type, record_id, source_hash, indexed_at, mtime, ctime, size, declared_type, schema_fp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		res, err := ix.execTx(ctx, tx, PhaseWrite, q,
 			rows.Path, rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
 			nanoTimeColumn(rows.MtimeNanos),
 			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
-			sizeColumn(rows.Size, rows.StatKnown()))
+			sizeColumn(rows.Size, rows.StatKnown()),
+			rows.DeclaredType, rows.SchemaFingerprint)
 		if err != nil {
 			return fmt.Errorf("propindex: inserting %q: %w", rows.Path, err)
 		}
@@ -494,16 +720,36 @@ func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNa
 	wantMtime := nanoTimeColumn(mtimeNanos)
 	wantSize := sizeColumn(size, mtimeNanos != 0)
 
-	// The one-way rule, in one expression: keep what is stored unless the
-	// caller has a birth time AND the stored column is empty. A stored value is
-	// never replaced either — a birth time that changed did so because the file
+	// FR-133'S ONE-WAY RULE, STATED CORRECTLY: a stored birth time survives
+	// because THE CALLER HAS NOTHING TO OFFER, never because the caller
+	// disagrees.
+	//
+	// The earlier version kept the stored value whatever the caller offered,
+	// and justified it with "a birth time that changed did so because the file
 	// was replaced, and that is a content change, which takes the UpsertNote
-	// path rather than this one.
+	// path". That is false for the four commonest ways a file is replaced with
+	// IDENTICAL bytes — `git checkout` of a deleted note, an rsync temp-file
+	// rename, a backup restore, an iCloud re-download. Each is a new inode with
+	// a new birth time and the same content, so the note takes the hash-equal
+	// skip and only this method runs: mtime and size were corrected and
+	// `file.ctime` froze at the FIRST file's creation date, permanently, with
+	// every `sort by file.ctime` quietly wrong afterwards.
+	//
+	// What the rule actually protects is unchanged and still absolute: a
+	// platform that cannot READ a birth time (Linux without statx birth-time
+	// support, a filesystem that records none) passes hasCtime=false and must
+	// never CLEAR what a macOS pass over the same synced vault established.
+	// That is the `!hasCtime` branch, and it is the only branch that keeps a
+	// stored value.
 	wantCtime := any(nil)
-	if len(haveCtime) > 0 {
-		wantCtime = haveCtime
-	} else if hasCtime {
+	switch {
+	case hasCtime:
+		// The caller observed a birth time. It is this pass's evidence about
+		// the file that is on disk now, and it wins — exactly as mtime and
+		// size do two lines above.
 		wantCtime = ctimeColumn(ctimeNanos, true)
+	case len(haveCtime) > 0:
+		wantCtime = haveCtime
 	}
 
 	if sameColumn(haveMtime, wantMtime) && sameColumn(haveSze, wantSize) && sameColumn(haveCtime, wantCtime) {
@@ -586,8 +832,9 @@ func boolInt(b bool) int {
 // WHERE clause and is not measured against B1 — it is the sync pipeline's own
 // maintenance walk (store.go's doc comment on the interface method explains
 // why), not a caller-shaped query.
-func (ix *Index) AllPaths(ctx context.Context, visit func(path, kind, sourceHash string) error) (err error) {
-	rows, err := ix.query(ctx, PhaseRead, `SELECT path, kind, source_hash FROM notes`)
+func (ix *Index) AllPaths(ctx context.Context, visit func(IndexedNote) error) (err error) {
+	rows, err := ix.query(ctx, PhaseRead,
+		`SELECT path, kind, source_hash, declared_type, schema_fp FROM notes`)
 	if err != nil {
 		return fmt.Errorf("propindex: listing indexed paths: %w", err)
 	}
@@ -598,11 +845,11 @@ func (ix *Index) AllPaths(ctx context.Context, visit func(path, kind, sourceHash
 	}()
 
 	for rows.Next() {
-		var path, kind, hash string
-		if err := rows.Scan(&path, &kind, &hash); err != nil {
+		var n IndexedNote
+		if err := rows.Scan(&n.Path, &n.Kind, &n.SourceHash, &n.DeclaredType, &n.SchemaFingerprint); err != nil {
 			return fmt.Errorf("propindex: reading an indexed path: %w", err)
 		}
-		if err := visit(path, kind, hash); err != nil {
+		if err := visit(n); err != nil {
 			return err
 		}
 	}

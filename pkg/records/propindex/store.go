@@ -243,6 +243,39 @@ type RelationHit struct {
 	Relation   RelationRow
 }
 
+// IndexedNote is one row of AllPaths' maintenance walk: everything the indexer
+// needs to decide whether the stored row is still current, and nothing else.
+//
+// It is a STRUCT rather than four positional strings because that decision now
+// takes more than one comparison, and a callback of four same-typed parameters
+// is one that gets called with two of them swapped. It carries no properties,
+// no relations and no tasks: this is the indexer's own walk, deliberately
+// outside FR-064's bounds, and it must never grow into something a
+// knowledge_find-shaped query could be served from.
+type IndexedNote struct {
+	// Path is the collection-relative path — this row's identity.
+	Path string
+	// Kind is KindNote or KindAttachment.
+	Kind string
+	// SourceHash is the note's content freshness token, "" for an attachment
+	// (whose bytes are never opened, FR-039a).
+	SourceHash string
+
+	// DeclaredType and SchemaFingerprint are the SECOND freshness token, and
+	// they are the reason this walk returns a struct at all.
+	//
+	// A row is derived from the note's bytes AND from the schema its `type:`
+	// names, and comparing only the first meant a schema change was never
+	// applied to the notes it governs — a newly created record type left every
+	// note that already declared it invisible to every query, permanently,
+	// while the answer still reported COMPLETE. NoteRows' own comment on these
+	// two fields has the full account; what matters here is that the indexer
+	// can perform the comparison WITHOUT re-reading or re-parsing the note,
+	// which is the whole economy of the hash-equal skip.
+	DeclaredType      string
+	SchemaFingerprint string
+}
+
 // Store is the seam. The SQLite implementation and the no-SQLite refusal both
 // satisfy it, so nothing above this package needs a build tag of its own.
 //
@@ -359,8 +392,9 @@ type Store interface {
 	// ask for this (FR-020a).
 	NeedsFullIndex() bool
 
-	// AllPaths visits every path the store currently holds, with its kind and
-	// source hash, in no particular order.
+	// AllPaths visits every path the store currently holds, in no particular
+	// order, with everything the indexer needs to decide whether that row is
+	// still current (see IndexedNote).
 	//
 	// This is the sync pipeline's OWN maintenance walk — the exact analog of a
 	// text-index manifest's Entries loop — and it is deliberately NOT subject
@@ -370,7 +404,7 @@ type Store interface {
 	// Nothing about it is exposed to a caller outside the indexing pipeline: it
 	// carries no properties, no relations, no tasks, and it must never be
 	// reached from a knowledge_find-shaped query.
-	AllPaths(ctx context.Context, visit func(path, kind, sourceHash string) error) error
+	AllPaths(ctx context.Context, visit func(IndexedNote) error) error
 
 	// Close releases the database.
 	Close() error
