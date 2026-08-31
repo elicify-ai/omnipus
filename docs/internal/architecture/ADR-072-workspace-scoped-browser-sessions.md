@@ -536,7 +536,7 @@ therefore need an explicit, literal, wildcard-free entry for **every** agent in
 | Tool | Jim | Ray | Mia | Ava |
 |---|---|---|---|---|
 | `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_handle_dialog`, `browser_snapshot` | allow | allow | deny | deny |
-| `browser_upload_file` | **ask** | **ask** | deny | deny |
+| `browser_upload_file` | **ask** | **ask** | **ask** | **ask** |
 
 **Corrected 2026-08-31:** the table above omits two agents that hold the full
 browser surface today — `IDExplorer` (`pkg/coreagent/core.go:756-760`) and
@@ -550,9 +550,25 @@ risk for every agent. The per-agent edits are posture, not coverage. That
 distinction matters: a spec that treats them as coverage will over-scope the
 work and under-test the posture.
 
-`browser_upload_file` is seeded **ask**, not allow: it is the only browser tool
-that carries a local file across the boundary into a remote site. Every other
-browser tool moves data inward. That asymmetry is worth one confirmation.
+**Operator ruling, 2026-08-31 (Daniel Piatkowski): `browser_upload_file` is
+`ask` in the GLOBAL tool policy, for every agent** — not per-agent, and not
+`deny` for delegation-tier workers. It is the only browser tool that carries a
+local file across the boundary into a remote site; every other browser tool
+moves data inward. That asymmetry is worth one confirmation from whoever is
+driving.
+
+**Dependency this creates, and it is a real one.** An `ask` reaching an agent
+with no human attached needs a defined answer. `AutoDenyAsk`
+(`pkg/agent/loop.go:594-599`) provides it for headless scheduled runs — every
+`ask`-policy call is auto-denied rather than hanging. **But issue #659 (open)
+records that `AutoDenyAsk` is not inherited by delegated subagents**, so a
+delegated worker that tries to upload a file today blocks on an approval nobody
+can answer.
+
+The concern was raised before the ruling and the ruling stands; it is sound
+*provided #659 lands first*. **#659 is therefore a hard prerequisite for
+`browser_upload_file`, not a related nicety** — shipping the seed without it
+converts a clean refusal into a hung turn.
 
 ### D2.10 Concurrency — one writer per browsing context
 
@@ -607,10 +623,26 @@ rather than a line under Consequences.
   number or a password field, where the existing text tool structurally could
   not.
 
-  **Decision (operator ruling required — see §6):** the snapshot omits values
-  by default for `text`/`search`/`combobox`/`password` roles, with an explicit
-  `include_values` opt-in, and the sensitive-value replacer wired in as defence
-  in depth rather than as the primary control.
+  **Operator ruling, 2026-08-31 (Daniel Piatkowski): the snapshot returns
+  field values by default.** Omit-by-default with an `include_values` opt-in
+  was offered and declined; the rationale for the ruling is that an agent
+  cannot verify a form is correctly filled before submitting it — one of the
+  main things this panel is for — without seeing what is in the fields.
+
+  **The risk is accepted, not absent, and is recorded here so it is not
+  rediscovered as a surprise.** A snapshot of a signed-in page can carry a card
+  number, a partially typed password, or an account identifier into the
+  conversation and into the stored transcript
+  (`sessions/<id>/<YYYY-MM-DD>.jsonl`, 90-day default retention). Two
+  mitigations are therefore **not** optional and must be specced:
+
+  - The sensitive-value replacer is wired in as defence in depth — it does not
+    cover form values, but it costs nothing and closes the credential-plaintext
+    case.
+  - The snapshot must be reachable in the ActivityPanel / verbose-chat surfaces
+    like any other tool call, so an operator can see what was captured. A
+    capture nobody can inspect is the failure mode this project has
+    `docs/internal/false-green-patterns.md` for.
 
 ## 3. Acceptance criteria
 
