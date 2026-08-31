@@ -638,3 +638,78 @@ func TestAggregates_ValueCountIsNotARowCount(t *testing.T) {
 		t.Errorf("scope = %q, want it to name the row it excluded", tot.Scope)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FR-152, the parts a correct-looking number does not prove
+// ---------------------------------------------------------------------------
+
+// TestAggregates_RoundingIsHalfEvenNotHalfUp.
+//
+// Every expected value in test 96 lands clear of a tie, so all of them pass
+// under half-up too — the label would declare a rule nothing enforced. These
+// two are exact ties at the declared scale, and they are the only shape that
+// tells the two rules apart.
+//
+// It matters beyond pedantry: half-up biases every column of values ending in
+// .5 upward by a consistent amount, and prices, hours and halves of things are
+// not rare in a vault.
+func TestAggregates_RoundingIsHalfEvenNotHalfUp(t *testing.T) {
+	// cuttings is an INTEGER property, so the declared scale is 0 + 2 = 2.
+	for _, c := range []struct {
+		name   string
+		values []int
+		want   string
+		why    string
+	}{
+		{
+			name:   "ties_down_to_even",
+			values: []int{1, 1, 1, 1, 1, 1, 1, 2},
+			want:   "1.12",
+			why: "sum 9 over 8 rows is exactly 1.125, an exact tie at 2 places; " +
+				"half-EVEN keeps the even digit and gives 1.12, half-up would give 1.13",
+		},
+		{
+			name:   "ties_up_to_even",
+			values: []int{1, 1, 1, 1, 1, 1, 2, 3},
+			want:   "1.38",
+			why: "sum 11 over 8 rows is exactly 1.375, an exact tie at 2 places; " +
+				"the digit before it is odd, so half-EVEN rounds up to 1.38",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := bloomFixture(t)
+			for i, v := range c.values {
+				f.write(fmt.Sprintf("garden/t-%02d.md", i), fmt.Sprintf(
+					"---\ntype: bloom\nid: BL-%04d\nspecies: Rosa\ncuttings: %d\n---\n", i+1, v))
+			}
+			if got := summarise(t, f, opAvg, "cuttings").Value; got != c.want {
+				t.Errorf("avg(cuttings) = %q, want %q — %s", got, c.want, c.why)
+			}
+		})
+	}
+}
+
+// TestAggregates_ArithmeticIsExactBeyondFloat64.
+//
+// FR-144's no-binary-float rule, asserted where a float would actually show:
+// past 2^53 a float64 cannot hold consecutive integers, so a sum computed in
+// one states digits nobody wrote. Every value in test 96 is small enough that a
+// float would have got it right, which is exactly why this case exists.
+func TestAggregates_ArithmeticIsExactBeyondFloat64(t *testing.T) {
+	f := bloomFixture(t)
+	// 2^53 + 1 = 9007199254740993 — the smallest integer a float64 cannot
+	// represent; it rounds to 9007199254740992.
+	f.write("garden/big.md", "---\ntype: bloom\nid: BL-0001\nspecies: Rosa\nheight_cm: 9007199254740993.00\n---\n")
+	f.write("garden/small.md", "---\ntype: bloom\nid: BL-0002\nspecies: Rosa\nheight_cm: 0.01\n---\n")
+
+	// 9007199254740993.00 + 0.01 = 9007199254740993.01, exactly.
+	if got := summarise(t, f, opSum, "height_cm").Value; got != "9,007,199,254,740,993.01" {
+		t.Errorf("sum = %q, want 9,007,199,254,740,993.01 — a sum that round-tripped "+
+			"through a binary float states digits nobody computed", got)
+	}
+	// 9007199254740993.01 / 2 = 4503599627370496.505, and the declared scale is
+	// 2 + 2 = 4, so it renders 4503599627370496.5050.
+	if got := summarise(t, f, opAvg, "height_cm").Value; got != "4,503,599,627,370,496.5050" {
+		t.Errorf("avg = %q, want 4,503,599,627,370,496.5050", got)
+	}
+}
