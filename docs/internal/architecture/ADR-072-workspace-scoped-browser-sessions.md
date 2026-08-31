@@ -1,4 +1,4 @@
-# ADR-072 — Browser tools: conversation-scoped, and usable by an agent
+# ADR-072 — Browser tools: workspace-scoped, and usable by an agent
 
 - **Status:** Proposed
 - **Date:** 2026-08-31
@@ -7,7 +7,7 @@
   the same commit as this file lands. §7 records why.
 - **Amends:** **[[ADR-043]]** (one shared Chrome + per-agent browser contexts,
   Accepted 2026-07-14). ADR-043's D2 — "the load-bearing decision" — keys each
-  CDP browser context by **agent**. This ADR **re-keys it to the conversation**.
+  CDP browser context by **agent**. This ADR **re-keys it to the workspace**.
   The isolation primitive, its strength and its implementation are unchanged;
   only the key changes. D1.0 states exactly what is preserved and what is not.
 - **Related:** ADR-038 (live browser panel, human takeover), ADR-041 (tabs),
@@ -122,8 +122,8 @@ consequences, D2 is additive surface.
 
 ## D1 — Ownership
 
-**A browsing context belongs to a conversation. Isolation is preserved in full
-— it moves from the agent axis to the conversation axis.**
+**Signed-in state belongs to the workspace. Isolation is preserved in full — it
+moves from the agent axis to the workspace axis.**
 
 ### D1.0 Reconciling with ADR-043 — read this before §1.2
 
@@ -142,13 +142,13 @@ So this ADR is not removing isolation. It argues the **axis is wrong**.
 |---|---|---|
 | Isolation primitive | CDP browser context | **unchanged** |
 | Partitions cookies / localStorage / indexedDB | yes | **unchanged** |
-| Keyed by | the **agent** | the **conversation** |
+| Keyed by | the **agent** | the **workspace** |
 
-**What ADR-043 was protecting still holds.** Its concern is that one agent's
-logged-in state must not leak into another's unrelated work. Under
-conversation-keying a login obtained in chat X is invisible in chat Y — which
-is the same protection, expressed against the boundary a human actually
-recognises.
+**What ADR-043 was protecting still holds — and is better expressed.** Its
+concern is that one agent's logged-in state must not leak into unrelated work.
+Under workspace-keying, a login obtained in workspace X is invisible in
+workspace Y. That is the same protection drawn at the boundary that actually
+separates unrelated work: different clients, different projects.
 
 **Why the agent is the wrong unit.** The human logs in first and *then* decides
 who to talk to. Case 3 is not an edge case; it is the ordinary way a person
@@ -157,10 +157,33 @@ on which colleague happened to be on screen at the moment a tab was opened —
 an implementation detail the operator has no reason to model, and, per §1.1,
 one the agents themselves misreport.
 
-**The behaviour change this accepts, stated plainly:** one agent present in two
-conversations now has **two cookie jars** — logged in to a site in one, logged
-out in the other. This follows directly from isolation tracking the human's
-session, and it is a deliberate consequence, not an oversight.
+**Why the workspace and not the conversation.** An earlier revision of this ADR
+keyed on the conversation. That fixed handover but produced a surprise: the
+same agent, asked the same thing in a new chat, would be logged out — because
+the login stayed behind in the old one. The workspace removes it. A
+conversation is short and a project produces many of them; **the workspace *is*
+the unit of related work**, so two agents on one team sharing a login is
+correct behaviour rather than leakage. Operator ruling, 2026-08-31.
+
+**Both properties therefore hold, and no surprise is accepted:**
+
+| | Handover works | No leak between unrelated work | No surprise logout |
+|---|---|---|---|
+| Per agent (today) | ✗ | ✓ | ✓ |
+| Per conversation (earlier draft) | ✓ | ✓ | ✗ |
+| **Per workspace (this ADR)** | **✓** | **✓** | **✓** |
+
+**Two consequences that must be stated rather than discovered:**
+
+1. **Every agent on a workspace inherits every signed-in session on it.** Adding
+   an agent to a team grants it those logins. That follows from the team being
+   the trust boundary, and it is the same judgement an operator already makes
+   when choosing a roster — but it is a grant, and should read as one.
+2. **Unattended delegated work shares the jar by default.** A background agent
+   scraping on its own will act as the signed-in user. Sometimes correct (it is
+   the operator's own work), sometimes not (acting as the operator on a live
+   site without a human present). D1.2 keeps the escape hatch rather than
+   deciding it here.
 
 **What does not change:** ADR-040's take-the-wheel model within a context;
 ADR-041's tab-set model; ADR-043 D1/D3/D4 (single Chrome, coordinator
@@ -170,9 +193,20 @@ ownership, hot-reload survival) and its whole deferred escape hatch.
 
 1. **One `BrowserManager` per workspace**, shared by every agent, instead of
    one per agent. The manager stops being the isolation boundary; the browser
-   context keyed by conversation becomes it.
-2. **Key browsing contexts by the routing session id** — the conversation —
-   instead of the constant `"default"`.
+   context keyed by workspace becomes it.
+2. **Key browsing contexts by the workspace id** instead of the constant
+   `"default"`. `tools.ToolWorkspaceID(ctx)` already carries it to every tool
+   (`pkg/tools/base.go:241-251`), so this needs no new plumbing — the same
+   situation as the session keys in §2.1.
+
+### D1.2 The escape hatch for unattended work
+
+Workspace-keyed is the default and covers every operator-facing case. The
+transcript session id (`tools.ToolTranscriptSessionID`) remains available as a
+*narrower* key for delegated background work that must not act as the
+signed-in user. **Not enabled by default** — recorded so the mechanism is not
+rebuilt later, and so the decision to use it is explicit at the point some
+workflow needs it.
 
 ### 2.1 The keys already exist and already mean the right thing
 
@@ -197,7 +231,7 @@ The parameter is threaded, wired and currently wasted on a constant.
 Six tool descriptions also contain the literal phrase "the shared browser
 session" and must change with the behaviour, not after it.
 
-### 2.2 Fallback when there is no conversation
+### 2.2 Fallback when there is no workspace
 
 A browser call outside any chat (a scheduled trigger, a heartbeat, a CLI
 invocation) has no routing session. Those keep a context keyed by the constant,
@@ -207,7 +241,7 @@ context is the same class of defect this ADR exists to remove.
 
 ### 2.3 The silent zero is removed, independently
 
-`ListTabs` must distinguish "this conversation has no browsing context yet"
+`ListTabs` must distinguish "this workspace has no browsing context yet"
 from "the browsing context has no tabs". Both are legitimate states; reporting
 them identically is what made §1.1 unobservable. The tool's description must
 also stop claiming "shared" unless and until it is true.
@@ -367,10 +401,11 @@ The operator's three cases, which are the test plan:
 |---|---|---|
 | 1 | Mia browses; operator watches and takes over | Works as today — unchanged |
 | 2 | Operator switches the chat from Mia to Jim mid-session | Jim sees and drives the same tabs. No handover step, no command |
-| 3 | Operator browses first, **then** asks an agent to take over | The tab was never owned by "whoever happened to be on screen"; any agent in that conversation sees it |
+| 3 | Operator browses first, **then** asks an agent to take over | The tab was never owned by "whoever happened to be on screen"; any agent on that workspace sees it |
 | 4 | An agent delegates unattended background browsing | The sub-agent does not hijack the tab the operator is reading |
 | 5 | `browser_list_tabs` with no browsing context | Says so. Must not be indistinguishable from an empty tab set |
-| 5b | **Isolation survives the re-key (ADR-043 D2).** Log in to a site in conversation X; open the same site in conversation Y | Y is **logged out**. This is the amended ADR-043 guarantee and the test that proves isolation was moved rather than dropped |
+| 5b | **Isolation survives the re-key (ADR-043 D2).** Log in to a site in workspace X; open the same site in workspace Y | Y is **logged out**. The amended ADR-043 guarantee, and the test that proves isolation moved rather than vanished |
+| 5c | **No surprise logout.** Log in during one chat; start a **new chat in the same workspace** and visit the same site | Still **logged in**. This is what the workspace axis buys over the conversation axis |
 
 Case 2 and case 3 are the ones broken today; 1 works; 4 and 5 are the
 regressions this design must not introduce.
@@ -398,30 +433,33 @@ than a wrong answer, and are the ones worth writing tests for first.
 
 **Gained**
 
-- Switching agents mid-conversation stops silently stranding the browser.
+- Switching agents, or opening a new chat, stops silently stranding the browser.
 - The tool descriptions become true, so agents stop asserting a false model to
   operators.
 - One less per-agent object; the shared Chrome gains a single owner of record.
 
 **Lost / risked**
 
-- **Concurrency.** Two agents in one conversation can now reach the same tab.
-  Today they are isolated by accident. `controlledResult` already arbitrates
-  human-vs-agent control (ADR-038 D6); agent-vs-agent within one conversation
-  is a case it was not written for and must be re-read against this change.
+- **Concurrency.** Two agents on one workspace can now reach the same tab, and
+  so can two concurrent chats. Today they are isolated by accident.
+  `controlledResult` already arbitrates human-vs-agent control (ADR-038 D6);
+  agent-vs-agent, and chat-vs-chat, are cases it was not written for and must
+  be re-read against this change. **This is the largest open risk in D1** — the
+  workspace axis widens it relative to the conversation-keyed draft, because
+  more parties now share one tab set.
 - **Blast radius.** Collapsing per-agent managers touches every browser tool
   call site and the live panel's session resolution.
-- **Idle reaping.** Session lifetime becomes conversation lifetime, not agent
-  lifetime. Reaping rules need re-deriving, or a long chat pins a Chrome tab
-  indefinitely.
-- **A behaviour change operators will notice (D1.0).** One agent in two
-  conversations gets two cookie jars. Someone will report this as a bug —
-  "Jim was logged in yesterday and isn't today" — so it needs to be in the
-  release notes, not only in this ADR.
-- **Context count scales with conversations, not agents.** ADR-043 sized the
-  hybrid at ~10 browser-using agents (≈1.5–2 GB). Conversations are unbounded
-  and longer-lived, so the reaping rule above stops being housekeeping and
-  becomes the thing that keeps memory finite.
+- **Idle reaping.** Browsing-context lifetime becomes workspace lifetime, not
+  agent lifetime. A workspace is effectively permanent, so "reap when idle"
+  must be defined on activity rather than existence, or a Chrome tab is pinned
+  forever.
+- **Adding an agent to a workspace now grants it that workspace's logins**
+  (D1.0). No operator sees this today, so it belongs in the release notes and
+  arguably in the team-editing UI, not only in this ADR.
+- **Context count scales with workspaces.** ADR-043 sized the hybrid at ~10
+  browser-using agents (≈1.5–2 GB). Workspaces are fewer and longer-lived than
+  conversations, so this is *better* than the conversation-keyed draft — but
+  the reaping rule above still decides whether memory stays finite.
 
 **D2 — gained**
 
@@ -459,8 +497,8 @@ with no ownership model at all. §1.4 has the mechanics.
 
 **Drop isolation entirely — one browser context for the workspace.** Simplest,
 and it would make handover trivial. Rejected: it discards ADR-043 D2 rather
-than amending it, and a scraping agent's login in one conversation would
-surface in an unrelated one. The operator confirmed isolation was wanted; only
+than amending it, and a scraping agent's login on one workspace would surface
+on an unrelated one. The operator confirmed isolation was wanted; only
 the axis was wrong.
 
 **Replace chromedp with playwright-go (D2).** Would deliver D2.1 and D2.2 for
@@ -477,12 +515,13 @@ kind for an agent — it retries, succeeds sometimes, and learns nothing.
 
 ## 6. Open questions
 
-- Does `controlledResult` need an agent-vs-agent arm, or is "one conversation,
-  one driver" sufficient?
+- Does `controlledResult` need an agent-vs-agent arm, and a chat-vs-chat arm?
+  "One workspace, one driver at a time" is the simplest rule; is it too strict
+  when two chats on a workspace are doing unrelated browsing?
 - Should the live panel's WebRTC session (`browser-webrtc[<agent>]`) also
-  re-key to the conversation, or is the agent label harmless once tabs are
-  conversation-scoped?
-- Reaping: what ends a conversation's browsing context?
+  re-key to the workspace, or is the agent label harmless once tabs are
+  workspace-scoped?
+- Reaping: a workspace never ends. What idles its browsing context out?
 
 ---
 
