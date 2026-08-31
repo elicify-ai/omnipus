@@ -340,7 +340,11 @@ func TestTranslateFilterTree_ShapesItDoesNotRecognise(t *testing.T) {
 		{"a combinator this importer does not know", `xor:\n  - a == "1"`},
 		{"a node with two combinator keys at once", "and:\n  - a == \"1\"\nor:\n  - b == \"2\""},
 		{"a scalar that is not a string", "42"},
-		{"a formula reference", `formula.age > 30`},
+		// `formula.age > 30` used to be here. It is now TRANSLATED — the base's
+		// `formulas:` block is carried, so the reference resolves — and the
+		// shapes that remain unrecognised are the ones with no leaf to build.
+		{"a bare formula reference", `formula.is_overdue`},
+		{"a formula compared against another formula", `formula.age > formula.threshold`},
 		{"a file method with no filter meaning", `file.asLink()`},
 	}
 	for _, tc := range cases {

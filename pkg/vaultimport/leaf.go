@@ -73,10 +73,23 @@ type RawLeaf struct {
 
 var (
 	reUntranslatableMarker = regexp.MustCompile(`\bfile\.|\bformula\.|\btoday\s*\(|\bdate\s*\(|\bnow\s*\(|\.isType\s*\(|\.length\b|\.year\b|\.month\b|\.day\b|\.week\b`)
-	reContains             = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\.contains\(\s*(.+?)\s*\)$`)
-	reCompare              = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*(.+)$`)
-	reBareNegated          = regexp.MustCompile(`^!\s*([A-Za-z_][A-Za-z0-9_]*)$`)
-	reBareIdent            = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// reFormulaCompare matches a comparison against a COMPUTED property —
+	// `formula.days_to_expiry <= 14`. It is checked BEFORE
+	// reUntranslatableMarker, which still lists `\bformula\.`: everything
+	// formula-shaped that is not exactly this one comparison shape (a method
+	// call on a formula, a formula on both sides, a bare formula reference)
+	// keeps being refused by name, and only the shape this importer can build
+	// a real leaf for is let through.
+	//
+	// The name is carried through as the FULL dotted `formula.<name>`, which is
+	// how every property position in the view format addresses a formula
+	// (FR-140) — namespace.go gives it a real *Property wearing the formula's
+	// declared type, so `<= 14` compares as a number rather than as text.
+	reFormulaCompare = regexp.MustCompile(`^(formula\.[A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*(.+)$`)
+	reContains       = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\.contains\(\s*(.+?)\s*\)$`)
+	reCompare        = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*(.+)$`)
+	reBareNegated    = regexp.MustCompile(`^!\s*([A-Za-z_][A-Za-z0-9_]*)$`)
+	reBareIdent      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // nonPropertyBareWords are bare tokens that look like an identifier to
@@ -152,6 +165,12 @@ func parseLeaf(expr string) parsedLeaf {
 		return parsedLeaf{Kind: leafUntranslatable}
 	}
 	if containsUnquotedLogicalOperator(s) {
+		return parsedLeaf{Kind: leafUntranslatable}
+	}
+	if m := reFormulaCompare.FindStringSubmatch(s); m != nil {
+		if leaf, ok := formulaCompareLeaf(m[1], m[2], strings.TrimSpace(m[3])); ok {
+			return leaf
+		}
 		return parsedLeaf{Kind: leafUntranslatable}
 	}
 	if reUntranslatableMarker.MatchString(s) {
@@ -267,4 +286,72 @@ func unquoteLiteral(raw string) (value string, quoted bool, empty bool) {
 		}
 	}
 	return s, false, s == ""
+}
+
+// formulaCompareLeaf builds the leaf for `formula.<name> OP literal`.
+//
+// It is deliberately the SAME shape check the ordinary compare path makes and
+// no looser: a right-hand side containing a call is refused rather than
+// mis-parsed, and an empty literal is refused because a formula's absent result
+// and the empty string are not the same thing to compare against (R-2 versus
+// FR-007a). What it does NOT do is decide whether the formula exists or whether
+// the literal suits its type — neither is knowable here, where there is one
+// expression string and no formula set. buildFormulaLeafNode decides both,
+// once the view's record type has resolved and the base's `formulas:` block has
+// been translated against it.
+// ---------------------------------------------------------------------------
+// THE RIGHT-HAND SIDE MUST BE A LITERAL, AND CHECKING THAT IS NOT PEDANTRY
+//
+// `formula.age > formula.threshold` and `formula.age > cutoff_days` both match
+// the comparison pattern above, and unquoteLiteral hands back an UNQUOTED
+// operand for each — so without the check below this function built
+//
+//	{property: formula.age, op: >, value: "formula.threshold"}
+//
+// a comparison of a number against the eighteen-character TEXT
+// `formula.threshold`. The view format has no property-to-property operator at
+// all: `value` is always a literal. So the clause the operator wrote is not
+// expressible, and the only honest answers are to refuse it or to invent one.
+// It is refused, by name, and the view is disabled — which is what the founder's
+// `is_stale: … formula.age > 30 …` would have needed had it been written the
+// other way round.
+// ---------------------------------------------------------------------------
+
+// reFormulaComparableLiteral matches the operand spellings that are genuinely
+// LITERALS when written unquoted: a number (with an optional sign and decimal
+// part) and the two booleans. Everything else unquoted names something.
+var reFormulaComparableLiteral = regexp.MustCompile(`^(-?\d+(\.\d+)?|true|false)$`)
+
+func formulaCompareLeaf(name, op, rhsRaw string) (parsedLeaf, bool) {
+	if strings.ContainsAny(rhsRaw, "()") {
+		return parsedLeaf{}, false
+	}
+	lit, quoted, empty := unquoteLiteral(rhsRaw)
+	if empty {
+		return parsedLeaf{}, false
+	}
+	if !quoted && !reFormulaComparableLiteral.MatchString(strings.TrimSpace(rhsRaw)) {
+		// An unquoted operand that is not a number or a boolean NAMES
+		// something — another formula, another property, a `file.*` field.
+		// See the block comment above.
+		return parsedLeaf{}, false
+	}
+	var wireOp string
+	switch op {
+	case "==", "!=":
+		wireOp = "eq"
+	case "<":
+		wireOp = "lt"
+	case "<=":
+		wireOp = "lte"
+	case ">":
+		wireOp = "gt"
+	case ">=":
+		wireOp = "gte"
+	default:
+		return parsedLeaf{}, false
+	}
+	return parsedLeaf{Kind: leafFilter, Filter: RawLeaf{
+		Property: name, Op: wireOp, Values: []string{lit}, Negate: op == "!=",
+	}}, true
 }

@@ -89,7 +89,16 @@ func TestParseLeaf_RefusesWhatItCannotTranslate(t *testing.T) {
 	}{
 		{"folder membership", `file.inFolder("99-Temp")`, "the standing FR-105 example — dropping it admits every scratch note"},
 		{"a file method", `file.hasTag("draft")`, "file.* is a whole grammar this importer does not implement"},
-		{"a computed property", `formula.days_to_expiry <= 14`, "a formula property no schema declares; matching it as an ordinary comparison would manufacture a clause against a property that does not exist"},
+		// `formula.days_to_expiry <= 14` is NO LONGER HERE, and its absence is
+		// the change this release makes: a base's `formulas:` block is carried
+		// now, so a comparison against a computed property resolves against a
+		// real declaration instead of being refused for want of one. It is
+		// covered positively by TestFormulaCompareLeaf_CarriesAComparisonAgainstALiteral.
+		// The formula SHAPES that are still refused stay below.
+		{"a bare formula reference", `formula.is_overdue`, "a truthiness test on a computed property, not a comparison — there is no shape to build"},
+		{"a method call on a formula", `formula.team_name.contains("T0")`, "a method call on a computed property is not a comparison this parser reads"},
+		{"a formula compared against another formula", `formula.age > formula.threshold`, "the view format's `value` is always a LITERAL; there is no property-to-property comparison to translate this into"},
+		{"a formula compared against a property", `formula.age > cutoff_days`, "same — an unquoted operand that is not a number or a boolean NAMES something"},
 		{"a date function", `due < today()`, "today() is evaluated at query time, not at import time"},
 		{"a date constructor", `date(due).year == 2026`, "date(...) accessors are not in this importer's vocabulary"},
 		{"now()", `updated > now()`, "same reason as today()"},
