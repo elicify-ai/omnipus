@@ -491,11 +491,26 @@ func TestEvaluate_PropagatesTheBoundRefusal(t *testing.T) {
 // TestEvaluate_ReportsAStaleIndexRatherThanAssumingAbsence is the case that
 // looks like a normal answer and is not.
 //
-// A property added to the schema after a note was indexed has NO state row for
-// that note. "The note says nothing" and "this index does not know what the
+// A property added to the schema after a note was indexed may have NO state row
+// for that note. "The note says nothing" and "this index does not know what the
 // note says" are different facts, and FR-008 treats the first as an INCLUSION —
 // so assuming the second is the first puts records into a negative filter's
 // answer on the strength of a stale index.
+//
+// REWRITTEN FOR FR-021e (founder ruling 1). This test used to assert the
+// OPPOSITE of what it now asserts in its first half, and the old assertion was
+// the defect the ruling removes. It indexed a note whose file plainly said
+// `condition: growing` under a schema that did not declare `condition`, then
+// filtered `condition IS NULL` and required the record to MATCH — with a
+// problem attached saying the index might be stale. Its own comment named the
+// fault out loud: "the note says `condition: growing` and the answer says it
+// says nothing." A problem line does not repair a wrong answer; the founder's
+// ruling was "can you not just fix them, use common sense", and FR-021e fixes
+// it at the storage layer by indexing every note's frontmatter, typed or not.
+//
+// The staleness mechanism itself is unchanged and is still asserted below — on
+// a property the NOTE DOES NOT CARRY, which is the case where the index
+// genuinely holds nothing and the two facts are genuinely indistinguishable.
 func TestEvaluate_ReportsAStaleIndexRatherThanAssumingAbsence(t *testing.T) {
 	store, _ := openIndex(t, Options{})
 
@@ -514,22 +529,52 @@ properties:
 
 	// Now query with the WIDER schema, which declares `condition`.
 	wide := plantSchema(t)
+
+	// (a) FR-021e: THE NOTE CARRIES THE KEY, so it is not absent — whatever the
+	// schema said when it was indexed. The raw row FR-021e stores holds
+	// "growing", the wider schema's enum admits that spelling, and it decodes
+	// into an ordinary present value.
 	got, rep := evaluate(t, store, Query{
 		Schema:  wide,
 		Filters: []records.Filter{{Property: "condition", Op: records.OpIsNull}},
 	})
+	assertPaths(t, got, nil,
+		"FR-021e, founder ruling 1: a note whose file says `condition: growing` must NEVER answer "+
+			"TRUE to `condition IS NULL`, whether or not the schema declared the property when the "+
+			"note was indexed")
+	if !rep.Complete() {
+		t.Errorf("the answer is not marked complete, but nothing is missing: the property was "+
+			"indexed as a raw row and decoded cleanly. Problems: %+v", rep.Problems)
+	}
 
-	// The record is still evaluated — the property reads absent — but the
-	// answer must not claim to be complete.
-	assertPaths(t, got, []string{"garden/a.md"}, "the property is treated as absent")
+	// And the positive direction, so (a) is not passing because the record
+	// vanished from the corpus altogether.
+	got, _ = evaluate(t, store, Query{
+		Schema: wide,
+		Filters: []records.Filter{
+			{Property: "condition", Op: records.OpEqual, Literal: "growing", LiteralGiven: true},
+		},
+	})
+	assertPaths(t, got, []string{"garden/a.md"},
+		"the value FR-021e stored is a real, comparable value, not merely a row that blocks IS NULL")
+
+	// (b) THE STALENESS MECHANISM, on the case it is actually for: a property
+	// the wider schema declares, the narrower one did not, and the NOTE DOES
+	// NOT CARRY. There is no row of any kind, so "the note says nothing" and
+	// "this index does not know" really are indistinguishable — which is
+	// exactly when the answer must not claim to be complete.
+	got, rep = evaluate(t, store, Query{
+		Schema:  wide,
+		Filters: []records.Filter{{Property: "planted", Op: records.OpIsNull}},
+	})
+	assertPaths(t, got, []string{"garden/a.md"}, "a property with no row at all is treated as absent")
 	if rep.Complete() {
-		t.Fatal("the answer claims to be COMPLETE while the index holds no state for the property " +
-			"being filtered on. That is the silent wrong answer ADR-068 exists to remove: the note " +
-			"says `condition: growing` and the answer says it says nothing.")
+		t.Fatal("the answer claims to be COMPLETE while the index holds no row of any kind for the " +
+			"property being filtered on. That is the silent wrong answer ADR-068 exists to remove.")
 	}
 	var found bool
 	for _, p := range rep.Problems {
-		if p.Code == records.FindingStaleIndex && p.Property == "condition" && p.RecordPath == "garden/a.md" {
+		if p.Code == records.FindingStaleIndex && p.Property == "planted" && p.RecordPath == "garden/a.md" {
 			found = true
 			if !strings.Contains(p.Reason, "re-index") {
 				t.Errorf("the problem does not name the remedy: %q", p.Reason)
