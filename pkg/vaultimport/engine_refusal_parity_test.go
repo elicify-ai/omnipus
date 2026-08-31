@@ -219,7 +219,7 @@ func TestUntypedSplitDomain_AppliesToEveryPositionTheEngineResolves(t *testing.T
 	limit := 50
 	resp, err := knowledgefind.Find(context.Background(), deps, generated.VaultFindRequest{
 		Limit:   &limit,
-		GroupBy: &[]string{"p"},
+		GroupBy: &[]generated.VaultFindGroupBy{{Property: "p"}},
 	})
 	engineRefused := err != nil || resp.Refused
 	reasons := make([]string, 0, len(resp.Problems))

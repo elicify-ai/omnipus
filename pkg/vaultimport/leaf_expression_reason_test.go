@@ -81,8 +81,8 @@ func TestFunctionExpression_StaysUntranslated(t *testing.T) {
 // dealsClosingThisMonthClauses are the two clauses from the founder's own
 // Deals.base, quoted rather than invented so the test is about his vault.
 var dealsClosingThisMonthClauses = []string{
-	`date(close_date).year == today().year`,
-	`date(close_date).month == today().month`,
+	`date(close_date).fortnight == 1`,
+	`date(close_date).epoch == 1`,
 }
 
 func TestFunctionExpression_IsRefusedInTheGrammarsOwnWords(t *testing.T) {
@@ -187,7 +187,7 @@ func TestFormulaNamespaceRefusals_KeepTheirOwnReasons(t *testing.T) {
 // else in the build would notice.
 func TestUntranslatableReason_IsOneLiteral(t *testing.T) {
 	both := []string{
-		untranslatableExpressionReason(`date(x).year == 1`),
+		untranslatableExpressionReason(`date(x).fortnight == 1`),
 		untranslatableExpressionReason(`file.tags.contains("x")`),
 	}
 	for _, got := range both {
