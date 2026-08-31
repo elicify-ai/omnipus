@@ -3119,7 +3119,9 @@ expressions into SQL — is the one this design structurally forbids. Neither ha
   formulas). The expression grammar is Obsidian's surface: arithmetic `+ - * / % ( )`, boolean
   `! && ||`, comparisons, and the closed function set (`if`, `toFixed`, `mean`, `round`,
   `date`, `today`, `now`, `format`, `list`, `link`, `icon`, `contains`, the `.time()`/
-  `.date()`/`.hour` accessors, and the file methods). `knowledge_configure` and the importer
+  `.date()`/`.hour` accessors, and the file methods) — **the accessor half of that list was
+  widened by D24.3a's pin revision on 2026-09-01; read it before treating this sentence as the
+  current surface.** `knowledge_configure` and the importer
   parse it **at write time** and REFUSE an expression that does not parse, naming the position
   — it is never stored. The view loader re-validates on load (a hand-edited file is re-checked,
   the posture `LoadViews` already takes for everything else), rejecting with the
@@ -3165,6 +3167,49 @@ expressions into SQL — is the one this design structurally forbids. Neither ha
   cost past the caps.
 - **Presentation values are not comparable.** `link()`, `icon()`, `asLink()`, `format()`
   produce display values; the comparator refuses them with the reason named.
+
+#### D24.3a — The pinned grammar's first REVISION: the Date field family (2026-09-01)
+
+D24.3 describes a grammar that is Obsidian's documented surface and CLOSED, and spec FR-143 pins
+"documented" to a dated fetch, making a widening a **spec revision with its own diff, never a
+silent code change**. This is the record of the first time that clause was exercised. It is here
+because a revision procedure nobody can point to afterwards is indistinguishable from not having
+one.
+
+- **The pressure that tested it.** The founder's `Deals::Closing This Month` view filters on
+  `date(close_date).year == today().year` — an ordinary "closing this year" list. `today()` and
+  `date(x)` parsed; `.year` and `.month` did not. Two implementers in a row REFUSED to add them,
+  each citing FR-143, and **both were right**: a grammar widened to make one view import is a
+  grammar that constrains nothing by the following week.
+- **The ruling.** The founder decided the accessors should exist — they are ordinary calendar
+  fields, he uses them in his own vault, and refusing them costs a real view — and that what had
+  been forbidden was doing it QUIETLY. So the pin moved deliberately: dated, sourced, diffed in
+  FR-143, and recorded here.
+- **What moved.** The pinned surface now names Obsidian's **functions** reference alongside the
+  syntax one (the syntax page defers to it: "many other fields and functions are available on date
+  objects"), fetched **2026-09-01**, and adopts its "Date type › Fields" table WHOLE — `year`,
+  `month`, `day`, `hour`, `minute`, `second`, `millisecond`, each `number`, each a whole number.
+  Previously only `.hour` had been transcribed. **Adopting the table entire is the point**: a
+  snapshot taken two rows at a time is not a snapshot. There is nothing to exclude — the table has
+  exactly seven rows and defines no `.week`, `.quarter` or `.dayOfWeek`, so those stay refused BY
+  NAME rather than by accident.
+- **What did NOT move, and that is the more important half.** The same fetch shows upstream has
+  restructured its duration model: the "Duration Type" field table that supplied `.days`, `.hours`,
+  `.minutes`, `.seconds` and `.milliseconds` is gone from both pages, and date subtraction is now
+  described as yielding "the millisecond difference" — a number rather than a duration object.
+  Adopting that wholesale would DELETE five accessors and change what `dateA - dateB` means,
+  breaking sixty-five working uses in the founder's own vault. **A behavioural change is not an
+  addition.** The duration model stays pinned at 2026-08-30 and the divergence is written down as
+  known, dated and owed its own decision — the one outcome that is clearly worse than either
+  choice is a future re-fetch inheriting it silently.
+- **The pin is still a wall.** `TestFormula_AccessorSurfaceIsPinned` asserts the parenless accessor
+  set EXACTLY, so the next addition fails a test that names FR-143 and the procedure. The position
+  moved; the wall did not come down.
+- **Scope, stated plainly.** This unblocks the grammar half of that view and no more. The view
+  remains disabled, because a filter leaf holds a property, an operator and a literal, and an
+  expression reaches one only as a declared `formula.<name>`. Import counts are unchanged:
+  CLEAN=10, WITH-LOSSES=8, REFUSED=0, 69 views, 3 disabled. Claiming a view for this change would
+  be the kind of loosely-bought clean count FR-105 exists to refuse.
 
 #### D24.4 — All fifteen summaries, in two computational classes — and the bounds hold
 

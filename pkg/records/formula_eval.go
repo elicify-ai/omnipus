@@ -433,6 +433,34 @@ var durationDivisors = map[string]*big.Rat{
 	"milliseconds": big.NewRat(1, 1000),
 }
 
+// dateComponents extracts each of the pinned snapshot's seven Date type fields
+// (FR-143 pin advanced 2026-09-01) from an instant.
+//
+// These are CALENDAR COMPONENTS, the exact opposite of durationDivisors above:
+// `.second` is the seconds field of a clock reading and can only be 0–59, while
+// `.seconds` is a whole duration expressed in seconds and is unbounded. Keeping
+// the two tables apart, rather than sharing one keyed lookup, is what stops a
+// future edit from quietly wiring `.second` to a divisor.
+//
+// The instant is read in UTC, which is the convention `.hour` already used and
+// which every other date reader in this file follows (`time()`'s formatting,
+// instantNanos' subtraction). A component that changed with the server's local
+// zone would make a stored formula answer differently on two machines.
+var dateComponents = map[string]func(time.Time) int{
+	"year":        func(t time.Time) int { return t.Year() },
+	"month":       func(t time.Time) int { return int(t.Month()) },
+	"day":         func(t time.Time) int { return t.Day() },
+	"hour":        func(t time.Time) int { return t.Hour() },
+	"minute":      func(t time.Time) int { return t.Minute() },
+	"second":      func(t time.Time) int { return t.Second() },
+	"millisecond": func(t time.Time) int { return t.Nanosecond() / nanosPerMillisecond },
+}
+
+// nanosPerMillisecond is spelled as a decimal integer for the same reason
+// nanosPerSecond is: `1e6` is an untyped FLOAT constant and this path refuses
+// floating point anywhere (formula_no_float_test.go).
+const nanosPerMillisecond = 1000000
+
 // evalFieldAccess evaluates a parenless accessor.
 //
 // Absence propagates (R-14) for every accessor including `.length`: a list that
@@ -458,8 +486,8 @@ func (e *FormulaEvaluator) evalFieldAccess(node *FieldAccess) (fval, []Compariso
 	if !ok {
 		return absentOf(rule.result), problems
 	}
-	if node.Field == "hour" {
-		return numberVal(new(big.Rat).SetInt64(int64(it.date.Instant.UTC().Hour()))), problems
+	if component, isDate := dateComponents[node.Field]; isDate {
+		return numberVal(new(big.Rat).SetInt64(int64(component(it.date.Instant.UTC())))), problems
 	}
 	div, ok := durationDivisors[node.Field]
 	if !ok || it.num == nil {

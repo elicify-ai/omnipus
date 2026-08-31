@@ -766,8 +766,11 @@ func inferIsType(node *Call) (inferred, *FormulaError) {
 //
 // FR-146 NOTE: this narrows an EXISTING function's type behaviour. It adds no
 // function, no accessor and no operator to the pinned grammar snapshot, so it is
-// not a spec revision — unlike `.year`/`.month`, which would be new accessors
-// and were correctly refused on exactly those grounds.
+// not a spec revision — unlike `.year`/`.month`, which ARE new accessors and
+// were therefore correctly refused here until they arrived the only way a
+// pinned grammar may grow: as a documented pin advance (2026-09-01) carrying
+// the whole Date type field table, a spec diff on FR-143 and an ADR-068 entry.
+// The refusal was right; the answer to it was a revision, not a code edit.
 // ---------------------------------------------------------------------------
 
 // narrowedFormulaEnv is a FormulaEnv with ONE property's type replaced.

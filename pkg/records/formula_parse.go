@@ -141,20 +141,69 @@ type accessorRule struct {
 
 // accessorFields is the parenless postfix set.
 //
-// FR-143's sentence documents `.hour`. The other six come from the SAME pinned
-// snapshot (the Bases syntax reference as fetched 2026-08-30) — its "Duration
-// Type" table lists `duration.days`, `.hours`, `.minutes`, `.seconds` and
-// `.milliseconds` as "Total <unit> in duration", and its "List Functions"
-// section lists `list.length`. They were missing from the transcription, not
-// from the snapshot: the founder's own eighteen `.base` files use `.days`
-// sixty-five times and `.length` once, so a grammar without them cannot read a
-// real vault at all.
+// FR-143's sentence documents `.hour`. The duration fields and `list.length`
+// come from the SAME pinned snapshot (the Bases syntax reference as fetched
+// 2026-08-30) — its "Duration Type" table lists `duration.days`, `.hours`,
+// `.minutes`, `.seconds` and `.milliseconds` as "Total <unit> in duration", and
+// its "List Functions" section lists `list.length`. They were missing from the
+// transcription, not from the snapshot: the founder's own eighteen `.base`
+// files use `.days` sixty-five times and `.length` once, so a grammar without
+// them cannot read a real vault at all.
+//
+// THE DATE FIELD FAMILY — FR-143 pin advanced 2026-09-01 (see the spec's FR-143
+// revision entry and ADR-068 §D24.3a). The seven singular fields below are the
+// COMPLETE "Date type › Fields" table of the Bases FUNCTIONS reference as
+// fetched 2026-09-01 from https://obsidian.md/help/bases/functions, transcribed
+// whole rather than mined for the two that unblocked a view:
+//
+//	date.year | number | The year of the date
+//	date.month | number | The month of the date (1–12)
+//	date.day | number | The day of the month
+//	date.hour | number | The hour (0–23)
+//	date.minute | number | The minute (0–59)
+//	date.second | number | The second (0–59)
+//	date.millisecond | number | The millisecond (0–999)
+//
+// Only `.hour` had been transcribed before. Adopting the table whole is the
+// point: a snapshot taken two rows at a time is not a snapshot, and the six
+// additions are one table, one receiver, one result type and one meaning
+// (extract a calendar component from a date). There is no `.week`, `.quarter`
+// or `.dayOfWeek` to decide about — the reference defines none, so none is here.
+//
+// SINGULAR IS A DATE, PLURAL IS A DURATION, and that is the reference's own
+// distinction, not ours: `.second` is the seconds field of a clock time (0–59)
+// while `.seconds` is a whole duration expressed in seconds. `.hour`/`.hours`
+// already carried that split before this revision; `.day`/`.days`,
+// `.minute`/`.minutes`, `.second`/`.seconds` and `.millisecond`/`.milliseconds`
+// now do too. Reading the wrong one is a typed REFUSAL naming the receiver, not
+// a plausible wrong number — which is the whole reason accessorRule carries a
+// receiver at all.
+//
+// WHAT WAS DELIBERATELY NOT ADOPTED on 2026-09-01: the same fetch shows upstream
+// has RESTRUCTURED its duration model — the "Duration Type" field table this
+// file cites above is gone from both pages, and "Date arithmetic" now says
+// subtracting two dates yields "the millisecond difference" (a number) rather
+// than a duration object. Adopting that would DELETE `.days` and its four
+// siblings and change what `dateA - dateB` means. That is a behavioural
+// revision, not an addition, it breaks sixty-five working uses in the founder's
+// own vault, and it is out of scope for this one. The duration model therefore
+// stays pinned at 2026-08-30 and the divergence is recorded — named, dated and
+// owed a decision — rather than silently inherited. See the spec's FR-143
+// revision entry.
 //
 // `string.length` is in the snapshot too and is deliberately NOT here. JavaScript
 // counts UTF-16 code units, Go counts bytes or runes, and the three disagree on
 // every non-BMP character; a length that quietly means one of three things is
 // worse than a refusal that names the gap. A list length has no such ambiguity.
 var accessorFields = map[string]accessorRule{
+	// The Date type › Fields table, whole (pin advanced 2026-09-01).
+	"year":        {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+	"month":       {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+	"day":         {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+	"minute":      {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+	"second":      {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+	"millisecond": {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
+
 	"hour":         {receiver: FormulaDate, result: FormulaNumber, scale: 0, receiverPhrase: "a date"},
 	"days":         {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
 	"hours":        {receiver: FormulaDuration, result: FormulaNumber, scale: FormulaDefaultScale, receiverPhrase: "a duration, which is what subtracting one date from another produces"},
