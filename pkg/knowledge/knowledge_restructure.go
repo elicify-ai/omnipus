@@ -174,8 +174,11 @@ func (t *RestructureTool) Parameters() map[string]any {
 			"trashed_at": map[string]any{
 				"type": "string",
 				"description": "restore: which trashed copy to restore, when the note was " +
-					"trashed more than once — one of the timestamps knowledge_describe's trash " +
-					"listing reports. Leave unset for the most recently trashed copy.",
+					"trashed more than once — the timestamp a trash response reported " +
+					"('-> trashed at ...'). Nothing lists them ahead of time; a restore " +
+					"naming a timestamp that has no copy is refused with every available " +
+					"timestamp for that path listed, which is the way to discover them. " +
+					"Leave unset for the most recently trashed copy.",
 			},
 		},
 		"required": []string{"op", "path"},

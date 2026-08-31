@@ -149,6 +149,55 @@ const authorOpConfigure AuthorOperation = "knowledge.configure"
 // criterion actually tests.
 var configureArgNames = []string{"op", "collection", "type", "view", "definition"}
 
+// ---------------------------------------------------------------------------
+// THE DESCRIPTION IS DERIVED, NEVER TRANSCRIBED
+//
+// A tool description is the only thing the model reads. A capability the
+// description omits does not exist in practice however well it is
+// implemented, and a name the description invents fails on every call that
+// follows it. Both halves have already gone wrong here: this parameter's
+// description asserted "the seven property types are … there is no eighth"
+// while records.PropertyTypes had held EIGHT since Draft 11, which made
+// `checkbox` — fully implemented, and accepted by this tool's own write path —
+// unreachable through the only agent-facing schema-authoring tool there is.
+//
+// So the two closed sets this description states are BUILT FROM THE SAME
+// VARIABLES THE VALIDATION READS, at init, rather than copied into prose that
+// nobody re-checks when the set grows:
+//
+//	records.PropertyTypes   what records.ParseSchema accepts as a property type
+//	records.OperatorNames() what a filter leaf's `op` may spell
+//
+// A hand-copied list is what created the defect; a derived one cannot drift.
+// TestConfigureDescription_PropertyTypesAreDerivedNotTranscribed and
+// TestConfigureDescription_OperatorsAreDerivedNotTranscribed hold that as
+// behaviour rather than as this paragraph.
+// ---------------------------------------------------------------------------
+
+// configurePropertyTypeSentence names every declared property type, derived
+// from records.PropertyTypes. The COUNT is rendered from len() for the same
+// reason the names are: "seven" was the half of the old sentence that was
+// wrong, and a literal count is a second thing to forget.
+var configurePropertyTypeSentence = buildPropertyTypeSentence()
+
+// configureOperatorSentence names every operator a filter leaf's `op` may
+// spell, derived from records.OperatorNames(). Naming them rather than
+// counting them is the point: "the ten SQL operators" tells a model a number
+// it cannot act on, and a guessed spelling (`contains`, `is_null`) is refused.
+var configureOperatorSentence = buildOperatorSentence()
+
+func buildPropertyTypeSentence() string {
+	names := make([]string, 0, len(records.PropertyTypes))
+	for _, t := range records.PropertyTypes {
+		names = append(names, string(t))
+	}
+	return fmt.Sprintf("The %d property types are %s.", len(names), strings.Join(names, ", "))
+}
+
+func buildOperatorSentence() string {
+	return "`op` is one of " + strings.Join(records.OperatorNames(), ", ") + ";"
+}
+
 // cascadeExampleCap bounds how many per-record findings a cascade report
 // names. The MATCHED/CLEAN/NEWLY-REPORTED counts are always exact; this only
 // caps the example lines under them, on the same reasoning check_integrity's
@@ -217,16 +266,19 @@ func (t *ConfigureTool) Parameters() map[string]any {
 				"description": "create_record_type / edit_record_type: the full schema — " +
 					"schema_version (required), type, optional label, optional identity " +
 					"{prefix}, and properties (a map of property name to {type, many, " +
-					"required, and per-type: label, values, to, inverse, unit}). The seven " +
-					"property types are text, enum, relation, date, integer, decimal, person — " +
-					"there is no eighth and no built-in vocabulary; every type name, property " +
-					"name and enum value is this vault's own. write_view: an OPTIONAL type " +
-					"(the record type queried; omit it for a view that spans every note in " +
-					"scope), one optional `filter` tree of {all|any|not} over leaves of " +
-					"{property, op, value} in the ten SQL operators, and optional label, " +
-					"grouping ({property, direction}), sort, properties, aggregates, limit, " +
-					"layout, formulas and property_config. A view carries NO version key. " +
-					"`name` is taken from `view`, not from this object.",
+					"required, and per-type: label, values, to, inverse, unit}). " +
+					configurePropertyTypeSentence + " There is no built-in vocabulary; every " +
+					"type name, property name and enum value is this vault's own. " +
+					"write_view: an OPTIONAL type (the record type queried; omit it for a " +
+					"view that spans every note in scope), one optional `filter` tree of " +
+					"{all|any|not} over leaves of {property, op, value} where " +
+					configureOperatorSentence + " and optional label, grouping ({property, " +
+					"direction}), sort, properties, aggregates, limit, layout, formulas and " +
+					"property_config. `formulas` and a DESCENDING grouping are stored " +
+					"faithfully but knowledge_find cannot serve a view declaring either; the " +
+					"write response says so rather than leaving you to find out at query " +
+					"time. A view carries NO version key. `name` is taken from `view`, not " +
+					"from this object.",
 			},
 		},
 		"required": []string{"op"},
@@ -531,18 +583,58 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 		Collection: target.col.Name, Root: root,
 		Paths: []string{relControlPlanePath(root, viewPath)}, At: t.deps.now(),
 	})
-	// ViewDef.Type is a *string since FR-018b made `type` optional (an untyped
-	// view spans record types). ParseView still refuses a typeless view, so
-	// this is non-nil in practice; the guard renders an untyped view as the
-	// empty type rather than panicking if that ever stops being true.
+	// ViewDef.Type is a *string since FR-018b made `type` optional: an UNTYPED
+	// view spans every note in scope and is entirely legal. ParseView refuses
+	// only a `type:` that is PRESENT but blank (view.go's RejectViewMissingType
+	// names it a typo rather than a deliberate absence) — an omitted key
+	// reaches here as nil routinely, so this is the ORDINARY path, not a
+	// defensive guard. The renderer says "untyped" rather than printing an
+	// empty type name, because `querying record type ""` reads as a bug.
 	viewType := ""
 	if parsed.Def.Type != nil {
 		viewType = *parsed.Def.Type
 	}
 	return tools.NewToolResult(RenderConfigure(ConfigureData{
 		Op: opWriteView, Name: viewName, Path: relControlPlanePath(root, viewPath),
-		ViewType: viewType,
+		ViewType: viewType, Unservable: t.serveRefusalFor(root, schemas, viewName),
 	}))
+}
+
+// serveRefusalFor answers the one question a "view saved" response used to
+// leave to the query path: will knowledge_find actually run this view?
+//
+// It will not, for three shapes ParseView and ValidateViewAgainstSchemas both
+// ACCEPT — a stored `disabled` flag, a DESCENDING grouping key, and any
+// declared `formulas` — because VaultFindRequest has no field that could
+// carry them and serving the view anyway would silently answer a BROADER
+// question than the view asks. That refusal is correct. What was wrong is
+// that it arrived nowhere near the write: knowledge_configure reported
+// success, knowledge_describe listed the view with its formulas rendered, and
+// only knowledge_find said anything — and what it said was "no saved view
+// named X", which is flatly false about a view that is on disk and listed.
+//
+// records.ViewFindLoader was built with this caller in mind and had none:
+// view_find_bridge.go's own header states "knowledge_describe and
+// knowledge_configure hold a *ViewFindLoader and can ask." This asks. Asking
+// the loader rather than re-deriving the three conditions here is the whole
+// point — a second copy of translateView's rules is how the write path and
+// the query path start disagreeing again.
+//
+// Returns "" when the view IS servable. A reload failure is REPORTED, not
+// swallowed: "saved, and I could not check" is a different statement from
+// "saved, and knowledge_find will run it", and only one of them is true.
+func (t *ConfigureTool) serveRefusalFor(root string, schemas *records.SchemaSet, viewName string) string {
+	set, _, lerr := records.LoadViews(root, schemas)
+	if lerr != nil {
+		return fmt.Sprintf(
+			"could not be checked — re-reading the views directory failed (%v); "+
+				"run knowledge_describe to see whether knowledge_find can serve this view", lerr)
+	}
+	refusal, refused := records.NewViewFindLoader(set).ServeRefusal(viewName)
+	if !refused {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s) — %s", refusal.Reason, refusal.Code, refusal.Remedy)
 }
 
 func (t *ConfigureTool) execDeleteView(target mutationTarget, args map[string]any) *tools.ToolResult {
@@ -878,8 +970,17 @@ type ConfigureData struct {
 	Reverted int
 
 	// ViewType is write_view's record type, named so the response confirms
-	// what the view queries without a second call.
+	// what the view queries without a second call. Empty means the view is
+	// UNTYPED (FR-018b) and spans every note in scope — a legal view, not a
+	// missing value.
 	ViewType string
+
+	// Unservable is write_view's answer to "will knowledge_find run this?",
+	// empty when it will. See ConfigureTool.serveRefusalFor: a view carrying
+	// `formulas`, a descending grouping or a stored `disabled` flag is written
+	// faithfully and REFUSED at query time, and the write is the only place
+	// that fact can reach the author while they can still act on it.
+	Unservable string
 }
 
 // RenderConfigure renders one knowledge_configure result as compact text
@@ -900,8 +1001,19 @@ func RenderConfigure(d ConfigureData) string {
 		fmt.Fprintf(&b, "record type %q deleted (%s removed)\n", d.Name, d.Path)
 		fmt.Fprintf(&b, "CASCADE (meaning): %d record(s) revert to ordinary notes\n", d.Reverted)
 	case opWriteView:
-		fmt.Fprintf(&b, "view %q saved at %s, querying record type %q\n", d.Name, d.Path, d.ViewType)
+		queries := fmt.Sprintf("querying record type %q", d.ViewType)
+		if d.ViewType == "" {
+			queries = "untyped: it spans every note in scope"
+		}
+		fmt.Fprintf(&b, "view %q saved at %s, %s\n", d.Name, d.Path, queries)
 		fmt.Fprintf(&b, "CASCADE (meaning): what this view returns changes; no note's own validity changes\n")
+		if d.Unservable != "" {
+			// Stated AFTER the cascade block (spec §4.1.6 puts the cascade
+			// first) and before anything else, in the words the loader itself
+			// uses, so the same sentence appears here and in a
+			// knowledge_describe listing of the same view.
+			fmt.Fprintf(&b, "NOT SERVABLE by knowledge_find: %s\n", d.Unservable)
+		}
 	case opDeleteView:
 		fmt.Fprintf(&b, "view %q deleted (%s removed)\n", d.Name, d.Path)
 		fmt.Fprintf(&b, "CASCADE (meaning): no note's own validity changes; any query naming this view by name is now refused\n")

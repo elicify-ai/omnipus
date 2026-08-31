@@ -608,7 +608,12 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, err
 	}
 	if len(copies) == 0 {
-		rerr := fmt.Errorf("%w: no trashed note at %s; knowledge_describe reports the trash contents", ErrRestoreNotFound, orig)
+		// NOT "knowledge_describe reports the trash contents" — it does not.
+		// knowledge_describe renders four sections (index, types, views,
+		// templates) and none of them reads the trash directory, so the old
+		// remedy sent the caller to a surface that would never answer, which
+		// is a dead end dressed up as a next step.
+		rerr := fmt.Errorf("%w: no trashed note at %s; `path` must be the note's ORIGINAL path from before it was trashed, not a path inside the trash", ErrRestoreNotFound, orig)
 		tr.emit(trashOpRestore, "refused", []string{orig}, rerr.Error())
 		return nil, rerr
 	}

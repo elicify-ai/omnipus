@@ -326,6 +326,10 @@ func renderSchemaRejections(b *strings.Builder, r *records.SchemaLoadReport) {
 
 func renderViews(b *strings.Builder, d DescribeData) {
 	views := d.Views.Views()
+	// Built once for the whole listing rather than per view: the loader is a
+	// thin wrapper over the set this function already holds, and asking it is
+	// what keeps this listing and knowledge_find's own answer in agreement.
+	loader := records.NewViewFindLoader(d.Views)
 	if len(views) == 0 {
 		b.WriteString("VIEWS (0) — no saved views; a query here starts from scratch\n")
 	} else {
@@ -349,8 +353,43 @@ func renderViews(b *strings.Builder, d DescribeData) {
 		if body := renderViewBody(v); body != "" {
 			b.WriteString(body)
 		}
+		b.WriteString(renderViewServeRefusal(loader, v))
 	}
 	renderViewRejections(b, d.ViewReport)
+}
+
+// renderViewServeRefusal states, per view, whether knowledge_find will
+// actually run it.
+//
+// THE HEAD LINE ABOVE SAYS "ask for one by name before inventing a filter",
+// AND FOR SOME VIEWS THAT INSTRUCTION FAILS. A view declaring `formulas`, or
+// a grouping key in DESCENDING order, is written faithfully, listed here in
+// full, and then refused by knowledge_find with "no saved view named X" — a
+// statement that is false about a view this very listing just showed. The
+// refusal itself is right (VaultFindRequest has no field for either, and
+// serving the view anyway would answer a broader question than it asks); what
+// was missing is that the agent following this listing had no way to know
+// before it called.
+//
+// The reason comes from records.ViewFindLoader — the SAME object knowledge_find
+// resolves views through — rather than from a second copy of its rules here.
+// view_find_bridge.go's header names this caller explicitly:
+// "knowledge_describe and knowledge_configure hold a *ViewFindLoader and can
+// ask."
+//
+// ServeRefusalDisabled is deliberately skipped: renderViewDisabled already
+// prints "DISABLED — stored but never applied; this view returns nothing" for
+// exactly that view, and saying it twice makes a reader look for two problems.
+func renderViewServeRefusal(loader *records.ViewFindLoader, v *records.SavedView) string {
+	if loader == nil || v == nil {
+		return ""
+	}
+	refusal, refused := loader.ServeRefusal(v.Name())
+	if !refused || refusal.Code == records.ServeRefusalDisabled {
+		return ""
+	}
+	return fmt.Sprintf("    !! NOT SERVABLE by knowledge_find: %s (%s) — %s\n",
+		refusal.Reason, refusal.Code, refusal.Remedy)
 }
 
 // ---------------------------------------------------------------------------
