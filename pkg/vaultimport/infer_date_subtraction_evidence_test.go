@@ -189,6 +189,22 @@ func TestDateSubtraction_ShapeTableIsWhatTheHeaderSays(t *testing.T) {
 			want: map[string]string{},
 		},
 		{
+			// FOUND BY MUTATION TESTING, and it is the case a reader is most
+			// likely to think cannot arise. `today(x)` PARSES — records checks
+			// call arity when it TYPES, not when it parses — so a Call named
+			// `today` carrying an argument really does reach this walk. It is
+			// not a date constructor: it is an expression the translator will
+			// refuse, and reading a declaration out of text the product
+			// refuses is the mistake the unparseable-formula branch exists to
+			// avoid, arriving one step later. Neither name is recorded: not
+			// `opened`, because what it was subtracted against is not a
+			// constructor, and not `created`, because it sits in an argument
+			// list rather than opposite one.
+			name: "a constructor with an argument is not a constructor",
+			src:  "today(created) - opened",
+			want: map[string]string{},
+		},
+		{
 			name: "a guard is not a declaration (the header's if(P, ...) entry)",
 			src:  `if(created, formula.age > 30, false)`,
 			want: map[string]string{},
