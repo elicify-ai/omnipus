@@ -253,8 +253,8 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 	// that opens the text index (both live under knowledge.IndexDirFor's one
 	// directory) — created here too so Sync is correct when called on its
 	// own, e.g. from a test or a future standalone re-index command.
-	if err := os.MkdirAll(filepath.Dir(idxPath), 0o700); err != nil {
-		return stats, fmt.Errorf("vaultprops: creating the index directory: %w", err)
+	if mkErr := os.MkdirAll(filepath.Dir(idxPath), 0o700); mkErr != nil {
+		return stats, fmt.Errorf("vaultprops: creating the index directory: %w", mkErr)
 	}
 
 	store, err := propindex.Open(ctx, idxPath, propindex.Options{Recorder: opts.Recorder})

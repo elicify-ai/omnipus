@@ -39,21 +39,21 @@ func syncVault(t *testing.T, files map[string]string) string {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	real, err := filepath.EvalSymlinks(root)
+	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	return real
+	return resolved
 }
 
 func syncHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	real, err := filepath.EvalSymlinks(home)
+	resolved, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	return real
+	return resolved
 }
 
 const plantSchema = "schema_version: 1\n" +
@@ -369,8 +369,8 @@ func TestSync_UnreadableNoteIsRemovedNotLeftStale(t *testing.T) {
 	assertPathsIndexed(t, home, root, map[string]bool{"Plants/Fern.md": true})
 
 	notePath := filepath.Join(root, "Plants", "Fern.md")
-	if err := os.Chmod(notePath, 0o000); err != nil {
-		t.Fatalf("chmod: %v", err)
+	if chmodErr := os.Chmod(notePath, 0o000); chmodErr != nil {
+		t.Fatalf("chmod: %v", chmodErr)
 	}
 	t.Cleanup(func() { _ = os.Chmod(notePath, 0o600) }) // let TempDir cleanup remove it
 

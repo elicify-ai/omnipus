@@ -66,8 +66,8 @@ func touchFile(t *testing.T, path string) time.Time {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	want := fi.ModTime().Add(statDrift)
-	if err := os.Chtimes(path, want, want); err != nil {
-		t.Fatalf("chtimes %s: %v", path, err)
+	if chErr := os.Chtimes(path, want, want); chErr != nil {
+		t.Fatalf("chtimes %s: %v", path, chErr)
 	}
 	after, err := os.Stat(path)
 	if err != nil {
