@@ -34,6 +34,16 @@ type RawLeaf struct {
 	Op       string // one of eq/lt/lte/gt/gte/contains/is_absent — RecordFilterOp's wire spelling
 	Values   []string
 	Negate   bool
+	// Truthy marks a leaf that came from Obsidian's BARE-PROPERTY test
+	// (`archived` on its own, not `archived == true`). It is translated as a
+	// negated `is_absent` — "has a value" — and that is only FAITHFUL for
+	// property types whose every present value is truthy. For a type that
+	// admits a present-but-falsy value (`false`, `0`) the two differ, and
+	// they differ in the forbidden direction: "has a value" returns MORE
+	// rows than "is truthy". The flag exists so buildFilterLeafNode, which
+	// is the only place that knows the property's declared type, can refuse
+	// exactly those cases by name (FR-105).
+	Truthy bool
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +78,19 @@ var (
 	reBareNegated          = regexp.MustCompile(`^!\s*([A-Za-z_][A-Za-z0-9_]*)$`)
 	reBareIdent            = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
+
+// nonPropertyBareWords are bare tokens that look like an identifier to
+// reBareIdent but are LITERALS, not property references. Without this,
+// `true` on its own reads as "the property named true has a value" — a
+// clause about a property no schema declares, which is refused later but
+// refused under the wrong name, and named wrongly in the report a human
+// reads.
+var nonPropertyBareWords = map[string]bool{
+	"true": true, "false": true, "null": true, "undefined": true,
+	// `type` is a property, but it is the DISCRIMINATOR: it is consumed
+	// into the view's own `type:` and is never a filter clause.
+	"type": true,
+}
 
 // parseLeaf translates one leaf expression string (already trimmed of a
 // leading `- ` list marker by the YAML decoder).
@@ -144,22 +167,34 @@ func parseLeaf(expr string) parsedLeaf {
 
 	if m := reBareNegated.FindStringSubmatch(s); m != nil {
 		prop := m[1]
-		if prop == "type" {
+		if nonPropertyBareWords[prop] {
 			return parsedLeaf{Kind: leafUntranslatable}
 		}
+		// `!prop` is Obsidian's FALSY check: absent, `false`, `0` or `""`.
+		// Ours is `is_absent`: absent, and `""` (FR-007a makes an empty
+		// string absent). Ours is therefore a strict SUBSET of Obsidian's —
+		// it can return FEWER rows on a checkbox or a number, never more,
+		// which is the direction FR-105 permits. It needs no Truthy flag
+		// because narrowing is not the failure this importer refuses.
 		return parsedLeaf{Kind: leafFilter, Filter: RawLeaf{Property: prop, Op: "is_absent"}}
 	}
 
 	if reBareIdent.MatchString(s) {
-		if s == "type" {
+		if nonPropertyBareWords[s] {
 			return parsedLeaf{Kind: leafUntranslatable}
 		}
-		// A bare property name is Obsidian's truthy/"has a value" check —
-		// the nearest equivalent our engine has is a NEGATED is_absent
-		// (FR-008: which also includes records where a LATER clause never
-		// gets the chance to say otherwise, but that is the same inclusion
-		// rule Obsidian's own truthy check gives an undefined property).
-		return parsedLeaf{Kind: leafFilter, Filter: RawLeaf{Property: s, Op: "is_absent", Negate: true}}
+		// A bare property name is Obsidian's TRUTHY check. The nearest
+		// equivalent our engine has is a negated `is_absent` — "has a
+		// value" — and the two agree only where every present value is
+		// truthy. They disagree on `false` and `0`, and there in the one
+		// direction FR-105 forbids: "has a value" matches the record
+		// Obsidian's truthy test rejects.
+		//
+		// The type is not known here (parseLeaf sees one expression string
+		// and no schema), so the leaf is MARKED rather than decided, and
+		// buildFilterLeafNode — which does know — refuses it by name for
+		// the types that admit a present-but-falsy value.
+		return parsedLeaf{Kind: leafFilter, Filter: RawLeaf{Property: s, Op: "is_absent", Negate: true, Truthy: true}}
 	}
 
 	return parsedLeaf{Kind: leafUntranslatable}

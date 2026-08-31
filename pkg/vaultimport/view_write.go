@@ -357,6 +357,65 @@ func emittedLayoutKey(layout string) string {
 	return layout
 }
 
+// ---------------------------------------------------------------------------
+// FR-105 — WHERE "has a value" IS NOT "is truthy"
+//
+// Obsidian's bare-property filter (`archived`) is a JavaScript truthy test.
+// Our nearest operator is `is_absent` negated, which asks a DIFFERENT
+// question: does this record have a value at all. The two agree exactly when
+// every value a property can hold is truthy, and they part company on the
+// falsy-but-present ones — `false` on a checkbox, `0` on a number. There the
+// negated `is_absent` matches a record Obsidian's own filter rejects, which
+// is the broadening FR-105 forbids by name.
+//
+// So the answer is decided PER DECLARED TYPE, as a partition over
+// records.PropertyTypes rather than as a list of the dangerous ones. A list
+// cannot detect its own incompleteness: add a ninth type and it defaults to
+// "safe", the truthy test translates, and the view broadens — the exact
+// failure, reintroduced by an omission. TestTruthyPartition_CoversEveryType
+// fails by name instead.
+//
+// The empty string is not on this map anywhere, deliberately: FR-007a makes
+// an empty string ABSENT, so `""` is falsy AND absent, and the two questions
+// still agree on it.
+// ---------------------------------------------------------------------------
+
+// truthyFalsyLiterals maps each declared property type to the present-but-
+// FALSY values it can hold. An empty string means the type has none, so a
+// bare truthy test translates faithfully.
+var truthyFalsyLiterals = map[records.PropertyType]string{
+	records.TypeCheckbox: "false",
+	records.TypeInteger:  "0",
+	records.TypeDecimal:  "0, 0.0",
+
+	records.TypeText:     "",
+	records.TypeEnum:     "",
+	records.TypeDate:     "",
+	records.TypeRelation: "",
+	records.TypePerson:   "",
+}
+
+// truthyAdmitsAFalsyValue reports whether a declared type can hold a value
+// that is present and falsy — i.e. whether "has a value" is BROADER than
+// "is truthy" for it. An unknown type answers TRUE: an unclassified type is
+// treated as the dangerous kind, so forgetting to classify one costs a view
+// that is disabled when it need not have been, never a view that broadens.
+func truthyAdmitsAFalsyValue(t records.PropertyType) bool {
+	lit, known := truthyFalsyLiterals[t]
+	if !known {
+		return true
+	}
+	return lit != ""
+}
+
+// falsyLiteralsFor names the offending values for the refusal message.
+func falsyLiteralsFor(t records.PropertyType) string {
+	if lit := truthyFalsyLiterals[t]; lit != "" {
+		return lit
+	}
+	return "a present but falsy value"
+}
+
 func describeLeaf(rl RawLeaf) string {
 	if len(rl.Values) > 0 {
 		return fmt.Sprintf("%s %s %v", rl.Property, rl.Op, rl.Values)
@@ -405,6 +464,23 @@ func buildFilterLeafNode(recordType string, rl RawLeaf, schemas *SchemaIndex) (*
 	prop, ok := schemas.Lookup(recordType, rl.Property)
 	if !ok {
 		return nil, fmt.Sprintf("property %q is not declared in the %q schema (never observed on a %s note)", rl.Property, recordType, recordType), false
+	}
+	if rl.Truthy && truthyAdmitsAFalsyValue(prop.Type) {
+		// FR-105, the exact broadening this flag exists to stop. Obsidian's
+		// bare `%s` matches only records whose value is TRUTHY; the negated
+		// `is_absent` it would otherwise become matches every record that
+		// HAS a value, `false` and `0` included. More rows, silently.
+		return nil, fmt.Sprintf(
+			"the bare truthy test `%s` has no faithful translation on a %s property — our nearest operator is \"has a value\", which also matches a record whose %s is present and FALSY (%s), so it would return MORE rows than the Obsidian original",
+			rl.Property, prop.Type, rl.Property, falsyLiteralsFor(prop.Type)), false
+	}
+	if prop.Many && rl.Op != "contains" && rl.Op != "is_absent" {
+		// §8 R-13: `contains` and `is_absent` are the only two operators
+		// defined against a many-valued property. Emitting anything else
+		// produces a clause the engine refuses per record at query time,
+		// which reads as an empty view rather than as a translation this
+		// importer could not make.
+		return nil, fmt.Sprintf("operator %q is not defined on many-valued property %q (only contains/is_absent are defined for a list)", rl.Op, rl.Property), false
 	}
 	if rl.Op == "contains" {
 		if prop.Type != records.TypeText && !prop.Many {
@@ -460,8 +536,17 @@ func buildValueNode(prop InferredProperty, raw string) (*yaml.Node, string, bool
 		}
 		ref := orderedMap(ordPair{Key: "link", Value: link}, ordPair{Key: "resolved", Value: false})
 		return orderedMap(ordPair{Key: "type", Value: string(prop.Type)}, ordPair{Key: field, Value: ref}), "", true
+	case records.TypeCheckbox:
+		// `checkbox` is FR-004c's eighth property type and RecordValue —
+		// the version-1 filter-literal wire type this importer writes — still
+		// carries only the original seven. There is no field to put `true`
+		// in, so the clause is refused BY NAME and its view disables, rather
+		// than being dropped (which would broaden it) or coerced into a text
+		// literal (which would compare "true" against a boolean and match
+		// nothing, an empty view dressed as a working one).
+		return nil, fmt.Sprintf("property %q is declared `checkbox`, which the version-%d view file format has no filter-literal representation for (RecordValue carries the original seven types)", prop.Name, records.SupportedViewVersion), false
 	}
-	return nil, "internal: unknown property type " + string(prop.Type), false
+	return nil, fmt.Sprintf("property %q is declared %q, a type this importer has no filter-literal representation for", prop.Name, prop.Type), false
 }
 
 func translateGroupBy(raw any, recordType string, schemas *SchemaIndex) (groupBy []string, losses []string) {
