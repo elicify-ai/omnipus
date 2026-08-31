@@ -757,10 +757,26 @@ components:
             Group the answer, outermost first. Two levels (FR-027); grouping by a
             relation is supported (FR-029); a record holding several values appears
             in every group it belongs to (FR-028).
+
+
+            EACH KEY CARRIES ITS OWN DIRECTION, and that is not decoration. This
+            was a bare list of names, so a saved view whose `grouping` recorded
+            `direction: desc` — written to its file faithfully, and read back
+            faithfully — had nowhere to land in a request, and serving it was
+            REFUSED (records.ServeRefusalGroupDirection) rather than answered
+            with the groups quietly reordered ascending. The refusal was the
+            right call; the absent field was the defect.
+
+
+            Omitted direction means `asc`. `desc` is the exact reverse of `asc`
+            over the values, and the ABSENT group sorts last in BOTH directions
+            — see VaultFindGroupBy for what "the values" means per declared
+            type, which is the comparator's answer (R-1) and not a rule
+            invented for grouping.
           items:
-            type: string
-            minLength: 1
-          example: ["company", "status"]
+            $ref: "./components/schemas/VaultFindGroupBy.yaml"
+            x-go-type: VaultFindGroupBy
+          example: [{ "property": "company" }, { "property": "status", "direction": "desc" }]
         sort:
           type: array
           description: >
@@ -991,6 +1007,8 @@ components:
       $ref: ./components/schemas/VaultFindResponse.yaml
     VaultFindSort:
       $ref: ./components/schemas/VaultFindSort.yaml
+    VaultFindGroupBy:
+      $ref: ./components/schemas/VaultFindGroupBy.yaml
     VaultFindAggregate:
       $ref: ./components/schemas/VaultFindAggregate.yaml
     VaultFindRow:

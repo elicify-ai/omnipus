@@ -20,6 +20,9 @@ properties:
   direction:
     type: string
     enum: [asc, desc]
+    x-enum-varnames:
+      - VaultFindSortDirectionAsc
+      - VaultFindSortDirectionDesc
     description: >
       Omitted means `asc`. Stated in prose rather than as a JSON Schema
       `default:` deliberately: openapi-typescript promotes a defaulted property

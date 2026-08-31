@@ -530,7 +530,7 @@ type VaultFindRequest = Partial<{
   near: string;
   hops: number;
   join: Array<string>;
-  group_by: Array<string>;
+  group_by: Array<VaultFindGroupBy>;
   sort: Array<VaultFindSort>;
   select: Array<string>;
   aggregate: Array<VaultFindAggregate>;
@@ -539,6 +539,10 @@ type VaultFindRequest = Partial<{
   cursor: string;
   detail: "minimal" | "standard";
 }>;
+type VaultFindGroupBy = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
 type VaultFindSort = {
   property: string;
   direction?: ("asc" | "desc") | undefined;
@@ -4364,6 +4368,10 @@ export const ViewDef: z.ZodType<ViewDef> = z.object({
   source: z.string().optional(),
   untranslated: z.array(z.string().min(1)).optional(),
 });
+export const VaultFindGroupBy: z.ZodType<VaultFindGroupBy> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
+});
 export const VaultFindSort: z.ZodType<VaultFindSort> = z.object({
   property: z.string().min(1),
   direction: z.enum(["asc", "desc"]).optional(),
@@ -4398,7 +4406,7 @@ export const VaultFindRequest: z.ZodType<VaultFindRequest> = z
     near: z.string().min(1),
     hops: z.number().int().gte(1).lte(2),
     join: z.array(z.string().min(1)),
-    group_by: z.array(z.string().min(1)).max(2),
+    group_by: z.array(VaultFindGroupBy).max(2),
     sort: z.array(VaultFindSort),
     select: z.array(z.string().min(1)),
     aggregate: z.array(VaultFindAggregate),

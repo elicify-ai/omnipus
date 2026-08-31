@@ -6410,6 +6410,24 @@ func (e VaultFindAggregateOp) Valid() bool {
 	}
 }
 
+// Defines values for VaultFindGroupByDirection.
+const (
+	VaultFindGroupByDirectionAsc  VaultFindGroupByDirection = "asc"
+	VaultFindGroupByDirectionDesc VaultFindGroupByDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindGroupByDirection enum.
+func (e VaultFindGroupByDirection) Valid() bool {
+	switch e {
+	case VaultFindGroupByDirectionAsc:
+		return true
+	case VaultFindGroupByDirectionDesc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for VaultFindPlanStepSource.
 const (
 	VaultFindPlanStepSourceGoComparator    VaultFindPlanStepSource = "go_comparator"
@@ -15580,6 +15598,65 @@ type VaultFindGroup struct {
 	Subgroups *[]VaultFindSubgroup `json:"subgroups,omitempty"`
 }
 
+// VaultFindGroupBy One grouping key of a knowledge_find request (spec FR-027, FR-018b).
+// IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. `group_by` used to be a bare list of property names. A saved view's own `grouping` keys have carried a direction since ADR-068 D24.1, so a view that recorded `DESC` was written to disk faithfully and then REFUSED at serve time (records.ServeRefusalGroupDirection) — the request had nowhere to ask for what the view had recorded. Refusing was right; the missing field was the defect. This is that field.
+// Shaped exactly like `sort` (VaultFindSort) — same name kept, same optional `direction`, same "omitted means asc" — because a request that expressed one ordering as objects and the other as bare strings taught every caller two grammars for one idea.
+type VaultFindGroupBy struct {
+	// Direction Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+	//
+	// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+	//
+	// `desc` IS THE EXACT REVERSE OF `asc` OVER THE VALUES, and what "the values" means is the comparator's own answer (ruling R-1's comparison domains), never a per-position rule invented for grouping:
+	//
+	// * `enum` and `text` order LEXICALLY over the case-folded value — `Won`,
+	//   `won` and `WON` order as one, exactly as they GROUP as one (R-5c). An
+	//   enum has NO declared-position ordinal: `desc` on a `status` declared
+	//   `[lead, qualified, won]` returns `won, qualified, lead` because `w` >
+	//   `q` > `l`, and would return them in a different order the moment a
+	//   value were renamed. A domain order is expressed by prefixing the
+	//   declared values (`1-lead`, `2-qualified`), which is visible in the
+	//   operator's own file and does what it appears to do.
+	// * `integer`, `decimal`, `date` and `datetime` order NATURALLY —
+	//   numerically and chronologically. `desc` over a backlink count returns
+	//   12 before 9; it does not return "9" before "12" because `9` > `1` as
+	//   text.
+	// * every other declared type (`relation`, `person`, `checkbox`) orders
+	//   lexically over the rendered group label, which is what the group is
+	//   identified BY.
+	//
+	//
+	// THE ABSENT GROUP SORTS LAST IN BOTH DIRECTIONS. This is a decision, not the comparator's leftover: a record with no value has not got a small value, and it has not got a large one either — absence is outside the order rather than at one end of it. Reversing it into first place on `desc` would put "nobody recorded this" exactly where a reader looking for the biggest group is looking. It is the same rule row sorting already applies (assemble.go's compareByProperty), stated once and applied to both.
+	Direction *VaultFindGroupByDirection `json:"direction,omitempty"`
+
+	// Property The property to group on. Grouping by a relation is supported (FR-029), and a record holding several values appears in EVERY group it belongs to (FR-028) rather than being assigned to one arbitrarily. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+	Property string `json:"property"`
+}
+
+// VaultFindGroupByDirection Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+//
+// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+//
+// `desc` IS THE EXACT REVERSE OF `asc` OVER THE VALUES, and what "the values" means is the comparator's own answer (ruling R-1's comparison domains), never a per-position rule invented for grouping:
+//
+//   - `enum` and `text` order LEXICALLY over the case-folded value — `Won`,
+//     `won` and `WON` order as one, exactly as they GROUP as one (R-5c). An
+//     enum has NO declared-position ordinal: `desc` on a `status` declared
+//     `[lead, qualified, won]` returns `won, qualified, lead` because `w` >
+//     `q` > `l`, and would return them in a different order the moment a
+//     value were renamed. A domain order is expressed by prefixing the
+//     declared values (`1-lead`, `2-qualified`), which is visible in the
+//     operator's own file and does what it appears to do.
+//   - `integer`, `decimal`, `date` and `datetime` order NATURALLY —
+//     numerically and chronologically. `desc` over a backlink count returns
+//     12 before 9; it does not return "9" before "12" because `9` > `1` as
+//     text.
+//   - every other declared type (`relation`, `person`, `checkbox`) orders
+//     lexically over the rendered group label, which is what the group is
+//     identified BY.
+//
+// THE ABSENT GROUP SORTS LAST IN BOTH DIRECTIONS. This is a decision, not the comparator's leftover: a record with no value has not got a small value, and it has not got a large one either — absence is outside the order rather than at one end of it. Reversing it into first place on `desc` would put "nobody recorded this" exactly where a reader looking for the biggest group is looking. It is the same rule row sorting already applies (assemble.go's compareByProperty), stated once and applied to both.
+type VaultFindGroupByDirection string
+
 // VaultFindJoin Columns BORROWED onto a row through a relation (spec FR-124).
 // It is a separate structure rather than extra cells on the row because the rendering rule is a correctness rule, not a layout preference: a borrowed value MUST render visibly as borrowed — `company [[Acme Ltd]]: status active` — and must never be merged into the row's own columns. It is not a property of this record, and a reader who takes it for one has been told something false about the record in front of them.
 type VaultFindJoin struct {
@@ -15638,7 +15715,11 @@ type VaultFindRequest struct {
 	Filter *VaultFilterNode `json:"filter,omitempty"`
 
 	// GroupBy Group the answer, outermost first. Two levels (FR-027); grouping by a relation is supported (FR-029); a record holding several values appears in every group it belongs to (FR-028).
-	GroupBy *[]string `json:"group_by,omitempty"`
+	//
+	// EACH KEY CARRIES ITS OWN DIRECTION, and that is not decoration. This was a bare list of names, so a saved view whose `grouping` recorded `direction: desc` — written to its file faithfully, and read back faithfully — had nowhere to land in a request, and serving it was REFUSED (records.ServeRefusalGroupDirection) rather than answered with the groups quietly reordered ascending. The refusal was the right call; the absent field was the defect.
+	//
+	// Omitted direction means `asc`. `desc` is the exact reverse of `asc` over the values, and the ABSENT group sorts last in BOTH directions — see VaultFindGroupBy for what "the values" means per declared type, which is the comparator's answer (R-1) and not a rule invented for grouping.
+	GroupBy *[]VaultFindGroupBy `json:"group_by,omitempty"`
 
 	// Hops Link steps from `near`. Meaningful only with `near`; omitted means 1. A third hop is REFUSED naming the limit and the remedy (FR-065) rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly.
 	Hops *int `json:"hops,omitempty"`

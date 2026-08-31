@@ -29,5 +29,8 @@ properties:
     enum:
       - asc
       - desc
+    x-enum-varnames:
+      - RecordSortDirectionAsc
+      - RecordSortDirectionDesc
     description: Ascending or descending, along the lexical order described above.
     example: "asc"
