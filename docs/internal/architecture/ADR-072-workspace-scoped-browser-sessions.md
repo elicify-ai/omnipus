@@ -320,9 +320,29 @@ largest blast radius in D1.
    comment governs the legacy no-coordinator fallback, not the coordinator path
    this ADR changes.)
 
-**No open blocker remains on the mechanism.** The open item is cost: the
-per-Chrome memory figure is unmeasured, and it sizes the cap in item 1. Measure
-before building, not after.
+**One assumption in this decision is NOT yet proven, and it is load-bearing.**
+D1.1a asserts each Chrome carries its own extension so `chrome.tabCapture`
+works. The reasoning is sound and worth recording: `LoadExtension` installs via
+CDP `Extensions.loadUnpacked` (`coordinator.go:892-896`), which **scopes to the
+DEFAULT browser context** — and under D1.1a a workspace's tabs live in its
+Chrome's default context, which is precisely the case that works today. The
+ADR-048 failure was specific to *CDP-created* contexts, where
+`WithEnableInIncognito(true)` grants visibility but, as
+`coordinator.go:951-958` records, "**VISIBILITY only, not capturability**".
+
+**But reasoning is what failed last time.** The claim "an isolated tab can be
+captured" was equally plausible until it was tested against real Chrome. So
+this is a **gate, not a footnote**: prove `chrome.tabCapture` succeeds against a
+*second Chrome's default context* before the pool is built. If it fails, D1.1a
+does not stand and D1.0a's trade-off returns.
+
+**The other open item is cost.** Per-Chrome memory is unmeasured and sizes the
+cap in item 1. Measure before building, not after.
+
+**Decider for every ruling in this ADR: Daniel Piatkowski (operator),
+2026-08-31.** Recorded once here so the individual "operator ruling" citations
+in D1.0, D1.1a, D1.2, D1.4, D2.9 and D2.11 have a named authority — a spec
+cannot resolve its own provenance.
 
 ### D1.2 One browser per workspace — everyone on it shares it
 
