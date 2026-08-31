@@ -19,7 +19,7 @@ import (
 // which were missing from the design one revision ago and both of which are
 // unrecoverable at query time:
 //
-//  1. FR-146's CAPS. One formula ≤ 64 nodes / depth 8; a view ≤ 16 formulas;
+//  1. FR-146's CAPS. One formula ≤ 64 nodes / depth 16; a view ≤ 16 formulas;
 //     a view's formulas ≤ 256 nodes in TOTAL. The third cap is the one that
 //     needs the set: sixteen individually legal formulas can still be 1,024
 //     nodes together.
@@ -55,8 +55,45 @@ import (
 const (
 	// maxFormulaNodes is the per-formula node cap.
 	maxFormulaNodes = 64
-	// maxFormulaDepth is the per-formula depth cap.
-	maxFormulaDepth = 8
+	// maxFormulaDepth is the per-formula depth cap. It was 8; it is 16, and
+	// the reason is written here rather than in a commit message because the
+	// number is the whole of the policy.
+	//
+	// WHAT THIS CAP IS NOT FOR. Two jobs are commonly assumed to be this
+	// constant's and are demonstrably owned elsewhere:
+	//
+	//   - STACK SAFETY belongs to maxParseDepth (=128, formula_parse.go), and
+	//     that file's own comment says so: this cap "is checked after parsing,
+	//     over the finished tree — which is too late to help if the parser has
+	//     already blown the stack building it". A tree this cap can reject has
+	//     already been built. Lowering this number protects no stack; raising
+	//     it endangers none, because 128 still bounds the descent.
+	//   - EVALUATION COST belongs to maxFormulaNodes and maxFormulaNodesPerView.
+	//     Evaluation is O(nodes) and shape-independent — `if` evaluates its
+	//     condition and ONE branch, so a nested chain is linear, not
+	//     exponential. A 64-node tree costs 64 steps whether it is 3 deep or
+	//     30. Depth contributes nothing to the arithmetic in this file's header.
+	//
+	// WHAT IT IS FOR: refusing an expression too tangled to read. That is a
+	// comprehensibility bound, which is a legitimate thing to enforce — but it
+	// must not refuse shapes the COST budget has already paid for, and 8 did
+	// exactly that. The grammar has no `switch`, so an N-way lookup can only be
+	// written as an N-arm `if` chain, which measures 5N+1 nodes and N+2 deep.
+	// The 64-node cap therefore already admits at most a 12-arm chain — 61
+	// nodes, depth 14 — and refuses 13 arms on nodes. A depth cap of 8 stopped
+	// that idiom at SIX arms, less than half of what the node budget had
+	// already bought, and reported it as a size refusal on a formula measuring
+	// 51 of its permitted 64 nodes. That mismatch is why 8 was wrong: it was
+	// not a tighter bound on cost, it was a second bound contradicting the
+	// first.
+	//
+	// 16 is the node cap's own deepest if-chain (14) plus two levels, so a
+	// chain that the node budget approves is not then refused for sitting
+	// inside one enclosing call. It still refuses genuinely unreadable nesting
+	// that costs almost nothing — 30 stacked `!` is 30 nodes and 31 deep, well
+	// inside the node cap and still rejected here, which is precisely the case
+	// this cap exists to catch.
+	maxFormulaDepth = 16
 	// maxFormulasPerView is how many formulas one view may define.
 	maxFormulasPerView = 16
 	// maxFormulaNodesPerView is the TOTAL node budget across a view's formulas.
