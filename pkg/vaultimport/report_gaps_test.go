@@ -11,10 +11,12 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
@@ -43,32 +45,49 @@ import (
 // It reads STRING LITERALS from the AST rather than raw file text, so a token
 // surviving only in a comment does not count: a comment cannot emit a loss.
 func TestGapTokens_StillExistInTheEmittingSource(t *testing.T) {
-	lits := packageStringLiterals(t, ".", "report.go")
+	lits := emittingSourceLiterals(t)
 	if len(lits) < 50 {
-		t.Fatalf("only %d string literals harvested from the package — the harvester is broken, so this guard would pass vacuously", len(lits))
+		t.Fatalf("only %d string literals harvested from the emitting packages — the harvester is broken, so this guard would pass vacuously", len(lits))
 	}
 	for _, sh := range gapShapes {
-		for _, tok := range sh.tokens {
-			found := false
+		check := func(tok, role string) {
 			for _, l := range lits {
 				if strings.Contains(l, tok) {
-					found = true
-					break
+					return
 				}
 			}
-			if !found {
-				t.Errorf("gap shape %q matches on %q, but no string literal in this package (outside report.go) contains it any more.\n"+
-					"Either the importer reworded that reason — in which case this shape now catches nothing and its losses fall to UNCLASSIFIED — or the shape was never real.",
-					sh.label, tok)
-			}
+			t.Errorf("gap shape %q %s %q, but no string literal in pkg/vaultimport (outside report.go) or pkg/records contains it any more.\n"+
+				"Either the importer reworded that reason — in which case this shape now catches nothing and its losses fall to UNCLASSIFIED — or the shape was never real.",
+				sh.label, role, tok)
+		}
+		for _, tok := range sh.tokens {
+			check(tok, "matches on")
+		}
+		for _, tok := range sh.derivedFrom {
+			check(tok, "splits its count using")
 		}
 	}
+}
+
+// emittingSourceLiterals harvests from BOTH packages that write a loss reason.
+//
+// pkg/vaultimport alone was enough while every reason was written here. It
+// stopped being enough the moment the importer started carrying a base's
+// `formulas:` block: a formula's reason is now records.ValidateFormulaSet's
+// own sentence, composed in pkg/records/formula_type.go and formula_set.go and
+// prefixed in formula_lex.go. Harvesting only this package would have left the
+// five newest shapes guarded by nothing at all — a guard that passes because it
+// is not looking, which is the exact failure mode this file exists to prevent.
+func emittingSourceLiterals(t *testing.T) []string {
+	t.Helper()
+	lits := packageStringLiterals(t, ".", "report.go")
+	return append(lits, packageStringLiterals(t, "../records")...)
 }
 
 // TestGapTokens_GuardCatchesAnInventedToken proves the guard above can fail.
 // A guard nobody has watched fail is a guard nobody should trust.
 func TestGapTokens_GuardCatchesAnInventedToken(t *testing.T) {
-	lits := packageStringLiterals(t, ".", "report.go")
+	lits := emittingSourceLiterals(t)
 	const invented = "no sort-direction field" // a real, DEAD token this report used to match on
 	for _, l := range lits {
 		if strings.Contains(l, invented) {
@@ -473,6 +492,15 @@ func reportWithOneLossOfEveryShape() *Report {
 		lossf(LossViewFilter, "date(close_date).year == today().year"),
 		lossf(LossViewFilter, "realm != %q", "personal"),
 		lossf(LossFilterLeaf, "whatever == 1 — the flux capacitor declined"),
+		// The five reasons records.ValidateFormulaSet writes about ONE
+		// formula. They arrived together when the importer started carrying a
+		// base's `formulas:` block, and they are five separate shapes here
+		// because they send the reader to five different places.
+		lossf(LossFilterLeaf, "formula.days_to_due <= 7 — %s", truthyGuardReason("days_to_due", "text")),
+		lossf(LossProperties, "column %q dropped — %s", "formula.age", untypedOperandReason("age", "created")),
+		lossf(LossProperties, "column %q dropped — %s", "formula.monthly_cost", arithmeticOverNonNumberReason("monthly_cost", "text")),
+		lossf(LossProperties, "column %q dropped — %s", "formula.team_name", formulaTooBigReason("team_name")),
+		lossf(LossGroupBy, "grouping %q DESCENDING is carried into the view file faithfully, but a knowledge_find request has no group direction, so applying this view is refused until it does (ServeRefusalGroupDirection) — the groups are not silently reordered ascending", "formula.backlink_count"),
 	}
 	return &Report{
 		Types: []TypeSchemaSummary{{Type: "company"}, {Type: "contact"}},
@@ -644,5 +672,373 @@ func TestRenderNameEvidenced_IsAbsentWhenNothingWasGuessed(t *testing.T) {
 	(&Report{Types: []TypeSchemaSummary{{Type: "contract"}}}).renderNameEvidenced(&buf)
 	if buf.Len() != 0 {
 		t.Errorf("a run that guessed nothing still printed a section:\n%s", buf.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The five formula-validation shapes
+//
+// When the importer started carrying a base's `formulas:` block, the single
+// "computed property" shape retired itself correctly — its reason ("does not
+// yet carry a base's `formulas:` block") stopped existing and the shape moved
+// to the zero-occurrence list with nobody editing prose. What took its place
+// was 37 losses carrying records.ValidateFormulaSet's OWN reasons, which no
+// shape recognised, so they printed as UNCLASSIFIED.
+//
+// The temptation is to catch all five with one formula-shaped bucket. That
+// would be worse than UNCLASSIFIED, not better: only ONE of the five is
+// formula-translator work. Two are decided by what the founder's vault
+// actually stores, one is an FR-146 policy number, and one is an inference
+// result. A single paragraph would tell him the formula work is unfinished and
+// send him to the wrong file — the specific failure this file was rewritten to
+// eliminate after a stale explanation reached him and became a false statement.
+//
+// The reason builders below compose the reasons the way pkg/records composes
+// them, so a corpus line here is the emitting format string's own shape rather
+// than a transcript of whatever the classifier happened to do.
+// ---------------------------------------------------------------------------
+
+// truthyGuardReason mirrors formula_type.go's inferIf, prefixed the way
+// formula_lex.go prefixes a formula's errors.
+func truthyGuardReason(formula, gotType string) string {
+	return "formula " + formula + ": `if`'s condition is a truth value; it was given " + gotType +
+		" at position 0; expected a truth value"
+}
+
+// untypedOperandReason mirrors formula_type.go's unknown-property branch.
+func untypedOperandReason(formula, prop string) string {
+	return "formula " + formula + ": `" + prop + "` is not a property this view can type — a formula operand must have a DECLARED type, or the formula would compare FALSE on some records with nothing reported at position 3; expected a property the view's record type declares"
+}
+
+// arithmeticOverNonNumberReason mirrors requireNumberOperands.
+func arithmeticOverNonNumberReason(formula, gotType string) string {
+	return "formula " + formula + ": `/` is arithmetic and is defined over numbers, but its left operand is " +
+		gotType + " at position 53; expected a number"
+}
+
+// formulaTooBigReason mirrors formula_set.go's depth cap.
+func formulaTooBigReason(formula string) string {
+	return "formula " + formula + ": the expression nests 12 levels deep; FR-146 caps one formula at 8; expected at most 8 levels of nesting"
+}
+
+// TestClassifyLoss_TheFiveFormulaReasonsAreFiveDIFFERENTShapes is the headline
+// regression. Every line below is a formula failing to translate; collapsing
+// them into one bucket is the failure mode, so this asserts they stay apart.
+func TestClassifyLoss_TheFiveFormulaReasonsAreFiveDIFFERENTShapes(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+		want   gapKind
+		why    string
+	}{
+		{
+			name:   "truthiness guard over a non-date operand",
+			reason: truthyGuardReason("days_to_expiry", "text"),
+			want:   gapFormulaTruthyGuard,
+			why:    "the guard-dropping rewrite is proved for a scalar date only; the operand's TYPE is what decides, so this must not read as formula-translator work",
+		},
+		{
+			name:   "operand the view's record type does not declare",
+			reason: untypedOperandReason("days_since_refresh", "last_refreshed"),
+			want:   gapFormulaOperandUntyped,
+			why:    "this is the undeclared-property INFERENCE gap reached through a formula; the formula is fine",
+		},
+		{
+			name:   "arithmetic over an operand typed as text",
+			reason: arithmeticOverNonNumberReason("monthly_cost", "text"),
+			want:   gapFormulaArithmeticOverText,
+			why:    "an isType() guard is a per-record test and does not narrow a statically declared type; a different remedy again",
+		},
+		{
+			name:   "formula past FR-146's size cap",
+			reason: formulaTooBigReason("team_name"),
+			want:   gapFormulaTooBig,
+			why:    "the formula was understood and refused for SIZE — a policy number, not a translation gap",
+		},
+		{
+			name:   "formula past FR-146's per-view cap",
+			reason: "the view defines 40 formulas; FR-146 caps a view at 32",
+			want:   gapFormulaTooBig,
+			why:    "the per-view caps are the same shape as the per-formula ones and must not fall out of the table",
+		},
+	}
+
+	seen := map[gapKind]string{}
+	for _, tc := range cases {
+		line := lossf(LossFilterLeaf, "formula.x == 1 — %s", tc.reason)
+		got := classifyLoss(line)
+		if got != tc.want {
+			t.Errorf("%s: classified as %v, want %v.\n  why it matters: %s\n  line: %s", tc.name, got, tc.want, tc.why, line)
+		}
+		if tc.want != gapFormulaTooBig {
+			if prev, dup := seen[got]; dup {
+				t.Errorf("%s and %s landed in the SAME bucket (%v). They need different remedies, so one paragraph cannot serve both.", tc.name, prev, got)
+			}
+			seen[got] = tc.name
+		}
+	}
+
+	// And none of them may fall back to the pre-existing formula bucket, whose
+	// paragraph says the base's `formulas:` block IS carried and what remains
+	// is an expression our grammar cannot express. That sentence is true of
+	// none of the five.
+	for _, tc := range cases {
+		if classifyLoss(lossf(LossFilterLeaf, "formula.x == 1 — %s", tc.reason)) == gapFormula {
+			t.Errorf("%s fell into the generic formula bucket, whose paragraph would explain it wrongly", tc.name)
+		}
+	}
+}
+
+// TestGapBreakdown_SplitsTheTruthinessGuardByTheOperandTypeTheCheckerNamed.
+//
+// The split is not decoration. `if(due, date(due) < today() && …, false)` over
+// a real DATE is blocked by the rewrite's second condition and is translator
+// work; `if(expiry, …)` over a property typed TEXT is blocked by the type and
+// is not. One total over both would answer the founder's "what do I do next"
+// with the wrong file half the time.
+func TestGapBreakdown_SplitsTheTruthinessGuardByTheOperandTypeTheCheckerNamed(t *testing.T) {
+	r := &Report{Bases: []BaseOutcome{{
+		BaseRelPath: "06-Bases/Mixed.base",
+		Status:      OutcomeConvertedWithLosses,
+		Views: []ViewOutcome{{
+			DisplayName: "V", Status: OutcomeConvertedWithLosses,
+			Losses: []string{
+				lossf(LossFilterLeaf, "formula.a == 1 — %s", truthyGuardReason("a", "text")),
+				lossf(LossFilterLeaf, "formula.b == 1 — %s", truthyGuardReason("b", "text")),
+				lossf(LossFilterLeaf, "formula.c == 1 — %s", truthyGuardReason("c", "date")),
+			},
+		}},
+	}}}
+
+	tally := r.tally(func(v ViewOutcome) []string { return v.Losses }, false)[gapFormulaTruthyGuard]
+	if tally == nil {
+		t.Fatal("no truthiness-guard tally at all — the shape did not fire, so the split below proves nothing")
+	}
+	if tally.Count != 3 {
+		t.Fatalf("counted %d truthiness losses, want 3", tally.Count)
+	}
+	if got := tally.Sub["text"]; got != 2 {
+		t.Errorf("text operands = %d, want 2 — the split is what routes the reader, so a wrong number here is a wrong instruction", got)
+	}
+	if got := tally.Sub["date"]; got != 1 {
+		t.Errorf("date operands = %d, want 1. A `date` operand is ALREADY typed correctly: counting it with the others would tell the founder to go fix inference for a property whose inference is right", got)
+	}
+	if tally.subTotal() != tally.Count {
+		t.Errorf("the split accounts for %d of %d — a shortfall means the breakdown stopped parsing the reason and the paragraph is summing something it cannot see", tally.subTotal(), tally.Count)
+	}
+
+	para := r.narrate(gapFormulaTruthyGuard, tally)
+	for _, want := range []string{"text x2", "date x1"} {
+		if !strings.Contains(para, want) {
+			t.Errorf("the rendered paragraph does not carry %q, so the split never reaches the founder:\n%s", want, para)
+		}
+	}
+}
+
+// TestGapBreakdown_NamesTheUndeclaredFormulaOperands. The remedy is
+// per-property — "six formula operands are undeclared" is not actionable and
+// "`created`, `updated`, `last_refreshed`" is.
+func TestGapBreakdown_NamesTheUndeclaredFormulaOperands(t *testing.T) {
+	r := &Report{Bases: []BaseOutcome{{
+		BaseRelPath: "06-Bases/U.base",
+		Status:      OutcomeConvertedWithLosses,
+		Views: []ViewOutcome{{
+			DisplayName: "V", Status: OutcomeConvertedWithLosses,
+			Losses: []string{
+				lossf(LossProperties, "column %q dropped — %s", "formula.age", untypedOperandReason("age", "created")),
+				lossf(LossProperties, "column %q dropped — %s", "formula.age2", untypedOperandReason("age2", "created")),
+				lossf(LossProperties, "column %q dropped — %s", "formula.stage", untypedOperandReason("stage", "updated")),
+			},
+		}},
+	}}}
+
+	tally := r.tally(func(v ViewOutcome) []string { return v.Losses }, false)[gapFormulaOperandUntyped]
+	if tally == nil {
+		t.Fatal("the undeclared-operand shape did not fire")
+	}
+	if tally.Sub["created"] != 2 || tally.Sub["updated"] != 1 {
+		t.Errorf("property split = %v, want created:2 updated:1 — the name is read out of the checker's own backticked sentence", tally.Sub)
+	}
+	para := r.narrate(gapFormulaOperandUntyped, tally)
+	for _, want := range []string{"`created` x2", "`updated`"} {
+		if !strings.Contains(para, want) {
+			t.Errorf("the paragraph does not name %s, so the reader gets a count instead of a work list:\n%s", want, para)
+		}
+	}
+}
+
+// TestSystemicGaps_DoNotAccuseThisImporterWhenTheCauseIsSomewhereElse.
+//
+// wireCap.verdict() ends by declaring the loss an FR-107 defect to file
+// against this importer. That is right when a missing importer is the only
+// thing in the way, and WRONG two sentences after a paragraph has explained
+// that the cause is prose in the founder's own vault, or an FR-146 cap, or the
+// type inference — where it contradicts the sentence above it and sends him to
+// the file he was just told not to open. This pins that the four
+// externally-caused paragraphs use notTheConstraint() instead.
+//
+// The forbidden text is taken FROM verdict() rather than typed here, so a
+// reword of verdict() cannot leave this test guarding a string nobody emits.
+func TestSystemicGaps_DoNotAccuseThisImporterWhenTheCauseIsSomewhereElse(t *testing.T) {
+	accusation := capFormulas.verdict()
+	if !strings.Contains(accusation, "defect to file") {
+		t.Fatalf("verdict() no longer accuses this importer (%q), so this test is guarding nothing — re-derive the forbidden text", accusation)
+	}
+
+	r := reportWithOneLossOfEveryShape()
+	tallies := r.tally(func(v ViewOutcome) []string { return v.Losses }, false)
+
+	external := map[gapKind]string{
+		gapFormulaTruthyGuard:        "the operand's inferred type decides this, and the paragraph has just said so",
+		gapFormulaOperandUntyped:     "the paragraph names the type inference as the cause and says the formula needs no change",
+		gapFormulaArithmeticOverText: "the paragraph names the vault's own values and the formula TYPE SYSTEM, not this importer",
+		gapFormulaTooBig:             "an FR-146 policy cap is a decision to take, not a defect to file",
+		gapGroupDirection:            "the importer carried the direction faithfully; the block is in the find request",
+	}
+	for kind, why := range external {
+		tally := tallies[kind]
+		if tally == nil || tally.Count == 0 {
+			t.Fatalf("no loss of kind %v in the fixture, so this assertion is vacuous", kind)
+		}
+		para := r.narrate(kind, tally)
+		if strings.Contains(para, accusation) {
+			t.Errorf("the %v paragraph embeds verdict()'s accusation against this importer, contradicting itself: %s\n\nparagraph:\n%s", kind, why, para)
+		}
+	}
+
+	// The control: a gap whose cause really IS a missing capability must still
+	// carry its verdict, or this test has simply banned the sentence.
+	mixed := tallies[gapMixedTypeDisjunction]
+	if mixed == nil {
+		t.Fatal("no mixed-type disjunction in the fixture — the control is missing")
+	}
+	if !strings.Contains(r.narrate(gapMixedTypeDisjunction, mixed), capMultiType.verdict()) {
+		t.Error("the mixed-type paragraph no longer carries its model verdict, so the rule above has over-corrected into 'never state the verdict'")
+	}
+}
+
+// TestProbeListElementField_FlipsWhenTheElementGainsTheField exercises the
+// TRUE branch of the group-direction probe, which the real wire types cannot
+// reach today. A probe whose true branch has never executed is a claim, not a
+// mechanism — and the whole point of deriving the sentence is that it stops
+// being printed on the day the field lands.
+func TestProbeListElementField_FlipsWhenTheElementGainsTheField(t *testing.T) {
+	type groupingToday struct {
+		GroupBy *[]string `json:"group_by,omitempty"`
+	}
+	type groupingElement struct {
+		Property  string `json:"property"`
+		Direction string `json:"direction"`
+	}
+	type groupingTomorrow struct {
+		GroupBy *[]groupingElement `json:"group_by,omitempty"`
+	}
+
+	today := probeListElementField("X.group_by[].direction", groupingToday{}, "group_by", "direction")
+	if today.Present {
+		t.Error("a []string element was reported as carrying a direction; the probe is not looking at the element type")
+	}
+	tomorrow := probeListElementField("X.group_by[].direction", groupingTomorrow{}, "group_by", "direction")
+	if !tomorrow.Present {
+		t.Error("an element struct that DOES declare `direction` was reported as not carrying one, so the paragraph could never stop calling the refusal correct")
+	}
+
+	// And the live probe reflects the real request type as it stands.
+	if capFindGroupDirection.Present != elementHasDirection(generated.VaultFindRequest{}) {
+		t.Error("capFindGroupDirection disagrees with the generated request type it is derived from")
+	}
+	if got := groupDirectionRequestClause(); capFindGroupDirection.Present == strings.Contains(got, "nowhere to ask") {
+		t.Errorf("the rendered clause does not follow the presence bit: present=%v, clause=%q", capFindGroupDirection.Present, got)
+	}
+}
+
+// elementHasDirection is the test's own independent reading of the wire type,
+// so the assertion above is not the probe agreeing with itself.
+func elementHasDirection(sample any) bool {
+	tv := reflect.TypeOf(sample)
+	for i := 0; i < tv.NumField(); i++ {
+		f := tv.Field(i)
+		if !strings.HasPrefix(f.Tag.Get("json"), "group_by") {
+			continue
+		}
+		ft := f.Type
+		for ft.Kind() == reflect.Ptr || ft.Kind() == reflect.Slice {
+			ft = ft.Elem()
+		}
+		if ft.Kind() != reflect.Struct {
+			return false
+		}
+		for j := 0; j < ft.NumField(); j++ {
+			if strings.HasPrefix(ft.Field(j).Tag.Get("json"), "direction") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestClassifyLoss_ACombinatorCarryingItsChildsReasonJoinsTheChildsBucket.
+//
+// `!=` desugars into a `not:` wrapper, and the combinator branch used to
+// report its own verbatim while discarding the child's diagnosis — six losses
+// arrived with no reason at all and every other bucket was a floor rather than
+// a total. The remedy is in view_write.go, but this file has to be ready to
+// absorb it, and "ready" is a claim worth failing over: the classifier reads
+// the reason half of a loss line, so a `not:`-wrapped loss must land in its
+// CHILD's bucket the moment the child's reason is carried through.
+func TestClassifyLoss_ACombinatorCarryingItsChildsReasonJoinsTheChildsBucket(t *testing.T) {
+	// Before: the group's verbatim alone, no reason. Nothing can be said.
+	bare := lossf(LossViewFilter, "realm != %q", "personal")
+	if got := classifyLoss(bare); got != gapReasonDiscarded {
+		t.Fatalf("a reason-less `!=` loss classified as %v, want gapReasonDiscarded — the fixture no longer reproduces the state this guards", got)
+	}
+
+	// After: the same verbatim with the leaf's own diagnosis appended.
+	for _, tc := range []struct {
+		reason string
+		want   gapKind
+	}{
+		{`value "personal" is not one of "realm"'s declared enum values (work)`, gapEnumLiteral},
+		{`property "realm" is not declared in the "contract" schema (never observed on a contract note)`, gapUndeclaredProperty},
+		{truthyGuardReason("is_overdue", "text"), gapFormulaTruthyGuard},
+	} {
+		carried := lossf(LossViewFilter, "realm != %q — %s", "personal", tc.reason)
+		if got := classifyLoss(carried); got != tc.want {
+			t.Errorf("a `not:`-wrapped loss carrying its child's reason classified as %v, want %v.\n"+
+				"Until this holds, every other count in the summary stays a floor rather than a total.\n  line: %s", got, tc.want, carried)
+		}
+	}
+}
+
+// TestClassifyLoss_TheBaseFunctionShapeSurvivesTheLeafGainingAReason.
+//
+// This shape used to be recognised ONLY by the expression's own shape, because
+// `date(close_date).year == today().year` arrived with no reason attached. The
+// moment the leaf parser started attaching the grammar's named refusal, those
+// losses stopped being reason-less — and classifyLoss returns UNCLASSIFIED for
+// any reason matching no token. A peer writing a strictly BETTER loss message
+// would therefore have moved this bucket to 0 and grown UNCLASSIFIED by 2:
+// an improvement showing up in the founder's report as a regression.
+//
+// So the shape has to catch BOTH forms, and both must be asserted. Without the
+// reason-carrying case below, deleting the tokens breaks nothing that fails.
+func TestClassifyLoss_TheBaseFunctionShapeSurvivesTheLeafGainingAReason(t *testing.T) {
+	expr := "date(close_date).year == today().year"
+
+	if got := classifyLoss(lossf(LossViewFilter, "%s", expr)); got != gapBaseFunction {
+		t.Errorf("the reason-LESS form classified as %v, want gapBaseFunction", got)
+	}
+
+	// The two reasons the leaf parser hands over, both composed the way their
+	// emitting sites compose them rather than copied from a run.
+	for _, reason := range []string{
+		"a view's filter compares a PROPERTY against a literal, and this clause is an EXPRESSION. Handed to the formula grammar, it is refused there too: `.year` is not a field the formula grammar defines at position 17; expected one of .days, .hour, .hours, .length, .milliseconds, .minutes, .seconds",
+		"`.month` is not a field the formula grammar defines at position 17; expected one of .days, .hour, .hours, .length, .milliseconds, .minutes, .seconds",
+	} {
+		line := lossf(LossViewFilter, "%s — %s", expr, reason)
+		if got := classifyLoss(line); got != gapBaseFunction {
+			t.Errorf("a `.base` function loss carrying the grammar's own named refusal classified as %v, want gapBaseFunction.\n"+
+				"Improving the loss MESSAGE must never move a loss into UNCLASSIFIED — that reads as a regression in the founder's report.\n  line: %s", got, line)
+		}
 	}
 }

@@ -72,7 +72,16 @@ type Report struct {
 	// NameEvidenced is every property typed from its NAME because the vault
 	// holds no value for it anywhere — a guess, on the record, rather than an
 	// observation. Populated from infer.CollectNameEvidencedInferences.
-	NameEvidenced  []NameEvidencedInference
+	NameEvidenced []NameEvidencedInference
+	// EnumWidenings is every inferred enum whose closed set met a literal the
+	// operator's own `.base` files filter on and no note carries — widened,
+	// or refused at enumMaxDistinct. Populated from CollectEnumWidenings.
+	//
+	// This is not decoration. Widening rather than refusing is defensible
+	// ONLY because the operator is told: silently, a mistyped filter matches
+	// nothing forever and looks healthy, which is worse than the disabled
+	// view it replaced. Each entry renders itself via ReportLines().
+	EnumWidenings  []EnumWidening
 	Types          []TypeSchemaSummary
 	Ambiguities    []AmbiguousInference
 	RelationSplits []RelationSplitReport
@@ -353,6 +362,24 @@ func (c wireCap) verdict() string {
 	return fmt.Sprintf("The wire format cannot carry this at all — there is no `%s` on the generated view types — so it is genuinely unrepresentable, not merely unimplemented.", c.Path)
 }
 
+// notTheConstraint is verdict()'s quieter half, for a paragraph that has
+// ALREADY named a cause other than a missing wire field.
+//
+// It exists because verdict() ends by declaring the loss an FR-107 defect
+// against this importer. That is the right conclusion when a missing importer
+// is the only thing between the founder and his view, and the WRONG one — two
+// sentences after the paragraph has just explained that the cause is prose in
+// his own vault, or a deliberate FR-146 cap, or the type inference. Printed
+// there, verdict() contradicts the sentence above it and sends the reader to
+// the file the paragraph just told him not to open. So a gap whose cause is
+// named elsewhere gets the wire FACT without the verdict attached to it.
+func (c wireCap) notTheConstraint() string {
+	if c.Present {
+		return fmt.Sprintf("(The model is not the constraint either way: `%s` exists on the generated view types.)", c.Path)
+	}
+	return fmt.Sprintf("(Note also that there is no `%s` on the generated view types, so even a fix to the cause named above would have nowhere to land — file that first.)", c.Path)
+}
+
 // jsonFieldName reads a struct field's wire name, which is the spelling an
 // operator sees in a view file and therefore the one worth probing for.
 func jsonFieldName(f reflect.StructField) string {
@@ -366,9 +393,8 @@ func jsonFieldName(f reflect.StructField) string {
 	return tag
 }
 
-// wireField finds one field of a generated struct by its wire name.
-func wireField(sample any, jsonName string) (reflect.StructField, bool) {
-	t := reflect.TypeOf(sample)
+// wireFieldIn finds one field of a generated struct TYPE by its wire name.
+func wireFieldIn(t reflect.Type, jsonName string) (reflect.StructField, bool) {
 	if t == nil || t.Kind() != reflect.Struct {
 		return reflect.StructField{}, false
 	}
@@ -378,6 +404,11 @@ func wireField(sample any, jsonName string) (reflect.StructField, bool) {
 		}
 	}
 	return reflect.StructField{}, false
+}
+
+// wireField finds one field of a generated struct by its wire name.
+func wireField(sample any, jsonName string) (reflect.StructField, bool) {
+	return wireFieldIn(reflect.TypeOf(sample), jsonName)
 }
 
 // probeField answers "does this wire type carry this field at all".
@@ -404,7 +435,42 @@ var (
 	// scope. Present AND optional is the question; a required `type` would
 	// mean untyped views are inexpressible.
 	capOptionalType = probeOptionalType()
+	// capViewGroupDirection — a saved view's grouping carrying a DIRECTION.
+	// Present means the import lost nothing; the block is downstream.
+	capViewGroupDirection = probeField("ViewGroupBy.direction", generated.ViewGroupBy{}, "direction")
+	// capFindGroupDirection — the same direction on a find REQUEST, which is
+	// the half that decides whether such a view can be served.
+	capFindGroupDirection = probeListElementField(
+		"VaultFindRequest.group_by[].direction", generated.VaultFindRequest{}, "group_by", "direction")
 )
+
+// probeListElementField answers "does the ELEMENT of this list field carry
+// this sub-field" — the question a find request's `group_by` poses, since a
+// direction has to hang off each grouping rather than off the list.
+//
+// It unwraps pointers and slices and looks at the element type. A `[]string`
+// has nowhere to put a direction and answers false. On the day `group_by`
+// becomes a list of structs carrying `direction`, this answers true and the
+// paragraph below stops calling the refusal correct — with no edit here, which
+// is the only reason that sentence is safe to print at all.
+//
+// It takes its sample rather than closing over the generated type so the flip
+// can be PROVEN in a test against a struct shaped the future way. A probe whose
+// true branch nobody has ever seen execute is a claim, not a mechanism.
+func probeListElementField(path string, sample any, listField, elemField string) wireCap {
+	c := wireCap{Path: path}
+	f, ok := wireField(sample, listField)
+	if !ok {
+		return c
+	}
+	t := f.Type
+	for t != nil && (t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+		t = t.Elem()
+	}
+	_, has := wireFieldIn(t, elemField)
+	c.Present = has
+	return c
+}
 
 // probeOptionalType is capOptionalType's derivation: `type` must exist AND be
 // a pointer, because an untyped view is spelled by OMITTING the key.
@@ -428,6 +494,18 @@ type gapKind int
 
 const (
 	gapFormula gapKind = iota
+	// The four shapes below are all reported by records.ValidateFormulaSet
+	// against ONE formula, and they are kept apart because they send the
+	// reader to FOUR DIFFERENT PLACES. Folding them into gapFormula would
+	// read as "the formula work is unfinished", which is true of exactly one
+	// of them.
+	gapFormulaTruthyGuard
+	gapFormulaOperandUntyped
+	gapFormulaArithmeticOverText
+	gapFormulaTooBig
+	// gapGroupDirection is not a translation gap at all: the import kept the
+	// direction and the QUERY cannot ask for it.
+	gapGroupDirection
 	gapMixedTypeDisjunction
 	gapOtherCombinator
 	gapUndeclaredProperty
@@ -456,6 +534,20 @@ type gapShape struct {
 	// matchExpr classifies a loss that carries NO reason, from the shape of
 	// the expression itself. Nil means this shape is never reached that way.
 	matchExpr func(expr string) bool
+	// breakdown, when set, reads a finer key out of the SAME reason text the
+	// tokens matched — the operand type a checker named, the property it
+	// could not find. The paragraph then reports the split instead of one
+	// total, which is the difference between "28 formula problems" and "these
+	// 11 are waiting on one thing and those 3 on another".
+	//
+	// It returns "" to contribute nothing, so a reason that carries no such
+	// key is simply counted and not guessed at.
+	breakdown func(reason string) string
+	// derivedFrom lists the substrings `breakdown` parses out. They do NOT
+	// classify anything, and they are guarded exactly as `tokens` are: a peer
+	// rewording the reason breaks a breakdown just as silently as it breaks a
+	// bucket, and silently is the one way this file is not allowed to fail.
+	derivedFrom []string
 }
 
 // gapShapes is the table, in match order. Reason tokens are disjoint by
@@ -474,6 +566,38 @@ var gapShapes = []gapShape{
 		matchExpr: func(expr string) bool {
 			return strings.Contains(expr, "formula.")
 		},
+	},
+	{
+		kind:        gapFormulaTruthyGuard,
+		label:       "formula guarded by `if(P, …)` where P is not a scalar `date` — Obsidian reads a bare P as JavaScript truthiness, and the guard-dropping rewrite is proved for `date` only",
+		tokens:      []string{"`if`'s condition is a truth value"},
+		derivedFrom: []string{"it was given %s"},
+		breakdown:   truthyGuardOperandType,
+	},
+	{
+		kind:        gapFormulaOperandUntyped,
+		label:       "formula naming a property the view's record type does not declare — the undeclared-property inference gap, reached through a formula",
+		tokens:      []string{"is not a property this view can type"},
+		derivedFrom: []string{"`%s` is not a property this view can type"},
+		breakdown:   untypedFormulaOperandName,
+	},
+	{
+		kind:   gapFormulaArithmeticOverText,
+		label:  "formula doing arithmetic on an operand this run did not type as a number",
+		tokens: []string{"is arithmetic and is defined over numbers"},
+	},
+	{
+		kind:  gapFormulaTooBig,
+		label: "formula past FR-146's size caps (nesting depth, node count, or a per-view total)",
+		// Both spellings are one shape: a formula the grammar UNDERSTOOD and
+		// then refused for size. The per-formula and per-view caps differ only
+		// in which number was exceeded.
+		tokens: []string{"FR-146 caps one formula at", "FR-146 caps a view at"},
+	},
+	{
+		kind:   gapGroupDirection,
+		label:  "grouping direction carried into the view file but not requestable — a find request has no group direction",
+		tokens: []string{"the groups are not silently reordered ascending"},
 	},
 	{
 		kind:   gapEmptyStringOnText,
@@ -506,8 +630,20 @@ var gapShapes = []gapShape{
 		matchExpr: isCombinatorExpr,
 	},
 	{
-		kind:      gapBaseFunction,
-		label:     "`.base` function expression this importer does not parse (`date(...)`, `today()`, `.year`/`.month`)",
+		kind:  gapBaseFunction,
+		label: "`.base` expression outside the PINNED Obsidian grammar snapshot (`date(x).year`, `today().month`) — widening it is an FR-143 spec revision, not a bug",
+		// These losses arrive BOTH ways and the shape must catch both. Today
+		// most carry no reason and are recognised by the expression's own
+		// shape; as the leaf parser starts attaching the grammar's named
+		// refusal, they start carrying one. Without the token, a peer
+		// IMPROVING the message would have moved these losses into
+		// UNCLASSIFIED and made the summary worse — which is precisely the
+		// drift TestGapTokens_StillExistInTheEmittingSource exists to expose
+		// before it reaches the founder rather than after.
+		tokens: []string{
+			"is not a field the formula grammar defines",
+			"a view's filter compares a PROPERTY against a literal",
+		},
 		matchExpr: isFunctionCallExpr,
 	},
 	{
@@ -515,6 +651,31 @@ var gapShapes = []gapShape{
 		label:     "dropped with NO stated reason — the leaf's diagnosis was discarded before it reached this report",
 		matchExpr: func(string) bool { return true },
 	},
+}
+
+// reTruthyGuardOperand reads the type the CHECKER named for a rejected `if`
+// condition out of its own sentence ("…it was given text at position 0;"). The
+// type is the routing decision for this whole shape, so it is read from the
+// checker's output rather than guessed from the formula's text.
+var reTruthyGuardOperand = regexp.MustCompile(`it was given ([a-z]+)`)
+
+func truthyGuardOperandType(reason string) string {
+	if m := reTruthyGuardOperand.FindStringSubmatch(reason); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// reUntypedFormulaOperand reads the PROPERTY NAME out of "`x` is not a property
+// this view can type". Naming them is the whole value of the paragraph: the
+// remedy is per-property, and a bare count of six says nothing about which six.
+var reUntypedFormulaOperand = regexp.MustCompile("`([^`]+)` is not a property this view can type")
+
+func untypedFormulaOperandName(reason string) string {
+	if m := reUntypedFormulaOperand.FindStringSubmatch(reason); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // reCombinator matches a loss whose text is a whole `and:`/`or:`/`not:` block,
@@ -625,6 +786,9 @@ type gapTally struct {
 	Bases    map[string]bool
 	Views    int
 	TypeRefs map[string]bool
+	// Sub is the shape's own finer split, keyed by whatever its `breakdown`
+	// read out of the reason. Empty unless the shape defines one.
+	Sub map[string]int
 }
 
 func (t *gapTally) add(example string) {
@@ -632,6 +796,59 @@ func (t *gapTally) add(example string) {
 	if t.Example == "" {
 		t.Example = example
 	}
+}
+
+// addSub records one finer key. A key of "" contributes nothing, so a reason
+// that does not carry the key is counted in Count and simply not split.
+func (t *gapTally) addSub(key string) {
+	if key == "" {
+		return
+	}
+	if t.Sub == nil {
+		t.Sub = map[string]int{}
+	}
+	t.Sub[key]++
+}
+
+// subTotal is how many of Count the split actually accounts for. The paragraphs
+// print it next to Count so a split that silently stops parsing shows up as a
+// shortfall the reader can see, rather than as a confidently wrong sum.
+func (t *gapTally) subTotal() int {
+	n := 0
+	for _, v := range t.Sub {
+		n += v
+	}
+	return n
+}
+
+// renderSub formats the split, largest first, ties broken by name so two runs
+// over the same vault produce the same line.
+func (t *gapTally) renderSub(unit func(key string, n int) string) string {
+	keys := make([]string, 0, len(t.Sub))
+	for k := range t.Sub {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if t.Sub[keys[i]] != t.Sub[keys[j]] {
+			return t.Sub[keys[i]] > t.Sub[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, unit(k, t.Sub[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// shapeByKind finds a shape's row, so tally can ask it for its breakdown.
+func shapeByKind(k gapKind) (gapShape, bool) {
+	for _, sh := range gapShapes {
+		if sh.kind == k {
+			return sh, true
+		}
+	}
+	return gapShape{}, false
 }
 
 // tallyLosses classifies every loss produced by a selector over the report.
@@ -668,9 +885,14 @@ func (r *Report) tally(includeLosses func(v ViewOutcome) []string, includeRefusa
 				continue
 			}
 			for _, l := range includeLosses(v) {
-				t := get(classifyLoss(l))
+				k := classifyLoss(l)
+				t := get(k)
 				t.add(l)
 				t.Bases[b.BaseRelPath] = true
+				if sh, ok := shapeByKind(k); ok && sh.breakdown != nil {
+					_, reason := splitLossLine(l)
+					t.addSub(sh.breakdown(reason))
+				}
 			}
 		}
 	}
@@ -851,6 +1073,36 @@ func (r *Report) narrate(k gapKind, t *gapTally) string {
 		return fmt.Sprintf("COMPUTED / FORMULA PROPERTY THIS IMPORTER COULD NOT TRANSLATE (%d dropped clause/column/sort/aggregate(s) across %d base(s)): the base's `formulas:` block IS carried now — it is parsed, translated into this product's own expression grammar, validated against the view's record type and written into the view file, and a `formula.*` reference in a filter, a grouping, a column or a summary resolves against it. What is counted here is the residue: an individual formula our grammar cannot express, and every reference to it. The two shapes that remain in the founder's vault are a JavaScript TRUTHINESS test used as an `if` condition (`if(due, ..., false)` — ours needs a boolean, and a bare date is not one) and an expression past FR-146's depth cap. %s Example: %q",
 			t.Count, len(t.Bases), capFormulas.verdict(), t.Example)
 
+	case gapFormulaTruthyGuard:
+		return fmt.Sprintf("TRUTHINESS GUARD IN A FORMULA (%d across %d base(s); by the operand type this run gave it: %s — %d of %d accounted for): the founder writes `if(P, <value>, \"\")`, where Obsidian reads a bare `P` as a JavaScript truthiness test. Our grammar wants an actual truth value there, and translate.go's W2 rewrite drops such a guard as REDUNDANT only where it can prove redundancy — P a single-valued `date` (FR-007a is what makes truthy and present the same question for a date, and for no other type) AND the guarded expression already absent wherever P is. The split above is the whole point of this paragraph, because the two halves are NOT the same job. An operand shown as `date` is already typed correctly and is blocked by W2's SECOND condition, deliberately: a guarded COMPARISON (`if(due, date(due) < today() && …, false)`) would reduce through the comparator's absence rules rather than through absence propagation, and translate.go declines to make that second, differently-argued proof. Those are formula-translator work. Every other operand type is this run declining to READ the property as a date — which is not automatically a defect, so before opening any code read the two sections above that say why: %s %s Example: %q",
+			t.Count, len(t.Bases),
+			t.renderSub(func(k string, n int) string { return fmt.Sprintf("%s x%d", k, n) }),
+			t.subTotal(), t.Count,
+			r.inferenceEvidenceFor("date"), capFormulas.notTheConstraint(), t.Example)
+
+	case gapFormulaOperandUntyped:
+		return fmt.Sprintf("FORMULA OPERAND THE VIEW'S RECORD TYPE DOES NOT DECLARE (%d across %d base(s); propert(ies): %s): this is NOT a formula gap and the formula translator is not the file to open. It is the same defect as PROPERTY THE INFERRED SCHEMA DOES NOT DECLARE above, reached through a formula instead of through a filter clause — the formula reads a property no sampled note of that record type carried, so there is no declared type to check the expression against and it is refused rather than allowed to compare FALSE on every record with nothing said. %s The two counts move together: every property named here that starts being inferred takes its formula with it, and nothing about the formula needs to change. Example: %q",
+			t.Count, len(t.Bases),
+			t.renderSub(func(k string, n int) string {
+				if n == 1 {
+					return fmt.Sprintf("`%s`", k)
+				}
+				return fmt.Sprintf("`%s` x%d", k, n)
+			}),
+			capFormulas.notTheConstraint(), t.Example)
+
+	case gapFormulaArithmeticOverText:
+		return fmt.Sprintf("ARITHMETIC IN A FORMULA OVER A NON-NUMBER OPERAND (%d across %d base(s)): the formula divides, multiplies or subtracts a property this run did not type as a number. TWO DIFFERENT CAUSES produce this identical line and they are fixed in different places, so read the operand's row in the record-type table above before opening anything. (a) The run could not read the property as a number — %s (b) The property genuinely holds mixed content and text is the CORRECT reading of it. Then the remedy is neither the inference nor the base file but this grammar: Obsidian's own `if(x.isType(\"number\"), …)` guard is a PER-RECORD runtime test, while our formulas are typed once against the single type the schema declares for a property, so the guard type-checks (it does yield a truth value) without narrowing `x` to a number inside the branch it guards. Making it narrow is a formula-type-system change. %s Example: %q",
+			t.Count, len(t.Bases), r.inferenceEvidenceFor("decimal", "integer", "number"), capFormulas.notTheConstraint(), t.Example)
+
+	case gapFormulaTooBig:
+		return fmt.Sprintf("FORMULA PAST FR-146's SIZE CAP (%d across %d base(s)): the expression was read and understood, then refused for SIZE — too deeply nested, too many nodes, or past a per-view total. Nothing here is misread, mistyped or untranslatable, so neither the type inference nor the formula translator is the file to open: the caps are FR-146 policy numbers in pkg/records/formula_set.go, and raising one is a deliberate decision about what a single view may cost to evaluate, taken on its own terms. The other remedy is to write the formula smaller in the `.base` file — a ten-arm nested `if` chain is a lookup table, and a lookup table is better expressed as a property on the record than as an expression re-evaluated per row. %s Example: %q",
+			t.Count, len(t.Bases), capFormulas.notTheConstraint(), t.Example)
+
+	case gapGroupDirection:
+		return fmt.Sprintf("GROUP DIRECTION CARRIED BUT NOT REQUESTABLE (%d across %d base(s)): the base groups DESCENDING. %s The block is one step further on, in the QUERY: %s Serving such a view therefore REFUSES (ServeRefusalGroupDirection) rather than returning the groups ascending and letting a reordering nobody asked for pass as the answer. So this is neither an import gap nor an inference gap — the importer did its job and the reader should not go looking in it. The remedy is a group direction on the find request; until that exists, refusing is the correct behaviour and not a defect to file against this importer. Example: %q",
+			t.Count, len(t.Bases), groupDirectionCarriedClause(), groupDirectionRequestClause(), t.Example)
+
 	case gapMixedTypeDisjunction:
 		return fmt.Sprintf("MIXED-TYPE DISJUNCTION (%d group(s) across %d base(s)): an `or:` whose branches name DIFFERENT record types. The filter grammar is NOT the blocker — a disjunction is carried, `or:` becomes `any:`, and `%s` exists on the generated view types. The RECORD TYPE is the blocker. %s The remaining alternative would be to import the view UNTYPED (`%s` permits that), but an untyped view spans every note in scope, which is strictly MORE rows than \"one of these two types\" — the broadening FR-105 forbids — so the group is dropped whole and the view is DISABLED instead. Example: %q",
 			t.Count, len(t.Bases), capAnyCombinator.Path, capMultiType.verdict(), capOptionalType.Path, t.Example)
@@ -872,12 +1124,12 @@ func (r *Report) narrate(k gapKind, t *gapTally) string {
 			t.Count, len(t.Bases), t.Example)
 
 	case gapBaseFunction:
-		return fmt.Sprintf("`.base` FUNCTION EXPRESSION (%d across %d base(s)): a call this importer's leaf parser does not read — `date(x).year`, `today()` and the `.year`/`.month` accessors. `file.inFolder`, `file.hasTag` and `file.hasLink` ARE translated (FR-134) and are not part of this count, so folder scoping is not among this vault's gaps. Example: %q",
+		return fmt.Sprintf("`.base` EXPRESSION OUTSIDE THE PINNED GRAMMAR SNAPSHOT (%d across %d base(s)): `date(x).year`, `today().month`, the `.year`/`.month` accessors. Read the next sentence before filing anything, because the obvious conclusion is the wrong one: these are NOT calls somebody forgot to implement. `records.ParseFormula` refuses them BY NAME and lists what is defined (`.days`, `.hour`, `.hours`, `.length`, `.milliseconds`, `.minutes`, `.seconds`). The grammar is PINNED to an Obsidian syntax snapshot — the Bases syntax reference as fetched 2026-08-30, see pkg/records/formula_parse.go — and FR-143 makes adopting a newer snapshot a SPEC REVISION carrying its own diff, never a quiet code change. So a view blocked here stays disabled and that is CORRECT. Widening the grammar is a decision to take deliberately, not an oversight to fix. `file.inFolder`, `file.hasTag` and `file.hasLink` ARE translated (FR-134) and are not part of this count, so folder scoping is not among this vault's gaps. Example: %q",
 			t.Count, len(t.Bases), t.Example)
 
 	case gapReasonDiscarded:
-		return fmt.Sprintf("DROPPED WITH NO STATED REASON (%d across %d base(s)): the expression is named but this report cannot say WHY it went. `!=` desugars into a `not:` wrapper (translate.go's nodeFromRawLeaf), and a combinator reports its OWN verbatim rather than the failing leaf's reason (view_write.go's `rawKindAny, rawKindNot` branch), so the leaf's diagnosis is discarded before it reaches here. Under FR-107 that is a reporting defect to file, independent of whether the drop was right. Example: %q",
-			t.Count, len(t.Bases), t.Example)
+		return fmt.Sprintf("DROPPED WITH NO STATED REASON (%d across %d base(s)): the expression is named but this report cannot say WHY it went. A combinator carries its CHILD's reason alongside its own verbatim (view_write.go's `resolveTree` and `joinReasons`), so a loss reaching this bucket is one where every child reason was itself empty — the diagnosis was never produced, not merely dropped on the way. TREAT EVERY OTHER COUNT IN THIS SECTION AS A FLOOR, NOT A TOTAL while this is non-zero: each of these %d losses belongs in one of the buckets above and is in none of them, so any bucket may be under-counted by up to that much. This report needs no change to absorb the fix — a loss line carrying a reason is classified on that reason, so these join their real buckets the moment one exists. Under FR-107 the missing reason is a reporting defect to file in its own right, independent of whether each drop was correct. Example: %q",
+			t.Count, len(t.Bases), t.Count, t.Example)
 
 	case gapTypeNotProvisioned:
 		named := sortedGapTypeNames(t.TypeRefs)
@@ -890,6 +1142,64 @@ func (r *Report) narrate(k gapKind, t *gapTally) string {
 			t.Views, len(t.Bases), strings.Join(named, ", "), claim, capOptionalType.Path)
 	}
 	return fmt.Sprintf("%d occurrence(s). Example: %q", t.Count, t.Example)
+}
+
+// inferenceEvidenceFor answers "why did this run not read that property as a
+// date / as a number", using THIS RUN'S OWN inference account rather than an
+// assumption about it.
+//
+// It exists because the obvious sentence is the wrong one. "The type inference
+// missed it" sends the reader to the inference code, and in the founder's vault
+// the inference had already declared, in this same report, that it REFUSED to
+// guess: `subscription.renewal_date` has 31 of 62 values parsing as a date and
+// the rest written as prose placeholders. Nothing in the inference is broken.
+// The answer is in the vault's own content, and it is already printed 400 lines
+// above — so this points there instead of inventing a cause.
+func (r *Report) inferenceEvidenceFor(wanted ...string) string {
+	want := map[string]bool{}
+	for _, w := range wanted {
+		want[strings.ToLower(w)] = true
+	}
+	var hits []string
+	for _, a := range r.Ambiguities {
+		if want[strings.ToLower(fmt.Sprint(a.BestType))] {
+			hits = append(hits, fmt.Sprintf("%s.%s (%d of %d values, %.0f%%, parse as %s)",
+				a.RecordType, a.Property, a.MatchedCount, a.TotalValues, a.MatchFrac*100, a.BestType))
+		}
+	}
+	// Every applicable clause is printed, not the first one that matches. An
+	// operand explained by the ambiguity list and an operand explained by
+	// neither list are BOTH in this count, and returning only the first
+	// explanation would answer for the whole bucket using evidence that covers
+	// part of it.
+	var out []string
+	if len(hits) > 0 {
+		out = append(out, fmt.Sprintf("(i) this run ALREADY REPORTED refusing to guess these, under `ambiguous property inferences` above: %s. That is the inference declining on evidence, not failing — the remaining values are prose in a column that is otherwise dates or numbers. The cheapest fix for those is in the VAULT, not in any code: blank or correct the odd values and the property types itself on the next run.",
+			strings.Join(hits, "; ")))
+	}
+	if len(r.NameEvidenced) > 0 {
+		out = append(out, fmt.Sprintf("(ii) %d propert(ies) were typed from their NAME alone because no note carries a value for them, listed under `typed from their NAME` above — check whether the operand is one of those before concluding anything about the inference.", len(r.NameEvidenced)))
+	}
+	out = append(out, "(iii) an operand named by neither list was typed from real observed values, so the place to look is the property's own content in the vault — not the inference code and not the formula translator.")
+	return strings.Join(out, " ")
+}
+
+// groupDirectionCarriedClause and groupDirectionRequestClause compose the two
+// halves of the group-direction verdict from the probes, so the paragraph
+// cannot outlive either field's presence. verdict() is deliberately not reused:
+// its wording is model-vs-importer, and this gap is view-vs-request.
+func groupDirectionCarriedClause() string {
+	if capViewGroupDirection.Present {
+		return fmt.Sprintf("The view file records that faithfully — `%s` exists on the generated view types — so NOTHING was lost at import time.", capViewGroupDirection.Path)
+	}
+	return fmt.Sprintf("There is no `%s` on the generated view types, so the direction is not even recorded: that is the first thing to file, ahead of anything below.", capViewGroupDirection.Path)
+}
+
+func groupDirectionRequestClause() string {
+	if capFindGroupDirection.Present {
+		return fmt.Sprintf("`%s` DOES exist now, so this refusal is STALE and is itself the defect to file.", capFindGroupDirection.Path)
+	}
+	return fmt.Sprintf("a find request has nowhere to ask for one — `group_by` is a list of property names and there is no `%s`.", capFindGroupDirection.Path)
 }
 
 func sortedGapTypeNames(m map[string]bool) []string {
