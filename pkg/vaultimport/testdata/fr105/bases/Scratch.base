@@ -1,0 +1,8 @@
+filters:
+  and:
+    - type == "task"
+    - not:
+        - file.inFolder("99-Temp")
+views:
+  - type: table
+    name: All but temp
