@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // ---------------------------------------------------------------------------
@@ -480,30 +482,52 @@ func reportWithOneLossOfEveryShape() *Report {
 // The provisioned-types section
 // ---------------------------------------------------------------------------
 
-// TestRenderProvisioned_SurvivesAnEmptyAccount. ReportLines() belongs to
-// another part of this package; the render path indexes [0] and [1:] on what it
-// returns. An empty slice there would panic the WHOLE report, which is the
-// founder's only window into his import — a section that omits one line is a
-// blemish, a report that crashes is a blackout.
-func TestRenderProvisioned_SurvivesAnEmptyAccount(t *testing.T) {
-	r := &Report{Provisioned: []ProvisionedType{{Type: "compliance"}}}
-	// A type with no properties and no bases still renders SOME account today;
-	// the guard is about the contract, not today's implementation, so the
-	// empty case is exercised through the render path directly.
+// TestRenderProvisionedEntry_SurvivesAnEmptyAccount. The render path indexes
+// [0] and [1:] on whatever ProvisionedType.ReportLines() returns — another
+// part of this package, free to change. An empty slice there would panic the
+// WHOLE report, which is the founder's only window into his import: a section
+// that omits one line is a blemish, a report that crashes is a blackout.
+//
+// This calls the entry renderer DIRECTLY with an empty slice, because that
+// case is unreachable through ReportLines() as written today — a test that
+// went through Render would pass whether the guard existed or not.
+func TestRenderProvisionedEntry_SurvivesAnEmptyAccount(t *testing.T) {
 	var buf bytes.Buffer
 	func() {
 		defer func() {
 			if p := recover(); p != nil {
-				t.Fatalf("Render panicked on a provisioned type with an empty account: %v", p)
+				t.Fatalf("rendering a provisioned type with an empty account panicked: %v", p)
 			}
 		}()
-		r.Render(&buf)
+		renderProvisionedEntry(&buf, "compliance", nil)
 	}()
-	if !strings.Contains(buf.String(), "DECLARED FROM A `.base` FILE") {
+	got := buf.String()
+	if !strings.Contains(got, "compliance") {
+		t.Errorf("the type was not named, so the entry vanished silently: %q", got)
+	}
+	if !strings.Contains(got, "defect to file") {
+		t.Errorf("an entry with no account must be reported as a defect, not rendered as an ordinary blank: %q", got)
+	}
+}
+
+// TestRenderProvisioned_RendersARealAccountThroughRender keeps the wiring
+// honest: the entry renderer above is reached from Render, not orphaned.
+func TestRenderProvisioned_RendersARealAccountThroughRender(t *testing.T) {
+	r := &Report{Provisioned: []ProvisionedType{{
+		Type:       "compliance",
+		Bases:      []string{"06-Bases/Compliance.base"},
+		Properties: []string{"authority", "due_date"},
+	}}}
+	var buf bytes.Buffer
+	r.Render(&buf)
+	got := buf.String()
+	if !strings.Contains(got, "DECLARED FROM A `.base` FILE") {
 		t.Error("the provisioned-types section did not render at all")
 	}
-	if !strings.Contains(buf.String(), "compliance") {
-		t.Error("the provisioned type was not named")
+	for _, want := range []string{"compliance", "authority", "due_date"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the account does not mention %q, so the operator cannot see what was assumed", want)
+		}
 	}
 }
 
@@ -541,5 +565,78 @@ func TestRenderProvisioned_IsAbsentWhenNothingWasProvisioned(t *testing.T) {
 	(&Report{}).Render(&buf)
 	if strings.Contains(buf.String(), "DECLARED FROM A `.base` FILE") {
 		t.Error("the provisioned-types heading rendered with nothing to report")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The two newest sections, held to the same standard
+// ---------------------------------------------------------------------------
+
+// TestRenderNameEvidenced_CountsTheTypesItFoundRatherThanNamingThem is the
+// anti-staleness guard for the name-inference section, and it is the same
+// argument as the systemic-gaps one in a smaller place.
+//
+// infer.go's rule produces only `date` today, and says so in a comment. A
+// report sentence saying "these are dates" would be true right up to the day a
+// second rule lands, and would then be silently wrong — which is exactly how
+// "ViewDef's filters: is a flat AND-only list" survived commit 37bfb062. The
+// section therefore counts the types it actually finds in the data.
+func TestRenderNameEvidenced_CountsTheTypesItFoundRatherThanNamingThem(t *testing.T) {
+	r := &Report{
+		Types: []TypeSchemaSummary{{Type: "contract"}, {Type: "deal"}},
+		NameEvidenced: []NameEvidencedInference{
+			{RecordType: "contract", Property: "renewal_date", Type: records.TypeDate, DeclaringNotes: 4},
+			{RecordType: "deal", Property: "close_date", Type: records.TypeDate, DeclaringNotes: 2},
+			{RecordType: "deal", Property: "seat_count", Type: records.TypeInteger, DeclaringNotes: 1},
+		},
+	}
+	var buf bytes.Buffer
+	r.renderNameEvidenced(&buf)
+	out := buf.String()
+
+	if !strings.Contains(out, "date x2") || !strings.Contains(out, "integer x1") {
+		t.Errorf("the heading did not count the types present in the data — a hardcoded \"these are dates\" is the shape that went stale before:\n%s", out)
+	}
+	if !strings.Contains(out, "GUESS") {
+		t.Error("a type read off a property NAME, with no value anywhere in the vault behind it, must be called a guess in the founder's own words")
+	}
+	if strings.Contains(out, "CONTRADICTION") {
+		t.Errorf("a consistent set produced a contradiction warning:\n%s", out)
+	}
+}
+
+// TestRenderNameEvidenced_ChecksItsOwnPremise. The section's premise is that
+// notes DECLARE the key and leave it blank. An entry that declares the key
+// nowhere, or names a record type this run did not infer, breaks that premise;
+// restating the claim over it would be the report being confidently wrong.
+func TestRenderNameEvidenced_ChecksItsOwnPremise(t *testing.T) {
+	noDeclaringNotes := &Report{
+		Types:         []TypeSchemaSummary{{Type: "contract"}},
+		NameEvidenced: []NameEvidencedInference{{RecordType: "contract", Property: "renewal_date", Type: records.TypeDate, DeclaringNotes: 0}},
+	}
+	var buf bytes.Buffer
+	noDeclaringNotes.renderNameEvidenced(&buf)
+	if !strings.Contains(buf.String(), "CONTRADICTION") {
+		t.Errorf("an entry whose key no note declares at all left the section's premise unchallenged:\n%s", buf.String())
+	}
+
+	unknownType := &Report{
+		Types:         []TypeSchemaSummary{{Type: "contract"}},
+		NameEvidenced: []NameEvidencedInference{{RecordType: "ghost", Property: "renewal_date", Type: records.TypeDate, DeclaringNotes: 3}},
+	}
+	buf.Reset()
+	unknownType.renderNameEvidenced(&buf)
+	if !strings.Contains(buf.String(), "CONTRADICTION") {
+		t.Errorf("a guess attached to a record type this run never inferred was narrated as though it were fine:\n%s", buf.String())
+	}
+}
+
+// TestRenderNameEvidenced_IsAbsentWhenNothingWasGuessed keeps the section from
+// printing an empty heading on the overwhelming majority of runs.
+func TestRenderNameEvidenced_IsAbsentWhenNothingWasGuessed(t *testing.T) {
+	var buf bytes.Buffer
+	(&Report{Types: []TypeSchemaSummary{{Type: "contract"}}}).renderNameEvidenced(&buf)
+	if buf.Len() != 0 {
+		t.Errorf("a run that guessed nothing still printed a section:\n%s", buf.String())
 	}
 }

@@ -68,7 +68,11 @@ type Report struct {
 	RejectedTypes []RejectedType
 	// Provisioned is every record type DECLARED from a `.base` file alone
 	// because no note in the vault carries it (FR-018d provisioning).
-	Provisioned    []ProvisionedType
+	Provisioned []ProvisionedType
+	// NameEvidenced is every property typed from its NAME because the vault
+	// holds no value for it anywhere — a guess, on the record, rather than an
+	// observation. Populated from infer.CollectNameEvidencedInferences.
+	NameEvidenced  []NameEvidencedInference
 	Types          []TypeSchemaSummary
 	Ambiguities    []AmbiguousInference
 	RelationSplits []RelationSplitReport
@@ -116,6 +120,7 @@ func (r *Report) Render(w io.Writer) {
 	}
 
 	r.renderProvisioned(w)
+	r.renderNameEvidenced(w)
 
 	fmt.Fprintf(w, "\n-- %d record types inferred --\n", len(r.Types))
 	for _, t := range r.Types {
@@ -699,20 +704,88 @@ func (r *Report) renderProvisioned(w io.Writer) {
 	var names []string
 	for _, p := range r.Provisioned {
 		names = append(names, p.Type)
-		lines := p.ReportLines()
-		if len(lines) == 0 {
-			fmt.Fprintf(w, "  %s: DECLARED, but this run produced no account of what was assumed — read the generated schema file directly; that is a defect to file, not a type with nothing to say.\n", p.Type)
-			continue
-		}
-		fmt.Fprintf(w, "  %s\n", lines[0])
-		for _, l := range lines[1:] {
-			fmt.Fprintf(w, "      %s\n", l)
-		}
+		renderProvisionedEntry(w, p.Type, p.ReportLines())
 	}
 
 	if observed, _ := r.partitionAgainstInferredTypes(names); len(observed) > 0 {
 		fmt.Fprintf(w, "  CONTRADICTION — %s also appear(s) among the %d record types inferred from real notes above, so notes DO carry them and nothing here should have been provisioned. Trust the inferred schema and file this.\n",
 			strings.Join(observed, ", "), len(r.Types))
+	}
+}
+
+// renderNameEvidenced prints every property this run typed from its NAME
+// because the vault held no value for it anywhere.
+//
+// THE SAME MECHANISM AS THE SYSTEMIC-GAPS SECTION, for the same reason. This
+// section states a limitation ("nothing was observed, so the name decided"),
+// and a hardcoded sentence about a limitation rots the moment the limitation
+// moves. Two things keep it honest, and neither is prose:
+//
+//  1. WHAT THE NAMES WERE READ AS IS COUNTED FROM THE DATA, never named in a
+//     string. infer.go's rule produces only `date` today and says so in a
+//     comment; the day it produces a second type, a sentence saying "these are
+//     dates" becomes false in silence. This section groups by the `Type` the
+//     inference actually wrote and prints the set it finds.
+//  2. EVERY ENTRY'S OWN PREMISE IS CHECKED against the report it appears in.
+//     The premise is "notes DECLARED the key and every one left it blank". An
+//     entry claiming zero declaring notes contradicts it — nothing declared the
+//     key, so there was no key to type — and an entry for a record type this
+//     run did not infer contradicts it too. Both are printed as contradictions
+//     rather than narrated as though they were fine.
+//
+// WHAT IT DOES NOT REACH: nothing here can tell whether the guess was RIGHT.
+// `renewal_date` typed as a date from its name is still a guess about a
+// property no note in the vault ever filled in, and the report says so in
+// those words rather than implying the type was measured.
+func (r *Report) renderNameEvidenced(w io.Writer) {
+	if len(r.NameEvidenced) == 0 {
+		return
+	}
+	byType := map[string]int{}
+	for _, n := range r.NameEvidenced {
+		byType[string(n.Type)]++
+	}
+	kinds := make([]string, 0, len(byType))
+	for k := range byType {
+		kinds = append(kinds, fmt.Sprintf("%s x%d", k, byType[k]))
+	}
+	sort.Strings(kinds)
+
+	fmt.Fprintf(w, "\n-- %d properties typed from their NAME, not from a value (%s) --\n", len(r.NameEvidenced), strings.Join(kinds, ", "))
+	fmt.Fprintln(w, "  Every property below is a GUESS. Notes of the record type declare the key and every one of them leaves it blank, so this run had no value anywhere to read a type from and used the property's name instead. Correct any one of them with: knowledge_configure set schema <type> property <name> type=<...>")
+
+	inferredTypes := map[string]bool{}
+	for _, t := range r.Types {
+		inferredTypes[t.Type] = true
+	}
+	for _, n := range r.NameEvidenced {
+		fmt.Fprintf(w, "  %s.%s -> %s (declared by %d note(s), every one blank)\n", n.RecordType, n.Property, n.Type, n.DeclaringNotes)
+		if n.DeclaringNotes <= 0 {
+			fmt.Fprintf(w, "      CONTRADICTION — no note declares `%s` at all, so there was no key here to type from a name. The premise of this whole section fails for this entry; file it rather than trusting the type.\n", n.Property)
+		}
+		if len(r.Types) > 0 && !inferredTypes[n.RecordType] {
+			fmt.Fprintf(w, "      CONTRADICTION — %q is not among the %d record types this run inferred, so this guess is attached to a type that does not exist here.\n", n.RecordType, len(r.Types))
+		}
+	}
+}
+
+// renderProvisionedEntry prints one provisioned type's account.
+//
+// It is a FUNCTION OVER THE LINES rather than inline code over a
+// ProvisionedType because the only interesting case — an empty account — is
+// unreachable through ProvisionedType.ReportLines() as that method is written
+// today. Inlined, the length guard could only be tested by mutating another
+// package's code, which is to say it could not be tested at all, and an
+// untested guard against a panic in the founder's only report is not a guard.
+// TestRenderProvisionedEntry_SurvivesAnEmptyAccount calls this directly.
+func renderProvisionedEntry(w io.Writer, typeName string, lines []string) {
+	if len(lines) == 0 {
+		fmt.Fprintf(w, "  %s: DECLARED, but this run produced no account of what was assumed — read the generated schema file directly. An entry with nothing to say is a defect to file, not a type with no story.\n", typeName)
+		return
+	}
+	fmt.Fprintf(w, "  %s\n", lines[0])
+	for _, l := range lines[1:] {
+		fmt.Fprintf(w, "      %s\n", l)
 	}
 }
 
