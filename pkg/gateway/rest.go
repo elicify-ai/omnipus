@@ -2640,6 +2640,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — it is
+	// the switch_agent target sentinel that always means "the configured
+	// default agent". Rejecting it at the create boundary makes the id/name
+	// collision impossible going forward, rather than merely documented (the
+	// part 3 upgrade-time WARN below covers agents that predate this check).
+	// Create's id is always a fresh uuid.New().String() (never operator-
+	// chosen), so only the name half of this rule is reachable here.
+	if strings.EqualFold(name, tools.SwitchAgentDefaultTarget) {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", name, tools.SwitchAgentDefaultTarget))
+		return
+	}
 	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
 	// rejected. The schema requires the `executor` object itself to be
 	// present for this variant, but its nested cli/cli_path properties are
@@ -3227,6 +3239,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	var req gen.AgentUpdateRequest
 	validateEnabled := cfg.Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
+		return
+	}
+	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
+	// the identical check in createAgent for the full rationale. An agent's
+	// id is never editable via PUT (it comes from the URL path, matched
+	// against cfg.Agents.List above), so only the name half is reachable
+	// here too; a pre-existing agent literally id'd "default" is covered by
+	// the boot-time WARN (part 3), not this rejection.
+	if req.Name != nil && strings.EqualFold(strings.TrimSpace(*req.Name), tools.SwitchAgentDefaultTarget) {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", strings.TrimSpace(*req.Name), tools.SwitchAgentDefaultTarget))
 		return
 	}
 	// Timestamp applied to the persisted agent on every successful save.
@@ -4234,6 +4257,17 @@ func (a *restAPI) credentialStoreReady() error {
 // producer side has a single definition.
 func channelCredKey(channelID, field string) string {
 	return "channel_" + channelID + "_" + field
+}
+
+// mcpEnvCredKey returns the canonical credential-store key for one MCP
+// server's env var secret. MUST stay identical to
+// pkg/sysagent/tools/mcp.go's mcpEnvCredKey ("mcp_<server>_<envKey>") — the
+// two packages independently produce and resolve refs under the same key
+// space (add_mcp_server / addMCPServer both write; pkg/mcp.ResolveServerEnvRefs
+// reads regardless of which path created the ref), so the format cannot
+// diverge between them.
+func mcpEnvCredKey(serverName, envKey string) string {
+	return "mcp_" + serverName + "_" + envKey
 }
 
 // removeStoredCredential removes refName from the credential store. A missing
@@ -7180,9 +7214,21 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			entry.EnvFile = &ef
 		}
 		// env/headers: return KEYS ONLY — values may be secrets (Authorization, API keys).
-		if len(srv.Env) > 0 {
-			keys := make([]string, 0, len(srv.Env))
+		// Union srv.Env (legacy plaintext) with srv.EnvRefs (credential-store-backed,
+		// the path add_mcp_server/addMCPServer route every new secret through) — a
+		// server added via either of those only ever populates EnvRefs, so reading
+		// srv.Env alone (BUG 2) made such a server appear to have NO environment
+		// configuration at all. A key present in both is reported once.
+		if len(srv.Env) > 0 || len(srv.EnvRefs) > 0 {
+			keySet := make(map[string]struct{}, len(srv.Env)+len(srv.EnvRefs))
 			for k := range srv.Env {
+				keySet[k] = struct{}{}
+			}
+			for k := range srv.EnvRefs {
+				keySet[k] = struct{}{}
+			}
+			keys := make([]string, 0, len(keySet))
+			for k := range keySet {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
@@ -7291,6 +7337,38 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Duplicate-name pre-check, BEFORE any credential-store write (mirrors the
+	// add_mcp_server tool fix, pkg/sysagent/tools/mcp.go): without this, a name
+	// collision was only discovered inside the config-write closure below,
+	// AFTER every env value had already been written to the credential store
+	// under mcp_<name>_<key> — silently overwriting the existing server's live
+	// credentials with the (rejected) request's values. This read is a
+	// snapshot, not a lock — the in-closure check further down stays as the
+	// authoritative concurrency guard for the race window between this check
+	// and the write.
+	if _, exists := a.agentLoop.MCPServersSnapshot()[req.Name]; exists {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("mcp server %q already exists", req.Name))
+		return
+	}
+	// Route env secrets into the encrypted credential store instead of
+	// writing them into config.json in plaintext — the same mechanism
+	// add_mcp_server (the tool) already uses (mcpEnvCredKey, "mcp_<name>_<key>").
+	// A partial failure here (some keys stored, one fails) leaves orphaned but
+	// harmless credential entries and no config write — no dangling ref is
+	// possible.
+	var envRefs map[string]string
+	if req.Env != nil && len(*req.Env) > 0 {
+		envRefs = make(map[string]string, len(*req.Env))
+		for key, value := range *req.Env {
+			credKey := mcpEnvCredKey(req.Name, key)
+			if _, err := a.storeCredential(credKey, value); err != nil {
+				slog.Error("rest: add mcp server: store env credential", "server", req.Name, "env_key", key, "error", err)
+				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store env credential %q: %v", key, err))
+				return
+			}
+			envRefs[key] = credKey
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -7332,8 +7410,13 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if req.Args != nil && len(*req.Args) > 0 {
 			entry["args"] = *req.Args
 		}
-		if req.Env != nil && len(*req.Env) > 0 {
-			entry["env"] = *req.Env
+		// Env is deliberately never persisted here — envRefs (credential-store
+		// references, resolved to real values only in memory at connect time by
+		// pkg/mcp.ResolveServerEnvRefs) is the only place a value from this
+		// request's env lands. This keeps addMCPServer's on-disk shape
+		// identical to add_mcp_server's (the tool).
+		if len(envRefs) > 0 {
+			entry["env_refs"] = envRefs
 		}
 		if req.EnvFile != nil && *req.EnvFile != "" {
 			entry["env_file"] = *req.EnvFile
@@ -7345,6 +7428,17 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
+			// Race-guard fired: a same-named server was created concurrently,
+			// between the pre-check above and this write. Roll back any env
+			// credentials this (rejected) request wrote above — leaving them
+			// in place would hijack the credentials of the server that won
+			// the race, exactly the bug this fix closes.
+			for envKey, credKey := range envRefs {
+				if delErr := a.removeStoredCredential(credKey); delErr != nil {
+					slog.Warn("rest: add mcp server: name-collision race — failed to roll back env credential",
+						"server", req.Name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+				}
+			}
 			jsonErr(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -7423,6 +7517,12 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	found := false
+	// removedEnvRefs captures the outgoing entry's EnvRefs (credential-store
+	// keys, mcp_<name>_<envKey>) so they can be cleaned up AFTER the config
+	// write succeeds — mirrors remove_mcp_server's (the tool) own ordering:
+	// deleting the credential entries before the config write is confirmed
+	// would risk destroying secrets for a removal that then fails to persist.
+	var removedEnvRefs map[string]string
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -7436,7 +7536,15 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		if servers == nil {
 			return nil
 		}
-		if _, exists := servers[id]; exists {
+		if existing, exists := servers[id]; exists {
+			// Round-trip through the typed struct to pull out EnvRefs cleanly
+			// (mirrors patchMCPServer's own existing-entry round-trip).
+			if raw, mErr := json.Marshal(existing); mErr == nil {
+				var current config.MCPServerConfig
+				if uErr := json.Unmarshal(raw, &current); uErr == nil {
+					removedEnvRefs = current.EnvRefs
+				}
+			}
 			delete(servers, id)
 			found = true
 		}
@@ -7449,6 +7557,21 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 	if !found {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
 		return
+	}
+	// Config write succeeded — clean up any credential-store entries this
+	// server's env values were stored under (BUG 2 fix). Without this, every
+	// server added via add_mcp_server/addMCPServer (which only ever populate
+	// EnvRefs, never plaintext Env) left its secrets permanently orphaned in
+	// the credential store on delete — remove_mcp_server (the tool) already
+	// does this cleanup; the REST path did not. Best-effort: a cleanup
+	// failure does not undo the already-committed config removal, it only
+	// means an orphaned credential-store entry survives under a name nothing
+	// references any more.
+	for envKey, credKey := range removedEnvRefs {
+		if err := a.removeStoredCredential(credKey); err != nil {
+			slog.Warn("rest: delete mcp server: failed to delete env credential",
+				"server", id, "env_key", envKey, "cred_key", credKey, "error", err)
+		}
 	}
 	// Config write succeeded — reconcile the live manager so the removed server is
 	// actually disconnected (DisconnectServer) and its tools evicted from the
@@ -7507,6 +7630,23 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
 			Message: fmt.Sprintf("env_file: %s", err.Error()),
+		})
+		return
+	}
+	// Resolve any credential-store env refs the same way production
+	// reconciliation does (pkg/agent/loop_mcp.go's reconcileLocked) — a
+	// server added via add_mcp_server carries EnvRefs, not literal Env, so
+	// without this the throwaway test connection would spawn the process
+	// with its secrets missing and report a misleading failure.
+	if a.credStore != nil {
+		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, a.credStore.Get)
+	} else {
+		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, nil)
+	}
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
 		})
 		return
 	}
@@ -7643,6 +7783,9 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 
 		// Merge only the fields that the caller provided (non-nil pointer).
+		// req.Env is handled separately, below the transport-consistency
+		// validation, so a validation failure never leaves an orphaned
+		// credential-store write behind (see the Env block's own comment).
 		if req.Enabled != nil {
 			current.Enabled = *req.Enabled
 		}
@@ -7654,9 +7797,6 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 		if req.Args != nil {
 			current.Args = *req.Args
-		}
-		if req.Env != nil {
-			current.Env = *req.Env
 		}
 		if req.EnvFile != nil {
 			current.EnvFile = *req.EnvFile
@@ -7674,6 +7814,38 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		if (current.Type == "sse" || current.Type == "http") && strings.TrimSpace(current.Command) != "" {
 			mcpPatchValidationMsg = "sse/http servers must not set a command"
 			return fmt.Errorf("validation: %s", mcpPatchValidationMsg)
+		}
+
+		// Route env secrets into the encrypted credential store instead of
+		// writing them into config.json in plaintext (BUG 2 fix) — the same
+		// mechanism add_mcp_server (the tool) and addMCPServer already use.
+		// Placed AFTER the transport-consistency validation above so a
+		// request that fails validation never reaches a credential-store
+		// write in the first place — no rollback needed.
+		//
+		// Collision handling: the credential key is deterministic
+		// (mcpEnvCredKey == "mcp_<name>_<key>"), so storing a new literal
+		// value for a key that was already ref-backed simply overwrites that
+		// same credential-store entry in place — the new literal value wins,
+		// exactly as add_mcp_server's description promises, and nothing is
+		// orphaned. Each key provided in this PATCH's env is deleted from
+		// current.Env (it is superseded by its ref) — env keys NOT mentioned
+		// in this PATCH, and any pre-existing EnvRefs entries for other keys,
+		// are left untouched.
+		if req.Env != nil && len(*req.Env) > 0 {
+			if current.EnvRefs == nil {
+				current.EnvRefs = make(map[string]string, len(*req.Env))
+			}
+			for key, value := range *req.Env {
+				credKey := mcpEnvCredKey(id, key)
+				if _, credErr := a.storeCredential(credKey, value); credErr != nil {
+					return fmt.Errorf("store env credential %q: %w", key, credErr)
+				}
+				current.EnvRefs[key] = credKey
+				if current.Env != nil {
+					delete(current.Env, key)
+				}
+			}
 		}
 
 		// Rebuild the map entry from the updated struct so the JSON shape is

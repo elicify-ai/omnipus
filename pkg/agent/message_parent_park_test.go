@@ -251,7 +251,6 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 		ParentDurableKey: parentTS.transcriptSessionID,
 		WorkspaceID:      "ws-c2-park",
 		AgentID:          parentTS.agent.ID,
-		LaunchProfile:    session.LaunchProfileUtility,
 	}))
 
 	// Subscribe to the event bus BEFORE dispatching, mirroring

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gomarkdown/markdown"
@@ -155,6 +156,16 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 			if !d.IsDir() {
 				continue
 			}
+			// Defensive: never surface a dot-prefixed directory as a skill.
+			// install_skill (pkg/tools/skills_install.go) stages a force=true
+			// reinstall's download under a hidden ".staging" subdirectory of
+			// this same skillsDir before renaming it into place, specifically
+			// so a concurrent scan here never sees the in-flight download —
+			// this check is a second, independent guard against that class of
+			// bug even if a future staging path changes again.
+			if strings.HasPrefix(d.Name(), ".") {
+				continue
+			}
 			skillFile := filepath.Join(dir, d.Name(), "SKILL.md")
 			if _, err := os.Stat(skillFile); err != nil {
 				continue
@@ -255,25 +266,88 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 	return sl.BuildSkillsSummaryFunc(nil)
 }
 
+// maxSkillsInSummary caps how many skills BuildSkillsSummaryFunc renders in
+// full: the summary used to dump every allowed skill's full XML entry into
+// the system prompt every turn with no limit, so an install with a large or
+// growing skill catalog paid an unbounded, ever-increasing per-turn cost.
+// The cap keeps the block bounded; truncated skills are still discoverable
+// via find_skills (mentioned in the footer appended when truncation occurs).
+const maxSkillsInSummary = 20
+
+// skillSourceRank orders SkillInfo.Source values by the same precedence
+// ListSkills uses to resolve name collisions: workspace overrides global
+// overrides builtin. Unknown sources sort last (defensive: should not occur
+// for skills produced by ListSkills).
+var skillSourceRank = map[string]int{
+	"workspace": 0,
+	"global":    1,
+	"builtin":   2,
+}
+
 // BuildSkillsSummaryFunc renders the skills summary block, optionally filtered
 // by an allow predicate. When allow is non-nil, only skills for which
 // allow(name) is true are listed — this implements per-agent progressive
 // disclosure so an agent's system prompt advertises only its allowlisted skills
-// (FR-9.4). When allow is nil, every loaded skill is listed.
+// (FR-9.4). When allow is nil, every loaded skill is eligible for listing.
+//
+// The eligible set is capped at maxSkillsInSummary. Previously the
+// cap kept the most-recently-modified skills, ranked by an os.Stat of each
+// skill's SKILL.md inside the sort comparator — an uncached syscall on every
+// system-prompt build (this runs every turn), and a meaningless ordering to
+// begin with: a git clone, cp -r, rsync, or container rebuild rewrites mtimes
+// wholesale (often to identical values), so which skills survived the cap
+// could change silently between deploys with no code change at all.
+//
+// The cap now keeps the same precedence ListSkills already uses to resolve
+// slug collisions — workspace skills first, then global, then builtin, tied
+// broken by display name then by slug — which is both a meaningful ordering
+// (more specific overrides survive) and free: it is computed once via
+// decorate-sort-undecorate over fields SkillInfo already carries, with no
+// filesystem access at all. A footer names how many were cut and points at
+// find_skills to search the full catalog, including anything not shown here.
 func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) string {
 	allSkills := sl.ListSkills()
 	if len(allSkills) == 0 {
 		return ""
 	}
 
-	var lines []string
-	lines = append(lines, "<skills>")
-	emitted := 0
+	// Filter to the allowed set first, then rank by the same
+	// workspace>global>builtin precedence ListSkills uses, tie-broken by
+	// name then slug for full determinism.
+	eligible := make([]SkillInfo, 0, len(allSkills))
 	for _, s := range allSkills {
-		// The allowlist is keyed on the slug (ID), never the display name.
 		if allow != nil && !allow(s.ID) {
 			continue
 		}
+		eligible = append(eligible, s)
+	}
+	if len(eligible) == 0 {
+		return ""
+	}
+
+	sort.SliceStable(eligible, func(i, j int) bool {
+		si, sj := eligible[i], eligible[j]
+		ri, rj := skillSourceRank[si.Source], skillSourceRank[sj.Source]
+		if ri != rj {
+			return ri < rj
+		}
+		if si.Name != sj.Name {
+			return si.Name < sj.Name
+		}
+		return si.ID < sj.ID
+	})
+
+	shown := eligible
+	truncated := 0
+	if len(eligible) > maxSkillsInSummary {
+		shown = eligible[:maxSkillsInSummary]
+		truncated = len(eligible) - maxSkillsInSummary
+	}
+
+	var lines []string
+	lines = append(lines, "<skills>")
+	emitted := 0
+	for _, s := range shown {
 		// The agent invokes a skill by the slug (ID) — that is the identifier
 		// ResolveSkillName/LoadSkill resolve against — so <name> carries the
 		// slug. The human-readable display name is surfaced separately so the
@@ -299,7 +373,15 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 	if emitted == 0 {
 		return ""
 	}
-	return strings.Join(lines, "\n")
+	out := strings.Join(lines, "\n")
+	if truncated > 0 {
+		noun := "skills"
+		if truncated == 1 {
+			noun = "skill"
+		}
+		out += fmt.Sprintf("\n\n%d more installed %s not shown above — call find_skills to search the full catalog.", truncated, noun)
+	}
+	return out
 }
 
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {

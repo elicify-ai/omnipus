@@ -13,6 +13,8 @@
 //   omnipus_tool_approval_pending     gauge     (none)
 //   omnipus_tool_approval_latency_seconds histogram  outcome
 //   omnipus_tool_mcp_collision_total  counter   conflict_with
+//   omnipus_toolsearch_zero_result_total   counter   (none) — ADR-071 §4.3.1(a)
+//   omnipus_toolsearch_no_followup_total   counter   (none) — ADR-071 §4.3.1(a)
 
 package gateway
 
@@ -44,6 +46,16 @@ type toolMetrics struct {
 	// Buckets: .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, +Inf.
 	latencyMu      sync.Mutex
 	latencyBuckets map[string]*latencyHistogram // outcome → histogram
+
+	// omnipus_toolsearch_zero_result_total / omnipus_toolsearch_no_followup_total
+	// (ADR-071 §4.3.1a): unlabelled counters. toolSearchZeroResultTotal is
+	// incremented once per ToolSearch query path call whose policy-loadable
+	// result set is empty; toolSearchNoFollowUpTotal once per query-path
+	// promotion still uncalled after searchPromotionHorizonTurns turns (or at
+	// session close, whichever comes first). Both reached via
+	// tools.SetToolMetricsRecorder's existing indirection — no new wiring.
+	toolSearchZeroResultTotal atomic.Uint64
+	toolSearchNoFollowUpTotal atomic.Uint64
 }
 
 var latencyBounds = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
@@ -94,6 +106,18 @@ func (m *toolMetrics) IncCollisionTotal(conflictWith string) {
 	m.collisionTotalMu.Lock()
 	m.collisionTotal[key]++
 	m.collisionTotalMu.Unlock()
+}
+
+// IncToolSearchZeroResult increments omnipus_toolsearch_zero_result_total
+// (ADR-071 §4.3.1a).
+func (m *toolMetrics) IncToolSearchZeroResult() {
+	m.toolSearchZeroResultTotal.Add(1)
+}
+
+// IncToolSearchNoFollowUp increments omnipus_toolsearch_no_followup_total
+// (ADR-071 §4.3.1a).
+func (m *toolMetrics) IncToolSearchNoFollowUp() {
+	m.toolSearchNoFollowUpTotal.Add(1)
 }
 
 // ObserveApprovalLatency records an approval latency sample for omnipus_tool_approval_latency_seconds.
@@ -195,6 +219,16 @@ func (a *restAPI) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&sb, "omnipus_tool_mcp_collision_total{%s} %d\n", labels, globalToolMetrics.collisionTotal[k])
 	}
 	globalToolMetrics.collisionTotalMu.Unlock()
+
+	// omnipus_toolsearch_zero_result_total (ADR-071 §4.3.1a)
+	sb.WriteString("# HELP omnipus_toolsearch_zero_result_total Total ToolSearch query-path calls whose policy-loadable result set was empty.\n")
+	sb.WriteString("# TYPE omnipus_toolsearch_zero_result_total counter\n")
+	fmt.Fprintf(&sb, "omnipus_toolsearch_zero_result_total %d\n", globalToolMetrics.toolSearchZeroResultTotal.Load())
+
+	// omnipus_toolsearch_no_followup_total (ADR-071 §4.3.1a)
+	sb.WriteString("# HELP omnipus_toolsearch_no_followup_total Total ToolSearch query-path promotions never called within the follow-up horizon.\n")
+	sb.WriteString("# TYPE omnipus_toolsearch_no_followup_total counter\n")
+	fmt.Fprintf(&sb, "omnipus_toolsearch_no_followup_total %d\n", globalToolMetrics.toolSearchNoFollowUpTotal.Load())
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, sb.String())

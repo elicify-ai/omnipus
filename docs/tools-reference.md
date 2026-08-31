@@ -2,9 +2,9 @@
 
 Omnipus exposes three kinds of tools to agents.
 
-**Built-in tools** are compiled into the binary, registered on per-agent `ToolRegistry` instances by `pkg/agent/loop.go` and `pkg/agent/instance.go`. Names use snake_case (`read_file`) for the original set and dotted prefixes (`workspace.shell`, `browser.navigate`) for newer namespaced families.
+**Built-in tools** are compiled into the binary, registered on per-agent `ToolRegistry` instances by `pkg/agent/loop.go` and `pkg/agent/instance.go`. Names use snake_case (`read_file`) for the original set and dotted prefixes (`browser.navigate`) for the browser family.
 
-**System tools (`system.*`)** are 41 administrative tools defined in `pkg/sysagent/tools/`. Available to any agent whose per-agent policy allows them; custom agents have `system.*: deny` seeded by default. There is no separate "system agent" runtime — these are ordinary builtins governed entirely by policy.
+**System tools (`system.*`-legacy-named)** are 33 administrative tools defined in `pkg/sysagent/tools/`, each registered under a flat snake_case name (e.g. `create_agent`). Available to any agent whose per-agent policy allows them; custom agents have these tools denied by default. There is no separate "system agent" runtime — these are ordinary builtins governed entirely by policy.
 
 **MCP tools** are registered at runtime from Model Context Protocol servers configured under `tools.mcp.servers` in `config.json`. Each tool is namespaced by the server name; the registry merges them into the same per-agent surface that the builtins occupy.
 
@@ -28,9 +28,7 @@ All five route through the per-agent workspace path guard. On Linux with sandbox
 
 | Tool | What it does | Notes |
 |---|---|---|
-| `exec` | PTY-capable shell execution with operator approval, sandbox.Run on the hardened path, and per-binary allow-lists. Supports background sessions with poll/read/write/send-keys/kill. | `pkg/tools/shell.go:445`. Scope is `ScopeCore` — only core agents see it on the registry; custom agents need explicit policy. |
-| `workspace.shell` | Foreground shell execution inside the agent workspace under the configured sandbox profile (`workspace`, `workspace+net`, `host`, `off`). Returns `exit_code`, `stdout`, `stderr`, `duration_ms`. | `pkg/tools/workspace_shell.go:140`. Gated by `experimental.workspace_shell_enabled` (default `false`; Jim's seed forces `true`). |
-| `workspace.shell_bg` | Background variant of `workspace.shell` with a managed dev-server port from `sandbox.dev_server_port_range`. | `pkg/tools/workspace_shell_bg.go:183`. Same enable-gate as `workspace.shell`. |
+| `bash` | Foreground or backgrounded shell execution under the configured sandbox profile (`workspace`, `workspace+net`, `host`, `off`), with operator approval and per-binary allow-lists. Set `run_in_background=true` for long-running commands (returns a `session_id` immediately); use `action=poll/read/kill` to manage it. ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into this one. | `pkg/tools/shell.go`. Registered for every agent regardless of sandbox mode; governed by each agent's explicit tool-policy entry. |
 | `build_static` | Tier 2 build command (e.g. `npm run build`) with egress proxy and audit-log fail-closed by default. | `pkg/tools/build_static.go:153`. |
 | `web_serve` | Unified Tier 1 (static serve) + Tier 3 (dev-server proxy) tool. Mints a preview-origin URL on the second listener port. | `pkg/tools/web_serve.go:201`. |
 
@@ -61,11 +59,8 @@ Tasks are stored per-agent as JSON files; concurrency goes through the `fileutil
 | Tool | What it does | Notes |
 |---|---|---|
 | `agent_list` | List configured agents (core and custom). | `pkg/tools/task.go:378` (lives in this file historically). |
-| `subagent` | Execute a subagent task synchronously and return the result. | `pkg/tools/subagent.go:333`. |
-| `spawn` | Spawn a subagent asynchronously in the background. | `pkg/tools/spawn.go:38`. |
-| `spawn_status` | Get the status of spawned subagents. | `pkg/tools/spawn_status.go:24`. |
-| `handoff` | Hand the conversation off to another agent. The receiving agent's prompt and tools take over. | `pkg/tools/handoff.go:99`. |
-| `return_to_default` | Return control to the default agent after a handoff. | `pkg/tools/handoff.go:312`. |
+| `delegate` | Delegate a task to a subagent, and control/monitor it afterward. `action="run"` (default) delegates a new task, in the background by default (returns a `task_id`/`session_id` immediately; set `async=false` to block and get the result inline). `action="status"` polls a running delegation. ADR-036 unified the retired `subagent`/`spawn`/`spawn_status` tools into this one. | `pkg/tools/delegate.go`. |
+| `switch_agent` | Switch the active agent for this session — hand off to a named agent (`target: <agent_id>`) or return to the default agent (`target: "default"`). Replaces the retired `hand_off` / `return_to_default` pair (ADR-071 D4). | `pkg/tools/handoff.go`. |
 
 ### Browser
 
@@ -121,31 +116,29 @@ There is no separate `cron_list` or `cron_delete` builtin — `cron` is one tool
 
 | Tool | What it does | Notes |
 |---|---|---|
-| `tool_search_tool_regex` | Search hidden tools by regex against name or description. Returns JSON schemas. | `pkg/tools/search_tool.go:30`. |
-| `tool_search_tool_bm25` | BM25 keyword search across the same surface. | `pkg/tools/search_tool.go:94`. |
+| `ToolSearch` | Load a hidden/lazy tool by exact name, or search the hidden-tool catalog by keyword (BM25) and auto-load the best match(es). Renamed from `load_tool` (ADR-071 D1); the `tool_search_tool_regex`/`tool_search_tool_bm25` pair this table previously listed predates the `load_tool` consolidation and no longer exists as separate tools. | `pkg/tools/tools_tool.go`. |
 
 These exist so an agent can opt into a large hidden-tool surface on demand rather than paying the context cost up front.
 
-## System tools (`system.*`)
+## System tools (`system.*`-legacy-named)
 
-Defined in `pkg/sysagent/tools/registry.go:13-79` as a flat list of 41 tools. Per-agent policy decides which agent can call which one — by default `SeedConfig` ships custom agents with `"system.*": "deny"` and a more permissive set for the core operator agent. Wildcards (`system.*`, `system.agent.*`) are honored with most-specific-prefix wins (`pkg/tools/compositor.go:51-106`).
+Defined in `pkg/sysagent/tools/registry.go` as a flat list of 33 tools (`BuildRegistry`'s own doc comment). Despite the legacy `system.*` grouping name, each tool's actual registered `Name()` and policy key is a flat snake_case name (e.g. `create_agent`, not `system.agent.create`) — there is no live dotted namespace or wildcard prefix for this family. Per-agent policy decides which agent can call which one; by default `SeedConfig` ships custom agents with these tools denied and a more permissive set for the core operator agent.
 
-Grouped by namespace:
+Grouped by area:
 
-| Namespace | Count | Tools | Source |
+| Area | Count | Tools | Source |
 |---|---|---|---|
-| `system.agent.*` | 8 | `create`, `update`, `delete`, `list`, `activate`, `deactivate`, `read_metadata`, `write_metadata` | `pkg/sysagent/tools/agent.go`, `metadata.go` |
-| `system.project.*` | 4 | `create`, `update`, `delete`, `list` | `pkg/sysagent/tools/project.go` |
-| `system.task.*` | 4 | `create`, `update`, `delete`, `list` | `pkg/sysagent/tools/task.go` |
-| `system.channel.*` | 5 | `enable`, `configure`, `disable`, `list`, `test` | `pkg/sysagent/tools/channel.go` |
-| `system.skill.*` | 4 | `install`, `remove`, `search`, `list` | `pkg/sysagent/tools/skill.go` |
-| `system.mcp.*` | 3 | `add`, `remove`, `list` | `pkg/sysagent/tools/mcp.go` |
-| `system.provider.*` + `system.models.list` | 4 | `configure`, `list`, `test`, `models.list` | `pkg/sysagent/tools/provider.go` |
-| `system.pin.*` | 3 | `list`, `create`, `delete` | `pkg/sysagent/tools/pin.go` |
-| `system.config.*` | 2 | `get`, `set` | `pkg/sysagent/tools/config.go` |
-| Utilities | 4 | `system.doctor.run`, `system.backup.create`, `system.cost.query`, `system.navigate` | `pkg/sysagent/tools/diag.go`, `navigate.go` |
+| Agent | 4 | `create_agent`, `update_agent`, `delete_agent`, `read_agent_metadata` | `pkg/sysagent/tools/agent.go`, `metadata.go` |
+| Workspace | 5 | `create_workspace`, `update_workspace`, `delete_workspace`, `list_workspaces`, `get_workspace` | `pkg/sysagent/tools/workspace.go` |
+| Task | 4 | `create_task_in_workspace`, `update_task_in_workspace`, `delete_task_in_workspace`, `list_tasks_in_workspace` | `pkg/sysagent/tools/task.go` |
+| Channel | 5 | `enable_channel`, `configure_channel`, `disable_channel`, `list_channels`, `test_channel` | `pkg/sysagent/tools/channel.go` |
+| Skill | 4 | `remove_skill`, `list_skills`, `create_skill`, `edit_skill` | `pkg/sysagent/tools/skill.go`, `skill_authoring.go` |
+| MCP | 3 | `add_mcp_server`, `remove_mcp_server`, `list_mcp_servers` | `pkg/sysagent/tools/mcp.go` |
+| Provider | 4 | `configure_provider`, `list_providers`, `test_provider`, `list_models` | `pkg/sysagent/tools/provider.go` |
+| Config | 2 | `get_config`, `set_config` | `pkg/sysagent/tools/config.go` |
+| Diagnostics / utility | 2 | `run_doctor`, `get_usage` | `pkg/sysagent/tools/diag.go` |
 
-`pkg/sysagent/tools/` is the source of truth for the exact set; the BRD's `Omnipus_BRD_AppendixD_System_Agent.md` describes the original 35 and predates the six additions (the four utility tools and the two `system.agent.read_metadata` / `system.agent.write_metadata` accessors from issue #240).
+`pkg/sysagent/tools/registry.go`'s `AllTools` is the source of truth for the exact set; several tools named in earlier revisions of this doc (`system.agent.write_metadata`, `system.navigate`, project/pin namespaces, `activate`/`deactivate`/`backup.create`/skill `install`/`search`) have since been retired.
 
 ## MCP tools
 

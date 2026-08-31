@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -228,16 +229,16 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 // in this exact order:
 //
 //  1. INFRA FORCE-ALLOW (unconditional): if ToolManifestTier(toolName) ==
-//     ManifestInfra (currently exactly {load_tool}), the verdict is "allow" no
+//     ManifestInfra (currently exactly {ToolSearch}), the verdict is "allow" no
 //     matter what the agent or global policy says. Infra tools are
 //     registration-gated, not policy-gated — a deny-by-default agent (Ava/Mia/
-//     Ray) never lists load_tool in its allow-set, so without this force-allow
+//     Ray) never lists ToolSearch in its allow-set, so without this force-allow
 //     every lazy/load-on-demand tool becomes unreachable at EXECUTION time (the
-//     model is shown load_tool but the exec gate denies it). The force-allow is
+//     model is shown ToolSearch but the exec gate denies it). The force-allow is
 //     UNCONDITIONAL — it does NOT depend on cfg.Tools.Manifest.Compressed. This
-//     is safe: when Compressed is off, load_tool is never surfaced to the model
+//     is safe: when Compressed is off, ToolSearch is never surfaced to the model
 //     (buildCompressedToolDefs is not invoked, and the manifest block that
-//     advertises load_tool is not injected), so its resolution is moot and
+//     advertises ToolSearch is not injected), so its resolution is moot and
 //     force-allowing it changes no observable behavior. When Compressed is on,
 //     this is exactly the reachability fix.
 //
@@ -292,7 +293,7 @@ func effectiveToolPolicyWith(
 // view and the gateway's exec gate cannot diverge.
 //
 // Resolution order (see effectiveToolPolicyWith for the full rationale):
-//  1. infra force-allow (load_tool → "allow", unconditional)
+//  1. infra force-allow (ToolSearch → "allow", unconditional)
 //  2. scope gate (unknown scope → "deny"; ScopeCore/ScopeGeneral defer to merge)
 //  3. global×agent strictest-wins merge (deny > ask > allow, god-mode, wildcards)
 //
@@ -498,12 +499,16 @@ func mcpContentText(content []mcp.Content) string {
 }
 
 // toolMetricsRecorder is the minimal interface needed by the tool registry
-// packages for FR-039 metrics (IncFilterTotal, IncCollisionTotal).
-// pkg/gateway implements this with its toolMetrics type; pkg/tools uses the
-// unexported interface so there is no import cycle.
+// packages for FR-039 metrics (IncFilterTotal, IncCollisionTotal) and, as of
+// ADR-071 §4.3.1(a), the two ToolSearch detection counters
+// (IncToolSearchZeroResult, IncToolSearchNoFollowUp). pkg/gateway implements
+// this with its toolMetrics type; pkg/tools uses the unexported interface so
+// there is no import cycle.
 type toolMetricsRecorder interface {
 	IncFilterTotal(agentType, effectivePolicy string)
 	IncCollisionTotal(conflictWith string)
+	IncToolSearchZeroResult()
+	IncToolSearchNoFollowUp()
 }
 
 // nopToolMetrics satisfies toolMetricsRecorder when no gateway is wired.
@@ -511,6 +516,8 @@ type nopToolMetrics struct{}
 
 func (nopToolMetrics) IncFilterTotal(_, _ string) {}
 func (nopToolMetrics) IncCollisionTotal(_ string) {}
+func (nopToolMetrics) IncToolSearchZeroResult()   {}
+func (nopToolMetrics) IncToolSearchNoFollowUp()   {}
 
 // activeToolMetricsRecorder is swapped at gateway boot.
 var activeToolMetricsRecorder toolMetricsRecorder = nopToolMetrics{}
@@ -522,4 +529,56 @@ func SetToolMetricsRecorder(m toolMetricsRecorder) {
 		activeToolMetricsRecorder = m
 		slog.Debug("tools: filter metrics recorder wired")
 	}
+}
+
+// ── ADR-071 §4.3.1(a): ToolSearch detection counters ────────────────────────
+//
+// Two operator-visible signals that make the D3 revisit trigger falsifiable:
+// omnipus_toolsearch_zero_result_total (a query returned no policy-loadable
+// hit) and omnipus_toolsearch_no_followup_total (a query-path promotion sat
+// unused for more than searchPromotionHorizonTurns turns). Both route through
+// the SAME toolMetricsRecorder indirection FR-039 established above — no
+// second, weaker mechanism — AND are mirrored into package-level
+// atomic.Uint64s here so unit tests can assert on the counters without
+// standing up a gateway (the one part of the earlier
+// handoffTranscriptWriteFailures framing that survives, as a test affordance
+// rather than the operator surface).
+
+// toolSearchZeroResultQueries and toolSearchNoFollowUpCalls back
+// ToolSearchZeroResultQueries() and ToolSearchNoFollowUpCalls().
+var (
+	toolSearchZeroResultQueries atomic.Uint64
+	toolSearchNoFollowUpCalls   atomic.Uint64
+)
+
+// recordToolSearchZeroResult increments both the local test-affordance
+// counter and the gateway-reachable recorder. Called from tools_tool.go's
+// query (by-description) path when it returns no policy-loadable hit.
+func recordToolSearchZeroResult() {
+	toolSearchZeroResultQueries.Add(1)
+	activeToolMetricsRecorder.IncToolSearchZeroResult()
+}
+
+// ToolSearchZeroResultQueries returns the current value of the
+// omnipus_toolsearch_zero_result_total counter. Exported for tests.
+func ToolSearchZeroResultQueries() uint64 {
+	return toolSearchZeroResultQueries.Load()
+}
+
+// RecordToolSearchNoFollowUp increments both the local test-affordance
+// counter and the gateway-reachable recorder. Exported because the
+// no-followup increment originates in pkg/agent (the promotion-age horizon
+// lives on AgentLoop, which owns the per-session state this counter has to
+// observe — pkg/tools has no visibility into it), and
+// activeToolMetricsRecorder above is unexported. pkg/agent already imports
+// pkg/tools, so this adds no new dependency and no import cycle.
+func RecordToolSearchNoFollowUp() {
+	toolSearchNoFollowUpCalls.Add(1)
+	activeToolMetricsRecorder.IncToolSearchNoFollowUp()
+}
+
+// ToolSearchNoFollowUpCalls returns the current value of the
+// omnipus_toolsearch_no_followup_total counter. Exported for tests.
+func ToolSearchNoFollowUpCalls() uint64 {
+	return toolSearchNoFollowUpCalls.Load()
 }

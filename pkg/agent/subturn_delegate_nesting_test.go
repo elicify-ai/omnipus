@@ -10,7 +10,7 @@
 // instructing ray to delegate onward to planner (await) via an explicitly
 // wired, unrestricted ray -> planner edge. The jim -> ray hop worked; ray's
 // own nested `delegate(agent_id="planner", ...)` call — even after a
-// successful `load_tool(names=["delegate"])` — failed immediately with:
+// successful `ToolSearch(names=["delegate"])` — failed immediately with:
 //
 //	{"error":"permission_denied","message":"Tool execution denied by policy.","tool":"delegate"}
 //
@@ -25,7 +25,7 @@
 // ROOT CAUSE: pkg/agent/subturn.go's spawnSubTurn built every delegated
 // child's tool registry via:
 //
-//	agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
+//	agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedSwitchAgent)
 //
 // — a registry-level filter that made "delegate" ENTIRELY ABSENT from the map
 // backing the child's own ts.agent.Tools (FR-H-006, "one level only", owner
@@ -36,15 +36,15 @@
 // chains — the registry-level block pre-empted it entirely, unconditionally,
 // regardless of how permissive the wired edges were.
 //
-// The load_tool "success" the UAT report observed was a red herring: the
-// unified `load_tool` infra tool (pkg/tools/tools_tool.go) is constructed
+// The ToolSearch "success" the UAT report observed was a red herring: the
+// unified `ToolSearch` infra tool (pkg/tools/tools_tool.go) is constructed
 // once, at the TOP-LEVEL persistent agent's registration time
 // (tools.NewToolsTool(agent.Tools, ...) in pkg/agent/loop.go), and its
 // canLoad/markLoaded closures re-resolve "the calling agent" via
 // al.registry.GetAgent(callerID) — the PERSISTENT top-level AgentInstance —
 // not the ephemeral per-turn child AgentInstance CloneExcept constructed
 // (which is never stored in al.registry, only in al.activeTurnStates). So
-// load_tool promoted/reported success against the TOP-LEVEL agent's own
+// ToolSearch promoted/reported success against the TOP-LEVEL agent's own
 // (unfiltered) registry, which already had "delegate", while the child's OWN
 // ts.agent.Tools — the object loop.go's per-iteration filterTimePolicyMap
 // (line ~5633) and the FR-079 TOCTOU re-check (resolveToolPolicyAtExec, line
@@ -55,7 +55,7 @@
 // "delegate" failed closed, BEFORE DelegateTool.Execute (and therefore its
 // real trust-set/mode/depth gate) was ever reached.
 //
-// THE FIX: spawnSubTurn now calls CloneExcept(tools.ExcludedHandoff) only.
+// THE FIX: spawnSubTurn now calls CloneExcept(tools.ExcludedSwitchAgent) only.
 // "delegate" is retained in every delegated child's own tool registry from
 // the moment it is cloned (delegate is registered via Register(), so it is
 // IsCore=true and always present in GetAll() — no TTL/promotion needed), so
@@ -63,12 +63,13 @@
 // nested delegate call reaches DelegateTool.Execute's real trust-set/mode/
 // depth gate (delegationDenyBackground/Await, SetDelegationDepthResolver) —
 // exactly the checks that MUST still apply and now finally get the chance to.
-// "hand_off" remains excluded (a distinct, still-valid concern: a nested
+// "switch_agent" (ADR-071 D4 renamed hand_off + return_to_default to this
+// one tool) remains excluded (a distinct, still-valid concern: a nested
 // sub-turn hijacking the ACTIVE parent session's agent).
 //
 // THIS TEST proves the fix end-to-end through the REAL production path: a
 // real spawnSubTurn call (jim -> ray) whose child (ray) runs a REAL runTurn
-// loop (scripted via a fake LLM provider) that itself calls load_tool then
+// loop (scripted via a fake LLM provider) that itself calls ToolSearch then
 // delegate, targeting a THIRD agent (planner) it is authorized to reach via
 // an explicit workspace delegation edge. Success is proven by observing BOTH
 // hops' real EventKindSubTurnSpawn events (ray's from the jim->ray hop this
@@ -321,19 +322,19 @@ func buildParentTurnState(t *testing.T, al *AgentLoop) *turnState {
 
 // TestNestedDelegate_Await verifies the FIX for async=false (await/blocking):
 // ray, itself running as a delegated sub-turn (spawned by a real spawnSubTurn
-// call from "jim"), calls load_tool then delegate(agent_id="planner",
+// call from "jim"), calls ToolSearch then delegate(agent_id="planner",
 // async=false) and the call reaches and passes the real trust-graph gate —
 // spawning planner as a genuine third-level sub-turn — instead of failing
 // closed with permission_denied before DelegateTool.Execute is ever reached.
 func TestNestedDelegate_Await(t *testing.T) {
 	al := newNestedDelegationAgentLoop(t)
 
-	// ray: load_tool(names=["delegate"]) -> delegate(agent_id="planner", async=false) -> final text.
+	// ray: ToolSearch(names=["delegate"]) -> delegate(agent_id="planner", async=false) -> final text.
 	raySeq := newScriptedProvider(
 		&providers.LLMResponse{
 			ToolCalls: []providers.ToolCall{{
 				ID:        "ray-call-1",
-				Name:      "load_tool",
+				Name:      "ToolSearch",
 				Arguments: map[string]any{"names": []string{"delegate"}},
 			}},
 		},
@@ -403,7 +404,7 @@ func TestNestedDelegate_Await(t *testing.T) {
 func TestNestedDelegate_Background(t *testing.T) {
 	al := newNestedDelegationAgentLoop(t)
 
-	// ray: load_tool -> delegate(agent_id="planner", async=true) -> final text.
+	// ray: ToolSearch -> delegate(agent_id="planner", async=true) -> final text.
 	// The delegate call returns a task_id immediately (non-blocking), so ray's
 	// final response follows right away while planner's spawn runs in the
 	// background on its OWN independent scripted provider.
@@ -411,7 +412,7 @@ func TestNestedDelegate_Background(t *testing.T) {
 		&providers.LLMResponse{
 			ToolCalls: []providers.ToolCall{{
 				ID:        "ray-call-1",
-				Name:      "load_tool",
+				Name:      "ToolSearch",
 				Arguments: map[string]any{"names": []string{"delegate"}},
 			}},
 		},
@@ -496,7 +497,7 @@ func TestNestedDelegate_Background(t *testing.T) {
 // is ever reached.
 //
 // Scenario: ray (delegate-allowed, with a trust edge to "planner" but NONE to
-// "outsider") is scripted to (1) load_tool, (2) delegate to "outsider" —
+// "outsider") is scripted to (1) ToolSearch, (2) delegate to "outsider" —
 // denied by the real trust-graph gate — then (3) delegate to "planner", which
 // DOES have a trust edge and must still succeed in the SAME turn. If the
 // trust-graph denial had incorrectly fed the ADR-058 ledger, step 3 would
@@ -504,13 +505,13 @@ func TestNestedDelegate_Background(t *testing.T) {
 func TestNestedDelegate_TrustGraphDenialDoesNotPoisonSubsequentCalls(t *testing.T) {
 	al := newNestedDelegationAgentLoop(t)
 
-	// ray: load_tool -> delegate(outsider) [denied, no trust edge] ->
+	// ray: ToolSearch -> delegate(outsider) [denied, no trust edge] ->
 	// delegate(planner) [authorized] -> final text.
 	raySeq := newScriptedProvider(
 		&providers.LLMResponse{
 			ToolCalls: []providers.ToolCall{{
 				ID:        "ray-call-1",
-				Name:      "load_tool",
+				Name:      "ToolSearch",
 				Arguments: map[string]any{"names": []string{"delegate"}},
 			}},
 		},

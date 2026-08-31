@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -174,4 +175,157 @@ func TestInstallSkillTool_DiscoverableByDifferentAgent(t *testing.T) {
 		}
 		assert.True(t, found, "%s's SkillsLoader must discover the globally-installed skill", name)
 	}
+}
+
+// blockingSkillRegistry is a skills.SkillRegistry test double whose
+// DownloadAndInstall extracts a real SKILL.md into targetDir and then blocks
+// until the test signals it to proceed — used to hold install_skill open in
+// the window between staging extraction and the final os.Rename, so a
+// concurrent ListSkills call can observe the live global skills directory
+// mid-install.
+type blockingSkillRegistry struct {
+	proceed chan struct{}
+	staged  chan string // reports the stageDir once SKILL.md has been written
+}
+
+func (blockingSkillRegistry) Name() string { return "blocking" }
+
+func (blockingSkillRegistry) Search(_ context.Context, _ string, _ int) ([]skills.SearchResult, error) {
+	return nil, nil
+}
+
+func (blockingSkillRegistry) GetSkillMeta(_ context.Context, slug string) (*skills.SkillMeta, error) {
+	return &skills.SkillMeta{Slug: slug, DisplayName: slug, LatestVersion: "1.0.0"}, nil
+}
+
+func (r blockingSkillRegistry) DownloadAndInstall(
+	_ context.Context, slug, _ string, targetDir string,
+) (*skills.InstallResult, error) {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, err
+	}
+	skillMD := "---\nname: " + slug + "\ndescription: mid-install staging probe\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+		return nil, err
+	}
+	r.staged <- targetDir
+	<-r.proceed
+	return &skills.InstallResult{Version: "1.0.0"}, nil
+}
+
+// TestInstallSkillTool_StagingDirectoryNeverVisibleToListSkills is the FIX 1
+// (HIGH) regression test: the staging directory install_skill extracts a
+// download into must never be visible to pkg/skills.SkillsLoader.ListSkills,
+// even WHILE the install is in flight — a concurrent list_skills call or a
+// system-prompt build must never see a phantom skill with an ID shaped like
+// the staging directory's name. This drives a real Execute() call in a
+// goroutine, blocks it mid-download after the staged SKILL.md is written but
+// before the final os.Rename, and asserts ListSkills sees only the
+// already-installed control skill — never the in-flight staging entry.
+func TestInstallSkillTool_StagingDirectoryNeverVisibleToListSkills(t *testing.T) {
+	globalSkills := t.TempDir()
+
+	// A control skill that is already fully installed, to prove ListSkills
+	// keeps working normally throughout.
+	require.NoError(t, os.MkdirAll(filepath.Join(globalSkills, "already-installed"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(globalSkills, "already-installed", "SKILL.md"),
+		[]byte("---\nname: already-installed\ndescription: control skill\n---\n\nBody.\n"),
+		0o644,
+	))
+
+	reg := blockingSkillRegistry{proceed: make(chan struct{}), staged: make(chan string, 1)}
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(reg)
+
+	tool := NewInstallSkillTool(registryMgr, globalSkills)
+
+	done := make(chan *ToolResult, 1)
+	go func() {
+		done <- tool.Execute(context.Background(), map[string]any{
+			"slug":     "mid-install-skill",
+			"registry": "blocking",
+		})
+	}()
+
+	// Wait until the download has staged its SKILL.md but Execute has not
+	// yet renamed it into place.
+	var stageDir string
+	select {
+	case stageDir = <-reg.staged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the staged install to write SKILL.md")
+	}
+	require.Contains(t, stageDir, ".staging"+string(filepath.Separator),
+		"the staged directory must live under the dedicated, non-scanned .staging subdirectory")
+
+	// Mid-install: ListSkills must see the control skill and NOTHING else —
+	// specifically not the in-flight staging entry.
+	loader := skills.NewSkillsLoader(t.TempDir(), globalSkills, t.TempDir())
+	infos := loader.ListSkills()
+	ids := make([]string, 0, len(infos))
+	for _, info := range infos {
+		ids = append(ids, info.ID)
+	}
+	assert.Contains(t, ids, "already-installed")
+	assert.Len(t, ids, 1, "no in-flight staging entry may be visible mid-install; got: %v", ids)
+	for _, id := range ids {
+		assert.NotContains(t, id, "install-", "no staging-shaped ID may ever be listed, got %q", id)
+	}
+
+	// Let the install finish and confirm it completed normally.
+	close(reg.proceed)
+	result := <-done
+	require.False(t, result.IsError, "install must succeed once unblocked, got: %s", result.ForLLM)
+	_, err := os.Stat(filepath.Join(globalSkills, "mid-install-skill", "SKILL.md"))
+	require.NoError(t, err, "the installed skill must land at its final location after Execute returns")
+
+	// And now it IS visible.
+	infosAfter := loader.ListSkills()
+	found := false
+	for _, info := range infosAfter {
+		if info.ID == "mid-install-skill" {
+			found = true
+		}
+	}
+	assert.True(t, found, "the completed install must be discoverable after Execute returns")
+}
+
+// TestNewInstallSkillTool_SweepsStaleStagingLeftoverFromCrash is the second
+// half of the FIX 1 (HIGH) regression coverage: if the process dies between
+// staging extraction and the final os.Rename (crash, OOM-kill, forced
+// restart), the deferred os.RemoveAll in Execute never runs, so a leftover
+// staging directory survives on disk. NewInstallSkillTool's constructor —
+// which runs once per agent at startup, see pkg/agent/loop.go's
+// registerSharedTools — must sweep any such leftover out of
+// skillsDir/.staging so it does not accumulate forever.
+func TestNewInstallSkillTool_SweepsStaleStagingLeftoverFromCrash(t *testing.T) {
+	globalSkills := t.TempDir()
+
+	// Simulate a crash-orphaned staging directory: fully extracted, complete
+	// with SKILL.md, exactly as DownloadAndInstall would leave it, but never
+	// renamed into place because the process died first.
+	orphan := filepath.Join(globalSkills, ".staging", "orphan-skill.install-abc123")
+	require.NoError(t, os.MkdirAll(orphan, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(orphan, "SKILL.md"),
+		[]byte("---\nname: orphan-skill\ndescription: crash leftover\n---\n\nBody.\n"),
+		0o644,
+	))
+
+	// A real, fully-installed skill must be left completely untouched by the
+	// sweep — the sweep is scoped to .staging only.
+	require.NoError(t, os.MkdirAll(filepath.Join(globalSkills, "real-skill"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(globalSkills, "real-skill", "SKILL.md"),
+		[]byte("---\nname: real-skill\ndescription: must survive the sweep\n---\n\nBody.\n"),
+		0o644,
+	))
+
+	_ = NewInstallSkillTool(skills.NewRegistryManager(), globalSkills)
+
+	_, err := os.Stat(orphan)
+	assert.True(t, os.IsNotExist(err), "the crash-orphaned staging directory must be removed by the startup sweep")
+	_, err = os.Stat(filepath.Join(globalSkills, "real-skill", "SKILL.md"))
+	assert.NoError(t, err, "the sweep must not touch real, already-installed skills")
 }

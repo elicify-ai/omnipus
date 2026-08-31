@@ -151,7 +151,7 @@ func (al *AgentLoop) decideRecallInjection(
 		// the share trigger too (M3).
 		resultTokens := estimateMessageTokens(providers.Message{Content: content})
 		windowTokens = sumMessageTokens(tail) + resultTokens
-		toolTokens = al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+		toolTokens = al.sentToolSurfaceTokens(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 		budget = agentContextBudget(ts.agent)
 
 		cs := config.DefaultContextSettings()

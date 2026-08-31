@@ -253,7 +253,6 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 			SessionID: sid, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-delegate",
 			ParentDurableKey: "parent-1", WorkspaceID: "ws", AgentID: "worker",
-			LaunchProfile: session.LaunchProfileSpecialist,
 		}); err != nil {
 			t.Fatalf("seed %s: %v", sid, err)
 		}
@@ -1437,7 +1436,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	//     A running session with a checkpoint + undelivered messages.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-running", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
 		LastCheckpointRef:     "ckpt-bs",
 		UndeliveredMessageIDs: []string{"bs-msg-1", "bs-msg-2"},
@@ -1446,13 +1445,13 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	// A queued session — also non-terminal, also swept.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-queued", Generation: 1, State: session.LifecycleQueued,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-done", Generation: 1, State: session.LifecycleCompleted,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 	// CRIT-1: a paused awaiting-correction owner (exemption b) — preserved.
@@ -1463,14 +1462,14 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
-		WorkspaceID: "ws", AgentID: "owner", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
 	})
 	// N-15: an in-flight goal predating the upgrade (stale semantics version).
 	h.pe.currentSemanticsVersionOverride = 3
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-stale-goal", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-bs",
 	})
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int {

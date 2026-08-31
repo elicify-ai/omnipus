@@ -1,7 +1,8 @@
 title: AgentSwitchedFrame
 description: >
   Server → client. Emitted when the active agent for a session changes due to
-  a successful handoff or return_to_default tool call. The SPA updates the
+  a successful switch_agent tool call (ADR-071 D4 merged the retired hand_off
+  and return_to_default tools into this one). The SPA updates the
   activeAgentId in the session store.
 type: object
 required:
@@ -20,7 +21,7 @@ properties:
     type: string
     description: >
       New active agent ID. Empty string means "returned to default agent"
-      (e.g., after return_to_default tool call).
+      (e.g., after switch_agent(target: "default")).
   message:
     type: string
     description: >

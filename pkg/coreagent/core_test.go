@@ -287,6 +287,25 @@ func TestCoreAgentDefaultTools(t *testing.T) {
 	}
 }
 
+// TestStaticCatalog_ContainsRenamedDiscoveryTool pins ADR-071 D1 / spec
+// FR-010 (W-D1 test 10): the boot-time tool-policy coverage validator
+// resolves the renamed discovery capability against the static catalog, and
+// the retired "load_tool" name is gone from it — a coverage gap here means
+// startup validation aborts on every install (CLAUDE.md constraint #6).
+func TestStaticCatalog_ContainsRenamedDiscoveryTool(t *testing.T) {
+	names := coreagent.AllStaticToolNames()
+	found := false
+	for _, n := range names {
+		if n == "ToolSearch" {
+			found = true
+		}
+		if n == "load_tool" {
+			t.Errorf("AllStaticToolNames() contains retired name %q", n)
+		}
+	}
+	assert.True(t, found, "AllStaticToolNames() must contain \"ToolSearch\"")
+}
+
 // =====================================================================
 // Test #16 — TestCoreAgentCannotDelete
 // =====================================================================

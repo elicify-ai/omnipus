@@ -768,17 +768,22 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	}
 }
 
-// TestAgentMetadataTools_RoundTrip verifies the round-trip semantics of
-// system.agent.write_metadata + system.agent.read_metadata.
+// TestAgentMetadataTools_RoundTrip verifies system.agent.read_metadata's read
+// semantics. Its former write-side companion, agent.write_metadata, was
+// retired (tool-manifest-tier-redesign review F6): it was a redundant,
+// unguarded second door onto files update_agent already writes through a
+// properly-guarded path (update_agent refuses locked core agents;
+// write_agent_metadata had no such check). Content is seeded directly on
+// disk below — what the write tool used to do in this test — rather than
+// through a tool call. The former AGENT.md frontmatter-validation subtests
+// (malformed/valid/no-frontmatter) tested write-side behavior that no longer
+// exists anywhere in this package and were removed along with the tool.
 //
-// Scenario A: write heartbeat content, read it back → exact match.
-// Scenario B: write malformed AGENT.md frontmatter → validation error.
-// Scenario C: read a non-existent file → NOT_FOUND error.
+// Scenario A: seed heartbeat content on disk, read it back → exact match.
+// Scenario B: read a non-existent file → NOT_FOUND error.
+// Scenario C: an unknown file key is rejected.
 //
-// BEFORE fix: these tools do not exist (compile/registration failure → test fails).
-// AFTER fix: they pass.
-//
-// Traces to: issue #240 regression lock B.
+// Traces to: issue #240 regression lock B; tool-manifest-tier-redesign review F6.
 func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	agentID := "test-roundtrip-agent"
@@ -788,27 +793,13 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 		t.Fatalf("setup workspace: %v", err)
 	}
 
-	writeTool := systools.NewAgentWriteMetadataTool(deps)
 	readTool := systools.NewAgentReadMetadataTool(deps)
 
 	t.Run("heartbeat_roundtrip", func(t *testing.T) {
 		beatContent := "Remind the team about the standup at 10am."
 
-		writeResult := writeTool.Execute(context.Background(), map[string]any{
-			"file":     "heartbeat",
-			"content":  beatContent,
-			"agent_id": agentID,
-		})
-		if writeResult.IsError {
-			t.Fatalf("write_metadata(heartbeat) failed: %s", writeResult.ForLLM)
-		}
-
-		onDisk, err := os.ReadFile(filepath.Join(wsPath, "HEARTBEAT.md"))
-		if err != nil {
-			t.Fatalf("read HEARTBEAT.md: %v", err)
-		}
-		if string(onDisk) != beatContent {
-			t.Errorf("disk content mismatch: got %q, want %q", string(onDisk), beatContent)
+		if err := os.WriteFile(filepath.Join(wsPath, "HEARTBEAT.md"), []byte(beatContent), 0o644); err != nil {
+			t.Fatalf("seed HEARTBEAT.md: %v", err)
 		}
 
 		readResult := readTool.Execute(context.Background(), map[string]any{
@@ -827,51 +818,6 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 		}
 		if body.Content != beatContent {
 			t.Errorf("read_metadata returned %q, want %q", body.Content, beatContent)
-		}
-	})
-
-	t.Run("agent_md_malformed_frontmatter_rejected", func(t *testing.T) {
-		// Unclosed frontmatter block — must be rejected before I/O.
-		malformedContent := "---\nname: Test Agent\n"
-		writeResult := writeTool.Execute(context.Background(), map[string]any{
-			"file":     "agent",
-			"content":  malformedContent,
-			"agent_id": agentID,
-		})
-		if !writeResult.IsError {
-			t.Fatalf("write_metadata(agent) with unclosed frontmatter should fail, got success: %s", writeResult.ForLLM)
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(writeResult.ForLLM), &m); err != nil {
-			t.Fatalf("result not JSON: %v", err)
-		}
-		errObj, _ := m["error"].(map[string]any)
-		if errObj["code"] != "INVALID_FRONTMATTER" {
-			t.Errorf("expected INVALID_FRONTMATTER error code, got %v", errObj["code"])
-		}
-	})
-
-	t.Run("agent_md_valid_frontmatter_accepted", func(t *testing.T) {
-		validContent := "---\nname: Test Agent\ndescription: A fine agent\n---\n\nSome body text.\n"
-		writeResult := writeTool.Execute(context.Background(), map[string]any{
-			"file":     "agent",
-			"content":  validContent,
-			"agent_id": agentID,
-		})
-		if writeResult.IsError {
-			t.Fatalf("write_metadata(agent) with valid frontmatter should succeed: %s", writeResult.ForLLM)
-		}
-	})
-
-	t.Run("agent_md_no_frontmatter_accepted", func(t *testing.T) {
-		noFrontmatter := "Just plain text, no frontmatter block."
-		writeResult := writeTool.Execute(context.Background(), map[string]any{
-			"file":     "agent",
-			"content":  noFrontmatter,
-			"agent_id": agentID,
-		})
-		if writeResult.IsError {
-			t.Fatalf("write_metadata(agent) without frontmatter should succeed: %s", writeResult.ForLLM)
 		}
 	})
 
@@ -894,9 +840,8 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("invalid_file_key_rejected", func(t *testing.T) {
-		result := writeTool.Execute(context.Background(), map[string]any{
+		result := readTool.Execute(context.Background(), map[string]any{
 			"file":     "totally-wrong",
-			"content":  "x",
 			"agent_id": agentID,
 		})
 		if !result.IsError {

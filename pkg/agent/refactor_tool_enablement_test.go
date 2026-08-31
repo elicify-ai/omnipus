@@ -68,7 +68,7 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 		// Skills
 		"find_skills", "install_skill",
 		// Agent orchestration
-		"delegate", "hand_off", "return_to_default",
+		"delegate", "switch_agent",
 		// Browser automation — the headline bug being fixed
 		"browser_navigate", "browser_click", "browser_type",
 		"browser_screenshot", "browser_get_text", "browser_wait",

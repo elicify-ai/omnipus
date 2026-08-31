@@ -1,6 +1,6 @@
 // W2-5: Integration test — sub-turn calling forbidden tools returns unknown-tool errors.
 //
-// Scripts a sub-turn where the LLM attempts to call delegate, then hand_off.
+// Scripts a sub-turn where the LLM attempts to call delegate, then switch_agent.
 // For each:
 //   - Assert the tool result returns an "unknown tool" / "not found" error.
 //   - Assert zero EventKindSubTurnSpawn emitted as a grandchild.
@@ -13,9 +13,9 @@
 //
 // FR-H-006 REVERSAL (live UAT, 2026-07-12): every test in this file constructs
 // its own child registry directly via parentRegistry.CloneExcept("delegate",
-// "hand_off") on a hand-built registry — it does NOT drive the real
+// "switch_agent") on a hand-built registry — it does NOT drive the real
 // pkg/agent/subturn.go::spawnSubTurn call site, which now excludes ONLY
-// "hand_off" (delegate is retained so a delegated sub-turn can itself
+// "switch_agent" (delegate is retained so a delegated sub-turn can itself
 // delegate onward, gated by the trust-graph/mode/depth system — see
 // pkg/agent/subturn_delegate_nesting_test.go). These tests remain valid as
 // exercises of the CloneExcept primitive with an explicit "delegate" argument;
@@ -31,7 +31,7 @@
 // HTTP injection into the gateway.
 //
 // What this file DOES test:
-// 1. Registry-level enforcement: executing "delegate", "hand_off" on a child
+// 1. Registry-level enforcement: executing "delegate", "switch_agent" on a child
 //    registry returns unknown-tool errors (not depth errors, not panics).
 // 2. Event bus invariant: calling ExecuteWithContext on excluded tools does NOT emit
 //    EventKindSubTurnSpawn (no grandchild).
@@ -60,12 +60,12 @@ import (
 
 // TestSubTurn_ForbiddenToolCalls_ReturnUnknownToolError verifies that a child
 // sub-turn's registry returns an "unknown tool" error when the LLM attempts to
-// call delegate or hand_off. This is the enforcement mechanism per FR-H-006.
+// call delegate or switch_agent. This is the enforcement mechanism per FR-H-006.
 //
 // BDD Scenario 9 (sprint-h-subagent-block-spec.md):
 //
-//	Given a sub-turn child registry constructed via CloneExcept("delegate","hand_off")
-//	When ExecuteWithContext is called for "delegate" or "hand_off"
+//	Given a sub-turn child registry constructed via CloneExcept("delegate","switch_agent")
+//	When ExecuteWithContext is called for "delegate" or "switch_agent"
 //	Then each returns a non-nil error result with "not found" in the error text
 //	And zero EventKindSubTurnSpawn are emitted as a result
 //
@@ -74,13 +74,13 @@ func TestSubTurn_ForbiddenToolCalls_ReturnUnknownToolError(t *testing.T) {
 	// Build a parent registry with both delegation-adjacent tools.
 	parentRegistry := tools.NewToolRegistry()
 	parentRegistry.Register(&tools.DelegateTool{})
-	parentRegistry.Register(&tools.HandoffTool{})
+	parentRegistry.Register(&tools.SwitchAgentTool{})
 	parentRegistry.Register(&tools.ReadFileTool{})
 
 	// Construct child registry as spawnSubTurn does.
-	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
+	childRegistry := parentRegistry.CloneExcept(tools.ExcludedDelegate, tools.ExcludedSwitchAgent)
 
-	forbiddenTools := []string{"delegate", "hand_off"}
+	forbiddenTools := []string{"delegate", "switch_agent"}
 
 	for _, toolName := range forbiddenTools {
 		t.Run("forbidden_tool="+toolName, func(t *testing.T) {
@@ -129,13 +129,13 @@ func TestSubTurn_ForbiddenToolCalls_EmitZeroGrandchildSpawnEvents(t *testing.T) 
 	// Build parent registry with delegation-adjacent tools + neutral tool.
 	parentRegistry := tools.NewToolRegistry()
 	parentRegistry.Register(&tools.DelegateTool{})
-	parentRegistry.Register(&tools.HandoffTool{})
+	parentRegistry.Register(&tools.SwitchAgentTool{})
 	parentRegistry.Register(&tools.ReadFileTool{})
 
-	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
+	childRegistry := parentRegistry.CloneExcept(tools.ExcludedDelegate, tools.ExcludedSwitchAgent)
 
 	// Attempt to call both forbidden tools on the child registry.
-	for _, toolName := range []string{"delegate", "hand_off"} {
+	for _, toolName := range []string{"delegate", "switch_agent"} {
 		result := childRegistry.ExecuteWithContext(
 			context.Background(),
 			toolName,
@@ -254,16 +254,16 @@ func TestSubTurn_OriginalDelegation_EmitsExactlyOneSpawnEvent(t *testing.T) {
 }
 
 // TestSubTurn_NeutralTools_RemainAccessible verifies that non-delegation tools
-// are unaffected by CloneExcept("delegate","hand_off").
+// are unaffected by CloneExcept("delegate","switch_agent").
 //
 // Traces to: temporal-puzzling-melody.md W2-5
 func TestSubTurn_NeutralTools_RemainAccessible(t *testing.T) {
 	parentRegistry := tools.NewToolRegistry()
 	parentRegistry.Register(&tools.DelegateTool{})
-	parentRegistry.Register(&tools.HandoffTool{})
+	parentRegistry.Register(&tools.SwitchAgentTool{})
 	parentRegistry.Register(&tools.ReadFileTool{})
 
-	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
+	childRegistry := parentRegistry.CloneExcept(tools.ExcludedDelegate, tools.ExcludedSwitchAgent)
 
 	// ReadFileTool must still be present in the child registry.
 	tool, ok := childRegistry.Get("read_file")
@@ -272,5 +272,5 @@ func TestSubTurn_NeutralTools_RemainAccessible(t *testing.T) {
 
 	// Child registry count must be parent count minus 2 (the two excluded tools).
 	assert.Equal(t, parentRegistry.Count()-2, childRegistry.Count(),
-		"child must have exactly parent_count-2 tools after excluding delegate+hand_off")
+		"child must have exactly parent_count-2 tools after excluding delegate+switch_agent")
 }

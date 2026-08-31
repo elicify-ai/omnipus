@@ -71,14 +71,12 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: childB, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID: chatA, ParentDurableKey: chatA, WorkspaceID: "ws-1", AgentID: "worker",
-		LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed B failed: %v", err)
 	}
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: grandchildD, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID: childB, ParentDurableKey: childB, WorkspaceID: "ws-1", AgentID: "worker",
-		LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed D failed: %v", err)
 	}
@@ -149,7 +147,6 @@ func TestPerChildMessageCeiling_IsPerDirectParent(t *testing.T) {
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: id, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 			OwnerScopeID: chatA, ParentDurableKey: chatA, WorkspaceID: "ws-1", AgentID: "worker",
-			LaunchProfile: session.LaunchProfileSpecialist,
 		}); err != nil {
 			t.Fatalf("seed %s failed: %v", id, err)
 		}

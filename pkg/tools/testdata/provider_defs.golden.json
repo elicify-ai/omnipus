@@ -1,147 +1,147 @@
 [
   {
     "name": "add_mcp_server",
-    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
+    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count. Every key in env is stored in the encrypted credential store and referenced from config.json by a ref (mcp_\u003cname\u003e_\u003ckey\u003e) — never written in plaintext, mirroring configure_channel's credential handling. sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. A name that already exists is refused, not updated — remove it first with remove_mcp_server. Tools the server exposes register with no tool policy and cannot be called until an operator assigns one.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
     "name": "configure_channel",
-    "description": "Configure an enabled channel with its credentials (token, phone_number, etc).\nParameters: id (required), plus channel-specific credentials.",
+    "description": "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode.",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "configure_provider",
-    "description": "Add or update an LLM provider with its API key.\nParameters: name (required), api_key (for cloud), api_base (optional).",
+    "description": "Store an LLM provider's API key in the encrypted credential store and wire it into config.json so the provider becomes usable. Does NOT contact the provider — the key is stored and referenced, never validated against the live API, so a wrong or revoked key is accepted here without complaint; call list_models afterwards to confirm the key actually works. name must be a catalog provider id (list_models or the Settings → Providers screen show the valid ids; note the ids are 'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host.\nParameters: name (required), api_key, api_base.",
     "scope": "core",
     "category": "providers",
     "source": "builtin"
   },
   {
     "name": "create_agent",
-    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path).",
+    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
   },
   {
     "name": "create_skill",
-    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; the write is consent-gated and versioned. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
+    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; prior versions are snapshotted for rollback, but whether the write additionally prompts for operator approval depends on your operator's tool-approval policy for this tool. content must not exceed 262144 bytes. A name that already exists is refused — use edit_skill to modify it instead. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
   },
   {
     "name": "create_task_in_workspace",
-    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done).",
+    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done). Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted.",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"
   },
   {
     "name": "create_workspace",
-    "description": "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace).",
+    "description": "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
   },
   {
     "name": "delete_agent",
-    "description": "Delete an agent and all its data (sessions, memory, workspace).\nParameters: id (required), confirm (bool, must be true).",
+    "description": "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and its home directory ($OMNIPUS_HOME/agents/\u003cid\u003e/ — SOUL.md, HEARTBEAT.md, MEMORY.md, its skills folder). Also cascades: every chat session in the shared session store that belongs SOLELY to this agent is deleted, together with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation agent switch) is left untouched to avoid destroying that agent's history, and is reported separately in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself survives); tasks it merely created keep that historical attribution. This agent is also removed from every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray), the currently configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted — set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. A step that fails partway through is reported in the response rather than silently swallowed — check for a warning field before assuming the cascade fully completed.\nParameters: id (required), confirm (bool, must be true).",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
   },
   {
     "name": "delete_task_in_workspace",
-    "description": "Delete a task. Parameters: id (required), confirm (bool, must be true).",
+    "description": "Permanently delete a to-do/task item from a workspace by id. Irreversible. You may only delete a task you own (creator or assignee) — deleting another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required), confirm (bool, must be true). Deleting a task also removes it from every other task's blocked_by list, which can unblock dependents and make them runnable — the response lists any tasks unblocked this way in unblocked_tasks. If those edges cannot be fully cleaned up the deletion still stands and the response carries a cascade_warning.",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"
   },
   {
     "name": "delete_workspace",
-    "description": "Delete a workspace and all its tasks. This is irreversible — all GTD tasks belonging to the workspace are permanently deleted. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion).",
+    "description": "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: all GTD tasks belonging to the workspace, the mount/folder-grant store (records of which host folders were shared with it), the delegation trust graph (which agents may delegate to which within it), and the workspace's own directory (AGENT.md and its shared memory room) are all permanently removed. Only GTD-status tasks (inbox/next/in_progress/blocked/done/failed) are cascade-deleted — workflow-status tasks that still reference this workspace_id are left in place and become orphans. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
   },
   {
     "name": "disable_channel",
-    "description": "Disable a channel connection. The channel will stop on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "edit_skill",
-    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md. Editing a built-in creates a user override; the built-in is never mutated in place. The write is consent-gated and versioned. Parameters: name (required), content (required, full new SKILL.md).",
+    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md; whether the write additionally prompts for operator approval depends on your operator's tool-approval policy for this tool. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name (required), content (required, full new SKILL.md).",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
   },
   {
     "name": "enable_channel",
-    "description": "Enable a channel connection. The channel will start on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "get_config",
-    "description": "Read a configuration value by dot-notation key.\nParameters: key (required, e.g. 'gateway.port').",
+    "description": "Read a setting (port, timeout, host, feature flag, or similar) from config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.mode'. Pair with set_config to change a value. Credential-shaped fields (API keys, secrets, tokens, passwords) and a handful of security-critical keys (gateway account/token data, the whole sandbox namespace's writable form, etc.) are refused or returned redacted — use list_providers to check configured providers without exposing keys.\nParameters: key (required, e.g. 'gateway.port').",
     "scope": "core",
     "category": "platform",
     "source": "builtin"
   },
   {
     "name": "get_usage",
-    "description": "Query token usage by period, agent, model, or session.\nParameters:\n  period   — time window: day, week, month (default), or all\n  by       — grouping dimension: agent (default), model, or session\n  agent_id — optional: restrict to a single agent\n  session_id — optional: restrict to a single session\nReturns input, output, cache-read, cache-write, and total token counts.\nNo dollar amounts — token counts only.\nExternal CLI subagents (subagent_3p) run on a separate engine and are excluded.",
+    "description": "Query token usage by period, agent, model, or session.\nParameters:\n  period   — time window: day, week, month (default), or all\n  by       — grouping dimension: agent (default), model, or session\n  agent_id — optional: restrict to a single agent\n  session_id — optional: restrict to a single session\nReturns input, output, cache-read, cache-write, and total token counts.\nNo dollar amounts — token counts only.\nExternal CLI subagents (subagent_3p) run on a separate engine and are excluded.\nIf some sessions could not be read the response sets partial=true with partial_error_count — treat the totals as a lower bound in that case.",
     "scope": "core",
     "category": "platform",
     "source": "builtin"
   },
   {
     "name": "get_workspace",
-    "description": "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks.\nParameters: id (required, from list_workspaces).",
+    "description": "Get a single workspace by ID, including its live task count.\nUse this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
   },
   {
     "name": "list_channels",
-    "description": "List all channels with status and implementation tier. No parameters required.",
+    "description": "List every messaging channel Omnipus supports — Telegram, Discord, WhatsApp, Slack, Matrix, Google Chat, IRC, LINE, Feishu, QQ, DingTalk, WeCom, Weixin — with each one's live state: not_configured, needs_credentials, or configured, plus whether it is currently enabled. Use the returned id with enable_channel, configure_channel, or test_channel. No parameters required.",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "list_mcp_servers",
-    "description": "List all MCP servers configured in tools.mcp.servers with their transport and enabled state. No parameters required.",
+    "description": "List all MCP servers configured in tools.mcp.servers with their transport, enabled state, and live connection status (connected/error/disconnected, from the same live readback add_mcp_server uses). Environment variables are never returned — they may hold credential-store references or, for servers configured before that mechanism existed, real secrets. No parameters required.",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
     "name": "list_models",
-    "description": "List available models from configured providers. Optional: filter by provider name. Returns model slugs, provider, and whether it's the system default.",
+    "description": "List models actually available from your configured providers. This queries each provider's live /models API (up to 15s per provider), so it doubles as a real connectivity and credential check — it is what test_provider points you to. Returns each model's slug, its provider, and whether it is the system default, plus the configured default_model. Providers that have no API key, no known base URL, or that fail to respond are omitted from the list and reported in `warnings` — check that field before treating the list as complete.\nParameters: provider (optional, filter to one provider).",
     "scope": "core",
     "category": "providers",
     "source": "builtin"
   },
   {
     "name": "list_providers",
-    "description": "List configured providers with connection status. API keys are never returned. No parameters required.",
+    "description": "List the providers configured in config.json and whether each one has an API key present in the credential store (key_present / no_credentials). API keys are never returned, and no network call is made — key_present means a key is stored, not that it works. Use list_models to exercise a provider's live API. No parameters required.",
     "scope": "core",
     "category": "providers",
     "source": "builtin"
   },
   {
     "name": "list_skills",
-    "description": "List all installed skills. No parameters required.",
+    "description": "List all installed skills (procedures, playbooks, and capabilities loaded from SKILL.md files) available to you right now, with each skill's id, name, and description. Use find_skills instead to search the marketplace for skills that are NOT yet installed. No parameters required.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -155,21 +155,14 @@
   },
   {
     "name": "list_workspaces",
-    "description": "List all active workspaces with their task counts. Call this to find workspace ids before calling create_task_in_workspace, list_tasks_in_workspace, or update_workspace. Returns newest workspaces first.\nParameters: status (optional: active/archived/all, defaults to active).",
+    "description": "List workspaces with their live task counts. Call this to find workspace ids for create_task_in_workspace, list_tasks_in_workspace, get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
   },
   {
-    "name": "navigate",
-    "description": "Navigate the UI to a specific screen.\nParameters: screen (chat/command-center/agents/skills/settings), agent_id (optional), section (optional).",
-    "scope": "core",
-    "category": "platform",
-    "source": "builtin"
-  },
-  {
     "name": "read_agent_metadata",
-    "description": "Read one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md). Pass agent_id to read another agent's metadata (subject to per-agent policy).",
+    "description": "Read one of an agent's metadata files: SOUL.md (personality, persona, system prompt and behavioural instructions), HEARTBEAT.md (proactive schedule), MEMORY.md (procedural/episodic memory), or AGENT.md (frontmatter config). Defaults to the calling agent's own files; pass agent_id to read another agent's. There is no per-target permission check — any agent granted this tool can read any agent's metadata, including MEMORY.md.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -183,65 +176,58 @@
   },
   {
     "name": "remove_skill",
-    "description": "Remove an installed skill. Parameters: name (required, the skill id as reported by list_skills — no path separators), confirm (bool, must be true).",
+    "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), confirm (bool, must be true).",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
   },
   {
     "name": "run_doctor",
-    "description": "Run security diagnostics and return a risk score (0-100) with actionable recommendations. No parameters required.",
+    "description": "Run a narrow set of security diagnostic checks (exec egress config, credentials.json/config.json file permissions, audit log directory presence) and return checks_failed_pct — the percentage of THESE FEW checks that failed — plus actionable recommendations. This is NOT a comprehensive security audit: it never looks at sandbox.mode, god-mode, dev_mode_bypass, or Landlock/seccomp availability, so an install with every real protection disabled can still score 0% (\"no risk\"). A low checks_failed_pct means only these specific checks passed, not that the install is secure. No parameters required.",
     "scope": "core",
     "category": "platform",
     "source": "builtin"
   },
   {
     "name": "set_config",
-    "description": "Update a configuration value.\nParameters: key (required), value (required).",
+    "description": "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., devices., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required).",
     "scope": "core",
     "category": "platform",
     "source": "builtin"
   },
   {
     "name": "test_channel",
-    "description": "Test a channel's configuration — checks the channel exists, is enabled, and has credentials configured.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Check a channel's stored configuration: that the channel type is known, that a config entry exists, whether it is enabled, and whether credentials are present. Does NOT contact the platform — this makes zero network calls, so a revoked or wrong token still reports success=true, and a channel that is configured but disabled also reports success=true (read the `enabled` field). Enable it with enable_channel and watch the gateway log for the real connection result.\nParameters: id (required, from list_channels).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "test_provider",
-    "description": "Test a provider connection. Parameters: name (required).",
+    "description": "Check that this provider's API key resolves in the credential store.\nDoes NOT contact the provider — this makes zero network calls, so a revoked, expired, or wrong API key can still report status=\"ok\" here. Local providers (ollama, lmstudio, vllm) always report ok — they need no key. A failed check comes back as a normal result with status=\"error\", not as a tool error. Parameters: name (required). Use list_models to actually exercise the connection against the provider's live API.",
     "scope": "core",
     "category": "providers",
     "source": "builtin"
   },
   {
     "name": "update_agent",
-    "description": "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is.",
+    "description": "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is. Locked core agents (Mia, Jim, Ava, Ray) cannot be modified at all — the call is refused. An empty string is silently IGNORED for name/description/color/icon (they cannot be cleared this way — omit the field instead), but an empty string for provider CLEARS an existing provider pin (falls back to default-provider resolution) — this is a deliberate asymmetry, not a bug. The agent's type (Main/Subagent/subagent_3p) and, for subagent_3p, its external CLI runtime (cli/cli_path) cannot be changed after creation — delete and recreate the agent to change these.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
   },
   {
     "name": "update_task_in_workspace",
-    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run.",
+    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), write_set (array of concrete paths this plan member creates/edits, replaces existing list; pass [] to clear), stream (new parallel-group id for this plan member; pass \"\" to clear), is_join (set/clear whether this plan member is an authored join/assemble member), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run. You may only update a task you own (assignee or creator); updating another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Refuses with PRINCIPAL_REQUIRED if the calling agent cannot be resolved. A call that fails validation changes nothing — the whole update, including a workspace_id move, is all-or-nothing.",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"
   },
   {
     "name": "update_workspace",
-    "description": "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated.",
+    "description": "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated — EXCEPT core_team: sending it REPLACES the entire team list, it does not merge or add to it. WARNING: to add one member without dropping the rest, first call get_workspace, append the new agent id to the existing core_team array, then send that complete array back here. Adding an agent to core_team also grants the default delegation trust edges between it and the existing team — this tool writes real authorization records, bounded to the built-in seed matrix (it can never invent an arbitrary edge or name an off-team agent). Edges among members that were already on the team are never re-added, so a trust edge you previously removed stays removed. The response reports any edges seeded in `delegation_seeded`. If the workspace's delegation record is unreadable the whole update is refused rather than overwriting it with defaults (DELEGATION_STORE_UNREADABLE). Updating core_team on a workspace whose setup was pending also marks setup_completed in the response. name is capped at 200 characters, description at 2000.",
     "scope": "core",
     "category": "workspaces",
-    "source": "builtin"
-  },
-  {
-    "name": "write_agent_metadata",
-    "description": "Write one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md) atomically. AGENT.md content is validated for well-formed frontmatter before writing. Pass agent_id to write another agent's metadata (subject to per-agent policy).",
-    "scope": "core",
-    "category": "agents",
     "source": "builtin"
   }
 ]

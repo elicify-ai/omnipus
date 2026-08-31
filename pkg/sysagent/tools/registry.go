@@ -10,17 +10,18 @@ import (
 
 // AllTools returns all system tools as a flat slice.
 // The slice preserves the canonical tool ordering from BRD Appendix D §D.4.1.
-// Two additional tools (agent.read_metadata, agent.write_metadata) are included
-// per issue #240 to provide the deterministic, self-validating accessors for
-// agent metadata files.
-func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
+// One additional tool (agent.read_metadata) is included per issue #240 to
+// provide the deterministic, self-validating accessor for agent metadata
+// files. Its write counterpart (agent.write_metadata) was retired: it was a
+// redundant, unguarded second door onto the same files update_agent already
+// writes through a properly-guarded path (refusing locked core agents).
+func AllTools(d *Deps) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (5: 3 original + 2 metadata accessors from issue #240; list, activate, deactivate retired)
+		// Agent management (4: 3 original + 1 metadata accessor from issue #240; list, activate, deactivate retired)
 		NewAgentCreateTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentDeleteTool(d),
 		NewAgentReadMetadataTool(d),
-		NewAgentWriteMetadataTool(d),
 
 		// Workspace management (5)
 		NewWorkspaceCreateTool(d),
@@ -65,18 +66,17 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewConfigGetTool(d),
 		NewConfigSetTool(d),
 
-		// Diagnostics / utility (3) — backup.create retired (§6: no infra, ops/CLI concern)
+		// Diagnostics / utility (2) — backup.create retired (§6: no infra, ops/CLI concern)
 		NewDoctorRunTool(d),
 		NewUsageQueryTool(d),
-		NewNavigateTool(d, navCb),
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 35 system tools.
+// BuildRegistry creates a ToolRegistry containing all 33 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
-func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
+func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()
-	for _, t := range AllTools(d, navCb) {
+	for _, t := range AllTools(d) {
 		reg.Register(t)
 	}
 	return reg

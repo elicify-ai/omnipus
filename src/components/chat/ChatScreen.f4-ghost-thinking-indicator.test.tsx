@@ -13,11 +13,11 @@
  * directly (VirtualAssistantMessageRow's GenericToolCall/BrowserToolReplayBlock/
  * WebServeBlock call sites, all `isError={tc.status === 'error'}`).
  *
- * Concretely: a streaming message whose only content is a failed `load_tool`
+ * Concretely: a streaming message whose only content is a failed `ToolSearch`
  * call (status:'error', no `error` string — the exact producible shape #617
  * is about) computed `hasVisibleToolCalls: false` under the OLD code, while
  * the row itself — whose own visibility gate reads `tc.status === 'error'`
- * — still rendered the tool row (load_tool's shouldRenderToolCall case
+ * — still rendered the tool row (ToolSearch's shouldRenderToolCall case
  * forces visibility on error). `showEmptyPlaceholder` unconditionally gates
  * only the ThinkingIndicator (`{showEmptyPlaceholder && <ThinkingIndicator
  * />}`), NOT the tool-call render loop below it (`messageParts.map` has no
@@ -165,7 +165,7 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 // `./tools/GenericToolCall` deliberately LEFT UNMOCKED — the whole point of
 // this test is that the real row (whose own visibility gate reads
-// `tc.status === 'error'`) renders "Failed" for the failed load_tool call
+// `tc.status === 'error'`) renders "Failed" for the failed ToolSearch call
 // while `hasVisibleToolCalls` must ALSO see it as visible (or the ghost
 // ThinkingIndicator bug reproduces).
 vi.mock('./IframePreview', () => ({ IframePreview: () => null }))
@@ -245,8 +245,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('F4 — ghost ThinkingIndicator over a visible failed load_tool row', () => {
-  it('a streaming message whose only content is a failed load_tool (status:error, no error string) shows the "Failed" row and does NOT also show the ghost thinking indicator', async () => {
+describe('F4 — ghost ThinkingIndicator over a visible failed ToolSearch row', () => {
+  it('a streaming message whose only content is a failed ToolSearch (status:error, no error string) shows the "Failed" row and does NOT also show the ghost thinking indicator', async () => {
     const now = new Date().toISOString()
     const assistantMsg: ChatMessage = {
       id: 'msg_ghost',
@@ -256,7 +256,7 @@ describe('F4 — ghost ThinkingIndicator over a visible failed load_tool row', (
       status: 'streaming',
       isStreaming: true,
       tool_calls: [
-        { id: 'tc_ghost', tool: 'load_tool', params: { name: 'foo' }, status: 'error' } as PositionedToolCall,
+        { id: 'tc_ghost', tool: 'ToolSearch', params: { name: 'foo' }, status: 'error' } as PositionedToolCall,
       ],
     }
     seedBucket([assistantMsg])
@@ -265,7 +265,7 @@ describe('F4 — ghost ThinkingIndicator over a visible failed load_tool row', (
       render(<ChatScreen />)
     })
 
-    // The real failed-row render — load_tool's shouldRenderToolCall case
+    // The real failed-row render — ToolSearch's shouldRenderToolCall case
     // forces visibility on error, so this must be visible either way.
     expect(screen.getByText('Failed')).toBeInTheDocument()
 
@@ -275,7 +275,7 @@ describe('F4 — ghost ThinkingIndicator over a visible failed load_tool row', (
     expect(screen.queryByText(THINKING_TEXT_RE)).toBeNull()
   })
 
-  it('control: a streaming message whose only content is a SUCCESSFUL load_tool call correctly shows the ghost thinking indicator (load_tool stays hidden by default, so the message legitimately has no visible content yet)', async () => {
+  it('control: a streaming message whose only content is a SUCCESSFUL ToolSearch call correctly shows the ghost thinking indicator (ToolSearch stays hidden by default, so the message legitimately has no visible content yet)', async () => {
     const now = new Date().toISOString()
     const assistantMsg: ChatMessage = {
       id: 'msg_ghost_ok',
@@ -285,7 +285,7 @@ describe('F4 — ghost ThinkingIndicator over a visible failed load_tool row', (
       status: 'streaming',
       isStreaming: true,
       tool_calls: [
-        { id: 'tc_ghost_ok', tool: 'load_tool', params: { name: 'foo' }, status: 'success', result: { ok: true } } as PositionedToolCall,
+        { id: 'tc_ghost_ok', tool: 'ToolSearch', params: { name: 'foo' }, status: 'success', result: { ok: true } } as PositionedToolCall,
       ],
     }
     seedBucket([assistantMsg])
@@ -294,10 +294,10 @@ describe('F4 — ghost ThinkingIndicator over a visible failed load_tool row', (
       render(<ChatScreen />)
     })
 
-    // load_tool with no error is hidden by default (toolVisibility.ts) —
+    // ToolSearch with no error is hidden by default (toolVisibility.ts) —
     // there is genuinely no visible content yet, so the thinking indicator
     // is the CORRECT render here, not a ghost. This pins the boundary: the
-    // F4 fix must not force load_tool visible unconditionally.
+    // F4 fix must not force ToolSearch visible unconditionally.
     expect(screen.queryByText('Failed')).toBeNull()
     expect(screen.queryByText('Done')).toBeNull()
     expect(screen.getByText(THINKING_TEXT_RE)).toBeInTheDocument()

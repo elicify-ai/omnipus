@@ -197,6 +197,21 @@ GENERIC_EXEMPT_LINES = {
     },
     'pkg/config/validate.go': {
         '"(migration from pre-DefaultPolicy-removal config shape; CLAUDE.md hard constraint 6 — "+',
+        # ADR-071 D1/D4 tool-policy KEY rename shim (load_tool -> ToolSearch,
+        # hand_off/return_to_default -> switch_agent) — a persisted-config-key
+        # migration, not provider identity mapping; unrelated to ADR-067.
+        'var legacyToolPolicyKeyMigrations = map[string]string{',
+        'func migrateLegacyToolPolicyMap[T ~string](m map[string]T) bool {',
+        'for legacy, dest := range legacyToolPolicyKeyMigrations {',
+        'if _, ok := m[legacy]; ok {',
+        'byDest[dest] = append(byDest[dest], legacy)',
+        'for dest, legacyKeys := range byDest {',
+        'for _, legacy := range legacyKeys {',
+        'merged = stricterToolPolicyValue(merged, string(m[legacy]))',
+        'delete(m, legacy)',
+        'func MigrateLegacyToolPolicyKeys(cfg *Config) bool {',
+        'changed := migrateLegacyToolPolicyMap(cfg.Sandbox.ToolPolicies)',
+        'if migrateLegacyToolPolicyMap(agentCfg.Tools.Builtin.Policies) {',
     },
 }
 

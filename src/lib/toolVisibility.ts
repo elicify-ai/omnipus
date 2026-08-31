@@ -50,11 +50,11 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  * anymore (revised 2026-07-16, user-approved): whether an error/denial
  * forces visibility is now a per-tool-class decision, not a single
  * short-circuit above the switch —
- *   - `load_tool`: an error still forces visibility. It has no calling
- *     agent's own turn to explain the failure in, and the panel hides
- *     load_tool by default too (shouldRenderToolCallInPanel below) — so
- *     without this exception the failure would be invisible everywhere
- *     except verbose chat.
+ *   - `ToolSearch` (renamed from `load_tool`, ADR-071 D1): an error still
+ *     forces visibility. It has no calling agent's own turn to explain the
+ *     failure in, and the panel hides ToolSearch by default too
+ *     (shouldRenderToolCallInPanel below) — so without this exception the
+ *     failure would be invisible everywhere except verbose chat.
  *   - `delegate` and the background-dispatch/poll/read sub-cases of `bash`:
  *     NO error exception. A failed/denied delegation or background shell
  *     command is returned to the CALLING agent's own turn as the tool
@@ -73,7 +73,7 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  *     narration is the only place the denial surfaces. A delegation that
  *     DOES dispatch (a span opens) has its own nested step-level failures
  *     shown in the panel via shouldRenderToolCallInPanel below (shows
- *     everything except load_tool). Only verbose chat brings any of these
+ *     everything except ToolSearch). Only verbose chat brings any of these
  *     rows back into the thread itself.
  *   - Every other case ignores `isError` entirely (they're either always
  *     visible or, for `bash`'s foreground/`kill` cases, don't depend on it).
@@ -82,7 +82,7 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  * @param params The tool call's arguments, if any.
  * @param verboseChatEnabled When true, every tool call renders — this function short-circuits to `true`.
  * @param isError When true, the call's outcome was an error/denial/failure. Only honored by the
- *   `load_tool` case (see above) — every other case decides visibility from tool+params alone.
+ *   `ToolSearch` case (see above) — every other case decides visibility from tool+params alone.
  *   Defaults to `false` so existing call sites that haven't been updated with an outcome signal
  *   keep their current (name/params-only) behavior unchanged.
  */
@@ -101,13 +101,19 @@ export function shouldRenderToolCall(
   switch (tool) {
     // --- Hidden by default: noisy infra with no standalone chat meaning ---
 
+    case 'ToolSearch':
     case 'load_tool':
       // Every call is infrastructure (loading a tool's full definition into
       // context) — never a meaningful standalone action to a chat reader.
       // Exception: an error/failure outcome still forces visibility (see
       // this function's doc comment) — unlike delegate/background-bash
-      // below, there is no calling-agent turn that narrates a load_tool
+      // below, there is no calling-agent turn that narrates a ToolSearch
       // failure on its behalf.
+      // `load_tool` is the pre-ADR-071-D1 name for this same tool — kept
+      // here (mirroring humanizeToolName.ts's EXPLICIT_LABELS entry, FR-015)
+      // solely so a conversation transcript recorded before the rename still
+      // gets the same hide-by-default/error-forces-visible treatment instead
+      // of falling through to `default: return true`.
       return isError
 
     case 'delegate': {
@@ -161,10 +167,16 @@ export function shouldRenderToolCall(
     // stays a readable, exhaustive table — a future reader can see at a
     // glance these were a deliberate inclusion, not an oversight.
 
-    case 'hand_off':
-    case 'return_to_default':
+    case 'switch_agent':
+      // ADR-071 D4: `hand_off` and `return_to_default` are merged into one
+      // tool, `switch_agent(target, note?)`. Both predecessors were always
+      // visible (no isError exception, no params-based branching) in this
+      // classifier, so the merge needs no reconciliation here — it is a
+      // straight rename of one always-visible case, asserted explicitly
+      // (rather than left to the `default:` fallthrough, which happens to
+      // fail open into the same `true`) per ADR-071 §5.2.2c.
+      return true
     case 'remember':
-    case 'write_agent_metadata':
     case 'get_usage':
     case 'run_doctor':
       return true
@@ -228,18 +240,22 @@ export function shouldRenderSubagentSpan(
  * the thread's policy). The panel is the designated home for exactly the
  * background/noisy detail the thread (shouldRenderToolCall) hides — a user
  * who opened the panel already asked to see what's happening, so default
- * to showing everything EXCEPT `load_tool` (pure internal
- * tool-definition-loading infra — "Find & load tools" humanized — with no
- * standalone meaning even in a detail view). Verbose chat reveals
- * `load_tool` there too. Deliberately name-based only, no params: unlike
- * shouldRenderToolCall this isn't classifying dispatch shape/outcome, only
- * excluding one always-noisy tool name.
+ * to showing everything EXCEPT `ToolSearch` (renamed from `load_tool`,
+ * ADR-071 D1 — pure internal tool-definition-loading infra — "Find & load
+ * tools" humanized — with no standalone meaning even in a detail view).
+ * `load_tool` (the pre-rename name) is excluded alongside it for the same
+ * FR-015 back-compat reason as the thread-side case above — an old
+ * transcript's pre-rename calls get the same panel treatment as new ones.
+ * Verbose chat reveals both there too. Deliberately name-based only, no
+ * params: unlike shouldRenderToolCall this isn't classifying dispatch
+ * shape/outcome, only excluding two always-noisy tool names (one current,
+ * one legacy alias for the same tool).
  */
 export function shouldRenderToolCallInPanel(
   tool: string,
   verboseChatEnabled: boolean,
 ): boolean {
-  return verboseChatEnabled || tool !== 'load_tool'
+  return verboseChatEnabled || (tool !== 'ToolSearch' && tool !== 'load_tool')
 }
 
 /**

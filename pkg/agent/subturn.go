@@ -915,7 +915,7 @@ func spawnSubTurn(
 	// mutex. Sessions is the one deliberate exception — always a fresh
 	// ephemeral (in-memory only) store, so child turns never pollute or
 	// persist to the source agent's real session history. Tools is set below
-	// (needs the delegate/hand_off exclusion, not a plain copy); toolPolicy
+	// (needs the delegate/switch_agent exclusion, not a plain copy); toolPolicy
 	// and providerPool are unexported atomic fields a struct literal cannot
 	// copy at all, also set below.
 	agent := AgentInstance{
@@ -971,12 +971,12 @@ func spawnSubTurn(
 	// soul-less agent) returned Jim's own compiled persona verbatim. This
 	// also caused the tool-policy split-brain: tools.WithAgentID(turnCtx,
 	// ts.agent.ID) (loop.go) threads agent.ID into the tool-execution
-	// context, and load_tool's canLoad resolver looks up "the calling agent"
+	// context, and ToolSearch's canLoad resolver looks up "the calling agent"
 	// by that ID via a fresh al.registry.GetAgent(...) call — so an unswapped
 	// ID meant canLoad checked the PARENT's real, registry-backed policy
 	// while the final FilterToolsByPolicy call (loop.go) read the child's own
 	// (nil, deny-all) toolPolicy above — two different verdicts for the same
-	// tool, observed live as an infinite load_tool retry loop.
+	// tool, observed live as an infinite ToolSearch retry loop.
 
 	// Tool-approval grant inheritance (consent boundary — delegation): the
 	// child sub-turn inherits every "Always Allow" grant the PARENT has
@@ -1012,16 +1012,16 @@ func spawnSubTurn(
 
 	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
 	// registry. Note: distinct from the identity-swap
-	// load_tool bug documented just above (ID/ContextBuilder, ~line 663) —
+	// ToolSearch bug documented just above (ID/ContextBuilder, ~line 663) —
 	// that one was wrong AGENT IDENTITY (an unswapped childTS.agentID made
 	// canLoad resolve the PARENT's policy instead of the child's own); this
 	// one is an INCOMPLETE TOOL SET for a correctly-identified agent (the
 	// child's identity was already right, but "delegate" was unconditionally
 	// missing from its registry regardless of identity or policy). Both
-	// happen to manifest through the same load_tool fabricated-success
+	// happen to manifest through the same ToolSearch fabricated-success
 	// symptom described below, but the two are independent bugs with
 	// independent fixes — do not conflate them when debugging a future
-	// load_tool report. The original FR-H-006 rationale ("one level
+	// ToolSearch report. The original FR-H-006 rationale ("one level
 	// only for general subagents", owner decision 2026-04-20) predates the
 	// per-edge depth-cap + trust-graph delegation system that now exists
 	// (workspace.DelegationEdge.Depth, config.SubTurn.MaxDepth,
@@ -1034,7 +1034,7 @@ func spawnSubTurn(
 	// gate — it did not just enforce "one level only", it made ANY grandchild
 	// delegation structurally impossible regardless of an explicit, wired,
 	// "unrestricted" trust edge, and it failed in a confusing way: the
-	// unified `load_tool` infra tool (ScopeCore, lazily loaded — see
+	// unified `ToolSearch` infra tool (ScopeCore, lazily loaded — see
 	// pkg/tools/tools_tool.go) reports a fabricated LOAD SUCCESS for
 	// "delegate" inside a child sub-turn (its canLoad/markLoaded closures
 	// resolve the caller's agent via al.registry.GetAgent(callerID), i.e. the
@@ -1048,10 +1048,11 @@ func spawnSubTurn(
 	// (delegationDenyBackground/Await, SetDelegationDepthResolver) at all —
 	// blocking every multi-hop chain (e.g. jim -> ray -> planner ->
 	// {explorer|researcher}) even when every edge in the chain was explicitly
-	// authorized. "hand_off" remains excluded: a nested sub-turn hijacking the
-	// ACTIVE parent session's agent is a distinct, still-valid concern
-	// (session takeover) unrelated to task-delegation chain depth, and is not
-	// governed by the depth-cap/trust-graph system at all.
+	// authorized. "switch_agent" remains excluded (ADR-071 D4 renamed
+	// hand_off + return_to_default to this one tool): a nested sub-turn
+	// hijacking the ACTIVE parent session's agent is a distinct, still-valid
+	// concern (session takeover) unrelated to task-delegation chain depth,
+	// and is not governed by the depth-cap/trust-graph system at all.
 	//
 	// Sourced from execSource (the resolved delegate, or baseAgent for
 	// self-delegation) — NOT unconditionally baseAgent. Workspace-scoped
@@ -1070,20 +1071,25 @@ func spawnSubTurn(
 	// ContextBuilder.
 	if execSource.Tools != nil {
 		// Known residual gap (not fixed here, documented only): unlike
-		// "delegate" above, "hand_off" is unconditionally excluded from
-		// EVERY child sub-turn's registry, and the SAME load_tool
+		// "delegate" above, "switch_agent" (ADR-071 D4 renamed hand_off +
+		// return_to_default to this one tool — the defect's mechanism is
+		// unaffected by the rename, see below) is unconditionally excluded
+		// from EVERY child sub-turn's registry, and the SAME ToolSearch
 		// fabricated-success-then-permission_denied bug just cured for
-		// "delegate" is still live for "hand_off" — canLoad/markLoaded
+		// "delegate" is still live for "switch_agent" — canLoad/markLoaded
 		// (pkg/tools/tools_tool.go) resolve the caller via
 		// al.registry.GetAgent(callerID), the PERSISTENT top-level agent,
-		// not this ephemeral child's own registry, so load_tool can still
-		// report a fabricated success for "hand_off" here even though it is
-		// structurally absent from agent.Tools. Root-caused but out of
-		// scope for this fix (tools_tool.go is a larger, separate change).
-		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedHandoff)
+		// not this ephemeral child's own registry, so ToolSearch can still
+		// report a fabricated success for "switch_agent" here even though it
+		// is structurally absent from agent.Tools. Root-caused but out of
+		// scope for this fix (tools_tool.go is a larger, separate change) —
+		// this is a wrong-REGISTRY bug (caller resolution), not a wrong-NAME
+		// bug, so it survives the D1 (load_tool->ToolSearch) and D4
+		// (hand_off/return_to_default->switch_agent) renames identically.
+		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedSwitchAgent)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"hand_off"},
+			"excluded", []string{string(tools.ExcludedSwitchAgent)},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)

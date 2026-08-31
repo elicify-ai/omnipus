@@ -11,6 +11,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
+import { humanizeToolName } from '../lib/humanizeToolName'
+import { shouldRenderToolCall } from '../lib/toolVisibility'
 
 // Walk a directory tree and return all .ts / .tsx file paths.
 function walkDir(dir: string, filter: (name: string) => boolean = () => true): string[] {
@@ -110,19 +112,31 @@ describe('FR-076 canonical tool names', () => {
   })
 
   // §-rename (2026-06-26): the intermediate `tools` multi-action name was renamed to
-  // `load_tool`. The canonical name assertions below guard this current name.
-  // Backend: pkg/tools registers `load_tool`; InfraManifestToolNames() returns {"load_tool"}.
-  // Frontend: humanizeToolName maps `load_tool` → "Find & load tools".
+  // `load_tool`. §-rename (ADR-071 D1, 2026-08-28): `load_tool` was renamed to
+  // `ToolSearch`. The canonical name assertions below guard the CURRENT name.
+  // Backend: pkg/tools registers `ToolSearch`; InfraManifestToolNames() returns
+  // {"ToolSearch"}. Frontend: humanizeToolName maps `ToolSearch` → "Find & load tools",
+  // and shouldRenderToolCall hides it from the chat thread by default.
 
-  it('canonical name load_tool is declared in this regression test', () => {
-    // The presence of this string in this file demonstrates that the canonical
-    // name is known and tracked. Backend tests assert the registry emits this name;
-    // this test guards the frontend boundary against silent drift back to the old names.
-    // History: tool_search_tool_bm25 (§6) → search_tools_bm25 (§7 rename) →
-    //          collapsed into `tools` multi-action (§-consolidation, 2026-06-25) →
-    //          renamed to `load_tool` (§-rename, 2026-06-26).
-    const canonical = 'load_tool'
-    expect(canonical).toBe('load_tool')
+  // TestCanonicalDiscoveryToolName_PinsProductionSymbol (ADR-071 D1 / spec
+  // FR-012, W-D1 test 1): this guard previously asserted a local variable
+  // against itself (`const canonical = 'load_tool'; expect(canonical).toBe(
+  // 'load_tool')`) — a tautology that could never fail and never caught a
+  // drift, exactly the pattern docs/internal/false-green-patterns.md warns
+  // about. It is re-pointed here at two REAL production symbols — the
+  // humanizeToolName EXPLICIT_LABELS key and the toolVisibility.ts case
+  // literal — so a future rename or revert that misses either site fails
+  // this test instead of passing silently.
+  it('canonical name ToolSearch is pinned against production symbols (humanizeToolName, shouldRenderToolCall)', () => {
+    // If the EXPLICIT_LABELS key drifted from "ToolSearch" (e.g. reverted to
+    // "load_tool" or misspelled), humanizeToolName would fall through to the
+    // generic fallback and return a different string.
+    expect(humanizeToolName('ToolSearch')).toBe('Find & load tools')
+
+    // If the toolVisibility.ts `case 'ToolSearch':` arm drifted, the call
+    // would fall through to `default: return true` (always visible),
+    // reversing the documented hidden-by-default rule for this infra tool.
+    expect(shouldRenderToolCall('ToolSearch', undefined, false)).toBe(false)
   })
 
   it('legacy name search_tools_bm25 does not appear as a non-comment literal in source files', () => {
@@ -170,8 +184,9 @@ describe('FR-076 canonical tool names', () => {
   })
 
   it('retired intermediate name "tools" (the loader) does not appear as a non-comment literal in source files', () => {
-    // After the §-rename (2026-06-26), the loader is `load_tool`; the old `tools`
-    // multi-action name must not reappear as a new code literal for the loader tool.
+    // After the §-rename (2026-06-26), the loader was `load_tool` (itself
+    // renamed to `ToolSearch` by ADR-071 D1); the old `tools` multi-action
+    // name must not reappear as a new code literal for the loader tool.
     // NOTE: the string "tools" legitimately appears in non-loader contexts (tab values,
     // query keys, route names, etc.) so we check for the exact tool-name patterns only:
     // the explicit humanizeToolName map key and the canonicalToolNames regression constant.

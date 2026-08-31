@@ -162,7 +162,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done)."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done). Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -244,7 +244,26 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
 	status := task.StatusInbox
-	if v, ok := args["status"].(string); ok && isValidTaskStatus(v) {
+	if v, ok := args["status"].(string); ok && v != "" {
+		// An unknown status is rejected outright, not silently defaulted to
+		// inbox — same reasoning as list_tasks_in_workspace's own status
+		// filter: defaulting a typo would teach the caller its requested
+		// status was applied when it never was.
+		if !isValidTaskStatus(v) {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				fmt.Sprintf("unknown status %q: expected one of inbox, next, blocked, done, failed", v), "status"))
+		}
+		// Issue #593 (Option A): in_progress is a DISPATCH state, never a
+		// caller-settable value at create time either — mirrors the guard
+		// update_task_in_workspace already enforces on the same transition.
+		// Without this, a caller could persist a "running" task with no
+		// session and no executor by simply creating it that way, bypassing
+		// the update-path guard entirely.
+		if task.Status(v) == task.StatusInProgress {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"in_progress cannot be set directly — it is only ever reached through real dispatch; "+
+					"create the task as next and call run_task to start it", "status"))
+		}
 		status = task.Status(v)
 	}
 	id := ulid.Make().String()
@@ -476,7 +495,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "update_task_in_workspace" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run."
+	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), write_set (array of concrete paths this plan member creates/edits, replaces existing list; pass [] to clear), stream (new parallel-group id for this plan member; pass \"\" to clear), is_join (set/clear whether this plan member is an authored join/assemble member), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run. You may only update a task you own (assignee or creator); updating another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Refuses with PRINCIPAL_REQUIRED if the calling agent cannot be resolved. A call that fails validation changes nothing — the whole update, including a workspace_id move, is all-or-nothing."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -663,6 +682,21 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		patch.AgentID = &v
 		updated = append(updated, "agent_id")
 	}
+	// workspace_id is not in task.Patch (workspace is required-scoped and not
+	// re-pointed via the generic patch), so it is applied via a separate,
+	// direct read-modify-write rather than through store.Update. Validate the
+	// target up front — as before — but do NOT write it yet: the actual write
+	// is deferred until AFTER store.Update (below) succeeds, so a subsequently
+	// rejected patch (an out-of-range priority, a DAG cycle, a depth
+	// violation) can no longer leave the task moved to a different workspace
+	// and persisted while the caller is told INVALID_INPUT and reasonably
+	// assumes nothing changed. The whole call is now all-or-nothing.
+	var pendingWorkspaceID string
+	var workspaceIDPending bool
+	// effectiveWorkspaceID is what blocked_by's same-workspace check (below)
+	// validates against: the workspace this task WILL be in once this call
+	// completes, even though the move itself has not been written yet.
+	effectiveWorkspaceID := existing.WorkspaceID
 	if v, ok := args["workspace_id"].(string); ok {
 		if v != "" {
 			if werr := validateID(v); werr != nil {
@@ -672,17 +706,9 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 			}
 		}
-		// workspace_id is not in task.Patch (workspace is required-scoped and not
-		// re-pointed via the generic patch); apply it directly under the lock.
-		mu := store.Lock(id)
-		mu.Lock()
-		existing.WorkspaceID = v
-		existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		writeErr := writeEntity(tasksDir(t.deps.Home), id, *existing)
-		mu.Unlock()
-		if writeErr != nil {
-			return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), ""))
-		}
+		pendingWorkspaceID = v
+		workspaceIDPending = true
+		effectiveWorkspaceID = v
 		updated = append(updated, "workspace_id")
 	}
 	if v, ok := args["due"].(string); ok {
@@ -706,10 +732,12 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 		// Same-workspace blocker guard (parity with validateBlockersWorkspace in
 		// the plain tool). Validate against the task's EFFECTIVE workspace —
-		// existing.WorkspaceID already reflects any workspace_id change applied
-		// above this point. CLEAR ([]) trivially passes.
+		// effectiveWorkspaceID reflects any requested-but-not-yet-written
+		// workspace_id change from above, since the move itself is deferred
+		// until after store.Update succeeds (see the workspace_id block
+		// above). CLEAR ([]) trivially passes.
 		if len(deps) > 0 {
-			if wErr := validateBlockersSameWorkspace(store, existing.WorkspaceID, deps); wErr != nil {
+			if wErr := validateBlockersSameWorkspace(store, effectiveWorkspaceID, deps); wErr != nil {
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by"))
 			}
 		}
@@ -748,6 +776,22 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
 	}
 
+	// Only now — AFTER store.Update has validated and persisted the rest of
+	// the patch — write the workspace_id move validated earlier. This keeps
+	// the call all-or-nothing: if store.Update had failed above, we already
+	// returned without touching the task at all.
+	if workspaceIDPending {
+		mu := store.Lock(id)
+		mu.Lock()
+		result.WorkspaceID = pendingWorkspaceID
+		result.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		writeErr := writeEntity(tasksDir(t.deps.Home), id, *result)
+		mu.Unlock()
+		if writeErr != nil {
+			return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), ""))
+		}
+	}
+
 	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
 	if result.Status == task.StatusDone {
 		if advanced, advErr := store.AdvanceBlockedDependents(id); advErr != nil {
@@ -777,7 +821,13 @@ func NewTaskDeleteTool(d *Deps) *TaskDeleteTool  { return &TaskDeleteTool{deps: 
 func (t *TaskDeleteTool) Name() string           { return "delete_task_in_workspace" }
 func (t *TaskDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskDeleteTool) Description() string {
-	return "Delete a task. Parameters: id (required), confirm (bool, must be true)."
+	return "Permanently delete a to-do/task item from a workspace by id. Irreversible. You may only delete " +
+		"a task you own (creator or assignee) — deleting another agent's task requires delegation trust to " +
+		"that agent within the workspace, or the call is refused. Use list_tasks_in_workspace first to find " +
+		"the task id.\nParameters: id (required), confirm (bool, must be true). Deleting a task also removes " +
+		"it from every other task's blocked_by list, which can unblock dependents and make them runnable — " +
+		"the response lists any tasks unblocked this way in unblocked_tasks. If those edges cannot be fully " +
+		"cleaned up the deletion still stands and the response carries a cascade_warning."
 }
 
 func (t *TaskDeleteTool) Parameters() map[string]any {
@@ -837,6 +887,7 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 	}
 
 	unblocked, err := store.Delete(id)
+	cascadeFailed := false
 	if err != nil {
 		if !errors.Is(err, task.ErrCascadeEdgeCleanupFailed) {
 			return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
@@ -847,13 +898,25 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 		// reporting success for the primary delete, matching how
 		// update_task_in_workspace above already treats
 		// AdvanceBlockedDependents's write-failure error as a logged,
-		// non-fatal side effect.
+		// non-fatal side effect. But the caller must be able to SEE the
+		// partial failure, not just have it buried in a server log —
+		// surfaced below via cascade_warning (mirrors the publish_warning
+		// pattern used by the three agent tools for the same shape).
+		cascadeFailed = true
 		slog.Warn("delete_task_in_workspace: cascade edge cleanup partially failed", "deleted_id", id, "error", err)
 	}
 	if len(unblocked) > 0 {
 		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)
 	}
-	return tools.NewToolResult(successJSON(map[string]any{"id": id, "deleted": true}))
+	result := map[string]any{"id": id, "deleted": true}
+	if len(unblocked) > 0 {
+		result["unblocked_tasks"] = unblocked
+	}
+	if cascadeFailed {
+		result["cascade_warning"] = "the task was deleted but some other tasks' blocked_by edges could not " +
+			"be cleaned up and now reference a deleted task"
+	}
+	return tools.NewToolResult(successJSON(result))
 }
 
 // ---- list_tasks_in_workspace ----

@@ -93,7 +93,7 @@ func (t *ReadInboxTool) Name() string           { return "read_inbox" }
 func (t *ReadInboxTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *ReadInboxTool) Category() ToolCategory { return CategoryCommunication }
 func (t *ReadInboxTool) Description() string {
-	return "Read your mailbox inbox. Returns recent messages (newest first) with uid, from, subject, and date — but no body. Use read_message with a uid to read the full body. Set unseen_only=true to see only unread mail."
+	return "Read your mailbox INBOX folder. Returns recent messages (newest first) with uid, from, subject, and date — but no body. Use read_message with a uid to read the full body. Set unseen_only=true to see only unread mail; combine it with before_uid to page through only-unread mail. IMPORTANT: this always reads the INBOX folder specifically — there is no parameter to select a different folder (Sent, Archive, Spam, etc.), so mail filed or moved elsewhere is never returned here."
 }
 
 func (t *ReadInboxTool) Parameters() map[string]any {
@@ -113,7 +113,7 @@ func (t *ReadInboxTool) Parameters() map[string]any {
 			"before_uid": map[string]any{
 				"type":        "integer",
 				"minimum":     1,
-				"description": "Pagination cursor: return only messages with a uid strictly less than this. Pass the smallest uid from the previous page to fetch the next (older) page.",
+				"description": "Pagination cursor: return only messages with a uid strictly less than this. Pass the smallest uid from the previous page to fetch the next (older) page. before_uid=1 always returns an empty list (nothing has a uid below 1) — that is how a pagination loop terminates.",
 			},
 		},
 	}
@@ -181,7 +181,7 @@ func (t *SearchEmailTool) Parameters() map[string]any {
 			"before_uid": map[string]any{
 				"type":        "integer",
 				"minimum":     1,
-				"description": "Pagination cursor: return only matches with a uid strictly less than this. Pass next_before_uid from the previous page to fetch the next (older) page.",
+				"description": "Pagination cursor: return only matches with a uid strictly less than this. Pass next_before_uid from the previous page to fetch the next (older) page. before_uid=1 always returns an empty results array (nothing has a uid below 1) — that is how a pagination loop terminates; check truncated/next_before_uid on each page rather than looping past that.",
 			},
 			"body": map[string]any{
 				"type":        "boolean",
@@ -245,7 +245,7 @@ func (t *ReadMessageTool) Name() string           { return "read_message" }
 func (t *ReadMessageTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *ReadMessageTool) Category() ToolCategory { return CategoryCommunication }
 func (t *ReadMessageTool) Description() string {
-	return "Read the full body of a single email by its uid (from read_inbox or search_email). Returns the sender, subject, date, message_id, and body."
+	return "Read the full body of a single email by its uid (from read_inbox or search_email). Returns the sender, subject, date, message_id, and body. IMPORTANT: reading a message here marks it \\Seen in the mailbox, the same as a person opening it in their inbox — it will no longer appear in read_inbox(unseen_only=true) or in the unread scan afterward. This is intentional, not a side effect to avoid."
 }
 
 func (t *ReadMessageTool) Parameters() map[string]any {
@@ -298,15 +298,15 @@ func (t *SendEmailTool) Name() string           { return "send_email" }
 func (t *SendEmailTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *SendEmailTool) Category() ToolCategory { return CategoryCommunication }
 func (t *SendEmailTool) Description() string {
-	return "Send a new email from your mailbox to a recipient. Provide to, subject, and body."
+	return "Send a new email from your mailbox to a recipient. Provide to, subject, and body. IMPORTANT: to accepts exactly ONE recipient address — there is no CC/BCC and no way to address multiple recipients in one call. If subject is left empty, the sent message uses the literal subject \"(no subject)\" rather than failing."
 }
 
 func (t *SendEmailTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"to":      map[string]any{"type": "string", "description": "Recipient email address."},
-			"subject": map[string]any{"type": "string", "description": "Subject line."},
+			"to":      map[string]any{"type": "string", "description": "A single recipient email address. Only one address is supported — this tool has no CC/BCC and cannot address multiple recipients."},
+			"subject": map[string]any{"type": "string", "description": "Subject line. If omitted or empty, the message is sent with the subject \"(no subject)\"."},
 			"body":    map[string]any{"type": "string", "description": "Plain-text message body."},
 		},
 		"required": []string{"to", "subject", "body"},
@@ -349,7 +349,7 @@ func (t *ReplyTool) Name() string           { return "reply" }
 func (t *ReplyTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *ReplyTool) Category() ToolCategory { return CategoryCommunication }
 func (t *ReplyTool) Description() string {
-	return "Reply to an email by its uid (from read_inbox or search_email). The reply goes to the original sender, threads correctly (In-Reply-To), and uses a 'Re:' subject. Provide the uid and the reply body."
+	return "Reply to an email by its uid (from read_inbox or search_email). The reply goes to the address the sender wants replies sent to (the message's Reply-To header, when the sender set one; otherwise the original From address), threads correctly (In-Reply-To), and uses a 'Re:' subject. Provide the uid and the reply body. IMPORTANT: this does NOT quote the original message in the reply body — only your body text is sent. It also only replies to the sender (or their Reply-To address): any other To/Cc recipients on the original message are NOT included."
 }
 
 func (t *ReplyTool) Parameters() map[string]any {
@@ -395,15 +395,22 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	if orig == nil {
 		return ErrorResult(fmt.Sprintf("reply: transport returned no message and no error for uid %d", uid))
 	}
-	if orig.From == "" {
+	if orig.From == "" && orig.ReplyTo == "" {
 		return ErrorResult("reply: original message has no sender to reply to")
+	}
+	// Prefer the sender's explicit Reply-To over From: for list mail, ticketing
+	// systems, and no-reply@ senders, Reply-To names the address the sender
+	// actually wants replies sent to.
+	to := orig.From
+	if orig.ReplyTo != "" {
+		to = orig.ReplyTo
 	}
 	subject := orig.Subject
 	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
 		subject = "Re: " + subject
 	}
 	req := email.SendRequest{
-		To:        orig.From,
+		To:        to,
 		Subject:   subject,
 		Body:      body,
 		InReplyTo: orig.MessageID,
@@ -411,7 +418,7 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	if err := tp.Send(ctx, req); err != nil {
 		return ErrorResult(fmt.Sprintf("reply failed: %v", err))
 	}
-	return NewToolResult(fmt.Sprintf(`{"replied":true,"to":%q,"uid":%d}`, orig.From, uid))
+	return NewToolResult(fmt.Sprintf(`{"replied":true,"to":%q,"uid":%d}`, to, uid))
 }
 
 // --- helpers ---

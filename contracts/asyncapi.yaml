@@ -425,7 +425,7 @@ operations:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: 'The active agent for a session changed (handoff or return_to_default). The SPA updates the active agent in the
+    summary: 'The active agent for a session changed (switch_agent, ADR-071 D4). The SPA updates the active agent in the
       session store.
 
       '

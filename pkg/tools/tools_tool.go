@@ -1,4 +1,4 @@
-// Omnipus — load_tool: unified discovery and load infra tool (v0.1.0)
+// Omnipus — ToolSearch: unified discovery and load infra tool (v0.1.0)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -6,8 +6,8 @@
 // It is the single infra tool that replaces the former search_tools_bm25
 // and search_tools_regex tools. Intent is inferred from which parameter is present:
 //
-//   - load_tool{ names: [string] } — LOAD those tools: fetch schemas + make callable.
-//   - load_tool{ query: string }   — SEARCH (BM25) over the hidden/lazy corpus,
+//   - ToolSearch{ names: [string] } — LOAD those tools: fetch schemas + make callable.
+//   - ToolSearch{ query: string }   — SEARCH (BM25) over the hidden/lazy corpus,
 //     auto-load the top hit, return schemas + full match list.
 //
 // See docs/internal/design/unified-tools-tool-2026-06.md for the full spec.
@@ -35,6 +35,21 @@ import (
 // loop.go builds the reason as: CanLoadAlreadyAvailablePrefix + " — just call it directly"
 // execLoad recognizes it via: strings.HasPrefix(reason, CanLoadAlreadyAvailablePrefix)
 const CanLoadAlreadyAvailablePrefix = "already available"
+
+// CanLoadAskPolicyPrefix is a typed sentinel reason the agent-loop canLoad
+// callback returns alongside ok=true when the calling agent's resolved
+// policy for the tool is "ask" (requires user confirmation before
+// execution) rather than "allow". The tool is otherwise fully loadable —
+// this signals nothing about whether loading is permitted, only which
+// policy tier permitted it.
+//
+// ADR-071 §3.2's ambiguity band uses this to exclude "ask"-policy tools
+// from the speculative cross-category promotion clause (search_ambiguity.go)
+// while leaving the confident score-band clause unrestricted — the same
+// narrowing §3.2.1 applies via administrativeToolNames, for the same reason
+// (a plausible-sounding query should not put a confirmation-gated tool's
+// schema into context on a half-score speculative match).
+const CanLoadAskPolicyPrefix = "ask-policy"
 
 // ToolsTool is the unified tool-discovery and load infra tool.
 //
@@ -76,7 +91,7 @@ func (t *ToolsTool) SetResolver(
 	t.markLoaded = markLoaded
 }
 
-func (t *ToolsTool) Name() string           { return "load_tool" }
+func (t *ToolsTool) Name() string           { return "ToolSearch" }
 func (t *ToolsTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *ToolsTool) Category() ToolCategory { return CategoryToolDiscovery }
 
@@ -113,7 +128,7 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	// Parse names — may be []string or []any.
 	names, namesErr := parseNamesArg(args)
 	if namesErr != nil {
-		return ErrorResult(fmt.Sprintf("load_tool: 'names' must be an array of strings: %v", namesErr))
+		return ErrorResult(fmt.Sprintf("ToolSearch: 'names' must be an array of strings: %v", namesErr))
 	}
 
 	// Precedence: names present and non-empty → load path.
@@ -129,7 +144,7 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 
 	// Neither provided.
 	return ErrorResult(
-		"load_tool: provide either 'names' (to load tools by name) or 'query' (to find a tool by what it does)",
+		"ToolSearch: provide either 'names' (to load tools by name) or 'query' (to find a tool by what it does)",
 	)
 }
 
@@ -139,88 +154,166 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 	if t.registry == nil {
 		return SilentResult("No tools found matching the query.")
 	}
-	logger.DebugCF("discovery", "load_tool(query/bm25)", map[string]any{"query": query})
+	logger.DebugCF("discovery", "ToolSearch(query/bm25)", map[string]any{"query": query})
 
 	cached := t.getOrBuildEngine()
 	if cached == nil {
-		logger.DebugCF("discovery", "load_tool(query/bm25): no hidden tools available", nil)
+		logger.DebugCF("discovery", "ToolSearch(query/bm25): no hidden tools available", nil)
+		recordToolSearchZeroResult()
 		return SilentResult("No tools found matching the query.")
 	}
 
-	ranked := cached.engine.Search(query, t.maxSearchResults)
+	// ADR-071 §3.2.2 (CRIT-201): rank over the WHOLE corpus, not just the
+	// top maxSearchResults. Search() already computes IDF/avgDocLen across
+	// the full corpus on every call (BM25Engine's own doc comment: "all
+	// indexing work is performed inside Search() on every call"), so
+	// widening topK to cached.docCount costs nothing extra — Search's own
+	// term-matching already returns far fewer candidates than the corpus
+	// size in the normal case. The policy filter below cannot build a
+	// truthful loadable list from a pre-truncated ranking without silently
+	// losing a loadable candidate ranked below a denied one.
+	ranked := cached.engine.Search(query, cached.docCount)
 	if len(ranked) == 0 {
-		logger.DebugCF("discovery", "load_tool(query/bm25): no matches", map[string]any{"query": query})
+		logger.DebugCF("discovery", "ToolSearch(query/bm25): no matches", map[string]any{"query": query})
+		recordToolSearchZeroResult()
 		return SilentResult("No tools found matching the query.")
 	}
 
-	// Build the full match list (name + description) for all ranked results.
-	matches := make([]ToolSearchResult, len(ranked))
-	for i, r := range ranked {
-		matches[i] = ToolSearchResult{
-			Name:        r.Document.Name,
-			Description: r.Document.Description,
+	// ADR-071 §3.2.2 point 5: no resolver ⇒ fail closed, no disclosure at
+	// all — not even a tool name. The only nil-resolver construction in
+	// production is the catalog-shape stub (NewToolsTool(nil, 0, 0)), whose
+	// nil registry already returned above; this guards any other
+	// resolver-less construction (e.g. test-only) the same way.
+	if t.canLoad == nil || t.markLoaded == nil {
+		recordToolSearchZeroResult()
+		return SilentResult("No tools found matching the query.")
+	}
+
+	// Mark the context as a query-path (by-description) promotion BEFORE any
+	// canLoad/markLoaded call, so the agent-loop's markLoaded closure can
+	// record a pending search-follow-up entry (ADR-071 §4.3.1a, FR-038a) —
+	// never done on the exact-name `names` path.
+	ctx = WithSearchPromotion(ctx)
+
+	// ADR-071 §3.2.2: filter-and-truncate in ONE pass, in rank order. Walk
+	// the full ranking, call canLoad on each, keep the loadable ones — with
+	// their score and category, which the ambiguity test below needs — and
+	// stop as soon as maxSearchResults loadable candidates are found. Bound
+	// the walk at searchCanLoadScanCap policy lookups so an agent with
+	// almost nothing allowed cannot produce an unbounded scan. The cap can
+	// only ever truncate the list earlier — it never admits a denied name.
+	var loadable []toolSearchCandidate
+	scanned := 0
+	for _, r := range ranked {
+		if scanned >= searchCanLoadScanCap || len(loadable) >= t.maxSearchResults {
+			break
 		}
-	}
-
-	logger.InfoCF("discovery", "load_tool(query/bm25) completed",
-		map[string]any{"query": query, "results": len(matches)})
-
-	// Auto-load the top hit. Walk the ranked list until one passes canLoad.
-	var loadedName string
-	var loadedSchema map[string]any
-	var schemas map[string]any
-
-	if t.canLoad != nil && t.markLoaded != nil {
-		for _, m := range matches {
-			name := m.Name
-			if ok, reason := t.canLoad(ctx, name); !ok {
-				logger.DebugCF("discovery", "load_tool(query): top hit not loadable, trying next",
-					map[string]any{"name": name, "reason": reason})
-				continue
-			}
-			// Promote hidden/MCP tool so it enters GetAll().
-			if t.registry != nil {
-				t.registry.PromoteTools([]string{name}, t.ttl)
-			}
-			loaded, _ := t.markLoaded(ctx, []string{name})
-			if schema, ok := loaded[name]; ok {
-				loadedName = name
-				loadedSchema = map[string]any{name: schema}
-				schemas = loadedSchema
-				break
-			}
+		scanned++
+		name := r.Document.Name
+		ok, reason := t.canLoad(ctx, name)
+		if !ok {
+			logger.DebugCF("discovery", "ToolSearch(query): candidate not loadable, skipping",
+				map[string]any{"name": name, "reason": reason})
+			continue
 		}
+		var cat ToolCategory
+		if tl, tok := t.registry.GetIncludingHidden(name); tok {
+			cat = tl.Category()
+		}
+		loadable = append(loadable, toolSearchCandidate{
+			name:        name,
+			description: r.Document.Description,
+			score:       r.Score,
+			category:    cat,
+			askPolicy:   reason == CanLoadAskPolicyPrefix,
+		})
 	}
 
-	// Build response JSON.
-	resp := map[string]any{
-		"matches": matches,
+	logger.InfoCF("discovery", "ToolSearch(query/bm25) completed",
+		map[string]any{"query": query, "ranked": len(ranked), "loadable": len(loadable)})
+
+	if len(loadable) == 0 {
+		// ADR-071 §3.2.2 point 4: an empty policy-filtered set is the
+		// existing "nothing matched" path, not a listing — the fire
+		// condition for the zero-result counter is now exactly
+		// len(matches) == 0, materialized here rather than approximated by
+		// "nothing got auto-loaded" (the D3 interim proxy this replaces).
+		recordToolSearchZeroResult()
+		return SilentResult("No tools found matching the query.")
 	}
-	if loadedName != "" {
-		resp["loaded"] = []string{loadedName}
+
+	// ADR-071 §3.2: decide which of the loadable, rank-ordered candidates to
+	// auto-load. A confident top hit promotes alone (today's behavior, byte
+	// for byte); an ambiguous query promotes up to searchMaxAutoLoad,
+	// narrowed by the "ask"-policy and administrative-tool exclusion on the
+	// speculative cross-category clause only.
+	promote := selectSearchPromotionCandidates(loadable)
+	names := make([]string, len(promote))
+	for i, c := range promote {
+		names[i] = c.name
+	}
+
+	// PromoteTools (un-hides hidden/MCP tools) + markLoaded (marks the
+	// (agent,session) loaded-tool bucket AND, since ctx carries
+	// WithSearchPromotion, records a pendingSearchPromotions entry per
+	// ADR-071 §4.3.1a) — same call shape execLoad already uses for a batch.
+	if t.registry != nil {
+		t.registry.PromoteTools(names, t.ttl)
+	}
+	schemas, _ := t.markLoaded(ctx, names)
+
+	loadedNames := make([]string, 0, len(schemas))
+	for n := range schemas {
+		loadedNames = append(loadedNames, n)
+	}
+	sort.Strings(loadedNames)
+
+	// matches is built from the policy-filtered `loadable` list, never from
+	// the raw `ranked` list (ADR-071 §3.2.2 point 3) — a tool the calling
+	// agent's policy denies is never nameable through this channel.
+	matches := make([]ToolSearchResult, len(loadable))
+	for i, c := range loadable {
+		matches[i] = ToolSearchResult{Name: c.name, Description: c.description}
+	}
+
+	resp := map[string]any{"matches": matches}
+	if len(loadedNames) > 0 {
+		resp["loaded"] = loadedNames
 		resp["schemas"] = schemas
 	}
 
 	encoded, err := json.Marshal(resp)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("load_tool(query): failed to encode result: %v", err))
+		return ErrorResult(fmt.Sprintf("ToolSearch(query): failed to encode result: %v", err))
 	}
 
 	var msg string
-	if loadedName != "" {
+	switch {
+	case len(loadedNames) == 1:
 		msg = fmt.Sprintf(
 			"Found %d tools. Loaded the best match '%s' (schema included) — call it now, or load a different one by passing its name in 'names'.\n%s",
 			len(matches),
-			loadedName,
+			loadedNames[0],
 			string(encoded),
 		)
-	} else {
-		// No resolver or all results denied by policy.
-		b, _ := json.Marshal(matches)
+	case len(loadedNames) > 1:
 		msg = fmt.Sprintf(
-			"Found %d tools:\n%s\n\nTo use one, call `load_tool` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.",
+			"Found %d tools. The query was ambiguous, so %d plausible matches were loaded (schemas included): %s — call the right one now, or load a different one by passing its name in 'names'.\n%s",
 			len(matches),
-			string(b),
+			len(loadedNames),
+			strings.Join(loadedNames, ", "),
+			string(encoded),
+		)
+	default:
+		// The policy-loadable candidates failed to resolve at markLoaded
+		// time (e.g. a schema lookup failure) — fall back to naming what
+		// was found and telling the model to load one itself. matches is
+		// already policy-filtered, so this discloses nothing an allowed
+		// search would not.
+		msg = fmt.Sprintf(
+			"Found %d tools:\n%s\n\nTo use one, call `ToolSearch` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.",
+			len(matches),
+			string(encoded),
 		)
 	}
 
@@ -231,13 +324,13 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 
 func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	if t.canLoad == nil || t.markLoaded == nil {
-		return ErrorResult("load_tool(load): resolver not set — internal configuration error")
+		return ErrorResult("ToolSearch(load): resolver not set — internal configuration error")
 	}
 
 	// Full-tier and infra tools are already in the model's callable set — loading
 	// them is a no-op success (C2 fix: avoid confusing the model with an error).
 	// BUT we must first verify policy: a policy-denied full-tier tool must return
-	// an error (F4 fix). We call canLoad to check policy; the real agent-loop
+	// an error. We call canLoad to check policy; the real agent-loop
 	// canLoad returns (false, "already available…") for allowed full-tier tools
 	// and (false, "denied…") for policy-denied ones. We interpret the reason to
 	// distinguish the two cases. (canLoad always returns false for full-tier since
@@ -284,7 +377,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 			// Include any "already available" hints so the model still knows
 			// about the tools it CAN call.
 			allMsgs := append(fullTierRejections, fullTierHints...)
-			return ErrorResult(fmt.Sprintf("load_tool(load): %s", strings.Join(allMsgs, "; ")))
+			return ErrorResult(fmt.Sprintf("ToolSearch(load): %s", strings.Join(allMsgs, "; ")))
 		}
 		if len(fullTierHints) > 0 {
 			return SilentResult(strings.Join(fullTierHints, "\n"))
@@ -310,7 +403,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	}
 
 	if len(accepted) == 0 {
-		msg := fmt.Sprintf("load_tool(load): no valid tools to load. Rejected: %s", strings.Join(preRejected, "; "))
+		msg := fmt.Sprintf("ToolSearch(load): no valid tools to load. Rejected: %s", strings.Join(preRejected, "; "))
 		return ErrorResult(msg)
 	}
 
@@ -321,7 +414,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	// Together they make both hidden-MCP and in-process-lazy tools callable.
 	if t.registry != nil {
 		t.registry.PromoteTools(accepted, t.ttl)
-		logger.InfoCF("discovery", "load_tool(load): promoted tools",
+		logger.InfoCF("discovery", "ToolSearch(load): promoted tools",
 			map[string]any{"tools": accepted, "ttl": t.ttl})
 	}
 
@@ -338,7 +431,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 
 	if len(loadedNames) == 0 {
 		msg := fmt.Sprintf(
-			"load_tool(load): failed to load requested tools. Rejected: %s",
+			"ToolSearch(load): failed to load requested tools. Rejected: %s",
 			strings.Join(allRejected, "; "),
 		)
 		return ErrorResult(msg)
@@ -361,7 +454,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("load_tool(load): failed to encode result: %v", err))
+		return ErrorResult(fmt.Sprintf("ToolSearch(load): failed to encode result: %v", err))
 	}
 
 	return SilentResult(string(encoded))
@@ -395,10 +488,10 @@ func (t *ToolsTool) getOrBuildEngine() *bm25CachedEngine {
 	docs := snapshotToSearchDocs(snap)
 	var cached *bm25CachedEngine
 	if len(docs) == 0 {
-		cached = &bm25CachedEngine{engine: nil, version: snap.Version}
+		cached = &bm25CachedEngine{engine: nil, version: snap.Version, docCount: 0}
 	} else {
-		cached = &bm25CachedEngine{engine: buildBM25Engine(docs), version: snap.Version}
-		logger.DebugCF("discovery", "load_tool BM25 engine rebuilt",
+		cached = &bm25CachedEngine{engine: buildBM25Engine(docs), version: snap.Version, docCount: len(docs)}
+		logger.DebugCF("discovery", "ToolSearch BM25 engine rebuilt",
 			map[string]any{"docs": len(docs), "version": snap.Version})
 	}
 	t.cached.Store(cached)

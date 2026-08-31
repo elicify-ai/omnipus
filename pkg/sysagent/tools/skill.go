@@ -21,7 +21,14 @@ func NewSkillRemoveTool(d *Deps) *SkillRemoveTool { return &SkillRemoveTool{deps
 func (t *SkillRemoveTool) Name() string           { return "remove_skill" }
 func (t *SkillRemoveTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillRemoveTool) Description() string {
-	return "Remove an installed skill. Parameters: name (required, the skill id as " +
+	return "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including " +
+		"any version history it holds, is permanently deleted; there is no undo. This only " +
+		"reaches a skill in the operator's installed-skills directory (populated by installing " +
+		"from the marketplace) — it does NOT reach a skill authored with create_skill or a user " +
+		"override created with edit_skill, which live in a separate directory: naming one here " +
+		"returns NOT_FOUND even though list_skills reports it as available. If the removed skill " +
+		"was shadowing a lower-priority skill of the same id (an override or a built-in), that " +
+		"one becomes visible again. Parameters: name (required, the skill id as " +
 		"reported by list_skills — no path separators), confirm (bool, must be true)."
 }
 
@@ -94,7 +101,9 @@ func NewSkillListTool(d *Deps) *SkillListTool   { return &SkillListTool{deps: d}
 func (t *SkillListTool) Name() string           { return "list_skills" }
 func (t *SkillListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillListTool) Description() string {
-	return "List all installed skills. No parameters required."
+	return "List all installed skills (procedures, playbooks, and capabilities loaded from SKILL.md files) " +
+		"available to you right now, with each skill's id, name, and description. Use find_skills instead " +
+		"to search the marketplace for skills that are NOT yet installed. No parameters required."
 }
 
 func (t *SkillListTool) Parameters() map[string]any {

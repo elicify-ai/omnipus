@@ -624,3 +624,189 @@ func TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp(t *testing.T) 
 	assert.Empty(t, RepairIncompleteToolPolicyCoverage(cfg, nil))
 	assert.Empty(t, RepairIncompleteToolPolicyCoverage(cfg, map[string]struct{}{}))
 }
+
+// --- MigrateLegacyToolPolicyKeys (ADR-071 §5.3.5, D1+D4 policy-key migration) ---
+//
+// Required tests per ADR-071 §5.3.5b, cases (i)-(iv), plus D1's load_tool
+// equivalent and the nil/empty guard.
+
+// TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_MigratesWithoutDenyBackfill
+// is required test (i): a config with only "hand_off": "allow" must boot with
+// "switch_agent": "allow" — NOT get "switch_agent": "deny" backfilled by
+// RepairIncompleteToolPolicyCoverage. This is the ADR-071 §5.3.5a regression
+// this whole migration exists to prevent: proves the full ordered sequence
+// (migrate -> repair -> validate) rather than just the migration in isolation.
+func TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_MigratesWithoutDenyBackfill(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"hand_off": "allow"},
+		},
+	}
+	knownTools := map[string]struct{}{"switch_agent": {}}
+
+	changed := MigrateLegacyToolPolicyKeys(cfg)
+	require.True(t, changed)
+	assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["switch_agent"],
+		"hand_off's value must carry forward to switch_agent")
+	_, legacyStillPresent := cfg.Sandbox.ToolPolicies["hand_off"]
+	assert.False(t, legacyStillPresent, "legacy hand_off key must be deleted")
+
+	// Now run the exact sequence repairAndValidateToolPolicyCoverage uses:
+	// migrate (already done above) -> repair -> validate. If the ordering
+	// regression this migration exists to prevent were present, the repair
+	// would instead see "switch_agent" as wholly uncovered and backfill it
+	// to "deny" for the agent below.
+	cfg.Agents.List = []AgentConfig{{ID: "some-agent"}}
+	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, repaired, "switch_agent must already be covered by the migrated global entry — nothing to repair")
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, gaps, "switch_agent must be fully covered after migration, with no deny backfill")
+}
+
+// TestMigrateLegacyToolPolicyKeys_Idempotent_SecondRunIsNoOp is required test
+// (ii): running the migration twice over the same config produces identical
+// output — the second run finds no legacy keys and changes nothing.
+func TestMigrateLegacyToolPolicyKeys_Idempotent_SecondRunIsNoOp(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{
+				"hand_off":          "deny",
+				"return_to_default": "allow",
+				"load_tool":         "ask",
+			},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{{
+				ID: "agent-a",
+				Tools: &AgentToolsCfg{
+					Builtin: AgentBuiltinToolsCfg{
+						Policies: map[string]ToolPolicy{"hand_off": ToolPolicyAllow},
+					},
+				},
+			}},
+		},
+	}
+
+	first := MigrateLegacyToolPolicyKeys(cfg)
+	require.True(t, first, "first run over a config with legacy keys must report a change")
+	snapshot := map[string]string{
+		"global_switch_agent": cfg.Sandbox.ToolPolicies["switch_agent"],
+		"global_tool_search":  cfg.Sandbox.ToolPolicies["ToolSearch"],
+		"agent_switch_agent":  string(cfg.Agents.List[0].Tools.Builtin.Policies["switch_agent"]),
+	}
+	assert.Len(t, cfg.Sandbox.ToolPolicies, 2, "both legacy destinations, no legacy keys left")
+	assert.Len(t, cfg.Agents.List[0].Tools.Builtin.Policies, 1, "the one legacy key folded to its one destination")
+
+	second := MigrateLegacyToolPolicyKeys(cfg)
+	assert.False(t, second, "second run over an already-migrated config must be a no-op")
+	assert.Equal(t, snapshot["global_switch_agent"], cfg.Sandbox.ToolPolicies["switch_agent"])
+	assert.Equal(t, snapshot["global_tool_search"], cfg.Sandbox.ToolPolicies["ToolSearch"])
+	assert.Equal(t, snapshot["agent_switch_agent"], string(cfg.Agents.List[0].Tools.Builtin.Policies["switch_agent"]))
+}
+
+// TestMigrateLegacyToolPolicyKeys_StrictestWins_DenyBeatsAllow is required
+// test (iii): hand_off: deny + return_to_default: allow -> switch_agent:
+// deny, and both legacy keys are gone.
+func TestMigrateLegacyToolPolicyKeys_StrictestWins_DenyBeatsAllow(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{
+				"hand_off":          "deny",
+				"return_to_default": "allow",
+			},
+		},
+	}
+
+	require.True(t, MigrateLegacyToolPolicyKeys(cfg))
+	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["switch_agent"], "strictest of deny/allow must win")
+	_, handOffPresent := cfg.Sandbox.ToolPolicies["hand_off"]
+	_, returnPresent := cfg.Sandbox.ToolPolicies["return_to_default"]
+	assert.False(t, handOffPresent, "hand_off must be deleted")
+	assert.False(t, returnPresent, "return_to_default must be deleted")
+}
+
+// TestMigrateLegacyToolPolicyKeys_DestinationParticipatesInFold is required
+// test (iv): switch_agent: deny + hand_off: allow -> switch_agent stays deny
+// — the pre-existing destination value must not be weakened by a looser
+// legacy value (ADR-071 §5.3.5b's "destination participates in the fold").
+func TestMigrateLegacyToolPolicyKeys_DestinationParticipatesInFold(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{
+				"switch_agent": "deny",
+				"hand_off":     "allow",
+			},
+		},
+	}
+
+	require.True(t, MigrateLegacyToolPolicyKeys(cfg))
+	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["switch_agent"],
+		"a pre-existing stricter switch_agent value must not be weakened by a looser legacy hand_off value")
+	_, handOffPresent := cfg.Sandbox.ToolPolicies["hand_off"]
+	assert.False(t, handOffPresent)
+}
+
+// TestMigrateLegacyToolPolicyKeys_LoadTool_MigratesToToolSearch covers D1's
+// equivalent migration (load_tool -> ToolSearch), handled by the same pass
+// as D4's — both renames must be migrated together at the same insertion
+// point per the task's instruction.
+func TestMigrateLegacyToolPolicyKeys_LoadTool_MigratesToToolSearch(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"load_tool": "ask"},
+		},
+	}
+
+	require.True(t, MigrateLegacyToolPolicyKeys(cfg))
+	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["ToolSearch"])
+	_, loadToolPresent := cfg.Sandbox.ToolPolicies["load_tool"]
+	assert.False(t, loadToolPresent)
+}
+
+// TestMigrateLegacyToolPolicyKeys_PerAgentMap verifies the per-agent
+// AgentConfig.Tools.Builtin.Policies map (map[string]ToolPolicy, a distinct
+// Go type from the global map[string]string) is migrated identically via the
+// same generic fold.
+func TestMigrateLegacyToolPolicyKeys_PerAgentMap(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "agent-with-legacy-keys",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							Policies: map[string]ToolPolicy{
+								"hand_off":          ToolPolicyAsk,
+								"return_to_default": ToolPolicyDeny,
+								"read_file":         ToolPolicyAllow, // untouched
+							},
+						},
+					},
+				},
+				{
+					ID:    "agent-without-tools-cfg",
+					Tools: nil, // must not panic
+				},
+			},
+		},
+	}
+
+	require.True(t, MigrateLegacyToolPolicyKeys(cfg))
+	policies := cfg.Agents.List[0].Tools.Builtin.Policies
+	assert.Equal(t, ToolPolicyDeny, policies["switch_agent"], "deny beats ask")
+	assert.Equal(t, ToolPolicyAllow, policies["read_file"], "unrelated entries must survive untouched")
+	_, handOffPresent := policies["hand_off"]
+	_, returnPresent := policies["return_to_default"]
+	assert.False(t, handOffPresent)
+	assert.False(t, returnPresent)
+	assert.Nil(t, cfg.Agents.List[1].Tools, "an agent with no Tools config must be left alone, not panic")
+}
+
+// TestMigrateLegacyToolPolicyKeys_NilOrEmpty_NoOp mirrors
+// TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp's guard shape.
+func TestMigrateLegacyToolPolicyKeys_NilOrEmpty_NoOp(t *testing.T) {
+	assert.False(t, MigrateLegacyToolPolicyKeys(nil))
+
+	cfg := &Config{Agents: AgentsConfig{List: []AgentConfig{{ID: "agent-i"}}}}
+	assert.False(t, MigrateLegacyToolPolicyKeys(cfg), "a config with no legacy keys anywhere must be a no-op")
+}

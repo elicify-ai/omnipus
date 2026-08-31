@@ -230,12 +230,14 @@ func NewAgentInstance(
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessions := initSessionStore(sessionsDir, agentID, omnipusHome())
 
-	mcpDiscoveryActive := cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled
+	// WithToolDiscovery gates the "Tool Discovery" prompt section on the
+	// 3-tier tool-manifest system (cfg.Tools.Manifest.Compressed, default ON)
+	// — NOT on the unrelated MCP-discovery config (cfg.Tools.MCP.Discovery.*,
+	// default OFF), which this used to (wrongly) gate on, per finding 1 / GH
+	// #657: a default install has the manifest system active but MCP
+	// discovery off, so the old gate rendered no discovery guidance at all.
 	contextBuilder := NewContextBuilder(workspace).
-		WithToolDiscovery(
-			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
-			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
-		).
+		WithToolDiscovery(cfg.Tools.Manifest.Compressed).
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker)
 
 	if agentCfg != nil {

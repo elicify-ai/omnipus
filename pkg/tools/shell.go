@@ -579,7 +579,20 @@ func (t *ExecTool) Scope() ToolScope       { return ScopeCore }
 func (t *ExecTool) Category() ToolCategory { return CategoryShell }
 
 func (t *ExecTool) Description() string {
-	return `Execute a shell command (sh -c on Linux/macOS, powershell on Windows). Set run_in_background=true for long-running commands (returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically in the foreground and in the background — a background session times out on its own after timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit session cancel.`
+	return "Execute a shell command (foreground or backgrounded) in the workspace and get its output.\n" +
+		"sh -c on Linux/macOS, powershell on Windows. Set run_in_background=true for long-running commands " +
+		"(returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, " +
+		"read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, " +
+		"no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically " +
+		"in the foreground and in the background — a background session times out on its own after " +
+		"timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit " +
+		"session cancel. Output is truncated beyond a size cap — a SUCCEEDING command keeps up to 64,000 " +
+		"characters, a FAILING one only 10,000 (the failure cap is smaller, so a large error command's output " +
+		"is cut harder than a successful one's); redirect to a file and read it with read_file/offset when you " +
+		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
+		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
+		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
+		"the guard refused the command, not that it failed to run."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -1851,11 +1864,20 @@ func truncateOutput(output string, exitCode int) string {
 	if exitCode == 0 {
 		limit = maxForegroundSuccessOutputLen
 	}
-	if len(output) > limit {
-		totalLen := len(output)
-		return output[:limit] + fmt.Sprintf(
+	// Rune-sliced (never splits a multi-byte UTF-8 codepoint mid-character,
+	// unlike a raw output[:limit] byte slice) — see G-1 in the tool-catalog
+	// review; same bug class already fixed in BuildCompressedManifest
+	// (manifest.go). Deliberately NOT utils.Truncate here: that helper
+	// reserves 3 of the caller's own limit chars for its own "..." marker,
+	// which would cut the body short of the exact limit AND double up with
+	// this function's own, more informative "(truncated, N more chars)"
+	// suffix below.
+	runes := []rune(output)
+	runeCount := len(runes)
+	if runeCount > limit {
+		return string(runes[:limit]) + fmt.Sprintf(
 			"\n... (truncated, %d more chars)",
-			totalLen-limit,
+			runeCount-limit,
 		)
 	}
 	return output

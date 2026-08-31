@@ -406,6 +406,93 @@ func TestWorkspaceCreate_LargeCoreTeamAccepted(t *testing.T) {
 	}
 }
 
+// TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers verifies:
+// create_workspace with a non-empty core_team must seed the same default
+// delegation edges update_workspace's seedDelegationEdgesForNewMembers seeds
+// for newly added members — otherwise, per ADR-037's fail-closed rule (no
+// edge ⇒ deny), no member of a freshly-created team could delegate to any
+// other. Mirrors TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers: team
+// [ava, jim, worker] should seed exactly jim→ava, jim→worker, ava→worker
+// (jim→ray is dropped — ray is not on the team).
+func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
+	tool := systools.NewWorkspaceCreateTool(deps)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"name":      "Fresh Team",
+		"core_team": []any{"ava", "jim", "worker"},
+	})
+	if result.IsError {
+		t.Fatalf("create_workspace failed: %s", result.ForLLM)
+	}
+
+	// Success result should mention the seeded edges (Ava can relay it).
+	m := parseSuccess(t, result.ForLLM)
+	note, _ := m["delegation_seeded"].(string)
+	if note == "" {
+		t.Fatal("expected a delegation_seeded note in the success result, got none")
+	}
+	if !strings.Contains(note, "jim") || !strings.Contains(note, "worker") {
+		t.Errorf("delegation_seeded note = %q, want it to mention jim and worker", note)
+	}
+
+	id := workspaceID(t, result.ForLLM)
+	edges := delegationEdgesFromDisk(t, home, id)
+	if len(edges) != 3 {
+		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
+	}
+	if findEdge(edges, "jim", "ray") != nil {
+		t.Error("jim→ray must be dropped — ray is not on the team")
+	}
+	if findEdge(edges, "jim", "ava") == nil {
+		t.Error("expected jim→ava edge")
+	}
+	if findEdge(edges, "jim", "worker") == nil {
+		t.Error("expected jim→worker edge")
+	}
+	if findEdge(edges, "ava", "worker") == nil {
+		t.Error("expected ava→worker edge")
+	}
+
+	// The edge list must never be copied into the child-writable workspace
+	// record itself — same invariant TestWorkspaceUpdate_PreservesDelegationGraph
+	// checks for update_workspace.
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	data, err := os.ReadFile(wsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("workspace JSON unparseable: %v", err)
+	}
+	if _, leaked := raw["delegation"]; leaked {
+		t.Errorf("create_workspace wrote the edge list back into the workspace record: %v", raw["delegation"])
+	}
+}
+
+// TestWorkspaceCreate_NoCoreTeam_NoDelegationSeeded verifies that a
+// core_team-less create never touches the delegation store and never emits a
+// delegation_seeded note.
+func TestWorkspaceCreate_NoCoreTeam_NoDelegationSeeded(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	tool := systools.NewWorkspaceCreateTool(deps)
+
+	result := tool.Execute(context.Background(), map[string]any{"name": "Solo"})
+	if result.IsError {
+		t.Fatalf("create_workspace failed: %s", result.ForLLM)
+	}
+	m := parseSuccess(t, result.ForLLM)
+	if _, hasNote := m["delegation_seeded"]; hasNote {
+		t.Errorf("no core_team was supplied — delegation_seeded note should be absent, got %v", m["delegation_seeded"])
+	}
+	id := workspaceID(t, result.ForLLM)
+	delegPath := filepath.Join(home, "entities", "delegation", id+".json")
+	if _, err := os.Stat(delegPath); err == nil {
+		t.Errorf("delegation store file should not exist for a core_team-less create: %s", delegPath)
+	}
+}
+
 // ---- get_workspace ----
 
 // TestWorkspaceGet_Found verifies that get_workspace returns the full workspace record.

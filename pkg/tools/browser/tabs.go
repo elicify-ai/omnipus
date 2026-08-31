@@ -32,7 +32,10 @@ func (t *ListTabsTool) Description() string {
 	return "List every open tab in the shared browser session: each tab's index, title, URL, " +
 		"and whether it is the currently-active (screencasted) tab. Call this after a click " +
 		"that might have opened a new tab (a target=\"_blank\" link or window.open — see " +
-		"browser_click's result) or whenever you need to see what's currently open."
+		"browser_click's result) or whenever you need to see what's currently open. IMPORTANT: if the " +
+		"browser has not been started yet (no browser_* tool has navigated anywhere), this returns " +
+		"browser_started=false with an EMPTY tabs list — that means \"no browser running\", not \"a " +
+		"running browser with zero tabs\" (a running browser always has at least one tab)."
 }
 
 func (t *ListTabsTool) Parameters() map[string]any {
@@ -43,11 +46,25 @@ func (t *ListTabsTool) Parameters() map[string]any {
 }
 
 func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	// B-8 fix: distinguish "the browser session doesn't exist yet" (no tool
+	// has ever navigated anywhere) from "a running browser with zero tabs" —
+	// the latter cannot occur (ADR-041's own invariant), but
+	// BrowserManager.ListTabs previously returned the identical empty-list
+	// shape for both, so a cold browser looked indistinguishable from a
+	// browser genuinely showing no tabs. browser_switch_tab and
+	// browser_close_tab both tell the model to "call browser_list_tabs
+	// first", making this the model's likely FIRST call, and it deserves an
+	// unambiguous answer.
+	browserStarted := t.mgr.sessionExists(defaultSessionID)
 	tabs, activeIdx, err := t.mgr.ListTabs(defaultSessionID)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_list_tabs: %s", err))
 	}
-	return jsonResult(map[string]any{"tabs": tabsToWire(tabs), "active_index": activeIdx})
+	return jsonResult(map[string]any{
+		"tabs":            tabsToWire(tabs),
+		"active_index":    activeIdx,
+		"browser_started": browserStarted,
+	})
 }
 
 // --- browser_switch_tab (ADR-041 D3) ---
@@ -68,7 +85,11 @@ func (t *SwitchTabTool) Category() tools.ToolCategory { return tools.CategoryBro
 func (t *SwitchTabTool) Description() string {
 	return "Switch the active tab in the shared browser session. Subsequent browser_* tool " +
 		"calls and the live screencast follow the newly-active tab. Call browser_list_tabs " +
-		"first to see valid indices."
+		"first to see valid indices — indices are 0-based (the first tab is index 0). On success, " +
+		"returns {\"success\": true, \"active_index\": ..., \"title\": ..., \"url\": ...} describing the " +
+		"tab just activated. If a human is currently controlling the browser via the live view, this call " +
+		"defers instead of switching — the result is {\"deferred\": true, \"reason\": ...} instead; wait " +
+		"for them to release control and retry."
 }
 
 func (t *SwitchTabTool) Parameters() map[string]any {
@@ -122,7 +143,11 @@ func (t *CloseTabTool) Description() string {
 	return "Close a tab in the shared browser session. If it was the active tab, a " +
 		"neighboring tab becomes active. The last remaining tab is never left closed — a " +
 		"fresh blank tab opens in its place instead. Call browser_list_tabs first to see " +
-		"valid indices."
+		"valid indices — indices are 0-based (the first tab is index 0). On success, returns " +
+		"{\"tabs\": [...], \"active_index\": ...} describing the resulting tab set, the same shape " +
+		"browser_list_tabs returns. If a human is currently controlling the browser via the live view, " +
+		"this call defers instead of closing the tab — the result is {\"deferred\": true, \"reason\": ...} " +
+		"instead; wait for them to release control and retry."
 }
 
 func (t *CloseTabTool) Parameters() map[string]any {
@@ -182,8 +207,13 @@ func (t *OpenTabTool) Description() string {
 		"browser_navigate, which reuses the CURRENT tab, this always creates an additional one. " +
 		"Optionally navigate the new tab to a URL right away. Use this when you need a second tab " +
 		"alongside the current one, e.g. to check another source without losing your place on the " +
-		"page you already have open. Subject to the maximum concurrent tabs limit (see " +
-		"browser_list_tabs); a provided url is SSRF-checked the same as browser_navigate."
+		"page you already have open. Subject to a maximum concurrent tab budget SHARED across all agents " +
+		"using this browser (browser_list_tabs does NOT report this limit — it only lists what's " +
+		"currently open); if the budget is reached, this call fails with an explanatory error naming the " +
+		"reason — close a tab with browser_close_tab and retry. A provided url is SSRF-checked the same " +
+		"as browser_navigate. If a human is currently controlling the browser via the live view, this " +
+		"call defers instead of opening a tab — the result is {\"deferred\": true, \"reason\": ...} " +
+		"instead; wait for them to release control and retry."
 }
 
 func (t *OpenTabTool) Parameters() map[string]any {

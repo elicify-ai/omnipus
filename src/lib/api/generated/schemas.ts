@@ -1449,7 +1449,6 @@ type DelegateRunAction = {
   target_agent_id: string;
   task: string;
   label?: string | undefined;
-  launch_profile: "utility" | "specialist";
   wait?: boolean | undefined;
   allow_blocking_question?: boolean | undefined;
   critical?: boolean | undefined;
@@ -1543,7 +1542,6 @@ type SessionLifecycleRecord = {
   workspace_id: string;
   agent_id: string;
   is_3p: boolean;
-  launch_profile: "utility" | "specialist";
   last_checkpoint_ref?: string | undefined;
   undelivered_message_ids: Array<string>;
   needs_input?:
@@ -4022,7 +4020,6 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
     workspace_id: z.string().min(1),
     agent_id: z.string().min(1),
     is_3p: z.boolean(),
-    launch_profile: z.enum(["utility", "specialist"]),
     last_checkpoint_ref: z.string().optional(),
     undelivered_message_ids: z.array(z.string()),
     needs_input: z
@@ -4074,7 +4071,6 @@ export const DelegateRunAction = z.object({
   target_agent_id: z.string().min(1),
   task: z.string().min(1).max(10000),
   label: z.string().max(100).optional(),
-  launch_profile: z.enum(["utility", "specialist"]),
   wait: z.boolean().optional(),
   allow_blocking_question: z.boolean().optional(),
   critical: z.boolean().optional(),

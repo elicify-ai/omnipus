@@ -348,7 +348,11 @@ func (t *ReadFileTool) Description() string {
 	return "Read the contents of a file. Supports pagination via `offset` and `length`. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
 		"automatically decoded to plain text; for these, `offset` and `length` count " +
-		"characters of extracted text rather than raw bytes."
+		"characters of extracted text rather than raw bytes. Other binary files (containing " +
+		"null bytes and not one of those document formats) are rejected outright — this tool " +
+		"is for text and the document formats above only. `length` above the server-side max " +
+		"is silently capped, not rejected — check the returned header's total size if you need " +
+		"to know how much was actually read."
 }
 
 func (t *ReadFileTool) Scope() ToolScope       { return ScopeGeneral }
@@ -393,7 +397,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use agent.read_metadata instead.
+	// via generic file tools — callers must use read_agent_metadata instead.
 	// A re-rooted workspace turn has no AGENT metadata files, so the guard
 	// is a safe no-op there (it only ever matches the four canonical
 	// agents/<id>/ files).
@@ -738,7 +742,11 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write content to a file. If the file already exists, you must set overwrite=true to replace it."
+	return "Write content to a file, replacing it entirely. If the file already exists, you must set " +
+		"overwrite=true to replace it — without it, the call is refused. If you hit that refusal and only " +
+		"want to change PART of an existing file, use edit_file (replace one exact snippet) or append_file " +
+		"(add to the end) instead of retrying write_file with overwrite=true, which discards everything " +
+		"already in the file. " + MetadataGuardNotice
 }
 
 func (t *WriteFileTool) Scope() ToolScope       { return ScopeCore }
@@ -778,7 +786,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 
 	// Metadata guard: reject writes to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use agent.write_metadata instead.
+	// via generic file tools — callers must use update_agent instead.
 	if policy.WorkDir != "" {
 		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied
@@ -878,7 +886,8 @@ func (t *ListDirTool) Name() string {
 
 func (t *ListDirTool) Description() string {
 	return "List files and directories in a path. Large directories page with offset/limit " +
-		"(entries), the same way read_file pages a file with offset/length (bytes)."
+		"(entries), the same way read_file pages a file with offset/length (bytes). `path` " +
+		"defaults to \".\" (the workspace root) when omitted."
 }
 
 func (t *ListDirTool) Scope() ToolScope       { return ScopeGeneral }
@@ -890,7 +899,7 @@ func (t *ListDirTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"path": map[string]any{
 				"type":        "string",
-				"description": "Path to list",
+				"description": "Path to list. Defaults to \".\" (the workspace root) if omitted.",
 			},
 			"offset": map[string]any{
 				"type":        "integer",
@@ -904,7 +913,6 @@ func (t *ListDirTool) Parameters() map[string]any {
 				"default": maxListDirEntries,
 			},
 		},
-		"required": []string{"path"},
 	}
 }
 

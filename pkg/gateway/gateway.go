@@ -449,7 +449,89 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 			}
 		}
 	}
+	// MCP server env-var credential refs (BUG 4 / architect finding, closed
+	// alongside the SEC-23-style migration in pkg/sysagent/tools/mcp.go and
+	// pkg/gateway/rest.go's mcp-servers handlers): mirror the Enabled-gate
+	// pattern above, at both the per-server level (srv.Enabled) and the
+	// global kill-switch level (cfg.Tools.MCP.Enabled) — an MCP server whose
+	// config is Enabled but sits under a globally-disabled tools.mcp.enabled
+	// never actually connects, so its ref is not "in use" any more than a
+	// disabled channel's is.
+	//
+	// NOTE: unlike every other category in this function, MCP refs are NOT
+	// resolved by credentials.ResolveBundle — they are resolved by a wholly
+	// separate pipeline (pkg/mcp.ResolveServerEnvRefs, invoked from
+	// pkg/agent/loop_mcp.go's reconcileLocked at connect time, not at boot
+	// credential-bundle time). That means marking a ref "in use" here has NO
+	// effect on the ResolveBundle-error fatal/degraded classification this
+	// map exists to drive (bootCredentials/executeReload, below) — recorded
+	// here anyway for completeness/documentation. The actual sensitive-value
+	// registration for MCP secrets (so they get scrubbed by
+	// SensitiveDataReplacer) is done separately by
+	// mcpEnabledEnvSensitiveValues, called from bootCredentials/executeReload
+	// alongside cfg.RegisterSensitiveValues.
+	//
+	// Boot-time asymmetry (documented, not fixed — see mcpEnabledEnvSensitiveValues
+	// and pkg/agent/loop_mcp.go's reconcileLocked): a dangling ref on an
+	// ENABLED channel aborts boot fatally (the "fatal: enabled credential ...
+	// not found" branch below); a dangling ref on an enabled+globally-enabled
+	// MCP server does not — reconcileLocked logs a WARN and skips connecting
+	// just that server, leaving the rest of boot to proceed normally. This
+	// asymmetry predates this fix and is left in place deliberately (making
+	// it fatal would be new boot-time behavior with its own blast radius —
+	// out of scope for this pass).
+	if cfg.Tools.MCP.Enabled {
+		for _, srv := range cfg.Tools.MCP.Servers {
+			if !srv.Enabled {
+				continue
+			}
+			for _, ref := range srv.EnvRefs {
+				if ref != "" {
+					m[ref] = true
+				}
+			}
+		}
+	}
 	return m
+}
+
+// mcpEnabledEnvSensitiveValues resolves the real (plaintext) value behind
+// every EnvRefs credential reference belonging to a live MCP server —
+// Enabled on the server AND the global tools.mcp.enabled kill-switch on,
+// the same Enabled-gate buildEnabledRefMap's MCP loop uses above — and
+// returns them for registration with cfg.RegisterSensitiveValues (BUG 4 /
+// architect finding).
+//
+// Unlike the channel/voice/web-search/marketplace/mailbox categories, MCP
+// env refs are not part of credentials.ResolveBundle's output (see the note
+// in buildEnabledRefMap above), so there is no existing bundle this function
+// can read from — it resolves each ref directly against the credential
+// store. A resolution failure (locked store, deleted ref) is swallowed here:
+// registering sensitive VALUES is this function's only job, and a dangling
+// or unreadable ref simply contributes nothing to scrub — the connect-time
+// failure itself is already surfaced (WARN + skip) by
+// pkg/agent/loop_mcp.go's reconcileLocked.
+func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) []string {
+	if store == nil || cfg == nil || !cfg.Tools.MCP.Enabled {
+		return nil
+	}
+	var values []string
+	for _, srv := range cfg.Tools.MCP.Servers {
+		if !srv.Enabled || len(srv.EnvRefs) == 0 {
+			continue
+		}
+		for _, ref := range srv.EnvRefs {
+			if ref == "" {
+				continue
+			}
+			value, err := store.Get(ref)
+			if err != nil || value == "" {
+				continue
+			}
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 // resolveAllRefPattern extracts the credential ref name that
@@ -698,6 +780,11 @@ func bootCredentials(
 	// session's tokens unscrubbed until the next explicit sign-in. Fold them
 	// in here too.
 	values = append(values, providers.CollectOAuthSensitiveValues(credStore)...)
+	// BUG 4 / architect finding: MCP server env-var secrets (resolved via
+	// EnvRefs) were never registered for scrubbing at all — see
+	// mcpEnabledEnvSensitiveValues's doc comment for why they cannot simply
+	// ride along in `bundle` above.
+	values = append(values, mcpEnabledEnvSensitiveValues(cfg, credStore)...)
 	cfg.RegisterSensitiveValues(values)
 
 	// Wire the shared credential store for CreateProviderFromConfig's
@@ -1158,14 +1245,14 @@ func RunContext(ctx context.Context, debug bool, homePath, configPath string, al
 //     TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog for
 //     the drift-detection regression test this package carries instead.
 //
-//   - systools.AllTools(nil, nil) has no equivalent metadata-only catalog
+//   - systools.AllTools(nil) has no equivalent metadata-only catalog
 //     function, but is safe to call for name-harvesting alone: every
 //     constructor in pkg/sysagent/tools does nothing but store the *Deps
 //     pointer it is given (never dereferenced at construction time), and
 //     every tool's Name() method is a static string literal that never reads
-//     deps. Passing nil deps and a nil NavigateCallback is therefore safe
-//     PROVIDED the returned tools are never Execute()d here — and they never
-//     are; only .Name() is called below.
+//     deps. Passing nil deps is therefore safe PROVIDED the returned tools
+//     are never Execute()d here — and they never are; only .Name() is called
+//     below.
 //
 // The three static catalogs never change at runtime, so the result is
 // computed once (guarded by knownBuiltinToolNamesOnce) and the same shared
@@ -1180,7 +1267,7 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, t := range browser.BrowserBuiltinMetadata() {
 			out[t.Name()] = struct{}{}
 		}
-		for _, t := range systools.AllTools(nil, nil) {
+		for _, t := range systools.AllTools(nil) {
 			out[t.Name()] = struct{}{}
 		}
 		// ADR-052 (autonomous agent plan execution, FR-027) — the four
@@ -1229,6 +1316,21 @@ var (
 // what "remaining gaps" means for it (abort boot vs. reject the reload and
 // keep serving the previous config).
 func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
+	// ADR-071 §5.3.5a: this migration MUST run FIRST, before
+	// RepairIncompleteToolPolicyCoverage below — not merely before the
+	// validator. The repair backfills any (agent, tool) pair with no policy
+	// entry to an explicit "deny" (correct, fail-closed, for its own
+	// purpose), and ToolSearch/switch_agent are new names with no policy
+	// entry anywhere until this migration folds the retired load_tool /
+	// hand_off / return_to_default keys forward. Sequenced any later, the
+	// first post-upgrade boot would silently deny both on every agent —
+	// boot succeeds with no gap and no abort, and every agent silently
+	// loses hand-off (and, after D3, ToolSearch denies 71% of the catalog).
+	if config.MigrateLegacyToolPolicyKeys(cfg) {
+		slog.Info("gateway: migrated legacy tool-policy keys to their ADR-071 replacements",
+			"migrations", "load_tool->ToolSearch, hand_off/return_to_default->switch_agent",
+		)
+	}
 	knownTools := buildKnownBuiltinToolNames()
 	if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
 		agentIDs := make(map[string]struct{}, len(repaired))
@@ -2511,7 +2613,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
 	centralBuiltinReg := tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(nil, nil) {
+	for _, t := range systools.AllTools(nil) {
 		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
 			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
 				"tool", t.Name(), "error", regErr)
@@ -2543,6 +2645,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// otherwise connected MCP tools would never surface outside the per-agent
 	// registries. Nil-safe on the AgentLoop side.
 	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
+	// Wire the credential-store resolver so ReconcileMCP can resolve
+	// add_mcp_server's EnvRefs (pkg/sysagent/tools/mcp.go routes MCP server
+	// `env` secrets through the encrypted credential store instead of
+	// config.json plaintext) back into real values at connect time. Store.Get
+	// has exactly the func(string) (string, error) signature
+	// AgentLoop.SetCredentialResolver expects. Guarded on credStore != nil
+	// defensively — bootCredentials aborts boot on failure, so this should
+	// always be non-nil in practice, but a nil receiver would panic inside
+	// Store.Get's mutex lock.
+	if credStore != nil {
+		agentLoop.SetCredentialResolver(credStore.Get)
+	}
 
 	runningServices, err := setupAndStartServices(
 		cfg,
@@ -2757,7 +2871,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// registry. The restAPIRef field was stored by setupAndStartServices exactly
 	// for this late-wire step.
 	centralBuiltinReg = tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(sysAgentDeps, nil) {
+	for _, t := range systools.AllTools(sysAgentDeps) {
 		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
 			slog.Warn("gateway: central builtin registry re-population skipped duplicate",
 				"tool", t.Name(), "error", err)
@@ -4006,6 +4120,10 @@ func executeReload(
 				reloadValues = append(reloadValues, v)
 			}
 		}
+		// BUG 4 / architect finding: MCP server env-var secrets — see
+		// mcpEnabledEnvSensitiveValues's doc comment (bootCredentials has the
+		// matching call for the boot path).
+		reloadValues = append(reloadValues, mcpEnabledEnvSensitiveValues(newCfg, cs)...)
 		if len(reloadValues) > 0 {
 			newCfg.RegisterSensitiveValues(reloadValues)
 		}

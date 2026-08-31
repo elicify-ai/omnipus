@@ -412,34 +412,34 @@ describe('ToolCallBadge — verbose chat gate', () => {
     })
   })
 
-  it('hides a load_tool call by default (verboseChatEnabled false)', () => {
-    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'load_tool', status: 'success' })} />)
+  it('hides a ToolSearch call by default (verboseChatEnabled false)', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'ToolSearch', status: 'success' })} />)
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('shows a load_tool call when verboseChatEnabled is true', () => {
+  it('shows a ToolSearch call when verboseChatEnabled is true', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
-    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'load_tool', status: 'success' })} />)
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'ToolSearch', status: 'success' })} />)
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // (item 8a, 2026-07-16 fix wave): component-level pin of the load_tool
+  // (item 8a, 2026-07-16 fix wave): component-level pin of the ToolSearch
   // isError override (mirrors the equivalent GenericToolCall.test.tsx pair)
   // — mutation-proofs the `toolCall.status === 'error' || marshalErr ||
   // !!delegationFailure` argument ToolCallBadge threads into
   // shouldRenderToolCall.
-  it('a load_tool call with status "error" is VISIBLE even when verboseChatEnabled is false', () => {
-    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'load_tool', status: 'error' })} />)
+  it('a ToolSearch call with status "error" is VISIBLE even when verboseChatEnabled is false', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'ToolSearch', status: 'error' })} />)
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  it('a load_tool call that succeeded but whose result is a _marshal_error sentinel is VISIBLE even when verboseChatEnabled is false', () => {
+  it('a ToolSearch call that succeeded but whose result is a _marshal_error sentinel is VISIBLE even when verboseChatEnabled is false', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
-          tool: 'load_tool',
+          tool: 'ToolSearch',
           status: 'success',
           result: { _marshal_error: 'json: unsupported type: chan int' },
         })}

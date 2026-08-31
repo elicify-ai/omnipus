@@ -36,7 +36,11 @@ func (t *EditFileTool) Name() string {
 }
 
 func (t *EditFileTool) Description() string {
-	return "Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file."
+	return "Edit a file by replacing old_text with new_text. The file must already exist — this tool does " +
+		"not create one; use write_file for that. old_text must appear EXACTLY ONCE in the file " +
+		"(byte-for-byte, including whitespace) — the edit is refused if it is not found at all, or if it " +
+		"matches more than once. If a repeated-text failure happens, do not retry the same snippet: widen " +
+		"old_text with more surrounding lines of context until it is unique. " + MetadataGuardNotice
 }
 
 func (t *EditFileTool) Scope() ToolScope       { return ScopeCore }
@@ -75,7 +79,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Metadata guard: reject edits to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use agent.write_metadata instead.
+	// via generic file tools — callers must use update_agent instead.
 	if policy.WorkDir != "" {
 		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied
@@ -128,7 +132,10 @@ func (t *AppendFileTool) Name() string {
 }
 
 func (t *AppendFileTool) Description() string {
-	return "Append content to the end of a file"
+	return "Append content to the end of a file, e.g. for a log or a running record. Creates the file if it " +
+		"does not exist yet. Concatenates raw bytes with NO newline inserted before the appended content — " +
+		"if you want each entry on its own line, include the leading \"\\n\" yourself, or the appended text " +
+		"will run together with the file's existing last line. " + MetadataGuardNotice
 }
 
 func (t *AppendFileTool) Scope() ToolScope       { return ScopeCore }
@@ -163,7 +170,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	// Metadata guard: reject appends to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use agent.write_metadata instead.
+	// via generic file tools — callers must use update_agent instead.
 	if policy.WorkDir != "" {
 		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied

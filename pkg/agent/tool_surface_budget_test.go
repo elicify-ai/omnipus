@@ -54,7 +54,7 @@ func newBudgetTestLoop(t *testing.T, compressed bool) *AgentLoop {
 	t.Helper()
 	cfg := &config.Config{}
 	cfg.Tools.Manifest.Compressed = compressed
-	al := &AgentLoop{}
+	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
 	al.cfg = cfg
 	return al
 }
@@ -78,7 +78,7 @@ func TestSentToolSurface_LazyToolsAreNotChargedAsFullSchemas(t *testing.T) {
 	registerLazyTools(reg, 200)
 	agent := &AgentInstance{ID: "budget-agent", Tools: reg, ContextWindow: 128000}
 
-	got := al.sentToolSurfaceTokens(agent, "sess-1")
+	got := al.sentToolSurfaceTokens(agent, "", "sess-1")
 
 	// What the old code charged: a full schema for every registered tool.
 	naive := estimateToolDefsTokens(reg.ToProviderDefs())
@@ -109,17 +109,15 @@ func TestSentToolSurface_LoadedLazyToolIsChargedFully(t *testing.T) {
 	registerLazyTools(reg, 20)
 	agent := &AgentInstance{ID: "budget-agent", Tools: reg, ContextWindow: 128000}
 
-	before := al.sentToolSurfaceTokens(agent, "sess-load")
+	before := al.sentToolSurfaceTokens(agent, "", "sess-load")
 
-	// Mark one lazy tool loaded for this session, as load_tool would.
-	al.loadedToolsMu.Lock()
-	if al.loadedTools == nil {
-		al.loadedTools = map[string]map[string]bool{}
-	}
-	al.loadedTools["sess-load"] = map[string]bool{"mcp_remote_query_000": true}
-	al.loadedToolsMu.Unlock()
+	// Mark one lazy tool loaded for this session, as ToolSearch would — via
+	// the real writer (markToolsLoaded) and the same composite bucket format
+	// sentToolSurfaceTokens now reads (manifestBucketKey(agentID,
+	// transcriptID, sessionKey)), not a hand-poked raw-sessionKey map entry.
+	al.markToolsLoaded(manifestBucketKey(agent.ID, "", "sess-load"), []string{"mcp_remote_query_000"})
 
-	after := al.sentToolSurfaceTokens(agent, "sess-load")
+	after := al.sentToolSurfaceTokens(agent, "", "sess-load")
 
 	require.Greater(t, after, before,
 		"a lazy tool that has been LOADED is sent as a full schema and must be charged for it; "+
@@ -136,7 +134,7 @@ func TestSentToolSurface_UncompressedChargesEverything(t *testing.T) {
 	registerLazyTools(reg, 30)
 	agent := &AgentInstance{ID: "budget-agent", Tools: reg, ContextWindow: 128000}
 
-	got := al.sentToolSurfaceTokens(agent, "sess-2")
+	got := al.sentToolSurfaceTokens(agent, "", "sess-2")
 	want := estimateToolDefsTokens(reg.ToProviderDefs())
 
 	require.Equal(t, want, got,

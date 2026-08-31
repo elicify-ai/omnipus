@@ -12,16 +12,18 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// handoffTranscriptWriteFailures counts how many times HandoffTool's or
-// ReturnToDefaultTool's audit-trail AppendTranscriptStrict write failed
-// (ADR-057 FR-002: every AppendTranscript invocation site must surface the
-// now-possible strict-write error as a counter increment plus a WARN naming
-// the session id — see the spec's "conversion boundary" table, handoff.go
-// row). The write itself stays best-effort by design (Execute step 7's doc
-// comment): a failed audit entry must never fail the handoff/return-to-default
-// operation, so this counter is the only durable, operator-visible signal
-// that it happened. Exposed via HandoffTranscriptWriteFailures() for tests
-// and operator tooling.
+// handoffTranscriptWriteFailures counts how many times SwitchAgentTool's
+// audit-trail AppendTranscriptStrict write failed (ADR-057 FR-002: every
+// AppendTranscript invocation site must surface the now-possible
+// strict-write error as a counter increment plus a WARN naming the session
+// id — see the spec's "conversion boundary" table, handoff.go row). The
+// write itself stays best-effort by design (Execute's audit step doc
+// comment): a failed audit entry must never fail the switch operation, so
+// this counter is the only durable, operator-visible signal that it
+// happened. Exposed via HandoffTranscriptWriteFailures() for tests and
+// operator tooling. Name retained across the ADR-071 D4 merge (hand_off +
+// return_to_default -> switch_agent) — it is an internal metric name, not a
+// tool identity, and renaming it has no user-facing effect.
 var handoffTranscriptWriteFailures atomic.Uint64
 
 // HandoffTranscriptWriteFailures returns the current value of the
@@ -40,15 +42,15 @@ var ErrAlreadyActive = session.ErrAlreadyActive
 // an import cycle (tools → agent → tools).
 type AgentRegistryReader interface {
 	// GetAgentName returns the display name and a boolean indicating whether
-	// the agent exists. Used by HandoffTool to validate agent_id and build
+	// the agent exists. Used by SwitchAgentTool to validate target and build
 	// user-facing messages.
 	GetAgentName(agentID string) (string, bool)
 
 	// IsWorker reports whether the agent identified by agentID is a sub-agent
-	// worker (the delegation-only labor tier). HandoffTool uses it to reject a
-	// handoff to a worker — workers are invoked via delegation, not handoff, so a
-	// worker must never become a session pin / live chat target. Returns false
-	// for an unknown agent.
+	// worker (the delegation-only labor tier). SwitchAgentTool uses it to
+	// reject a switch to a worker — workers are invoked via delegation, not
+	// hand-off, so a worker must never become a session pin / live chat
+	// target. Returns false for an unknown agent.
 	IsWorker(agentID string) bool
 }
 
@@ -65,14 +67,25 @@ type HandoffEvent struct {
 	SessionID string
 	AgentID   string
 	AgentName string
+	// ToDefault is true when this event came from switch_agent's
+	// return-to-default branch (target case-insensitively equal to
+	// SwitchAgentDefaultTarget), false for a named-agent hand-off. Callers
+	// that need to report "was this an explicit named switch or a return to
+	// default" — e.g. the WS agent_switched frame builder — MUST use this
+	// field rather than re-deriving the answer after the fact by comparing
+	// AgentID against the configured default agent id: an explicit
+	// switch_agent(target:"<id>") that happens to name the current default
+	// agent is a named switch, not a return-to-default, even though the
+	// resulting AgentID is identical in both cases.
+	ToDefault bool
 }
 
 // HandoffFunc is the callback signature for handoff notifications.
 type HandoffFunc func(HandoffEvent)
 
-// HandoffSessionStore is the subset of *session.UnifiedStore that HandoffTool
-// and ReturnToDefaultTool require. Defining it as an interface decouples the
-// tools package from the concrete store type, which is being refactored by the
+// HandoffSessionStore is the subset of *session.UnifiedStore that
+// SwitchAgentTool requires. Defining it as an interface decouples the tools
+// package from the concrete store type, which is being refactored by the
 // session-store subagent in parallel.
 //
 // *session.UnifiedStore satisfies this interface once SwitchAgent is added to it.
@@ -95,96 +108,174 @@ type HandoffSessionStore interface {
 	AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error
 }
 
-// HandoffTool transfers the active session to a specialist agent.
+// SwitchAgentDefaultTarget is the reserved switch_agent `target` value that
+// always means "the configured default agent" (ADR-071 §5.1.3) — matched
+// case-insensitively (strings.EqualFold), and it always wins over any real
+// agent whose id happens to be the literal string "default" (in any casing);
+// there is no fallback to an id-matched agent and no lookup-order subtlety.
+// Case-insensitive matching here mirrors the collision rule enforced at the
+// agent create/update boundary (pkg/gateway/rest.go's strings.EqualFold
+// checks) — without it, target:"Default" (capital D) would fall through to
+// "look for a named agent called Default", find none, and return a
+// confusing "agent not found" error instead of routing to the default
+// agent as the caller clearly intended. Exported so callers outside this
+// package that must reason about the same reservation — agent
+// create/update boundary rejection, the upgrade-time boot WARN for a
+// pre-existing agent literally named "default" — check against the same
+// literal rather than re-declaring it.
+const SwitchAgentDefaultTarget = "default"
+
+// SwitchAgentTool switches the active agent for a session — either handing
+// off to a named target agent, or returning to the configured default.
 //
-// On a successful handoff it:
-//  1. Validates the target agent against the registry.
-//  2. Atomically switches the active agent on the session (idempotent).
-//  3. Reads the session transcript and applies a 50% token-budget split so the
-//     target agent receives recent context without overflowing its context window.
-//  4. Appends a system entry to the transcript as an audit-trail record.
-//  5. Notifies the frontend so the UI can update its active-agent indicator.
-type HandoffTool struct {
+// ADR-071 D4 merges the retired HandoffTool and ReturnToDefaultTool into
+// this one tool identity (the same "one capability, one tool, variation
+// becomes a parameter" precedent ADR-036 set for bash and delegate).
+// strings.EqualFold(target, SwitchAgentDefaultTarget) selects the
+// return-to-default branch; any other value is a named-agent hand-off. The
+// two branches share every step below except the token-budget transcript
+// transfer (named-target only — the default agent isn't cold, it's already
+// in this transcript) and the audit entry's content/AgentID stamping
+// (asymmetric by design — see Execute's own comment on that step).
+//
+// On a successful switch it:
+//  1. Resolves the target agent — the default sentinel, or a registry lookup.
+//  2. Rejects a worker target — unconditionally, on both branches.
+//  3. Atomically switches the active agent on the session (idempotent).
+//  4. Named-target branch only: reads the session transcript and applies a
+//     50% token-budget split so the target agent receives recent context
+//     without overflowing its context window.
+//  5. Appends a system entry to the transcript as an audit-trail record.
+//  6. Notifies the frontend so the UI can update its active-agent indicator.
+type SwitchAgentTool struct {
 	BaseTool
 	getRegistry      func() AgentRegistryReader
 	sessionStore     HandoffSessionStore
 	getContextWindow func(agentID string) int
+	getDefaultAgent  func() string
 	onHandoff        HandoffFunc
 }
 
-// NewHandoffTool creates a HandoffTool.
+// NewSwitchAgentTool creates a SwitchAgentTool.
 //
-//   - getRegistry is called at Execute time (not construction time) so hot reloads
-//     are automatically reflected without rebuilding the tool.
+//   - getRegistry is called at Execute time (not construction time) so hot
+//     reloads are automatically reflected without rebuilding the tool.
 //   - sessionStore provides atomic agent switching and transcript access.
-//   - getContextWindow resolves the target agent's context window for budget math;
-//     it should follow: agent-specific → defaults → 8192.
+//   - getContextWindow resolves the target agent's context window for
+//     budget math (named-target branch only); it should follow:
+//     agent-specific → defaults → 8192.
+//   - getDefaultAgent resolves the default agent ID from config at call
+//     time (target: "default" branch only).
 //   - onHandoff notifies the frontend of the agent switch; may be nil.
-func NewHandoffTool(
+func NewSwitchAgentTool(
 	getRegistry func() AgentRegistryReader,
 	sessionStore HandoffSessionStore,
 	getContextWindow func(agentID string) int,
+	getDefaultAgent func() string,
 	onHandoff HandoffFunc,
-) *HandoffTool {
-	return &HandoffTool{
+) *SwitchAgentTool {
+	return &SwitchAgentTool{
 		getRegistry:      getRegistry,
 		sessionStore:     sessionStore,
 		getContextWindow: getContextWindow,
+		getDefaultAgent:  getDefaultAgent,
 		onHandoff:        onHandoff,
 	}
 }
 
-func (t *HandoffTool) Name() string           { return "hand_off" }
-func (t *HandoffTool) Scope() ToolScope       { return ScopeCore }
-func (t *HandoffTool) Category() ToolCategory { return CategoryDelegation }
+func (t *SwitchAgentTool) Name() string           { return "switch_agent" }
+func (t *SwitchAgentTool) Scope() ToolScope       { return ScopeCore }
+func (t *SwitchAgentTool) Category() ToolCategory { return CategoryDelegation }
 
-func (t *HandoffTool) Description() string {
-	return "Hand off the conversation to a specialist agent. The user's subsequent messages will go to the target agent."
+func (t *SwitchAgentTool) Description() string {
+	return "Switch the active agent for this session — hand off to a named agent (target: <agent_id>) or return to the default agent (target: \"default\")."
 }
 
-func (t *HandoffTool) Parameters() map[string]any {
+func (t *SwitchAgentTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"agent_id": map[string]any{
-				"type":        "string",
-				"description": "ID of the target agent (e.g. \"ray\", \"max\", \"ava\", \"jim\")",
+			"target": map[string]any{
+				"type": "string",
+				"description": "ID of the target agent (e.g. \"ray\", \"ava\", \"jim\"), " +
+					"or the literal string \"default\" to return to the default agent",
 			},
-			"context": map[string]any{
-				"type":        "string",
-				"description": "Context or instructions to give the target agent about this conversation",
+			"note": map[string]any{
+				"type": "string",
+				"description": "Optional. When switching to a named agent: context or instructions for " +
+					"that agent about this conversation. When returning to the default agent " +
+					"(target: \"default\"): a summary of what was accomplished. Strongly recommended " +
+					"when handing off to another agent — it is the only context the incoming agent " +
+					"gets beyond the transcript.",
 			},
 		},
-		"required": []string{"agent_id", "context"},
+		// note is declared optional (ADR-071 §5.1.1): hand_off's equivalent
+		// "context" param was schema-required but never enforced in
+		// Execute — no validation, no error on a missing/empty value — so
+		// this is a deliberate, near-costless relaxation, not a behavior
+		// regression. Only target is required.
+		"required": []string{"target"},
 	}
 }
 
-func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	// Overall 10-second timeout (FR-009, SC-006).
+func (t *SwitchAgentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Overall 10-second timeout — unconditional across both branches
+	// (ADR-071 §5.1.2, a deliberate widening from hand_off's original
+	// handoff-only wrapper). The default-return branch does no transcript
+	// I/O so the ceiling costs it nothing, and one context lifetime for a
+	// tool that mutates live session state is the safer default.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	agentID, ok := args["agent_id"].(string)
-	if !ok || agentID == "" {
-		return ErrorResult("agent_id is required")
+	target, ok := args["target"].(string)
+	if !ok || target == "" {
+		return ErrorResult("target is required")
 	}
-	contextMsg, _ := args["context"].(string)
+	note, _ := args["note"].(string)
 
-	// Step 1: Validate target agent exists (FR-012).
+	// Case-insensitive: see SwitchAgentDefaultTarget's doc comment — this
+	// mirrors the collision rule pkg/gateway/rest.go enforces with
+	// strings.EqualFold at the agent create/update boundary. Without this,
+	// target:"Default" (capital D) would fall through to a named-agent
+	// lookup, find nothing (correctly, since it's reserved), and return a
+	// confusing "agent not found" error instead of routing to the default
+	// agent.
+	toDefault := strings.EqualFold(target, SwitchAgentDefaultTarget)
+
+	// Step 1: Resolve the target agent. The sentinel always wins
+	// (ADR-071 §5.1.3 part 1) — no fallback to a real agent literally
+	// named "default", no lookup-order subtlety.
 	reg := t.getRegistry()
-	agentName, exists := reg.GetAgentName(agentID)
-	if !exists {
-		return ErrorResult(fmt.Sprintf("agent %q not found — check the agent ID", agentID))
+	var agentID, agentName string
+	if toDefault {
+		agentID = t.getDefaultAgent()
+		if agentID == "" {
+			return ErrorResult("no default agent configured")
+		}
+		// Matches ReturnToDefaultTool's original behavior exactly: the
+		// default agent's own id is used as its display name in the audit
+		// entry / result text, with no registry display-name lookup.
+		agentName = agentID
+	} else {
+		var exists bool
+		agentName, exists = reg.GetAgentName(target)
+		if !exists {
+			return ErrorResult(fmt.Sprintf("agent %q not found — check the agent ID", target))
+		}
+		agentID = target
 	}
 
-	// Step 2: Reject a worker target. A worker is a delegation-only labor tier —
-	// it is invoked via create_task / sub-agent delegation, never as a live chat
-	// persona. Handing off would pin the session to the worker (making it a chat
-	// target), so refuse before any switch occurs.
+	// Step 2: Reject a worker target — unconditional on both branches
+	// (ADR-071 §5.1.2, a deliberate small improvement over the retired
+	// return_to_default, which had no worker check at all). A hand-edited
+	// config can point the default-agent singleton at a worker; without
+	// this check that misconfiguration would silently pin the session to
+	// it instead of producing the clear error hand_off already gave for
+	// the named-target case.
 	if reg.IsWorker(agentID) {
 		return ErrorResult(
 			fmt.Sprintf(
-				"cannot hand off to %q — it is a worker; workers are invoked via delegation, not handoff",
+				"cannot switch to %q — it is a worker; workers are invoked via delegation, not switch_agent",
 				agentName,
 			),
 		)
@@ -193,7 +284,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// Step 3: Get session ID from context.
 	sessionID := resolveSessionID(ctx)
 	if sessionID == "" {
-		return ErrorResult("handoff is not available in this context (no session key)")
+		return ErrorResult("switch_agent is not available in this context (no session key)")
 	}
 
 	// Step 4: Atomic switch (idempotent via ErrAlreadyActive) (MAJ-005, MAJ-006, FR-005, FR-015).
@@ -204,54 +295,89 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(fmt.Sprintf("failed to switch agent: %v", err))
 	}
 
-	// Step 5: Token-budget-aware context transfer (FR-004, FR-011).
-	contextWindow := t.getContextWindow(agentID)
-	budget := int(float64(contextWindow) * 0.50)
-
-	transcript, err := t.sessionStore.ReadTranscript(sessionID)
-	if err != nil {
-		slog.Warn("handoff: could not read transcript for context transfer", "session", sessionID, "error", err)
-		// Proceed with empty context rather than failing the handoff.
-		transcript = nil
-	}
-	recent, older := splitByTokenBudget(transcript, budget)
-
-	// Step 6: Build summary for older messages (tiered summarization).
-	// Simple truncation fallback — LLM summarization can be layered on later once
-	// provider access is available in the tool layer without import cycles.
+	// Step 5: Token-budget-aware context transfer (FR-004, FR-011) — SKIPPED
+	// when target == "default" (ADR-071 §5.1.2): the transfer exists to
+	// brief a COLD agent, one that hasn't been in this conversation. The
+	// default agent isn't cold — it was in the conversation before any
+	// handoff, its own entries are already in this same transcript, and it
+	// hydrates them on its next turn regardless. Paying a full
+	// ReadTranscript + budget split to re-brief an agent that already has
+	// the context is pure cost for no information; skipping it here
+	// preserves today's return_to_default behavior exactly.
 	var summaryLine string
-	if len(older) > 0 {
-		summaryLine = fmt.Sprintf("[%d earlier messages not shown]", len(older))
+	var recent []session.TranscriptEntry
+	if !toDefault {
+		contextWindow := t.getContextWindow(agentID)
+		budget := int(float64(contextWindow) * 0.50)
+
+		transcript, err := t.sessionStore.ReadTranscript(sessionID)
+		if err != nil {
+			slog.Warn("switch_agent: could not read transcript for context transfer", "session", sessionID, "error", err)
+			// Proceed with empty context rather than failing the switch.
+			transcript = nil
+		}
+		var older []session.TranscriptEntry
+		recent, older = splitByTokenBudget(transcript, budget)
+		if len(older) > 0 {
+			summaryLine = fmt.Sprintf("[%d earlier messages not shown]", len(older))
+		}
 	}
 
-	// Step 7: Log handoff event in transcript as an audit trail (FR-016).
+	// Step 6: Log the switch as an audit-trail entry (FR-016). Content AND
+	// AgentID stamping stay asymmetric by branch, DELIBERATELY (ADR-071
+	// §5.1.2) — do not "clean up" what looks like an inconsistency:
+	//   - Named target: stamps the TARGET agent, because transcript
+	//     hydration on a fresh turn surfaces this entry under the
+	//     INCOMING agent's own history (e.g. Ray sees the brief on his
+	//     first turn after Mia hands off to him).
+	//   - Default: stamps the CURRENT (outgoing) agent, because this entry
+	//     is a record of what the outgoing agent did.
+	// The "Handoff: " content prefix is FROZEN (ADR-071 §5.2.2a) —
+	// pkg/gateway/replay.go matches it via strings.HasPrefix with no
+	// shared constant between producer and consumer; do not rewrite it
+	// without introducing one first. The default branch's
+	// "Returned to default agent (...)" text does NOT share that prefix
+	// and so — matching today's return_to_default exactly — is not
+	// replayed into an agent_switched frame; that pre-existing gap is
+	// documented, not fixed, by this ADR (§5.2.2a).
 	currentAgentID := ToolAgentID(ctx)
-	handoffContent := fmt.Sprintf("Handoff: %s → %s. Context: %s", currentAgentID, agentName, contextMsg)
+	var content, auditAgentID, forUser, forLLMHeadline string
+	if toDefault {
+		content = fmt.Sprintf("Returned to default agent (%s).", agentID)
+		if note != "" {
+			content = fmt.Sprintf("Returned to default agent (%s). Summary: %s", agentID, note)
+		}
+		auditAgentID = currentAgentID
+		forUser = "Returning to default agent."
+		forLLMHeadline = content
+	} else {
+		content = fmt.Sprintf("Handoff: %s → %s. Context: %s", currentAgentID, agentName, note)
+		auditAgentID = agentID
+		forUser = fmt.Sprintf("Connecting you with %s...", agentName)
+		forLLMHeadline = fmt.Sprintf("Handoff complete. %s is now active.", agentName)
+	}
 	appendErr := t.sessionStore.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID:   fmt.Sprintf("handoff-%d", time.Now().UnixNano()),
-		Type: session.EntryTypeSystem,
-		Role: "system",
-		// AgentID = target so transcript hydration on a fresh turn picks
-		// up this entry under the new agent's history (e.g. Ray sees the
-		// brief on his first turn after Mia hands off to him).
-		AgentID:   agentID,
-		Content:   handoffContent,
+		ID:        fmt.Sprintf("switch-agent-%d", time.Now().UnixNano()),
+		Type:      session.EntryTypeSystem,
+		Role:      "system",
+		AgentID:   auditAgentID,
+		Content:   content,
 		Timestamp: time.Now().UTC(),
 	})
 	if appendErr != nil {
 		// FR-002: surface the now-possible strict-write error as a counter
 		// increment plus a WARN naming the session id — this remains
-		// best-effort (the handoff itself already succeeded above), but the
+		// best-effort (the switch itself already succeeded above), but the
 		// failure must no longer be invisible.
 		handoffTranscriptWriteFailures.Add(1)
-		slog.Warn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
+		slog.Warn("switch_agent: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
 	}
 
-	// Step 8: Notify frontend (so the UI can update its active-agent indicator).
+	// Step 7: Notify frontend (so the UI can update its active-agent indicator).
 	if t.onHandoff != nil {
 		chatID := ToolChatID(ctx)
 		if chatID == "" {
-			slog.Warn("handoff: empty chatID; UI agent_switched will not target a specific connection",
+			slog.Warn("switch_agent: empty chatID; UI agent_switched will not target a specific connection",
 				"session_id", sessionID)
 		}
 		t.onHandoff(HandoffEvent{
@@ -260,13 +386,12 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			SessionID: sessionID,
 			AgentID:   agentID,
 			AgentName: agentName,
+			ToDefault: toDefault,
 		})
 	}
 
-	// Step 9: Return context for the target agent.
-	forLLMParts := []string{
-		fmt.Sprintf("Handoff complete. %s is now active.", agentName),
-	}
+	// Step 8: Return context for the caller.
+	forLLMParts := []string{forLLMHeadline}
 	if summaryLine != "" {
 		forLLMParts = append(forLLMParts, summaryLine)
 	}
@@ -276,7 +401,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	return &ToolResult{
-		ForUser: fmt.Sprintf("Connecting you with %s...", agentName),
+		ForUser: forUser,
 		ForLLM:  strings.Join(forLLMParts, "\n"),
 	}
 }
@@ -340,113 +465,4 @@ func formatRecentMessages(entries []session.TranscriptEntry) string {
 		fmt.Fprintf(&sb, "%s%s: %s\n", e.Role, agentTag, e.Content)
 	}
 	return strings.TrimRight(sb.String(), "\n")
-}
-
-// ReturnToDefaultTool clears the session-level agent override by switching the
-// active agent back to the configured default.
-type ReturnToDefaultTool struct {
-	BaseTool
-	sessionStore    HandoffSessionStore
-	getDefaultAgent func() string
-	onHandoff       HandoffFunc
-}
-
-// NewReturnToDefaultTool creates a ReturnToDefaultTool.
-//
-//   - sessionStore is used to switch the active agent atomically.
-//   - getDefaultAgent resolves the default agent ID from config at call time.
-//   - onHandoff notifies the frontend of the agent switch; may be nil.
-func NewReturnToDefaultTool(
-	sessionStore HandoffSessionStore,
-	getDefaultAgent func() string,
-	onHandoff HandoffFunc,
-) *ReturnToDefaultTool {
-	return &ReturnToDefaultTool{
-		sessionStore:    sessionStore,
-		getDefaultAgent: getDefaultAgent,
-		onHandoff:       onHandoff,
-	}
-}
-
-func (t *ReturnToDefaultTool) Name() string           { return "return_to_default" }
-func (t *ReturnToDefaultTool) Scope() ToolScope       { return ScopeCore }
-func (t *ReturnToDefaultTool) Category() ToolCategory { return CategoryDelegation }
-
-func (t *ReturnToDefaultTool) Description() string {
-	return "Return the conversation to the default agent. Clears any active handoff override for this session."
-}
-
-func (t *ReturnToDefaultTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"summary": map[string]any{
-				"type":        "string",
-				"description": "Optional summary of what was accomplished before returning",
-			},
-		},
-		"required": []string{},
-	}
-}
-
-func (t *ReturnToDefaultTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	sessionID := resolveSessionID(ctx)
-	if sessionID == "" {
-		return ErrorResult("return_to_default is not available in this context (no session key)")
-	}
-
-	defaultAgentID := t.getDefaultAgent()
-	if defaultAgentID == "" {
-		return ErrorResult("no default agent configured")
-	}
-
-	if err := t.sessionStore.SwitchAgent(sessionID, defaultAgentID); err != nil && !errors.Is(err, ErrAlreadyActive) {
-		return ErrorResult(fmt.Sprintf("failed to return to default agent: %v", err))
-	}
-
-	// Build the message once for both audit trail and LLM response.
-	summary, _ := args["summary"].(string)
-	message := fmt.Sprintf("Returned to default agent (%s).", defaultAgentID)
-	if summary != "" {
-		message = fmt.Sprintf("Returned to default agent (%s). Summary: %s", defaultAgentID, summary)
-	}
-
-	// Log the return event as an audit trail (FR-016).
-	currentAgentID := ToolAgentID(ctx)
-	appendErr := t.sessionStore.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID:        fmt.Sprintf("return-%d", time.Now().UnixNano()),
-		Type:      session.EntryTypeSystem,
-		Role:      "system",
-		Content:   message,
-		AgentID:   currentAgentID,
-		Timestamp: time.Now().UTC(),
-	})
-	if appendErr != nil {
-		// FR-002: surface the now-possible strict-write error as a counter
-		// increment plus a WARN naming the session id — best-effort, same
-		// as HandoffTool.Execute's audit write above.
-		handoffTranscriptWriteFailures.Add(1)
-		slog.Warn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
-	}
-
-	// Notify the frontend.
-	if t.onHandoff != nil {
-		chatID := ToolChatID(ctx)
-		if chatID == "" {
-			slog.Warn("return_to_default: empty chatID; UI agent_switched will not target a specific connection",
-				"session_id", sessionID)
-		}
-		t.onHandoff(HandoffEvent{
-			Channel:   ToolChannel(ctx),
-			ChatID:    chatID,
-			SessionID: sessionID,
-			AgentID:   defaultAgentID,
-			AgentName: defaultAgentID,
-		})
-	}
-
-	return &ToolResult{
-		ForUser: "Returning to default agent.",
-		ForLLM:  message,
-	}
 }

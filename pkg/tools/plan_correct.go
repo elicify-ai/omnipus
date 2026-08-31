@@ -133,7 +133,12 @@ func (t *PlanCorrectTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanCorrectTool) Description() string {
 	return "Correct a running plan that has parked for adjudication (phase awaiting_supervision) or " +
-		"stalled with no dispatchable member. Four verbs: append (add tail work), supersede (mark a " +
+		"stalled with no dispatchable member — use this when a plan looks stuck and needs to be " +
+		"unstuck. Only the plan supervisor may call this; every other caller is refused. Order new " +
+		"work with optional tail_edges (from/to naming an existing member id or a tail member's ref " +
+		"from this same call) — the graph must stay acyclic and no edge may touch the member being " +
+		"superseded. Each verb accepts only its own fields: passing a field a verb does not take is " +
+		"rejected outright, not ignored. Four verbs: append (add tail work), supersede (mark a " +
 		"done member's outcome ignored by the judge — REQUIRES at least one replacement tail member; " +
 		"the system automatically carries every acceptance criterion of the superseded member onto " +
 		"your replacement work, so you do not need to know or restate its exact criteria — just " +

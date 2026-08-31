@@ -294,13 +294,25 @@ func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 					descLine = fmt.Sprintf("\nDescription: %s", desc)
 				}
 			}
+			// Finding 5 (context-audit 2026-08): this used to restate the
+			// working-directory fact in full, competing with the two OTHER
+			// full statements in this same system message (envcontext/
+			// render.go's "Paths you can use" section, and
+			// getWorkspaceAndRules' now-removed "Your workspace is at:"
+			// line) — three full statements, two of them wrong for a
+			// CoreTeam member. Now single-sourced: render.go states the
+			// default (private) directory once, and THIS block states only
+			// the delta/exception for a CoreTeam member, explicitly framed
+			// as an override of that default rather than a second
+			// competing full statement.
 			return fmt.Sprintf(
-				"## Working Directory\nYou are a member of the Workspace \"%s\" (id: %s)'s shared team.%s\n\n"+
-					"Your file tools (read_file, write_file, edit_file, list_directory, bash, etc.) operate "+
-					"relative to THIS workspace's SHARED directory, NOT your own private agent directory:\n\n%s\n\n"+
-					"Always use RELATIVE paths for file operations (e.g. \"report.html\") — the tools are "+
+				"## Working Directory (exception to the Environment section above)\n"+
+					"As a member of the Workspace \"%s\" (id: %s)'s shared team,%s your file tools "+
+					"(read_file, write_file, edit_file, list_directory, bash, etc.) are RE-ROOTED to "+
+					"this workspace's SHARED directory instead of your usual private one:\n\n%s\n\n"+
+					"Use RELATIVE paths for file operations (e.g. \"report.html\") — the tools are "+
 					"already rooted here. Do not construct or report an absolute path under agents/%s/; "+
-					"that is not where your files are.",
+					"that is not where your files are for this session.",
 				title, wsID, descLine, wsDir, id,
 			)
 		})

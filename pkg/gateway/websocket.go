@@ -46,11 +46,11 @@ import (
 // FilterToolsByPolicy uses at defs-assembly time — so the gateway exec gate and
 // the loop's sent-defs view can never drift. It builds the resolver inputs (the
 // sandbox global floor + the agent's builtin policy) from cfg. The primitive
-// encapsulates, in order: (1) infra force-allow (load_tool → allow,
+// encapsulates, in order: (1) infra force-allow (ToolSearch → allow,
 // unconditional — infra tools are registration-gated, not policy-gated, so they
 // stay executable for EVERY agent including deny-by-default Ava/Mia/Ray, or
 // every lazy tool becomes unreachable at exec time), (2) the scope gate, and
-// (3) global×agent strictest-wins (deny > ask > allow). The tools that load_tool
+// (3) global×agent strictest-wins (deny > ask > allow). The tools that ToolSearch
 // *loads* stay independently policy-gated when they are actually called.
 //
 // BEHAVIOR CHANGE (intentional): this does NOT preserve the OLD gateway exec
@@ -3199,12 +3199,13 @@ type openSpanEntry struct {
 //
 //   - agent_switched → class (a). Built at this file's ToolExecEnd case
 //     (below, evtSID := p.SessionID from agent.ToolExecEndPayload) immediately
-//     after a successful hand_off/return_to_default tool_call_result — the
-//     IDENTICAL payload and session-id source as tool_call_result, which is
-//     already verified class (a). A delegated child can invoke hand_off on
-//     its own session exactly as a root turn can, so evtSID is the child's own
-//     producing session whenever that happens, distinct from the routing key.
-//     Stamped alongside tool_call_result above.
+//     after a successful switch_agent tool_call_result (ADR-071 D4 merged
+//     hand_off/return_to_default into this one tool) — the IDENTICAL payload
+//     and session-id source as tool_call_result, which is already verified
+//     class (a). A delegated child can invoke switch_agent on its own session
+//     exactly as a root turn can, so evtSID is the child's own producing
+//     session whenever that happens, distinct from the routing key. Stamped
+//     alongside tool_call_result above.
 //
 //   - task_status_changed → class (b). Its only non-test construction site is
 //     `TaskStatusChangedFrame{..., SessionId: p.SessionID, ...}` (this file's
@@ -3878,7 +3879,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				producingSIDForResult = producingSID
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallResult), resultF)
-			// When the handoff tool succeeds, notify the frontend to switch agents.
+			// When switch_agent succeeds, notify the frontend to switch agents.
 			// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
 			//
 			// ADR-057 FR-089 (W5 audit): agent_switched is class (a), not
@@ -3886,48 +3887,81 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// comment pre-audit) — it is derived from THIS SAME
 			// ToolExecEndPayload, at the exact call site whose tool_call_result
 			// sibling is already verified class (a): a delegated child can
-			// invoke hand_off/return_to_default on its OWN session exactly as a
-			// root turn can, so evtSID here is the CHILD's own producing
-			// session whenever the hand_off ran inside a sub-turn, distinct
-			// from the routing key placed in SessionId below. Reuses
+			// invoke switch_agent on its OWN session exactly as a root turn
+			// can, so evtSID here is the CHILD's own producing session
+			// whenever switch_agent ran inside a sub-turn, distinct from the
+			// routing key placed in SessionId below. Reuses
 			// producingSIDForResult computed above rather than re-deriving it,
 			// since both frames answer the identical "does this ToolExecEnd's
 			// producer differ from its routing key" question.
-			if p.Tool == "hand_off" && status == "success" {
-				if activeAgent, ok := h.agentLoop.GetSessionActiveAgent(evtSID); ok {
-					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
-					// Use generated.AgentSwitchedFrame (contract-first migration).
-					switchF := generated.AgentSwitchedFrame{
-						Type:      string(generated.WsFrameTypeAgentSwitched),
-						SessionId: evtSID,
-					}
-					if activeAgent != "" {
-						switchF.AgentId = &activeAgent
-					}
-					if agentName != "" {
-						switchF.Message = &agentName
-					}
-					if producingSIDForResult != "" {
-						pid := producingSIDForResult
-						switchF.ProducingSessionId = &pid
-					}
-					sendConnGenFrame(wc, string(generated.WsFrameTypeAgentSwitched), switchF)
-				}
-			}
-			if p.Tool == "return_to_default" && status == "success" {
+			//
+			// ADR-071 §5.2.1/§5.2.2: this used to be TWO exact-string
+			// branches (p.Tool == "hand_off" and p.Tool == "return_to_default"),
+			// one per retired tool. D4 merged both into one tool name with no
+			// arguments in ToolExecEndPayload to distinguish which branch ran
+			// (agent.ToolExecEndPayload carries no tool-arguments field).
+			//
+			// The semantic is NOT re-derived from the resulting agent id
+			// (§5.2.2 decision A's original approach: comparing the
+			// session's post-switch active agent against the registry's
+			// default agent id) — that comparison misreports an explicit
+			// switch_agent(target:"<id>") that happens to name the CURRENT
+			// default agent as a return-to-default, since the resulting
+			// AgentID is identical in both cases. Instead this reads the
+			// tool's own toDefault intent back via GetLastSwitchToDefault,
+			// populated synchronously by onHandoffFrontend (pkg/agent/loop.go)
+			// from tools.HandoffEvent.ToDefault before this ToolExecEnd event
+			// is even emitted, keyed the same way GetSessionActiveAgent is.
+			if p.Tool == "switch_agent" && status == "success" {
 				defaultAgent := h.agentLoop.GetRegistry().GetDefaultAgent()
 				var defaultName string
 				if defaultAgent != nil {
 					defaultName = defaultAgent.Name
 				}
-				// Use generated.AgentSwitchedFrame (contract-first migration).
+				activeAgent, activeOk := h.agentLoop.GetSessionActiveAgent(evtSID)
+				toDefault, sawToDefault := h.agentLoop.GetLastSwitchToDefault(evtSID)
+				if !activeOk {
+					// After a SUCCESSFUL switch this is an invariant
+					// violation, not a normal path (§5.2.2) — WARN rather
+					// than silently emitting nothing, so this is
+					// distinguishable in logs from the exact regression
+					// this section exists to prevent. Still emit a frame
+					// below (defaulting to the "returned to default" shape)
+					// rather than dropping it — the sibling
+					// return_to_default branch never had this guard and
+					// always emitted.
+					slog.Warn("websocket: switch_agent succeeded but no active agent found for session",
+						"session_id", evtSID)
+				}
+				if !sawToDefault {
+					// Should not happen on the success path — onHandoffFrontend
+					// stores this before Execute returns, strictly before this
+					// event fires. Fall back to the old id-comparison so a
+					// frame still emits (best-effort) rather than silently
+					// dropping, and make the anomaly visible.
+					slog.Warn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
+						"session_id", evtSID)
+					toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
+				}
 				switchF := generated.AgentSwitchedFrame{
 					Type:      string(generated.WsFrameTypeAgentSwitched),
 					SessionId: evtSID,
-					// AgentId omitted (nil ptr) = return to default agent
 				}
-				if defaultName != "" {
-					switchF.Message = &defaultName
+				if activeOk && activeAgent != "" && !toDefault {
+					// Named-target switch.
+					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
+					switchF.AgentId = &activeAgent
+					if agentName != "" {
+						switchF.Message = &agentName
+					}
+				} else {
+					// Returned to default (or the active-agent lookup was
+					// unavailable — best-effort default shape per the WARN
+					// above). AgentId omitted (nil ptr) = return to default
+					// agent.
+					if defaultName != "" {
+						switchF.Message = &defaultName
+					}
 				}
 				if producingSIDForResult != "" {
 					pid := producingSIDForResult

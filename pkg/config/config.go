@@ -20,6 +20,7 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1998,6 +1999,20 @@ var knownChannelTypes = map[string]struct{}{
 	// channel. A legacy channels.email config entry is dropped on load with a WARN.
 }
 
+// KnownChannelTypes returns a sorted copy of the canonical supported-channel
+// type identifier set (knownChannelTypes above). Exported so other packages
+// — notably pkg/sysagent/tools's channel-management tools — can derive their
+// own channel allow-lists from this single source of truth instead of
+// hand-maintaining a second, driftable copy of the same ID set.
+func KnownChannelTypes() []string {
+	names := make([]string, 0, len(knownChannelTypes))
+	for n := range knownChannelTypes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // normalizeChannelMap fills in the Type field from the map key when absent
 // (so JSON-loaded entries without an explicit "type" field get a default),
 // and drops entries whose effective channel type is not in knownChannelTypes,
@@ -3480,9 +3495,9 @@ type ToolsConfig struct {
 
 	// Manifest controls the tool-manifest optimization (v0.1.0). When
 	// Compressed is true (the default), only the high-frequency "full" tools
-	// plus load_tool/search are sent as callable defs each turn; all other
+	// plus ToolSearch are sent as callable defs each turn; all other
 	// allowed tools appear in a compact manifest block in the system context
-	// and are made callable on demand via load_tool. When false, every tool is
+	// and are made callable on demand via ToolSearch. When false, every tool is
 	// sent as a full callable def every turn (legacy behavior; backward-compat
 	// kill-switch).
 	Manifest ManifestConfig `json:"manifest" yaml:"manifest,omitempty"`
@@ -3532,6 +3547,27 @@ type ManifestConfig struct {
 	// Default: true (enabled). When false, every tool is sent full (legacy behavior).
 	// Controlled at runtime via PUT /api/v1/performance (tools_on_demand field).
 	Compressed bool `json:"compressed" yaml:"compressed,omitempty"`
+
+	// PreviewAllLazy reverts ADR-071 D3's three-tier visibility split: when
+	// true, tools.ToolManifestVisibility returns ManifestPreviewed for EVERY
+	// ManifestLazy tool, restoring the pre-D3 behavior where the whole lazy
+	// catalog (Tier 2 + Tier 3) appears as preview lines in the compressed
+	// manifest block. Default: false (the three-tier split — 17 always-listed,
+	// 8 previewed, 63 search-only — is active on a fresh install and on every
+	// upgrade). It does NOT revert User Story 1's permission filtering of
+	// ToolSearch results, nor the per-(agent,session) scoping of the loaded-
+	// tool set (ADR-071 §4.6) — those hold regardless of this flag.
+	//
+	// This is a stored-configuration dial, not an environment variable and
+	// not a settings-screen control, read live inside ToolManifestVisibility
+	// on every turn (no restart needed to flip it). It is explicitly
+	// time-boxed (FR-043): it exists only to survive the operator observation
+	// window for the omnipus_toolsearch_zero_result_total and
+	// omnipus_toolsearch_no_followup_total detection counters
+	// (pkg/gateway/metrics.go) — once those counters have produced enough
+	// data to validate the split or motivate a widened Tier 2, this field
+	// MUST be deleted in the same change that acts on that data.
+	PreviewAllLazy bool `json:"preview_all_lazy,omitempty" yaml:"preview_all_lazy,omitempty"`
 }
 
 // RunInWorkspaceConfig holds dev-mode configuration for the web_serve tool.
@@ -3944,8 +3980,21 @@ type MCPServerConfig struct {
 	Command string `json:"command"`
 	// Args are the arguments to pass to the command
 	Args []string `json:"args,omitempty"`
-	// Env are environment variables to set for the server process (stdio only)
+	// Env are environment variables to set for the server process (stdio only).
+	// Written directly here means the value is stored in config.json IN
+	// PLAINTEXT — legacy/back-compat path only (e.g. a server added via the
+	// gateway REST API). Prefer EnvRefs.
 	Env map[string]string `json:"env,omitempty"`
+	// EnvRefs are credential-store references for stdio env vars: key = env
+	// var name, value = the credential-store key holding the real secret.
+	// add_mcp_server (pkg/sysagent/tools/mcp.go) routes every value passed in
+	// its `env` parameter through the encrypted credential store rather than
+	// writing it to config.json in plaintext — this is where the resulting
+	// refs land. At connect time, pkg/mcp.ResolveServerEnvRefs resolves each
+	// ref to its real value and merges it into Env IN MEMORY ONLY (never
+	// written back to config.json); an EnvRefs entry overrides a same-named
+	// literal Env entry. See pkg/agent/loop_mcp.go's reconcileLocked.
+	EnvRefs map[string]string `json:"env_refs,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
 	// Type is "stdio", "sse", or "http" (default: stdio if command is set, sse if url is set)
