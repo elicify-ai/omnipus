@@ -713,3 +713,43 @@ func TestAggregates_ArithmeticIsExactBeyondFloat64(t *testing.T) {
 		t.Errorf("avg = %q, want 4,503,599,627,370,496.5050", got)
 	}
 }
+
+// TestRefuseTotal_ClearsAValueAlreadyComputed.
+//
+// This test exists because a mutation survived without it. Every reducer today
+// refuses BEFORE it assigns a value, so deleting the clearing line changed no
+// integration result at all — the assertion that "a refused summary carries no
+// value" was passing because no value had ever been set, not because anything
+// cleared one.
+//
+// The line is not decoration. The first reducer that computes a number and then
+// discovers it cannot stand behind it — a sum whose last addend is unreadable,
+// a bound reached after the accumulator is already populated — goes through
+// here, and FR-154's whole point is that what it returns is a refusal rather
+// than a number nobody can vouch for.
+func TestRefuseTotal_ClearsAValueAlreadyComputed(t *testing.T) {
+	got := refuseTotal(generated.VaultFindTotal{
+		Op:    opSum,
+		Label: "sum(height_cm)",
+		Value: "120.00",
+		Scope: "over 4 of 5 evaluated rows (5 shown)",
+	}, "the fifth value could not be read")
+
+	if got.Value != "" {
+		t.Errorf("a refused total kept the value %q. A number a reader can see is a "+
+			"number a reader will use, and `refused: true` beside it reads as a "+
+			"footnote rather than a retraction.", got.Value)
+	}
+	if got.Refused == nil || !*got.Refused {
+		t.Errorf("the total is not marked refused: %+v", got)
+	}
+	if !strings.HasPrefix(got.Scope, "no total: ") {
+		t.Errorf("scope = %q, want it to open with the refusal rather than the old scope", got.Scope)
+	}
+	if !strings.Contains(got.Scope, "the fifth value could not be read") {
+		t.Errorf("scope = %q and does not carry the reason", got.Scope)
+	}
+	if got.Label != "sum(height_cm)" {
+		t.Errorf("label = %q; a refusal must still say WHAT was refused", got.Label)
+	}
+}
