@@ -282,12 +282,48 @@ func TestIsTypeNarrowing_TheEvaluatorKeepsThePromiseTheNarrowingMakes(t *testing
 		}
 	})
 
-	t.Run("prose takes the else-branch, and the arithmetic NEVER runs", func(t *testing.T) {
-		// This is the case the whole design turns on. `if` is lazy, so the
-		// division is never reached — and "never reached" has to mean NO
-		// problem was recorded, not "a problem was recorded and swallowed".
-		// A problem list with an entry here would be the runtime surprise that
-		// is strictly worse than the clean refusal this change replaced.
+	t.Run("the guarded branch is NEVER evaluated when the guard is false", func(t *testing.T) {
+		// THE LAZINESS ASSERTION, with an oracle that can actually see it.
+		//
+		// A static narrowing is the claim that the guarded branch cannot meet a
+		// non-number. Laziness is what makes the claim true, so a test has to
+		// be able to tell "the branch did not run" from "the branch ran and
+		// produced nothing" — and arithmetic over a text operand produces
+		// nothing QUIETLY, so it cannot be that oracle.
+		//
+		// Division by zero can: FR-144 makes it an absent result plus a NAMED
+		// problem. Put one in the guarded branch, over a property the guard has
+		// nothing to do with, and its problem is present if and only if the
+		// branch was evaluated.
+		schema := formulaFixtureSchema()
+		src := `if(name.isType("number"), amount / 0, "")`
+		c := fixtureCandidate{props: map[string]PropertyValue{
+			"name":   textValue(schema.Properties["name"], "PLACEHOLDER — cost unknown"),
+			"amount": numberValue(t, schema.Properties["amount"], "5"),
+		}}
+		res := evalOne(t, src, c)
+		for _, p := range res.Problems {
+			if strings.Contains(p.Detail, "division by zero") {
+				t.Fatalf("the guard is FALSE and the guarded branch was evaluated anyway (%q). Eager evaluation turns this narrowing from a static guarantee into a runtime surprise — strictly worse than the refusal it replaced", p.Detail)
+			}
+		}
+
+		// And the same expression WITH the guard true does report it, so the
+		// absence above is laziness rather than a problem list that never fills.
+		c.props["name"] = textValue(schema.Properties["name"], "42")
+		lit := evalOne(t, src, c)
+		saw := false
+		for _, p := range lit.Problems {
+			if strings.Contains(p.Detail, "division by zero") {
+				saw = true
+			}
+		}
+		if !saw {
+			t.Fatal("with the guard TRUE the guarded branch's division by zero was not reported — the oracle above cannot see an eager evaluation, so its silence proves nothing")
+		}
+	})
+
+	t.Run("prose takes the else-branch and produces absence, quietly", func(t *testing.T) {
 		for _, prose := range []string{"PLACEHOLDER — cost unknown", "usage-based; US$20.60 (Apr)", ""} {
 			res := evalNarrowing(t, prose, false, "annual")
 			if !res.Absent {
