@@ -38,11 +38,21 @@ import (
 // self-test with its own copy of the rules proves only that the copy works,
 // which is decimal_no_float_test.go's own stated reasoning applied one file
 // over.
+//
+// WHY THE TEST FUNCTIONS ARE NAMED "BinaryFP" AND NOT "Float". The
+// package-wide guard bans any IDENTIFIER containing "Float" — that one rule is
+// what catches big.Float, ParseFloat, FormatFloat, SetFloat64 and Rat.FloatString
+// in a single line — and it scans this file like every other. A test function
+// called TestFormula_NoBinaryFloat... is therefore itself an offence, and the
+// first draft of this file failed the package suite for exactly that reason
+// while passing every scoped `-run TestFormula_` invocation. Do not rename these
+// back; the existing guard file uses the same "BinaryFP" spelling for the same
+// reason.
 // ---------------------------------------------------------------------------
 
-// TestFormula_NoBinaryFloatOnTheArithmeticPath is FR-144 / R-15 enforced
+// TestFormula_NoBinaryFPOnTheArithmeticPath is FR-144 / R-15 enforced
 // mechanically over the formula layer's own files.
-func TestFormula_NoBinaryFloatOnTheArithmeticPath(t *testing.T) {
+func TestFormula_NoBinaryFPOnTheArithmeticPath(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("reading package dir: %v", err)
@@ -102,13 +112,13 @@ func TestFormula_NoBinaryFloatOnTheArithmeticPath(t *testing.T) {
 	}
 }
 
-// TestFormula_NoFloatGuardActuallyDetects proves this guard can fail, using the
+// TestFormula_NoBinaryFPGuardActuallyDetects proves this guard can fail, using the
 // two shapes a float would most plausibly take in THIS layer.
 //
 // Both are real temptations rather than invented ones: `Rat.FloatString(n)` is a
 // one-line replacement for the whole of ratToDecimal, and `strconv.ParseFloat`
 // is the obvious way to turn a numeric literal's token text into a number.
-func TestFormula_NoFloatGuardActuallyDetects(t *testing.T) {
+func TestFormula_NoBinaryFPGuardActuallyDetects(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
