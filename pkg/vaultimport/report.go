@@ -73,6 +73,18 @@ type Report struct {
 	// holds no value for it anywhere — a guess, on the record, rather than an
 	// observation. Populated from infer.CollectNameEvidencedInferences.
 	NameEvidenced []NameEvidencedInference
+	// FormulaEvidenced is every property typed from a `.base` file's own
+	// FORMULA because the vault holds no value for it anywhere. Populated
+	// from CollectFormulaEvidencedTypes.
+	//
+	// It is a SEPARATE section from NameEvidenced on purpose, and the reason
+	// is the founder's next action rather than tidiness: a name-based guess
+	// is this package reading English and the only place to correct it is the
+	// schema, while a formula-based one rests on a line the operator wrote in
+	// a file he owns — so the report has to name that file and that formula,
+	// or he cannot tell a type he should overrule from a formula he should
+	// fix. Each entry renders itself via ReportLines().
+	FormulaEvidenced []FormulaEvidencedType
 	// EnumWidenings is every inferred enum whose closed set met a literal the
 	// operator's own `.base` files filter on and no note carries — widened,
 	// or refused at enumMaxDistinct. Populated from CollectEnumWidenings.
@@ -130,6 +142,7 @@ func (r *Report) Render(w io.Writer) {
 
 	r.renderProvisioned(w)
 	r.renderEnumWidenings(w)
+	r.renderFormulaEvidenced(w)
 	r.renderNameEvidenced(w)
 
 	fmt.Fprintf(w, "\n-- %d record types inferred --\n", len(r.Types))
@@ -957,6 +970,74 @@ func (r *Report) renderEnumWidenings(w io.Writer) {
 	}
 }
 
+// renderFormulaEvidenced prints every property this run typed from a `.base`
+// file's own FORMULA because the vault held no value for it anywhere.
+//
+// Placed between the enum widenings and the name guesses because that is the
+// order of the evidence, strongest first: a record type provisioned from a
+// base, then a closed set widened by a base, then a property TYPED by a base,
+// then the one decision in the whole run made on no vault evidence at all.
+//
+// THE SAME ANTI-DRIFT MECHANISM the section below it uses, for the same
+// reason. What the formulas were read AS is COUNTED from the entries, never
+// written into a sentence: infer.go's rule produces only `date` today, and a
+// heading that said "these are dates" would go false in silence on the day it
+// produces a second type. And every entry's own PREMISE is checked against the
+// report it appears in — the premise is "a base formula said so", so an entry
+// carrying no evidence at all, or attached to a record type this run did not
+// infer, is printed as a contradiction rather than narrated as though it were
+// fine.
+//
+// WHAT IT DOES NOT REACH: nothing here can tell whether the operator's formula
+// is RIGHT. `date(last_refreshed)` is his statement about his own property,
+// and this section reports it as a statement rather than implying the type was
+// measured — which is why it quotes the formula rather than summarising it.
+func (r *Report) renderFormulaEvidenced(w io.Writer) {
+	if len(r.FormulaEvidenced) == 0 {
+		return
+	}
+	byType := map[string]int{}
+	for _, f := range r.FormulaEvidenced {
+		byType[string(f.Type)]++
+	}
+	kinds := make([]string, 0, len(byType))
+	for k := range byType {
+		kinds = append(kinds, fmt.Sprintf("%s x%d", k, byType[k]))
+	}
+	sort.Strings(kinds)
+
+	fmt.Fprintf(w, "\n-- %d properties typed from a BASE FORMULA, not from a value (%s) --\n",
+		len(r.FormulaEvidenced), strings.Join(kinds, ", "))
+	fmt.Fprintln(w, "  No note of these record types carries a value for these properties, so the notes could not say what they hold — but the operator's own `.base` file did, by applying a type-specific function to the bare property name. That is a STRONGER claim than the name-based guesses below it and a WEAKER one than an observed value: if a formula below is wrong, fix the formula in the base file; if only the type is wrong, the last line of each entry overrules it in one edit.")
+
+	// THE PREMISE IS "THIS RUN HAS A SCHEMA FOR THAT RECORD TYPE", AND THAT IS
+	// TWO SETS, NOT ONE. renderNameEvidenced next door checks against r.Types
+	// alone and is right to: a name-based guess is made during inference, over
+	// a type some note carries. This rule runs LATER, over `inferred` after
+	// FR-018d provisioning has added the types no note carries at all — and
+	// three of the four properties it types in the founder's vault live on
+	// exactly those provisioned types. Checking r.Types alone here printed a
+	// CONTRADICTION on each of them: a report calling its own correct decision
+	// impossible, which is worse than saying nothing.
+	known := map[string]bool{}
+	for _, t := range r.Types {
+		known[t.Type] = true
+	}
+	for _, p := range r.Provisioned {
+		known[p.Type] = true
+	}
+	for _, f := range r.FormulaEvidenced {
+		renderProvisionedEntry(w, f.RecordType+"."+f.Property, f.ReportLines())
+		if len(f.Evidence) == 0 {
+			fmt.Fprintf(w, "      CONTRADICTION — no base formula is recorded for `%s`, so there was no evidence here to type from. The premise of this whole section fails for this entry; file it rather than trusting the type.\n", f.Property)
+		}
+		if len(known) > 0 && !known[f.RecordType] {
+			fmt.Fprintf(w, "      CONTRADICTION — %q is neither among the %d record types this run inferred nor among the %d it provisioned from a `.base` file, so this type is attached to a record type this run has no schema for.\n",
+				f.RecordType, len(r.Types), len(r.Provisioned))
+		}
+	}
+}
+
 func (r *Report) renderProvisioned(w io.Writer) {
 	if len(r.Provisioned) == 0 {
 		return
@@ -1215,7 +1296,10 @@ func (r *Report) inferenceEvidenceFor(wanted ...string) string {
 	if len(r.NameEvidenced) > 0 {
 		out = append(out, fmt.Sprintf("(ii) %d propert(ies) were typed from their NAME alone because no note carries a value for them, listed under `typed from their NAME` above — check whether the operand is one of those before concluding anything about the inference.", len(r.NameEvidenced)))
 	}
-	out = append(out, "(iii) an operand named by neither list was typed from real observed values, so the place to look is the property's own content in the vault — not the inference code and not the formula translator.")
+	if len(r.FormulaEvidenced) > 0 {
+		out = append(out, fmt.Sprintf("(iii) %d propert(ies) were typed from a `.base` file's own FORMULA because no note carries a value for them, listed under `typed from a BASE FORMULA` above — an operand there was read as a date on the strength of the operator's own expression, so if one looks wrong the base file is where to fix it.", len(r.FormulaEvidenced)))
+	}
+	out = append(out, "(iv) an operand named by none of the lists above was typed from real observed values, so the place to look is the property's own content in the vault — not the inference code and not the formula translator.")
 	return strings.Join(out, " ")
 }
 
