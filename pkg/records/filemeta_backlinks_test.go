@@ -12,13 +12,13 @@ import (
 	"testing"
 )
 
-// streamOf turns a fixed row slice into a LinkEdgeStream and counts how many
+// fmStreamOf turns a fixed row slice into a LinkEdgeStream and counts how many
 // rows the consumer actually pulled.
 //
 // The counter is the instrument the bound test depends on: without it, "the
 // scan aborted" and "the scan ran to completion and then reported an error"
 // look identical from the outside, and only one of them is FR-132.
-func streamOf(rows []FileLinkRow, visited *int) LinkEdgeStream {
+func fmStreamOf(rows []FileLinkRow, visited *int) LinkEdgeStream {
 	return func(visit func(FileLinkRow) error) error {
 		for _, r := range rows {
 			if visited != nil {
@@ -32,7 +32,7 @@ func streamOf(rows []FileLinkRow, visited *int) LinkEdgeStream {
 	}
 }
 
-func backlinkFixture() []FileLinkRow {
+func fmBacklinkFixture() []FileLinkRow {
 	return []FileLinkRow{
 		// Three spellings of one reference, from three different notes.
 		{NotePath: "Index/Clients.md", Target: "Clients/Acme Corp.md", Raw: "[[Clients/Acme Corp.md]]"},
@@ -53,21 +53,21 @@ func backlinkFixture() []FileLinkRow {
 
 func TestBacklinks_DerivedInverseOnAFixture(t *testing.T) {
 	var visited int
-	ix, err := BuildBacklinkIndex(BacklinkScope{PathPrefix: "vaults/main"}, streamOf(backlinkFixture(), &visited))
+	ix, err := BuildBacklinkIndex(BacklinkScope{PathPrefix: "vaults/main"}, fmStreamOf(fmBacklinkFixture(), &visited))
 	if err != nil {
 		t.Fatalf("BuildBacklinkIndex: %v", err)
 	}
-	if visited != len(backlinkFixture()) {
-		t.Fatalf("visited %d edges of %d — the stream was not consumed once through", visited, len(backlinkFixture()))
+	if visited != len(fmBacklinkFixture()) {
+		t.Fatalf("visited %d edges of %d — the stream was not consumed once through", visited, len(fmBacklinkFixture()))
 	}
-	if ix.EdgeCount() != len(backlinkFixture()) {
-		t.Fatalf("EdgeCount = %d, want %d", ix.EdgeCount(), len(backlinkFixture()))
+	if ix.EdgeCount() != len(fmBacklinkFixture()) {
+		t.Fatalf("EdgeCount = %d, want %d", ix.EdgeCount(), len(fmBacklinkFixture()))
 	}
 	if ix.Scope().PathPrefix != "vaults/main" {
 		t.Fatalf("scope = %+v", ix.Scope())
 	}
 
-	got := targetsOf(ix.For("Clients/Acme Corp.md"))
+	got := fmTargetsOf(ix.For("Clients/Acme Corp.md"))
 	want := []string{
 		"Boards/Wall.md",
 		"Deals/Q3 Renewal.md",
@@ -75,14 +75,14 @@ func TestBacklinks_DerivedInverseOnAFixture(t *testing.T) {
 		"Notes/lower.md",
 		"People/Jane Roe.md",
 	}
-	if !equalStrings(got, want) {
+	if !fmEqualStrings(got, want) {
 		t.Fatalf("backlinks = %v, want %v (sorted, deduped, self-link dropped, embed included)", got, want)
 	}
 
 	// A note nobody links to gets an empty list — and, resolved, an ABSENT
 	// value, so `file.backlinks IS NULL` answers "orphan".
 	if bl := ix.For("Notes/Other.md"); len(bl) != 0 {
-		t.Fatalf("an unreferenced note has backlinks %v", targetsOf(bl))
+		t.Fatalf("an unreferenced note has backlinks %v", fmTargetsOf(bl))
 	}
 
 	m := FileMeta{Path: "Notes/Other.md"}
@@ -90,7 +90,7 @@ func TestBacklinks_DerivedInverseOnAFixture(t *testing.T) {
 	if !m.BacklinksDerived {
 		t.Fatal("Apply left BacklinksDerived false")
 	}
-	pv := mustResolve(t, FileBacklinksProp, m)
+	pv := fmMustResolve(t, FileBacklinksProp, m)
 	if pv.State != StateAbsent {
 		t.Fatalf("an unreferenced note's file.backlinks = %v, want absent", pv.State)
 	}
@@ -99,13 +99,13 @@ func TestBacklinks_DerivedInverseOnAFixture(t *testing.T) {
 	// layer rather than through the index's own accessor.
 	m2 := FileMeta{Path: "Clients/Acme Corp.md"}
 	ix.Apply(&m2)
-	pv2 := mustResolve(t, FileBacklinksProp, m2)
-	if got := texts(pv2); !equalStrings(got, want) {
+	pv2 := fmMustResolve(t, FileBacklinksProp, m2)
+	if got := fmTexts(pv2); !fmEqualStrings(got, want) {
 		t.Fatalf("resolved file.backlinks = %v, want %v", got, want)
 	}
 }
 
-func targetsOf(links []Wikilink) []string {
+func fmTargetsOf(links []Wikilink) []string {
 	out := make([]string, 0, len(links))
 	for _, l := range links {
 		out = append(out, l.Target)
@@ -135,7 +135,7 @@ func TestBacklinks_RefusesAtTheEdgeBoundMidScan(t *testing.T) {
 	}
 
 	var visited int
-	ix, err := BuildBacklinkIndex(BacklinkScope{PathPrefix: "vaults/main"}, streamOf(edges, &visited))
+	ix, err := BuildBacklinkIndex(BacklinkScope{PathPrefix: "vaults/main"}, fmStreamOf(edges, &visited))
 	if err == nil {
 		t.Fatalf("built an index over %d edges with a bound of %d", ix.EdgeCount(), MaxBacklinkEdges)
 	}
@@ -174,7 +174,7 @@ func TestBacklinks_RefusesAtTheEdgeBoundMidScan(t *testing.T) {
 	// pass for an implementation that refused everything.
 	MaxBacklinkEdges = rows
 	visited = 0
-	ok, err := BuildBacklinkIndex(BacklinkScope{}, streamOf(edges, &visited))
+	ok, err := BuildBacklinkIndex(BacklinkScope{}, fmStreamOf(edges, &visited))
 	if err != nil {
 		t.Fatalf("exactly at the bound: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestBacklinks_NotDerivedRefusesRatherThanAnsweringEmpty(t *testing.T) {
 	}
 
 	// The same candidate, with the index applied, answers.
-	ix, err := BuildBacklinkIndex(BacklinkScope{}, streamOf(backlinkFixture(), nil))
+	ix, err := BuildBacklinkIndex(BacklinkScope{}, fmStreamOf(fmBacklinkFixture(), nil))
 	if err != nil {
 		t.Fatalf("BuildBacklinkIndex: %v", err)
 	}
@@ -234,13 +234,13 @@ func TestBacklinks_NilStreamIsRefused(t *testing.T) {
 // Determinism: Go randomises map iteration, so an unsorted answer would reorder
 // a rendered column between two identical calls.
 func TestBacklinks_OrderIsStableAcrossRuns(t *testing.T) {
-	ix, err := BuildBacklinkIndex(BacklinkScope{}, streamOf(backlinkFixture(), nil))
+	ix, err := BuildBacklinkIndex(BacklinkScope{}, fmStreamOf(fmBacklinkFixture(), nil))
 	if err != nil {
 		t.Fatalf("BuildBacklinkIndex: %v", err)
 	}
-	first := targetsOf(ix.For("Clients/Acme Corp.md"))
+	first := fmTargetsOf(ix.For("Clients/Acme Corp.md"))
 	for i := 0; i < 50; i++ {
-		if got := targetsOf(ix.For("Clients/Acme Corp.md")); !equalStrings(got, first) {
+		if got := fmTargetsOf(ix.For("Clients/Acme Corp.md")); !fmEqualStrings(got, first) {
 			t.Fatalf("run %d gave %v, first run gave %v", i, got, first)
 		}
 	}
@@ -255,7 +255,7 @@ func TestBacklinks_EmptyEndpointsAreDropped(t *testing.T) {
 		{NotePath: "Notes/b.md", Target: "Acme"},
 	}
 	var visited int
-	ix, err := BuildBacklinkIndex(BacklinkScope{}, streamOf(rows, &visited))
+	ix, err := BuildBacklinkIndex(BacklinkScope{}, fmStreamOf(rows, &visited))
 	if err != nil {
 		t.Fatalf("BuildBacklinkIndex: %v", err)
 	}
@@ -264,10 +264,10 @@ func TestBacklinks_EmptyEndpointsAreDropped(t *testing.T) {
 	if ix.EdgeCount() != 3 {
 		t.Fatalf("EdgeCount = %d, want 3", ix.EdgeCount())
 	}
-	if got := targetsOf(ix.For("Acme.md")); !equalStrings(got, []string{"Notes/b.md"}) {
+	if got := fmTargetsOf(ix.For("Acme.md")); !fmEqualStrings(got, []string{"Notes/b.md"}) {
 		t.Fatalf("backlinks = %v, want only Notes/b.md", got)
 	}
 	if got := ix.For(""); got != nil {
-		t.Fatalf("an empty path resolved to %v", targetsOf(got))
+		t.Fatalf("an empty path resolved to %v", fmTargetsOf(got))
 	}
 }

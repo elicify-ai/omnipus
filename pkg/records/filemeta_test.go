@@ -32,7 +32,7 @@ import (
 // property, not read off the implementation.
 // ---------------------------------------------------------------------------
 
-func fixtureFileMeta() FileMeta {
+func fmFixture() FileMeta {
 	mtime := time.Date(2026, 8, 30, 14, 5, 0, 0, time.UTC)
 	ctime := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
 	return FileMeta{
@@ -58,9 +58,9 @@ func fixtureFileMeta() FileMeta {
 	}
 }
 
-// mustResolve is the happy path, so a failure names the property rather than
+// fmMustResolve is the happy path, so a failure names the property rather than
 // panicking somewhere further down.
-func mustResolve(t *testing.T, name string, m FileMeta) PropertyValue {
+func fmMustResolve(t *testing.T, name string, m FileMeta) PropertyValue {
 	t.Helper()
 	pv, err := ResolveFileProperty(name, m)
 	if err != nil {
@@ -71,7 +71,7 @@ func mustResolve(t *testing.T, name string, m FileMeta) PropertyValue {
 
 // texts renders a resolved value's comparison keys, which is what every
 // assertion below is actually about.
-func texts(pv PropertyValue) []string {
+func fmTexts(pv PropertyValue) []string {
 	out := make([]string, 0, len(pv.Values))
 	for _, v := range pv.Values {
 		out = append(out, v.Text)
@@ -79,7 +79,7 @@ func texts(pv PropertyValue) []string {
 	return out
 }
 
-func equalStrings(a, b []string) bool {
+func fmEqualStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -96,7 +96,7 @@ func equalStrings(a, b []string) bool {
 // ---------------------------------------------------------------------------
 
 func TestFileMeta_AllThirteenResolveOnOneFixture(t *testing.T) {
-	m := fixtureFileMeta()
+	m := fmFixture()
 
 	// The twelve that resolve. Expected values are FR-130's descriptions
 	// applied to the fixture by hand.
@@ -128,7 +128,7 @@ func TestFileMeta_AllThirteenResolveOnOneFixture(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pv := mustResolve(t, tc.name, m)
+			pv := fmMustResolve(t, tc.name, m)
 			if pv.State != tc.state {
 				t.Fatalf("state = %v, want %v", pv.State, tc.state)
 			}
@@ -146,9 +146,9 @@ func TestFileMeta_AllThirteenResolveOnOneFixture(t *testing.T) {
 					got = append(got, v.Number.String())
 				}
 			default:
-				got = texts(pv)
+				got = fmTexts(pv)
 			}
-			if !equalStrings(got, tc.want) {
+			if !fmEqualStrings(got, tc.want) {
 				t.Fatalf("values = %q, want %q", got, tc.want)
 			}
 			if len(pv.SourceIndex) != len(pv.Values) {
@@ -185,11 +185,11 @@ func TestFileMeta_AllThirteenResolveOnOneFixture(t *testing.T) {
 
 // FR-133 / spec test 93.
 func TestFileMeta_CtimeAbsentWhereBirthtimeUnknown(t *testing.T) {
-	m := fixtureFileMeta()
+	m := fmFixture()
 	m.CtimeKnown = false
 	m.Ctime = time.Time{}
 
-	pv := mustResolve(t, FileCtimeProp, m)
+	pv := fmMustResolve(t, FileCtimeProp, m)
 	if pv.State != StateAbsent {
 		t.Fatalf("state = %v, want absent — FR-133 forbids substituting the inode-change time", pv.State)
 	}
@@ -222,7 +222,7 @@ func TestFileMeta_CtimeAbsentWhereBirthtimeUnknown(t *testing.T) {
 
 	// A ctime the platform DOES record must not carry the finding — otherwise
 	// the assertion above passes for a reason unrelated to birth times.
-	if pv := mustResolve(t, FileCtimeProp, fixtureFileMeta()); len(pv.Findings) != 0 {
+	if pv := fmMustResolve(t, FileCtimeProp, fmFixture()); len(pv.Findings) != 0 {
 		t.Fatalf("a known birth time carries findings %+v", pv.Findings)
 	}
 }
@@ -238,7 +238,7 @@ func TestFileMeta_EmptyManyIsAbsentAndRootFolderIsPresent(t *testing.T) {
 	m := FileMeta{Path: "Inbox.md", BacklinksDerived: true}
 
 	for _, name := range []string{FileTagsProp, FileLinksProp, FileEmbedsProp, FileBacklinksProp, FilePropertiesProp} {
-		pv := mustResolve(t, name, m)
+		pv := fmMustResolve(t, name, m)
 		if pv.State != StateAbsent {
 			t.Fatalf("%s on a note with none = %v, want absent (a derived property has no key to have written an empty list)",
 				name, pv.State)
@@ -254,11 +254,11 @@ func TestFileMeta_EmptyManyIsAbsentAndRootFolderIsPresent(t *testing.T) {
 
 	// file.folder is text, and FR-007a's empty-is-absent rule is for NON-text
 	// types: "" IS the root folder.
-	folder := mustResolve(t, FileFolderProp, m)
+	folder := fmMustResolve(t, FileFolderProp, m)
 	if folder.State != StatePresent {
 		t.Fatalf("file.folder at the vault root = %v, want present — the root is a folder", folder.State)
 	}
-	if got := texts(folder); !equalStrings(got, []string{""}) {
+	if got := fmTexts(folder); !fmEqualStrings(got, []string{""}) {
 		t.Fatalf("file.folder at the root = %q, want one empty string", got)
 	}
 	res, err := Filter{Property: FileFolderProp, Op: OpIsNull}.MatchValue(Comparator{}, FilePropertySchema(), folder)
@@ -275,7 +275,7 @@ func TestFileMeta_EmptyManyIsAbsentAndRootFolderIsPresent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFileMeta_ComparisonsRunInTheGoComparator(t *testing.T) {
-	m := fixtureFileMeta()
+	m := fmFixture()
 	schema := FilePropertySchema()
 
 	cases := []struct {
@@ -308,7 +308,7 @@ func TestFileMeta_ComparisonsRunInTheGoComparator(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
-			pv := mustResolve(t, tc.property, m)
+			pv := fmMustResolve(t, tc.property, m)
 			f := Filter{Property: tc.property, Op: tc.op, Literal: tc.literal, LiteralGiven: true}
 			// The ZERO Comparator: no RelationResolver anywhere. If any file.*
 			// property were typed `relation`, every link case here would report
@@ -370,7 +370,7 @@ func TestFileMeta_ResolutionCannotReachSQL(t *testing.T) {
 		found = true
 		for _, param := range fn.Type.Params.List {
 			var b strings.Builder
-			if err := printType(&b, param.Type); err != nil {
+			if err := fmPrintType(&b, param.Type); err != nil {
 				t.Fatalf("render parameter type: %v", err)
 			}
 			typ := b.String()
@@ -385,19 +385,19 @@ func TestFileMeta_ResolutionCannotReachSQL(t *testing.T) {
 	}
 }
 
-// printType renders the small subset of type expressions the guarded signature
+// fmPrintType renders the small subset of type expressions the guarded signature
 // can legally contain. Anything else — a pointer, a selector like sql.DB, a
 // channel — is deliberately reported as itself so the assertion above fails
 // naming what arrived.
-func printType(b *strings.Builder, e ast.Expr) error {
+func fmPrintType(b *strings.Builder, e ast.Expr) error {
 	switch t := e.(type) {
 	case *ast.Ident:
 		b.WriteString(t.Name)
 	case *ast.StarExpr:
 		b.WriteString("*")
-		return printType(b, t.X)
+		return fmPrintType(b, t.X)
 	case *ast.SelectorExpr:
-		if err := printType(b, t.X); err != nil {
+		if err := fmPrintType(b, t.X); err != nil {
 			return err
 		}
 		b.WriteString("." + t.Sel.Name)
@@ -411,17 +411,17 @@ func printType(b *strings.Builder, e ast.Expr) error {
 // FR-134 — the methods become ordinary leaves
 // ---------------------------------------------------------------------------
 
-// renderNode renders a translated tree so a failure shows the tree rather than
+// fmRenderNode renders a translated tree so a failure shows the tree rather than
 // a soup of pointers, and so the test log carries the translated tree as the
 // evidence FR-134 asks for.
-func renderNode(n generated.VaultFilterNode) string {
+func fmRenderNode(n generated.VaultFilterNode) string {
 	switch {
 	case n.All != nil:
-		return "{all: [" + renderChildren(*n.All) + "]}"
+		return "{all: [" + fmRenderChildren(*n.All) + "]}"
 	case n.Any != nil:
-		return "{any: [" + renderChildren(*n.Any) + "]}"
+		return "{any: [" + fmRenderChildren(*n.Any) + "]}"
 	case n.Not != nil:
-		return "{not: " + renderNode(*n.Not) + "}"
+		return "{not: " + fmRenderNode(*n.Not) + "}"
 	}
 	var b strings.Builder
 	b.WriteString("{")
@@ -441,37 +441,37 @@ func renderNode(n generated.VaultFilterNode) string {
 	return b.String()
 }
 
-func renderChildren(children []generated.VaultFilterNode) string {
+func fmRenderChildren(children []generated.VaultFilterNode) string {
 	parts := make([]string, 0, len(children))
 	for _, c := range children {
-		parts = append(parts, renderNode(c))
+		parts = append(parts, fmRenderNode(c))
 	}
 	return strings.Join(parts, ", ")
 }
 
-// assertOrdinaryLeaves is FR-134's actual claim: what a method translates to is
+// fmAssertOrdinaryLeaves is FR-134's actual claim: what a method translates to is
 // indistinguishable from a hand-written filter. Every leaf names one of the
 // twelve filterable file.* properties and one of FR-022b's closed ten operators,
 // and there is no other kind of node anywhere in the tree.
-func assertOrdinaryLeaves(t *testing.T, n generated.VaultFilterNode) {
+func fmAssertOrdinaryLeaves(t *testing.T, n generated.VaultFilterNode) {
 	t.Helper()
 	switch {
 	case n.All != nil:
 		for _, c := range *n.All {
-			assertOrdinaryLeaves(t, c)
+			fmAssertOrdinaryLeaves(t, c)
 		}
 		return
 	case n.Any != nil:
 		for _, c := range *n.Any {
-			assertOrdinaryLeaves(t, c)
+			fmAssertOrdinaryLeaves(t, c)
 		}
 		return
 	case n.Not != nil:
-		assertOrdinaryLeaves(t, *n.Not)
+		fmAssertOrdinaryLeaves(t, *n.Not)
 		return
 	}
 	if n.Property == nil || n.Op == nil {
-		t.Fatalf("leaf %s is not a {property, op, value} object", renderNode(n))
+		t.Fatalf("leaf %s is not a {property, op, value} object", fmRenderNode(n))
 	}
 	if _, ok := FileProperty(*n.Property); !ok {
 		t.Fatalf("leaf names %q, which is not one of the twelve filterable file properties", *n.Property)
@@ -481,15 +481,15 @@ func assertOrdinaryLeaves(t *testing.T, n generated.VaultFilterNode) {
 	}
 }
 
-// matchNode is a TEST-LOCAL tree composer. It owns nothing but and/or/not:
+// fmMatchNode is a TEST-LOCAL tree composer. It owns nothing but and/or/not:
 // every leaf is delegated to the real Filter/Comparator path, which is the half
 // the assertion is about. Composition itself belongs to the query engine and is
 // not reimplemented here beyond what a two-leaf `any` needs.
-func matchNode(n generated.VaultFilterNode, schema *Schema, m FileMeta) (bool, error) {
+func fmMatchNode(n generated.VaultFilterNode, schema *Schema, m FileMeta) (bool, error) {
 	switch {
 	case n.All != nil:
 		for _, c := range *n.All {
-			ok, err := matchNode(c, schema, m)
+			ok, err := fmMatchNode(c, schema, m)
 			if err != nil || !ok {
 				return false, err
 			}
@@ -497,7 +497,7 @@ func matchNode(n generated.VaultFilterNode, schema *Schema, m FileMeta) (bool, e
 		return true, nil
 	case n.Any != nil:
 		for _, c := range *n.Any {
-			ok, err := matchNode(c, schema, m)
+			ok, err := fmMatchNode(c, schema, m)
 			if err != nil {
 				return false, err
 			}
@@ -507,7 +507,7 @@ func matchNode(n generated.VaultFilterNode, schema *Schema, m FileMeta) (bool, e
 		}
 		return false, nil
 	case n.Not != nil:
-		ok, err := matchNode(*n.Not, schema, m)
+		ok, err := fmMatchNode(*n.Not, schema, m)
 		return !ok, err
 	}
 
@@ -555,12 +555,12 @@ func TestFileMeta_MethodsTranslateToOrdinaryLeaves(t *testing.T) {
 			if err != nil {
 				t.Fatalf("TranslateFileMethod(%s, %q): %v", tc.method, tc.arg, err)
 			}
-			got := renderNode(node)
+			got := fmRenderNode(node)
 			t.Logf("file.%s(%q) => %s", tc.method, tc.arg, got)
 			if got != tc.want {
 				t.Fatalf("translated tree = %s, want %s", got, tc.want)
 			}
-			assertOrdinaryLeaves(t, node)
+			fmAssertOrdinaryLeaves(t, node)
 		})
 	}
 
@@ -581,7 +581,7 @@ func TestFileMeta_MethodsTranslateToOrdinaryLeaves(t *testing.T) {
 		t.Fatalf("hasLink: %v", err)
 	}
 
-	inScope := fixtureFileMeta() // Clients/Acme Corp.md, tags clients/active + priority
+	inScope := fmFixture() // Clients/Acme Corp.md, tags clients/active + priority
 	outOfScope := FileMeta{
 		Path:             "Archive/Old Note.md",
 		Tags:             []string{"clientsofmine"}, // NOT under clients/ — a prefix match without the "/" would wrongly include it
@@ -603,9 +603,9 @@ func TestFileMeta_MethodsTranslateToOrdinaryLeaves(t *testing.T) {
 	}
 	for _, tc := range evalCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			got, err := matchNode(tc.node, schema, tc.meta)
+			got, err := fmMatchNode(tc.node, schema, tc.meta)
 			if err != nil {
-				t.Fatalf("matchNode: %v", err)
+				t.Fatalf("fmMatchNode: %v", err)
 			}
 			if got != tc.want {
 				t.Fatalf("matched = %v, want %v", got, tc.want)
@@ -615,9 +615,9 @@ func TestFileMeta_MethodsTranslateToOrdinaryLeaves(t *testing.T) {
 
 	// The exact tag, not only its children.
 	exact := FileMeta{Path: "n.md", Tags: []string{"clients"}, BacklinksDerived: true}
-	got, err := matchNode(tagNode, schema, exact)
+	got, err := fmMatchNode(tagNode, schema, exact)
 	if err != nil {
-		t.Fatalf("matchNode: %v", err)
+		t.Fatalf("fmMatchNode: %v", err)
 	}
 	if !got {
 		t.Fatal("hasTag(\"clients\") did not match a note tagged exactly clients")
@@ -631,25 +631,25 @@ func TestFileMeta_LikeOperandIsEscaped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inFolder: %v", err)
 	}
-	t.Logf(`file.inFolder("Q1_2026") => %s`, renderNode(node))
+	t.Logf(`file.inFolder("Q1_2026") => %s`, fmRenderNode(node))
 	want := `{any: [{file.folder = "Q1_2026"}, {file.folder LIKE "Q1\_2026/%"}]}`
-	if got := renderNode(node); got != want {
+	if got := fmRenderNode(node); got != want {
 		t.Fatalf("translated tree = %s, want %s", got, want)
 	}
 
 	schema := FilePropertySchema()
 	decoy := FileMeta{Path: "Q1x2026/note.md", BacklinksDerived: true}
-	matched, err := matchNode(node, schema, decoy)
+	matched, err := fmMatchNode(node, schema, decoy)
 	if err != nil {
-		t.Fatalf("matchNode: %v", err)
+		t.Fatalf("fmMatchNode: %v", err)
 	}
 	if matched {
 		t.Fatal(`inFolder("Q1_2026") matched a note in "Q1x2026" — the underscore reached LIKE unescaped`)
 	}
 	real := FileMeta{Path: "Q1_2026/note.md", BacklinksDerived: true}
-	matched, err = matchNode(node, schema, real)
+	matched, err = fmMatchNode(node, schema, real)
 	if err != nil {
-		t.Fatalf("matchNode: %v", err)
+		t.Fatalf("fmMatchNode: %v", err)
 	}
 	if !matched {
 		t.Fatal(`inFolder("Q1_2026") did not match a note in "Q1_2026" — the escape broke the real match`)
@@ -674,7 +674,7 @@ func TestFileMeta_MethodTranslationRefusals(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			node, err := TranslateFileMethod(tc.method, tc.arg)
 			if err == nil {
-				t.Fatalf("translated to %s; a refusal was required", renderNode(node))
+				t.Fatalf("translated to %s; a refusal was required", fmRenderNode(node))
 			}
 			var qe *QueryError
 			if !errors.As(err, &qe) {
@@ -712,7 +712,7 @@ func TestFileMeta_MethodTranslationRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hasTag(#clients): %v", err)
 	}
-	if got, want := renderNode(node), `{any: [{file.tags = "clients"}, {file.tags LIKE "clients/%"}]}`; got != want {
+	if got, want := fmRenderNode(node), `{any: [{file.tags = "clients"}, {file.tags LIKE "clients/%"}]}`; got != want {
 		t.Fatalf("hasTag(#clients) = %s, want %s", got, want)
 	}
 }
@@ -720,7 +720,7 @@ func TestFileMeta_MethodTranslationRefusals(t *testing.T) {
 // AsLink is reachable only as presentation — there is no property name that
 // resolves to it, which is what makes "presentation never compares" structural.
 func TestFileMeta_AsLinkIsPresentationOnly(t *testing.T) {
-	m := fixtureFileMeta()
+	m := fmFixture()
 	link := m.AsLink()
 	if link.Target != "Clients/Acme Corp.md" || link.Display != "Acme Corp" {
 		t.Fatalf("AsLink = %+v, want target the path and display the name", link)
@@ -759,7 +759,7 @@ func TestFileMeta_SchemaExposesTwelveNotThirteen(t *testing.T) {
 	sort.Strings(got)
 	want := append([]string(nil), FileFilterablePropertyNames...)
 	sort.Strings(want)
-	if !equalStrings(got, want) {
+	if !fmEqualStrings(got, want) {
 		t.Fatalf("refusal lists %v, want the twelve %v", got, want)
 	}
 
@@ -770,7 +770,7 @@ func TestFileMeta_SchemaExposesTwelveNotThirteen(t *testing.T) {
 }
 
 func TestFileMeta_NamespaceRefusalsDistinguishTypoFromForeignName(t *testing.T) {
-	m := fixtureFileMeta()
+	m := fmFixture()
 
 	_, err := ResolveFileProperty("file.modified", m)
 	if err == nil || !strings.Contains(err.Error(), "is not a file property") {
@@ -812,8 +812,8 @@ func TestFileMeta_PathDerivationsAreVaultPathsNotOSPaths(t *testing.T) {
 		if got := m.FileExt(); got != tc.ext {
 			t.Errorf("%q: ext = %q, want %q", tc.path, got, tc.ext)
 		}
-		pv := mustResolve(t, FilePathProp, m)
-		if got := texts(pv); !equalStrings(got, []string{tc.clean}) {
+		pv := fmMustResolve(t, FilePathProp, m)
+		if got := fmTexts(pv); !fmEqualStrings(got, []string{tc.clean}) {
 			t.Errorf("%q: path = %q, want %q", tc.path, got, tc.clean)
 		}
 	}
@@ -822,7 +822,7 @@ func TestFileMeta_PathDerivationsAreVaultPathsNotOSPaths(t *testing.T) {
 func TestFileMeta_UnknownStatIsAbsentNotZero(t *testing.T) {
 	m := FileMeta{Path: "n.md", BacklinksDerived: true}
 	for _, name := range []string{FileMtimeProp, FileCtimeProp, FileSizeProp} {
-		pv := mustResolve(t, name, m)
+		pv := fmMustResolve(t, name, m)
 		if pv.State != StateAbsent {
 			t.Fatalf("%s with no indexed stat = %v, want absent", name, pv.State)
 		}
@@ -831,7 +831,7 @@ func TestFileMeta_UnknownStatIsAbsentNotZero(t *testing.T) {
 	// separates them, and a test that only checked the unknown side would pass
 	// for an implementation that reported every zero as absent.
 	m.SizeKnown = true
-	pv := mustResolve(t, FileSizeProp, m)
+	pv := fmMustResolve(t, FileSizeProp, m)
 	if pv.State != StatePresent || pv.Values[0].Number.String() != "0" {
 		t.Fatalf("a zero-byte file resolved to %+v, want a present 0", pv)
 	}
