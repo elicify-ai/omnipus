@@ -94,10 +94,19 @@ type SyncStats struct {
 	Problems []SyncProblem
 }
 
-// SyncOptions configures Sync. Empty today; declared so a future test seam
-// (a propindex.Recorder, matching propindex.Options) costs no signature
-// change at every call site.
-type SyncOptions struct{}
+// SyncOptions configures Sync.
+type SyncOptions struct {
+	// Recorder, when set, is handed to the store so every statement this sync
+	// executes is captured. Production callers leave it nil.
+	//
+	// It exists because FR-136's requirement is not "the stat ends up right" —
+	// a full re-index would satisfy that and would be the bug. The requirement
+	// is that a content-unchanged, stat-drifted file costs a METADATA-ONLY
+	// update: no re-parse, no child-row rewrite. That is a statement about
+	// which statements were executed, and nothing observable from the outside
+	// of the store can distinguish it. Spec test 99 asserts it here.
+	Recorder *propindex.Recorder
+}
 
 // storedNoteState is what the store already held for one path, read via
 // Store.AllPaths before this run writes anything.
@@ -115,7 +124,7 @@ type storedNoteState struct {
 // at every capability boundary; a maintenance job on an unsupported platform
 // is not a second thing to fail loudly about, and plain-word search keeps
 // working there regardless.
-func Sync(ctx context.Context, home, collectionRoot string, _ SyncOptions) (SyncStats, error) {
+func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (SyncStats, error) {
 	var stats SyncStats
 
 	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
@@ -151,7 +160,7 @@ func Sync(ctx context.Context, home, collectionRoot string, _ SyncOptions) (Sync
 		return stats, fmt.Errorf("vaultprops: creating the index directory: %w", err)
 	}
 
-	store, err := propindex.Open(ctx, idxPath, propindex.Options{})
+	store, err := propindex.Open(ctx, idxPath, propindex.Options{Recorder: opts.Recorder})
 	if err != nil {
 		// On a SQLite-capable build this is a real failure (disk full,
 		// permissions, a corrupt file SQLite itself refuses) — returned
