@@ -37,7 +37,9 @@ import (
 //	  (1) it carries at least one non-reserved frontmatter key, AND
 //	  (2) EVERY key it carries is a property T declares, AND
 //	  (3) EVERY property T declares as REQUIRED is present and non-empty
-//	      on the note.
+//	      on the note, AND
+//	  (4) EVERY value the note carries is one T would ACCEPT — right arity,
+//	      right type, and for an enum, one of T's declared values.
 //	The type is WRITTEN only when EXACTLY ONE inferred type matches.
 //
 // (2) is what stops a note being adopted by a type that never heard of half
@@ -45,10 +47,25 @@ import (
 // everything: a type whose notes all carry `status` and `owner` will not
 // take a note that carries neither. (1) stops a note with no frontmatter at
 // all — which matches every type vacuously under (2) — from matching
-// anything. And "exactly one" is the honest reading of a founder ruling
-// about common sense: two candidates is not a match, it is a coin toss, and
-// a coin toss written into the operator's own files is worse than a line in
-// a report saying which two.
+// anything. (4) is what stops a note being typed into a schema it
+// demonstrably violates: shape alone let `status: blocked` be written as a
+// `project` whose status values are `active` and `done`, producing a note
+// that failed the very schema the same run generated. Its rule and its
+// evidence live in typeinfer_conformance.go.
+//
+// And "exactly one" is the honest reading of a founder ruling about common
+// sense: two candidates is not a match, it is a coin toss, and a coin toss
+// written into the operator's own files is worse than a line in a report
+// saying which two.
+//
+// A CONSEQUENCE OF (4) WORTH KNOWING. A record type evidenced by only a
+// handful of notes infers tight enums on fields that are really free text —
+// two people with two addresses makes `email` an enum of those two
+// addresses — and (4) then refuses to adopt any newcomer into it. That is
+// the correct conservative answer (the alternative writes a type onto a
+// note that then fails validation), but it means a 2-note type adopts
+// almost nothing, and the report says so per note rather than leaving the
+// operator to wonder.
 //
 // THE WRITE IS THE MINIMUM POSSIBLE EDIT. One `type: <value>` line is
 // inserted immediately after the opening `---` fence. Nothing else in the
@@ -125,10 +142,22 @@ func InferTypesForUntypedNotes(notes []NoteRecord, inferred map[string][]Inferre
 			rep.NoMatch++
 			out.Reason = "left as is: the note carries no frontmatter properties at all, so there is no shape to match. It is still fully indexed (FR-021e) and reachable through an untyped view."
 		default:
-			out.Candidates = matchingTypes(keys, n.Rec, shapes)
+			var blocked []shapeBlock
+			out.Candidates, blocked = matchingTypes(keys, n.Rec, shapes)
 			switch len(out.Candidates) {
 			case 0:
 				rep.NoMatch++
+				if len(blocked) > 0 {
+					// A NEAR MISS, and the most useful line in the whole
+					// report: the note is one bad value away from being a
+					// record, and this names the value. Typing it anyway
+					// would write a note that fails the schema this very
+					// run produced.
+					out.Reason = fmt.Sprintf(
+						"left as is: its shape fits %s, but the value stops it — %s. Typing it anyway would write a note that fails the schema this run just produced. Fix the value, or add `type:` yourself if the schema is what is wrong. It is still fully indexed (FR-021e) and reachable through an untyped view.",
+						plural(len(blocked), "one type", "these types"), joinBlocks(blocked))
+					break
+				}
 				out.Reason = fmt.Sprintf(
 					"left as is: it carries [%s], and no inferred type declares all of those AND has every one of its own required properties present on this note. It is still fully indexed (FR-021e) and reachable through an untyped view.",
 					strings.Join(keys, ", "))
@@ -182,19 +211,21 @@ func adoptTypeInMemory(rec *records.Record, typeName string) {
 	rec.Frontmatter.Values[records.RecordTypeKey] = records.Node{Kind: records.KindScalar, Text: typeName}
 }
 
-// typeShape is one inferred type reduced to the two sets the match rule
-// needs: every property it declares, and the subset it requires.
+// typeShape is one inferred type reduced to what the match rule needs: its
+// name, every property it declares (with the full declaration, so condition
+// (4) can ask whether a value is acceptable), and the subset it requires.
 type typeShape struct {
-	declared map[string]struct{}
+	name     string
+	declared map[string]InferredProperty
 	required []string
 }
 
 func buildTypeShapes(inferred map[string][]InferredProperty) map[string]typeShape {
 	shapes := map[string]typeShape{}
 	for t, props := range inferred {
-		sh := typeShape{declared: map[string]struct{}{}}
+		sh := typeShape{name: t, declared: map[string]InferredProperty{}}
 		for _, p := range props {
-			sh.declared[p.Name] = struct{}{}
+			sh.declared[p.Name] = p
 			if p.Required {
 				sh.required = append(sh.required, p.Name)
 			}
@@ -216,17 +247,42 @@ func nonReservedKeys(rec records.Record) []string {
 	return out
 }
 
-// matchingTypes applies the three-condition rule stated in this file's
-// header and returns every type that satisfies it, sorted.
-func matchingTypes(keys []string, rec records.Record, shapes map[string]typeShape) []string {
+// matchingTypes applies the four-condition rule stated in this file's header
+// and returns every type that satisfies it, sorted.
+//
+// It also returns the types that satisfied (1)-(3) — the SHAPE — but were
+// stopped by (4), each with the single value that stopped it. Those are the
+// near-misses worth naming: "nothing matched" is not actionable, whereas
+// "it is a project except `status: blocked` is not one of project's values"
+// is a one-line fix the operator can make.
+func matchingTypes(keys []string, rec records.Record, shapes map[string]typeShape) ([]string, []shapeBlock) {
 	var out []string
-	for t, sh := range shapes {
+	var blocked []shapeBlock
+	for _, t := range sortedShapeNames(shapes) {
+		sh := shapes[t]
 		if !everyKeyDeclared(keys, sh) {
 			continue
 		}
 		if !everyRequiredPresent(rec, sh) {
 			continue
 		}
+		if block, ok := everyValueAccepted(rec, sh); !ok {
+			blocked = append(blocked, block)
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out, blocked
+}
+
+// sortedShapeNames iterates shapes in a stable order, so a note blocked on
+// several types names them in the same order on every run — Go's map
+// iteration order is randomised and a report that reshuffles between two
+// identical runs teaches an operator to distrust it.
+func sortedShapeNames(shapes map[string]typeShape) []string {
+	out := make([]string, 0, len(shapes))
+	for t := range shapes {
 		out = append(out, t)
 	}
 	sort.Strings(out)
@@ -316,6 +372,21 @@ func writeTypeKey(absPath, typeName string) error {
 	first := body[:nl]
 	if strings.TrimRight(string(first), " \t\r") != "---" {
 		return fmt.Errorf("the file has no frontmatter block (its first line is not `---`)")
+	}
+
+	// The already-typed guard. InferTypesForUntypedNotes never reaches here
+	// with a typed note, so this cannot fire through the normal path — it is
+	// here because a function that silently writes a SECOND `type:` key into
+	// a file is a landmine for the next caller, and a duplicate key is the
+	// kind of corruption an operator finds weeks later in someone else's
+	// document. The question is asked of records.ParseRecord rather than a
+	// substring scan, so "does this file declare a type" gets the same
+	// answer here as everywhere else in the product.
+	if existing := records.ParseRecord(absPath, src); existing.ParseError == "" {
+		if _, has := existing.Frontmatter.Get(records.RecordTypeKey); has {
+			return fmt.Errorf("the file already declares `%s: %s`; refusing to write a second one",
+				records.RecordTypeKey, existing.TypeName())
+		}
 	}
 
 	lineEnd := "\n"
