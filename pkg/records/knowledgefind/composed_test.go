@@ -385,6 +385,15 @@ func TestComposed_FormulaOverFileMetadataInAnUntypedViewUnderABufferingSummary(t
 
 	// ── 5. RULING R-A, over the statements this very query emitted ─────────
 	assertNoComparisonReachedSQL(t, f.rec)
+
+	// ── 6. B1 IS STILL TAKEN FIRST, before the child-table prepass ─────────
+	//
+	// The order is the bound's whole value. B1 exists to refuse a query BEFORE
+	// it pays for anything, so a query that buffers 50,000 notes' tags and then
+	// discovers it was over the evaluation bound has already paid the cost the
+	// bound was written to avoid. Asserting the ORDER of the emitted statements
+	// is how that is checked without writing 50,001 notes.
+	assertB1PrecedesTheChildPrepass(t, f.rec)
 }
 
 // assertNoComparisonReachedSQL is the emitted-SQL guard applied to the COMPOSED
@@ -440,6 +449,35 @@ func assertNoComparisonReachedSQL(t *testing.T, rec *propindex.Recorder) {
 			t.Errorf("a read statement names %d child tables at once — FR-131 forbids the join, because "+
 				"two children of one parent joined together is a cross-product:\n  %s", seen, flat)
 		}
+	}
+}
+
+// assertB1PrecedesTheChildPrepass reads the statement ORDER, which is the only
+// observable the bound's cost argument actually rests on.
+func assertB1PrecedesTheChildPrepass(t *testing.T, rec *propindex.Recorder) {
+	t.Helper()
+	stmts := rec.InPhase(propindex.PhaseRead)
+	firstCount, firstChild := -1, -1
+	for i, sql := range stmts {
+		flat := strings.Join(strings.Fields(sql), " ")
+		if firstCount < 0 && strings.Contains(flat, "COUNT(*)") && strings.Contains(flat, "FROM notes") {
+			firstCount = i
+		}
+		if firstChild < 0 && (strings.Contains(flat, "note_tags") || strings.Contains(flat, "note_links")) {
+			firstChild = i
+		}
+	}
+	if firstCount < 0 {
+		t.Fatal("no B1 count statement was emitted at all; the evaluation bound never ran")
+	}
+	if firstChild < 0 {
+		t.Fatal("no child-table statement was emitted; the composed query names file.tags, so the " +
+			"prepass must have run and this ordering check is vacuous without it")
+	}
+	if firstCount > firstChild {
+		t.Errorf("the child-table prepass (statement %d) ran BEFORE B1's count (statement %d): a query "+
+			"over the evaluation bound would buffer every candidate's tags and only then be refused, "+
+			"which is exactly the cost B1 exists to avoid", firstChild, firstCount)
 	}
 }
 
