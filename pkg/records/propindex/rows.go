@@ -187,7 +187,12 @@ type NoteRows struct {
 // while the three numbers are already filled in — writes a CONFIDENT 1970
 // instead of an honest absence, and that is not the direction this package errs
 // in.
-func (r NoteRows) StatKnown() bool { return r.MtimeNanos != 0 }
+// The receiver is a POINTER only to match SetFileMeta's, which must be one.
+// Mixing the two forms on one type is what `recvcheck` flags, and the mix is
+// worth avoiding for a better reason than the linter: a value-receiver method
+// beside a pointer-receiver mutator is how someone comes to call the mutator on
+// a copy and watch the change evaporate.
+func (r *NoteRows) StatKnown() bool { return r.MtimeNanos != 0 }
 
 // SourceHash computes the freshness token for a note's bytes.
 //

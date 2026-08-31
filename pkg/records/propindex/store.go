@@ -245,6 +245,17 @@ type RelationHit struct {
 
 // Store is the seam. The SQLite implementation and the no-SQLite refusal both
 // satisfy it, so nothing above this package needs a build tag of its own.
+//
+// It is over the twelve-method line `interfacebloat` draws, deliberately.
+// Splitting it would mean splitting the PLATFORM GATE with it: the whole reason
+// this interface exists is that one type satisfies it on a build with SQLite and
+// another refuses on a build without, and two halves means two gates that can
+// drift apart — which is the failure FR-020h names. The method count is also not
+// an accident of design: FR-131 requires each child table to be streamed by its
+// OWN statement, so a new child table IS a new method, and the alternative to
+// twelve methods is the multi-child join that D16.6 already fixed once.
+//
+//nolint:interfacebloat // one interface IS the platform gate (FR-020h); one method per child stream is FR-131's assembly rule.
 type Store interface {
 	// UpsertNote replaces everything the index holds for one path, in one
 	// transaction. It is the FIRST of D16.5's three writes.

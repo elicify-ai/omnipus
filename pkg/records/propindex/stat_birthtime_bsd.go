@@ -23,7 +23,11 @@ func birthTime(_ string, fi os.FileInfo) (time.Time, bool) {
 	if !ok || st == nil {
 		return time.Time{}, false
 	}
-	sec, nsec := int64(st.Birthtimespec.Sec), int64(st.Birthtimespec.Nsec)
+	// Timespec.Unix() rather than two conversions: Sec and Nsec are int64 on
+	// some of these platforms and int32 on others, so a written-out conversion
+	// is either required or redundant depending on GOARCH — and `unconvert`
+	// flags the redundant case on whichever one the linter happens to run for.
+	sec, nsec := st.Birthtimespec.Unix()
 	if sec <= 0 && nsec == 0 {
 		return time.Time{}, false
 	}
