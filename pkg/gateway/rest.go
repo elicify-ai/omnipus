@@ -7838,8 +7838,8 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			}
 			for key, value := range *req.Env {
 				credKey := mcpEnvCredKey(id, key)
-				if _, err := a.storeCredential(credKey, value); err != nil {
-					return fmt.Errorf("store env credential %q: %w", key, err)
+				if _, credErr := a.storeCredential(credKey, value); credErr != nil {
+					return fmt.Errorf("store env credential %q: %w", key, credErr)
 				}
 				current.EnvRefs[key] = credKey
 				if current.Env != nil {

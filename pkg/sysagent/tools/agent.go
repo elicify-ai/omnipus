@@ -883,7 +883,10 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	// here is best-effort/non-fatal, matching delete_workspace's own
 	// best-effort-cascade shape (a failed mount/delegation-store cleanup
 	// there does not stop the workspace from being deleted either).
-	var cascadeWarnings []string
+	// Capacity 3: one slot per cascade source (sessions, tasks, workspaces)
+	// below — a reasonable hint for the common case of zero-to-few
+	// warnings; exact per-source counts aren't known until each step runs.
+	cascadeWarnings := make([]string, 0, 3)
 
 	// store.Delete(id) — the authoritative entity-record delete — runs
 	// FIRST, before any of the irreversible cascade steps below (bug-fix,

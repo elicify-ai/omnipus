@@ -422,7 +422,7 @@ func (t *TypeTool) Parameters() map[string]any {
 func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
-	clear, _ := args["clear"].(bool)
+	clearField, _ := args["clear"].(bool)
 	if selector == "" {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
@@ -447,19 +447,19 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	// `clear` lets the caller choose between the historical
-	// append-only behavior (default, preserves callers written before this
-	// parameter existed — and lets a human and this agent share a browser
-	// session without clobbering each other's typing) and clearing the
-	// field's existing value first (opt-in). SetValue writes the DOM
-	// `value` property directly to "" — it fires no input/change event on
-	// its own, but the SendKeys call right after dispatches REAL key events
-	// starting from that empty value, so frameworks that listen for native
-	// input events (including React's synthetic-event system) observe the
-	// same incremental typing they would from a human clearing the field
-	// and retyping.
+	// clearField (the "clear" arg) lets the caller choose between the
+	// historical append-only behavior (default, preserves callers written
+	// before this parameter existed — and lets a human and this agent
+	// share a browser session without clobbering each other's typing) and
+	// clearing the field's existing value first (opt-in). SetValue writes
+	// the DOM `value` property directly to "" — it fires no input/change
+	// event on its own, but the SendKeys call right after dispatches REAL
+	// key events starting from that empty value, so frameworks that listen
+	// for native input events (including React's synthetic-event system)
+	// observe the same incremental typing they would from a human clearing
+	// the field and retyping.
 	actions := []chromedp.Action{chromedp.WaitVisible(target, chromedp.ByQuery)}
-	if clear {
+	if clearField {
 		actions = append(actions, chromedp.SetValue(target, "", chromedp.ByQuery))
 	}
 	actions = append(actions, chromedp.SendKeys(target, text, chromedp.ByQuery))
@@ -477,7 +477,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		)
 	}
 
-	return jsonResult(map[string]any{"success": true, "cleared": clear})
+	return jsonResult(map[string]any{"success": true, "cleared": clearField})
 }
 
 // --- browser_screenshot (US-5) ---

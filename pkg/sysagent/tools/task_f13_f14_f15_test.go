@@ -94,7 +94,6 @@ func TestCreateTaskInWorkspace_ValidStatusesStillAccepted(t *testing.T) {
 	seedWorkspace(t, home, testWorkspaceID)
 
 	for _, st := range []task.Status{task.StatusInbox, task.StatusNext, task.StatusFailed} {
-		st := st
 		t.Run(string(st), func(t *testing.T) {
 			result := systools.NewTaskCreateTool(deps).Execute(callerCtx("caller-agent"), map[string]any{
 				"name":         "valid status " + string(st),

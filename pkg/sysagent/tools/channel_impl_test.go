@@ -377,8 +377,8 @@ func TestChannelList_ReportsLiveState(t *testing.T) {
 	}
 	byID := make(map[string]map[string]any, len(rawChannels))
 	for _, rc := range rawChannels {
-		ch, ok := rc.(map[string]any)
-		if !ok {
+		ch, entryOK := rc.(map[string]any)
+		if !entryOK {
 			t.Fatalf("list_channels entry has unexpected shape: %#v", rc)
 		}
 		id, _ := ch["id"].(string)
