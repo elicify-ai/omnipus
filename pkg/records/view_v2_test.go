@@ -1,833 +1,1049 @@
-// Omnipus — tests for ViewDef schema_version 2 loading (ADR-068 D24.1, spec
-// FR-018b/FR-018c/FR-018d, FR-109, FR-146, FR-148).
+// Omnipus — tests for the ViewDef version-2 loader (ADR-068 D24.1,
+// spec FR-018b..FR-018d, FR-109).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
 package records
 
 import (
-	"encoding/json"
+	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// v2FixtureSchemas declares the record type the version-2 fixtures query. It
-// is deliberately separate from viewFixtureSchemas: the v2 tests need a
-// many-valued property and a date, and growing the shared fixture would have
-// changed what the version-1 tests are testing.
-func v2FixtureSchemas(t *testing.T) (string, *SchemaSet) {
-	t.Helper()
-	root := writeVaultSchema(t, "", "deal.yaml", `
+// ---------------------------------------------------------------------------
+// WHAT THESE TESTS ARE ORACLED AGAINST
+//
+// Every expected value below is read off spec FR-018b..FR-018d and FR-109, not
+// off view.go. Where a number appears (64 leaves, depth 8) it is FR-023c's,
+// quoted at the assertion.
+//
+// The single most important case in this file is
+// TestView_V1ContainsNeverBecomesLikeOnLoad. Spec Draft 10 said a version-1
+// view "loads translated to v2 semantics", with `contains` becoming
+// `LIKE '%…%'`; Draft 11 withdrew that as review finding F5 because it
+// BROADENS — `labels contains "in"` would newly match `indoor` and `printing`
+// — automatically, on files already on disk. That test does not merely assert
+// the translation is absent; it MEASURES what the translation would have
+// returned, so it cannot pass on a build where the two operators had quietly
+// become synonyms.
+//
+// Every view here is written to a real vault directory and read back through
+// LoadViews, never hand-built as a struct. The requirement is about files on
+// disk, and a struct literal skips the decode that FR-018b's version partition
+// lives in.
+// ---------------------------------------------------------------------------
+
+// v2FixtureSchema declares the record type the version-2 fixtures query. It
+// adds the many-valued `labels` property the broadening measurement needs;
+// `state`, `maker` and `batch` mirror viewFixtureSchemas so a v1 and a v2 view
+// over the same type can be compared side by side.
+const v2FixtureSchema = `
 schema_version: 1
-type: deal
-label: Deal
+type: widget
+label: Widget
 identity:
-  prefix: DL
+  prefix: WI
 properties:
   name:   { type: text, required: true }
-  stage:  { type: enum, values: [lead, open, won, lost] }
-  amount: { type: integer }
-  closed: { type: date }
-  tags:   { type: text, many: true }
-`)
-	set, report, err := LoadSchemas(root)
+  state:  { type: enum, values: [draft, shipped, withdrawn] }
+  maker:  { type: relation, to: foundry }
+  batch:  { type: integer }
+  labels: { type: text, many: true }
+`
+
+const v2FixtureRelatedSchema = `
+schema_version: 1
+type: foundry
+properties:
+  name:   { type: text }
+  region: { type: enum, values: [north, south] }
+`
+
+// v2Vault writes the two fixture schemas plus the named view files into one
+// vault and loads both, returning the view set and the load report.
+//
+// It returns the REPORT rather than failing on a rejection, because half the
+// cases below are about the rejection.
+func v2Vault(t *testing.T, views map[string]string) (*ViewSet, *ViewLoadReport, *SchemaSet) {
+	t.Helper()
+	root := writeVaultSchema(t, "", "widget.yaml", v2FixtureSchema)
+	root = writeVaultSchema(t, root, "foundry.yaml", v2FixtureRelatedSchema)
+	schemas, sreport, err := LoadSchemas(root)
 	if err != nil {
 		t.Fatalf("LoadSchemas: %v", err)
 	}
-	if !report.OK() {
-		t.Fatalf("fixture schemas did not load: %v", report.Rejections)
+	if !sreport.OK() {
+		t.Fatalf("fixture schemas did not load: %v", sreport.Rejections)
 	}
-	return root, set
-}
-
-// loadOneView writes one view file and loads it, returning the view or the
-// rejection — whichever the loader produced.
-func loadOneView(t *testing.T, root string, schemas *SchemaSet, body string) (*SavedView, *ViewRejection) {
-	t.Helper()
-	root = writeVaultView(t, root, "v.yaml", body)
-	views, report, err := LoadViews(root, schemas)
+	for filename, body := range views {
+		root = writeVaultView(t, root, filename, body)
+	}
+	set, report, err := LoadViews(root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
-	if len(report.Rejections) > 1 {
-		t.Fatalf("one file produced %d rejections: %v", len(report.Rejections), report.Rejections)
+	return set, report, schemas
+}
+
+// mustLoadView loads one view file and fails with the rejection if it did not
+// load — the common case, spelled once.
+func mustLoadView(t *testing.T, filename, body string) *SavedView {
+	t.Helper()
+	set, report, _ := v2Vault(t, map[string]string{filename: body})
+	if !report.OK() {
+		t.Fatalf("the view was rejected: %v", report.Rejections)
 	}
-	if len(report.Rejections) == 1 {
-		return nil, &report.Rejections[0]
+	if set.Len() != 1 {
+		t.Fatalf("expected exactly one loaded view, got %d (%v)", set.Len(), set.Names())
 	}
-	if views.Len() != 1 {
-		t.Fatalf("expected exactly one loaded view, got %d", views.Len())
+	return set.Views()[0]
+}
+
+// ---------------------------------------------------------------------------
+// FR-018b — the version-2 grammar, whole
+// ---------------------------------------------------------------------------
+
+// TestView_V2TreeExpressesDisjunction is spec test 90.
+//
+// FR-018b's opening sentence is the requirement: "Seven filter groups in the
+// founder's vault use disjunction; none was expressible as a view." So the
+// case is a view whose filter is `{any: [...]}` with a nested `{all: [...]}`,
+// carrying the rest of the v2 grammar alongside it — a directional `grouping`,
+// a `layout`, a `property_config` — read off disk and then handed to the
+// knowledge_find bridge.
+//
+// THE TREE MUST ARRIVE AT FIND UNCHANGED. A v2 `filter` already IS find's
+// VaultFilterNode, so anything other than an identical tree on the other side
+// is a translation, and FR-018b's whole point is that version 2 needs none.
+func TestView_V2TreeExpressesDisjunction(t *testing.T) {
+	v := mustLoadView(t, "active.yaml", `
+schema_version: 2
+name: active-widgets
+type: widget
+label: Active widgets
+layout: cards
+filter:
+  any:
+    - property: state
+      op: "="
+      value: shipped
+    - all:
+        - property: state
+          op: "="
+          value: draft
+        - property: batch
+          op: ">="
+          value: "7"
+    - not:
+        property: batch
+        op: "IS NULL"
+grouping:
+  - property: state
+  - property: maker
+    direction: asc
+sort:
+  - property: name
+    direction: asc
+properties: [name, state]
+limit: 25
+property_config:
+  state:
+    display_name: Stage
+`)
+
+	if v.Def.SchemaVersion != ViewVersion2 {
+		t.Fatalf("schema_version = %d, want %d", v.Def.SchemaVersion, ViewVersion2)
 	}
-	return views.Views()[0], nil
+	// The v1 keys must be absent, not back-filled. A loader that populated
+	// `filters` from `filter` would make the two versions indistinguishable
+	// downstream, which is the drift the partition exists to stop.
+	if v.Def.Filters != nil {
+		t.Errorf("a version-2 view carries no v1 `filters` list; got %+v", v.Def.Filters)
+	}
+	if v.Def.GroupBy != nil {
+		t.Errorf("a version-2 view carries no v1 `group_by` list; got %+v", v.Def.GroupBy)
+	}
+
+	// ── the tree ───────────────────────────────────────────────────────────
+	if v.Def.Filter == nil {
+		t.Fatal("the `filter` tree did not survive the load")
+	}
+	root := *v.Def.Filter
+	if root.Any == nil {
+		t.Fatalf("the root node is not a disjunction: %+v", root)
+	}
+	if len(*root.Any) != 3 {
+		t.Fatalf("the disjunction has %d branches, want 3", len(*root.Any))
+	}
+	branches := *root.Any
+
+	// branch 0 — a plain leaf.
+	assertLeaf(t, branches[0], "state", generated.Equal, "shipped")
+
+	// branch 1 — a nested conjunction, which is the shape v1 could not nest.
+	if branches[1].All == nil || len(*branches[1].All) != 2 {
+		t.Fatalf("branch 1 is not a two-child `all`: %+v", branches[1])
+	}
+	assertLeaf(t, (*branches[1].All)[0], "state", generated.Equal, "draft")
+	assertLeaf(t, (*branches[1].All)[1], "batch", generated.GreaterThanEqual, "7")
+
+	// branch 2 — tree negation, which is NOT `<>` (spec §8 R-2).
+	if branches[2].Not == nil {
+		t.Fatalf("branch 2 is not a `not`: %+v", branches[2])
+	}
+	if branches[2].Not.Op == nil || *branches[2].Not.Op != generated.ISNULL {
+		t.Fatalf("the negated leaf's operator is %v, want `IS NULL`", branches[2].Not.Op)
+	}
+
+	// ── grouping carries a direction ───────────────────────────────────────
+	// FR-018b: "`group_by` entries are `{property, direction: asc|desc}` — the
+	// bare name list dropped 24 real direction declarations silently."
+	if v.Def.Grouping == nil || len(*v.Def.Grouping) != 2 {
+		t.Fatalf("grouping = %+v, want two keys", v.Def.Grouping)
+	}
+	g := *v.Def.Grouping
+	if g[0].Property != "state" || g[0].Direction != nil {
+		t.Errorf("grouping[0] = %+v; an omitted direction must stay ABSENT — the contract states asc is the default rather than declaring one, so a loader that filled it in would be inventing a declaration the file never made", g[0])
+	}
+	if g[1].Property != "maker" || g[1].Direction == nil || *g[1].Direction != generated.ViewGroupByDirectionAsc {
+		t.Errorf("grouping[1] = %+v, want maker/asc", g[1])
+	}
+
+	// ── layout and display config ──────────────────────────────────────────
+	if v.Def.Layout == nil || *v.Def.Layout != generated.ViewDefLayoutCards {
+		t.Errorf("layout = %v, want cards (FR-109)", v.Def.Layout)
+	}
+	if v.Def.PropertyConfig == nil {
+		t.Fatal("property_config did not survive the load")
+	}
+	cfg, ok := (*v.Def.PropertyConfig)["state"]
+	if !ok || cfg.DisplayName == nil || *cfg.DisplayName != "Stage" {
+		t.Errorf("property_config[state] = %+v, want display_name Stage", cfg)
+	}
+
+	// ── and it produces the right query ────────────────────────────────────
+	req, served := NewViewFindLoader(newSet(v)).View("active-widgets")
+	if !served {
+		t.Fatal("a fully version-2 view was not servable; version 2 exists so that it is")
+	}
+	if req.Type == nil || *req.Type != "widget" {
+		t.Errorf("request type = %v, want widget", req.Type)
+	}
+	if !reflect.DeepEqual(req.Filter, v.Def.Filter) {
+		t.Errorf("the request's filter differs from the view's own tree.\n view: %s\n  req: %s",
+			renderNode(*v.Def.Filter), renderNode(*req.Filter))
+	}
+	if req.Filter == v.Def.Filter {
+		t.Error("the request aliases the saved view's own tree; a request the engine normalises in place would then rewrite the view on disk's in-memory copy")
+	}
+	if req.GroupBy == nil || !reflect.DeepEqual(*req.GroupBy, []string{"state", "maker"}) {
+		t.Errorf("request group_by = %v, want [state maker]", req.GroupBy)
+	}
+	if req.Select == nil || !reflect.DeepEqual(*req.Select, []string{"name", "state"}) {
+		t.Errorf("request select = %v, want [name state]", req.Select)
+	}
+	if req.Limit == nil || *req.Limit != 25 {
+		t.Errorf("request limit = %v, want 25", req.Limit)
+	}
+	if req.Sort == nil || len(*req.Sort) != 1 || (*req.Sort)[0].Property != "name" {
+		t.Errorf("request sort = %+v, want one key on name", req.Sort)
+	}
+}
+
+// assertLeaf checks one leaf node's three fields at once, so a failure names
+// which of them was wrong rather than dumping a struct.
+func assertLeaf(t *testing.T, n generated.VaultFilterNode, property string, op generated.VaultFilterNodeOp, value string) {
+	t.Helper()
+	if n.Property == nil || *n.Property != property {
+		t.Errorf("leaf property = %v, want %q", n.Property, property)
+	}
+	if n.Op == nil || *n.Op != op {
+		t.Errorf("leaf operator = %v, want %q", n.Op, string(op))
+	}
+	if n.Value == nil || *n.Value != value {
+		t.Errorf("leaf value = %v, want %q", n.Value, value)
+	}
+}
+
+// renderNode renders a filter tree as one line, so a diff failure is readable.
+func renderNode(n generated.VaultFilterNode) string {
+	switch {
+	case n.All != nil:
+		return "all(" + renderChildren(*n.All) + ")"
+	case n.Any != nil:
+		return "any(" + renderChildren(*n.Any) + ")"
+	case n.Not != nil:
+		return "not(" + renderNode(*n.Not) + ")"
+	}
+	op, val := "", ""
+	if n.Op != nil {
+		op = string(*n.Op)
+	}
+	if n.Value != nil {
+		val = *n.Value
+	}
+	return fmt.Sprintf("%s %s %q", derefOrEmpty(n.Property), op, val)
+}
+
+func renderChildren(children []generated.VaultFilterNode) string {
+	parts := make([]string, 0, len(children))
+	for _, c := range children {
+		parts = append(parts, renderNode(c))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ---------------------------------------------------------------------------
+// FR-018b — a version-1 file keeps version-1 semantics, verbatim
+// ---------------------------------------------------------------------------
+
+// TestView_V1FileKeepsItsOwnSemanticsVerbatim reads a version-1 file off disk
+// alongside the version-2 one above and proves the loader gives it the OLD
+// meaning, unmodified.
+//
+// FR-018b: "A v1 view evaluates with its recorded v1 operators, verbatim …
+// files on disk are never rewritten on read."
+//
+// The assertions are deliberately about the SPELLING as well as the shape. v1
+// spells its operators `eq`/`gte` (the RecordFilter vocabulary ruling R-B
+// retired) and v2 spells them `=`/`>=`. A loader that had normalised the
+// stored file into the new vocabulary would satisfy a shape-only test while
+// having done exactly the rewrite the requirement forbids.
+func TestView_V1FileKeepsItsOwnSemanticsVerbatim(t *testing.T) {
+	v := mustLoadView(t, "shipped.yaml", `
+schema_version: 1
+name: shipped-widgets
+type: widget
+filters:
+  - property: state
+    op: eq
+    values:
+      - type: enum
+        enum: shipped
+  - property: batch
+    op: gte
+    values:
+      - type: integer
+        integer: "7"
+group_by: [state]
+sort:
+  - property: name
+    direction: asc
+`)
+
+	if v.Def.SchemaVersion != ViewVersion1 {
+		t.Fatalf("schema_version = %d, want 1 — a file on disk is never upgraded on read", v.Def.SchemaVersion)
+	}
+	// The v2 keys must be absent. Nothing translated them into existence.
+	if v.Def.Filter != nil {
+		t.Errorf("a version-1 view grew a v2 `filter` tree on load: %s", renderNode(*v.Def.Filter))
+	}
+	if v.Def.Grouping != nil {
+		t.Errorf("a version-1 view grew a v2 `grouping` list on load: %+v", v.Def.Grouping)
+	}
+	if v.Def.Layout != nil {
+		t.Errorf("a version-1 view grew a `layout` on load: %v", v.Def.Layout)
+	}
+
+	if v.Def.Filters == nil || len(*v.Def.Filters) != 2 {
+		t.Fatalf("the v1 `filters` list did not survive: %+v", v.Def.Filters)
+	}
+	f := *v.Def.Filters
+	if f[0].Op != generated.Eq {
+		t.Errorf("filter 1 operator = %q, want the v1 spelling `eq`", string(f[0].Op))
+	}
+	if f[1].Op != generated.Gte {
+		t.Errorf("filter 2 operator = %q, want the v1 spelling `gte`", string(f[1].Op))
+	}
+	if v.Def.GroupBy == nil || !reflect.DeepEqual(*v.Def.GroupBy, []string{"state"}) {
+		t.Errorf("group_by = %v, want [state]", v.Def.GroupBy)
+	}
+
+	// And it still produces the right query: v1's flat list is a conjunction,
+	// so the request is one `all` of two leaves in find's own spelling. The
+	// TRANSLATION AT THE SEAM is legitimate — it happens when the view is
+	// served, from the verbatim file, and never writes anything back.
+	req, served := NewViewFindLoader(newSet(v)).View("shipped-widgets")
+	if !served {
+		t.Fatal("a version-1 view using only translatable operators must still be servable")
+	}
+	if req.Filter == nil || req.Filter.All == nil || len(*req.Filter.All) != 2 {
+		t.Fatalf("request filter = %+v, want an `all` of two leaves", req.Filter)
+	}
+	assertLeaf(t, (*req.Filter.All)[0], "state", generated.Equal, "shipped")
+	assertLeaf(t, (*req.Filter.All)[1], "batch", generated.GreaterThanEqual, "7")
+	if req.GroupBy == nil || !reflect.DeepEqual(*req.GroupBy, []string{"state"}) {
+		t.Errorf("request group_by = %v, want [state]", req.GroupBy)
+	}
+
+	// The file on disk was not touched by any of that.
+	if v.Def.SchemaVersion != ViewVersion1 || (*v.Def.Filters)[0].Op != generated.Eq {
+		t.Error("serving the view mutated the loaded view")
+	}
+}
+
+// TestView_V1ContainsNeverBecomesLikeOnLoad is the exit proof for FR-018b's
+// review finding F5, and it is deliberately not an assertion about absence.
+//
+// A test that only said "the v1 view is not servable" would pass just as
+// happily on a build where `contains` and `LIKE '%…%'` had become synonyms —
+// the very state the requirement is about. So this runs in two halves:
+//
+//  1. MEASURE what the substitution would return. A version-2 view whose
+//     leaf is `labels LIKE '%in%'` loads, is servable, and its pattern
+//     matches `indoor` and `printing` as well as the element `in` — the
+//     three records FR-018b names.
+//  2. Prove the version-1 `contains` view produces NO such query: its
+//     operator is still `contains` after the load, no request escapes at
+//     all, and the refusal names the widening.
+//
+// Half 1 is what makes half 2 worth having. If LIKE ever stopped being
+// broader, half 1 fails and this test says so, rather than silently guarding
+// a distinction that no longer exists.
+func TestView_V1ContainsNeverBecomesLikeOnLoad(t *testing.T) {
+	// The records the spec's own example is stated over (FR-018b: "`labels
+	// contains \"in\"` matches the element `in`; `LIKE '%in%'` matches
+	// `indoor`, `printing`, `min`").
+	records := map[string]Record{
+		"exact":     ParseRecord("exact.md", []byte("---\ntype: widget\nname: E\nlabels: [in]\n---\n")),
+		"indoor":    ParseRecord("indoor.md", []byte("---\ntype: widget\nname: I\nlabels: [indoor]\n---\n")),
+		"printing":  ParseRecord("printing.md", []byte("---\ntype: widget\nname: P\nlabels: [printing]\n---\n")),
+		"unrelated": ParseRecord("unrelated.md", []byte("---\ntype: widget\nname: U\nlabels: [outdoor]\n---\n")),
+	}
+	// Expected verdicts, read off that sentence BEFORE the comparator is
+	// asked. `outdoor` is the control: an operator that matched everything
+	// could not pass either column.
+	wantLike := map[string]bool{"exact": true, "indoor": true, "printing": true, "unrelated": false}
+	wantMembership := map[string]bool{"exact": true, "indoor": false, "printing": false, "unrelated": false}
+
+	set, report, schemas := v2Vault(t, map[string]string{
+		// The version-2 view that DOES ask for substring matching.
+		"substring.yaml": `
+schema_version: 2
+name: labels-like-in
+type: widget
+filter:
+  property: labels
+  op: LIKE
+  value: "%in%"
+`,
+		// The version-1 view that asks for whole-element membership and must
+		// never become the one above.
+		"membership.yaml": `
+schema_version: 1
+name: labels-contains-in
+type: widget
+filters:
+  - property: labels
+    op: contains
+    values:
+      - type: text
+        text: "in"
+`,
+	})
+	if !report.OK() {
+		t.Fatalf("both views are valid files and must LOAD; rejected: %v", report.Rejections)
+	}
+	sc, ok := schemas.Get("widget")
+	if !ok {
+		t.Fatal("fixture schema missing")
+	}
+	loader := NewViewFindLoader(set)
+
+	// ── half 1: what the substitution would have returned ──────────────────
+	likeReq, served := loader.View("labels-like-in")
+	if !served {
+		t.Fatal("a version-2 LIKE view must be servable; without it this test cannot measure what the substitution would do")
+	}
+	if likeReq.Filter == nil || likeReq.Filter.Op == nil || *likeReq.Filter.Op != generated.LIKE {
+		t.Fatalf("the v2 request's operator is %+v, want LIKE", likeReq.Filter)
+	}
+	likeMatched := runLeaf(t, sc, records, Filter{
+		Property: "labels", Op: OpLike, Literal: *likeReq.Filter.Value, LiteralGiven: true,
+	}, wantLike, `LIKE "%in%"`)
+
+	// Whole-element membership is the faithful alternative the migration
+	// refusal offers for `contains`, and it is the narrower of the two.
+	membershipMatched := runLeaf(t, sc, records, Filter{
+		Property: "labels", Op: OpEqual, Literal: "in", LiteralGiven: true,
+	}, wantMembership, `whole-element membership (= "in")`)
+
+	if likeMatched-membershipMatched != 2 {
+		t.Fatalf("LIKE matched %d records and membership matched %d; FR-018b's example requires LIKE to match exactly 2 more (indoor, printing). "+
+			"If that is no longer true, the prohibition needs re-deriving rather than re-asserting", likeMatched, membershipMatched)
+	}
+
+	// ── half 2: the version-1 view produces no such query ──────────────────
+	v1, ok := set.Get("labels-contains-in")
+	if !ok {
+		t.Fatalf("the v1 view is missing from the set; names: %v", set.Names())
+	}
+	if v1.Def.SchemaVersion != ViewVersion1 {
+		t.Errorf("the v1 file's schema_version is %d after load, want 1", v1.Def.SchemaVersion)
+	}
+	if v1.Def.Filters == nil || len(*v1.Def.Filters) != 1 || (*v1.Def.Filters)[0].Op != generated.Contains {
+		t.Fatalf("the stored operator was rewritten on read: %+v", v1.Def.Filters)
+	}
+	if v1.Def.Filter != nil {
+		t.Fatalf("the v1 view grew a v2 tree on load: %s — that is the translation FR-018b withdrew", renderNode(*v1.Def.Filter))
+	}
+
+	req, servedV1 := loader.View("labels-contains-in")
+	if servedV1 {
+		t.Fatalf("knowledge_find served a version-1 `contains` view as %s; the only way to do that is to have substituted an operator, which would newly return the %d extra records measured above",
+			renderNode(*req.Filter), likeMatched-membershipMatched)
+	}
+	if req.Filter != nil {
+		t.Fatalf("a refused view still produced a filter: %s — a partial translation broadens exactly as a whole one does", renderNode(*req.Filter))
+	}
+	refusal, has := loader.ServeRefusal("labels-contains-in")
+	if !has {
+		t.Fatal("the view is unservable and FR-018b requires the reason to be NAMED; nothing was reported")
+	}
+	if refusal.Code != ServeRefusalV1Contains {
+		t.Errorf("refusal code = %q, want %q", refusal.Code, ServeRefusalV1Contains)
+	}
+	if !strings.Contains(refusal.Reason, "contains") {
+		t.Errorf("the reason does not name the operator it refused: %s", refusal.Reason)
+	}
+}
+
+// runLeaf evaluates one filter over the fixture records, checks every verdict
+// against the expected map, and returns how many matched.
+func runLeaf(t *testing.T, sc *Schema, records map[string]Record, f Filter, want map[string]bool, label string) int {
+	t.Helper()
+	matched := 0
+	for name, rec := range records {
+		res, err := f.Match(sc, rec)
+		if err != nil {
+			t.Fatalf("%s over %s: %v", label, name, err)
+		}
+		if res.Matched != want[name] {
+			t.Fatalf("%s matched %s = %v, want %v — read off FR-018b's own example", label, name, res.Matched, want[name])
+		}
+		if res.Matched {
+			matched++
+		}
+	}
+	return matched
+}
+
+// ---------------------------------------------------------------------------
+// FR-018b — an unknown version is REFUSED, never defaulted
+// ---------------------------------------------------------------------------
+
+// TestView_UnsupportedVersionIsRefusedNamingWhatIsSupported pins the shape of
+// the refusal, not just its existence.
+//
+// A loader that fell back to the nearest version it knew would be the same
+// silent-wrong-answer failure the whole surface is written against: the file
+// would evaluate under semantics its author never wrote. So the refusal must
+// (a) happen, (b) name the version found, and (c) list what IS supported —
+// otherwise an operator holding a version-3 file has no way to learn that 1
+// and 2 are the choices.
+func TestView_UnsupportedVersionIsRefusedNamingWhatIsSupported(t *testing.T) {
+	for _, version := range []string{"3", "0", "-1", "99"} {
+		t.Run("schema_version "+version, func(t *testing.T) {
+			body := fmt.Sprintf("schema_version: %s\nname: future\ntype: widget\n", version)
+			_, rej := ParseView("/vault/.omnipus-vault/views/future.yaml", []byte(body))
+			if rej == nil {
+				t.Fatalf("schema_version %s parsed; an unknown version must never be read as the nearest known one", version)
+			}
+			if rej.Code != RejectViewUnsupportedVersion {
+				t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewUnsupportedVersion, rej.Reason)
+			}
+			if !strings.Contains(rej.Reason, version) {
+				t.Errorf("the refusal does not name the version it found (%s): %s", version, rej.Reason)
+			}
+			for _, supported := range []string{"1", "2"} {
+				if !strings.Contains(rej.Reason, supported) {
+					t.Errorf("the refusal does not list supported version %s, so the reader cannot learn what to write: %s", supported, rej.Reason)
+				}
+			}
+		})
+	}
+
+	// And the set itself is exactly {1, 2} — FR-018b: "`SupportedViewVersion`
+	// becomes the set {1, 2}". Asserted directly so that adding a version
+	// without a decision fails here.
+	if got := supportedViewVersions(); !reflect.DeepEqual(got, []int{1, 2}) {
+		t.Fatalf("supportedViewVersions() = %v, want [1 2]", got)
+	}
+	for _, v := range []int{1, 2} {
+		if !IsSupportedViewVersion(v) {
+			t.Errorf("version %d must be readable", v)
+		}
+	}
+	for _, v := range []int{0, 3, -1} {
+		if IsSupportedViewVersion(v) {
+			t.Errorf("version %d must not be readable", v)
+		}
+	}
+
+	// SupportedViewVersion is the WRITER's constant and is deliberately still
+	// 1: the only in-tree writer (pkg/vaultimport/view_write.go) emits v1 KEYS,
+	// and stamping 2 onto a v1-shaped file makes the version partition below
+	// refuse it on the very next load. This assertion is the tripwire for
+	// bumping the constant alone — see view.go's comment on it.
+	if SupportedViewVersion != ViewVersion1 {
+		t.Errorf("SupportedViewVersion = %d. If the importer now emits v2 KEYS this is correct and this assertion should move with it; if it does not, the importer is producing files this loader rejects",
+			SupportedViewVersion)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FR-109 — layout is carried, and an unrenderable one is not flattened
+// ---------------------------------------------------------------------------
+
+// TestView_LayoutIsCarriedAndPoliced covers the measured failure FR-109 was
+// written after: "An Obsidian CARDS view imported as a table, recorded no loss
+// at all, and scored CLEAN under the parity exit criterion."
+//
+// Two halves, and the second is the one that matters. Carrying `cards` is
+// necessary; REFUSING an unrecognised layout is what stops the flattening,
+// because a bare string field accepts anything and an unrecognised value
+// renders as the default table with nobody told.
+func TestView_LayoutIsCarriedAndPoliced(t *testing.T) {
+	// Every declared layout survives the round trip, including the four the
+	// SPA does not render — they exist precisely so the importer can RECORD
+	// what an Obsidian view asked for.
+	for _, layout := range viewLayoutNames() {
+		t.Run("carried: "+layout, func(t *testing.T) {
+			v := mustLoadView(t, "l.yaml", fmt.Sprintf(
+				"schema_version: 2\nname: l\ntype: widget\nlayout: %s\n", layout))
+			if v.Def.Layout == nil {
+				t.Fatalf("layout %q was dropped on load", layout)
+			}
+			if string(*v.Def.Layout) != layout {
+				t.Fatalf("layout = %q, want %q", string(*v.Def.Layout), layout)
+			}
+		})
+	}
+
+	// An omitted layout stays ABSENT rather than being filled in with `table`.
+	// The contract states table is the default; a loader that wrote it in
+	// would make "the author asked for a table" and "the author said nothing"
+	// indistinguishable, and the importer's loss report is built on telling
+	// them apart.
+	v := mustLoadView(t, "plain.yaml", "schema_version: 2\nname: plain\ntype: widget\n")
+	if v.Def.Layout != nil {
+		t.Errorf("an omitted layout was filled in as %q; absent must stay absent", string(*v.Def.Layout))
+	}
+
+	// An unrecognised layout is REFUSED, naming the permitted set. `card`
+	// (singular) is the realistic typo and the one that would otherwise render
+	// as a silent table.
+	for _, bad := range []string{"card", "Cards", "grid", ""} {
+		t.Run("refused: "+bad, func(t *testing.T) {
+			_, report, _ := v2Vault(t, map[string]string{
+				"bad.yaml": fmt.Sprintf("schema_version: 2\nname: bad\ntype: widget\nlayout: %q\n", bad),
+			})
+			if report.OK() {
+				t.Fatalf("layout %q loaded; an unrecognised layout renders as the default table with nobody told (FR-109)", bad)
+			}
+			rej := report.Rejections[0]
+			if rej.Code != RejectViewInvalidLayout {
+				t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewInvalidLayout, rej.Reason)
+			}
+			if !strings.Contains(rej.Reason, "cards") || !strings.Contains(rej.Reason, "table") {
+				t.Errorf("the refusal does not list the permitted layouts: %s", rej.Reason)
+			}
+		})
+	}
+
+	// `layout` is a VERSION-2 key. A version-1 file setting it is refused
+	// rather than honoured — otherwise the relaxation leaks backwards and a v1
+	// file starts carrying meaning its version never had.
+	_, report, _ := v2Vault(t, map[string]string{
+		"v1layout.yaml": "schema_version: 1\nname: v1layout\ntype: widget\nlayout: cards\n",
+	})
+	if report.OK() {
+		t.Fatal("a version-1 view was allowed to set `layout`")
+	}
+	if report.Rejections[0].Code != RejectViewVersionKeyMismatch {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewVersionKeyMismatch, report.Rejections[0].Reason)
+	}
 }
 
 // ---------------------------------------------------------------------------
 // The version partition
 // ---------------------------------------------------------------------------
 
-// TestView_EveryWireKeyIsVersionClassified is the guard that makes the
-// version partition a partition instead of a list somebody maintains.
+// TestView_EveryWireKeyIsVersionClassified is the guard view.go's partition
+// comment promises BY NAME.
 //
-// A FLAT DENYLIST CANNOT DETECT ITS OWN DELETION. If `viewV2OnlyKeys` simply
-// listed keys to refuse on v1, removing `layout` from it would break nothing
-// visible: no v1 fixture sets `layout`, so no test would notice, and from
-// then on a v1 file could carry a v2 key silently.
+// The comment's claim is the whole reason the three sets are a partition and
+// not a denylist: "every `json:` tag on the generated wire type must appear in
+// exactly one of the three sets, and every name in the three sets must be a
+// real tag. Adding a wire key to ViewDef without deciding which version owns
+// it fails TestView_EveryWireKeyIsVersionClassified BY NAME."
 //
-// A partition can, because it is checked against the SOURCE OF TRUTH —
-// generated.ViewDef's own json tags, which come from contracts/openapi.yaml.
-// Every tag must be classified exactly once, and every classified name must
-// be a real tag. So:
-//
-//	deleting a key from any set        -> it is unclassified   -> FAIL
-//	adding a key to two sets           -> classified twice     -> FAIL
-//	adding a wire key to ViewDef.yaml  -> it is unclassified   -> FAIL
-//	renaming a key in the contract     -> the old name is dead -> FAIL
-//
-// which is the whole point: the next person to extend the view format is told
-// to decide which version owns their key, at build time, by name.
+// Without this test that sentence is a comment describing a test that does not
+// exist, and the partition erodes exactly the way a denylist does.
 func TestView_EveryWireKeyIsVersionClassified(t *testing.T) {
-	tags := viewDefJSONTags(t)
-	if len(tags) < 15 {
-		t.Fatalf("only %d json tags found on generated.ViewDef; the reflection walk is not reading the type it thinks it is", len(tags))
+	classified := map[string]string{}
+	for k := range viewV1OnlyKeys {
+		classified[k] = "viewV1OnlyKeys"
 	}
-
-	sets := map[string]map[string]struct{}{
-		"viewV1OnlyKeys": viewV1OnlyKeys,
-		"viewV2OnlyKeys": viewV2OnlyKeys,
-		"viewSharedKeys": viewSharedKeys,
-	}
-
-	// (a) every wire key is classified exactly once.
-	var unclassified, multiply []string
-	for _, tag := range tags {
-		in := []string{}
-		for name, set := range sets {
-			if _, ok := set[tag]; ok {
-				in = append(in, name)
-			}
+	for k := range viewV2OnlyKeys {
+		if where, dup := classified[k]; dup {
+			t.Errorf("key %q is in both %s and viewV2OnlyKeys; a partition assigns each key exactly once", k, where)
 		}
-		switch len(in) {
-		case 0:
-			unclassified = append(unclassified, tag)
-		case 1:
-		default:
-			sort.Strings(in)
-			multiply = append(multiply, tag+" in "+strings.Join(in, "+"))
+		classified[k] = "viewV2OnlyKeys"
+	}
+	for k := range viewSharedKeys {
+		if where, dup := classified[k]; dup {
+			t.Errorf("key %q is in both %s and viewSharedKeys; a partition assigns each key exactly once", k, where)
 		}
-	}
-	if len(unclassified) > 0 {
-		sort.Strings(unclassified)
-		t.Errorf("these ViewDef wire keys belong to no version set: %v.\n"+
-			"Every key must be classified as version-1-only, version-2-only or shared — an unclassified key is a key both versions silently accept, which is how the two vocabularies start leaking into each other.",
-			unclassified)
-	}
-	if len(multiply) > 0 {
-		sort.Strings(multiply)
-		t.Errorf("these ViewDef wire keys are classified more than once: %v", multiply)
+		classified[k] = "viewSharedKeys"
 	}
 
-	// (b) every classified name is a real wire key. This half catches the
-	// rename: move `group_by` to another spelling in the contract and the
-	// stale entry here is reported rather than silently guarding nothing.
-	real := map[string]struct{}{}
-	for _, tag := range tags {
-		real[tag] = struct{}{}
-	}
-	var phantom []string
-	for setName, set := range sets {
-		for k := range set {
-			if _, ok := real[k]; !ok {
-				phantom = append(phantom, k+" (in "+setName+")")
-			}
-		}
-	}
-	if len(phantom) > 0 {
-		sort.Strings(phantom)
-		t.Errorf("these names are classified but are not json keys on generated.ViewDef: %v.\n"+
-			"A classified name that no longer exists guards nothing; either the contract renamed it or the set is stale.",
-			phantom)
-	}
-}
-
-// viewDefJSONTags reads the wire key of every field on generated.ViewDef.
-func viewDefJSONTags(t *testing.T) []string {
-	t.Helper()
-	typ := reflect.TypeOf(generated.ViewDef{})
-	out := make([]string, 0, typ.NumField())
-	for i := 0; i < typ.NumField(); i++ {
-		tag := typ.Field(i).Tag.Get("json")
+	wire := map[string]struct{}{}
+	rt := reflect.TypeOf(generated.ViewDef{})
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("json")
 		if tag == "" || tag == "-" {
-			t.Fatalf("generated.ViewDef field %s carries no json tag; the wire key cannot be derived", typ.Field(i).Name)
+			continue
 		}
-		out = append(out, strings.Split(tag, ",")[0])
+		name := strings.Split(tag, ",")[0]
+		if name == "" {
+			continue
+		}
+		wire[name] = struct{}{}
+		if _, ok := classified[name]; !ok {
+			t.Errorf("ViewDef wire key %q belongs to no version set. Add it to viewV1OnlyKeys, viewV2OnlyKeys or viewSharedKeys in view.go — a key in none of them is accepted by BOTH versions, which is what the partition exists to prevent", name)
+		}
 	}
-	sort.Strings(out)
-	return out
+	for name, where := range classified {
+		if _, ok := wire[name]; !ok {
+			t.Errorf("%s names %q, which is not a `json:` tag on generated.ViewDef; the partition is guarding a key that no longer crosses the wire", where, name)
+		}
+	}
 }
 
-// TestView_VersionKeyMismatchIsRefusedBothWays proves a file speaks one
-// version's vocabulary or the other, never a mixture — and that the refusal
-// names the key and the version it belongs to.
+// TestView_VersionKeyMismatchIsRefusedBothWays proves the partition is
+// enforced in BOTH directions and that the refusal is informative.
 //
-// The v2-key-on-v1 direction is the one that matters most: without it a v1
-// file could carry a `filter:` tree that decodes fine (both keys live on the
-// one generated type) and is then never evaluated, because v1 evaluation
-// reads `filters`. The view would load, look right, and filter by nothing.
+// A file carrying a key from the other version is a file whose author
+// disagrees with itself about which query it is. Preferring either spelling
+// would answer a question nobody asked — and in the v1-file-with-`filter:`
+// direction the loss is silent, because both keys decode cleanly onto the one
+// generated type and the tree would simply never be read.
 func TestView_VersionKeyMismatchIsRefusedBothWays(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-
 	cases := []struct {
-		name    string
-		body    string
-		wantKey string
+		name      string
+		body      string
+		foreign   string
+		otherSide string
 	}{
 		{
-			name:    "a v2 tree on a version-1 file",
-			wantKey: "filter",
+			name: "a version-1 file with a v2 filter tree",
 			body: `
 schema_version: 1
-name: v
-type: deal
-filter:
-  property: stage
-  op: "="
-  value: open
-`,
-		},
-		{
-			name:    "a v2 layout on a version-1 file",
-			wantKey: "layout",
-			body:    "schema_version: 1\nname: v\ntype: deal\nlayout: cards\n",
-		},
-		{
-			name:    "a v1 filters list on a version-2 file",
-			wantKey: "filters",
-			body: `
-schema_version: 2
-name: v
-type: deal
+name: mixed
+type: widget
 filters:
-  - property: stage
+  - property: state
     op: eq
-    values: [{type: enum, enum: open}]
+    values: [{type: enum, enum: shipped}]
+filter:
+  property: state
+  op: "="
+  value: draft
 `,
+			foreign:   "filter",
+			otherSide: "2",
 		},
 		{
-			name:    "a v1 group_by on a version-2 file",
-			wantKey: "group_by",
-			body:    "schema_version: 2\nname: v\ntype: deal\ngroup_by: [stage]\n",
+			name:      "a version-1 file with v2 grouping",
+			body:      "schema_version: 1\nname: mixed\ntype: widget\ngrouping: [{property: state}]\n",
+			foreign:   "grouping",
+			otherSide: "2",
 		},
 		{
-			// An EMPTY v1 list on a v2 file. This is the case a struct-side
-			// check would miss — a nil *[]RecordFilter is indistinguishable
-			// from a key that decoded to nothing — and it still says the
-			// author believed they were writing v1.
-			name:    "an empty v1 filters list on a version-2 file",
-			wantKey: "filters",
-			body:    "schema_version: 2\nname: v\ntype: deal\nfilters: []\n",
+			name:      "a version-2 file with a v1 filters list",
+			body:      "schema_version: 2\nname: mixed\ntype: widget\nfilters: []\n",
+			foreign:   "filters",
+			otherSide: "1",
+		},
+		{
+			name:      "a version-2 file with a bare group_by",
+			body:      "schema_version: 2\nname: mixed\ntype: widget\ngroup_by: [state]\n",
+			foreign:   "group_by",
+			otherSide: "1",
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, rej := loadOneView(t, root, schemas, tc.body)
+			_, rej := ParseView("/vault/.omnipus-vault/views/mixed.yaml", []byte(tc.body))
 			if rej == nil {
-				t.Fatalf("the file loaded; a view carrying the other version's keys must be refused")
+				t.Fatal("the mixed-vocabulary file parsed")
 			}
 			if rej.Code != RejectViewVersionKeyMismatch {
 				t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewVersionKeyMismatch, rej.Reason)
 			}
-			if !strings.Contains(rej.Reason, tc.wantKey) {
-				t.Errorf("the refusal does not name the offending key %q: %s", tc.wantKey, rej.Reason)
+			if !strings.Contains(rej.Reason, tc.foreign) {
+				t.Errorf("the refusal does not name the offending key %q: %s", tc.foreign, rej.Reason)
+			}
+			if !strings.Contains(rej.Reason, tc.otherSide) {
+				t.Errorf("the refusal does not say which version %q belongs to: %s", tc.foreign, rej.Reason)
 			}
 		})
 	}
+
+	// `filters: []` above is the case a struct-side check would MISS — an
+	// empty v1 list decodes to a non-nil-but-empty slice that is
+	// indistinguishable from absence once decoded. Stated here so that a
+	// later "simplification" to reading the decoded struct fails with the
+	// reason attached.
 }
 
 // ---------------------------------------------------------------------------
-// FR-018b — the find grammar, and what it buys
+// FR-018b / FR-018d — the optional type
 // ---------------------------------------------------------------------------
 
-// TestView_V2TreeExpressesDisjunction is spec §7 test 90.
+// TestView_UntypedV2ViewLoads covers FR-018b's "`type` is OPTIONAL" and the
+// two edges either side of it.
 //
-// The measured failure it closes: seven filter groups in the founder's vault
-// use disjunction, and NOT ONE was expressible as a view, because v1's
-// `filters` is a flat AND-only list. A v2 view must load an `any` tree,
-// validate its leaves against the schema, and hand find the SAME tree — not a
-// translation of it.
-func TestView_V2TreeExpressesDisjunction(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-	v, rej := loadOneView(t, root, schemas, `
+// The relaxation is BY VERSION. A version-1 view has no untyped semantics to
+// fall back on, so it stays rejected exactly as it always was; and a `type:`
+// that is present but blank is a typo at either version, never the deliberate
+// absence — treating it as untyped would turn a misspelling into a vault-wide
+// query.
+func TestView_UntypedV2ViewLoads(t *testing.T) {
+	// An untyped v2 view loads, and its ordinary property names are NOT
+	// checked against any single schema: FR-018b resolves them by name over
+	// FR-021e's rows at query time, so there is no name the loader could
+	// refuse without refusing a query FR-018b requires to work.
+	v := mustLoadView(t, "folder.yaml", `
 schema_version: 2
-name: hot-or-large
-type: deal
+name: folder-scoped
 filter:
-  any:
-    - property: stage
-      op: "="
-      value: won
-    - all:
-        - property: amount
-          op: ">="
-          value: "10000"
-        - property: stage
-          op: "<>"
-          value: lost
+  property: undeclared_anywhere
+  op: IS NOT NULL
+properties: [name, undeclared_anywhere]
 `)
-	if rej != nil {
-		t.Fatalf("a version-2 disjunctive view was rejected: %s", rej)
-	}
-	if v.Def.SchemaVersion != ViewVersion2 {
-		t.Fatalf("schema_version = %d, want 2", v.Def.SchemaVersion)
-	}
-	if v.Def.Filter == nil || v.Def.Filter.Any == nil || len(*v.Def.Filter.Any) != 2 {
-		t.Fatalf("the `any` tree did not survive the load: %+v", v.Def.Filter)
+	if v.Def.Type != nil {
+		t.Fatalf("type = %v, want absent", v.Def.Type)
 	}
 
-	req, ok := NewViewFindLoader(newSet(v)).View("hot-or-large")
-	if !ok {
-		t.Fatal("a version-2 view whose every leaf is already find's own grammar must be servable")
-	}
-	// The tree is handed over UNCHANGED. Compared structurally rather than
-	// field by field, because "unchanged" is the whole claim.
-	if !sameFilterJSON(t, v.Def.Filter, req.Filter) {
-		t.Fatalf("the served filter differs from the saved one.\nsaved: %s\nserved: %s",
-			mustJSON(t, v.Def.Filter), mustJSON(t, req.Filter))
-	}
-	if req.Filter == v.Def.Filter {
-		t.Fatal("the served request ALIASES the saved view's filter; a request the engine later normalises in place would rewrite the saved view")
-	}
-	if (*v.Def.Filter.Any)[0].Property == (*req.Filter.Any)[0].Property {
-		t.Fatal("a child leaf's Property pointer is shared with the saved view — the deep copy is only one level deep")
-	}
-}
-
-// TestView_V2GroupingCarriesDirection covers the second half of FR-018b's
-// grammar change, and the failure it was written after: v1's bare `group_by`
-// list has no direction field at all, so 24 real `groupBy` directions in the
-// founder's vault were flattened to the default in silence.
-func TestView_V2GroupingCarriesDirection(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-	v, rej := loadOneView(t, root, schemas, `
-schema_version: 2
-name: by-stage
-type: deal
-grouping:
-  - property: stage
-    direction: desc
-  - property: closed
-`)
-	if rej != nil {
-		t.Fatalf("rejected: %s", rej)
-	}
-	if v.Def.Grouping == nil || len(*v.Def.Grouping) != 2 {
-		t.Fatalf("grouping did not survive: %+v", v.Def.Grouping)
-	}
-	g := *v.Def.Grouping
-	if g[0].Direction == nil || *g[0].Direction != generated.ViewGroupByDirectionDesc {
-		t.Fatalf("grouping[0].direction = %v, want desc — the direction is the whole reason this key exists", g[0].Direction)
-	}
-	// An OMITTED direction stays omitted on the wire. `asc` is the documented
-	// default, and defaulting it HERE would make "the author asked for
-	// ascending" and "the author said nothing" indistinguishable to every
-	// later reader — including the importer's own loss report.
-	if g[1].Direction != nil {
-		t.Fatalf("grouping[1].direction = %v, want nil; the asc default belongs to the renderer, not the loader", *g[1].Direction)
-	}
-}
-
-// TestView_V2DescendingGroupIsRefusedNotFlattened is the seam this loader
-// refuses to paper over.
-//
-// VaultFindRequest.group_by is a bare []string with no direction. Serving a
-// descending v2 grouping through it would reorder the groups ascending in
-// SILENCE — the exact failure ViewGroupBy was added to end. So it is refused
-// with the reason named, and an ASCENDING key (or one with no direction)
-// still crosses, because for those nothing is lost.
-func TestView_V2DescendingGroupIsRefusedNotFlattened(t *testing.T) {
-	mk := func(dir *generated.ViewGroupByDirection) *SavedView {
-		return &SavedView{Def: generated.ViewDef{
-			SchemaVersion: ViewVersion2, Name: "g", Type: ptr("deal"),
-			Grouping: ptr([]generated.ViewGroupBy{{Property: "stage", Direction: dir}}),
-		}}
+	// A version-1 view with no type is still rejected.
+	_, rej := ParseView("/v/x.yaml", []byte("schema_version: 1\nname: v\n"))
+	if rej == nil || rej.Code != RejectViewMissingType {
+		t.Fatalf("a v1 view with no type must be rejected, got %+v", rej)
 	}
 
-	desc := NewViewFindLoader(newSet(mk(ptr(generated.ViewGroupByDirectionDesc))))
-	if _, ok := desc.View("g"); ok {
-		t.Fatal("a descending grouping was served through a request that cannot carry a direction; that flattens it silently")
-	}
-	refusal, has := desc.ServeRefusal("g")
-	if !has || refusal.Code != ServeRefusalGroupDirection {
-		t.Fatalf("ServeRefusal = %+v (%v), want %s", refusal, has, ServeRefusalGroupDirection)
-	}
-	if !strings.Contains(refusal.Reason, "stage") {
-		t.Errorf("the reason does not name the grouping key: %s", refusal.Reason)
-	}
-
-	for _, tc := range []struct {
-		name string
-		dir  *generated.ViewGroupByDirection
-	}{
-		{"ascending", ptr(generated.ViewGroupByDirectionAsc)},
-		{"unspecified", nil},
-	} {
-		t.Run(tc.name+" crosses losslessly", func(t *testing.T) {
-			req, ok := NewViewFindLoader(newSet(mk(tc.dir))).View("g")
-			if !ok {
-				t.Fatal("ascending IS the documented default, so nothing is lost and the view must be servable")
-			}
-			if req.GroupBy == nil || len(*req.GroupBy) != 1 || (*req.GroupBy)[0] != "stage" {
-				t.Fatalf("GroupBy = %v, want [stage]", req.GroupBy)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// FR-018b — the optional type, and FR-018c's reserved namespaces
-// ---------------------------------------------------------------------------
-
-// TestView_V2TypeIsOptionalAndV1TypeIsNot is the relaxation, and the proof it
-// did not leak backwards.
-//
-// Four of the founder's eighteen bases scope purely by folder and span record
-// types, so an untyped view has to load. A version-1 file has no untyped
-// semantics to fall back on — its filters are validated against one type's
-// schema — so it stays rejected exactly as it always was.
-func TestView_V2TypeIsOptionalAndV1TypeIsNot(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-
-	t.Run("version 2 without a type loads", func(t *testing.T) {
-		v, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: everything\nsort: [{property: name, direction: asc}]\n")
-		if rej != nil {
-			t.Fatalf("an untyped version-2 view was rejected: %s", rej)
-		}
-		if v.Def.Type != nil {
-			t.Fatalf("Type = %q, want nil — an untyped view must not acquire one", *v.Def.Type)
-		}
-	})
-
-	t.Run("version 1 without a type is still refused", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 1\nname: everything\n")
-		if rej == nil {
-			t.Fatal("a version-1 view with no type loaded; the relaxation is version-2's only")
-		}
-		if rej.Code != RejectViewMissingType {
-			t.Fatalf("code = %s, want %s", rej.Code, RejectViewMissingType)
-		}
-	})
-
-	t.Run("a blank type is a typo at either version", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: everything\ntype: \"\"\n")
+	// A blank type is a typo at either version.
+	for _, version := range []int{1, 2} {
+		body := fmt.Sprintf("schema_version: %d\nname: v\ntype: \"   \"\n", version)
+		_, rej := ParseView("/v/x.yaml", []byte(body))
 		if rej == nil || rej.Code != RejectViewMissingType {
-			t.Fatalf("an empty `type` must be refused as a typo, not read as a deliberate absence; got %v", rej)
+			t.Fatalf("version %d: a blank `type` must be refused as a typo, got %+v", version, rej)
 		}
+	}
+
+	// A type NO schema declares is still drift, at version 2 as at version 1
+	// (FR-018d: "`RejectViewUnknownType` still fires for a type NO schema
+	// declares — that is drift, not provisioning").
+	_, report, _ := v2Vault(t, map[string]string{
+		"gone.yaml": "schema_version: 2\nname: gone\ntype: sprocket\n",
 	})
-}
-
-// TestView_UntypedViewDoesNotRefuseUnknownProperties is the honest boundary
-// of the untyped case (FR-018b, as rewritten in Draft 11).
-//
-// An untyped view resolves a property BY NAME over the rows FR-021e keeps for
-// every note, and a name no in-scope type declares resolves in the text
-// domain. So there is no property name this LOADER can refuse without
-// refusing a query the requirement says must work — and it must not invent
-// one to look thorough.
-func TestView_UntypedViewDoesNotRefuseUnknownProperties(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-	v, rej := loadOneView(t, root, schemas, `
-schema_version: 2
-name: folder-scoped
-filter:
-  property: nowhere_declared
-  op: "="
-  value: yes
-properties: [nowhere_declared, also_undeclared]
-`)
-	if rej != nil {
-		t.Fatalf("an untyped view naming an undeclared property was rejected: %s\n"+
-			"FR-018b resolves such a name at query time in the text domain; refusing it here would refuse a query the requirement mandates.", rej)
+	if report.OK() {
+		t.Fatal("a v2 view naming an undeclared type loaded; the optional type does not make an unknown one acceptable")
 	}
-	if v.Def.Filter == nil || v.Def.Filter.Property == nil || *v.Def.Filter.Property != "nowhere_declared" {
-		t.Fatalf("the filter did not survive: %+v", v.Def.Filter)
-	}
-
-	// The same name in a TYPED view is still refused, which is what shows the
-	// leniency above is scoped to the untyped case rather than a hole.
-	_, rej2 := loadOneView(t, root, schemas, `
-schema_version: 2
-name: folder-scoped
-type: deal
-filter:
-  property: nowhere_declared
-  op: "="
-  value: yes
-`)
-	if rej2 == nil || rej2.Code != RejectViewUnknownProperty {
-		t.Fatalf("a TYPED view naming an undeclared property must still be refused (FR-024); got %v", rej2)
+	if report.Rejections[0].Code != RejectViewUnknownType {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewUnknownType, report.Rejections[0].Reason)
 	}
 }
 
-// TestView_V2ReservedNamespacesAreAcceptedAndV1IsUnchanged covers FR-018c in
-// the positions a view uses, and the deliberate scoping of it.
-//
-// `file.*` and `formula.*` are valid in every property position OF A
-// VERSION-2 VIEW. They are NOT newly accepted on a version-1 file: a v1 view
-// naming `file.mtime` in its sort was refused as an undeclared property
-// before this change, and accepting it now would quietly widen what a file
-// already on disk is allowed to say — the same class of change as
-// translating its operators.
-func TestView_V2ReservedNamespacesAreAcceptedAndV1IsUnchanged(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-
-	t.Run("file.* in a version-2 sort and filter", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, `
-schema_version: 2
-name: recent
-type: deal
-filter:
-  property: file.mtime
-  op: ">"
-  value: "2026-01-01"
-sort: [{property: file.mtime, direction: desc}]
-`)
-		if rej != nil {
-			t.Fatalf("a version-2 view using the reserved file namespace was rejected: %s", rej)
-		}
-	})
-
-	t.Run("a misspelled file property is refused with the real ones listed", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: recent\ntype: deal\nsort: [{property: file.mtimes, direction: desc}]\n")
-		if rej == nil || rej.Code != RejectViewUnknownProperty {
-			t.Fatalf("`file.mtimes` must be refused as a misspelling, not accepted into the namespace; got %v", rej)
-		}
-		if !strings.Contains(rej.Reason, FileMtimeProp) {
-			t.Errorf("the refusal does not list the real file properties: %s", rej.Reason)
-		}
-	})
-
-	t.Run("file.file is not a comparison target", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: recent\ntype: deal\nsort: [{property: file.file, direction: desc}]\n")
-		if rej == nil || rej.Code != RejectViewUnknownProperty {
-			t.Fatalf("`file.file` is the note itself and cannot be sorted on (FR-130); got %v", rej)
-		}
-		// …but it renders, so the DISPLAY position accepts it.
-		if _, rej2 := loadOneView(t, root, schemas, "schema_version: 2\nname: recent\ntype: deal\nproperties: [file.file, name]\n"); rej2 != nil {
-			t.Fatalf("`file.file` must remain renderable in `properties`: %s", rej2)
-		}
-	})
-
-	t.Run("version 1 is not newly permissive", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 1\nname: recent\ntype: deal\nsort: [{property: file.mtime, direction: desc}]\n")
-		if rej == nil {
-			t.Fatal("a version-1 view naming file.mtime loaded; that is a widening of what an existing file may say, applied automatically — the same class of change FR-018b prohibits for operators")
-		}
-		if rej.Code != RejectViewUnknownProperty {
-			t.Fatalf("code = %s, want %s", rej.Code, RejectViewUnknownProperty)
-		}
-	})
-}
-
 // ---------------------------------------------------------------------------
-// FR-109 — layout
+// FR-023c — the tree bound, applied to a view
 // ---------------------------------------------------------------------------
 
-// TestView_LayoutIsCarriedAndPoliced covers the field and the measured
-// failure behind it: an Obsidian CARDS view imported as a table, recorded no
-// loss, and scored CLEAN.
+// TestView_V2FilterTreeBoundsAreRefusedAtLoad checks the two numbers FR-023c
+// states, on the side of each that must fail.
 //
-// The enum matters because the JSON decoder does NOT police it — ViewDefLayout
-// is a bare string type, so `layout: card` (singular) would load, mean nothing
-// to the SPA, and render as the default table. That is the silent flattening
-// again, arriving through a typo instead of an importer.
-func TestView_LayoutIsCarriedAndPoliced(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-
-	for _, layout := range viewLayoutNames() {
-		t.Run(layout+" is carried", func(t *testing.T) {
-			v, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: l\ntype: deal\nlayout: "+layout+"\n")
-			if rej != nil {
-				t.Fatalf("layout %q was rejected: %s", layout, rej)
-			}
-			if v.Def.Layout == nil || string(*v.Def.Layout) != layout {
-				t.Fatalf("layout = %v, want %q — an unrenderable layout must still be RECORDED, so the loss is named rather than invisible", v.Def.Layout, layout)
-			}
-		})
+// The bound is measured at LOAD rather than left to the query path because a
+// view is written once and evaluated forever: a tree that will be refused on
+// every query should be refused when it is stored, naming which bound it
+// broke.
+func TestView_V2FilterTreeBoundsAreRefusedAtLoad(t *testing.T) {
+	// FR-023c's two numbers, WRITTEN OUT rather than read from the code's own
+	// constants. A test that sized its fixtures from maxViewFilterLeaves would
+	// follow the constant anywhere it was moved to, and pass at a cap of 128
+	// as happily as at 64 — which is precisely the guard failing open.
+	const specLeafCap = 64
+	const specDepthCap = 8
+	if maxViewFilterLeaves != specLeafCap || maxViewFilterDepth != specDepthCap {
+		t.Fatalf("the code caps a view filter at %d leaves / depth %d; FR-023c states %d and %d",
+			maxViewFilterLeaves, maxViewFilterDepth, specLeafCap, specDepthCap)
 	}
 
-	t.Run("a layout outside the enum is refused", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: l\ntype: deal\nlayout: card\n")
-		if rej == nil {
-			t.Fatal("`layout: card` loaded; it would render as the default table, which is the silently-flattened cards view FR-109 exists to prevent")
+	leafYAML := func(indent string) string {
+		return indent + "- property: batch\n" + indent + "  op: IS NOT NULL\n"
+	}
+	flat := func(n int) string {
+		var b strings.Builder
+		b.WriteString("schema_version: 2\nname: wide\ntype: widget\nfilter:\n  all:\n")
+		for i := 0; i < n; i++ {
+			b.WriteString(leafYAML("    "))
 		}
-		if rej.Code != RejectViewInvalidLayout {
-			t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewInvalidLayout, rej.Reason)
-		}
-		if !strings.Contains(rej.Reason, "cards") {
-			t.Errorf("the refusal does not list the layouts that would have worked: %s", rej.Reason)
-		}
-	})
-}
+		return b.String()
+	}
 
-// ---------------------------------------------------------------------------
-// FR-023c — the filter tree bound
-// ---------------------------------------------------------------------------
+	// 64 leaves is the cap and must LOAD; 65 must not.
+	if _, report, _ := v2Vault(t, map[string]string{"w.yaml": flat(specLeafCap)}); !report.OK() {
+		t.Fatalf("a tree at FR-023c's cap of %d leaves was refused: %v", specLeafCap, report.Rejections)
+	}
+	_, report, _ := v2Vault(t, map[string]string{"w.yaml": flat(specLeafCap + 1)})
+	if report.OK() {
+		t.Fatalf("a tree of %d leaves loaded; FR-023c caps a filter at %d", specLeafCap+1, specLeafCap)
+	}
+	if report.Rejections[0].Code != RejectViewFilterTooLarge {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewFilterTooLarge, report.Rejections[0].Reason)
+	}
+	if !strings.Contains(report.Rejections[0].Reason, "64") {
+		t.Errorf("the refusal does not name the bound it broke: %s", report.Rejections[0].Reason)
+	}
 
-// TestView_V2FilterTreeIsBounded proves FR-023c applies to a view's tree
-// identically to a request's, and that the refusal names WHICH bound.
-//
-// Enforced at LOAD rather than left to the query path because a view is
-// written once and evaluated forever: a tree that will be refused on every
-// query should be refused when it is stored, while somebody is looking at it.
-func TestView_V2FilterTreeIsBounded(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-
-	leaf := "    - {property: stage, op: \"=\", value: open}\n"
-
-	t.Run("exactly at the leaf bound loads", func(t *testing.T) {
-		body := "schema_version: 2\nname: wide\ntype: deal\nfilter:\n  any:\n" + strings.Repeat(leaf, maxViewFilterLeaves)
-		if _, rej := loadOneView(t, root, schemas, body); rej != nil {
-			t.Fatalf("%d leaves is the bound, not past it; rejected: %s", maxViewFilterLeaves, rej)
-		}
-	})
-
-	t.Run("one leaf over is refused naming the bound", func(t *testing.T) {
-		body := "schema_version: 2\nname: wide\ntype: deal\nfilter:\n  any:\n" + strings.Repeat(leaf, maxViewFilterLeaves+1)
-		_, rej := loadOneView(t, root, schemas, body)
-		if rej == nil {
-			t.Fatalf("%d leaves loaded; FR-023c caps a filter at %d", maxViewFilterLeaves+1, maxViewFilterLeaves)
-		}
-		if rej.Code != RejectViewFilterTooLarge {
-			t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewFilterTooLarge, rej.Reason)
-		}
-		if !strings.Contains(rej.Reason, "leaves") {
-			t.Errorf("the refusal does not say which bound was broken: %s", rej.Reason)
-		}
-	})
-
-	t.Run("depth is bounded separately", func(t *testing.T) {
-		// A chain of `not` nodes: one leaf, arbitrary depth. It is refused for
-		// DEPTH, which is what shows the two bounds are measured separately
-		// rather than one standing in for the other.
-		body := "schema_version: 2\nname: deep\ntype: deal\nfilter:\n"
+	// Depth. `not` nests one node per level, so the depth is exact.
+	nested := func(levels int) string {
+		var b strings.Builder
+		b.WriteString("schema_version: 2\nname: deep\ntype: widget\nfilter:\n")
 		indent := "  "
-		for i := 0; i < maxViewFilterDepth; i++ { // root + 8 nots = depth 10 at the leaf
-			body += indent + "not:\n"
+		for i := 0; i < levels-1; i++ {
+			b.WriteString(indent + "not:\n")
 			indent += "  "
 		}
-		body += indent + "{property: stage, op: \"=\", value: open}\n"
-		_, rej := loadOneView(t, root, schemas, body)
-		if rej == nil {
-			t.Fatalf("a tree %d levels deep loaded with only one leaf; FR-023c caps depth at %d independently of the leaf count", maxViewFilterDepth+1, maxViewFilterDepth)
-		}
-		if rej.Code != RejectViewFilterTooLarge {
-			t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewFilterTooLarge, rej.Reason)
-		}
-		if !strings.Contains(rej.Reason, "deep") {
-			t.Errorf("the refusal names the wrong bound: %s", rej.Reason)
-		}
-	})
-
-	t.Run("a node that is neither leaf nor combinator is refused", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: empty\ntype: deal\nfilter: {}\n")
-		if rej == nil || rej.Code != RejectViewInvalidFilterNode {
-			t.Fatalf("an empty filter node must be refused rather than treated as 'match everything'; got %v", rej)
-		}
-	})
-
-	t.Run("a node that is BOTH leaf and combinator is refused", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, `
-schema_version: 2
-name: both
-type: deal
-filter:
-  property: stage
-  op: "="
-  value: open
-  all:
-    - {property: amount, op: ">", value: "1"}
-`)
-		if rej == nil || rej.Code != RejectViewInvalidFilterNode {
-			t.Fatalf("a node that is both a leaf and a combinator must be refused, not resolved by precedence; got %v", rej)
-		}
-	})
-}
-
-// TestView_V2FilterTreeLeafPropertiesAreValidated proves the tree is WALKED,
-// not merely counted — and that the refusal says where in the tree the fault
-// is, because "unknown property" over a twelve-leaf disjunction sends the
-// operator reading the whole file.
-func TestView_V2FilterTreeLeafPropertiesAreValidated(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-	_, rej := loadOneView(t, root, schemas, `
-schema_version: 2
-name: nested
-type: deal
-filter:
-  any:
-    - property: stage
-      op: "="
-      value: open
-    - all:
-        - property: amount
-          op: ">"
-          value: "1"
-        - not:
-            property: nonesuch
-            op: "="
-            value: x
-`)
-	if rej == nil {
-		t.Fatal("an undeclared property buried three levels down was accepted; the tree is not being walked")
+		b.WriteString(indent + "property: batch\n" + indent + "op: IS NOT NULL\n")
+		return b.String()
 	}
-	if rej.Code != RejectViewUnknownProperty {
-		t.Fatalf("code = %s, want %s (%s)", rej.Code, RejectViewUnknownProperty, rej.Reason)
+	if _, atCap, _ := v2Vault(t, map[string]string{"d.yaml": nested(specDepthCap)}); !atCap.OK() {
+		t.Fatalf("a tree at FR-023c's depth cap of %d was refused: %v", specDepthCap, atCap.Rejections)
 	}
-	if !strings.Contains(rej.Reason, "filter.any[1].all[1].not") {
-		t.Errorf("the refusal does not locate the fault in the tree: %s", rej.Reason)
+	_, report, _ = v2Vault(t, map[string]string{"d.yaml": nested(specDepthCap + 1)})
+	if report.OK() {
+		t.Fatalf("a tree %d levels deep loaded; FR-023c caps depth at %d", specDepthCap+1, specDepthCap)
 	}
-	if !strings.Contains(rej.Reason, "stage") {
-		t.Errorf("the refusal does not list the properties that would have worked: %s", rej.Reason)
+	if report.Rejections[0].Code != RejectViewFilterTooLarge {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewFilterTooLarge, report.Rejections[0].Reason)
+	}
+	if !strings.Contains(report.Rejections[0].Reason, "8") {
+		t.Errorf("the refusal does not name the depth bound it broke: %s", report.Rejections[0].Reason)
+	}
+
+	// A node that is neither a leaf nor a combinator, and one that is both.
+	for _, tc := range []struct{ name, filter string }{
+		{"empty node", "filter:\n  {}\n"},
+		{"leaf and combinator at once", "filter:\n  property: batch\n  op: IS NOT NULL\n  all:\n    - property: batch\n      op: IS NULL\n"},
+		{"childless combinator", "filter:\n  all: []\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "schema_version: 2\nname: odd\ntype: widget\n" + tc.filter
+			_, report, _ := v2Vault(t, map[string]string{"o.yaml": body})
+			if report.OK() {
+				t.Fatal("a malformed filter node loaded")
+			}
+			if report.Rejections[0].Code != RejectViewInvalidFilterNode {
+				t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+					RejectViewInvalidFilterNode, report.Rejections[0].Reason)
+			}
+		})
 	}
 }
 
 // ---------------------------------------------------------------------------
-// FR-140/FR-146/FR-148 — formulas, re-validated on load
+// FR-140s / FR-018b — formulas and property_config
 // ---------------------------------------------------------------------------
 
-// TestView_V2FormulasAreRevalidatedOnLoad proves FR-140's second half: the
-// parser lives in the write path, AND the loader re-checks, so a HAND-EDITED
-// file is re-checked rather than trusted because it once passed a writer.
+// TestView_V2FormulasAreRevalidatedOnLoad covers the second half of FR-140's
+// rule: "The parser lives in the write path … the view loader re-validates on
+// load, so a hand-edited file is re-checked."
+//
+// A view file is a text file an operator can open. If only the writer checked
+// formulas, an edit made in a text editor would be discovered broken at query
+// time — the failure this loader exists to move forward.
 func TestView_V2FormulasAreRevalidatedOnLoad(t *testing.T) {
-	root, schemas := v2FixtureSchemas(t)
-
-	t.Run("a well-formed formula loads and is referenceable", func(t *testing.T) {
-		v, rej := loadOneView(t, root, schemas, `
+	// A valid formula loads, and is referenceable as `formula.<name>` in a
+	// property position (FR-018c's reserved namespace).
+	v := mustLoadView(t, "calc.yaml", `
 schema_version: 2
-name: f
-type: deal
+name: calc
+type: widget
 formulas:
-  doubled: "amount * 2"
+  doubled: batch * 2
 properties: [name, formula.doubled]
 `)
-		if rej != nil {
-			t.Fatalf("rejected: %s", rej)
-		}
-		if v.Def.Formulas == nil || (*v.Def.Formulas)["doubled"] != "amount * 2" {
-			t.Fatalf("the formula SOURCE TEXT must survive verbatim (FR-141): %+v", v.Def.Formulas)
-		}
-	})
+	if v.Def.Formulas == nil || (*v.Def.Formulas)["doubled"] != "batch * 2" {
+		t.Fatalf("the formula source text did not survive verbatim: %+v", v.Def.Formulas)
+	}
 
-	t.Run("a formula that does not parse is refused", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: f\ntype: deal\nformulas:\n  broken: \"amount * \"\n")
-		if rej == nil || rej.Code != RejectViewInvalidFormula {
-			t.Fatalf("a hand-edited unparseable formula must be refused on LOAD; got %v", rej)
-		}
-	})
-
-	t.Run("a reference cycle is refused rather than recursed", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, `
+	// A reference to a formula the view does not declare is refused, naming
+	// what IS declared — a dangling `formula.` reference would otherwise
+	// resolve against nothing and return an empty column in silence.
+	_, report, _ := v2Vault(t, map[string]string{"dangling.yaml": `
 schema_version: 2
-name: f
-type: deal
+name: dangling
+type: widget
 formulas:
-  a: "formula.b + 1"
-  b: "formula.a + 1"
-`)
-		if rej == nil || rej.Code != RejectViewInvalidFormula {
-			t.Fatalf("FR-148: a reference cycle parses clean and would recurse forever; it must be refused naming its path. Got %v", rej)
-		}
-	})
-
-	t.Run("a formula reference with no declaration is refused", func(t *testing.T) {
-		_, rej := loadOneView(t, root, schemas, "schema_version: 2\nname: f\ntype: deal\nproperties: [formula.nonesuch]\n")
-		if rej == nil || rej.Code != RejectViewUnknownFormula {
-			t.Fatalf("`formula.nonesuch` names nothing; it must be refused, not rendered as an empty column. Got %v", rej)
-		}
-	})
-}
-
-// TestViewFindLoader_V2FormulaViewIsRefusedWithAReason: VaultFindRequest has
-// no formulas key, so every `formula.<name>` a served view named would
-// resolve against nothing. That is a seam in find's REQUEST, not a defect in
-// the view — so the view loads and is listed, and only the serving is
-// refused, with the reason naming why.
-func TestViewFindLoader_V2FormulaViewIsRefusedWithAReason(t *testing.T) {
-	v := &SavedView{Def: generated.ViewDef{
-		SchemaVersion: ViewVersion2, Name: "f", Type: ptr("deal"),
-		Formulas: ptr(map[string]string{"doubled": "amount * 2"}),
-	}}
-	loader := NewViewFindLoader(newSet(v))
-	if _, ok := loader.View("f"); ok {
-		t.Fatal("a view declaring formulas was served through a request that carries none")
+  doubled: batch * 2
+properties: [formula.tripled]
+`})
+	if report.OK() {
+		t.Fatal("a reference to an undeclared formula loaded")
 	}
-	refusal, has := loader.ServeRefusal("f")
-	if !has || refusal.Code != ServeRefusalFormula {
-		t.Fatalf("ServeRefusal = %+v (%v), want %s", refusal, has, ServeRefusalFormula)
+	if report.Rejections[0].Code != RejectViewUnknownFormula {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewUnknownFormula, report.Rejections[0].Reason)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// FR-105 — a disabled view is never applied
-// ---------------------------------------------------------------------------
-
-// TestViewFindLoader_DisabledViewIsNeverApplied is the broadening prohibition
-// made structural. An imported view whose untranslatable expression sat in a
-// row-set-affecting position is stored DISABLED precisely because applying it
-// would return more rows than the original — the standing example being a
-// base that filtered out two scratch folders.
-//
-// The view here translates PERFECTLY. That is the point: without the check it
-// would be served, and it would silently include everything the dropped
-// clauses excluded.
-func TestViewFindLoader_DisabledViewIsNeverApplied(t *testing.T) {
-	v := &SavedView{Def: generated.ViewDef{
-		SchemaVersion: ViewVersion2, Name: "d", Type: ptr("deal"),
-		Disabled:     ptr(true),
-		Untranslated: ptr([]string{`!inFolder("99-Temp")`}),
-		Filter: &generated.VaultFilterNode{
-			Property: ptr("stage"), Op: ptr(generated.Equal), Value: ptr("open"),
-		},
-	}}
-	loader := NewViewFindLoader(newSet(v))
-
-	if _, ok := loader.View("d"); ok {
-		t.Fatal("a disabled view was served; its filter translates cleanly, which is exactly why the `disabled` flag has to be checked rather than inferred")
-	}
-	refusal, has := loader.ServeRefusal("d")
-	if !has || refusal.Code != ServeRefusalDisabled {
-		t.Fatalf("ServeRefusal = %+v (%v), want %s", refusal, has, ServeRefusalDisabled)
-	}
-	if !strings.Contains(refusal.Reason, "99-Temp") {
-		t.Errorf("FR-105 requires the refusal to name the expression that disabled the view: %s", refusal.Reason)
+	if !strings.Contains(report.Rejections[0].Reason, "doubled") {
+		t.Errorf("the refusal does not list the formulas that ARE declared: %s", report.Rejections[0].Reason)
 	}
 
-	// A disabled VERSION-1 view is refused too — the flag is not version-scoped.
-	v1 := newTestView("d1", nil)
-	v1.Def.Disabled = ptr(true)
-	if _, ok := NewViewFindLoader(newSet(v1)).View("d1"); ok {
-		t.Fatal("a disabled version-1 view was served")
+	// An expression that does not parse is refused at LOAD, not stored and
+	// discovered later.
+	_, report, _ = v2Vault(t, map[string]string{"broken.yaml": `
+schema_version: 2
+name: broken
+type: widget
+formulas:
+  bad: "batch * "
+`})
+	if report.OK() {
+		t.Fatal("an unparseable formula loaded; FR-140 requires the loader to re-check a hand-edited file")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	if report.Rejections[0].Code != RejectViewInvalidFormula {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewInvalidFormula, report.Rejections[0].Reason)
 	}
-	return string(b)
-}
 
-func sameFilterJSON(t *testing.T, a, b *generated.VaultFilterNode) bool {
-	t.Helper()
-	return mustJSON(t, a) == mustJSON(t, b)
+	// property_config keys are PROPERTY names and are checked as such — a
+	// config entry for a property that does not exist is a column heading
+	// nothing will ever render.
+	_, report, _ = v2Vault(t, map[string]string{"cfg.yaml": `
+schema_version: 2
+name: cfg
+type: widget
+property_config:
+  nonexistent:
+    display_name: Ghost
+`})
+	if report.OK() {
+		t.Fatal("property_config named an undeclared property and loaded")
+	}
+	if report.Rejections[0].Code != RejectViewUnknownProperty {
+		t.Fatalf("code = %s, want %s (%s)", report.Rejections[0].Code,
+			RejectViewUnknownProperty, report.Rejections[0].Reason)
+	}
+	if !strings.Contains(report.Rejections[0].Reason, "property_config") {
+		t.Errorf("the refusal does not say WHERE the bad name is: %s", report.Rejections[0].Reason)
+	}
 }
