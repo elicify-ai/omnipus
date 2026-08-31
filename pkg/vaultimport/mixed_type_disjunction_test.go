@@ -453,3 +453,88 @@ func TestMixedTypeDisjunction_TheSevenFlippedViewsNeverBroaden(t *testing.T) {
 	}
 	t.Logf("MIXED-TYPE DISJUNCTION: %d view(s) flipped from DISABLED to enabled, %d of them graded FALSIFIABLY against the independent oracle", seen, falsifiable)
 }
+
+// ---------------------------------------------------------------------------
+// HALF THREE — THE VIEW-SIDE REDUCTION, WHICH THE FOUNDER'S VAULT NEVER REACHES
+//
+// translateOneView reduces BOTH trees: the base's outer filter and the view's
+// own. In this vault only the outer one ever carries a deferred disjunction, so
+// deleting the view-side call changes nothing measurable — a mutation confirmed
+// it SURVIVES the whole suite otherwise.
+//
+// A line that cannot fail is a line nobody can trust, and the symmetry is not
+// decoration: a view may perfectly well narrow a base with its own `or:`. So it
+// gets a fixture of its own rather than an argument.
+// ---------------------------------------------------------------------------
+
+// mtdViewSideBase puts the mixed-type disjunction in the VIEW's filter, beside
+// the `type ==` literal that resolves the view. Under `widget` the `gadget`
+// branch is false and the `widget` branch reduces to its remainder, so the view
+// must keep requiring `size == "large"`.
+const mtdViewSideBase = `filters:
+  and:
+    - file.inFolder("things")
+views:
+  - type: table
+    name: Narrowed By Its Own Or
+    filters:
+      and:
+        - type == "widget"
+        - or:
+            - and:
+                - type == "widget"
+                - size == "large"
+            - type == "gadget"
+`
+
+func TestMixedTypeDisjunction_TheViewsOwnFilterIsReducedToo(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "things")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("creating things/: %v", err)
+	}
+	// Two widgets, one large one small, plus a gadget the view must never
+	// return whatever happens to the disjunction.
+	notes := map[string]string{
+		"big":   "---\ntype: widget\nsize: large\n---\n\n# big\n",
+		"small": "---\ntype: widget\nsize: small\n---\n\n# small\n",
+		"other": "---\ntype: gadget\nsize: large\n---\n\n# other\n",
+	}
+	for stem, body := range notes {
+		if err := os.WriteFile(filepath.Join(dir, stem+".md"), []byte(body), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", stem, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bases"), 0o750); err != nil {
+		t.Fatalf("creating bases/: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bases", "Things.base"), []byte(mtdViewSideBase), 0o600); err != nil {
+		t.Fatalf("writing the base: %v", err)
+	}
+
+	rep, err := Run(root, true)
+	if err != nil {
+		t.Fatalf("importing the view-side fixture: %v", err)
+	}
+
+	l := w3Load(t, root)
+	def := w3View(t, l, rep, "Narrowed By Its Own Or") // fails loudly if stored DISABLED
+	got := w3Rows(t, l, def, w3Clock())
+
+	want := []string{"things/big.md"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("the view's own disjunction must reduce to `size == \"large\"` under type=widget.\n"+
+			"want %v\ngot  %v\n"+
+			"Returning both widgets means the remainder was dropped (a BROADENING); returning none means the branch was.",
+			want, got)
+	}
+
+	// INSTRUMENT POWER. The one-row answer is only evidence if a broken
+	// translation would have produced a different one.
+	broad := def
+	broad.Filter = nil
+	widened := w3Rows(t, l, broad, w3Clock())
+	if len(widened) != 2 {
+		t.Errorf("INSTRUMENT HAS NO POWER: with every clause stripped the view returns %v, so the %d-row grade above could not have detected a dropped remainder", widened, len(got))
+	}
+}
