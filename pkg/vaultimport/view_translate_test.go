@@ -59,11 +59,15 @@ views:
         direction: desc
     summaries:
       priority: sum
+      decided: Latest
 
   # (2) DISPLAY-ONLY LOSSES. Nothing here can change which rows come back:
   # a formula column, an undeclared column, a formula sort key, a groupBy
   # direction the wire type has no field for, and an aggregate that does not
-  # exist. Expected: CONVERTED WITH NAMED LOSSES, ENABLED.
+  # exist -- "frobnicate", NOT "avg", which RecordAggregate.yaml declares among
+  # its fifteen; the earlier fixture used "avg" on the strength of a rule the
+  # contract has since retracted. Expected: CONVERTED WITH NAMED LOSSES,
+  # ENABLED.
   - type: table
     name: Board
     filters:
@@ -80,7 +84,7 @@ views:
       property: status
       direction: desc
     summaries:
-      priority: avg
+      priority: frobnicate
 
   # (3) THE STANDING FR-105 EXAMPLE, WHICH NOW TRANSLATES. Under version 1
   # the folder exclusion had no representation and the view was disabled to
@@ -585,8 +589,19 @@ func TestTruthyPartition_CoversEveryType(t *testing.T) {
 			t.Errorf("truthyFalsyLiterals classifies %q, which records.PropertyTypes does not declare", pt)
 		}
 	}
-	if truthyAdmitsAFalsyValue(records.PropertyType("a type that does not exist")) != true {
+	if truthyAdmitsAFalsyValue(InferredProperty{Type: records.PropertyType("a type that does not exist")}) != true {
 		t.Error("an unknown property type must be treated as admitting a falsy value — the fail-safe direction is a disabled view, never a broadened one")
+	}
+	// An enum is on the safe side ONLY while none of its declared values is
+	// falsy in Obsidian's own JavaScript sense. The type alone cannot answer
+	// this, which is why the partition takes the whole property.
+	safe := InferredProperty{Type: records.TypeEnum, EnumValues: []string{"open", "won"}}
+	if truthyAdmitsAFalsyValue(safe) {
+		t.Error("an enum of ordinary words admits no falsy value; the truthy test translates faithfully")
+	}
+	unsafe := InferredProperty{Type: records.TypeEnum, EnumValues: []string{"0", "high"}}
+	if !truthyAdmitsAFalsyValue(unsafe) {
+		t.Error("an enum declaring `0` DOES admit a falsy value — `IS NOT NULL` matches the record holding 0 that Obsidian's truthy test rejects")
 	}
 }
 

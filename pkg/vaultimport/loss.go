@@ -62,6 +62,11 @@ const (
 	LossAggregates LossPosition = "aggregates"
 	// LossLayout — the view's requested rendering (FR-109).
 	LossLayout LossPosition = "layout"
+	// LossLimit — the view's own row-count bound (`limit:`). A limit DECIDES
+	// the row set: dropping one lets the view return more rows than the base
+	// asked for, which is the FR-105 direction, so it is classified with the
+	// filters and not with the annotations.
+	LossLimit LossPosition = "limit"
 )
 
 // allLossPositions is every position this importer can emit. It exists so a
@@ -76,6 +81,7 @@ var allLossPositions = []LossPosition{
 	LossSort,
 	LossAggregates,
 	LossLayout,
+	LossLimit,
 }
 
 // lossAffectsRowSet is FR-105's partition. TRUE means a loss at this
@@ -90,6 +96,7 @@ var lossAffectsRowSet = map[LossPosition]bool{
 	LossBaseOuterFilter: true,
 	LossViewFilter:      true,
 	LossFilterLeaf:      true,
+	LossLimit:           true,
 
 	LossGroupBy:    false,
 	LossProperties: false,

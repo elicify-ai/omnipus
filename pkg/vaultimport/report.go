@@ -26,6 +26,7 @@ type TypeSchemaSummary struct {
 	DateCount     int
 	IntegerCount  int
 	DecimalCount  int
+	CheckboxCount int
 	TextCount     int
 }
 
@@ -43,16 +44,33 @@ type ValidationSummary struct {
 	ErrorFindingCount   int
 	WarningFindingCount int
 	InvalidExamples     []string // capped, for the report
+	// DryRun records that these numbers came from a --dry-run: the schemas
+	// were rendered and loaded from a throwaway staging directory rather than
+	// from the vault. The numbers are the same ones a real run would produce;
+	// the heading has to say which happened, or the report claims a state of
+	// the vault that does not exist yet.
+	DryRun bool
 }
 
 // Report is the importer's complete, honest account of one run.
 type Report struct {
-	VaultRoot      string
-	Discriminator  TypeDiscriminatorCheck
-	LoadProblems   []LoadProblem
+	VaultRoot string
+	// DryRun is true when nothing was written to the vault.
+	DryRun        bool
+	Discriminator TypeDiscriminatorCheck
+	LoadProblems  []LoadProblem
+	// RejectedTypes is every declared `type:` this run refused to treat as a
+	// record type because it is not a legal identifier (and therefore not a
+	// safe file name) — reported rather than silently skipped.
+	RejectedTypes  []RejectedType
 	Types          []TypeSchemaSummary
 	Ambiguities    []AmbiguousInference
 	RelationSplits []RelationSplitReport
+	// AritySplits is every property whose notes disagreed about whether it
+	// holds one value or a list. The majority decides `many:`; the minority is
+	// named here, because those notes WILL fail validation and an operator
+	// reading an arity error deserves to know this run predicted it.
+	AritySplits []AritySplitReport
 	// TypeInference is FR-104b's per-note account of every note that
 	// arrived carrying no `type:` key.
 	TypeInference TypeInferenceReport
@@ -65,6 +83,9 @@ type Report struct {
 // Render writes the full, human-readable report.
 func (r *Report) Render(w io.Writer) {
 	fmt.Fprintf(w, "Obsidian vault import — %s\n", r.VaultRoot)
+	if r.DryRun {
+		fmt.Fprintln(w, "DRY RUN — nothing was written to the vault. Every number below was produced by rendering the schemas and views this run WOULD write into a throwaway directory and loading them back through the real loaders, so they are the numbers a real run produces.")
+	}
 	fmt.Fprintln(w, strings.Repeat("=", 78))
 
 	fmt.Fprintln(w, "\n-- Type discriminator check --")
@@ -78,11 +99,21 @@ func (r *Report) Render(w io.Writer) {
 		}
 	}
 
+	if len(r.RejectedTypes) > 0 {
+		fmt.Fprintf(w, "\n-- %d declared `type:` values REFUSED as record types --\n", len(r.RejectedTypes))
+		for _, rt := range r.RejectedTypes {
+			fmt.Fprintf(w, "  %q: %s\n", rt.Type, rt.Reason)
+			for _, p := range rt.NotePaths {
+				fmt.Fprintf(w, "      %s\n", p)
+			}
+		}
+	}
+
 	fmt.Fprintf(w, "\n-- %d record types inferred --\n", len(r.Types))
 	for _, t := range r.Types {
-		fmt.Fprintf(w, "  %-20s %4d notes, %2d properties (required=%d many=%d relation=%d enum=%d date=%d integer=%d decimal=%d text=%d)\n",
+		fmt.Fprintf(w, "  %-20s %4d notes, %2d properties (required=%d many=%d relation=%d enum=%d date=%d integer=%d decimal=%d checkbox=%d text=%d)\n",
 			t.Type, t.NoteCount, t.PropertyCount, t.RequiredCount, t.ManyCount,
-			t.RelationCount, t.EnumCount, t.DateCount, t.IntegerCount, t.DecimalCount, t.TextCount)
+			t.RelationCount, t.EnumCount, t.DateCount, t.IntegerCount, t.DecimalCount, t.CheckboxCount, t.TextCount)
 	}
 
 	fmt.Fprintf(w, "\n-- %d ambiguous property inferences (refused to guess; defaulted to text) --\n", len(r.Ambiguities))
@@ -98,12 +129,12 @@ func (r *Report) Render(w io.Writer) {
 	for _, s := range r.RelationSplits {
 		switch s.Rule {
 		case RelationUnresolved:
-			fmt.Fprintf(w, "  %s.%s: NOT TYPED — no link resolved to any known record type (unresolved=%d); declared text.\n",
-				s.RecordType, s.Property, s.Unresolved)
+			fmt.Fprintf(w, "  %s.%s: NOT TYPED — no link resolved to exactly one known record type (unresolved=%d, ambiguous=%d); declared text.\n",
+				s.RecordType, s.Property, s.Unresolved, s.AmbiguousLinks)
 			fmt.Fprintf(w, "      fix: %s\n", s.Remedy)
 		case RelationSupermajority:
-			fmt.Fprintf(w, "  %s.%s: declared relation, to=%s — %d of %d links (>= 2/3); %d of those links resolved, %d dangled.\n",
-				s.RecordType, s.Property, s.MajorityType, s.MajorityCount, s.LinkTotal, s.ResolvedTotal, s.Unresolved)
+			fmt.Fprintf(w, "  %s.%s: declared relation, to=%s — %d of %d links (>= 2/3); %d of those links resolved to exactly one type, %d dangled, %d were ambiguous (the linked title exists as more than one record type).\n",
+				s.RecordType, s.Property, s.MajorityType, s.MajorityCount, s.LinkTotal, s.ResolvedTotal, s.Unresolved, s.AmbiguousLinks)
 			if len(s.Minority) > 0 {
 				fmt.Fprintf(w, "      minority (these links WILL be reported as relation_type_mismatch, which is correct): %s\n",
 					strings.Join(s.Minority, ", "))
@@ -111,8 +142,8 @@ func (r *Report) Render(w io.Writer) {
 				fmt.Fprintf(w, "      no conflicting target type; the shortfall is %d link(s) that resolved to nothing.\n", s.Unresolved)
 			}
 		case RelationNoMajority:
-			fmt.Fprintf(w, "  %s.%s: NOT TYPED — no target type reached 2/3 of this property's %d links (%d resolved, %d dangled); declared text.\n",
-				s.RecordType, s.Property, s.LinkTotal, s.ResolvedTotal, s.Unresolved)
+			fmt.Fprintf(w, "  %s.%s: NOT TYPED — no target type reached 2/3 of this property's %d links (%d resolved to exactly one type, %d dangled, %d ambiguous); declared text.\n",
+				s.RecordType, s.Property, s.LinkTotal, s.ResolvedTotal, s.Unresolved, s.AmbiguousLinks)
 			fmt.Fprintf(w, "      evidence: %s\n", strings.Join(s.Minority, ", "))
 			fmt.Fprintf(w, "      counting only RESOLVED targets it would have been %d of %d — the narrower reading of FR-104a; see inferRelationTarget for why the wider one is applied.\n",
 				s.StrictNumerator, s.StrictDenominator)
@@ -120,6 +151,16 @@ func (r *Report) Render(w io.Writer) {
 		default:
 			fmt.Fprintf(w, "  %s.%s: %v (unresolved=%d) — declared %s\n",
 				s.RecordType, s.Property, s.ByType, s.Unresolved, s.Declared)
+		}
+	}
+
+	fmt.Fprintf(w, "\n-- %d properties whose notes disagree about one-value vs list --\n", len(r.AritySplits))
+	for _, a := range r.AritySplits {
+		fmt.Fprintf(w, "  %s.%s: declared many=%v — %d note(s) write a list, %d write a single value.\n",
+			a.RecordType, a.Property, a.Many, a.ListCount, a.ScalarCount)
+		fmt.Fprintf(w, "      the %d note(s) in the minority WILL be reported as an arity error against this schema; that is the disagreement, not a defect this run introduced.\n", a.MinorityCount())
+		for _, ex := range a.Examples {
+			fmt.Fprintf(w, "      minority example: %s\n", ex)
 		}
 	}
 
@@ -204,7 +245,11 @@ func (r *Report) Render(w io.Writer) {
 	}
 
 	v := r.Validation
-	fmt.Fprintln(w, "\n-- Validation over every note, against the schemas just written --")
+	if v.DryRun {
+		fmt.Fprintln(w, "\n-- Validation over every note, against the schemas this run WOULD write (dry run: staged, not written to the vault) --")
+	} else {
+		fmt.Fprintln(w, "\n-- Validation over every note, against the schemas just written --")
+	}
 	fmt.Fprintf(w, "  %d notes total\n", v.TotalNotes)
 	fmt.Fprintf(w, "  %d notes carry no `type:` — not records at all\n", v.NotRecordsAtAll)
 	fmt.Fprintf(w, "  %d notes carry a `type:` this run recognised as a schema\n", v.RecognisedRecords)

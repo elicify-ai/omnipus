@@ -10,6 +10,7 @@ package vaultimport
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -93,7 +94,7 @@ func TranslateBase(pb *ParsedBase, baseRelPath string, schemas *SchemaIndex, slu
 	for _, vraw := range pb.Views {
 		name, _ := vraw["name"].(string)
 		slug := slugs.Slug(baseRelPath, name)
-		vo, pv := translateOneView(vraw, outerTrans, baseRelPath, slug, schemas)
+		vo, pv := translateOneView(vraw, outerTrans, pb.Limit, baseRelPath, slug, schemas)
 		outcome.Views = append(outcome.Views, vo)
 		if vo.Status != OutcomeRefused {
 			anyNonRefused = true
@@ -127,7 +128,7 @@ func hasRefusedView(views []ViewOutcome) bool {
 	return false
 }
 
-func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, slug string, schemas *SchemaIndex) (ViewOutcome, *ProducedView) {
+func translateOneView(vraw map[string]any, outer TreeTranslation, outerLimit any, baseRelPath, slug string, schemas *SchemaIndex) (ViewOutcome, *ProducedView) {
 	name, _ := vraw["name"].(string)
 	vo := ViewOutcome{BaseRelPath: baseRelPath, DisplayName: name}
 
@@ -179,6 +180,9 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 	aggOut, aggLosses := translateSummaries(vraw["summaries"], res)
 	losses = append(losses, aggLosses...)
 
+	limit, limitLosses := translateLimit(vraw["limit"], outerLimit)
+	losses = append(losses, limitLosses...)
+
 	// FR-105, THE BROADENING PROHIBITION. Every loss is classified by the
 	// position it came from (loss.go). A loss anywhere a row set is decided
 	// DISABLES the view; a loss in an annotation position does not. Nothing
@@ -220,6 +224,9 @@ func translateOneView(vraw map[string]any, outer TreeTranslation, baseRelPath, s
 	}
 	if len(aggOut) > 0 {
 		pairs = append(pairs, ordPair{Key: "aggregates", Value: seq(aggOut...)})
+	}
+	if limit > 0 {
+		pairs = append(pairs, ordPair{Key: "limit", Value: limit})
 	}
 	pairs = append(pairs, ordPair{Key: "source", Value: baseRelPath})
 	if len(losses) > 0 {
@@ -474,23 +481,74 @@ var truthyFalsyLiterals = map[records.PropertyType]string{
 	records.TypePerson:   "",
 }
 
-// truthyAdmitsAFalsyValue reports whether a declared type can hold a value
+// jsFalsyLiterals are the value spellings Obsidian's own JavaScript truthy
+// test rejects. `false` and `0` are here; `"false"` as a QUOTED string is not,
+// because a non-empty string is truthy in JavaScript — but this importer
+// cannot see a value's quoting (observedValue carries text, and an enum's
+// declared values are text by the time they reach a schema), so a declared
+// value that READS like one of these is treated as one. That is the safe
+// direction: it costs a view that is disabled when it need not have been.
+var jsFalsyLiterals = map[string]bool{
+	"false": true,
+	"0":     true,
+	"0.0":   true,
+	"":      true,
+}
+
+// enumDeclaresAFalsyValue reports whether any of an enum's declared values is
+// one Obsidian's truthy test would reject.
+//
+// THE TYPE ALONE IS NOT ENOUGH FOR AN ENUM, and this is the residual half of
+// the finding that moved boolean inference to `checkbox`. `enum` is on the safe
+// side of the partition because most enums are controlled vocabularies of
+// words, every one of which is truthy. But an enum is whatever the vault put in
+// it: `level: 0 / high / low` infers an enum declaring `0`, and `IS NOT NULL`
+// then matches the record holding 0 that Obsidian's bare `level` filter
+// rejects. So for this one type the partition consults the DECLARED VALUES,
+// which is the only place the answer actually lives.
+func enumDeclaresAFalsyValue(values []string) bool {
+	for _, v := range values {
+		if jsFalsyLiterals[records.FoldKey(strings.TrimSpace(v))] {
+			return true
+		}
+	}
+	return false
+}
+
+// truthyAdmitsAFalsyValue reports whether a declared property can hold a value
 // that is present and falsy — i.e. whether "has a value" is BROADER than
 // "is truthy" for it. An unknown type answers TRUE: an unclassified type is
 // treated as the dangerous kind, so forgetting to classify one costs a view
 // that is disabled when it need not have been, never a view that broadens.
-func truthyAdmitsAFalsyValue(t records.PropertyType) bool {
-	lit, known := truthyFalsyLiterals[t]
+func truthyAdmitsAFalsyValue(p InferredProperty) bool {
+	lit, known := truthyFalsyLiterals[p.Type]
 	if !known {
 		return true
 	}
-	return lit != ""
+	if lit != "" {
+		return true
+	}
+	if p.Type == records.TypeEnum {
+		return enumDeclaresAFalsyValue(p.EnumValues)
+	}
+	return false
 }
 
 // falsyLiteralsFor names the offending values for the refusal message.
-func falsyLiteralsFor(t records.PropertyType) string {
-	if lit := truthyFalsyLiterals[t]; lit != "" {
+func falsyLiteralsFor(p InferredProperty) string {
+	if lit := truthyFalsyLiterals[p.Type]; lit != "" {
 		return lit
+	}
+	if p.Type == records.TypeEnum {
+		var falsy []string
+		for _, v := range p.EnumValues {
+			if jsFalsyLiterals[records.FoldKey(strings.TrimSpace(v))] {
+				falsy = append(falsy, v)
+			}
+		}
+		if len(falsy) > 0 {
+			return "the declared value(s) " + strings.Join(falsy, ", ")
+		}
 	}
 	return "a present but falsy value"
 }
@@ -571,10 +629,10 @@ func buildV2LeafNode(r leafResolver, l v2Leaf) (*generated.VaultFilterNode, stri
 		if !r.typed() {
 			return nil, "the bare truthy test cannot be translated in an UNTYPED view: `has a value` is broader than `is truthy` for a checkbox, a number or a text property, and with no declared type there is nothing to rule those out", false
 		}
-		if truthyAdmitsAFalsyValue(prop.Type) {
+		if truthyAdmitsAFalsyValue(prop) {
 			return nil, fmt.Sprintf(
 				"the bare truthy test has no faithful translation on a %s property — our nearest operator is `IS NOT NULL`, which also matches a record whose %s is present and FALSY (%s), so it would return MORE rows than the Obsidian original",
-				prop.Type, l.Property, falsyLiteralsFor(prop.Type)), false
+				prop.Type, l.Property, falsyLiteralsFor(prop)), false
 		}
 		return opNode(l.Property, generated.ISNOTNULL), "", true
 
@@ -840,6 +898,67 @@ func stringOf(v any) string {
 	return s
 }
 
+// ---------------------------------------------------------------------------
+// FR-105 REACHES `limit:` TOO — A ROW-COUNT BOUND DECIDES THE ROW SET
+//
+// Nothing in this package read a base view's `limit:` at all: ParsedBase kept
+// only `filters` and `views`, and the whole package contained one occurrence of
+// the word, in a comment. So a base view written `limit: 5` imported UNLIMITED,
+// scored CONVERTED, and recorded zero losses — a view that returns fifty rows
+// where the operator asked for five, with nothing anywhere to say so.
+//
+// A limit that is carried into the view file faithfully is NOT a loss; ViewDef
+// has the field and this writes it. A limit that cannot be read — a value that
+// is not a positive whole number — IS one, and it sits with the filters rather
+// than with the annotations, because dropping a bound lets the view return MORE
+// rows than the base asked for and that is the one direction FR-105 forbids.
+// ---------------------------------------------------------------------------
+
+// translateLimit reads the view's own `limit:`, falling back to the base's
+// top-level one — the same composition `filters:` uses, with the more specific
+// declaration winning. It returns 0 when no limit was declared at all.
+func translateLimit(viewLimit, outerLimit any) (limit int, losses []string) {
+	raw, where := viewLimit, "the view's"
+	if raw == nil {
+		raw, where = outerLimit, "the base's"
+	}
+	if raw == nil {
+		return 0, nil
+	}
+	n, ok := wholeNumber(raw)
+	if !ok || n <= 0 {
+		return 0, []string{lossf(LossLimit,
+			"%s `limit: %v` could not be read as a positive whole number, so this view imports with NO row bound at all — it will return more rows than the Obsidian original",
+			where, raw)}
+	}
+	return n, nil
+}
+
+// wholeNumber reads a YAML scalar as a whole number. yaml.v3 decodes an
+// unquoted integer as `int`, but a quoted one arrives as a string and a large
+// one can arrive as `int64` or `float64`, so all four are read rather than
+// assuming the shape the fixture happened to have.
+func wholeNumber(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		if n != float64(int(n)) {
+			return 0, false
+		}
+		return int(n), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	}
+	return 0, false
+}
+
 // translateOrder carries the Base view's `order:` as the view's display
 // `properties`.
 //
@@ -897,7 +1016,80 @@ func translateSort(raw any, r leafResolver) (nodes []*yaml.Node, losses []string
 	return nodes, losses
 }
 
-var supportedAggregateOps = map[string]string{"sum": "sum", "min": "min", "max": "max", "count": "count"}
+// ---------------------------------------------------------------------------
+// FIFTEEN AGGREGATE OPS, NOT FOUR — AND THE OLD REFUSAL QUOTED A RETRACTED RULE
+//
+// This map used to hold `sum`, `min`, `max`, `count` and its refusal told the
+// operator "there is deliberately no avg". RecordAggregate.yaml opens with the
+// sentence "THE 'THERE IS DELIBERATELY NO AVG' PARAGRAPH THAT STOOD HERE IS
+// SUPERSEDED" and declares fifteen ops, `avg` and `median` among them. So an
+// Obsidian `Average` summary was dropped, and the operator was told the reason
+// was a product rule that no longer exists.
+//
+// The source of truth is now the GENERATED enum, and allRecordAggregateOps
+// below is asserted against it: an op added to the contract and not reachable
+// from here fails TestAggregates_EveryContractOpIsReachable by name rather than
+// drifting quietly, which is the same guard the query side already has.
+// ---------------------------------------------------------------------------
+
+// allRecordAggregateOps is every op the contract declares. It is the drift
+// anchor — the test walks it, not the map below.
+var allRecordAggregateOps = []generated.RecordAggregateOp{
+	generated.RecordAggregateOpCount,
+	generated.RecordAggregateOpSum,
+	generated.RecordAggregateOpMin,
+	generated.RecordAggregateOpMax,
+	generated.RecordAggregateOpAvg,
+	generated.RecordAggregateOpMedian,
+	generated.RecordAggregateOpStddev,
+	generated.RecordAggregateOpRange,
+	generated.RecordAggregateOpEarliest,
+	generated.RecordAggregateOpLatest,
+	generated.RecordAggregateOpChecked,
+	generated.RecordAggregateOpUnchecked,
+	generated.RecordAggregateOpEmpty,
+	generated.RecordAggregateOpFilled,
+	generated.RecordAggregateOpUnique,
+}
+
+// obsidianAggregateAliases maps the spellings Obsidian's own summary vocabulary
+// uses onto ours, folded to lower case. Only names that are genuinely the same
+// function under a different word are here — a near-miss is refused by name
+// rather than guessed at, because a summary silently computed as the wrong
+// function is worse than a summary the operator is told was dropped.
+var obsidianAggregateAliases = map[string]generated.RecordAggregateOp{
+	"average":  generated.RecordAggregateOpAvg,
+	"mean":     generated.RecordAggregateOpAvg,
+	"distinct": generated.RecordAggregateOpUnique,
+	"notempty": generated.RecordAggregateOpFilled,
+	"stdev":    generated.RecordAggregateOpStddev,
+}
+
+// aggregateOpFor resolves one `.base` summary function name to a contract op.
+// Matching ignores case: Obsidian writes `Sum` and `Average`, we write `sum`
+// and `avg`, and the capitalisation is spelling, not meaning.
+func aggregateOpFor(raw string) (generated.RecordAggregateOp, bool) {
+	key := strings.ToLower(strings.TrimSpace(raw))
+	if key == "" {
+		return "", false
+	}
+	for _, op := range allRecordAggregateOps {
+		if string(op) == key {
+			return op, true
+		}
+	}
+	op, ok := obsidianAggregateAliases[key]
+	return op, ok
+}
+
+// aggregateOpNames renders the supported set for a refusal message.
+func aggregateOpNames() string {
+	names := make([]string, 0, len(allRecordAggregateOps))
+	for _, op := range allRecordAggregateOps {
+		names = append(names, string(op))
+	}
+	return strings.Join(names, ", ")
+}
 
 func translateSummaries(raw any, r leafResolver) (nodes []*yaml.Node, losses []string) {
 	summ, ok := raw.(map[string]any)
@@ -906,11 +1098,12 @@ func translateSummaries(raw any, r leafResolver) (nodes []*yaml.Node, losses []s
 	}
 	for _, prop := range sortedKeys(summ) {
 		opRaw := stringOf(summ[prop])
-		op, known := supportedAggregateOps[strings.ToLower(strings.TrimSpace(opRaw))]
+		opVal, known := aggregateOpFor(opRaw)
 		if !known {
-			losses = append(losses, lossf(LossAggregates, "summary %q on %q dropped — unsupported aggregate (only sum/min/max/count exist; there is deliberately no avg)", opRaw, prop))
+			losses = append(losses, lossf(LossAggregates, "summary %q on %q dropped — this release has no aggregate by that name; the fifteen it does have are %s", opRaw, prop, aggregateOpNames()))
 			continue
 		}
+		op := string(opVal)
 		if reason, ok := r.checkProperty(prop, true); !ok {
 			losses = append(losses, lossf(LossAggregates, "%s(%s) dropped — %s", op, prop, reason))
 			continue

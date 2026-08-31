@@ -188,6 +188,16 @@ func translateLeafExpr(expr string) TreeTranslation {
 		return TreeTranslation{Root: lostNode(s)}
 	}
 
+	// The compound-expression guard runs before EVERY pattern, not just before
+	// parseLeaf's. reFileMethod is `$`-anchored on a closing paren, so
+	// `file.inFolder("a") && file.inFolder("b")` matches it with the argument
+	// `a") && file.inFolder("b` — a folder name nothing is in, ANDed into the
+	// view as if it were the operator's. See leaf.go's header for the whole
+	// failure this closes.
+	if containsUnquotedLogicalOperator(s) {
+		return TreeTranslation{Root: lostNode(s)}
+	}
+
 	if m := reFileMethod.FindStringSubmatch(s); m != nil {
 		return TreeTranslation{Root: fileMethodNode(m[1], m[2], s)}
 	}

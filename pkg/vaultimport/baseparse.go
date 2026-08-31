@@ -27,6 +27,12 @@ type ParsedBase struct {
 	Filters any
 	// Views is each `views:` entry, still generic.
 	Views []map[string]any
+	// Limit is the base-level `limit:` value, applying to every view that does
+	// not declare its own — the same composition `filters:` uses. Kept as
+	// `any` for the same reason everything else here is: this is not our
+	// format, and a value that is not a whole number becomes a NAMED loss
+	// rather than a decode failure that takes the whole file down.
+	Limit any
 }
 
 // ParseBaseFile reads one `.base` file's bytes into its generic structure.
@@ -35,7 +41,7 @@ func ParseBaseFile(data []byte) (*ParsedBase, error) {
 	if err := yaml.Unmarshal(data, &top); err != nil {
 		return nil, fmt.Errorf("vaultimport: .base file is not valid YAML: %w", err)
 	}
-	pb := &ParsedBase{Filters: top["filters"]}
+	pb := &ParsedBase{Filters: top["filters"], Limit: top["limit"]}
 	rawViews, _ := top["views"].([]any)
 	for _, rv := range rawViews {
 		if m, ok := rv.(map[string]any); ok {

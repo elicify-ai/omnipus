@@ -28,11 +28,15 @@ import (
 // (the one type every value always parses as, per D3: text is prose, never
 // validated for shape).
 //
-// It does NOT decide `required`/`many` by guessing either: `many` is true
-// the moment ANY note of the type wrote the property as a YAML sequence
-// (records.KindSequence), and `required` is true only when EVERY note of the
-// type carries a non-null, non-empty value for it (D3.2/FR-007 treat an
-// explicit null exactly like absence).
+// It does NOT decide `required`/`many` by guessing either. `required` is true
+// only when EVERY note of the type carries a non-null, non-empty value for it
+// (D3.2/FR-007 treat an explicit null exactly like absence). `many` follows the
+// MAJORITY of the notes that carried a value, and the minority is reported
+// (AritySplitReport) — it used to be true the moment ANY note wrote a
+// sequence, which was the one inference here made from a single observation,
+// and it manufactured validation errors: one note writing `tags: [a, b]`
+// against three writing `tags: a` declared `many: true` and records.Validate
+// then reported an arity error against each of the three.
 // ---------------------------------------------------------------------------
 
 // ClassifyKind names which inference rule decided a property's type. It is
@@ -41,7 +45,7 @@ type ClassifyKind string
 
 const (
 	ClassifyRelation  ClassifyKind = "relation" // every value is a wikilink
-	ClassifyBoolean   ClassifyKind = "boolean"  // every value folds to true/false
+	ClassifyBoolean   ClassifyKind = "boolean"  // every value folds to true/false -> checkbox
 	ClassifyDate      ClassifyKind = "date"     // every value parses as records.TypeDate
 	ClassifyInteger   ClassifyKind = "integer"  // every value parses as records.TypeInteger
 	ClassifyDecimal   ClassifyKind = "decimal"  // every value parses as records.TypeDecimal
@@ -82,16 +86,96 @@ type PropertyObservation struct {
 	// PresentNonEmptyCount is how many notes of the type carried a genuine
 	// (non-null, non-empty) value — the numerator for `required`.
 	PresentNonEmptyCount int
-	// Many is true the moment any note wrote this property as a list.
-	Many bool
+	// ListNotes and ScalarNotes partition the notes that carried a genuine
+	// value for this property by the SHAPE they wrote it in — a YAML sequence
+	// or a single scalar. Their lengths sum to PresentNonEmptyCount.
+	//
+	// They replaced a single `Many bool` that was set the moment ANY note
+	// wrote a list. That was the one inference in this file made from a single
+	// observation, and it manufactured errors: three notes writing
+	// `tags: urgent` and one writing `tags: [urgent, legal]` produced
+	// `many: true`, and records.Validate then reported an arity error against
+	// each of the three — errors created by this importer's own guess, about
+	// notes it had read. The majority decides now, and the minority is
+	// REPORTED (AritySplitReport) rather than left for the operator to
+	// discover as three findings with no stated cause.
+	ListNotes   []string
+	ScalarNotes []string
 	// Values is every individual scalar value observed (a many-valued
 	// property contributes each element), each tagged with the note it came
 	// from so an ambiguity report can name real examples.
 	Values []observedValue
 }
 
+// Many is the arity this importer declares: the shape the MAJORITY of the
+// notes carrying a value wrote it in. A tie declares a list — with an equal
+// split there is no majority to follow, and a list is the shape that can hold
+// what both halves of the vault wrote.
+func (po *PropertyObservation) Many() bool {
+	return len(po.ListNotes) >= len(po.ScalarNotes) && len(po.ListNotes) > 0
+}
+
+// AritySplit reports the disagreement, or nil when every note agreed.
+func (po *PropertyObservation) AritySplit(recordType string) *AritySplitReport {
+	if len(po.ListNotes) == 0 || len(po.ScalarNotes) == 0 {
+		return nil
+	}
+	many := po.Many()
+	minority := po.ScalarNotes
+	if !many {
+		minority = po.ListNotes
+	}
+	ex := minority
+	if len(ex) > maritySplitExamples {
+		ex = ex[:maritySplitExamples]
+	}
+	return &AritySplitReport{
+		RecordType:  recordType,
+		Property:    po.Name,
+		Many:        many,
+		ListCount:   len(po.ListNotes),
+		ScalarCount: len(po.ScalarNotes),
+		Examples:    append([]string(nil), ex...),
+	}
+}
+
+// maritySplitExamples caps how many minority notes an arity split names.
+const maritySplitExamples = 3
+
+// AritySplitReport is one property whose notes disagreed about whether it
+// holds a single value or a list.
+type AritySplitReport struct {
+	RecordType string
+	Property   string
+	// Many is what this run declared — the majority shape.
+	Many bool
+	// ListCount and ScalarCount are how many notes wrote each shape.
+	ListCount   int
+	ScalarCount int
+	// Examples names up to three notes in the MINORITY: the ones that will be
+	// reported as an arity error against the schema this run wrote.
+	Examples []string
+}
+
+// MinorityCount is how many notes disagree with the declared arity.
+func (a AritySplitReport) MinorityCount() int {
+	if a.Many {
+		return a.ScalarCount
+	}
+	return a.ListCount
+}
+
 type observedValue struct {
-	Text     string
+	Text string
+	// Block reports that this value was written as a YAML BLOCK scalar (`|`
+	// or `>`). It is carried because records.parseLinkValue REFUSES a block
+	// scalar as a wikilink by name under FR-030a — its raw source is a block
+	// indicator and an indented body, which is not wikilink syntax — and a
+	// value's Text alone cannot tell. Without it isWikilink was a SECOND
+	// ORACLE that disagreed with the validator: `company: |` + `[[Acme]]`
+	// inferred `type: relation` and then failed validation on every such
+	// note, an error the importer manufactured about its own inference.
+	Block    bool
 	NotePath string // vault-relative, for reporting
 }
 
@@ -258,11 +342,20 @@ func CollectTypeGroups(notes []NoteRecord) map[string]*TypeGroup {
 func collectNodeValues(po *PropertyObservation, node records.Node, notePath string) {
 	switch node.Kind {
 	case records.KindSequence:
-		po.Many = true
+		// ARITY AND VALUE ARE COUNTED SEPARATELY, AND `tags: []` IS WHY.
+		// An empty list carries no VALUE evidence (nothing to classify, and
+		// FR-007 makes it absent for `required`) but it is unambiguous ARITY
+		// evidence: the operator wrote a list. records.Validate agrees — its
+		// absence gate (missing key / explicit null / FR-007a's empty string)
+		// does not catch an empty SEQUENCE, so `tags: []` reaches the arity
+		// check and fails against `many: false`. Gating the arity count on
+		// non-emptiness turned four `tags: []` company notes into four arity
+		// errors this importer created itself.
+		po.ListNotes = append(po.ListNotes, notePath)
 		nonEmpty := false
 		for _, item := range node.Items {
 			if item.Kind == records.KindScalar && strings.TrimSpace(item.Text) != "" {
-				po.Values = append(po.Values, observedValue{Text: item.Text, NotePath: notePath})
+				po.Values = append(po.Values, observedValue{Text: item.Text, Block: item.Block, NotePath: notePath})
 				nonEmpty = true
 			}
 		}
@@ -271,9 +364,14 @@ func collectNodeValues(po *PropertyObservation, node records.Node, notePath stri
 		}
 	case records.KindScalar:
 		if strings.TrimSpace(node.Text) != "" {
-			po.Values = append(po.Values, observedValue{Text: node.Text, NotePath: notePath})
+			po.Values = append(po.Values, observedValue{Text: node.Text, Block: node.Block, NotePath: notePath})
 			po.PresentNonEmptyCount++
+			po.ScalarNotes = append(po.ScalarNotes, notePath)
 		}
+		// An EMPTY scalar is counted as neither shape. FR-007a makes it the
+		// absent state on every non-text type, and records.Validate settles
+		// absence before arity, so it is not evidence that the operator meant
+		// a single value.
 	case records.KindNull, records.KindMapping:
 		// KindNull is explicit absence (FR-007). KindMapping never conforms
 		// to any of the seven property types; it contributes nothing to
@@ -325,6 +423,10 @@ type InferredProperty struct {
 	// unanimously on one record type (or converged on none at all) —
 	// reported rather than left silent, whatever `to:` ended up being.
 	RelationSplit *RelationSplitReport
+	// AritySplit is set when the notes of this type disagreed about whether
+	// this property holds one value or a list. `many:` follows the majority
+	// and the minority is named here.
+	AritySplit *AritySplitReport
 }
 
 // AmbiguousInference is one property this package refused to classify
@@ -371,6 +473,13 @@ type RelationSplitReport struct {
 	LinkTotal int
 	// Unresolved is how many link targets matched no known note at all.
 	Unresolved int
+	// AmbiguousLinks is how many links resolved to MORE THAN ONE record type,
+	// because two notes in different folders share the linked title. Such a
+	// link is evidence for no type at all — which target the operator meant is
+	// the one thing this package cannot recover — so it is excluded from every
+	// numerator and reported here instead of silently voting for whichever
+	// type sorts first.
+	AmbiguousLinks int
 	// MajorityType and MajorityCount are the winning target type and its
 	// count. MajorityType is empty when no type reached the threshold.
 	MajorityType  string
@@ -450,9 +559,13 @@ func InferSchema(g *TypeGroup, names *NameIndex) []InferredProperty {
 
 func classifyProperty(recordType string, po *PropertyObservation, noteCount int, names *NameIndex) InferredProperty {
 	ip := InferredProperty{
-		Name:     po.Name,
-		Many:     po.Many,
-		Required: po.PresentNonEmptyCount == noteCount && noteCount > 0,
+		Name: po.Name,
+		// The MAJORITY shape, not "any note wrote a list". See
+		// PropertyObservation.Many for why the single-observation rule this
+		// replaced manufactured validation errors.
+		Many:       po.Many(),
+		AritySplit: po.AritySplit(recordType),
+		Required:   po.PresentNonEmptyCount == noteCount && noteCount > 0,
 		// The same numerator `required` is decided from, kept rather than
 		// reduced to the bit. See the field's own doc comment for why the
 		// bit is not enough for FR-104b's tie-break.
@@ -468,8 +581,36 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 		return ip
 	}
 
+	// --- a block scalar is prose, and only `text` accepts prose ---------
+	//
+	// A YAML block scalar (`|` or `>`) is a MULTI-LINE STRING. Its Text here
+	// is the folded body, newline and all, and every non-text parser compares
+	// that body against a shape: an enum against its declared values, a date
+	// against a grammar, a relation against wikilink syntax — which
+	// records.parseLinkValue refuses for a block scalar BY NAME under FR-030a.
+	//
+	// The importer used to see only the Text, so `company: |` + `[[Acme]]`
+	// inferred `relation` and then failed validation on every such note: an
+	// error this package manufactured about its own inference. Refusing the
+	// wikilink is only half the fix — falling through to `enum` declares
+	// `[[Acme]]` as a value and the note still fails, because the value it
+	// actually holds is `[[Acme]]\n`. D3 makes `text` prose that is never
+	// validated for shape, so text is the one honest answer for a value the
+	// operator deliberately wrote as a multi-line string.
+	if anyValue(po.Values, func(v observedValue) bool { return v.Block }) {
+		ip.Type = records.TypeText
+		ip.Kind = ClassifyText
+		return ip
+	}
+
 	// --- relation -----------------------------------------------------
-	if allMatch(po.Values, isWikilink) {
+	// isWikilinkValue, not isWikilink: the predicate has to see the BLOCK
+	// flag, because records.parseLinkValue refuses a block scalar as a
+	// wikilink by name (FR-030a). Testing the Text alone made this a second
+	// oracle that disagreed with the validator. The block-scalar branch above
+	// already returned, so this is belt and braces on the ONE predicate whose
+	// disagreement with the validator was measured.
+	if allMatchValue(po.Values, isWikilinkValue) {
 		to, split := inferRelationTarget(recordType, po, names)
 		if to == "" {
 			// FR-034 (schema.go's Property.finalize): a relation MUST
@@ -490,11 +631,28 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 		return ip
 	}
 
-	// --- boolean (modelled as a 2-value enum; the schema has no bool) --
+	// --- boolean ------------------------------------------------------
+	//
+	// THIS IS FR-004c'S `checkbox`, AND MODELLING IT AS A 2-VALUE ENUM WAS A
+	// BROADENING BUG, NOT A STYLE CHOICE. Read before "simplifying" it back.
+	//
+	// The schema has had eight property types since FR-004c/ADR-068 D24.5;
+	// this branch predated `checkbox` and wrote `{type: enum, values:
+	// [false, true]}` instead. That is not merely a less precise declaration:
+	// `enum` sits on the SAFE side of view_write.go's truthy partition, so
+	// Obsidian's bare `archived` filter translated to `IS NOT NULL` with NO
+	// loss recorded and the view shipped ENABLED — and `IS NOT NULL` matches
+	// every note that declares `archived` AT ALL, including the ones holding
+	// `false`, which Obsidian's truthy test rejects. 200 task notes split
+	// true/false: Obsidian returns the true ones, the imported view returned
+	// all 200. That is precisely the broadening FR-105 admits no exception to.
+	//
+	// The partition entry that would have refused it — TypeCheckbox, whose
+	// falsy literal is `false` — was UNREACHABLE, because this was the only
+	// place a boolean could have become one and it never did.
 	if allMatch(po.Values, isBooleanLiteral) {
-		ip.Type = records.TypeEnum
+		ip.Type = records.TypeCheckbox
 		ip.Kind = ClassifyBoolean
-		ip.EnumValues = []string{"false", "true"}
 		return ip
 	}
 
@@ -576,6 +734,27 @@ func classifyKindFor(t records.PropertyType) ClassifyKind {
 	}
 }
 
+// anyValue reports whether any observation satisfies the predicate.
+func anyValue(vs []observedValue, test func(observedValue) bool) bool {
+	for _, v := range vs {
+		if test(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// allMatchValue is allMatch for a predicate that needs the whole observation,
+// not just its text — see observedValue.Block.
+func allMatchValue(vs []observedValue, test func(observedValue) bool) bool {
+	for _, v := range vs {
+		if !test(v) {
+			return false
+		}
+	}
+	return true
+}
+
 func allMatch(vs []observedValue, test func(string) bool) bool {
 	for _, v := range vs {
 		if !test(v.Text) {
@@ -633,6 +812,15 @@ func sortedDistinctDisplay(vs []observedValue, distinct map[string]struct{}) []s
 func isWikilink(s string) bool {
 	_, ok := records.ParseWikilink(s)
 	return ok
+}
+
+// isWikilinkValue is the oracle that agrees with records.parseLinkValue: a
+// BLOCK scalar is never a wikilink however its folded text reads (FR-030a).
+func isWikilinkValue(v observedValue) bool {
+	if v.Block {
+		return false
+	}
+	return isWikilink(v.Text)
 }
 
 func isBooleanLiteral(s string) bool {
@@ -712,9 +900,13 @@ func isDecimal(s string) bool {
 func inferRelationTarget(recordType string, po *PropertyObservation, names *NameIndex) (string, *RelationSplitReport) {
 	byType := map[string]int{}
 	unresolved := 0
+	ambiguous := 0
 	resolvedTotal := 0
 	linkTotal := 0
 	for _, v := range po.Values {
+		if v.Block {
+			continue // FR-030a: a block scalar is not a link (isWikilinkValue)
+		}
 		link, ok := records.ParseWikilink(v.Text)
 		if !ok {
 			continue
@@ -725,22 +917,41 @@ func inferRelationTarget(recordType string, po *PropertyObservation, names *Name
 			unresolved++
 			continue
 		}
-		for _, t := range types {
-			if t == "" {
-				continue // resolved to a real note, but not a record
-			}
-			byType[t]++
+		// EVERY COUNT HERE IS PER LINK. The numerator used to be incremented
+		// once per (link x matching type) while the denominator counted links,
+		// and the two are not comparable: NameIndex.Resolve returns a SLICE
+		// precisely because two notes in different folders can share a title.
+		// Three `deal` notes each linking `[[Acme]]`, where `companies/Acme.md`
+		// is a company and `vendors/Acme.md` a vendor, gave bestCount=3 against
+		// linkTotal=3 — 9 >= 6, a "supermajority" — when the true evidence is
+		// an exact 3-of-6 tie and the winner was decided by the alphabetical
+		// tie-break in highestCount. `to: company` on a coin toss.
+		//
+		// So a link that resolves to MORE THAN ONE record type is evidence for
+		// NEITHER. It is not unresolved (the target exists) and it is not a
+		// vote (which target the operator meant is exactly what this package
+		// cannot know), so it is counted on its own and named in the report.
+		distinct := distinctRecordTypes(types)
+		switch len(distinct) {
+		case 0:
+			// Resolved to a real note that is not a record. Neither a vote nor
+			// a dangling link — it simply carries no type evidence.
+		case 1:
+			byType[distinct[0]]++
 			resolvedTotal++
+		default:
+			ambiguous++
 		}
 	}
 
 	rep := &RelationSplitReport{
-		RecordType:    recordType,
-		Property:      po.Name,
-		ByType:        byType,
-		ResolvedTotal: resolvedTotal,
-		LinkTotal:     linkTotal,
-		Unresolved:    unresolved,
+		RecordType:     recordType,
+		Property:       po.Name,
+		ByType:         byType,
+		ResolvedTotal:  resolvedTotal,
+		LinkTotal:      linkTotal,
+		Unresolved:     unresolved,
+		AmbiguousLinks: ambiguous,
 	}
 
 	if resolvedTotal == 0 {
@@ -754,7 +965,7 @@ func inferRelationTarget(recordType string, po *PropertyObservation, names *Name
 	rep.MajorityType, rep.MajorityCount = bestType, bestCount
 	rep.StrictNumerator, rep.StrictDenominator = bestCount, resolvedTotal
 
-	if len(byType) == 1 && unresolved == 0 {
+	if len(byType) == 1 && unresolved == 0 && ambiguous == 0 {
 		// Unanimous: every link this property holds resolved, and every
 		// one of them pointed at the same type. Nothing to report beyond
 		// the schema itself, which is why this is the one branch that
@@ -795,6 +1006,26 @@ func highestCount(byType map[string]int) (string, int) {
 		}
 	}
 	return best, bestCount
+}
+
+// distinctRecordTypes reduces one link's resolved types to the distinct,
+// non-empty record types it points at. The empty string means "a real note
+// that is not a record" (BuildNameIndex's own encoding) and is not a type.
+func distinctRecordTypes(types []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(types))
+	for _, t := range types {
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sortedTypeNames(byType map[string]int) []string {

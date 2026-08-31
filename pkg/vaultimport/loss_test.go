@@ -30,10 +30,14 @@ import (
 //	sort              — what order they come back in. Same rows.
 //	aggregates        — a number computed OVER the rows. Same rows.
 //	layout            — table vs cards vs board. Same rows.
+//	limit             — the row-count bound the base declared. Dropping one
+//	                    lets the view return every match where the operator
+//	                    asked for the first N. MORE rows.
 var expectedLossClassification = map[LossPosition]bool{
 	LossBaseOuterFilter: true,
 	LossViewFilter:      true,
 	LossFilterLeaf:      true,
+	LossLimit:           true,
 
 	LossGroupBy:    false,
 	LossProperties: false,

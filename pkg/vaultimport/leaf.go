@@ -92,11 +92,66 @@ var nonPropertyBareWords = map[string]bool{
 	"type": true,
 }
 
+// ---------------------------------------------------------------------------
+// A COMPOUND EXPRESSION IS NOT A LEAF, AND THE COMPARE PATTERN CANNOT TELL
+//
+// reCompare's right-hand side is `(.+)$` — it takes ALL the remaining text. So
+// `status != "done" && priority > 3` matched it as ONE comparison whose literal
+// was the whole string `"done" && priority > 3`. unquoteLiteral needs matching
+// quotes at BOTH ends and there are none, so it came back as a bare, unquoted
+// literal, and `!=` set Negate, which translate.go wraps as a tree `not`. The
+// view then carried
+//
+//	NOT(status = '"done" && priority > 3')
+//
+// which no record's status ever equals, so the negation matches EVERY record —
+// shipped CONVERTED, enabled, with zero losses recorded. A filter the operator
+// wrote to narrow a view instead removed it, silently, and looked clean.
+//
+// The marker list did not catch it because it enumerates FUNCTION and FIELD
+// shapes (`file.`, `formula.`, `today(`), not operators. So the operators are
+// checked here, structurally, before any pattern runs — and only OUTSIDE quotes,
+// because `vendor == "Smith && Sons"` is a legitimate literal that happens to
+// contain the characters and refusing it would be a loss taken for nothing.
+// ---------------------------------------------------------------------------
+
+// containsUnquotedLogicalOperator reports whether the expression uses `&&` or
+// `||` outside a quoted string literal — i.e. whether it is a COMPOUND
+// expression rather than the single comparison every pattern below assumes.
+//
+// The scan is deliberately dumb about escapes: `.base` filter literals are
+// short and this importer's job on anything it is not certain of is to refuse.
+// A backslash-escaped quote would end the string early here and the expression
+// would be refused; that is the safe direction.
+func containsUnquotedLogicalOperator(s string) bool {
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '"' || c == '\'' {
+			quote = c
+			continue
+		}
+		if i+1 < len(s) && (c == '&' || c == '|') && s[i+1] == c {
+			return true
+		}
+	}
+	return false
+}
+
 // parseLeaf translates one leaf expression string (already trimmed of a
 // leading `- ` list marker by the YAML decoder).
 func parseLeaf(expr string) parsedLeaf {
 	s := strings.TrimSpace(expr)
 	if s == "" {
+		return parsedLeaf{Kind: leafUntranslatable}
+	}
+	if containsUnquotedLogicalOperator(s) {
 		return parsedLeaf{Kind: leafUntranslatable}
 	}
 	if reUntranslatableMarker.MatchString(s) {
