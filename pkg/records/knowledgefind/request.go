@@ -400,8 +400,17 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 	if req.Aggregate != nil {
 		for _, a := range *req.Aggregate {
 			op := string(a.Op)
+			if !a.Op.Valid() {
+				// The op enum is CLOSED at fifteen (FR-150). An op outside it
+				// is refused here rather than falling through to a reducer that
+				// has no case for it: an empty value reads as an answer.
+				return refuse(problem(generated.UnsupportedParameter,
+					fmt.Sprintf("%q is not a summary; the fifteen are %s",
+						op, strings.Join(allSummaryOps(), ", ")),
+					"use one of "+strings.Join(allSummaryOps(), ", ")), nil)
+			}
 			agg := aggregate{op: op}
-			if op == "count" {
+			if op == opCount {
 				if a.Property != nil && *a.Property != "" {
 					return refuse(problem(generated.UnsupportedParameter,
 						fmt.Sprintf("count was given the property %q, but count counts ROWS, not values", *a.Property),
@@ -419,11 +428,16 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 			if r != nil {
 				return r
 			}
-			if prop.Type != records.TypeInteger && prop.Type != records.TypeDecimal {
+			if !opDefinedForType(op, prop.Type) {
+				// FR-155: a summary a type does not define is REFUSED NAMING
+				// THE ONES IT DOES — never answered with a zero, and never
+				// refused with a bare "not supported" that leaves the caller
+				// guessing at what to ask instead.
+				defined := strings.Join(opsDefinedFor(prop.Type), ", ")
 				p := problem(generated.TypeMismatch,
-					fmt.Sprintf("%s(%s) is not defined: %s is a %s property, and only integer and decimal can be reduced",
-						op, *a.Property, *a.Property, prop.Type),
-					"use count to count rows, or group_by "+*a.Property+" to see the distribution")
+					fmt.Sprintf("%s(%s) is not defined: %s is a %s property, and the summaries defined for %s are %s",
+						op, *a.Property, *a.Property, prop.Type, prop.Type, defined),
+					"use one of "+defined+", or count to count rows")
 				p.Property = a.Property
 				return refuse(p, nil)
 			}

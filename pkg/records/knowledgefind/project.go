@@ -144,93 +144,19 @@ func group3String(s string) string {
 // TOTALS — computed over the FULL EVALUATED SET, never the page (FR-125a)
 // ---------------------------------------------------------------------------
 
-// computeTotals reduces every requested aggregate.
+// computeTotals reduces every requested aggregate over the FULL evaluated set.
 //
-// The scope clause is built in the same function as the number, so the two can
-// never drift apart. A total whose scope is added by a later layer is a total
-// that will eventually be rendered without one, and FR-125's whole subject is
-// that a bare number over a partially-evaluated set is a wrong answer.
+// It is a loop and nothing else: the fifteen summaries and their two
+// computational classes live in summaries.go, so that "which reductions exist"
+// is answered in one place rather than by reading a switch statement here. The
+// scope clause is built beside each number, in reduceAggregate, for the reason
+// FR-125 gives — a total whose scope is attached by a later layer is a total
+// that will eventually be rendered without one, and a bare number over a
+// partially-evaluated set is a wrong answer.
 func computeTotals(q *query, rows []survivor) []generated.VaultFindTotal {
 	out := make([]generated.VaultFindTotal, 0, len(q.aggregates))
-	shown := len(rows)
-	if shown > q.limit {
-		shown = q.limit
-	}
-
 	for _, a := range q.aggregates {
-		t := generated.VaultFindTotal{
-			Op:    generated.VaultFindTotalOp(a.op),
-			Label: a.label(),
-		}
-		if a.op == "count" {
-			t.Value = group3(len(rows))
-			t.Scope = fmt.Sprintf("over %d of %d evaluated rows (%d shown)",
-				len(rows), len(rows), shown)
-			out = append(out, t)
-			continue
-		}
-
-		var acc records.Decimal
-		var have bool
-		counted, skipped := 0, 0
-		for _, s := range rows {
-			v, ok := firstValue(s, a.property)
-			if !ok {
-				skipped++
-				continue
-			}
-			counted++
-			if !have {
-				acc, have = v.Number, true
-				continue
-			}
-			switch a.op {
-			case "sum":
-				sum, err := acc.Add(v.Number)
-				if err != nil {
-					// An exact sum that cannot be represented is REFUSED, never
-					// rounded to fit. A silently rounded total is a number
-					// nobody computed wearing the authority of one that was.
-					t.Refused = boolPtr(true)
-					t.Value = ""
-					t.Scope = fmt.Sprintf("no total: %v", err)
-					have = false
-				}
-				acc = sum
-			case "min":
-				if v.Number.Cmp(acc) < 0 {
-					acc = v.Number
-				}
-			case "max":
-				if v.Number.Cmp(acc) > 0 {
-					acc = v.Number
-				}
-			}
-		}
-
-		if t.Refused != nil && *t.Refused {
-			out = append(out, t)
-			continue
-		}
-		if !have {
-			// No row carried a value. That is not zero, and rendering it as zero
-			// would state a fact about the corpus that is not true.
-			t.Refused = boolPtr(true)
-			t.Value = ""
-			t.Scope = fmt.Sprintf("no total: none of the %d evaluated rows carries a value for %s",
-				len(rows), a.property)
-			out = append(out, t)
-			continue
-		}
-
-		t.Value = groupDigits(acc.String())
-		t.Scope = fmt.Sprintf("over %d of %d evaluated rows (%d shown)", counted, len(rows), shown)
-		if skipped > 0 {
-			// The scope names what it EXCLUDED, in the same sentence as the
-			// number, so a reader cannot take the total for a whole-set figure.
-			t.Scope += fmt.Sprintf("; %d row(s) carry no %s and are not included", skipped, a.property)
-		}
-		out = append(out, t)
+		out = append(out, reduceAggregate(q, a, rows))
 	}
 	return out
 }
