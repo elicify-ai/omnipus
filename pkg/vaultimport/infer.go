@@ -52,6 +52,12 @@ const (
 	ClassifyEnum      ClassifyKind = "enum"     // small, repeated, closed vocabulary
 	ClassifyText      ClassifyKind = "text"     // the fallback every value accepts
 	ClassifyAmbiguous ClassifyKind = "ambiguous_defaulted_to_text"
+	// ClassifyDateFromName: NOT ONE value was ever observed for this
+	// property anywhere in the vault, so there is no data to classify at
+	// all, and its NAME is the only evidence that exists. See
+	// nameEvidencedDate for the rule and for why this is the one place in
+	// this file a name is allowed to decide anything.
+	ClassifyDateFromName ClassifyKind = "date_from_name_no_values_observed"
 )
 
 // Tunable inference thresholds, stated here (not buried in a condition) so a
@@ -70,19 +76,66 @@ const (
 	// observations / distinct values) — the signal that the vocabulary is
 	// actually CLOSED rather than merely short so far.
 	enumMinAvgRepeat = 2.0
-	// ambiguousMatchFloor: when the single best-matching non-text candidate
-	// type (date/integer/decimal/relation) matches at least this fraction of
-	// a property's observed values but NOT all of them, the property is
-	// reported as an ambiguous inference instead of silently defaulted. Below
-	// this floor the partial match is treated as coincidence (e.g. one
-	// free-text title that happens to parse as a number) and not reported.
-	ambiguousMatchFloor = 0.60
+)
+
+// ambiguousMatchFloorNum/Den: when the single best-matching non-text
+// candidate type (date/integer/decimal) matches at least this fraction of a
+// property's observed values but NOT all of them, the property is reported
+// as an ambiguous inference instead of silently defaulted to text. Below the
+// floor the partial match is treated as coincidence (e.g. one free-text
+// title that happens to parse as a number) and not reported.
+//
+// IT IS ONE HALF, AND IT USED TO BE 0.60. Read before raising it back.
+//
+// The floor's job is to suppress COINCIDENCE, and coincidence is a small
+// ABSOLUTE agreement dressed up as a fraction — one title in fifty that
+// parses as a number scores 0.02 and is nowhere near any floor worth
+// arguing about. 0.60 was not filtering coincidence; it was hiding the one
+// shape in the founder's vault most worth reporting.
+//
+// The case, measured: `subscription.renewal_date` holds 62 values. THIRTY-ONE
+// are real ISO dates and thirty-one are hand-written `PLACEHOLDER — renewal
+// date unknown` / `PLACEHOLDER — usage-based model, no fixed renewal` strings
+// in seventeen distinct spellings. That is exactly 0.50, it sat below 0.60,
+// and so the run declared the property `text`, LOST the `renewal_date != ""`
+// filter that Subscriptions.base's "Renewing <14d" view is built on, and said
+// NOTHING about why. The founder was left with a disabled view and no line
+// connecting it to his own placeholder rows. Refusing to type it date is
+// correct — typing it would make those 31 notes invalid against the schema
+// this same run wrote, which this package admits no exception to — but
+// refusing SILENTLY is not.
+//
+// Stated as an exact integer ratio rather than a float for the same reason
+// relationSupermajorityNum/Den and bestFitMarginNum/Den are: the deciding
+// case in the real vault is 31 of 62, which lands EXACTLY on the boundary,
+// and a decision that turns on which way a float division rounds is not a
+// decision anybody can reproduce. `matched*2 >= 1*total` settles it in
+// integers on every platform.
+//
+// Blast radius, measured on the founder's 757-note vault rather than
+// asserted: the whole vault contains exactly TWO properties whose best
+// non-text candidate matches some-but-not-all of their values —
+// `subscription.cost` at 42/63 (already reported at the old floor) and
+// `subscription.renewal_date` at 31/62 (silent at the old floor, reported at
+// this one). The change adds one report line and removes none.
+const (
+	ambiguousMatchFloorNum = 1
+	ambiguousMatchFloorDen = 2
 )
 
 // PropertyObservation is everything this package saw about one property on
 // one record type, across every note of that type.
 type PropertyObservation struct {
 	Name string
+	// DeclaredCount is how many notes of the type WROTE THE KEY AT ALL,
+	// whatever they wrote after it — a real value, an explicit null, an
+	// empty string, an empty list, a nested mapping. It is deliberately a
+	// wider count than PresentNonEmptyCount, and the gap between the two is
+	// the evidence that matters for a property nobody ever filled in: 12 of
+	// 12 project notes declare `deadline` and every one of them left it
+	// blank is a fact about the vault, whereas "0 values observed" alone
+	// cannot tell that apart from a property one stray note mentioned once.
+	DeclaredCount int
 	// PresentNonEmptyCount is how many notes of the type carried a genuine
 	// (non-null, non-empty) value — the numerator for `required`.
 	PresentNonEmptyCount int
@@ -340,6 +393,12 @@ func CollectTypeGroups(notes []NoteRecord) map[string]*TypeGroup {
 // contributes to neither Values nor the required-count (FR-007: null is
 // absence).
 func collectNodeValues(po *PropertyObservation, node records.Node, notePath string) {
+	// Counted BEFORE the switch and outside every branch: this is "the note
+	// wrote this key", which is true of a null, an empty string and an empty
+	// list alike. CollectTypeGroups calls this exactly once per (note, key),
+	// so the count is the number of notes declaring the key.
+	po.DeclaredCount++
+
 	switch node.Kind {
 	case records.KindSequence:
 		// ARITY AND VALUE ARE COUNTED SEPARATELY, AND `tags: []` IS WHY.
@@ -419,6 +478,11 @@ type InferredProperty struct {
 	// Ambiguity is set when this property's type was NOT a unanimous match
 	// and had to be defaulted to text — the honesty-contract payload.
 	Ambiguity *AmbiguousInference
+	// NameEvidenced is set when the vault held NO value for this property
+	// anywhere and its type was read from its NAME instead. It is the
+	// honesty payload for the one decision in this package made without a
+	// single observation behind it; see classifyWithNoValues.
+	NameEvidenced *NameEvidencedInference
 	// RelationSplit is set when a relation's targets did not converge
 	// unanimously on one record type (or converged on none at all) —
 	// reported rather than left silent, whatever `to:` ended up being.
@@ -573,12 +637,7 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 	}
 	total := len(po.Values)
 	if total == 0 {
-		// Every observation was null/empty. There is no shape evidence at
-		// all; text is the only type that never rejects an absent-in-effect
-		// value written as `x: ""` on the rare note that had it.
-		ip.Type = records.TypeText
-		ip.Kind = ClassifyText
-		return ip
+		return classifyWithNoValues(recordType, po, ip)
 	}
 
 	// --- a block scalar is prose, and only `text` accepts prose ---------
@@ -665,20 +724,23 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 		{records.TypeInteger, isInteger},
 		{records.TypeDecimal, isDecimal},
 	}
-	bestFrac := 0.0
+	// Every candidate is scored against the SAME denominator (`total`), so
+	// ranking them by matched COUNT is identical to ranking them by
+	// fraction — and it is exact, where a float division is not. Ties keep
+	// the first candidate in this fixed list, so two identical runs report
+	// the same best type.
 	var bestType records.PropertyType
 	var bestMatched, bestTotal int
 	var bestBad []observedValue
 	for _, c := range candidates {
 		matched, bad := partitionMatch(po.Values, c.test)
-		frac := float64(matched) / float64(total)
-		if frac == 1.0 {
+		if matched == total {
 			ip.Type = c.t
 			ip.Kind = classifyKindFor(c.t)
 			return ip
 		}
-		if frac > bestFrac {
-			bestFrac, bestType, bestMatched, bestTotal, bestBad = frac, c.t, matched, total, bad
+		if matched > bestMatched {
+			bestType, bestMatched, bestTotal, bestBad = c.t, matched, total, bad
 		}
 	}
 
@@ -694,7 +756,13 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 	}
 
 	// --- ambiguous: a real, non-coincidental partial match --------------
-	if bestFrac >= ambiguousMatchFloor {
+	//
+	// `bestMatched/bestTotal >= num/den`, cross-multiplied so the deciding
+	// case in the real vault (31 of 62 against a floor of one half — dead on
+	// the boundary) is settled by integers rather than by which way a float
+	// division happens to land. bestMatched > 0 keeps the guard honest when
+	// nothing matched at all: 0/n is not a partial match to report.
+	if bestMatched > 0 && bestMatched*ambiguousMatchFloorDen >= ambiguousMatchFloorNum*bestTotal {
 		ex := make([]AmbiguousExample, 0, 3)
 		for i, b := range bestBad {
 			if i >= 3 {
@@ -706,7 +774,7 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 			RecordType:   recordType,
 			Property:     po.Name,
 			BestType:     bestType,
-			MatchFrac:    bestFrac,
+			MatchFrac:    float64(bestMatched) / float64(bestTotal),
 			TotalValues:  bestTotal,
 			MatchedCount: bestMatched,
 			Examples:     ex,
@@ -719,6 +787,214 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 		ip.Kind = ClassifyAmbiguous
 	}
 	return ip
+}
+
+// ---------------------------------------------------------------------------
+// A PROPERTY NOBODY EVER FILLED IN
+//
+// classifyWithNoValues decides a property for which the vault holds NOT ONE
+// value: every note of the type that mentions the key wrote `deadline:` and
+// nothing after it, or an explicit null, or an empty string.
+//
+// THIS IS NOT A RARE CORNER. On the founder's own vault 141 of the inferred
+// properties are in this state — most of them on `template`, which is what a
+// template IS, and four of them on real record types whose `.base` views were
+// DISABLED because of the answer this function used to give.
+//
+// WHY `text` WAS THE WRONG ANSWER, AND WHY IT IS NOT THE SAFE ONE EITHER.
+//
+// The old branch defaulted to text and called it the conservative choice.
+// It is not conservative; in this engine it is the single most OPINIONATED
+// choice available, and it is the only one that costs a filter.
+//
+// FR-007a gives `text` absence semantics that no other type has: on text the
+// empty string is a PRESENT value, and on all seven other types it is
+// ABSENT. So declaring text is a positive assertion — "the empty string is
+// meaningful data here" — made about a property for which the vault contains
+// no data whatsoever. And it is exactly that assertion that makes Obsidian's
+// idiomatic `prop != ""` untranslatable: view_write.go's shapeIsSet can map
+// it to `IS NOT NULL` on every NON-text type and must refuse it on text,
+// because `IS NOT NULL` would match a record holding `""` that Obsidian's
+// filter excludes.
+//
+// The measured bill for that default, on the founder's vault: `contract.
+// end_date`, `deal.close_date` and `project.deadline` — all three with ZERO
+// observed values — were declared text, their `!= ""` filters were refused
+// by name, and Projects.base's "Deadlines" view (whose ONLY row-set loss was
+// that one filter) shipped DISABLED.
+//
+// WHAT DECIDES IT INSTEAD. With no values, all eight property types are
+// EQUALLY consistent with the evidence, and — this is the part that makes
+// the choice safe rather than merely arbitrary — NONE of them can invalidate
+// a note, because there is no value for any of them to reject. The
+// acceptance bar this package will not cross (a note this run typed is never
+// reported invalid by the same run) is untouched here as a matter of
+// arithmetic, not of luck: zero values cannot fail zero, one, or eight
+// schemas.
+//
+// So the choice is free, and the only signal left is the property's NAME.
+// This is the ONE place in this file a name decides anything, and the guard
+// rails are the reason it is allowed to:
+//
+//	(1) It fires ONLY at zero values. One observed value anywhere in the
+//	    type and the name is ignored entirely and the normal
+//	    parse-every-value chain runs. DATA ALWAYS BEATS THE NAME. The case
+//	    that proves the guard rail is real: `subscription.renewal_date`
+//	    carries the same date-shaped name and 62 values, 31 real ISO dates
+//	    and 31 hand-written `PLACEHOLDER — ...` strings. It stays TEXT. A
+//	    rule that read the name there would have made 31 of the founder's
+//	    own notes invalid against the schema the same run wrote.
+//	(2) The name shapes are a CLOSED, literal list (nameEvidencedDate), not
+//	    a fuzzy match, and it covers only names that cannot plausibly mean
+//	    anything but a calendar date.
+//	(3) Only DATE is inferred this way. There is no `_count -> integer`, no
+//	    `is_* -> checkbox`, no `email -> text`. Those would be guesses with
+//	    no measured benefit, and this package does not buy tidiness with
+//	    guesses.
+//	(4) It is EVIDENCE-CARRYING: NameEvidenced is populated so the run can
+//	    report the guess by name, with the counts behind it. An unreported
+//	    guess is the thing this file exists to refuse.
+//
+// AND IT CANNOT BROADEN A VIEW (FR-105). Going from text to date changes
+// three translations in view_write.go's buildV2LeafNode, and each moves in
+// the narrowing direction or not at all:
+//
+//	`prop != ""`   text: REFUSED (a loss).  date: `IS NOT NULL`, which
+//	               matches only records holding a parseable date. Obsidian
+//	               matches records holding a non-empty string, plus — on the
+//	               reading where `undefined != ""` is true — the absent ones
+//	               as well. Ours is a subset under both readings.
+//	bare `prop`    text: REFUSED (`""` is present-and-falsy).  date: `IS NOT
+//	               NULL`; a date has no falsy literal, so again a subset.
+//	`prop == ""`   REFUSED on both. Unchanged.
+//
+// A FUTURE NOTE CAN STILL BE WRONG, and that is the honest cost. If somebody
+// later writes `end_date: on signature` the schema will report it, where a
+// text declaration would have let it through. That is what inferring a
+// schema MEANS; every other branch in this file carries the same exposure,
+// and the report names this property so the operator can overrule it with
+// one knowledge_configure edit.
+func classifyWithNoValues(recordType string, po *PropertyObservation, ip InferredProperty) InferredProperty {
+	if nameEvidencedDate(po.Name) {
+		ip.Type = records.TypeDate
+		ip.Kind = ClassifyDateFromName
+		ip.NameEvidenced = &NameEvidencedInference{
+			RecordType:     recordType,
+			Property:       po.Name,
+			Type:           records.TypeDate,
+			DeclaringNotes: po.DeclaredCount,
+		}
+		return ip
+	}
+	// The name says nothing this package is willing to act on, so nothing
+	// distinguishes the eight types and text remains the declaration — not
+	// because it is neutral (it is not; see above) but because changing it
+	// on no signal at all would be churn, and text is the type whose
+	// validator asks the least of a value that does not exist yet.
+	ip.Type = records.TypeText
+	ip.Kind = ClassifyText
+	return ip
+}
+
+// dateNameExact is the closed list of property names that ARE a date, whole.
+//
+// THE BAR FOR AN ENTRY, and it is deliberately high: a wrong name-guess
+// produces a schema that REJECTS the operator's first real note, which is a
+// worse outcome than the lost filter this rule exists to recover. So an
+// entry needs the name to be unambiguous in ordinary usage AND, where the
+// vault can speak to it, evidence from the vault itself.
+//
+//	date       a date, by definition.
+//	deadline   denotes a point in time in English and nothing else.
+//	due        admitted on EVIDENCE, not on the word alone. "Due" can
+//	           certainly mean an amount ("balance due"), but in the
+//	           founder's vault `due` holds twelve values and every single
+//	           one of them is an ISO date (plus eight notes writing `due:
+//	           ""`, which FR-007a makes absence on any non-text type). Where
+//	           he fills the key in, he fills it in with a date. Note the
+//	           rule still never fires on those notes — they HAVE values, so
+//	           they classify by value — it fires only on `template.due`,
+//	           which 35 template notes declare and every one leaves blank.
+//
+// REJECTED, with the measurement that rejected it:
+//
+//	_at        SUGGESTED and REFUSED. `created_at`, `updated_at`,
+//	           `started_at`, `captured_at` and `attached_at` all appear in
+//	           the founder's vault and every one of them holds the literal
+//	           string `timestamp` as a placeholder. records.TypeDate accepts
+//	           only the six ISO layouts in dateLayouts, so `timestamp` does
+//	           not parse. Those particular properties are safe today because
+//	           they HAVE values and data beats the name — but they are proof
+//	           that `_at` is exactly the shape this vault writes non-dates
+//	           into, and the first all-blank `_at` property would be typed
+//	           `date` and would reject his first real note.
+//	expiry, completed, last_activity, last_refreshed, term, period, close
+//	           Each reads just as naturally as an amount, a term, a checkbox
+//	           or a free-text note, and none costs a measured filter. If a
+//	           name needs an argument about what it "implies", that is the
+//	           signal the guess has gone past the evidence.
+var dateNameExact = map[string]bool{
+	"date":     true,
+	"deadline": true,
+	"due":      true,
+}
+
+// nameEvidencedDate reports whether a property's NAME, on its own, names a
+// calendar date beyond reasonable argument.
+//
+// The suffix and the prefix are both accepted because `signed_date` and
+// `date_signed` are the same naming convention written in two word orders,
+// and a rule that took one and refused the other would be deciding on the
+// operator's grammar rather than on what the name means. `-` is folded to
+// `_` for the same reason: Obsidian permits either separator in a property
+// name and they mean the same thing.
+func nameEvidencedDate(name string) bool {
+	f := records.FoldKey(strings.TrimSpace(name))
+	f = strings.ReplaceAll(f, "-", "_")
+	if dateNameExact[f] {
+		return true
+	}
+	return strings.HasSuffix(f, "_date") || strings.HasPrefix(f, "date_")
+}
+
+// NameEvidencedInference is one property this package typed from its NAME
+// because the vault held no value for it anywhere — the honesty payload for
+// classifyWithNoValues, and the thing that keeps a name-based guess from
+// being a silent one.
+type NameEvidencedInference struct {
+	RecordType string
+	Property   string
+	// Type is what the name was read as. Only records.TypeDate is ever
+	// produced today; the field is here so a reader of the report does not
+	// have to know that.
+	Type records.PropertyType
+	// DeclaringNotes is how many notes of the record type wrote the key at
+	// all — every one of them leaving it blank, which is the whole reason
+	// this branch ran.
+	DeclaringNotes int
+}
+
+// CollectNameEvidencedInferences gathers every name-based type decision an
+// inference pass made, sorted, ready for the run report to print.
+//
+// It exists so the report does not have to know the shape of the rule that
+// produced these — it asks this package for its own guesses and prints them.
+func CollectNameEvidencedInferences(inferred map[string][]InferredProperty) []NameEvidencedInference {
+	var out []NameEvidencedInference
+	for _, props := range inferred {
+		for _, p := range props {
+			if p.NameEvidenced != nil {
+				out = append(out, *p.NameEvidenced)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RecordType != out[j].RecordType {
+			return out[i].RecordType < out[j].RecordType
+		}
+		return out[i].Property < out[j].Property
+	})
+	return out
 }
 
 func classifyKindFor(t records.PropertyType) ClassifyKind {
