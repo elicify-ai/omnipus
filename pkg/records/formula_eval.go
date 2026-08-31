@@ -720,6 +720,25 @@ func (e *FormulaEvaluator) evalArithmetic(node *BinaryOp, left, right fval, prob
 	if !lok || !rok {
 		return absentOf(FormulaNumber), problems
 	}
+	// R-11: TOTAL, AND NEVER PANICS. Every arithmetic case below reads
+	// `fitem.num`, which is nil on a value of any other type — and `big.Rat`'s
+	// methods dereference their arguments, so a text operand reaching here is a
+	// SEGFAULT in a query path, not a wrong answer.
+	//
+	// The type checker is what normally stops one arriving, and this is a belt
+	// rather than a second opinion: it fires only on a tree that reached
+	// evaluation without passing inference. That set grew with `isType`
+	// narrowing — the narrowing tells the checker the guarded branch holds a
+	// number, and `evalIf` binds the value that makes it true, so a future edit
+	// admitting a new guard shape on ONE of those two sides would land here.
+	// A named problem is the right failure for that; a crash is not.
+	if l.num == nil || r.num == nil {
+		return absentOf(FormulaNumber), append(problems, ComparisonProblem{
+			Code:   CompareNonConforming,
+			Detail: fmt.Sprintf("`%s` was reached with an operand that is not a number, which the type checker should have refused; no value was computed for this record", node.Op),
+			Remedy: "report this: a formula was evaluated that static inference would not have accepted",
+		})
+	}
 	rounded := left.rounded || right.rounded
 
 	switch node.Op {

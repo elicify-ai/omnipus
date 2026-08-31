@@ -282,47 +282,6 @@ func TestIsTypeNarrowing_TheEvaluatorKeepsThePromiseTheNarrowingMakes(t *testing
 		}
 	})
 
-	t.Run("the guarded branch is NEVER evaluated when the guard is false", func(t *testing.T) {
-		// THE LAZINESS ASSERTION, with an oracle that can actually see it.
-		//
-		// A static narrowing is the claim that the guarded branch cannot meet a
-		// non-number. Laziness is what makes the claim true, so a test has to
-		// be able to tell "the branch did not run" from "the branch ran and
-		// produced nothing" — and arithmetic over a text operand produces
-		// nothing QUIETLY, so it cannot be that oracle.
-		//
-		// Division by zero can: FR-144 makes it an absent result plus a NAMED
-		// problem. Put one in the guarded branch, over a property the guard has
-		// nothing to do with, and its problem is present if and only if the
-		// branch was evaluated.
-		schema := formulaFixtureSchema()
-		src := `if(name.isType("number"), amount / 0, "")`
-		c := fixtureCandidate{props: map[string]PropertyValue{
-			"name":   textValue(schema.Properties["name"], "PLACEHOLDER — cost unknown"),
-			"amount": numberValue(t, schema.Properties["amount"], "5"),
-		}}
-		res := evalOne(t, src, c)
-		for _, p := range res.Problems {
-			if strings.Contains(p.Detail, "division by zero") {
-				t.Fatalf("the guard is FALSE and the guarded branch was evaluated anyway (%q). Eager evaluation turns this narrowing from a static guarantee into a runtime surprise — strictly worse than the refusal it replaced", p.Detail)
-			}
-		}
-
-		// And the same expression WITH the guard true does report it, so the
-		// absence above is laziness rather than a problem list that never fills.
-		c.props["name"] = textValue(schema.Properties["name"], "42")
-		lit := evalOne(t, src, c)
-		saw := false
-		for _, p := range lit.Problems {
-			if strings.Contains(p.Detail, "division by zero") {
-				saw = true
-			}
-		}
-		if !saw {
-			t.Fatal("with the guard TRUE the guarded branch's division by zero was not reported — the oracle above cannot see an eager evaluation, so its silence proves nothing")
-		}
-	})
-
 	t.Run("prose takes the else-branch and produces absence, quietly", func(t *testing.T) {
 		for _, prose := range []string{"PLACEHOLDER — cost unknown", "usage-based; US$20.60 (Apr)", ""} {
 			res := evalNarrowing(t, prose, false, "annual")
@@ -463,5 +422,105 @@ func TestIsTypeNarrowing_DoesNotCrossAFormulaBoundary(t *testing.T) {
 	}
 	if !res.Values()[0].Bool {
 		t.Error("`formula.g` answered as though `name` were a number inside the guarded branch — the narrowing leaked across a formula boundary, and the memo now holds g's narrowed answer for every later reader")
+	}
+}
+
+// TestIsTypeNarrowing_TheGuardedBranchIsNeverEvaluatedWhenTheGuardIsFalse is
+// the assertion the whole design rests on, and it is a TOP-LEVEL test on
+// purpose.
+//
+// It began life as a subtest of the case above. Then an eager-`if` mutation
+// made an earlier sibling PANIC inside the shared evaluator, the parent test
+// died with it, and this assertion never ran — a mutation that "killed the
+// suite" while leaving the one claim it was aimed at unexercised. A claim this
+// load-bearing does not share a parent with anything.
+//
+// A static narrowing is the claim that the guarded branch cannot meet a
+// non-number. Laziness is what makes the claim true, so the test has to tell
+// "the branch did not run" from "the branch ran and produced nothing" — and
+// arithmetic over a text operand produces nothing QUIETLY, so it cannot be that
+// oracle. Division by zero can: FR-144 makes it an absent result plus a NAMED
+// problem. Put one in the guarded branch, over a property the guard has nothing
+// to do with, and its problem is present if and only if the branch was
+// evaluated.
+func TestIsTypeNarrowing_TheGuardedBranchIsNeverEvaluatedWhenTheGuardIsFalse(t *testing.T) {
+	// THE LAZINESS ASSERTION, with an oracle that can actually see it.
+	//
+	// A static narrowing is the claim that the guarded branch cannot meet a
+	// non-number. Laziness is what makes the claim true, so a test has to
+	// be able to tell "the branch did not run" from "the branch ran and
+	// produced nothing" — and arithmetic over a text operand produces
+	// nothing QUIETLY, so it cannot be that oracle.
+	//
+	// Division by zero can: FR-144 makes it an absent result plus a NAMED
+	// problem. Put one in the guarded branch, over a property the guard has
+	// nothing to do with, and its problem is present if and only if the
+	// branch was evaluated.
+	schema := formulaFixtureSchema()
+	src := `if(name.isType("number"), amount / 0, "")`
+	c := fixtureCandidate{props: map[string]PropertyValue{
+		"name":   textValue(schema.Properties["name"], "PLACEHOLDER — cost unknown"),
+		"amount": numberValue(t, schema.Properties["amount"], "5"),
+	}}
+	res := evalOne(t, src, c)
+	for _, p := range res.Problems {
+		if strings.Contains(p.Detail, "division by zero") {
+			t.Fatalf("the guard is FALSE and the guarded branch was evaluated anyway (%q). Eager evaluation turns this narrowing from a static guarantee into a runtime surprise — strictly worse than the refusal it replaced", p.Detail)
+		}
+	}
+
+	// And the same expression WITH the guard true does report it, so the
+	// absence above is laziness rather than a problem list that never fills.
+	c.props["name"] = textValue(schema.Properties["name"], "42")
+	lit := evalOne(t, src, c)
+	saw := false
+	for _, p := range lit.Problems {
+		if strings.Contains(p.Detail, "division by zero") {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatal("with the guard TRUE the guarded branch's division by zero was not reported — the oracle above cannot see an eager evaluation, so its silence proves nothing")
+	}
+}
+
+// TestFormulaArithmetic_OverANonNumberIsANamedProblemNeverAPanic is R-11 held
+// at the one place the narrowing made reachable.
+//
+// Every arithmetic case reads `fitem.num`, which is nil on a value of any other
+// type, and `big.Rat`'s methods dereference their arguments — so a text operand
+// arriving there is a SEGFAULT in a query path, not a wrong answer. The type
+// checker is what normally stops one, and this test is what stops the belt from
+// being removed as dead code: it builds the tree DIRECTLY, bypassing inference,
+// which is exactly the shape a future edit admitting a new guard on one side
+// only would produce.
+func TestFormulaArithmetic_OverANonNumberIsANamedProblemNeverAPanic(t *testing.T) {
+	schema := formulaFixtureSchema()
+	set, errs := ValidateFormulaSet(map[string]string{"f": "amount / 2"}, schema)
+	if len(errs) != 0 {
+		t.Fatalf("fixture must validate: %v", formulaErrorMessages(errs))
+	}
+	decl, _ := set.Get("f")
+	// Swap the numeric operand for a text one WITHOUT re-inferring — the tree a
+	// checker never saw.
+	bin, ok := decl.Root.(*BinaryOp)
+	if !ok {
+		t.Fatalf("fixture root is %T, want *BinaryOp", decl.Root)
+	}
+	bin.Left = &Ref{Kind: RefProperty, Name: "name"}
+
+	e := NewFormulaEvaluator(set, testComparator(), formulaTestNow())
+	e.Begin(fixtureCandidate{props: map[string]PropertyValue{
+		"name": textValue(schema.Properties["name"], "not a number at all"),
+	}})
+	res, ok := e.Evaluate("f")
+	if !ok {
+		t.Fatal("the formula did not evaluate")
+	}
+	if !res.Absent {
+		t.Errorf("arithmetic over a text operand produced %v; it must produce absence", res.Values())
+	}
+	if len(res.Problems) == 0 {
+		t.Error("R-4: the operand that could not be used must be REPORTED — silence here is the wrong answer wearing a type system")
 	}
 }
