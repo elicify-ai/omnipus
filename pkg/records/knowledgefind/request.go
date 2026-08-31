@@ -89,6 +89,11 @@ type query struct {
 	// touched is every property the query names, in first-mention order. It is
 	// what `explain` reports and what the schema check ranges over.
 	touched []string
+
+	// ns is the three namespaces this query resolves names against — the
+	// record type's own schema, FR-130's `file.*` and the view's `formula.*`.
+	// It is built once, in parse, and every property position reads it.
+	ns *namespace
 }
 
 type sortKey struct {
@@ -108,7 +113,7 @@ type aggregate struct {
 // Every failure here returns a *RefusalError carrying the remedy. None of them
 // returns an empty result: "no matches" and "you spelled it wrong" are
 // indistinguishable to a caller, and the second is far more common.
-func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *RefusalError) {
+func parse(req generated.VaultFindRequest, set *records.SchemaSet, formulas map[string]string) (*query, *RefusalError) {
 	q := &query{
 		kind:  KindNote,
 		limit: DefaultLimit,
@@ -150,6 +155,14 @@ func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *Ref
 		return nil, r
 	}
 	if r := q.resolveType(req, set); r != nil {
+		return nil, r
+	}
+	// THE NAMESPACE IS BUILT BETWEEN THE TYPE AND THE FIRST PROPERTY POSITION,
+	// and the order is forced: a formula's static type (FR-143a) is inferred
+	// against the record type's schema, so the type has to be resolved first —
+	// and every property position after this point resolves through the
+	// namespace, so it has to exist before the first of them.
+	if r := q.buildNamespace(formulas); r != nil {
 		return nil, r
 	}
 	if r := q.applyFilter(req); r != nil {
@@ -255,13 +268,14 @@ func (q *query) applyFilter(req generated.VaultFindRequest) *RefusalError {
 	if req.Filter == nil {
 		return nil
 	}
-	if q.schema == nil {
-		return refuse(problem(generated.UnsupportedParameter,
-			"a typed filter needs a record type: property names are scoped to their type, "+
-				"so there is nothing to resolve the names against",
-			"add type=<record type>, or search with words instead of a filter"), nil)
-	}
-	n, r := buildNode(*req.Filter, q.schema)
+	// NO "a filter needs a record type" GUARD HERE ANY MORE, and its removal is
+	// the untyped multi-type view (FR-018d). `file.mtime > "2026-01-01"` and
+	// `formula.age < 30` name properties that belong to no record type, so a
+	// blanket refusal would make the whole `file.*` namespace unreachable from
+	// the one query shape it was designed for. A leaf naming a TYPED property
+	// with no type given is still refused — by namespace.resolve, which says so
+	// per leaf and names both escapes rather than refusing the whole filter.
+	n, r := buildNode(*req.Filter, q.namespace())
 	if r != nil {
 		return r
 	}
@@ -286,25 +300,10 @@ func (q *query) applyFilter(req generated.VaultFindRequest) *RefusalError {
 // refused on an inverse name (FR-024's ordinary "unknown property" message)
 // until inverse computation is implemented end to end.
 func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
-	lookup := func(kind, name string) (*records.Property, *RefusalError) {
-		if q.schema == nil {
-			return nil, refuse(problem(generated.UnsupportedParameter,
-				fmt.Sprintf("%s names the property %q, but no record type was given", kind, name),
-				"add type=<record type> so property names can be resolved"), nil)
-		}
-		prop, ok := q.schema.Property(name)
-		if !ok {
-			names := q.schema.PropertyNames()
-			p := problem(generated.UnknownProperty,
-				fmt.Sprintf("unknown property %q on record type %q; declared: %s",
-					name, q.schema.Type, strings.Join(names, ", ")),
-				"call knowledge_describe record_type="+q.schema.Type+" to see the declared properties")
-			p.Property = str(name)
-			p.Permitted = &names
-			return nil, refuse(p, nil)
-		}
-		return prop, nil
-	}
+	// ONE lookup for every position, and it is the namespace's. Before this,
+	// applyColumns owned a second copy of FR-024's refusal — which is how
+	// `select` and `filter` come to disagree about which names exist.
+	lookup := q.namespace().resolve
 
 	if req.Select != nil {
 		for _, name := range *req.Select {

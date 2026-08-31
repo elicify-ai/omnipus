@@ -54,7 +54,7 @@ type node struct {
 }
 
 // buildNode converts one wire node, refusing anything ambiguous.
-func buildNode(n generated.VaultFilterNode, schema *records.Schema) (*node, *RefusalError) {
+func buildNode(n generated.VaultFilterNode, ns *namespace) (*node, *RefusalError) {
 	forms := 0
 	if n.All != nil {
 		forms++
@@ -86,20 +86,20 @@ func buildNode(n generated.VaultFilterNode, schema *records.Schema) (*node, *Ref
 
 	switch {
 	case n.All != nil:
-		return buildCombinator(nodeAll, "AND", *n.All, schema)
+		return buildCombinator(nodeAll, "AND", *n.All, ns)
 	case n.Any != nil:
-		return buildCombinator(nodeAny, "OR", *n.Any, schema)
+		return buildCombinator(nodeAny, "OR", *n.Any, ns)
 	case n.Not != nil:
-		child, r := buildNode(*n.Not, schema)
+		child, r := buildNode(*n.Not, ns)
 		if r != nil {
 			return nil, r
 		}
 		return &node{kind: nodeNot, children: []*node{child}, text: "NOT (" + child.text + ")"}, nil
 	}
-	return buildLeaf(n, schema)
+	return buildLeaf(n, ns)
 }
 
-func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, schema *records.Schema) (*node, *RefusalError) {
+func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, ns *namespace) (*node, *RefusalError) {
 	if len(in) == 0 {
 		// An empty `all` is vacuously true and an empty `any` vacuously false,
 		// and neither is what a caller who wrote `{all: []}` meant. Guessing
@@ -113,7 +113,7 @@ func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, 
 	out := &node{kind: k}
 	parts := make([]string, 0, len(in))
 	for i := range in {
-		child, r := buildNode(in[i], schema)
+		child, r := buildNode(in[i], ns)
 		if r != nil {
 			return nil, r
 		}
@@ -136,7 +136,7 @@ func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, 
 // records.QueryError into a wire code and passes the message through unchanged,
 // because two places owning one refusal's wording is how the tool's copy goes
 // stale the day the engine's improves.
-func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *RefusalError) {
+func buildLeaf(n generated.VaultFilterNode, ns *namespace) (*node, *RefusalError) {
 	if n.Property == nil || *n.Property == "" {
 		return nil, refuse(problem(generated.UnknownProperty,
 			"a filter leaf names no property",
@@ -146,6 +146,16 @@ func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *Ref
 		return nil, refuse(problem(generated.UnsupportedOperator,
 			fmt.Sprintf("the filter on %q names no operator", *n.Property),
 			"supported: "+strings.Join(records.OperatorNames(), ", ")), nil)
+	}
+
+	// THE NAMESPACE RESOLVES THE NAME FIRST, and Prepare validates the
+	// predicate second. The order is what keeps each refusal specific: a
+	// misspelled `file.mtimes` gets "the file properties are ..." and a
+	// `formula.aeg` gets "this view defines ...", where Prepare — which only
+	// knows it was handed a schema — would say "record type "deal" has no
+	// property", sending the caller to fix a schema that is not the problem.
+	if _, r := ns.resolve("filter", *n.Property); r != nil {
+		return nil, r
 	}
 
 	f := records.Filter{Property: *n.Property, Op: records.Operator(*n.Op)}
@@ -158,7 +168,7 @@ func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *Ref
 		f.LiteralGiven = true
 	}
 
-	prepared, err := f.Prepare(schema)
+	prepared, err := f.Prepare(ns.composite)
 	if err != nil {
 		var qe *records.QueryError
 		if errors.As(err, &qe) {
@@ -255,7 +265,7 @@ type evalResult struct {
 // and the reader would fix it, re-run, and be told about the next one. The cost
 // is evaluating leaves whose answer cannot change the verdict; the benefit is a
 // problem list that is complete the first time.
-func (n *node) eval(c records.Comparator, cand candidate) evalResult {
+func (n *node) eval(c records.Comparator, cand *candidate) evalResult {
 	switch n.kind {
 	case nodeLeaf:
 		return evalLeaf(c, cand, n.leaf)
@@ -312,7 +322,7 @@ func (n *node) eval(c records.Comparator, cand candidate) evalResult {
 // The decode and the match share a single declaration — pf.Property — which is
 // what stops a stale or hand-built *records.Property silently changing which
 // type disposition and arity rule the comparator applies.
-func evalLeaf(c records.Comparator, cand candidate, pf records.PreparedFilter) evalResult {
+func evalLeaf(c records.Comparator, cand *candidate, pf records.PreparedFilter) evalResult {
 	prop := pf.Property
 	left, err := cand.value(prop)
 	if err != nil {

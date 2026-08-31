@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -58,6 +59,26 @@ type ViewLoader interface {
 	Names() []string
 }
 
+// ViewFormulaLoader is the OPTIONAL half of ViewLoader: the saved view's
+// `formulas:` map (FR-141), which the base interface does not carry because a
+// view's request fragment and its computed properties are different things.
+//
+// IT IS A SEPARATE INTERFACE RATHER THAN A METHOD ON ViewLoader so that adding
+// formulas cannot silently un-satisfy an existing loader — records.ViewFindLoader
+// implements ViewLoader today and would stop compiling against a widened one at
+// a wiring site that does not exist yet, which is a landmine rather than a
+// compile error anybody would see.
+//
+// A loader that does not implement it is a vault with no formulas, which is the
+// correct reading of "this view declares none" and is exactly what the
+// formula-namespace refusal then says.
+type ViewFormulaLoader interface {
+	// Formulas returns one view's formula sources, keyed by name, with the
+	// expression as SOURCE TEXT (FR-141). ok=false means the view is not
+	// defined; an empty map means it defines no formulas.
+	Formulas(view string) (map[string]string, bool)
+}
+
 // Deps is what knowledge_find needs from its host. Every field is a real dependency
 // with a real consumer; there is no field here that exists only to be nil.
 type Deps struct {
@@ -89,6 +110,11 @@ type Deps struct {
 	// Epoch is the properties index's generation counter, which a cursor is
 	// issued against.
 	Epoch int64
+	// Now is the instant `now()` and `today()` are evaluated at, snapshotted
+	// ONCE for the whole response (FR-146). The zero value means "read the
+	// clock when the query starts", which is the same snapshot taken one layer
+	// down — it is a default, never a per-candidate clock read.
+	Now time.Time
 }
 
 // Find answers one query.
@@ -115,7 +141,7 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 		return refusalResponse(req, rawEcho(req), r), r
 	}
 
-	q, r := parse(req, set)
+	q, r := parse(req, set, viewFormulas(d.Views, req.View))
 	if r != nil {
 		// The echo is the RAW request here, not the executable one: parse is the
 		// step that failed, so there is no "as executed" form to report. A
@@ -357,8 +383,28 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
+	// THE CHILD-TABLE PREPASSES, before the candidate stream and after B1.
+	//
+	// After B1 because a query that would be refused for evaluating 80,000
+	// candidates must not first pay to buffer their tags; before the stream
+	// because FR-131 forbids joining a second child table into the candidate
+	// statement, so the only place to assemble `file.tags`/`file.links` is
+	// beside the stream rather than inside it.
+	files, r := newFileMetaSource(ctx, d, q)
+	if r != nil {
+		return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+	}
+
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
-	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, files: files}
+
+	// ONE evaluator for the whole scan, and `now` snapshotted ONCE (FR-146's
+	// last clause) so `now()`/`today()` give the same answer for every
+	// candidate. A per-candidate clock read would put records on opposite sides
+	// of `due < today()` in one response that has no error to show for it.
+	if ev.q.namespace().formulas.Len() > 0 {
+		ev.formulas = records.NewFormulaEvaluator(ev.q.namespace().formulas, cmp, queryNow(d))
+	}
 
 	// FIX F6: the fanout truncation detected above is a property of the
 	// QUERY, not of any one record — Records is deliberately empty, matching
@@ -431,6 +477,13 @@ type evaluation struct {
 	// of them could weaken.
 	near map[string]bool
 
+	// files assembles FR-130's twelve virtual properties per candidate from the
+	// parent row and the child-table prepasses.
+	files *fileMetaSource
+	// formulas is the ONE evaluator for this scan, nil when the view declares
+	// no formulas.
+	formulas *records.FormulaEvaluator
+
 	selected    int
 	survivors   []survivor
 	problems    []generated.RecordProblem
@@ -474,7 +527,8 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 	}
 
 	e.selected++
-	cand := newCandidate(c)
+	cand := newCandidate(c, e.q.schema, e.files.meta(c), e.formulas)
+	defer e.drainFormulaProblems(cand)
 
 	matched := true
 	if e.q.filter != nil {
@@ -510,7 +564,7 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 }
 
 // materialise decodes the render and sort columns for one survivor.
-func (e *evaluation) materialise(cand candidate) (map[string]records.PropertyValue, error) {
+func (e *evaluation) materialise(cand *candidate) (map[string]records.PropertyValue, error) {
 	out := map[string]records.PropertyValue{}
 	for _, prop := range e.q.renderProperties() {
 		v, err := cand.value(prop)
@@ -520,6 +574,50 @@ func (e *evaluation) materialise(cand candidate) (map[string]records.PropertyVal
 		out[prop.Name] = v
 	}
 	return out, nil
+}
+
+// drainFormulaProblems moves a candidate's formula problems into the response.
+//
+// It runs on EVERY visited candidate, matched or not, because FR-026 requires
+// the offending record to be named whether or not the problem happened to
+// change the outcome — a division by zero in a formula the filter then rejected
+// on other grounds is still a defect the reader has to fix.
+func (e *evaluation) drainFormulaProblems(cand *candidate) {
+	if len(cand.formulaProblems) == 0 {
+		return
+	}
+	ps := make([]generated.RecordProblem, 0, len(cand.formulaProblems))
+	for _, cp := range cand.formulaProblems {
+		ps = append(ps, comparisonProblem(cand.rows.RecordID, cand.rows.Path, cp))
+	}
+	e.recordProblems(ps)
+	cand.formulaProblems = nil
+}
+
+// queryNow is FR-146's one-per-response snapshot.
+func queryNow(d Deps) time.Time {
+	if d.Now.IsZero() {
+		return time.Now()
+	}
+	return d.Now
+}
+
+// viewFormulas reads the named view's `formulas:` map, when the loader carries
+// one. Everything about it is optional and every absence means the same,
+// honest thing: this query has no formulas.
+func viewFormulas(loader ViewLoader, view *string) map[string]string {
+	if loader == nil || view == nil || *view == "" {
+		return nil
+	}
+	fl, ok := loader.(ViewFormulaLoader)
+	if !ok {
+		return nil
+	}
+	sources, ok := fl.Formulas(*view)
+	if !ok {
+		return nil
+	}
+	return sources
 }
 
 // recordProblems appends, deduplicating on record+property+code so a filter tree

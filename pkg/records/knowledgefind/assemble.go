@@ -18,15 +18,27 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
-// renderProperties is the ordered set of declared properties a row renders and
-// sorts by: `select` when given, the schema's own declaration order otherwise,
-// so a report reads the way the operator wrote it.
+// renderProperties is the ordered set of properties a row renders and sorts by:
+// `select` when given, the record type's own declaration order otherwise, so a
+// report reads the way the operator wrote it.
+//
+// IT IS ALSO THE DECODE LIST, and that second job is why it resolves through
+// the NAMESPACE rather than the schema. Whatever it returns is what
+// materialise() decodes into the survivor's values map — and the sorter, the
+// grouper and all fifteen summaries read that map and nothing else. A
+// `file.mtime` sort key or a `formula.age` summary target missing from this
+// list is not a missing column: it is a sort that orders by a value nobody
+// read and a summary computed over an empty set, both rendering perfectly.
+//
+// THE DEFAULT IS UNCHANGED: with no `select`, the columns are the record type's
+// declared properties in declaration order. The twelve `file.*` properties are
+// resolvable but not defaulted — a view gets them because it asked, never
+// because they exist. An UNTYPED query has no declaration order, so its columns
+// are exactly what it named.
 func (q *query) renderProperties() []*records.Property {
-	if q.schema == nil {
-		return nil
-	}
+	ns := q.namespace()
 	names := q.selectCols
-	if len(names) == 0 {
+	if len(names) == 0 && q.schema != nil {
 		names = q.schema.PropertyOrder
 	}
 	seen := map[string]bool{}
@@ -35,7 +47,7 @@ func (q *query) renderProperties() []*records.Property {
 		if seen[n] {
 			return
 		}
-		if p, ok := q.schema.Property(n); ok {
+		if p, ok := ns.composite.Property(n); ok {
 			seen[n] = true
 			out = append(out, p)
 		}
