@@ -90,17 +90,64 @@ const (
 	// people. It does NOT imply a built-in person type — D0 forbids that. With
 	// no `to:` declared, only the link shape is validated.
 	TypePerson PropertyType = "person"
+	// TypeCheckbox is FR-004c's eighth type (ADR-068 D24.5): YAML `true` or
+	// `false`, with ABSENT as the third state. Equality only — `=`, `<>`, `IN`,
+	// `IS NULL`, `IS NOT NULL`; the four ordering operators are refused naming
+	// the remedy, exactly as R-13 refuses them over a list.
+	//
+	// It exists because D3.2's own marquee example — "days I did not meditate" —
+	// had no native type. Modelled as an enum, the third state is a fourth
+	// declared value somebody has to remember to write; modelled as text, `true`
+	// and `True` are two values. As its own type, absence IS the third state and
+	// FR-007a's `""` folds into it.
+	//
+	// ---------------------------------------------------------------------
+	// NAMING — THIS IS NOT THE MARKDOWN TASK CHECKBOX, AND THE PRODUCT HAS BOTH
+	//
+	// Omnipus already has a "checkbox" and it is a DIFFERENT THING at a
+	// different layer. Keeping the two apart is a naming rule, not a comment:
+	//
+	//	THIS (FR-004c)          a PROPERTY TYPE. Lives in a note's YAML
+	//	                        FRONTMATTER, under a key a schema declares.
+	//	                        One value per note. Vocabulary: `checkbox`,
+	//	                        TypeCheckbox, TypedValue.Bool.
+	//
+	//	THE OTHER (FR-076a)     a MARKDOWN TASK checkbox — `- [ ] call Ada` — in
+	//	                        the note's BODY. Many per note, each with its own
+	//	                        line number. Vocabulary: `note_tasks` (the index
+	//	                        table), `propindex.TaskHit`, `kind: task`.
+	//	                        NEVER `checkbox` in an identifier.
+	//
+	// The rule, in one line: **`checkbox` names the property type; `task` names
+	// the body construct.** Nothing in this package reads a note's body at all
+	// (Record is frontmatter and a path — record.go), so a `- [ ] …` line can
+	// never become a value of this type; TestCheckbox_IsAPropertyTypeNotAMarkdownTask
+	// holds that as behaviour rather than as this paragraph.
+	//
+	// The confusion is not hypothetical: ADR-068 D24 reaches BOTH in one
+	// sentence — the fifteen summary functions include `Checked`/`Unchecked`,
+	// which count `true`/`false` over THIS type, while D15.3's indexed rows
+	// count the OTHER one.
+	TypeCheckbox PropertyType = "checkbox"
 )
 
 // PropertyTypes is the closed set, in declaration order. FR-004's "exactly
 // these" is asserted against this slice.
 //
-// THE COUNT IS SEVEN, and the arithmetic is worth stating because it is easy
-// to get wrong in the other direction (ADR-068 D3, revision 7): `money` was
-// DELETED and `number` was SPLIT into `integer` and `decimal`, so
-// −1 −1 +2 = still seven. The membership changed; the count did not.
+// THE COUNT IS EIGHT SINCE DRAFT 11, and the arithmetic is worth stating
+// because it has already been got wrong in both directions:
+//
+//	revision 7 (ADR-068 D3)   `money` DELETED, `number` SPLIT into `integer`
+//	                          and `decimal`. −1 −1 +2 = still SEVEN. The
+//	                          membership changed; the count did not.
+//	Draft 11 (FR-004c/D24.5)  `checkbox` ADDED. +1 = EIGHT.
+//
+// A "seven" anywhere in this package or the specification is a Draft-9-or-
+// earlier figure; FR-004c is the record of when it changed. Do not "correct"
+// a count back to seven — that re-creates the stale-contract defect UAT case
+// C-8 was written for.
 var PropertyTypes = []PropertyType{
-	TypeText, TypeEnum, TypeRelation, TypeDate, TypeInteger, TypeDecimal, TypePerson,
+	TypeText, TypeEnum, TypeRelation, TypeDate, TypeInteger, TypeDecimal, TypePerson, TypeCheckbox,
 }
 
 // isNumericType reports whether a declared type holds a number. §8 R-1 treats
@@ -225,6 +272,45 @@ type Property struct {
 	// record type and `status` on another are UNRELATED declarations, so a
 	// Property always knows whose it is and is never looked up vault-wide.
 	RecordType string
+
+	// Formula is non-empty exactly when this property is DERIVED — computed by
+	// an expression (FR-140..FR-148) rather than read out of a file. It holds
+	// the expression's source text, so the declaration a comparison was decided
+	// against is visible in the same struct as the type it declares.
+	//
+	// ---------------------------------------------------------------------
+	// WHY A DERIVED PROPERTY IS A `Property` AT ALL — FR-143a / R-18
+	//
+	// The comparator (compare_oracle.go) reads exactly two things off an
+	// operand's declaration: `Type` and `Many`. R-1 then makes a comparison
+	// between two DIFFERENT declared types a plain `false` — no error, no
+	// problem reported, deliberately, because `"3" > 2` is an ordinary false
+	// and not a defect in anybody's data.
+	//
+	// That silence is correct for schema properties, whose type is fixed in a
+	// file before any record is read. It is CATASTROPHIC for a formula whose
+	// type is discovered per record: `if(c, 1, "x")` yields `decimal` on some
+	// records and `text` on others, so `if(c,1,"x") > 5` answers TRUE for
+	// some records, FALSE for others, and reports nothing either way. A
+	// silently wrong answer wearing a type system, which is the exact phrase
+	// FR-143a uses.
+	//
+	// So a formula MUST arrive at the comparator carrying ONE static type and
+	// ONE arity, inferred and validated at write/load — before any record is
+	// touched. Making it a Property is how: the comparator cannot tell a
+	// derived operand from a declared one, and does not need to, because by
+	// construction there is nothing to tell.
+	//
+	// THE ERROR CHANNEL IS WRITE/LOAD, NOT COMPARE TIME. Inference and the
+	// `if()`-branch agreement check belong to whoever owns the expression
+	// language; this field is the handoff. What THIS package enforces is the
+	// half that has to be enforced here and cannot be enforced there: that the
+	// values an operand actually carries agree with the type it declares — see
+	// ValueConformsToDeclaration (value.go) and normalizeOperand
+	// (compare_oracle.go). Without that, a declaration is a promise nothing
+	// checks, and a `text` value under a `decimal` declaration compares as
+	// zero.
+	Formula string
 }
 
 // ResolveEnum resolves a WRITTEN value to the declared EnumValue it names, and
@@ -297,6 +383,12 @@ func (p *Property) ExpectedShape() string {
 		base = fmt.Sprintf("decimal (an exact number, at most %d decimal places)", maxDecimalScale)
 	case TypeDate:
 		base = "date (YYYY-MM-DD, or an RFC-3339 instant)"
+	case TypeCheckbox:
+		// FR-004c. Absence is named in the shape because it is the THIRD
+		// STATE, not a missing value: an operator reading this refusal has to
+		// know that leaving the key out is a legitimate answer, or they will
+		// invent a fourth spelling for "not applicable".
+		base = "checkbox (true or false; leave the property out entirely for the third, unset state)"
 	}
 	if p.Many {
 		return "a list of " + base
@@ -1060,7 +1152,53 @@ func (p *Property) finalize() error {
 	if p.Type != TypeRelation && p.Type != TypePerson && (p.To != "" || p.Inverse != "") {
 		return fmt.Errorf("`to`/`inverse` are only meaningful on a relation or person, not on a %s", p.Type)
 	}
+
+	// FR-143a — the rules a DERIVED property must satisfy. Each one closes a
+	// way a formula could otherwise reach the comparator without a usable
+	// declaration, or claim an obligation nothing can discharge.
+	if p.Formula != "" {
+		if p.Required {
+			// Nothing writes a derived value into a file, so "a record must
+			// carry a value" has no subject. Left permitted, every record
+			// would fail a requirement no author could satisfy.
+			return fmt.Errorf("a formula property cannot be `required`; nothing writes a derived value into a note, so the requirement could never be satisfied — drop `required` or make this a stored property")
+		}
+		if p.To != "" || p.Inverse != "" {
+			// R-16: `asLink()` and friends produce PRESENTATION values, which
+			// do not compare at all. A derived edge is therefore not a
+			// relation, and declaring a target would promise FR-034 target
+			// checking and D5's derived inverse over something that is neither.
+			return fmt.Errorf("a formula property cannot declare `to`/`inverse`; a derived link is a presentation value (R-16), not a relation the vault can check a target for or derive an inverse from")
+		}
+		if p.Type == TypeRelation || p.Type == TypePerson {
+			return fmt.Errorf("a formula property cannot declare type %s; a derived link is a presentation value (R-16) — declare it `text`", p.Type)
+		}
+	}
 	return nil
+}
+
+// NewFormulaProperty builds the DERIVED property a formula presents to the
+// comparator: one static type, one static arity, declared before any record is
+// read (FR-143a / R-18).
+//
+// It is deliberately the SAME construction path as NewProperty — a formula that
+// declares an `enum` type still has to declare its values, a `unit` still only
+// belongs on a number — because the whole point of R-18 is that the comparator
+// sees no difference between a derived declaration and a stored one. A second,
+// laxer constructor would reintroduce exactly the asymmetry the rule removes.
+//
+// What it does NOT do is infer the type from the expression. That inference,
+// the `if()`-branch agreement check and the cycle check (FR-148) belong to the
+// expression language and are its author's to write; this constructor is the
+// boundary they hand a finished declaration across. It refuses an EMPTY
+// expression for that reason: a derived property with no expression is a
+// declaration with nothing behind it, and it would compare happily.
+func NewFormulaProperty(decl Property) (*Property, error) {
+	if strings.TrimSpace(decl.Formula) == "" {
+		return nil, fmt.Errorf("a formula property must carry its expression; without it there is a declared type with nothing behind it, which compares as though it were real")
+	}
+	decl.Formula = strings.TrimSpace(decl.Formula)
+	return NewProperty(decl)
 }
 
 // NewProperty builds a Property from a hand-written declaration — the path a

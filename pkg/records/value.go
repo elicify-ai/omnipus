@@ -205,6 +205,12 @@ type TypedValue struct {
 	// Int64 returns it without loss. For a `decimal` the scale is bounded by
 	// maxDecimalScale and the magnitude is unbounded.
 	Number Decimal
+
+	// Bool carries a `checkbox` value (FR-004c). It has only TWO inhabitants,
+	// which is the point: the third state — unset — is ABSENCE and is carried
+	// by PropertyValue.State, never by a third value here. A `*bool` would put
+	// the third state in two places at once and let them disagree.
+	Bool bool
 }
 
 // String renders a value for a report.
@@ -218,6 +224,16 @@ func (v TypedValue) String() string {
 		return v.Date.String()
 	case TypeInteger, TypeDecimal:
 		return v.Number.String()
+	case TypeCheckbox:
+		// The CANONICAL spelling, not the file's. A checkbox has exactly two
+		// values however they were written (`TRUE`, `True`, `true` are one
+		// value under FR-011a's fold), and rendering three spellings of one
+		// value is the thing FR-011c avoids for enums by rendering the DECLARED
+		// name. `true`/`false` is this type's declared name.
+		if v.Bool {
+			return "true"
+		}
+		return "false"
 	}
 	return v.Text
 }
@@ -301,6 +317,8 @@ func ParseValue(p *Property, n Node) (TypedValue, *ValueError) {
 		return parseIntegerValue(p, n)
 	case TypeDecimal:
 		return parseDecimalValue(p, n)
+	case TypeCheckbox:
+		return parseCheckboxValue(p, n)
 	}
 	return TypedValue{}, &ValueError{
 		Code:     FindingUnsupportedType,
@@ -328,6 +346,161 @@ func parseTextValue(p *Property, n Node) (TypedValue, *ValueError) {
 	// D3: text is "never validated". An empty string is a VALUE, distinct from
 	// absent (DS-1, §8 R-3), and is accepted here without comment.
 	return TypedValue{Type: TypeText, Raw: n.Text, Text: n.Text}, nil
+}
+
+// FindingNotABoolean — a `checkbox` property holding something that is neither
+// `true` nor `false` (FR-004c).
+//
+// IT IS DECLARED HERE, beside its parser, rather than in validate.go's block
+// with the other FindingCodes. That is a deliberate exception with a boring
+// reason and it should not be generalised: this change's ownership boundary put
+// validate.go off-limits except for FR-007a's two call sites, and a code that
+// exists in the same file as the only function that raises it is a smaller
+// wrong than a code declared in a file this change was not entitled to grow.
+// Move it into validate.go's const block the next time that file is opened for
+// its own reasons.
+//
+// It is a SEPARATE code from FindingWrongShape for the same reason
+// FindingNotADate is: the remedy differs. A shape fault means "you wrote a list
+// where a value belongs"; this means "you wrote a value, and `yes` is not one
+// of the two this type has".
+const FindingNotABoolean FindingCode = "not_a_boolean"
+
+// checkboxSpellings is FR-004c's accepted vocabulary, folded.
+//
+// TWO SPELLINGS, NOT SIX. `yes`/`no` and `on`/`off` are NOT accepted, and that
+// is a decision rather than an omission. YAML 1.1 treated all six as booleans,
+// YAML 1.2 removed four of them, and yaml.v3 follows 1.2 — so `active: yes`
+// already reaches this package as the STRING "yes" with tag `!!str`. Accepting
+// it here would make this package disagree with the parser every consumer of
+// the same file uses, including Obsidian's own property editor, and the
+// disagreement would be invisible: the note would validate for us and read as
+// text everywhere else. The refusal names `true`/`false`, so the fix is one
+// word in the operator's own file.
+//
+// The fold is FR-011a's, so `TRUE`, `True` and `true` are ONE value — the same
+// rule that makes `Won` resolve to a declared `won`. A checkbox has two values,
+// however many ways they are spelled.
+var checkboxSpellings = map[string]bool{
+	FoldKey("true"):  true,
+	FoldKey("false"): false,
+}
+
+// parseCheckboxValue reads FR-004c's eighth type: `true` or `false`, and
+// nothing else.
+//
+// ABSENCE IS NOT HANDLED HERE and could not be. The third state is the property
+// having no value at all, which ResolveProperty decides before any element
+// reaches a parser — including FR-007a's `""`, which AbsentByEmptyString turns
+// into absence for this type like every other non-text one. Reaching this
+// function means the note wrote SOMETHING, so the only outcomes are the two
+// values and a refusal.
+func parseCheckboxValue(p *Property, n Node) (TypedValue, *ValueError) {
+	if err := mustBeScalar(p, n); err != nil {
+		return TypedValue{}, err
+	}
+	b, ok := checkboxSpellings[FoldKey(strings.TrimSpace(n.Text))]
+	if !ok {
+		return TypedValue{}, &ValueError{
+			Code:      FindingNotABoolean,
+			Reason:    fmt.Sprintf("property %q holds %q, which is not a checkbox value; a checkbox holds `true` or `false` (matching ignores case), and the third state is written by leaving the property out entirely", p.Name, n.Text),
+			Expected:  p.ExpectedShape(),
+			Got:       n.Text,
+			Permitted: []string{"true", "false"},
+		}
+	}
+	return TypedValue{Type: TypeCheckbox, Raw: n.Text, Bool: b}, nil
+}
+
+// ---------------------------------------------------------------------------
+// FR-007a — FOR EVERY NON-TEXT TYPE, THE EMPTY STRING IS THE ABSENT STATE
+// ---------------------------------------------------------------------------
+
+// AbsentByEmptyString reports whether the value a note wrote for this property
+// is FR-007a's empty-string absence: `completed: ""` on a `date`, and its
+// equivalent on every other non-text type.
+//
+// WHY THIS IS A RULING AND NOT A LENIENCY. The founder's own vault writes
+// `completed: ""` to mean "not yet". That is a live convention across a real
+// corpus, not a typo — and before this rule the layer read it as a value that
+// FAILED to be a date and raised a finding. 52 real findings (46 not-a-date,
+// 4 enum, 2 wikilink) came from exactly that reading: the layer reported, at
+// length and with an expected shape, on a value that visibly is not there.
+//
+// It costs nothing, and that is checkable rather than asserted. Enumerate the
+// non-text types and ask what `""` could mean as a VALUE:
+//
+//	date       no date is the empty string
+//	integer    no integer is the empty string
+//	decimal    no decimal is the empty string
+//	enum       a declared value is non-empty — finalize() refuses an empty one
+//	relation   a wikilink starts `[[` — ParseWikilink refuses ""
+//	person     as relation
+//	checkbox   `true` or `false`, neither of which is ""
+//
+// Every one of them REFUSED `""` already. So the choice was never "value or
+// absence"; it was "absence, or a finding about a value that cannot exist".
+//
+// `text` IS EXCLUDED, and the exclusion is the load-bearing half. For text an
+// empty string is a real, present, legitimate value — DS-1 and §8 R-3 both name
+// it — and a note that writes `summary: ""` has said something different from a
+// note that omits `summary`. A predicate that over-reached here would silently
+// delete legitimate empty strings out of every text property in the vault, and
+// `summary IS NULL` would start matching notes that have a summary. That is a
+// worse defect than the 52 findings this rule removes, so `text` is checked
+// FIRST and returns false before anything else is looked at.
+//
+// TRIMMING: the comparison is against the TRIMMED text, per FR-007a's "(after
+// trimming)". `completed: "   "` is the same intent as `completed: ""`. This
+// does not trim `text`, which never reaches the trim.
+//
+// It answers only about a SCALAR node. A null node is already absent by FR-007
+// and a list or mapping is a shape question ResolveProperty settles first.
+func AbsentByEmptyString(p *Property, n Node) bool {
+	if p == nil || p.Type == TypeText {
+		return false
+	}
+	if n.Kind != KindScalar {
+		return false
+	}
+	return strings.TrimSpace(n.Text) == ""
+}
+
+// ---------------------------------------------------------------------------
+// R-18 / FR-143a — A DECLARATION THE VALUES ACTUALLY HONOUR
+// ---------------------------------------------------------------------------
+
+// ValueConformsToDeclaration reports whether a typed value may be compared as a
+// value of this property's declared type.
+//
+// It is R-1's precondition, stated as code. R-1 decides a comparison by looking
+// at the two PROPERTIES' declared types and nothing else; compare_oracle.go's
+// compareElements then reaches into whichever FIELD of TypedValue that declared
+// type names. The two steps agree only while every carried value really is of
+// the type its property declares — and nothing checked that until FR-143a
+// required it.
+//
+// THE HOLE IT CLOSES, EXECUTED. Put a `text` TypedValue into a PropertyValue
+// whose Property declares `decimal`:
+//
+//	R-1                 decimal vs decimal — same domain, falls through
+//	disposition         `>` is defined for decimal — falls through
+//	compareElements     dispatches to a.Number.Cmp(b.Number)
+//	TypedValue.Number   the ZERO Decimal, because a text value never set it
+//
+// So `"x" > 5` answers FALSE and `"x" < 5` answers TRUE, with nothing reported.
+// A declaration nothing enforces is a comment, and this one was load-bearing:
+// FR-143a exists precisely so a formula arrives carrying ONE static type, and
+// that promise is worth exactly as much as this check.
+//
+// The domain, not the type, is what has to agree — R-1 makes `text`/`enum` one
+// declared type and `integer`/`decimal` one, so an `integer` value under a
+// `decimal` declaration is correct and must stay correct (`3 = 3.0` is TRUE).
+func ValueConformsToDeclaration(p *Property, v TypedValue) bool {
+	if p == nil {
+		return false
+	}
+	return comparisonDomain(p.Type) == comparisonDomain(v.Type)
 }
 
 func parseEnumValueNode(p *Property, n Node) (TypedValue, *ValueError) {
@@ -359,6 +532,30 @@ func parseEnumValueNode(p *Property, n Node) (TypedValue, *ValueError) {
 func parseLinkValue(p *Property, n Node) (TypedValue, *ValueError) {
 	if err := mustBeScalar(p, n); err != nil {
 		return TypedValue{}, err
+	}
+	// FR-030a's IFF, second half. The first half — a flow sequence whose raw
+	// bytes say `[[Target]]` IS a wikilink — is applied in frontmatter.go, at
+	// the moment the source is still available. This is the other direction: a
+	// BLOCK SCALAR whose folded content happens to read `[[Target]]` is NOT a
+	// wikilink, because its raw source text is a block indicator followed by an
+	// indented body and that is not wikilink syntax:
+	//
+	//	company: |
+	//	  [[Acme]]
+	//
+	// The scalar's Text here is "[[Acme]]\n" and ParseWikilink, which trims,
+	// would accept it. Under a rule that says the RAW TEXT decides, it must not:
+	// the operator wrote a multi-line string, and reading a link out of it is
+	// the same class of error as reading a list as a link — the parser's shape
+	// overruling the operator's bytes, just in the direction that happens to
+	// flatter us. Refused, naming the quoted form that works.
+	if n.Block {
+		return TypedValue{}, &ValueError{
+			Code:     FindingNotAWikilink,
+			Reason:   fmt.Sprintf("property %q holds a block scalar (`|` or `>`); its raw text is a multi-line string, not a wikilink, so it is not read as one (FR-030a) — write the link inline as \"[[Target]]\" instead", p.Name),
+			Expected: p.ExpectedShape(),
+			Got:      n.Text,
+		}
 	}
 	link, ok := ParseWikilink(n.Text)
 	if !ok {

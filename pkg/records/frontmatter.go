@@ -86,6 +86,25 @@ type Node struct {
 	// Quoted reports whether the scalar was written in quotes. FR-030 wants a
 	// relation stored as a QUOTED wikilink, so this is how that is checked.
 	Quoted bool
+	// Block reports whether the scalar was written as a BLOCK scalar — `|` or
+	// `>`. Its Text is then the FOLDED body, which no longer resembles the
+	// bytes the operator wrote, so FR-030a's raw-text rule has to know: a
+	// block scalar reading `[[Acme]]` is a multi-line string, not a link
+	// (value.go's parseLinkValue).
+	Block bool
+	// RawSource is the node's own bytes, re-sliced out of the frontmatter
+	// block.
+	//
+	// IT IS POPULATED ONLY WHERE FR-030a'S RAW-TEXT RULE FIRED — YAML parsed a
+	// flow collection, the operator's bytes said `[[Target]]`, and this Node is
+	// the wikilink those bytes name. Empty everywhere else, including on
+	// ordinary scalars, whose Text already IS their source modulo YAML quoting.
+	//
+	// So `RawSource != ""` is the marker that this Node's SHAPE was decided by
+	// the source rather than by the parser, and it is the only place the
+	// original flow-sequence reading survives. Do not start populating it
+	// generally without deciding what that marker then means.
+	RawSource string
 	// Items holds a sequence's elements, in order.
 	Items []Node
 	// Keys holds a mapping's keys in document order; Fields holds their values.
@@ -163,6 +182,12 @@ func ParseFrontmatter(src []byte) (Frontmatter, error) {
 	// Do not move this back inside convertYAMLNodeFailure.
 	budget := newConvertBudget()
 
+	// FR-030a's instrument. The parser has already thrown away the brackets by
+	// the time we see a node, so the decision "is this a wikilink?" has to be
+	// able to go back to the operator's own bytes. This is that: the block, and
+	// enough index to turn a yaml.Node's (Line, Column) back into a byte range.
+	slicer := newSourceSlicer(block)
+
 	// refuse fails the WHOLE frontmatter rather than keeping a partial map: a
 	// note whose properties silently went missing would validate as an ordinary
 	// note and vanish from answers that still report complete — the exact
@@ -195,7 +220,7 @@ func ParseFrontmatter(src []byte) (Frontmatter, error) {
 			continue
 		}
 		fm.Keys = append(fm.Keys, key)
-		node, why := convertYAMLNodeFailure(v, startLine, budget)
+		node, why := convertYAMLNodeFailure(v, startLine, budget, slicer)
 		if why != "" {
 			return refuse(why, key, line)
 		}
@@ -306,12 +331,12 @@ func (b *convertBudget) charge() bool {
 // It converts and reports why it stopped, if it did. The caller turns a
 // non-empty reason into a parse error so the note is reported by name rather
 // than silently appearing to have empty frontmatter.
-func convertYAMLNodeFailure(n *yaml.Node, lineOffset int, b *convertBudget) (Node, string) {
-	out := convertYAMLNodeBounded(n, lineOffset, b)
+func convertYAMLNodeFailure(n *yaml.Node, lineOffset int, b *convertBudget, s *sourceSlicer) (Node, string) {
+	out := convertYAMLNodeBounded(n, lineOffset, b, s)
 	return out, b.failed
 }
 
-func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node {
+func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget, s *sourceSlicer) Node {
 	if n == nil || !b.charge() {
 		return Node{Kind: KindNull}
 	}
@@ -322,7 +347,13 @@ func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node
 			return Node{Kind: KindNull}
 		}
 		b.active[n.Alias] = true
-		out := convertYAMLNodeBounded(n.Alias, lineOffset, b)
+		// The ALIAS's position, not the anchor's: an alias that expands to a
+		// flow sequence has the anchor's bytes, and re-slicing at the alias
+		// site would read `*x` rather than a wikilink. Passing nil declines the
+		// FR-030a rule for aliased content instead of answering it wrongly —
+		// an anchored `[[Target]]` reached through `*x` stays a sequence and is
+		// reported as a shape fault, which is at least true.
+		out := convertYAMLNodeBounded(n.Alias, lineOffset, b, nil)
 		delete(b.active, n.Alias)
 		return out
 	}
@@ -331,17 +362,53 @@ func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node
 	switch n.Kind {
 	case yaml.ScalarNode:
 		out.Text = n.Value
-		out.Quoted = n.Style == yaml.SingleQuotedStyle || n.Style == yaml.DoubleQuotedStyle
+		out.Quoted = n.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle) != 0
+		out.Block = n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0
 		if n.Tag == "!!null" {
 			out.Kind = KindNull
 		} else {
 			out.Kind = KindScalar
 		}
 	case yaml.SequenceNode:
+		// FR-030a, first half — THE RAW SOURCE TEXT DECIDES WHAT A WIKILINK IS.
+		//
+		// `- [[Target]]` is legal YAML flow-list syntax, so the parser hands
+		// back a sequence containing a sequence containing the scalar `Target`,
+		// and every bracket the operator typed is gone. Downstream that becomes
+		// "property holds a list where a single value belongs" — a shape
+		// complaint about a shape the operator never wrote. It was the root
+		// cause of most of 66 wrong-shape findings in the founder's vault.
+		//
+		// So before this subtree is converted at all, the operator's own bytes
+		// are consulted. If they say exactly `[[Target]]`, this node IS that
+		// wikilink and is emitted as the SCALAR it was written as. The parser's
+		// reading is discarded, which is the whole ruling in one line.
+		//
+		// It happens HERE, at the frontmatter layer, rather than at the point a
+		// relation is parsed, and that placement is load-bearing: ResolveProperty
+		// checks ARITY before it looks at any value (FR-006, deliberately), so a
+		// scalar `company: [[Acme]]` would be refused as "holds a list" and never
+		// reach a value parser at all. Deciding the shape while the source is
+		// still in hand is the only place the rule can be applied uniformly to
+		// scalar and list properties both. It also means every consumer of a
+		// Node — validation, filtering, the index — sees the same decided shape,
+		// rather than each re-deriving it.
+		//
+		// Note what CANNOT be mistaken for a link: isExactWikilinkSource refuses
+		// any inner `[`, `]`, `,` or newline, so a genuine nested list
+		// (`[[a, b]]`) and a multi-line flow sequence both stay sequences. D14 is
+		// untouched — nothing is rewritten on disk, ever.
+		if raw, ok := s.flowWikilink(n); ok {
+			out.Kind = KindScalar
+			out.Text = raw
+			out.RawSource = raw
+			out.Tag = "!!str"
+			return out
+		}
 		out.Kind = KindSequence
 		out.Items = make([]Node, 0, len(n.Content))
 		for _, c := range n.Content {
-			out.Items = append(out.Items, convertYAMLNodeBounded(c, lineOffset, b))
+			out.Items = append(out.Items, convertYAMLNodeBounded(c, lineOffset, b, s))
 			if b.failed != "" {
 				return Node{Kind: KindNull}
 			}
@@ -355,7 +422,7 @@ func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node
 				continue
 			}
 			out.Keys = append(out.Keys, key)
-			out.Fields[key] = convertYAMLNodeBounded(n.Content[i+1], lineOffset, b)
+			out.Fields[key] = convertYAMLNodeBounded(n.Content[i+1], lineOffset, b, s)
 			if b.failed != "" {
 				return Node{Kind: KindNull}
 			}
@@ -364,6 +431,184 @@ func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node
 		out.Kind = KindNull
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// FR-030a — GOING BACK TO THE OPERATOR'S BYTES
+//
+// records.Node carries Kind/Text/Tag/Quoted/Items/Keys/Fields/Line and NO
+// SOURCE SPAN. That is exactly why FR-030a is new work rather than a one-line
+// predicate: by the time a value is typed, the brackets are gone and there is
+// nothing left to read.
+//
+// yaml.Node carries Line AND Column, so the span is RECONSTRUCTIBLE — start at
+// (Line, Column), scan forward to the matching close bracket. Two details make
+// it less obvious than it sounds, and both are handled below:
+//
+//   - COLUMN IS A RUNE INDEX, NOT A BYTE INDEX. yaml.v3's scanner advances the
+//     column once per character read, whatever its UTF-8 width. A frontmatter
+//     line holding `société: [[Acme]]` therefore has a Column that is smaller
+//     than the byte offset, and slicing on it directly would start mid-word.
+//     offsetOf walks runes.
+//   - THE END IS NOT GIVEN AT ALL. yaml.Node has no end position, so the close
+//     has to be found by scanning — with bracket depth AND quote state, because
+//     `[["a]b"]]` is one bracket pair with a `]` inside a string.
+//
+// The scan crosses newlines deliberately: a multi-line flow sequence is one
+// node, and its raw source is the whole thing. isExactWikilinkSource then
+// refuses it for containing a newline, which is the right answer for the right
+// reason — the span was read correctly and the CONTENT is not a wikilink.
+// ---------------------------------------------------------------------------
+
+// sourceSlicer turns a yaml.Node's position back into the bytes it was written
+// as. It reads the frontmatter BLOCK — the same bytes yaml.Unmarshal was given,
+// after CRLF and BOM normalisation — so positions line up exactly.
+type sourceSlicer struct {
+	block []byte
+	// lineStarts[n] is the byte offset of 1-based line n. Index 0 is unused and
+	// holds 0, so a line number indexes it directly with no arithmetic to get
+	// wrong.
+	lineStarts []int
+}
+
+func newSourceSlicer(block []byte) *sourceSlicer {
+	s := &sourceSlicer{block: block, lineStarts: []int{0, 0}}
+	for i, b := range block {
+		if b == '\n' {
+			s.lineStarts = append(s.lineStarts, i+1)
+		}
+	}
+	return s
+}
+
+// offsetOf converts a 1-based (line, column) into a byte offset into the block.
+// Column is a RUNE index — see the header — so this walks runes rather than
+// adding column-1 to the line start.
+func (s *sourceSlicer) offsetOf(line, col int) (int, bool) {
+	if s == nil || line < 1 || line >= len(s.lineStarts) || col < 1 {
+		return 0, false
+	}
+	start := s.lineStarts[line]
+	rest := s.block[start:]
+	if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+		rest = rest[:i]
+	}
+	runes := 0
+	for i := range string(rest) {
+		if runes == col-1 {
+			return start + i, true
+		}
+		runes++
+	}
+	if runes == col-1 {
+		return start + len(rest), true
+	}
+	return 0, false
+}
+
+// flowWikilink returns the node's raw source text when — and only when — the
+// operator wrote a wikilink there and YAML read it as a flow collection.
+//
+// The gate is the BYTE at the node's own start position, not yaml.Style. A
+// block sequence's items begin at `-` and a scalar begins at its first
+// character, so requiring `[` admits exactly the flow collections FR-030a is
+// about and does not depend on how the decoder happens to populate a style
+// bitmask.
+func (s *sourceSlicer) flowWikilink(n *yaml.Node) (string, bool) {
+	if s == nil || n == nil {
+		return "", false
+	}
+	start, ok := s.offsetOf(n.Line, n.Column)
+	if !ok || start >= len(s.block) || s.block[start] != '[' {
+		return "", false
+	}
+	end, ok := s.matchingBracket(start)
+	if !ok {
+		return "", false
+	}
+	raw := string(s.block[start : end+1])
+	if !isExactWikilinkSource(raw) {
+		return "", false
+	}
+	return raw, true
+}
+
+// matchingBracket returns the index of the bracket closing the one at start.
+//
+// It tracks quote state as well as depth, because a quoted element may contain
+// an unbalanced bracket: `["a]b"]` closes at the LAST `]`, not the one inside
+// the string. Without that, the span would be short and the raw text would be
+// a truncated lie about what the operator wrote — worse than declining to
+// answer, because it would still look like a well-formed answer.
+//
+// A run to the end of the block with the depth still open returns false: an
+// unterminated flow sequence is a YAML error the decoder has its own words for,
+// and this function does not invent a span for it.
+func (s *sourceSlicer) matchingBracket(start int) (int, bool) {
+	depth := 0
+	var quote byte
+	for i := start; i < len(s.block); i++ {
+		c := s.block[i]
+		if quote != 0 {
+			if c == '\\' && quote == '"' {
+				i++ // a backslash escape inside a double-quoted scalar
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '[', '{':
+			depth++
+		case ']', '}':
+			depth--
+			if depth == 0 {
+				return i, true
+			}
+			if depth < 0 {
+				return 0, false
+			}
+		}
+	}
+	return 0, false
+}
+
+// isExactWikilinkSource is FR-030a's grammar over RAW SOURCE TEXT: the bytes
+// must be exactly a wikilink and nothing else.
+//
+// It is STRICTER than ParseWikilink, and every extra refusal is one the ruling
+// names or requires:
+//
+//	`,`         a genuine nested list. FR-030a's own words: "a genuine nested
+//	            list (`[[a, b]]`, raw text with a comma) can never be mistaken
+//	            for a link". Without this clause `[[a, b]]` would become a link
+//	            to a note called "a, b" — the mirror image of the defect the
+//	            ruling exists to fix, and harder to see.
+//	`[` / `]`   `[[a],[b]]` is two lists. ParseWikilink alone accepts it: it
+//	            only rejects an inner `[[` or `]]`, and this has neither, so it
+//	            would yield a target of `a],[b`.
+//	newline     a multi-line flow sequence. The span was read correctly; the
+//	            content simply is not a wikilink, and a note name spanning two
+//	            lines is not a thing.
+//
+// A QUOTED scalar is not subject to any of this and must not be. `"[[a, b]]"`
+// is a link to "a, b": the operator quoted it, so YAML never read a list, there
+// is no parser accident to correct, and D5.1's quoting convention is what our
+// own writes produce. That path never reaches this function.
+func isExactWikilinkSource(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if !strings.HasPrefix(s, "[[") || !strings.HasSuffix(s, "]]") || len(s) <= 4 {
+		return false
+	}
+	if strings.ContainsAny(s[2:len(s)-2], "[],\n\r") {
+		return false
+	}
+	_, ok := ParseWikilink(s)
+	return ok
 }
 
 // extractFrontmatterBlock returns the YAML between the opening `---` and the

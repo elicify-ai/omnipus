@@ -57,21 +57,31 @@ func numericProp(t *testing.T, name string) *Property {
 // TestTypes_StillSevenWithMoneyGoneAndNumberSplit is FR-004's arithmetic,
 // asserted rather than asserted-in-a-comment.
 //
-// ADR-068 D3 is explicit that the count is easy to get wrong in the OTHER
-// direction: −1 (money) −1 (number) +2 (integer, decimal) = still seven. A
-// previous reader nearly wrote a different number, which is exactly why this is
-// a test and not a sentence.
+// THE NAME IS NOW HISTORICAL AND IS KEPT DELIBERATELY. It records revision 7's
+// arithmetic — −1 (money) −1 (number) +2 (integer, decimal) = still SEVEN — which
+// is the sum a previous reader nearly got wrong and the reason this is a test
+// rather than a sentence. Draft 11 then added an EIGHTH, `checkbox` (FR-004c),
+// so the live count is eight and both facts are asserted below. Renaming the
+// function would break the spec §7 traceability row that cites it by name and
+// would erase the very arithmetic it exists to pin.
 func TestTypes_StillSevenWithMoneyGoneAndNumberSplit(t *testing.T) {
-	if len(PropertyTypes) != 7 {
-		t.Fatalf("FR-004: the type set is SEVEN; got %d (%v)", len(PropertyTypes), PropertyTypes)
+	if len(PropertyTypes) != 8 {
+		t.Fatalf("FR-004 as amended by FR-004c: the type set is EIGHT; got %d (%v)", len(PropertyTypes), PropertyTypes)
 	}
 	want := map[PropertyType]bool{
 		TypeText: true, TypeEnum: true, TypeRelation: true, TypeDate: true,
-		TypeInteger: true, TypeDecimal: true, TypePerson: true,
+		TypeInteger: true, TypeDecimal: true, TypePerson: true, TypeCheckbox: true,
+	}
+	// Revision 7's arithmetic, still pinned: the seven that survived `money`'s
+	// deletion and `number`'s split are all present, and `checkbox` is the ONE
+	// addition on top of them. Asserted as 7+1 rather than as a bare 8 so that
+	// deleting one of the original seven and adding two more could not pass.
+	if len(want)-1 != 7 {
+		t.Fatalf("FR-004: the pre-checkbox set must still be the seven of revision 7; the expectation above lists %d besides checkbox", len(want)-1)
 	}
 	for _, ty := range PropertyTypes {
 		if !want[ty] {
-			t.Fatalf("FR-004: %q is not one of the seven declared types", ty)
+			t.Fatalf("FR-004: %q is not one of the eight declared types", ty)
 		}
 		delete(want, ty)
 	}

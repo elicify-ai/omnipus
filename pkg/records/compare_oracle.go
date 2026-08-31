@@ -284,6 +284,12 @@ func comparisonDomain(t PropertyType) PropertyType {
 		// comparison domain.
 		return TypeDecimal
 	}
+	// `checkbox` (FR-004c) falls through here, alone in its own domain, and that
+	// is the decision. It is NOT unified with anything: not with `text` (`true`
+	// the boolean and `"true"` the string are different declarations and R-1
+	// exists to keep them apart), and not with a number (SQLite's 0/1 boolean is
+	// a storage convention, not a type, and adopting it would make
+	// `done > 0` a meaningful question with a meaningless answer).
 	return t
 }
 
@@ -313,6 +319,38 @@ func normalizeOperand(pv PropertyValue) PropertyValue {
 	}
 	if !pv.Property.Many && len(pv.Values) != 1 {
 		pv.State = StateNonConforming
+	}
+	// R-18/FR-143a — THE DECLARATION MUST BE ONE THE VALUES ACTUALLY HONOUR.
+	//
+	// R-1 decides a comparison from the two PROPERTIES' declared types and
+	// nothing else, and compareElements then reads whichever FIELD of TypedValue
+	// that declared type names. Nothing joined the two up until this line: a
+	// `text` value carried under a `decimal` declaration passed R-1 (decimal vs
+	// decimal), passed the disposition (`>` is defined for decimal), and reached
+	// `a.Number.Cmp(b.Number)` — where Number is the ZERO Decimal, because a
+	// text value never sets it. `"x" > 5` answered FALSE and `"x" < 5` answered
+	// TRUE, with nothing reported. A silently wrong answer wearing a type
+	// system, which is FR-143a's own phrase for it.
+	//
+	// It matters most for a FORMULA. A schema property's type is fixed in a file
+	// before any record is read, so its values cannot disagree with it without a
+	// bug in this package. A formula's type is inferred from an expression, and
+	// `if(c, 1, "x")` yields `decimal` on some records and `text` on others —
+	// which is exactly why FR-143a makes the type STATIC and validated at
+	// write/load. This check is what makes that promise worth something: the
+	// error channel is write/load, and here is where a broken promise stops
+	// being silent.
+	//
+	// Non-conformance, not a panic and not a special code: §8 R-4 already says
+	// what to do with a present value that does not conform to its declaration —
+	// false for every operator AND reported, once per offending operand. This
+	// simply widens what "does not conform" catches to include the case the type
+	// system was supposed to have made impossible.
+	for _, v := range pv.Values {
+		if !ValueConformsToDeclaration(pv.Property, v) {
+			pv.State = StateNonConforming
+			break
+		}
 	}
 	return pv
 }
@@ -507,6 +545,16 @@ func (c Comparator) compareElements(op Operator, a, b TypedValue, la, rb Propert
 		// R-1 makes these ONE declared type for comparison, so one branch:
 		// `3 = 3.0` is true and an integer compares with a decimal numerically.
 		return orderingHolds(op, a.Number.Cmp(b.Number)), nil
+	case TypeCheckbox:
+		// R-17/FR-216 — equality only. Ordering never arrives: the disposition
+		// above refused `<`, `<=`, `>` and `>=` for this type and named the
+		// remedy, so this branch answers `=`, `<>` and `IN` and nothing else.
+		//
+		// equalityAnswer, not orderingHolds, and the difference is the point: a
+		// three-way compare over a boolean would have to invent an order for
+		// `false` against `true`, which is the SQLite 0/1 convention leaking
+		// back in through the implementation after the disposition refused it.
+		return equalityAnswer(op, a.Bool == b.Bool), nil
 	default:
 		return false, []ComparisonProblem{{
 			Code:      CompareOperatorNotDefined,
@@ -619,7 +667,8 @@ func unresolvedRelationProblem(op Operator, side string, link Wikilink, pv Prope
 }
 
 // operatorDefinedForType is the disposition of each operator for each declared
-// type. FR-022b's ten operators, seven declared types.
+// type. FR-022b's ten operators, EIGHT declared types since FR-004c added
+// `checkbox` (a "seven" here is a Draft-9-or-earlier figure).
 //
 // AC-8.2: a change to this table is a SPECIFICATION change and must be argued as
 // one. A change that only moves cells in the generated table is an
@@ -663,6 +712,14 @@ func unresolvedRelationProblem(op Operator, side string, link Wikilink, pv Prope
 //     type, so their rows MUST be identical. `LIKE` is undefined for the same
 //     reason as `date`. TestComparison_DomainMatesShareOneRow holds the
 //     identity, so a one-sided edit cannot land.
+//   - checkbox — R-17/FR-216 via FR-004c: equality ONLY. Ordering is refused
+//     naming the remedy, because "is unchecked less than checked?" has no
+//     answer that is a fact about the data rather than about SQLite's habit of
+//     storing a boolean as 0 and 1. `LIKE` is undefined for the same reason it
+//     is on `date`: reaching it would mean coercing the value to text, and this
+//     design coerces nothing (R-1). The THIRD STATE is absence, so R-3's
+//     `IS NULL`/`IS NOT NULL` — which preempt this table for every type — are
+//     the operators that ask about it.
 //
 // `IN` is defined wherever `=` is, and for the same reason: it IS `=` over a set.
 var operatorDefinedForType = map[PropertyType]map[Operator]bool{
@@ -699,6 +756,11 @@ var operatorDefinedForType = map[PropertyType]map[Operator]bool{
 	TypeDecimal: {
 		OpEqual: true, OpNotEqual: true,
 		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
+		OpLike: false, OpIn: true,
+	},
+	TypeCheckbox: {
+		OpEqual: true, OpNotEqual: true,
+		OpLess: false, OpLessOrEqual: false, OpGreater: false, OpGreaterOrEqual: false,
 		OpLike: false, OpIn: true,
 	},
 }

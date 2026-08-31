@@ -444,9 +444,20 @@ func ResolveProperty(rec Record, prop *Property) PropertyValue {
 	}
 
 	n, present := rec.Frontmatter.Get(prop.Name)
-	if !present || n.Kind == KindNull {
+	if !present || n.Kind == KindNull || AbsentByEmptyString(prop, n) {
 		// FR-007 — absent. Missing key and explicit null are the same state:
 		// a key with no value is not a value.
+		//
+		// FR-007a joins them as a THIRD spelling of the same state: on any
+		// NON-TEXT type, `completed: ""` is unset. The rule and the reasoning
+		// live on AbsentByEmptyString (value.go) — this file calls out to the
+		// type system rather than restating a type rule of its own.
+		//
+		// IT SITS HERE, BEFORE THE ARITY CHECK BELOW, and that ordering is the
+		// decision. `tags: ""` on a `many` property is the operator saying
+		// "unset", not the operator writing a scalar where a list belongs; an
+		// arity finding there would send them to add brackets around nothing.
+		// Absence and arity are independent, and absence is settled first.
 		return pv
 	}
 	base.Line = n.Line
@@ -481,6 +492,23 @@ func ResolveProperty(rec Record, prop *Property) PropertyValue {
 
 	pv.State = StatePresent
 	for i, el := range elements {
+		// FR-007a, the ELEMENT half: "in a `many` property, empty elements
+		// resolve as absent elements". The element is skipped — no value, no
+		// SourceIndex entry, and deliberately NO finding, because there is no
+		// fault to report about a value that is not there.
+		//
+		// It is a separate branch from the KindNull one immediately below, and
+		// they must NOT be merged: `- ` (an empty list entry) is a shape fault
+		// this package has always reported, while `- ""` on a non-text property
+		// is the founder's own convention for an unset element. Merging them
+		// would either resurrect 52 findings or silence a real one.
+		//
+		// A list whose every element is empty therefore ends as StatePresent
+		// with zero values — a present, empty list, which R-3 says is a VALUE
+		// and not absence. That is the right answer: the operator wrote a list.
+		if AbsentByEmptyString(prop, el) {
+			continue
+		}
 		if el.Kind == KindNull {
 			f := base
 			if isList {

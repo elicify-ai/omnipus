@@ -134,6 +134,16 @@ var oracleDisposition = map[PropertyType]map[Operator]bool{
 		OpLess: false, OpLessOrEqual: false, OpGreater: false, OpGreaterOrEqual: false,
 		OpLike: false, OpIn: true,
 	},
+	// R-17/FR-216 via FR-004c: `checkbox` compares by EQUALITY ONLY. Ordering is
+	// refused naming the remedy — "is unchecked less than checked?" has no
+	// answer that is a fact about the data rather than about SQLite's habit of
+	// storing a boolean as 0 and 1. `LIKE` is undefined for `date`'s reason:
+	// reaching it would mean coercing to text, and this design coerces nothing.
+	TypeCheckbox: {
+		OpEqual: true, OpNotEqual: true,
+		OpLess: false, OpLessOrEqual: false, OpGreater: false, OpGreaterOrEqual: false,
+		OpLike: false, OpIn: true,
+	},
 	// R-7: a date compares as an instant. `LIKE` is not defined — SQL reaches it
 	// by coercing the date to text, and this design coerces nothing (R-1).
 	TypeDate: {
@@ -207,6 +217,16 @@ func tvEnum(t *testing.T, name string) TypedValue {
 		t.Fatalf("test fixture: %q is not in the declared enum set %v", name, p.PermittedValues())
 	}
 	return TypedValue{Type: TypeEnum, Raw: name, Enum: v}
+}
+
+// tvBool builds a `checkbox` value the way parseCheckboxValue does: Raw keeps
+// the file's own spelling, Bool carries the value.
+func tvBool(b bool) TypedValue {
+	raw := "false"
+	if b {
+		raw = "true"
+	}
+	return TypedValue{Type: TypeCheckbox, Raw: raw, Bool: b}
 }
 
 func tvLink(t PropertyType, target string) TypedValue {
@@ -336,6 +356,12 @@ func sweepFixtures(t *testing.T, sw sweep, typ PropertyType, pos valuePos) Typed
 			return pick(left, tvNumber(t, TypeInteger, "2"), tvNumber(t, TypeInteger, "3"))
 		case TypeDecimal: // R-1: equal in value to the integer row, different in storage
 			return pick(left, tvNumber(t, TypeDecimal, "2.0"), tvNumber(t, TypeDecimal, "3.0"))
+		case TypeCheckbox:
+			// R-17: equality only, so what this sweep has to supply is a pair
+			// that is UNEQUAL — the `less` half of the relation is never
+			// consulted, because the disposition refuses `<` before any value
+			// is looked at. false/true is the unequal pair.
+			return pick(left, tvBool(false), tvBool(true))
 		}
 	case sweepEqual:
 		switch typ {
@@ -360,6 +386,8 @@ func sweepFixtures(t *testing.T, sw sweep, typ PropertyType, pos valuePos) Typed
 		case TypeDecimal:
 			// FR-013/FR-020b: equal across declared scales, exactly, no float.
 			return pick(left, tvNumber(t, TypeDecimal, "3.0"), tvNumber(t, TypeDecimal, "3.000"))
+		case TypeCheckbox:
+			return pick(left, tvBool(true), tvBool(true))
 		}
 	case sweepGreater:
 		switch typ {
@@ -391,6 +419,8 @@ func sweepFixtures(t *testing.T, sw sweep, typ PropertyType, pos valuePos) Typed
 			return pick(left, tvNumber(t, TypeInteger, "3"), tvNumber(t, TypeInteger, "2"))
 		case TypeDecimal:
 			return pick(left, tvNumber(t, TypeDecimal, "3.0"), tvNumber(t, TypeDecimal, "2.0"))
+		case TypeCheckbox:
+			return pick(left, tvBool(true), tvBool(false))
 		}
 	case sweepPattern:
 		switch typ {
@@ -412,6 +442,11 @@ func sweepFixtures(t *testing.T, sw sweep, typ PropertyType, pos valuePos) Typed
 			return pick(left, tvNumber(t, TypeInteger, "3"), tvNumber(t, TypeInteger, "2"))
 		case TypeDecimal:
 			return pick(left, tvNumber(t, TypeDecimal, "3.0"), tvNumber(t, TypeDecimal, "2.0"))
+		case TypeCheckbox:
+			// `LIKE` is undefined for a checkbox, so the pattern half of this
+			// sweep is never reached; the pair only has to stay UNEQUAL so the
+			// equality operators keep their meaning in this sweep.
+			return pick(left, tvBool(true), tvBool(false))
 		}
 	}
 	t.Fatalf("test fixture: no sweep value for %s/%s", sw, typ)
@@ -837,16 +872,28 @@ func TestComparisonTruthTable(t *testing.T) {
 	// AC-8.1's shape guard: adding a declared type, an arity shape, a sweep or
 	// an operator without extending the table changes this number, loudly.
 	//
-	// 38 = 7 declared types x 5 arity shapes (scalar, empty list, one-element
+	// IT IS HARDCODED ON PURPOSE. Deriving it from len(PropertyTypes) would make
+	// it agree with any type set automatically, which is the one thing a
+	// tripwire must not do — the point is that an eighth type cannot be added
+	// without a human editing this line and the arithmetic beside it.
+	//
+	// 43 = 8 declared types x 5 arity shapes (scalar, empty list, one-element
 	// list, two-element list, list with a non-conforming element) + absent
 	// scalar + absent list + non-conforming scalar.
-	if wantCells != 4*38*38*10 {
-		t.Fatalf("table shape changed: %d cells; AC-8.1 requires 4 sweeps x 38 operand states x 38 x every one of the ten operators", wantCells)
+	//
+	// It was 38 until Draft 11: FR-004c's `checkbox` is the eighth type, so
+	// 7x5+3 = 38 became 8x5+3 = 43.
+	if wantCells != 4*43*43*10 {
+		t.Fatalf("table shape changed: %d cells; AC-8.1 requires 4 sweeps x 43 operand states x 43 x every one of the ten operators", wantCells)
 	}
 	// The arity dimension used to be entirely OUTSIDE this table — every cell
 	// was scalar-against-scalar. These guards make that regression impossible to
-	// reintroduce by quietly shrinking operandStates back to nine.
-	if wantMulti := 4 * (38*38 - 9*9) * 10; multiValue != wantMulti {
+	// reintroduce by quietly shrinking operandStates back to the scalar-only set.
+	//
+	// 10 = the states whose property is NOT `many`: one scalar per declared
+	// type (8), plus the absent scalar and the non-conforming scalar. It was 9
+	// before `checkbox`.
+	if wantMulti := 4 * (43*43 - 10*10) * 10; multiValue != wantMulti {
 		t.Fatalf("multi-value cells = %d, want %d (every pairing where either side is a `many` property)",
 			multiValue, wantMulti)
 	}

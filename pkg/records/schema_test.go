@@ -226,12 +226,16 @@ properties:
 // TestSchema_TypesAreScopedToRecordType covers FR-004 and FR-009 — spec §7's
 // traceability row for US-1 scenario 1.2.
 func TestSchema_TypesAreScopedToRecordType(t *testing.T) {
-	t.Run("FR-004 exactly seven property types exist", func(t *testing.T) {
-		// The oracle is ADR-068 D3's table, transcribed here from the ADR and
-		// not from the implementation.
+	t.Run("FR-004 exactly eight property types exist", func(t *testing.T) {
+		// The oracle is ADR-068 D3's table as amended by D24.5, transcribed
+		// here from the ADR and not from the implementation.
 		// REVISION 7 CHANGED THE MEMBERSHIP, NOT THE COUNT: `money` deleted,
 		// `number` split into `integer` and `decimal`. −1 −1 +2 = still seven.
-		want := []string{"text", "enum", "relation", "date", "integer", "decimal", "person"}
+		// DRAFT 11 / FR-004c THEN CHANGED THE COUNT: `checkbox` is the eighth.
+		// The ORDER is asserted too, so `checkbox` has to be appended rather
+		// than inserted — PropertyTypes is what a rejection lists back to the
+		// operator, and that list should not reshuffle between releases.
+		want := []string{"text", "enum", "relation", "date", "integer", "decimal", "person", "checkbox"}
 		if len(PropertyTypes) != len(want) {
 			t.Fatalf("FR-004 declares exactly %d property types, package declares %d: %v", len(want), len(PropertyTypes), PropertyTypes)
 		}
@@ -242,7 +246,7 @@ func TestSchema_TypesAreScopedToRecordType(t *testing.T) {
 		}
 	})
 
-	t.Run("FR-004 an undeclared property type is rejected listing the seven", func(t *testing.T) {
+	t.Run("FR-004 an undeclared property type is rejected listing the eight", func(t *testing.T) {
 		root := writeVaultSchema(t, "", "widget.yaml", `
 schema_version: 1
 type: widget
@@ -257,7 +261,7 @@ properties:
 			t.Fatalf("expected one rejection, got %v", report.Rejections)
 		}
 		reason := report.Rejections[0].Reason
-		for _, pt := range []string{"text", "enum", "relation", "date", "integer", "decimal", "person"} {
+		for _, pt := range []string{"text", "enum", "relation", "date", "integer", "decimal", "person", "checkbox"} {
 			if !strings.Contains(reason, pt) {
 				t.Fatalf("a type rejection must list the supported types; %q missing from %q", pt, reason)
 			}
