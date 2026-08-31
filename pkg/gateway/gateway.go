@@ -5279,11 +5279,20 @@ func setupAndStartServices(
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
-		// staticcheck S1000: this select had exactly one case (ticker.C) and
-		// no cancellation/done channel, so it is equivalent to ranging over
-		// the ticker channel directly — ticker.C never closes, so this loops
-		// forever exactly as the select version did.
-		for range ticker.C {
+		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
+		// which never exits) — this goroutine outlives the process
+		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
+		// class of bug: any un-canceled background loop started here can
+		// still be mid-tick (Library.OrphanGC touches disk) when a caller
+		// that boots/tears down many gateways in one process — every test
+		// using testutil.StartTestGateway — has already moved on to
+		// t.TempDir() cleanup of homePath.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 			a := agentLoop
 			if a == nil {
 				continue
@@ -5338,6 +5347,10 @@ func setupAndStartServices(
 		const reapInterval = time.Minute
 		ticker := time.NewTicker(reapInterval)
 		defer ticker.Stop()
+		// ctx.Done() is observed below so this goroutine actually exits on
+		// gateway shutdown instead of outliving the process — see
+		// runCatalogRefreshLoop's doc comment for the shared class of bug.
+		//
 		// Each tick is recovered INDIVIDUALLY, matching the boot-time
 		// warm-up goroutine above: an unrecovered panic in any goroutine takes
 		// the WHOLE gateway process down — chat, every channel, every agent —
@@ -5365,8 +5378,13 @@ func setupAndStartServices(
 				}
 			}
 		}
-		for range ticker.C {
-			sweep()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
 		}
 	}()
 
