@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
@@ -645,6 +646,11 @@ type InferredProperty struct {
 	// this property holds one value or a list. `many:` follows the majority
 	// and the minority is named here.
 	AritySplit *AritySplitReport
+	// EnumWidened is set when this property's closed set met a literal the
+	// operator's own `.base` files filter on and no note carries — whether
+	// the set grew or the growth was refused at enumMaxDistinct. See
+	// WidenEnumsFromBases.
+	EnumWidened *EnumWidening
 }
 
 // AmbiguousInference is one property this package refused to classify
@@ -1546,4 +1552,484 @@ func relationRemedy(recordType, property string, candidates []string) string {
 	return fmt.Sprintf(
 		"the evidence is genuinely mixed (%s); pick one and it is a one-line edit: knowledge_configure set schema %s property %s type=relation to=<%s>",
 		strings.Join(candidates, " | "), recordType, property, strings.Join(candidates, "|"))
+}
+
+// ---------------------------------------------------------------------------
+// WIDENING AN INFERRED ENUM FROM A `.base` FILE
+//
+// An inferred enum's closed set is the DISTINCT VALUES OBSERVED. That makes
+// it a statement about what the vault currently holds, and the operator's
+// `.base` files routinely make a different one: `status == "doing"` against a
+// `task.status` inferred as (blocked, done, open, todo). No note carries
+// `doing`, so buildV2LeafNode refuses the literal, the clause is DROPPED, and
+// a dropped conjunct matches more rows than the original — so FR-105 disables
+// the whole view. On the founder's vault that cost four views across four
+// bases, none of them for a reason he would recognise as a reason.
+//
+// THIS IS THE SAME MOVE FR-018d MADE, AND THE SAME MOVE THE TEMPLATE RULE
+// ABOVE MAKES. A `.base` file naming a record type no note carries declares
+// that type. A template naming a property no note carries declares that
+// property. A base FILTERING on a value no note carries declares that value.
+// In each case the operator wrote the file, so the file is evidence.
+//
+// THE AMBIGUITY, STATED PLAINLY. A base filtering on a value no note carries
+// is genuinely two things at once: the operator filtering for a state that
+// has not occurred yet, or the operator's typo. This package cannot tell them
+// apart and does not pretend to.
+//
+// It does not have to, and that is the whole argument for widening rather
+// than refusing: IF THE LITERAL IS A TYPO, OBSIDIAN'S OWN VIEW ALSO RETURNS
+// NOTHING. Widening reproduces the original exactly under BOTH readings — a
+// real unoccurred state and a slip alike — where refusing reproduces it under
+// neither. So this is not a coin toss between two translations. It is the
+// faithful translation, and the only open question is whether the operator is
+// TOLD, which is what EnumWidening and its ReportLines exist for.
+//
+// Refusing is also not the cautious option it looks like. It costs a working
+// view for a state that occurs next week, and it tells the operator less: a
+// disabled view names the clause, but a widened one names the clause, the
+// base file, the observed values, and the nearest declared spelling.
+//
+// WHY IT CANNOT REJECT A NOTE. Every admitted value is by construction one
+// that canonicalEnumValue could not already resolve, i.e. one NO note of the
+// type carries. Validation of the current vault is therefore bit-identical
+// before and after: the acceptance bar (a note this run typed is never
+// reported invalid by the same run) is preserved by monotonicity, not by
+// luck. A larger `values:` list can only ever accept more.
+//
+// WHY IT CANNOT REORDER ANYTHING. records.comparisonDomain maps TypeEnum onto
+// TypeText — "an enum compares as the text it is" — so enum ordering is
+// LEXICAL on the value, never ordinal by position in `values:`. Appending to
+// the list cannot change the result of any comparison over any note's stored
+// value. Had enums compared by declaration order, this rule would be unsafe
+// and would have to be abandoned; it is worth knowing which fact it rests on.
+//
+// WHY IT CANNOT BROADEN A VIEW (FR-105), INCLUDING UNDER A NEGATION. This is
+// the obligation a leaf-level argument misses, and one was got wrong on this
+// branch today: a rewrite that NARROWS a leaf BROADENS the view when the leaf
+// sits under a `not:`, because a subset's complement is a superset.
+//
+// Widening survives that for a reason a narrowing rewrite cannot borrow: the
+// translated clause is EQUIVALENT to Obsidian's, not a subset of it.
+// `status == "doing"` in Obsidian matches the records whose status is
+// `doing`; the widened enum emits `status = doing`, which matches the same
+// records. Equivalence is preserved by complement — if A = B then ¬A = ¬B —
+// so the clause is faithful in BOTH polarities and needs no polarity proof.
+// Contrast `prop != ""` -> `IS NOT NULL`, which is a genuine subset relation
+// (`IS NOT NULL` does not have Obsidian's present-but-empty case) and is
+// therefore refused under a `not:`. The difference is exactly equivalence
+// versus containment, and it is why this rule needs no narrowingProof.
+//
+// Note also what does NOT happen here: no new translation path is created. An
+// admitted literal takes the identical buildV2LeafNode branch its already-
+// declared siblings take — after this rule, `status == "doing"` is emitted
+// exactly as `status == "blocked"` next door in the same base already was.
+// The rule moves a literal from "refused" into a class whose semantics this
+// importer already stands on.
+//
+// TWO HONEST LIMITS ON THAT EQUIVALENCE, NEITHER INTRODUCED HERE.
+//
+//   - canonicalEnumValue matches with records.FoldKey, so the emitted clause
+//     is case-insensitive where Obsidian's `==` is not. That is PRE-EXISTING
+//     for every enum literal this importer already translates, and it is not
+//     caused by widening — it is stated here only so a later reader does not
+//     mistake this rule for its source.
+//   - Widening never rescues a clause refused for some OTHER reason. A
+//     `.contains` on a scalar enum, or an ordering operator on a many
+//     property, is refused whatever the closed set holds; admitting its
+//     literal would change a schema the operator reads without changing one
+//     row of one view. leafAssertsEnumMembership is aligned with
+//     buildV2LeafNode precisely so this cannot drift apart.
+//
+// WHERE IT STOPS. enumMaxDistinct is the count above which classifyProperty
+// declines to call a property an enum at all. A base naming enough unknown
+// literals to push the set past that bound is not evidence for a wider enum —
+// it is evidence the INFERENCE was wrong about the property. So the widening
+// is refused wholesale, the observed set is left EXACTLY as the notes made it,
+// and the refusal is reported. It is refused wholesale rather than partially
+// because a partial widening would admit an arbitrary subset of the
+// operator's own literals, which is a worse answer than either extreme.
+// ---------------------------------------------------------------------------
+
+// EnumWidening is the account of one property's closed set meeting the
+// literals the operator's `.base` files filter it against — whether the set
+// grew or the growth was refused. It is the honesty payload for this rule, on
+// the same contract as AmbiguousInference and NameEvidencedInference: a guess
+// is acceptable when it is REPORTED and correctable in one edit.
+type EnumWidening struct {
+	RecordType string
+	// Property is the enum property the literals were compared against.
+	Property string
+	// Observed is the closed set as inference left it, before this rule.
+	Observed []string
+	// Requested is every literal the bases named that the observed set did
+	// not already contain, folded-deduplicated and sorted.
+	Requested []string
+	// Added is what actually joined the set. It equals Requested on a
+	// widening and is EMPTY on a refusal, so a reader never has to consult
+	// Refused to know what changed.
+	Added []string
+	// Refused is set when admitting Requested would have pushed the set past
+	// enumMaxDistinct, so nothing was added at all.
+	Refused bool
+	// Bases names every `.base` file that filtered on one of these values,
+	// sorted — the operator has to be told which file to go and look at.
+	Bases []string
+	// Nearest maps a requested literal to the OBSERVED value within one edit
+	// of it, when there is one. It is the typo check, handed to the operator
+	// rather than guessed at here.
+	Nearest map[string]string
+}
+
+// ReportLines renders this account for the import report and for the schema
+// file's own header, in the operator's terms.
+func (w EnumWidening) ReportLines() []string {
+	var lines []string
+	if w.Refused {
+		lines = append(lines, fmt.Sprintf(
+			"%s.%s: NOT widened. %s filter(s) on %s, which no note of this type carries; admitting them would take the closed set to %d values, past the %d at which this run stops treating a property as an enum at all. The set is left exactly as the notes made it (%s) and those clauses stay named losses — a closed set that large is evidence the property was mis-inferred, not evidence for a wider set.",
+			w.RecordType, w.Property, joinBaseFiles(w.Bases), quoteJoin(w.Requested),
+			len(w.Observed)+len(w.Requested), enumMaxDistinct, quoteJoin(w.Observed)))
+	} else {
+		lines = append(lines, fmt.Sprintf(
+			"%s.%s: the closed set gained %s, which no note of this type carries — %s filter(s) on it, so it is the operator's own word for a legal value rather than an observation. Observed values were %s. An imported view filtering on it returns exactly what the Obsidian original returns, which today is no rows.",
+			w.RecordType, w.Property, quoteJoin(w.Added), joinBaseFiles(w.Bases), quoteJoin(w.Observed)))
+	}
+	for _, v := range w.Requested {
+		near, ok := w.Nearest[v]
+		if !ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf(
+			"CHECK FOR A TYPO — %q is one edit from the observed value %q. If it is a slip, this filter matches nothing for as long as the `.base` file says %q — in Obsidian too, which is why it was carried across rather than dropped. Fix it in the base file, not here.",
+			v, near, v))
+	}
+	lines = append(lines, fmt.Sprintf(
+		"correct the set in a single edit: knowledge_configure set schema %s property %s type=enum values=%s",
+		w.RecordType, w.Property, strings.Join(w.Observed, ",")))
+	return lines
+}
+
+// enumWideningAcc accumulates one property's requested literals across every
+// base and view that named them, before any decision is made.
+type enumWideningAcc struct {
+	bases     map[string]struct{}
+	requested map[string]string // folded key -> the operator's spelling
+}
+
+// WidenEnumsFromBases admits into each inferred enum's closed set the literals
+// the operator's own `.base` files assert membership against, MUTATING
+// `inferred` in place, and returns the account of every property it touched
+// (including the ones it refused to touch).
+//
+// It must run after every schema is inferred and provisioned, and BEFORE both
+// writeSchemas and NewSchemaIndex: the admitted value has to reach the WRITTEN
+// schema, or the clause would be admitted at translate time and then refused
+// by records at query time — a view that imports clean and returns an error.
+func WidenEnumsFromBases(inferred map[string][]InferredProperty, relPaths []string, parsed map[string]*ParsedBase) []EnumWidening {
+	byType := map[string]map[string]*enumWideningAcc{}
+
+	for _, rel := range relPaths {
+		pb := parsed[rel]
+		if pb == nil {
+			continue
+		}
+		outer := TranslateFilterTree(pb.Filters)
+		outerLeaves := collectV2Leaves(outer.Root)
+
+		for _, vraw := range pb.Views {
+			viewTrans := TranslateFilterTree(vraw["filters"])
+			rt, conflict := resolveViewType(viewTrans.TypeLiterals, outer.TypeLiterals)
+			if conflict != "" || rt == "" {
+				// An UNTYPED view (FR-018b) queries every note in scope, so a
+				// property name in it is not scoped to one record type and its
+				// literal cannot be attributed to one vocabulary. Guessing
+				// which type was meant would rewrite every type that happens
+				// to share the property name.
+				continue
+			}
+			declared := inferred[rt]
+			if declared == nil {
+				continue
+			}
+			leaves := append(append([]v2Leaf{}, outerLeaves...), collectV2Leaves(viewTrans.Root)...)
+			for _, l := range leaves {
+				prop, ok := findInferredProperty(declared, l.Property)
+				if !ok || !leafAssertsEnumMembership(l, prop) {
+					// Never invents a property. Adding a VALUE to a vocabulary
+					// that exists and CREATING the vocabulary are different
+					// questions, and the second one belongs to the template
+					// rule and to FR-018d provisioning.
+					continue
+				}
+				if _, already := canonicalEnumValue(prop, l.Value); already {
+					// The translator would already resolve this literal, so
+					// nothing is added and nothing is reported. Reporting it
+					// would be a correction notice for a value that never
+					// changed.
+					continue
+				}
+				byProp := byType[rt]
+				if byProp == nil {
+					byProp = map[string]*enumWideningAcc{}
+					byType[rt] = byProp
+				}
+				a := byProp[l.Property]
+				if a == nil {
+					a = &enumWideningAcc{bases: map[string]struct{}{}, requested: map[string]string{}}
+					byProp[l.Property] = a
+				}
+				a.bases[rel] = struct{}{}
+				if key := records.FoldKey(strings.TrimSpace(l.Value)); key != "" {
+					if _, seen := a.requested[key]; !seen {
+						a.requested[key] = strings.TrimSpace(l.Value)
+					}
+				}
+			}
+		}
+	}
+
+	var out []EnumWidening
+	for _, rt := range sortedStringKeys(byType) {
+		for _, propName := range sortedStringKeys(byType[rt]) {
+			a := byType[rt][propName]
+			idx := indexOfProperty(inferred[rt], propName)
+			if idx < 0 {
+				continue
+			}
+			requested := make([]string, 0, len(a.requested))
+			for _, key := range sortedStringKeys(a.requested) {
+				requested = append(requested, a.requested[key])
+			}
+			if len(requested) == 0 {
+				continue
+			}
+			observed := append([]string(nil), inferred[rt][idx].EnumValues...)
+
+			w := EnumWidening{
+				RecordType: rt,
+				Property:   propName,
+				Observed:   observed,
+				Requested:  requested,
+				Bases:      sortedStringKeys(a.bases),
+				Nearest:    nearestWithinOneEdit(requested, observed),
+			}
+			if len(observed)+len(requested) > enumMaxDistinct {
+				w.Refused = true
+			} else {
+				w.Added = requested
+				widened := append(append([]string(nil), observed...), requested...)
+				sort.Slice(widened, func(i, j int) bool {
+					return records.FoldCompare(records.FoldKey(widened[i]), records.FoldKey(widened[j])) < 0
+				})
+				inferred[rt][idx].EnumValues = widened
+			}
+			stored := w
+			inferred[rt][idx].EnumWidened = &stored
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// CollectEnumWidenings gathers every enum-widening account off an inferred
+// schema set, in a stable order — the same shape as
+// CollectNameEvidencedInferences, so the report renders all of this package's
+// honesty payloads the same way.
+func CollectEnumWidenings(inferred map[string][]InferredProperty) []EnumWidening {
+	var out []EnumWidening
+	for _, props := range inferred {
+		for _, p := range props {
+			if p.EnumWidened != nil {
+				out = append(out, *p.EnumWidened)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RecordType != out[j].RecordType {
+			return out[i].RecordType < out[j].RecordType
+		}
+		return out[i].Property < out[j].Property
+	})
+	return out
+}
+
+// leafAssertsEnumMembership reports whether one filter leaf is the operator
+// asserting that its literal BELONGS TO the property's closed set — which is
+// exactly the set of positions where buildV2LeafNode tests the literal against
+// that set, and no others.
+//
+// The alignment with buildV2LeafNode is the whole safety condition. A literal
+// admitted from a position that clause never consults would change a schema an
+// operator reads without changing one row of one view; a position that clause
+// DOES consult and this one misses leaves the view disabled for no reason.
+func leafAssertsEnumMembership(l v2Leaf, prop InferredProperty) bool {
+	if prop.Type != records.TypeEnum || strings.TrimSpace(l.Value) == "" {
+		return false
+	}
+	switch l.Shape {
+	case shapeCompare:
+		// Equality is the membership claim. An ORDERING comparison is not:
+		// in `status > "m"`, `m` is a comparison BOUND, not a state any note
+		// is meant to carry, and admitting it would put it in the vocabulary
+		// forever — offered as a groupBy bucket and a filter suggestion.
+		// (`!=` reaches here as a tree negation over an `=` leaf, per
+		// nodeFromRawLeaf, so it is covered by this same branch.)
+		return l.Op == generated.Equal || l.Op == generated.LessThanGreaterThan
+	case shapeContains:
+		// R-9 makes `.contains` element membership on a LIST — the same claim
+		// `==` makes on a scalar. On a scalar enum buildV2LeafNode refuses it
+		// before ever consulting the closed set, so it asserts nothing.
+		return prop.Many
+	}
+	return false
+}
+
+func findInferredProperty(props []InferredProperty, name string) (InferredProperty, bool) {
+	if i := indexOfProperty(props, name); i >= 0 {
+		return props[i], true
+	}
+	return InferredProperty{}, false
+}
+
+func indexOfProperty(props []InferredProperty, name string) int {
+	for i := range props {
+		if props[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// nearestWithinOneEdit pairs each requested literal with an observed value one
+// edit away, when there is one. "One edit" is Damerau-Levenshtein — insertion,
+// deletion, substitution OR TRANSPOSITION — because a transposition is the
+// single most common typing slip (`doen` for `done`) and plain Levenshtein
+// scores it 2, which would miss exactly the case this check exists for.
+//
+// It decides nothing. The pairing is EVIDENCE handed to the operator, who
+// holds the one fact this package does not: whether they meant it.
+func nearestWithinOneEdit(requested, observed []string) map[string]string {
+	out := map[string]string{}
+	for _, r := range requested {
+		for _, o := range observed {
+			if withinOneEdit(records.FoldKey(r), records.FoldKey(o)) {
+				out[r] = o
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// withinOneEdit reports whether a and b are at Damerau-Levenshtein distance 1
+// or less.
+func withinOneEdit(a, b string) bool {
+	ar, br := []rune(a), []rune(b)
+	switch d := len(ar) - len(br); {
+	case d == 0:
+		return equalRunes(ar, br) || oneSubstitutionApart(ar, br) || oneTranspositionApart(ar, br)
+	case d == 1:
+		return oneDeletionApart(ar, br)
+	case d == -1:
+		return oneDeletionApart(br, ar)
+	}
+	return false
+}
+
+// oneSubstitutionApart: equal lengths, differing in exactly one position.
+func oneSubstitutionApart(a, b []rune) bool {
+	diff := 0
+	for i := range a {
+		if a[i] != b[i] {
+			diff++
+			if diff > 1 {
+				return false
+			}
+		}
+	}
+	return diff == 1
+}
+
+// oneTranspositionApart: equal lengths, identical except for two ADJACENT
+// positions whose runes are swapped — `doen` against `done`.
+func oneTranspositionApart(a, b []rune) bool {
+	first := -1
+	for i := range a {
+		if a[i] != b[i] {
+			if first < 0 {
+				first = i
+				continue
+			}
+			if i != first+1 || a[i] != b[first] || a[first] != b[i] {
+				return false
+			}
+			// Everything after the swapped pair must match.
+			for j := i + 1; j < len(a); j++ {
+				if a[j] != b[j] {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// oneDeletionApart: `long` becomes `short` by deleting exactly one rune.
+func oneDeletionApart(long, short []rune) bool {
+	i, j, skipped := 0, 0, false
+	for i < len(long) && j < len(short) {
+		if long[i] == short[j] {
+			i, j = i+1, j+1
+			continue
+		}
+		if skipped {
+			return false
+		}
+		skipped = true
+		i++
+	}
+	return true
+}
+
+func equalRunes(a, b []rune) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sortedStringKeys returns a map's keys in lexical order, so every list this
+// rule produces is identical between two runs over the same vault.
+func sortedStringKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func quoteJoin(vs []string) string {
+	if len(vs) == 0 {
+		return "(none)"
+	}
+	out := make([]string, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, fmt.Sprintf("%q", v))
+	}
+	return strings.Join(out, ", ")
+}
+
+func joinBaseFiles(vs []string) string {
+	if len(vs) == 0 {
+		return "a base"
+	}
+	return strings.Join(vs, ", ")
 }
