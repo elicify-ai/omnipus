@@ -18,7 +18,7 @@ func ptr[T any](v T) *T { return &v }
 func newTestView(name string, filters []generated.RecordFilter) *SavedView {
 	def := generated.ViewDef{
 		Name:          name,
-		Type:          "deal",
+		Type:          ptr("deal"),
 		SchemaVersion: 1,
 	}
 	if filters != nil {
@@ -40,7 +40,7 @@ func newSet(views ...*SavedView) *ViewSet {
 // unchanged, for a view with no filter.
 func TestViewFindLoader_MechanicalFieldsCarryOver(t *testing.T) {
 	def := generated.ViewDef{
-		Name: "open-deals", Type: "deal", SchemaVersion: 1,
+		Name: "open-deals", Type: ptr("deal"), SchemaVersion: 1,
 		GroupBy:    ptr([]string{"stage"}),
 		Properties: ptr([]string{"name", "amount"}),
 		Limit:      ptr(25),

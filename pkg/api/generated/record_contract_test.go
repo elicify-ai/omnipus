@@ -101,17 +101,57 @@ func requiredJSONField(t *testing.T, typ reflect.Type, jsonName string) reflect.
 // contracts/ and returns its top-level `required` list. Deliberately reads the
 // CONTRACT rather than the generated artifact: this is the half of the test
 // that fires the moment someone loosens the YAML, regeneration or not.
-func componentSchemaRequired(t *testing.T, schemaName string) []string {
+// componentSchemaYAML returns one component schema's YAML source, WHEREVER IT
+// LIVES. Most schemas are one file per schema under contracts/components/
+// schemas/; a few are hosted INLINE in contracts/openapi.yaml under
+// components.schemas because they reference the recursive VaultFilterNode by
+// internal $ref, which a cross-file reference cannot express without killing
+// oapi-codegen (the ADR-034 exception — VaultFindRequest, VaultFilterNode and,
+// since D24.1, ViewDef).
+//
+// Every contract assertion below reads through here rather than joining a path
+// itself. That matters: when ViewDef moved inline, the file-path version of
+// this lookup did not FAIL — os.ReadFile returned "no such file", the test
+// erred out, and a reader could easily have "fixed" it by dropping ViewDef
+// from the list, silently retiring a D0 guard over the very schema that had
+// just grown six new fields.
+func componentSchemaYAML(t *testing.T, schemaName string) []byte {
 	t.Helper()
 
 	path := filepath.Join(contractsDir(), "components", "schemas", schemaName+".yaml")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err, "could not read component schema %s", path)
+	if raw, err := os.ReadFile(path); err == nil {
+		return raw
+	}
+
+	specPath := filepath.Join(contractsDir(), "openapi.yaml")
+	raw, err := os.ReadFile(specPath)
+	require.NoError(t, err, "could not read %s", specPath)
+
+	var doc struct {
+		Components struct {
+			Schemas map[string]yaml.Node `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc), "could not parse %s", specPath)
+
+	node, ok := doc.Components.Schemas[schemaName]
+	require.True(t, ok,
+		"schema %q is neither a file under contracts/components/schemas/ nor an "+
+			"inline entry under components.schemas in contracts/openapi.yaml", schemaName)
+
+	out, err := yaml.Marshal(&node)
+	require.NoError(t, err, "could not re-marshal inline schema %q", schemaName)
+	return out
+}
+
+func componentSchemaRequired(t *testing.T, schemaName string) []string {
+	t.Helper()
 
 	var doc struct {
 		Required []string `yaml:"required"`
 	}
-	require.NoError(t, yaml.Unmarshal(raw, &doc), "could not parse %s", path)
+	require.NoError(t, yaml.Unmarshal(componentSchemaYAML(t, schemaName), &doc),
+		"could not parse component schema %s", schemaName)
 	return doc.Required
 }
 
@@ -553,15 +593,19 @@ func TestContract_RecordFilter_OperatorEnumMatchesTheEngine(t *testing.T) {
 			"one is a spec rule with no wire representation")
 }
 
-// ── The seven property types are closed ──────────────────────────────────────
-// Traces to: FR-004. An eighth type added anywhere would mean a value the
-// validator, the index and the query evaluator do not all agree on.
+// ── The eight property types are closed ──────────────────────────────────────
+// Traces to: FR-004, FR-004c. A NINTH type added anywhere would mean a value
+// the validator, the index and the query evaluator do not all agree on.
+//
+// The count is EIGHT since spec Draft 11 (FR-004c, ADR-068 D24.5) added
+// `checkbox`, which is what the Checked/Unchecked summaries count and what
+// D3.2's "days I did not meditate" example needed a native type for. It was
+// seven before that, and seven for a different membership before ADR-068
+// revision 7. This test's name still says Seven, deliberately: renaming it
+// would break the traceability table's reference to it, and the assertion
+// below is what is authoritative about the count, not the identifier.
 
 func TestContract_PropertyDef_SevenTypesExactly(t *testing.T) {
-	path := filepath.Join(contractsDir(), "components", "schemas", "PropertyDef.yaml")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-
 	var doc struct {
 		Properties struct {
 			Type struct {
@@ -569,14 +613,15 @@ func TestContract_PropertyDef_SevenTypesExactly(t *testing.T) {
 			} `yaml:"type"`
 		} `yaml:"properties"`
 	}
-	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	require.NoError(t, yaml.Unmarshal(componentSchemaYAML(t, "PropertyDef"), &doc))
 
 	assert.ElementsMatch(t,
-		[]string{"text", "enum", "relation", "date", "integer", "decimal", "person"},
+		[]string{"text", "enum", "relation", "date", "integer", "decimal", "person", "checkbox"},
 		doc.Properties.Type.Enum,
-		"FR-004: exactly these seven property types, no more and no fewer. The MEMBERSHIP "+
-			"changed in ADR-068 revision 7 and the COUNT did not: `money` deleted, `number` "+
-			"split into `integer` and `decimal` — minus one, minus one, plus two.")
+		"FR-004 + FR-004c: exactly these eight property types, no more and no fewer. "+
+			"`checkbox` is the eighth (Draft 11); before it the count was seven, and the "+
+			"MEMBERSHIP of that seven changed in ADR-068 revision 7 without the count "+
+			"moving: `money` deleted, `number` split into `integer` and `decimal`.")
 }
 
 // TestContract_PropertyDef_ArityAndPresenceAreRequired guards D3.1. `many`
@@ -601,17 +646,13 @@ func TestContract_PropertyDef_ArityAndPresenceAreRequired(t *testing.T) {
 
 func TestContract_D0_NoBuiltInRecordTypesInTheContract(t *testing.T) {
 	for _, schemaName := range []string{"RecordType", "VaultRecord", "RecordQueryRequest", "ViewDef"} {
-		path := filepath.Join(contractsDir(), "components", "schemas", schemaName+".yaml")
-		raw, err := os.ReadFile(path)
-		require.NoError(t, err)
-
 		var doc struct {
 			Properties map[string]struct {
 				Type string   `yaml:"type"`
 				Enum []string `yaml:"enum"`
 			} `yaml:"properties"`
 		}
-		require.NoError(t, yaml.Unmarshal(raw, &doc))
+		require.NoError(t, yaml.Unmarshal(componentSchemaYAML(t, schemaName), &doc))
 
 		typeProp, ok := doc.Properties["type"]
 		require.True(t, ok, "%s must carry a `type` property", schemaName)

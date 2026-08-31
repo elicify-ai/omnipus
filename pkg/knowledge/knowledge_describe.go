@@ -329,7 +329,16 @@ func renderViews(b *strings.Builder, d DescribeData) {
 		fmt.Fprintf(b, "VIEWS (%d) — ask for one by name before inventing a filter\n", len(views))
 	}
 	for _, v := range views {
-		head := fmt.Sprintf("  %s  type %s", v.Name(), v.Def.Type)
+		// ViewDef.Type is a *string since FR-018b made `type` optional (an
+		// untyped view spans record types). Rendered through %s a nil — or a
+		// non-nil — pointer prints an ADDRESS, which is why go vet flags it:
+		// an operator reading "type 0xc000123456" learns nothing and cannot
+		// tell it from a real type name.
+		viewType := "(untyped)"
+		if v.Def.Type != nil {
+			viewType = *v.Def.Type
+		}
+		head := fmt.Sprintf("  %s  type %s", v.Name(), viewType)
 		if lbl := v.DisplayLabel(); lbl != v.Name() {
 			head += " " + quoteDisplay(lbl)
 		}
