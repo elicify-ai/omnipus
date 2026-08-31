@@ -10,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -95,7 +97,7 @@ func statFromInfo(path string, fi os.FileInfo) FileMeta {
 		ModTime: fi.ModTime().UTC(),
 		Size:    fi.Size(),
 	}
-	if bt, ok := birthTime(path, fi); ok {
+	if bt, ok := fileutil.BirthTime(path, fi); ok {
 		m.BirthTime, m.HasBirthTime = bt.UTC(), true
 	}
 	return m

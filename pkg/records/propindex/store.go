@@ -333,11 +333,25 @@ type Store interface {
 	// re-indexed the whole note" — which is the bug FR-136 exists to prevent and
 	// which a void return would leave unobservable.
 	//
-	// ctime is deliberately NOT refreshed. A refresh is driven by the walk, the
-	// walk carries size and mtime only, and there is nothing here to refresh a
-	// birth time FROM; a birth time also does not change, so the value written
-	// at index time stays correct. Three columns are written, two are refreshed.
-	RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos int64) (bool, error)
+	// CTIME IS REFRESHED, BUT ONLY UPWARDS — and the asymmetry is the whole of
+	// FR-133 applied to a refresh.
+	//
+	// This method's first version took size and mtime only, on the reasoning
+	// that a birth time does not change so the value written at index time
+	// stays correct. That reasoning is sound and is not what the two extra
+	// parameters are for. They are for the note whose row was written with NO
+	// birth time at all — every note indexed before the walk carried one, and
+	// every note on a pass where the platform could not produce one. Such a row
+	// is only ever re-written by a full UpsertNote, and a content-unchanged skip
+	// never performs one, so without this the value would stay NULL until the
+	// next schema-version rebuild.
+	//
+	// hasCtime FALSE therefore means "the caller has nothing to offer", NEVER
+	// "clear what is stored". A Linux pass with no statx birth-time support must
+	// not erase the value a macOS pass over the same synced vault wrote —
+	// FR-133's absence is the absence of a FACT, and one platform not knowing
+	// something is not evidence that another platform's answer was wrong.
+	RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos, ctimeNanos int64, hasCtime bool) (bool, error)
 
 	// NeedsFullIndex reports that the store holds nothing usable and the caller
 	// must re-derive it from the notes — a fresh file, or one written by an

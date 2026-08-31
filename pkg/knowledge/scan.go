@@ -33,6 +33,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // ScanKind distinguishes the two things a collection holds. The distinction is
@@ -82,6 +84,29 @@ type ScanEntry struct {
 	Size int64
 	// ModTimeNanos is the modification time in Unix nanoseconds, from Lstat.
 	ModTimeNanos int64
+	// CtimeNanos is the file's BIRTH time in Unix nanoseconds, and HasCtime
+	// says whether this platform recorded one at all (spec FR-133).
+	//
+	// It is here rather than left to the indexer because the indexer has no
+	// os.FileInfo — this walk does, and the birth time is read from the SAME
+	// one Size and ModTimeNanos come from. On macOS, the BSDs and Windows that
+	// costs nothing: the value is already in the structure Lstat filled in. On
+	// Linux it costs ONE statx(2) per file, because the birth time is reachable
+	// no other way.
+	//
+	// HasCtime FALSE IS A REAL ANSWER, not a failure: a Linux kernel older than
+	// 4.11, a filesystem that records no creation time, and any platform whose
+	// stat structure has no birth field all land here, and `file.ctime` is then
+	// ABSENT. It is never the POSIX inode-change time that shares the name —
+	// that one moves on a chmod and is routinely LATER than the modification
+	// time, which is exactly the kind of plausible wrong answer FR-133 exists
+	// to refuse.
+	//
+	// Nothing here opens a file. statx(2) is a path lookup, so this package's
+	// "never opens anything" property (FR-039a, and the header above) is
+	// untouched.
+	CtimeNanos int64
+	HasCtime   bool
 }
 
 // ScanProblem records something the walk refused to do, or could not do. Both
@@ -242,12 +267,21 @@ func Scan(root string) (*ScanResult, error) {
 			})
 			return nil //nolint:nilerr // reported as a ScanProblem; the walk must continue
 		}
-		res.Entries = append(res.Entries, ScanEntry{
+		// The birth time comes from the os.FileInfo already in hand, so on every
+		// platform but Linux this is a struct-field read rather than a syscall.
+		// It lives in pkg/fileutil rather than in the package that STORES it
+		// because pkg/records/propindex's own tests import this package, so
+		// depending on propindex here is an import cycle in the test binary.
+		entry := ScanEntry{
 			RelPath:      rel,
 			Kind:         ScanKindFor(rel),
 			Size:         fi.Size(),
 			ModTimeNanos: fi.ModTime().UnixNano(),
-		})
+		}
+		if bt, ok := fileutil.BirthTime(path, fi); ok {
+			entry.CtimeNanos, entry.HasCtime = bt.UnixNano(), true
+		}
+		res.Entries = append(res.Entries, entry)
 		return nil
 	})
 	if walkErr != nil {

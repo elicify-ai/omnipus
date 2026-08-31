@@ -62,7 +62,7 @@ func TestRefreshNoteStat_AppliesTheChangeAndReportsIt(t *testing.T) {
 	mustUpsert(t, store, rows)
 
 	later := time.Date(2026, 8, 31, 8, 30, 0, 500, time.UTC)
-	changed, err := store.RefreshNoteStat(ctx, rows.Path, 250, later.UnixNano())
+	changed, err := store.RefreshNoteStat(ctx, rows.Path, 250, later.UnixNano(), 0, false)
 	if err != nil {
 		t.Fatalf("RefreshNoteStat: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRefreshNoteStat_TouchesNothingButTheStat(t *testing.T) {
 	}
 
 	if _, err := store.RefreshNoteStat(ctx, rows.Path,
-		999, time.Date(2026, 8, 31, 8, 30, 0, 0, time.UTC).UnixNano()); err != nil {
+		999, time.Date(2026, 8, 31, 8, 30, 0, 0, time.UTC).UnixNano(), 0, false); err != nil {
 		t.Fatalf("RefreshNoteStat: %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestRefreshNoteStat_ReportsNoChangeWhenNothingChanged(t *testing.T) {
 	rows := statAt(taggedNote(t), 100, mtime, time.Date(2020, 5, 5, 5, 5, 5, 0, time.UTC))
 	mustUpsert(t, store, rows)
 
-	changed, err := store.RefreshNoteStat(ctx, rows.Path, 100, mtime.UnixNano())
+	changed, err := store.RefreshNoteStat(ctx, rows.Path, 100, mtime.UnixNano(), 0, false)
 	if err != nil {
 		t.Fatalf("RefreshNoteStat: %v", err)
 	}
@@ -164,12 +164,12 @@ func TestRefreshNoteStat_ReportsNoChangeWhenNothingChanged(t *testing.T) {
 	// caught. A store that compared mtime alone would report no change for a
 	// file that was truncated in place within the same nanosecond — and one
 	// that compared size alone would miss every `touch`.
-	if changed, err = store.RefreshNoteStat(ctx, rows.Path, 101, mtime.UnixNano()); err != nil {
+	if changed, err = store.RefreshNoteStat(ctx, rows.Path, 101, mtime.UnixNano(), 0, false); err != nil {
 		t.Fatalf("RefreshNoteStat (size only): %v", err)
 	} else if !changed {
 		t.Error("a size-only change was not reported; the comparison is ignoring the size column")
 	}
-	if changed, err = store.RefreshNoteStat(ctx, rows.Path, 101, mtime.Add(time.Hour).UnixNano()); err != nil {
+	if changed, err = store.RefreshNoteStat(ctx, rows.Path, 101, mtime.Add(time.Hour).UnixNano(), 0, false); err != nil {
 		t.Fatalf("RefreshNoteStat (mtime only): %v", err)
 	} else if !changed {
 		t.Error("an mtime-only change was not reported; the comparison is ignoring the mtime column")
@@ -189,7 +189,7 @@ func TestRefreshNoteStat_UnknownPathIsANoOpNotAnError(t *testing.T) {
 	mustUpsert(t, store, taggedNote(t))
 	beforeCount := len(collect(t, store, Selector{}))
 
-	changed, err := store.RefreshNoteStat(ctx, "garden/never-indexed.md", 1, time.Now().UnixNano())
+	changed, err := store.RefreshNoteStat(ctx, "garden/never-indexed.md", 1, time.Now().UnixNano(), 0, false)
 	if err != nil {
 		t.Fatalf("RefreshNoteStat on a path the store does not hold returned an error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestRefreshNoteStat_UnknownPathIsANoOpNotAnError(t *testing.T) {
 
 	// An empty path is a CALLER BUG, not a vault fact, and is refused rather
 	// than silently treated as "no such note".
-	if _, err := store.RefreshNoteStat(ctx, "", 1, 1); err == nil {
+	if _, err := store.RefreshNoteStat(ctx, "", 1, 1, 0, false); err == nil {
 		t.Error("RefreshNoteStat accepted an empty path; a path is the note's identity here and an " +
 			"empty one is a defect in the caller, not a note that happens to be missing")
 	}

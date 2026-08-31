@@ -215,7 +215,7 @@ func (s *verdictSpy) Tags(context.Context, propindex.Selector, func(propindex.Ta
 func (s *verdictSpy) Links(context.Context, propindex.Selector, func(propindex.LinkHit) error) error {
 	return nil
 }
-func (s *verdictSpy) RefreshNoteStat(context.Context, string, int64, int64) (bool, error) {
+func (s *verdictSpy) RefreshNoteStat(context.Context, string, int64, int64, int64, bool) (bool, error) {
 	return false, nil
 }
 

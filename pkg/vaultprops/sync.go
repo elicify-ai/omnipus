@@ -166,18 +166,27 @@ type storedNoteState struct {
 // correct" is equally satisfied by a full re-index, which is the bug rather
 // than the fix. The count separates the two.
 //
-// CTIME IS DELIBERATELY NOT REFRESHED HERE, AND THAT IS A NAMED GAP RATHER
-// THAN AN OVERSIGHT. FR-133 says `file.ctime` is the file's BIRTH time where
-// the platform records one, and ABSENT where it does not — explicitly NOT the
-// misnamed POSIX inode-change time, which moves on a permission change and is
-// routinely later than the modification time. knowledge.ScanEntry carries
-// Size and ModTimeNanos from Lstat and no birth time at all
-// (pkg/knowledge/scan.go), so THE WALK HAS NO CTIME TO REFRESH FROM. Writing a
-// zero, or substituting st_ctime, would be a wrong answer with no error
-// channel — the precise failure this requirement exists to remove — so the
-// value stays absent, which FR-133 declares legal. Birth time becomes
-// refreshable when the WALK carries it; that is a pkg/knowledge seam, named
-// here so nobody has to discover it by wondering why ctime never moves.
+// CTIME IS NOW CARRIED TOO, AND THE SEAM THIS COMMENT USED TO NAME IS CLOSED.
+// It read: "knowledge.ScanEntry carries Size and ModTimeNanos from Lstat and no
+// birth time at all, so THE WALK HAS NO CTIME TO REFRESH FROM ... birth time
+// becomes refreshable when the WALK carries it; that is a pkg/knowledge seam."
+// The walk now carries it (knowledge.ScanEntry.CtimeNanos/HasCtime), read from
+// the SAME os.FileInfo Size and ModTimeNanos come from.
+//
+// The refusal that comment was protecting is unchanged and still absolute: a
+// birth time this platform did not record is ABSENT, never the misnamed POSIX
+// inode-change time, which moves on a permission change and is routinely later
+// than the modification time. What changed is only that there is now something
+// honest to carry. The refresh applies it ONE WAY — it can fill in a row that
+// has no birth time, and it never clears one, so a Linux pass without statx
+// birth-time support cannot erase what a macOS pass over the same synced vault
+// established (Store.RefreshNoteStat's contract states the rule).
+//
+// The gap was worth closing rather than documenting: `file.ctime` was NULL for
+// every note on every platform, so it was not FR-133's honest absence on
+// platforms that lack a birth time, it was a dead property everywhere. Every
+// imported Bases view sorting or filtering on creation date returned nothing
+// useful, and nothing reported why.
 // ---------------------------------------------------------------------------
 
 // refreshStatIfDrifted is FR-136's decision for one entry this run did NOT
@@ -192,7 +201,8 @@ func refreshStatIfDrifted(
 	entry knowledge.ScanEntry,
 	stats *SyncStats,
 ) error {
-	changed, err := store.RefreshNoteStat(ctx, entry.RelPath, entry.Size, entry.ModTimeNanos)
+	changed, err := store.RefreshNoteStat(ctx, entry.RelPath,
+		entry.Size, entry.ModTimeNanos, entry.CtimeNanos, entry.HasCtime)
 	if err != nil {
 		return fmt.Errorf("vaultprops: refreshing the stat of %q: %w", entry.RelPath, err)
 	}
@@ -357,6 +367,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 			if err := store.UpsertNote(ctx, propindex.NoteRows{
 				Path: entry.RelPath, Kind: propindex.KindAttachment,
 				Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
+				CtimeNanos: entry.CtimeNanos, HasCtime: entry.HasCtime,
 			}); err != nil {
 				return stats, fmt.Errorf("vaultprops: indexing attachment %q: %w", entry.RelPath, err)
 			}
@@ -433,6 +444,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		// that reports size 0 for the width of one extra statement is exactly
 		// the kind of transient wrong answer this index is built to not have.
 		rows.Size, rows.MtimeNanos = entry.Size, entry.ModTimeNanos
+		rows.CtimeNanos, rows.HasCtime = entry.CtimeNanos, entry.HasCtime
 		if err := store.UpsertNote(ctx, rows); err != nil {
 			return stats, fmt.Errorf("vaultprops: indexing %q: %w", entry.RelPath, err)
 		}

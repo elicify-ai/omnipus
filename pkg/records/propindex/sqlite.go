@@ -447,11 +447,13 @@ func (ix *Index) DeleteNote(ctx context.Context, path string) (err error) {
 // does not exist. The bool is what a caller counts, so a false positive in it is
 // a wrong number in someone's sync report.
 //
-// ctime is untouched. The walk that drives a refresh carries size and mtime
-// only, so there is nothing here to refresh a birth time from — and a birth time
-// does not change, so the value written at index time remains correct. Three
-// columns are written at index time; two are refreshed.
-func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos int64) (changed bool, err error) {
+// ctime is refreshed ONE WAY ONLY: an absent stored birth time can be filled
+// in, and a stored one is never cleared. See the interface's doc comment for
+// why the asymmetry is FR-133 rather than caution — briefly, hasCtime false
+// means the CALLER has nothing to offer, and a Linux pass with no statx
+// birth-time support must not erase what a macOS pass over the same synced
+// vault already established.
+func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos, ctimeNanos int64, hasCtime bool) (changed bool, err error) {
 	if path == "" {
 		return false, errors.New("propindex: RefreshNoteStat called with an empty path")
 	}
@@ -468,11 +470,11 @@ func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNa
 	}()
 
 	var (
-		id                 int64
-		haveMtime, haveSze []byte
+		id                            int64
+		haveMtime, haveSze, haveCtime []byte
 	)
 	scanErr := ix.queryRowTx(ctx, tx, PhaseWrite,
-		`SELECT note_id, mtime, size FROM notes WHERE path = ?`, path).Scan(&id, &haveMtime, &haveSze)
+		`SELECT note_id, mtime, size, ctime FROM notes WHERE path = ?`, path).Scan(&id, &haveMtime, &haveSze, &haveCtime)
 	switch {
 	case errors.Is(scanErr, sql.ErrNoRows):
 		// A path this store does not hold. Refreshing the metadata of a note the
@@ -491,7 +493,20 @@ func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNa
 
 	wantMtime := nanoTimeColumn(mtimeNanos)
 	wantSize := sizeColumn(size, mtimeNanos != 0)
-	if sameColumn(haveMtime, wantMtime) && sameColumn(haveSze, wantSize) {
+
+	// The one-way rule, in one expression: keep what is stored unless the
+	// caller has a birth time AND the stored column is empty. A stored value is
+	// never replaced either — a birth time that changed did so because the file
+	// was replaced, and that is a content change, which takes the UpsertNote
+	// path rather than this one.
+	wantCtime := any(nil)
+	if len(haveCtime) > 0 {
+		wantCtime = haveCtime
+	} else if hasCtime {
+		wantCtime = ctimeColumn(ctimeNanos, true)
+	}
+
+	if sameColumn(haveMtime, wantMtime) && sameColumn(haveSze, wantSize) && sameColumn(haveCtime, wantCtime) {
 		if err = tx.Commit(); err != nil {
 			return false, fmt.Errorf("propindex: closing the stat refresh of %q: %w", path, err)
 		}
@@ -499,7 +514,7 @@ func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNa
 	}
 
 	if _, err = ix.execTx(ctx, tx, PhaseWrite,
-		`UPDATE notes SET mtime = ?, size = ? WHERE note_id = ?`, wantMtime, wantSize, id); err != nil {
+		`UPDATE notes SET mtime = ?, size = ?, ctime = ? WHERE note_id = ?`, wantMtime, wantSize, wantCtime, id); err != nil {
 		err = fmt.Errorf("propindex: refreshing the stat of %q: %w", path, err)
 		return false, err
 	}

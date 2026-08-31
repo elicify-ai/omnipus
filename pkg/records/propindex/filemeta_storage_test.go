@@ -514,3 +514,77 @@ func TestRawRows_ANoteWithNoFrontmatterContributesNone(t *testing.T) {
 		t.Errorf("a note with no frontmatter acquired properties: %#v", got[0].Props)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FR-133 under a refresh — the one-way rule
+// ---------------------------------------------------------------------------
+
+// TestRefreshNoteStat_FillsAnAbsentCtimeAndNeverClearsAStoredOne.
+//
+// Both directions matter and they fail differently.
+//
+// FILLING is what makes an existing index recover. A row written before the
+// walk carried a birth time — or on a pass where the platform could not produce
+// one — is only ever rewritten by a full UpsertNote, and a content-unchanged
+// skip never performs one. Without the fill, such a row keeps a NULL ctime
+// until the next schema-version rebuild, which may never come.
+//
+// NOT CLEARING is what makes a synced vault survive. hasCtime false means the
+// CALLER has nothing to offer, never "the stored value is wrong": a Linux pass
+// with no statx birth-time support running over a vault a Mac indexed must not
+// erase the Mac's answer. FR-133's absence is the absence of a FACT, and one
+// platform's ignorance is not evidence against another's knowledge.
+func TestRefreshNoteStat_FillsAnAbsentCtimeAndNeverClearsAStoredOne(t *testing.T) {
+	ctx := context.Background()
+	mtime := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	born := time.Date(2019, 3, 4, 5, 6, 7, 0, time.UTC)
+
+	t.Run("fills an absent one", func(t *testing.T) {
+		store, _ := openIndex(t, Options{})
+		rows := taggedNote(t)
+		rows.Size, rows.MtimeNanos = 100, mtime.UnixNano() // no birth time
+		mustUpsert(t, store, rows)
+
+		if got := collect(t, store, Selector{})[0].File; got.HasBirthTime {
+			t.Fatalf("the fixture already holds a birth time (%s); this test would pass with the fill deleted", got.BirthTime)
+		}
+
+		changed, err := store.RefreshNoteStat(ctx, rows.Path, 100, mtime.UnixNano(), born.UnixNano(), true)
+		if err != nil {
+			t.Fatalf("RefreshNoteStat: %v", err)
+		}
+		if !changed {
+			t.Error("filling in a previously absent birth time is a change, and the bool is what a sync report counts")
+		}
+		got := collect(t, store, Selector{})[0].File
+		if !got.HasBirthTime || !got.BirthTime.Equal(born) {
+			t.Errorf("the absent birth time was not filled in: %+v", got)
+		}
+	})
+
+	t.Run("never clears a stored one", func(t *testing.T) {
+		store, _ := openIndex(t, Options{})
+		rows := taggedNote(t)
+		rows.Size, rows.MtimeNanos = 100, mtime.UnixNano()
+		rows.CtimeNanos, rows.HasCtime = born.UnixNano(), true
+		mustUpsert(t, store, rows)
+
+		// A pass from a platform that has no birth time to offer.
+		later := mtime.Add(2 * time.Hour)
+		if _, err := store.RefreshNoteStat(ctx, rows.Path, 100, later.UnixNano(), 0, false); err != nil {
+			t.Fatalf("RefreshNoteStat: %v", err)
+		}
+
+		got := collect(t, store, Selector{})[0].File
+		if !got.HasBirthTime || !got.BirthTime.Equal(born) {
+			t.Errorf("a refresh from a platform with no birth time ERASED the stored one: %+v.\n"+
+				"hasCtime false means the caller has nothing to offer, never that the stored value is "+
+				"wrong — a Linux pass over a vault a Mac indexed must not delete the Mac's answer.", got)
+		}
+		// And the mtime it DID have to offer still landed, so the test is not
+		// passing because the refresh did nothing at all.
+		if !got.ModTime.Equal(later) {
+			t.Errorf("the refresh did not apply the mtime it was given: %s, want %s", got.ModTime, later)
+		}
+	})
+}
