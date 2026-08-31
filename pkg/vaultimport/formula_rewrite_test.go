@@ -113,10 +113,33 @@ func TestRewriteW2_DropsATruthyDateGuardOnlyWhenItIsProvablyRedundant(t *testing
 			why:  "the guarded expression names `created`, not `due`, so it has a value on a record with no `due` at all — dropping the guard would ADD a value where Obsidian showed nothing",
 		},
 		{
-			name: "a guard over a COMPARISON is never dropped (3-arg, false else)",
+			// THIS ROW REVERSED, and the reversal is the point rather than a
+			// relaxation. It used to assert that `if(due, <comparison>, false)`
+			// stays untouched, because "R-2 makes a comparison over an absent
+			// operand FALSE, which is a VALUE and not absence". Both halves of
+			// that sentence are true and the conclusion did not follow: the
+			// ELSE-BRANCH IS ALSO `false`, so the value the guard was
+			// protecting against is the value the else-branch already returns.
+			// W4 proves that identity (translate.go's header) and drops the
+			// guard. The `""` else-branch rows below are unaffected — there the
+			// two values really do differ, `false` against absence, which is
+			// why they still refuse.
+			name: "a guard over a COMPARISON is dropped when the else-branch is `false` (W4)",
 			in:   `if(due, date(due) < today(), false)`,
-			want: `if(due, date(due) < today(), false)`,
-			why:  "R-2 makes a comparison over an absent operand FALSE, which is a VALUE and not absence — this is Compliance.base's is_overdue and it stays a named loss",
+			want: `date(due) < today()`,
+			why:  "with `due` absent the comparison is present-FALSE under §8 R-2, which is exactly what the `false` else-branch returns — the two forms hold the same value on every record",
+		},
+		{
+			name: "a guard over a COMPARISON is NOT dropped when the else-branch is `true`",
+			in:   `if(due, date(due) < today(), true)`,
+			want: `if(due, date(due) < today(), true)`,
+			why:  "W4's identity is that the guarded expression already returns the ELSE-BRANCH's value where the guard is absent; `false` is that value and `true` is its opposite",
+		},
+		{
+			name: "a guard over a NON-comparison is never dropped, `false` else or not",
+			in:   `if(due, done, false)`,
+			want: `if(due, done, false)`,
+			why:  "`done` is a checkbox read straight off the record — on a note with no `due` it is whatever that note's `done` says, not false",
 		},
 		{
 			// THE CASE THAT REACHES absentWhenAbsent's COMPARISON RULE. The
@@ -243,9 +266,14 @@ func TestTranslateFormulas_OneRefusalDoesNotTakeTheOthersWithIt(t *testing.T) {
 	schema := rewriteSchema(t)
 	pb := &ParsedBase{
 		Formulas: map[string]string{
-			"age":          `(today() - created).days`,
-			"days_to_due":  `if(due, (date(due) - today()).days, "")`,
-			"broken":       `if(due, date(due) < today(), false)`, // the truthy-date guard over a boolean
+			"age":         `(today() - created).days`,
+			"days_to_due": `if(due, (date(due) - today()).days, "")`,
+			// A guard whose GUARDED EXPRESSION is a bare property rather than
+			// a comparison. W4 reaches the `false` else-branch shape but not
+			// this one — `done` has a value of its own on a record with no
+			// `due` — so it is still the truthy-date guard no rewrite carries,
+			// which is what this test needs a refusal for.
+			"broken":       `if(due, done, false)`,
 			"needs_broken": `formula.broken`,
 		},
 		FormulaNames: []string{"age", "broken", "days_to_due", "needs_broken"},

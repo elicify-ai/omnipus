@@ -864,13 +864,13 @@ func renderVerbatim(node any) string {
 // type (FR-007a), `if()`'s condition must be a boolean and its branches must
 // share ONE type (FR-143a).
 //
-// So a base formula is not copied — it is TRANSLATED, by exactly two rewrites,
-// each of which is a proved equivalence and neither of which is a guess. What
+// So a base formula is not copied — it is TRANSLATED, by four rewrites, each
+// of which is a proved equivalence and none of which is a guess. What
 // neither rewrite reaches stays a NAMED LOSS at every position that references
 // it, which is what keeps FR-105 true: a formula that decides a row set and did
 // not translate leaves its view DISABLED, exactly as it is today.
 //
-// THE TWO REWRITES, AND THE PROOF OF EACH
+// THE REWRITES, AND THE PROOF OF EACH
 //
 // W1 — `if(C, X, "")` becomes `if(C, X)`.
 //
@@ -971,15 +971,96 @@ func renderVerbatim(node any) string {
 //	product-wide, and W2's guard-DROPPING has the identical behaviour there,
 //	because the guarded expression over a non-conforming operand is absent too.
 //
-// WHAT IS DELIBERATELY NOT REWRITTEN. `if(P, <boolean over P>, false)` reduces
-// too — a comparison over an absent operand is FALSE under R-2, not absent, so
-// the then-branch already yields the else-branch's value. It is left as a
-// named loss all the same: that proof runs through the comparator's rules
-// rather than through absence propagation, `!=` behaves differently from the
-// other five operators under R-2, and a second, differently-argued rewrite is
-// how a translator starts being approximately right. The founder's
-// `is_overdue` formulas stay lost, their views stay DISABLED, and the report
-// says so.
+// W4 — `if(P, C, false)` becomes `C`, when P is a bare DATE property and C is
+// a boolean expression that is PRESENT-FALSE wherever P is absent.
+//
+//	THIS REWRITE WAS DECLINED RATHER THAN DISPROVED, and the paragraph that
+//	declined it said so in as many words: "that proof runs through the
+//	comparator's rules rather than through absence propagation, `!=` behaves
+//	differently from the other five operators under R-2, and a second,
+//	differently-argued rewrite is how a translator starts being approximately
+//	right." Two of those three sentences were true. The middle one was not,
+//	and the whole refusal rested on it — so it was checked against
+//	compare_oracle.go rather than restated.
+//
+//	WHAT R-2 ACTUALLY SAYS ABOUT `!=`, quoted from the comparator itself:
+//	"R-2 — either side absent: false for every remaining operator, `<>`
+//	INCLUDED." The exemption list above it is `IS NULL` / `IS NOT NULL` and
+//	nothing else, and the code says why in the line before: "`<>` is NOT one,
+//	ruled explicitly in spec §8 R-2 (review round 6, C-7)". So inside THIS
+//	product's comparator `!=` behaves exactly like the other five. The
+//	divergence the old paragraph was reaching for is real but it is a
+//	different one — it is against JAVASCRIPT, where `undefined != "done"` is
+//	TRUE — and it is discussed under THE `!=` DIVERGENCE below, where it
+//	belongs, because it is a property of translating the guarded expression
+//	AT ALL and not of dropping the guard.
+//
+//	THE PROOF, IN TWO STATES OF P. The guard is a bare `date` property, so
+//	W2's own rule applies unchanged: truthy is exactly PRESENT there (FR-007a
+//	makes `""` absent on a date and a real date is never falsy in
+//	JavaScript), and evalIf's "an ABSENT condition is FALSE" makes ours agree.
+//
+//	  P present  Obsidian takes the then-branch, value `C`. The reduced form
+//	             IS `C`. Identical, with nothing to prove about C.
+//	  P absent   Obsidian takes the else-branch, value `false`. The reduced
+//	             form is `C`, and the whole condition below is that `C` is
+//	             PRESENT-FALSE there. Identical.
+//
+//	The two forms therefore hold the SAME VALUE on every record — not a
+//	subset, an equality. That is what makes it safe at any depth of
+//	negation, which is the one thing a rewrite in this file has to earn:
+//	resolveTree's own header records that `not:` is where a narrowing becomes
+//	a broadening, and knowledge_find negates a combinator as a bare
+//	`!inner.matched` with no absence rule of its own. An equality inverts to
+//	an equality.
+//
+//	PRESENT-FALSE IS TWO CLAIMS, NOT ONE, and conflating them is how this
+//	rewrite would go wrong. `false` and `absent` are different values here:
+//	a filter `formula.f == true` cannot tell them apart, but `formula.f ==
+//	false` can, and so can `IS NULL`. presentFalseWhenAbsent therefore proves
+//	FALSE-ness and PRESENCE separately, and every `true` it can answer cites a
+//	line of pkg/records/formula_eval.go:
+//
+//	  a COMPARISON with an absent operand   evalComparison returns
+//	                                        `boolVal(answer)`, and R-2 makes
+//	                                        the comparator's answer `false`.
+//	                                        Present, and false. All six
+//	                                        operators, `!=` included.
+//	  `&&` with one side present-false      evalBinary computes
+//	    and the other a present boolean     `boolVal(l.flag && r.flag)`.
+//	                                        Present, and false.
+//	  `||` with BOTH sides present-false    same line, `l.flag || r.flag`.
+//
+//	`&&` IS THE TRAP, AND IT IS NOT `!=`. evalBinary's `&&`/`||` branch is the
+//	one place in the evaluator where a boolean operator PROPAGATES ABSENCE:
+//	"if left.absent || right.absent { return absentOf(FormulaBoolean) }",
+//	commented "treating it as false here would make `!(absent && x)` true,
+//	which is R-2's exact trap one layer up". So `false && <absent>` is ABSENT,
+//	not false — and a rewrite that assumed short-circuiting would produce an
+//	absent value where Obsidian produces `false`. That is why the `&&` rule
+//	above demands the OTHER side be a proven present boolean rather than
+//	anything at all, and why presentBooleanWhenAbsent exists as a separate
+//	predicate instead of being folded into the first.
+//
+//	THE `!=` DIVERGENCE, NAMED HERE BECAUSE IT IS REAL AND IS NOT THIS
+//	REWRITE'S. Inside a formula, `status != "done"` over an ABSENT `status` is
+//	FALSE (R-2, reached through evalComparison's direct call to the
+//	comparator), where JavaScript answers TRUE. FR-008's absent-rescue, which
+//	would re-include those records for a `<>` LEAF, lives a layer up in
+//	Filter.Match and never reaches a formula — W3's own three-state table
+//	already records that. So the founder's `is_overdue` is FALSE on a task
+//	with a due date in the past and no `status` at all, where Obsidian's is
+//	TRUE: FEWER rows, the direction FR-105 permits. It is a property of
+//	carrying the guarded expression, identical in `if(P, C, false)` and in
+//	`C`, so it neither blocks this rewrite nor is created by it — and it is
+//	reported at the view that uses the formula, by the same path W1's
+//	divergence is.
+//
+//	WHAT IS STILL NOT REWRITTEN. An else-branch of `true`; a guard on any type
+//	but a single-valued `date`; a guarded expression whose top node is not one
+//	of the three forms above. Each answers false and stays a named loss, on
+//	the same whitelist discipline W2 states: a node kind added to the grammar
+//	tomorrow costs a rewrite that does not fire, never one that fires wrongly.
 // ---------------------------------------------------------------------------
 
 // FormulaTranslation is a base's `formulas:` block, translated.
@@ -1167,7 +1248,7 @@ func TranslateFormulas(pb *ParsedBase, schema *records.Schema) FormulaTranslatio
 	return out
 }
 
-// rewriteFormulaSource applies W1, W2 and W3 until none fires, returning the
+// rewriteFormulaSource applies W1, W2, W3 and W4 until none fires, returning the
 // translated source and a human-readable note naming what changed (empty when
 // the source was carried verbatim).
 //
@@ -1188,6 +1269,13 @@ func rewriteFormulaSource(src string, schema *records.Schema) (out string, note 
 			out = "if(" + args[0] + ", " + args[1] + ")"
 			notes = append(notes, `its "" else-branch was dropped — an omitted `+"`if`"+` branch is this product's own spelling of "show nothing", and FR-143a refuses a number branch paired with a text one`)
 			continue
+		}
+		if len(args) == 3 && isFalseLiteral(args[2]) {
+			if guard, guarded, reduced := reduceGuardedComparison(args[0], args[1], schema); reduced {
+				out = guarded
+				notes = append(notes, "its `if("+guard+", …, false)` presence guard was dropped as REDUNDANT — the guarded comparison already answers FALSE wherever `"+guard+"` is absent (spec §8 R-2, `!=` included), which is the else-branch's own value, so the two forms hold the same value on every record")
+				continue
+			}
 		}
 		if len(args) == 2 {
 			if guard, guarded, reduced := reduceRedundantDateGuard(args[0], args[1], schema); reduced {
@@ -1241,6 +1329,114 @@ func reduceRedundantDateGuard(guard, guarded string, schema *records.Schema) (st
 		return "", "", false
 	}
 	return ref.Name, strings.TrimSpace(guarded), true
+}
+
+// reduceGuardedComparison decides W4. It returns the guarded expression when
+// the `false` else-branch is provably the value that expression already holds
+// wherever the guard is absent, and reports false otherwise — including for
+// every case it simply cannot prove, which is the safe answer.
+//
+// The GUARD condition is W2's, unchanged and deliberately shared: a
+// single-valued `date` is the one type on which Obsidian's truthiness and our
+// presence are the same question (FR-007a). What differs is the condition on
+// the guarded expression, and it is a STRONGER one than W2's, not a weaker
+// one: W2 needs the expression to be ABSENT where the guard is, this needs it
+// to be PRESENT and FALSE. See W4's proof in this section's header.
+func reduceGuardedComparison(guard, guarded string, schema *records.Schema) (string, string, bool) {
+	if schema == nil {
+		return "", "", false
+	}
+	guardNode, err := records.ParseFormula(guard)
+	if err != nil {
+		return "", "", false
+	}
+	ref, ok := guardNode.(*records.Ref)
+	if !ok || ref.Kind != records.RefProperty {
+		return "", "", false
+	}
+	prop, found := schema.Property(ref.Name)
+	if !found || prop.Type != records.TypeDate || prop.Many {
+		return "", "", false
+	}
+	guardedNode, err := records.ParseFormula(guarded)
+	if err != nil {
+		return "", "", false
+	}
+	if !presentFalseWhenAbsent(guardedNode, ref.Name) {
+		return "", "", false
+	}
+	return ref.Name, strings.TrimSpace(guarded), true
+}
+
+// presentFalseWhenAbsent reports whether an expression holds a PRESENT boolean
+// FALSE on every record where the named property is absent.
+//
+// IT IS A WHITELIST OVER THE EVALUATOR'S WRITTEN-DOWN RULES, on absentWhenAbsent's
+// own discipline: every `true` below cites a line of pkg/records/formula_eval.go
+// or pkg/records/compare_oracle.go, and anything not listed answers FALSE.
+//
+// PRESENCE IS HALF THE CLAIM. Returning absence where the else-branch returns
+// `false` would be a wrong answer, not a narrower one: `formula.f == false`
+// and `IS NULL` both tell the two apart even though `formula.f == true` cannot.
+func presentFalseWhenAbsent(n records.FormulaNode, prop string) bool {
+	node, ok := n.(*records.BinaryOp)
+	if !ok {
+		return false
+	}
+	switch node.Op {
+	case "==", "!=", "<", "<=", ">", ">=":
+		// evalComparison hands both operands to the ONE comparator and wraps
+		// its answer as `boolVal(answer)` — a PRESENT boolean, never absence.
+		// compare_oracle.go's R-2 then makes that answer `false` whenever
+		// either side is absent, "for every remaining operator, `<>` included";
+		// the only exemptions are IS NULL / IS NOT NULL, which are not
+		// spellable as a binary operator in this grammar at all.
+		return absentWhenAbsent(node.Left, prop) || absentWhenAbsent(node.Right, prop)
+	case "&&":
+		// evalBinary returns absentOf(FormulaBoolean) when EITHER side is
+		// absent — `&&` is the one boolean operator in this evaluator that
+		// propagates absence, and it does so deliberately (its own comment
+		// calls treating absence as false here "R-2's exact trap one layer
+		// up"). So one side being present-false is not enough: the other has
+		// to be a proven present boolean, or `false && <absent>` is ABSENT.
+		return (presentFalseWhenAbsent(node.Left, prop) && presentBooleanWhenAbsent(node.Right, prop)) ||
+			(presentFalseWhenAbsent(node.Right, prop) && presentBooleanWhenAbsent(node.Left, prop))
+	case "||":
+		// Same evaluator line; `l.flag || r.flag` is false only when both are.
+		return presentFalseWhenAbsent(node.Left, prop) && presentFalseWhenAbsent(node.Right, prop)
+	}
+	return false
+}
+
+// presentBooleanWhenAbsent reports whether an expression holds a PRESENT
+// boolean — true or false, never absence — on every record where the named
+// property is absent. It says nothing about WHICH boolean.
+//
+// THE COMPARISON CASE RESTS ON A STATIC GUARANTEE, and that is worth stating
+// rather than leaving as a gap. evalComparison has ONE path that returns
+// absence instead of a boolean: R-16, an operand whose type has no
+// PropertyValue form at all (a presentation value). Its own comment calls that
+// "the belt for a hand-built tree" — inferComparison refuses such a comparison
+// at write time, and every source this file emits is re-parsed and re-validated
+// as part of a whole records.FormulaSet before it is written (translateFormulas
+// refuses the entire block if that validation fails). So a formula that could
+// reach R-16 is REFUSED rather than shipped with a rewritten value, which is
+// the safe direction for the one case this predicate cannot see.
+func presentBooleanWhenAbsent(n records.FormulaNode, prop string) bool {
+	switch node := n.(type) {
+	case *records.BoolLit:
+		// eval: "case *BoolLit: return boolVal(node.Value), nil".
+		return true
+	case *records.BinaryOp:
+		switch node.Op {
+		case "==", "!=", "<", "<=", ">", ">=":
+			return true
+		case "&&", "||":
+			return presentBooleanWhenAbsent(node.Left, prop) && presentBooleanWhenAbsent(node.Right, prop)
+		}
+		return false
+	}
+	return false
 }
 
 // spellTextTruthinessGuard decides W3. It returns the guard's own source text
@@ -1394,6 +1590,14 @@ func splitTopLevelIfArgs(src string) ([]string, bool) {
 		}
 	}
 	return args, true
+}
+
+// isFalseLiteral reports whether an argument is exactly the boolean literal
+// `false`. `"false"` is NOT one — a quoted string is a text value, and on a
+// text property it is a TRUTHY one in JavaScript, so reading it as the boolean
+// would invert the branch the operator wrote.
+func isFalseLiteral(arg string) bool {
+	return strings.TrimSpace(arg) == "false"
 }
 
 // isEmptyTextLiteral reports whether an argument is exactly the empty string

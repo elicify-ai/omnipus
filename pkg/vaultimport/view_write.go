@@ -216,7 +216,7 @@ func translateOneView(
 	outer = ReduceTypedDisjunctions(outer, resolvedType)
 	viewTrans = ReduceTypedDisjunctions(viewTrans, resolvedType)
 
-	res := leafResolver{recordType: resolvedType, schemas: schemas, formulas: formulasFor(resolvedType)}
+	res := leafResolver{recordType: resolvedType, schemas: schemas, formulas: formulasFor(resolvedType), schema: schemaForType(schemas, resolvedType)}
 
 	outerNode, losses := res.resolve(outer.Root, LossBaseOuterFilter)
 	viewNode, viewLosses := res.resolve(viewTrans.Root, LossViewFilter)
@@ -356,6 +356,29 @@ type leafResolver struct {
 	// it; a name it does not carry becomes a named loss quoting why the formula
 	// itself could not be translated, never a bare "no such formula".
 	formulas FormulaTranslation
+	// schema is the view's record type rendered as the REAL *records.Schema
+	// this import is about to write — the same value schemaForType produces for
+	// the formula translator, carried rather than recomputed.
+	//
+	// It exists so a literal can be checked by the ENGINE'S OWN rule rather
+	// than by a second opinion restated here: records.ParseValue is the
+	// function a note's own value goes through AND the one Filter.Validate
+	// runs a filter literal through at serve time, so a literal it refuses is
+	// exactly a literal knowledge_find will refuse.
+	schema *records.Schema
+}
+
+// declaredSchema returns the view's record type as a real *records.Schema.
+//
+// It falls back to rendering one on demand when the field was not populated,
+// which keeps every hand-built leafResolver in the tests answering the same way
+// a production one does — a resolver whose schema silently became nil would
+// make this file's engine-derived checks pass by not running.
+func (r leafResolver) declaredSchema() *records.Schema {
+	if r.schema != nil {
+		return r.schema
+	}
+	return schemaForType(r.schemas, r.recordType)
 }
 
 // typed reports whether this view declares a record type, and therefore whether
@@ -806,6 +829,16 @@ func buildV2LeafNode(r leafResolver, l v2Leaf) (*generated.VaultFilterNode, stri
 			return nil, fmt.Sprintf("property %q is not declared in the %q schema (never observed on a %s note)", l.Property, r.recordType, r.recordType), false
 		}
 		prop = p
+	} else if !records.IsFileNamespace(l.Property) {
+		// The FILTER position of the same check checkProperty makes for the
+		// grouping, sort, select and aggregate positions. It is repeated rather
+		// than shared because a filter leaf never goes through checkProperty —
+		// buildV2LeafNode is the whole of a leaf's validation — and leaving it
+		// out here would let the one position that decides the ROW SET keep
+		// writing views the engine refuses.
+		if reason, split := r.untypedSplitDomain(l.Property); split {
+			return nil, reason, false
+		}
 	}
 
 	switch l.Shape {
@@ -982,18 +1015,75 @@ func buildV2LeafNode(r leafResolver, l v2Leaf) (*generated.VaultFilterNode, stri
 				return valueNode(l.Property, l.Op, canonical), "", true
 			}
 			if prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
-				// A relation is compared by TARGET (spec §8 R-8), which is what
-				// a wikilink's inside is.
-				link := l.Value
-				if w, ok := records.ParseWikilink(l.Value); ok {
-					link = w.Target
+				// A relation is compared by TARGET (spec §8 R-8) — and the
+				// operand the engine takes for that comparison is a WIKILINK,
+				// not the target's bare text.
+				//
+				// THIS BRANCH USED TO STRIP THE BRACKETS, and to write whatever
+				// it was given when there were none. Both spellings are refused
+				// at serve time by the same function: Filter.Validate runs every
+				// literal through records.ParseValue, and ParseValue on a
+				// relation calls ParseWikilink, which answers false for anything
+				// that does not start `[[`. So `owner == "Daniel Piatkowski"` in
+				// a `.base` file — 308 of the founder's notes hold
+				// `owner: "[[Daniel Piatkowski]]"`, so the property really is a
+				// relation — was written into an ENABLED view that
+				// knowledge_find then refuses on first use. A view that imports
+				// clean and dies when someone opens it is worse than one that
+				// imports with a named loss, so this now asks the engine.
+				value, reason, valid := r.relationLiteral(l.Property, l.Value)
+				switch {
+				case valid:
+					return valueNode(l.Property, l.Op, value), "", true
+				case reason != "":
+					return nil, reason, false
 				}
-				return valueNode(l.Property, l.Op, link), "", true
+				return nil, fmt.Sprintf("the literal %q cannot be checked against %q's declaration, so it is not written rather than written unchecked", l.Value, l.Property), false
 			}
 		}
 		return valueNode(l.Property, l.Op, l.Value), "", true
 	}
 	return nil, "this importer has no translation for that expression shape", false
+}
+
+// relationLiteral decides what a `relation`/`person` comparison may carry, by
+// asking the ENGINE rather than by restating its rule.
+//
+// records.ParseValue is the one function a relation value goes through, on a
+// note (value.go's readRelation) and on a filter literal alike
+// (Filter.Validate's "the literals go through ParseValue — the same function a
+// record's own value goes through"). So a literal it accepts is one
+// knowledge_find will accept, and a literal it refuses is one knowledge_find
+// will refuse, WITH THE SAME WORDS — which is what makes this a derived check
+// and not a second opinion that can drift.
+//
+// WHY A BARE NAME IS NOT QUIETLY WRAPPED IN BRACKETS. `[[Daniel Piatkowski]]`
+// would parse, and would then compare by RESOLVED TARGET IDENTITY under §8 R-8
+// — matching `[[People/Daniel Piatkowski|Danny]]` and every other spelling that
+// resolves to the same note. Obsidian's `==` against a string compares against
+// the value it holds. Those are not the same set, and the identity reading is
+// the LARGER one, which is the direction FR-105 forbids. Nothing in this
+// repository settles what Obsidian does with a link-to-string comparison, and a
+// translation nobody can check is a guess; a named loss is not.
+//
+// ok=false with an empty reason means the declaration itself could not be read,
+// which the caller reports in its own words.
+func (r leafResolver) relationLiteral(property, raw string) (value, reason string, ok bool) {
+	schema := r.declaredSchema()
+	if schema == nil {
+		return "", "", false
+	}
+	prop, found := schema.Property(property)
+	if !found {
+		return "", "", false
+	}
+	_, verr := records.ParseValue(prop, records.Node{Kind: records.KindScalar, Text: raw})
+	if verr == nil {
+		return raw, "", true
+	}
+	return "", fmt.Sprintf(
+		"the literal %q is not a value a %s property can hold: %s. knowledge_find validates a filter literal through the same records.ParseValue a note's own value goes through, so writing it anyway would produce a view that imports clean and is REFUSED the first time anyone opens it",
+		raw, prop.Type, verr.Reason), false
 }
 
 func isOrderingOp(op generated.VaultFilterNodeOp) bool {
@@ -1118,6 +1208,17 @@ func (r leafResolver) checkProperty(name string, comparison bool) (reason string
 		}
 		return "", true
 	case !r.typed():
+		// FR-018b makes every ordinary name LEGAL in an untyped view, and the
+		// loader accordingly refuses none of them. The ENGINE is a different
+		// question, and this is where the two were confused: knowledge_find
+		// resolves an untyped name against every in-scope record type, and
+		// REFUSES the whole request when two of them declare it in different
+		// comparison domains ("An untyped query will not split one name across
+		// two domains"). So a name this importer cannot vouch for has to become
+		// a named loss here as well.
+		if reason, split := r.untypedSplitDomain(name); split {
+			return reason, false
+		}
 		return "", true
 	default:
 		if _, found := r.schemas.Lookup(r.recordType, name); !found {
@@ -1125,6 +1226,87 @@ func (r leafResolver) checkProperty(name string, comparison bool) (reason string
 		}
 		return "", true
 	}
+}
+
+// untypedSplitDomain reports whether an UNTYPED view naming this property would
+// be refused by knowledge_find because two in-scope record types declare it in
+// different comparison domains.
+//
+// WHY THIS IS RESTATED RATHER THAN CALLED, and what is done about it. The rule
+// lives in knowledgefind's own `sameUntypedDomain`, and calling it would be the
+// better shape — a peer exported SummaryOpDefinedForType for exactly this
+// reason and view_write.go's summary gate calls it. It is unexported, and this
+// change owns no file in that package, so the rule is written out here instead
+// and then GRADED against the engine: TestUntypedSplitDomain_PredictsFindExactly
+// puts every declaration pair to both this predicate and a real
+// knowledgefind.Find, and a single disagreement fails. A restatement nobody
+// measures is how the importer and the engine drift apart; a restatement
+// measured against the engine is a slower export.
+//
+// THE THREE FIELDS ARE THE ENGINE'S, not a selection made here: declared TYPE,
+// declared ARITY, and — for a link-valued property — the TARGET type. All three
+// decide which rule of §8 a comparison runs under. An enum's VALUE SET is
+// deliberately NOT one of them: two `enum` declarations are one domain and the
+// engine unions their sets.
+func (r leafResolver) untypedSplitDomain(name string) (reason string, split bool) {
+	if r.schemas == nil || strings.HasPrefix(name, formulaNamespace) || records.IsFileNamespace(name) {
+		return "", false
+	}
+	type decl struct {
+		recordType string
+		prop       InferredProperty
+	}
+	types := make([]string, 0, len(r.schemas.byType))
+	for t := range r.schemas.byType {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+
+	var decls []decl
+	for _, t := range types {
+		if p, ok := r.schemas.Lookup(t, name); ok {
+			decls = append(decls, decl{recordType: t, prop: p})
+		}
+	}
+	if len(decls) < 2 {
+		return "", false
+	}
+	first := decls[0]
+	for _, d := range decls[1:] {
+		if sameInferredDomain(first.prop, d.prop) {
+			continue
+		}
+		return fmt.Sprintf(
+			"this view declares no record type, and %q is declared differently by two of them: %s declares it %s and %s declares it %s. knowledge_find will not split one name across two domains in an untyped query — it REFUSES the whole request, so a view carrying this clause imports clean and returns nothing but a refusal the first time anyone opens it. Give the view a record type, or rename the property in one of the two",
+			name, first.recordType, describeInferredDecl(first.prop), d.recordType, describeInferredDecl(d.prop)), true
+	}
+	return "", false
+}
+
+// sameInferredDomain is knowledgefind's `sameUntypedDomain`, over this
+// package's inferred declarations. Field for field, in the same order, so a
+// reader can diff the two by eye.
+func sameInferredDomain(a, b InferredProperty) bool {
+	if a.Type != b.Type || a.Many != b.Many {
+		return false
+	}
+	if a.Type == records.TypeRelation || a.Type == records.TypePerson {
+		return a.To == b.To
+	}
+	return true
+}
+
+// describeInferredDecl renders one declaration the way the engine's own
+// conflict refusal does, so the two messages read alike.
+func describeInferredDecl(p InferredProperty) string {
+	out := string(p.Type)
+	if p.To != "" {
+		out += " to " + p.To
+	}
+	if p.Many {
+		out += " (many)"
+	}
+	return out
 }
 
 // translateGrouping carries the Base's `groupBy` — INCLUDING its direction,
