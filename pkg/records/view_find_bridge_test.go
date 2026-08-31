@@ -124,9 +124,9 @@ func TestViewFindLoader_FilterTable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			node, ok := translateRecordFilter(tc.filter)
-			if !ok {
-				t.Fatalf("translateRecordFilter(%+v) refused, want a translation", tc.filter)
+			node, refusal := translateRecordFilter(tc.filter, "table-view", 1)
+			if refusal != nil {
+				t.Fatalf("translateRecordFilter(%+v) refused (%s), want a translation", tc.filter, refusal)
 			}
 			if tc.wantNot {
 				if node.Not == nil {

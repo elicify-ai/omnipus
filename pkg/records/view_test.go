@@ -193,9 +193,30 @@ func TestView_VersionIsMandatoryAndPinned(t *testing.T) {
 			want: RejectViewMissingVersion,
 		},
 		{
+			// 2 is now READABLE (FR-018b), so the future version this case
+			// pins moved up by one. The case itself must stay: a version this
+			// release does not know is rejected, never read as the nearest
+			// one it does.
 			name: "a future schema_version",
-			body: "schema_version: 2\nname: v\ntype: widget\n",
+			body: "schema_version: 3\nname: v\ntype: widget\n",
 			want: RejectViewUnsupportedVersion,
+		},
+		{
+			name: "version zero",
+			body: "schema_version: 0\nname: v\ntype: widget\n",
+			want: RejectViewUnsupportedVersion,
+		},
+		{
+			// A v2 view may omit `type`; a v1 view may not, and this is the
+			// pair that keeps the relaxation FROM leaking backwards.
+			name: "no type on schema_version 1",
+			body: "schema_version: 1\nname: v\n",
+			want: RejectViewMissingType,
+		},
+		{
+			name: "an empty type on schema_version 2 is a typo, not an untyped view",
+			body: "schema_version: 2\nname: v\ntype: \"  \"\n",
+			want: RejectViewMissingType,
 		},
 		{
 			name: "an empty file",
@@ -206,11 +227,6 @@ func TestView_VersionIsMandatoryAndPinned(t *testing.T) {
 			name: "no name",
 			body: "schema_version: 1\ntype: widget\n",
 			want: RejectViewMissingName,
-		},
-		{
-			name: "no type",
-			body: "schema_version: 1\nname: v\n",
-			want: RejectViewMissingType,
 		},
 	}
 	for _, tc := range cases {
