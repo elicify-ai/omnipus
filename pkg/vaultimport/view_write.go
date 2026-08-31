@@ -197,6 +197,25 @@ func translateOneView(
 	}
 	vo.ResolvedType = resolvedType
 
+	// THE RECORD TYPE IS ONLY KNOWN HERE, AND ONE KIND OF NODE WAS WAITING FOR
+	// IT. A base's outer filter is translated ONCE, above the view loop, so a
+	// disjunction whose branches name DIFFERENT record types could not be
+	// settled there — "either type" is not a fact any single view's `type:` can
+	// hold. It is carried as a rawKindTypedAny instead and settled now, against
+	// the type this view actually resolved to, which is the missing premise:
+	//
+	//	(inFolder AND (type=="content" OR type=="brand-kit")) AND type=="content"
+	//
+	// is `inFolder AND type=="content"` — the disjunction is absorbed by the
+	// view's own conjunct. Both trees are reduced under the SAME type because
+	// both are conjoined into one filter below, and each returns a rewritten
+	// copy: `outer` is shared by every view in this base and must not be
+	// reduced in place. A group that does not settle degrades to the same loss,
+	// with the same verbatim, that it produced before. See
+	// ReduceTypedDisjunctions for why the rewrite is an equivalence.
+	outer = ReduceTypedDisjunctions(outer, resolvedType)
+	viewTrans = ReduceTypedDisjunctions(viewTrans, resolvedType)
+
 	res := leafResolver{recordType: resolvedType, schemas: schemas, formulas: formulasFor(resolvedType)}
 
 	outerNode, losses := res.resolve(outer.Root, LossBaseOuterFilter)

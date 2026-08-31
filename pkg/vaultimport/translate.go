@@ -71,7 +71,30 @@ const (
 	rawKindAll
 	rawKindAny
 	rawKindNot
+	// rawKindTypedAny is a disjunction EVERY branch of which asserts exactly
+	// one `type == "X"` — the shape that used to be lost whole as a
+	// "mixed-type disjunction".
+	//
+	// It is DEFERRED, not translated: what it means depends on the record type
+	// the VIEW resolves to, and translateOr does not know that yet (the base's
+	// outer filter is translated once, before any view is looked at). It is
+	// settled by ReduceTypedDisjunctions, and it never survives to the
+	// resolution pass in either direction — it becomes a real node or a
+	// rawKindLost carrying the same verbatim it would have carried before.
+	rawKindTypedAny
 )
+
+// typedBranch is one branch of a rawKindTypedAny: the single record type it
+// asserts, and whatever else it said.
+type typedBranch struct {
+	// RecordType is the branch's one `type == "X"` literal. Never empty — a
+	// disjunction with an untyped branch is not a rawKindTypedAny.
+	RecordType string
+	// Remainder is the branch MINUS its type literal, and NIL is meaningful
+	// rather than missing: the branch was nothing but the type literal, so
+	// under that type it is simply TRUE.
+	Remainder *rawNode
+}
 
 // rawNode is one node of the intermediate tree: the Base filter's shape, with
 // its leaves not yet checked against a record type's schema.
@@ -80,6 +103,11 @@ type rawNode struct {
 	Leaf     v2Leaf
 	Prebuilt *generated.VaultFilterNode
 	Kids     []*rawNode
+	// Branches is set for rawKindTypedAny ONLY, and Kids is empty there. They
+	// are separate fields on purpose: every existing walker over this tree
+	// recurses through Kids, and a deferred disjunction must not be walked as
+	// though its branches were already unconditional.
+	Branches []typedBranch
 	// Verbatim is the content-preserving YAML re-serialisation of the source
 	// (sub)tree, used when this node — or anything under it — has to be
 	// reported as a loss instead of translated.
@@ -397,8 +425,23 @@ func allNode(kids []*rawNode) *rawNode {
 // an untyped view spans EVERY note in scope, which is strictly MORE rows than
 // "one of these two types", and that is the broadening FR-105 forbids. There is
 // no filter leaf to fall back on either: `type` is the record discriminator,
-// not a declared property of any schema. So a mixed-type `or:` is lost whole,
-// exactly as it was under version 1.
+// not a declared property of any schema. So a mixed-type `or:` cannot be
+// translated HERE, and under version 1 that was the end of it.
+//
+// IT IS NO LONGER THE END OF IT, AND THE REASON IS THAT THIS FUNCTION WAS
+// ANSWERING THE WRONG QUESTION. A base's outer filter is translated ONCE, before
+// any view is read, so the only question available here was "what does this
+// disjunction mean on its own" — and on its own it means "either type", which is
+// indeed unrepresentable. But no view ever applies it on its own. Every view
+// applies `outer AND view` (view_write.go's conjoin), and in this vault every
+// view re-asserts ONE of the disjuncts in its own `and:`:
+//
+//	Content.base:  (inFolder AND (type=="content" OR type=="brand-kit")) AND type=="content"
+//
+// which is `inFolder AND type=="content"` by absorption — (X ∨ Y) ∧ X ≡ X. So
+// the mixed branch is deferred rather than lost: it becomes a rawKindTypedAny,
+// and ReduceTypedDisjunctions settles it per view, once the view's record type
+// is known. See that function for the exactness proof.
 //
 // THE ONE EXCEPTION IS DISTRIBUTIVITY, NOT A JUDGEMENT CALL. When EVERY branch
 // asserts the SAME single type, the group has the shape
@@ -422,46 +465,299 @@ func allNode(kids []*rawNode) *rawNode {
 //     is still exactly equal, but it is a different simplification with a
 //     different proof, so it is refused rather than folded in here.
 func translateOr(items []any, original map[string]any) TreeTranslation {
-	lost := TreeTranslation{Root: lostNode(renderVerbatim(original))}
+	verbatim := renderVerbatim(original)
+	lost := TreeTranslation{Root: lostNode(verbatim)}
 
-	var kids []*rawNode
-	var lits []string
+	// ONE pass, keeping BOTH readings of every branch — the remainder tree and
+	// the single type literal it asserts, if any — because the three outcomes
+	// below need different halves of the same walk.
+	type branch struct {
+		lit       string // "" when the branch names no record type
+		remainder *rawNode
+	}
+	var bs []branch
 	for _, it := range items {
 		sub := TranslateFilterTree(it)
-		if sub.Root == nil || containsLost(sub.Root) {
+		if containsLost(sub.Root) {
 			return lost
 		}
 		branchLits := distinctSorted(sub.TypeLiterals)
 		if len(branchLits) > 1 {
+			// One branch pinning two types is false, not narrow. Refused
+			// rather than folded: an always-false disjunct only THINS a
+			// disjunction, but proving that is a different proof.
 			return lost
 		}
-		lits = append(lits, branchLits...)
-		kids = append(kids, sub.Root)
+		b := branch{remainder: sub.Root}
+		if len(branchLits) == 1 {
+			b.lit = branchLits[0]
+		}
+		if b.lit == "" && b.remainder == nil {
+			// A branch that asserted nothing at all — an empty `or:` member.
+			// Not a shape with a meaning to preserve.
+			return lost
+		}
+		bs = append(bs, b)
 	}
-	if len(kids) == 0 {
+	if len(bs) == 0 {
 		return lost
 	}
 
-	var harvested []string
-	switch {
-	case len(lits) == 0:
-		// No branch mentions the type at all — an ordinary disjunction.
-	case len(lits) == len(kids) && len(distinctSorted(lits)) == 1:
-		harvested = distinctSorted(lits)
+	typed, untyped := 0, 0
+	litSet := map[string]struct{}{}
+	everyRemainderPresent := true
+	for _, b := range bs {
+		if b.lit == "" {
+			untyped++
+		} else {
+			typed++
+			litSet[b.lit] = struct{}{}
+		}
+		if b.remainder == nil {
+			everyRemainderPresent = false
+		}
+	}
+
+	// CASE 1 — no branch mentions the type at all. An ordinary disjunction,
+	// unchanged from version 1.
+	if typed == 0 {
+		return TreeTranslation{Root: anyNode(collectRemainders(bs, func(b branch) *rawNode { return b.remainder }), verbatim)}
+	}
+
+	// CASE 2 — DISTRIBUTIVITY. Every branch names the SAME one type and every
+	// branch has something left after it is removed, so
+	//
+	//	(A AND T) OR (B AND T)  ==  T AND (A OR B)
+	//
+	// exactly, by the distributive law. The type is harvested and the
+	// remainders become the disjunction. This is the founder's
+	// Subscriptions.base and it is UNCHANGED — the conditions below are the
+	// same two the version-1 comment set out, and case 3 is only reached when
+	// they fail.
+	if untyped == 0 && len(litSet) == 1 && everyRemainderPresent {
+		var harvested []string
+		for lit := range litSet {
+			harvested = append(harvested, lit)
+		}
+		return TreeTranslation{
+			Root:         anyNode(collectRemainders(bs, func(b branch) *rawNode { return b.remainder }), verbatim),
+			TypeLiterals: harvested,
+		}
+	}
+
+	// CASE 3 — EVERY branch names a type, but they do not all name the SAME
+	// one (or one of them is nothing but its type literal). Nothing factors out
+	// and nothing can be decided here, so the whole disjunction is DEFERRED to
+	// the per-view pass, which knows the record type this will be applied
+	// under. No type is harvested: "either type" is not "this type", and that
+	// was always the correct half of the old refusal.
+	//
+	// A branch with NO type literal keeps this out of case 3 deliberately.
+	// Under `type == T` such a branch survives whatever T is, so the reduction
+	// would still be exact — but no base in this vault has that shape, so
+	// there is nothing to grade it against, and an ungraded reduction is not
+	// worth the row it might invent.
+	if untyped == 0 {
+		branches := make([]typedBranch, 0, len(bs))
+		for _, b := range bs {
+			branches = append(branches, typedBranch{RecordType: b.lit, Remainder: b.remainder})
+		}
+		return TreeTranslation{Root: &rawNode{Kind: rawKindTypedAny, Branches: branches, Verbatim: verbatim}}
+	}
+
+	// Some branches assert a type and some do not. Neither factors.
+	return lost
+}
+
+// collectRemainders is the small adapter that keeps the two `anyNode` call
+// sites above from each rebuilding the same slice.
+func collectRemainders[T any](in []T, f func(T) *rawNode) []*rawNode {
+	out := make([]*rawNode, 0, len(in))
+	for _, v := range in {
+		if n := f(v); n != nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// anyNode wraps children in `any`, collapsing the pointless cases exactly as
+// allNode does: no children is no filter, and a one-branch disjunction is that
+// branch.
+func anyNode(kids []*rawNode, verbatim string) *rawNode {
+	switch len(kids) {
+	case 0:
+		return nil
+	case 1:
+		return kids[0]
 	default:
-		// Some branches assert a type and some do not, or they assert
-		// different ones. Neither factors.
-		return lost
+		return &rawNode{Kind: rawKindAny, Kids: kids, Verbatim: verbatim}
 	}
+}
 
-	if len(kids) == 1 {
-		// A one-branch disjunction is that branch.
-		return TreeTranslation{Root: kids[0], TypeLiterals: harvested}
+// ---------------------------------------------------------------------------
+// SETTLING A DEFERRED DISJUNCTION — WHY THIS IS EXACT, AND WHERE IT STOPS
+//
+// A rawKindTypedAny is `⋁ᵢ (type == Tᵢ ∧ Rᵢ)`, each Rᵢ possibly absent (the
+// branch was only its type literal). ReduceTypedDisjunctions is handed the ONE
+// record type the view resolved to, T, and rewrites it to `⋁_{Tᵢ = T} Rᵢ`.
+//
+// THE PROOF DOES NOT DEPEND ON OBSIDIAN'S SEMANTICS, WHICH IS WHY IT HOLDS.
+// The natural argument — "a note has one `type:`, so a branch naming a
+// different one is false" — is true but it rests on a fact about the source
+// vault, and the whole FR-105 discipline exists because facts about the source
+// vault are where broadenings come from. The argument that needs nothing:
+//
+//	THE VIEW THIS PRODUCES WRITES `type: T`, AND A TYPED VIEW RETURNS ONLY
+//	RECORDS WHOSE RecordType IS EXACTLY T.
+//
+// That is our own scoping (knowledgefind's query.selector puts T in the
+// propindex Selector's RecordType; a candidate of any other type is never
+// streamed at all). So a branch requiring `type == Tᵢ ≠ T` can only ever have
+// contributed rows THIS VIEW COULD NOT RETURN IN THE FIRST PLACE. Dropping it
+// removes nothing. And a branch requiring `type == T` is asserting something
+// already guaranteed, so it reduces to its remainder. The rewrite is an
+// EQUIVALENCE under the view's own type scope, not a subset of it — nothing to
+// invert, nothing to be careful about downstream.
+//
+// It is exactly the same reasoning translateOr's case 2 already used for one
+// type, applied to the case where the branches disagree. What was missing was
+// never a wire format. It was the view's type, which is resolved thirty lines
+// after the outer filter is translated.
+//
+// FOUR PLACES IT DELIBERATELY STOPS, each because the reduction stops being an
+// equivalence or stops being gradeable:
+//
+//   - AND-POSITION ONLY. The rewrite is conditioned on `type == T` being
+//     asserted alongside, which the view's own filter does. That conditioning
+//     is only available where the disjunction is conjoined with it — under an
+//     `or:` or a `not:` it is not, and a node reducing to TRUE inside an `any:`
+//     would make the whole disjunction true. Outside AND-position it stays lost.
+//   - AN UNTYPED VIEW (T == "") CANNOT REDUCE. With no type asserted the
+//     disjunction really does span two domains, and importing it untyped is the
+//     vault-wide broadening the old refusal correctly named.
+//   - NO SURVIVING BRANCH means the effective filter is FALSE. That is exact —
+//     the Obsidian view returns nothing — but "write a view that can never
+//     match" is a different product decision from "translate this filter", so
+//     it stays lost rather than being silently emitted as an empty view.
+//   - UNDER A NEGATION, refused by translateNot. The equivalence above IS
+//     preserved by negation, so this one is conservatism rather than necessity;
+//     no base in this vault has the shape, so there is nothing to grade it
+//     against.
+//
+// In every stopping case the node degrades to a rawKindLost carrying the SAME
+// verbatim it carried before, so the loss text, its position and its
+// classification in the report are byte-identical to the old refusal.
+// ---------------------------------------------------------------------------
+
+// ReduceTypedDisjunctions settles every deferred type-guarded disjunction in one
+// translated tree, under the record type the view resolved to.
+//
+// It returns a REWRITTEN COPY and mutates nothing. That is load-bearing rather
+// than hygienic: a base's outer filter is translated ONCE and then handed to
+// every view in the base (TranslateBase), so reducing it in place under the
+// first view's type would silently apply that type's reduction to all the
+// others — five views in Content.base, resolving to two different types.
+func ReduceTypedDisjunctions(t TreeTranslation, recordType string) TreeTranslation {
+	out := t
+	out.Root = reduceTypedNode(t.Root, recordType, true)
+	return out
+}
+
+// reduceTypedNode rewrites one subtree. `andPos` reports whether this node sits
+// in AND-position from the root — true at the root, preserved through `all`,
+// and false under `any` or `not`.
+//
+// A nil return means "this subtree is TRUE, drop it", which only an `all` (or
+// the root) may act on. That is precisely why andPos is tracked rather than
+// assumed.
+func reduceTypedNode(n *rawNode, recordType string, andPos bool) *rawNode {
+	if n == nil {
+		return nil
 	}
-	return TreeTranslation{
-		Root:         &rawNode{Kind: rawKindAny, Kids: kids, Verbatim: renderVerbatim(original)},
-		TypeLiterals: harvested,
+	switch n.Kind {
+	case rawKindTypedAny:
+		if !andPos {
+			return lostNode(n.Verbatim)
+		}
+		return reduceTypedAny(n, recordType)
+
+	case rawKindAll:
+		kids := make([]*rawNode, 0, len(n.Kids))
+		for _, k := range n.Kids {
+			if rk := reduceTypedNode(k, recordType, true); rk != nil {
+				kids = append(kids, rk)
+			}
+		}
+		return allNode(kids)
+
+	case rawKindAny, rawKindNot:
+		kids := make([]*rawNode, 0, len(n.Kids))
+		for _, k := range n.Kids {
+			rk := reduceTypedNode(k, recordType, false)
+			if rk == nil {
+				// Unreachable today: only a rawKindTypedAny can reduce to
+				// nothing, and one is refused outright outside AND-position
+				// just above. It is handled rather than ignored because a
+				// vanished disjunct would make an `any:` TRUE and a `not:`
+				// FALSE, which is the one way this rewrite could broaden.
+				return lostNode(n.Verbatim)
+			}
+			kids = append(kids, rk)
+		}
+		if n.Kind == rawKindAny {
+			return anyNode(kids, n.Verbatim)
+		}
+		cp := *n
+		cp.Kids = kids
+		return &cp
+
+	default:
+		// A leaf, a prebuilt node or an already-lost one. Nothing to settle.
+		return n
 	}
+}
+
+// reduceTypedAny applies the equivalence to ONE deferred disjunction.
+func reduceTypedAny(n *rawNode, recordType string) *rawNode {
+	if recordType == "" {
+		return lostNode(n.Verbatim)
+	}
+	kept := make([]*rawNode, 0, len(n.Branches))
+	for _, b := range n.Branches {
+		if b.RecordType != recordType {
+			continue
+		}
+		if b.Remainder == nil {
+			// This branch is `type == T` and nothing else, so under T it is
+			// TRUE — and one true disjunct makes the whole disjunction true.
+			// It contributes no constraint at all.
+			return nil
+		}
+		kept = append(kept, b.Remainder)
+	}
+	if len(kept) == 0 {
+		return lostNode(n.Verbatim)
+	}
+	return anyNode(kept, n.Verbatim)
+}
+
+// containsTypedAny reports whether a subtree still holds a deferred
+// disjunction, so `not:` can refuse one rather than carry it somewhere its
+// reduction has not been proved.
+func containsTypedAny(n *rawNode) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind == rawKindTypedAny {
+		return true
+	}
+	for _, k := range n.Kids {
+		if containsTypedAny(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // translateNot handles `not: [...]`. Obsidian ANDs the wrapped list and negates
@@ -474,7 +770,7 @@ func translateNot(items []any, original map[string]any) TreeTranslation {
 	var kids []*rawNode
 	for _, it := range items {
 		sub := TranslateFilterTree(it)
-		if len(sub.TypeLiterals) > 0 || sub.Root == nil || containsLost(sub.Root) {
+		if len(sub.TypeLiterals) > 0 || sub.Root == nil || containsLost(sub.Root) || containsTypedAny(sub.Root) {
 			return TreeTranslation{Root: lostNode(renderVerbatim(original))}
 		}
 		kids = append(kids, sub.Root)
@@ -501,6 +797,15 @@ func containsLost(n *rawNode) bool {
 	}
 	for _, k := range n.Kids {
 		if containsLost(k) {
+			return true
+		}
+	}
+	// A deferred disjunction keeps its branches OUTSIDE Kids, and this walk is
+	// what decides whether a group is carried at all. Missing them would let a
+	// lost leaf ride inside a branch remainder into a translated view — the
+	// one shape "lost as a unit" exists to prevent.
+	for _, b := range n.Branches {
+		if containsLost(b.Remainder) {
 			return true
 		}
 	}

@@ -180,12 +180,25 @@ or:
 
 // TestTranslateFilterTree_OrRefusesEveryFactorisationThatIsNotExact is the
 // guard on the test above. Each case below LOOKS close to the factorable shape
-// and is not equal to it, so each must be lost whole.
+// and is not equal to it, so none may be factored HERE.
+//
+// TWO OF THE THREE ARE NO LONGER LOST, AND THE GUARD IS UNCHANGED. They are
+// DEFERRED instead — carried as a rawKindTypedAny and settled per view, once
+// the record type the view resolves to is known, because that type is the
+// premise that makes them exact (`(X ∨ Y) ∧ X ≡ X`). What this test still
+// pins is the part that was always the real requirement: translateOr must
+// harvest NO type from them and must not factor them on its own. The
+// `why` text of each is preserved verbatim as the reason it cannot be settled
+// at THIS point, and each is checked to still be lost when there is no type to
+// settle it against — which is the untyped view the original `why` names.
 func TestTranslateFilterTree_OrRefusesEveryFactorisationThatIsNotExact(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
 		why  string
+		// deferred is true when the group survives as a rawKindTypedAny for
+		// the per-view pass, false when it is lost outright here.
+		deferred bool
 	}{
 		{
 			name: "two different types",
@@ -198,7 +211,8 @@ or:
       - type == "brand-kit"
       - status == "accepted"
 `,
-			why: "a ViewDef declares one type; \"either type\" is not one type, and an untyped view spans MORE than the two",
+			why:      "a ViewDef declares one type; \"either type\" is not one type, and an untyped view spans MORE than the two",
+			deferred: true,
 		},
 		{
 			name: "one branch does not assert the type at all",
@@ -220,14 +234,28 @@ or:
       - type == "decision"
       - status == "accepted"
 `,
-			why: "still exactly equal, but by a DIFFERENT simplification with a different proof — refused rather than folded in",
+			why:      "still exactly equal, but by a DIFFERENT simplification with a different proof — refused rather than folded in",
+			deferred: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := TranslateFilterTree(yamlTree(t, tc.src))
-			if got := rawShape(tr.Root); got != "LOST" {
-				t.Errorf("tree = %q, want LOST — %s", got, tc.why)
+			switch {
+			case tc.deferred:
+				if tr.Root == nil || tr.Root.Kind != rawKindTypedAny {
+					t.Errorf("tree = %q, want a DEFERRED type-guarded disjunction — %s", rawShape(tr.Root), tc.why)
+				}
+				// The original assertion, still made: with no record type to
+				// settle it against there is nothing to absorb it, so it is
+				// lost exactly as it was before.
+				if got := rawShape(ReduceTypedDisjunctions(tr, "").Root); got != "LOST" {
+					t.Errorf("untyped reduction = %q, want LOST — %s", got, tc.why)
+				}
+			default:
+				if got := rawShape(tr.Root); got != "LOST" {
+					t.Errorf("tree = %q, want LOST — %s", got, tc.why)
+				}
 			}
 			if len(tr.TypeLiterals) != 0 {
 				t.Errorf("type literals = %v, want none — %s", tr.TypeLiterals, tc.why)
