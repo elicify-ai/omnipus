@@ -1482,12 +1482,9 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **And** the manager holds **two distinct `sessionEntry` values** and neither one's `tabs` slice contains the other's `tabEntry` — the assertion that fails if the re-key merged the sets
 - **And** B cannot switch to, drive or close A's tab
 
-**Scenario: the per-agent tab cap survives the re-key (Edge Case) — US-22/AC4, FR-049**
-- **Given** `tools.browser.max_tabs = 5` and agents A and B on workspace W
-- **When** A opens five tabs
-- **Then** A's sixth is refused with `maxTabsReachedErr`
-- **And** B can still open five tabs of its own
-- **And** `totalTabCountLocked` was evaluated over B's own tab set, not over every session in the manager
+~~**Scenario: the per-agent tab cap survives the re-key (Edge Case) — US-22/AC4, FR-049**~~ **TOMBSTONED by ADR D1.5a.**
+- It drove `tools.browser.max_tabs = 5` and asserted A's sixth tab was refused while B could still open five of its own. **The key, the refusal and `maxTabsReachedErr` are all deleted from the code** (FR-059), so every step of it asserts machinery that will not exist.
+- **Nothing about tab OWNERSHIP is lost with it** — that is *agent's-tabs-are-its-own*, which is untouched. What is lost is the only scenario in which a tab open was ever refused, and its replacement is *runaway-tab-loop-is-stopped-by-memory* below.
 
 **Scenario: two agents on their OWN tabs never contend (Happy Path) — US-9/AC0, FR-048**
 - **Given** Jim and Ray on workspace W, each with a tab of their own
@@ -1530,8 +1527,8 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **And** the tools that defer under neither are exactly `{browser_screenshot, browser_get_text, browser_wait, browser_list_tabs}`
 - **And** no registered `browser_*` tool falls outside those two sets
 
-**Scenario: the pool evicts the LRU and launches, silently — US-15/AC1+AC2, FR-038, FR-050**
-- **Given** a derived target of 2, live browsers for W1 (least recently used, idle, no viewer) and W2, and W1 holding a login
+**Scenario: the pool evicts the LRU and launches, silently (*pool-evicts-lru-under-pressure*) — US-15/AC1+AC2, FR-050, FR-057**
+- **Given** live browsers for W1 (least recently used, idle, no viewer) and W2, W1 holding a login, and a **fixture memory reading under which the gate refuses a third launch** *(revision 4's Given was "a derived target of 2"; there is no target — D1.5a. The observable behaviour below is unchanged; only what triggers it is)*
 - **When** a turn resolves to workspace W3
 - **Then** W1's Chrome is closed, W3's launches, and `LiveKeys()` is `{ws:W2, ws:W3}`
 - **And** the tool result is a **success** — no error reaches the agent and nothing reaches the operator
@@ -1540,13 +1537,13 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - *The last two steps are the load-bearing ones: without them eviction is data loss, not a capacity policy.*
 
 **Scenario: eviction skips the instance with a viewer and takes the next one — US-15/AC3, FR-050, FR-010**
-- **Given** a derived target of 2 and live browsers for W1 (least recently used, **live viewer attached**) and W2 (second-least, idle)
+- **Given** a fixture memory reading under which the gate refuses, and live browsers for W1 (least recently used, **live viewer attached**) and W2 (second-least, idle)
 - **When** a turn resolves to W3
 - **Then** **W2** is evicted and W1 is untouched — its pid, its tabs and its viewer stream all survive
 - *The all-pinned case cannot distinguish "the guard works" from "nothing was evictable anyway"; this scenario is the one that can.*
 
 **Scenario: eviction skips the instance with a lease-EXEMPT call in flight — US-15/AC4, FR-051**
-- **Given** a derived target of 2, W1 least recently used with a long `browser_screenshot` executing against it, and W2 idle
+- **Given** a fixture memory reading under which the gate refuses, W1 least recently used with a long `browser_screenshot` executing against it, and W2 idle
 - **When** a turn resolves to W3
 - **Then** W2 is evicted, W1 is untouched, and the `browser_screenshot` completes normally
 - **And** the write lease was **not** consulted — `browser_screenshot` holds none (§14 rule 3's exempt set is six), which is precisely why `InFlight()` exists
@@ -1558,48 +1555,76 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **And** W1 is evictable and idle-closable
 - *Without this, one abandoned panel makes a slot permanently unreclaimable — under eviction that is a deadlock, not a leak.*
 
-**Scenario: nothing is evictable — overshoot by exactly one, then wait, then name it — US-15/AC6, FR-053**
-- **Given** a derived target of 2 and live browsers for W1 and W2, **each with a viewer attached and a tool call in flight**
+**Scenario: nothing is evictable — wait, then refuse, naming memory (*nothing-is-evictable-then-refuse*) — US-15/AC6, FR-053, FR-057**
+- **Given** a fixture memory reading under which the gate refuses, and live browsers for W1 and W2, **each with a viewer attached and a tool call in flight**
 - **When** a turn resolves to W3
-- **Then** a third instance starts, `len(LiveKeys()) == 3`, and **one** WARN names the target and W3
-- **And when** a fourth workspace W4 is requested while that state persists
-- **Then** the call **waits** for an instance to become evictable, and on its own deadline returns a **named error** identifying W4 and the target
-- **And** `len(LiveKeys())` never reaches 4 — the overshoot is `target + 1` **total**, not per request
+- **Then** the call **waits** for an instance to become evictable, up to its own tool deadline
+- **And** on that deadline it returns an error that identifies W3 and names **memory** as the constraint, carrying FR-063's `memory_pressure` reason code
+- **And** `len(LiveKeys())` is still `2` — **no third instance was started**, not even one
+- **And** the error text names **no limit and no config key**, because none exists to raise
+- *Revision 4 asserted the opposite of the middle step: a third instance started (`target + 1`, total) with a WARN, and only a fourth request was refused. **D1.5a deletes the soft cap and rules the gate a hard stop**, so there is nothing left to overshoot — exceeding real free memory invokes the OOM killer, which can take the gateway with it.*
 
-**Scenario: thrash is reported once, with the remedy — US-15/AC8, FR-054**
-- **Given** a configured thrash window and threshold, and more workspaces browsing concurrently than the target allows
+**Scenario: thrash is reported once, with a remedy that exists (*thrash-warns-once*) — US-15/AC8, FR-054**
+- **Given** a configured thrash window and threshold, and more workspaces browsing concurrently than the host's memory allows
 - **When** a workspace is evicted and reopened more than `threshold` times within `window`
-- **Then** **exactly one** WARN is emitted, naming the target, the contending workspaces **and** the remedy
+- **Then** **exactly one** WARN is emitted, naming the contending workspaces, naming **memory** as the binding constraint, and naming a remedy that exists — *give the host more memory*, or *browse fewer workspaces at once*
 - **And** driving a further `2 × threshold` cycles inside the same rolling period emits **no additional** WARN
+- **And** the WARN names **neither `tools.browser.max_browsers` nor any other config key** — the assertion is on the absence, because revision 4's remedy was "raise `max_browsers`" and that key is deleted (SC-022's rule: trace every named action to the function that performs it, or reject)
 
-**Scenario: the ceiling's edge values, and what they do NOT mean — US-15/AC9a+AC10, FR-038a, FR-056**
-- **Given** `tools.browser.max_browsers = 0` (and separately, `-1`)
-- **Then** `Target()` reports `operatorCeiling` as **absent** — the same `<= 0` shape `max_total_tabs` uses (`coordinator.go:785-788`)
-- **And** the derived target **still binds**: with fixture memory values yielding a target of 3, a fifth concurrent workspace evicts rather than being admitted
-- *This is the assertion revision 3 got backwards: it required "`<= 0` ⇒ unlimited and no request is ever refused on this axis", which cannot happen under `clamp(…, 1, ceiling)`.*
-- **And given** a configured `max_total_tabs = 3` with browsers live for W1 and W2, **then** the tab budget is still **global**: the third tab opened across both browsers is the last one allowed, not the third in each
-- **And** `--renderer-process-limit` is enforced **per instance** at the same time, and neither cap is silently multiplied by N
+~~**Scenario: the ceiling's edge values, and what they do NOT mean — US-15/AC9a+AC10, FR-038a, FR-056**~~ **TOMBSTONED by ADR D1.5a.**
+- It asserted `max_browsers <= 0` means "no operator ceiling" rather than "unlimited", and that `max_total_tabs` stays a **global** budget across N Chromes rather than becoming 30 × N. **Both keys are deleted** (FR-059): there is no ceiling to interpret, no derived target behind it, and no global tab budget to keep global.
+- **Not re-derived.** These were edge semantics *of a cap*; with no cap there is no edge. §17 M7b's finding is dissolved rather than resolved, and both of its tests go with it.
 
-**Scenario: the target is derived from memory, not shipped as a constant — US-15/AC9, FR-056**
-- **Given** fixture memory values for a 3916 MB host and separately for a 32 GB host, and a fixed `FIXED_FLOOR`, `gateway_reserve` and `R`
-- **When** the pool computes its target
-- **Then** the two hosts get **different** targets, both ≥ 1
-- **And** no literal target value appears in `pkg/config/defaults.go`
-- **And** with `operator_ceiling` set below the derived value, the ceiling wins; set above it, the derivation wins
+**Scenario: the capacity path holds no constant, and no target (*no-constant-in-the-capacity-path*) — US-15/AC9+AC9b, FR-062** *(replaces the tombstoned *the target is derived from memory, not shipped as a constant*, which computed `clamp((min(host_RAM, cgroup_limit) × 0.5 − gateway_reserve) / (FIXED_FLOOR + R×85MB + encoder_page), 1, operator_ceiling)` — every term of which is now gone or withdrawn)*
+- **Given** fixture memory values for a 3916 MB host and separately for a 32 GB host
+- **When** a launch is considered on each
+- **Then** the decision is `headroom >= PER_BROWSER_COST` (≈182 MB) on both — **the same check**, giving different answers because the hosts differ, not because a target was computed
+- **And** the source contains **no per-renderer byte constant and no per-tab byte constant** anywhere in the capacity path — asserted structurally, because the measured spread was **30 MB → 327 MB in one snapshot** (11×) and renderer count is not tab count (**2 tabs, 13 renderers**)
+- **And** no literal browser-count value appears in `pkg/config/defaults.go`
+- **And** every doc comment quoting ≈182 MB also states its scope: **macOS, one snapshot, Chrome for Testing, idle and non-capturing**
 
-**Scenario: every per-key Chrome carries the renderer floor — FR-055**
-- **Given** the shipped `tools.browser.max_tabs` (default 5)
+**Scenario: no per-key Chrome carries a renderer limit, and site isolation is full — US-15/AC9b, FR-062** *(this is revision 4's *every per-key Chrome carries the renderer floor* **inverted**, not deleted — the flag it asserted is now forbidden, and the property that mattered is asserted more strongly)*
 - **When** any per-key Chrome is launched
-- **Then** its argv contains `--renderer-process-limit=R` with `R >= max_tabs`
-- **And** two cross-site tabs opened in one workspace occupy **distinct renderer processes** (ADR criterion P8)
-- *R is a site-isolation **floor**: it is derived from the tab count, and if the memory arithmetic then yields fewer than one browser the tab budget is lowered, never R.*
+- **Then** its argv contains **no** `--renderer-process-limit` at any value
+- **And** two cross-site tabs opened in one workspace occupy **distinct renderer processes** (ADR criterion P8) — which now holds for *every* tab, not only for those below a bound
+- *The flag **weakens** site isolation above its bound: over-limit navigations reuse same-site processes. It was justified as acceptable for "semi-trusted destinations", and `ValidateURL` (`manager.go:685-708`) permits any public URL, so that adjective was never earned. **Not setting it dissolves C-303 / C4 / C206 rather than mitigating them** — there is no residual trade-off left to record.*
 
-**Scenario: admission stops under real memory pressure (Edge Case) — US-15/AC11, FR-057**
+**Scenario: admission stops under real memory pressure (*pressure-gate-thresholds*) (Edge Case) — US-15/AC11+AC11a, FR-057**
 - **Given** Linux with a cgroup memory limit, and fixture `memory.current / memory.max` values of 0.84, 0.85 and 0.86
 - **When** a turn resolves to a workspace with no live browser and **at least one instance is evictable**
-- **Then** at 0.84 and 0.85 the pool proceeds; at 0.86 it does not grow
-- **And given** macOS or Windows, **then** the gate is a no-op and the conservative operator ceiling is the entire control — stated, not implied
-- **And** the case where pressure is above 0.85 **and nothing is evictable** is **deliberately not asserted**: "refuse to grow" (D1.5 item 3) and "always evict-and-launch" (D1.7) cannot both hold there, the ADR does not decide it, and a test that picked an answer would ratify a decision nobody made (§0.5 E-2)
+- **Then** at 0.84 and 0.85 the pool proceeds; at 0.86 it evicts the LRU instance and re-asks the gate
+- **And when** pressure is 0.86 **and nothing is evictable**, **then** the request is **refused** — this case is now **asserted**, where revision 4 deliberately left it out. *(It was omitted because "refuse to grow" (D1.5 item 3) and "always evict-and-launch, never refuse" (D1.7) gave opposite answers, the ADR had not decided, and a test picking one would have ratified a decision nobody made. **D1.5a decides it**: the gate is a hard stop, the cap is soft, and with the cap deleted only the hard stop remains — §0.5 E-2, now struck through.)*
+- **And given** macOS or Windows, **then** the gate has **no signal to read at all** — `readMemAvailableBytes` returns 0 by design (`pkg/config/meminfo_other.go`) — **and the run must fail rather than pass quietly**, because with every counter deleted a blind gate there is not a weaker limit but no limit. *This scenario is the one that makes §0.5 **E-6** visible instead of latent; it stays red until the operator rules on which of E-6's three shapes ships.*
+
+**Scenario: the counters are gone from the code, not merely unset (*counters-are-gone*) — US-15/AC12, FR-059**
+- **Given** the shipped binary and a repo-wide search
+- **Then** `MaxTabs`, `MaxTotalTabs`, `TryOpenTab`, `ReleaseTab`, `reservedTabs`, `reserveGlobalTab`, `releaseGlobalTab` and `maxTabsReachedErr` resolve to **nothing** — in production code **and** in `_test.go` files
+- **And given** a `config.json` carrying `tools.browser.max_tabs: 5`, **when** the gateway loads it, **then** it is **rejected with a named error** identifying the removed key
+- *A deleted key that still loads and quietly does nothing is worse than the cap it replaced: an operator who sets it believes they have a limit they do not have. This is the same failure shape as the ADR-037 "saved, changed nothing" anti-pattern this project bans.*
+- **And** `totalTabCountLocked` **still exists** — FR-048's per-agent tab sets are still counted for listing and for the gate's telemetry; only its use as an enforcement point is removed
+
+**Scenario: a runaway tab loop is stopped by memory, at the tab (*runaway-tab-loop-is-stopped-by-memory*) — US-15/AC13, FR-060**
+- **Given** one live browser for workspace W and an agent looping `browser_open_tab` against it
+- **And** a fixture memory reading that crosses the gate's threshold at the *k*-th tab
+- **When** the loop reaches tab *k+1*
+- **Then** that open is **refused**, with FR-063's `memory_pressure` reason code, and the loop does not proceed to *k+2* while the reading holds
+- **And** the gate was consulted at **all five** tab-open sites — `createFirstTab` (`manager.go:1139`), `OpenTab` (`:2005`, `:2047`) and `adoptTarget` (`:2216`, `:2286`) — the same five the deleted cap was checked at
+- *A launch-only gate never sees this loop: it opens no browser, so it reaches no launch decision. **And no counter remains to catch it** — this scenario is the whole of what stands between the loop and the OOM killer.*
+
+**Scenario: neither remaining control may silently do nothing (*idle-close-actually-closes*, *gate-cannot-vacuously-pass*) — US-15/AC14, FR-061**
+- **Given** a browser with zero tabs and zero live viewers held past `tools.browser.idle_close_ttl`
+- **Then** the sweep **closes it**, and a run in which nothing is ever closed **fails** — the assertion is on the close having happened, not on the absence of an error
+- **And given** a fixture memory reading below the gate's threshold, **when** a launch is requested, **then** the gate **refuses**; a gate that answers "room available" for every input **fails** this scenario
+- **And** neither control is reachable behind a disabled flag, a "best effort" path, or an off-by-default setting on any supported platform
+- *Previously a counter caught a runaway before either of these did. That backstop is gone **by decision**, so a gap in either is not a degraded limit — it is no limit. These two assertions exist because "the control ran and did nothing" is the exact shape of the false green `docs/internal/false-green-patterns.md` catalogues.*
+
+**Scenario: a memory refusal is legible to the agent (*memory-refusal-is-legible-to-the-agent*) — US-15/AC15, FR-063**
+- **Given** a `browser_click` whose `target="_blank"` spawns a new tab, and a memory reading under which the gate refuses to adopt it
+- **When** `applyReconcileOutcome` (`pkg/tools/browser/tools.go:346-356`) builds the model-visible note
+- **Then** the outcome's reason is `tabAdoptReasonMemoryPressure` (`"memory_pressure"`), it matches its **own** arm of the switch, and the text names the host being out of memory **and** a remedy that exists
+- **And** the text names **no limit and no config key**
+- **And** no adoption refusal reaches the `default:` arm — *"it could not be adopted"*, with no reason and no remedy — which is where every memory refusal would land if the deleted `tabAdoptReasonMaxTabs` were removed without a replacement
+- *An agent that cannot distinguish "the host is out of memory" from "something went wrong" **retries**, straight back into the runaway loop this ruling accepts the risk of. Found by the D2 spec.*
 
 **Scenario: the managed-Chromium download still starts at boot — FR-016c**
 - **Given** a fresh install with no Chromium on `$PATH` and no managed install, and **zero** live browsing keys
@@ -1993,16 +2018,18 @@ The previous draft said "unmodified" and that was **unsatisfiable, at compile le
 | 8 concurrent action tools on the **workspace-owned** tab | 1 at a time; 0 errors; 0 deadlocks; **all 8 eventually complete or defer with a named holder** | FR-019, FR-020, FR-023 |
 | lease holder panics mid-action | next acquire succeeds ≤ `leaseWaitTimeout` | FR-024 |
 | human holds control lock (key `ws:W`) + agent action | ADR-038 D6 reason; lease never acquired | FR-002c, FR-022 |
-| derived target 2, 2 live (LRU idle), request for a 3rd workspace | LRU **evicted**, 3rd launched, **no error**; LRU's profile dir still present; LRU relaunches logged in | FR-038, FR-050 |
-| derived target 2, LRU has a **live viewer**, request for a 3rd | **second**-LRU evicted; LRU pid/tabs/stream unaffected | FR-050, FR-010 |
-| derived target 2, LRU has a lease-**exempt** call in flight, request for a 3rd | second-LRU evicted; the exempt call completes | FR-051 |
+| gate refuses, 2 live (LRU idle), request for a 3rd workspace | LRU **evicted**, gate re-asked, 3rd launched, **no error**; LRU's profile dir still present; LRU relaunches logged in | FR-050, FR-057 |
+| gate refuses, LRU has a **live viewer**, request for a 3rd | **second**-LRU evicted; LRU pid/tabs/stream unaffected | FR-050, FR-010 |
+| gate refuses, LRU has a lease-**exempt** call in flight, request for a 3rd | second-LRU evicted; the exempt call completes | FR-051 |
 | viewer attached but silent past the WebRTC liveness window | counted **detached** by both eviction and `CloseIdle` | FR-052 |
-| derived target 2, **all** instances viewed **and** busy, request for a 3rd | exactly 3 live (`target+1`), one WARN naming target + workspace | FR-053 |
-| the same, then a 4th request | waits, then a **named error** naming the workspace and the target; never 4 live | FR-053 |
-| `2 × threshold` evict-reopen cycles in one window | **exactly one** WARN naming target, contending workspaces and remedy | FR-054 |
-| fixture host 3916 MB vs 32 GB, same `FIXED_FLOOR`/`R` | **different** derived targets, both ≥ 1; no literal target in `defaults.go` | FR-056 |
-| cgroup `memory.current/memory.max` = 0.84 / 0.85 / 0.86 | admit / admit / refuse-to-grow; no-op off Linux | FR-057 |
-| any per-key Chrome launch | argv contains `--renderer-process-limit=R`, `R >= max_tabs` | FR-055 |
+| gate refuses, **all** instances viewed **and** busy, request for a 3rd | waits to its deadline, then an error naming the **workspace and MEMORY**, reason code `memory_pressure`; **still exactly 2 live** — no overshoot | FR-053, FR-063 |
+| ~~the same, then a 4th request~~ | ~~exactly 3 live (`target+1`), one WARN; the 4th waits then errors~~ **TOMBSTONED — D1.5a deletes the `+1` overshoot; the row above is the whole behaviour now** | ~~FR-053~~ |
+| `2 × threshold` evict-reopen cycles in one window | **exactly one** WARN naming the contending workspaces, **memory** as the constraint, and a remedy that exists; names **no config key** | FR-054 |
+| fixture host 3916 MB vs 32 GB | the **same** check, `headroom >= PER_BROWSER_COST` (≈182 MB), giving different answers; no literal browser count in `defaults.go`; no per-renderer or per-tab constant anywhere in the capacity path | FR-062 |
+| cgroup `memory.current/memory.max` = 0.84 / 0.85 / 0.86, **something evictable** | admit / admit / evict-then-re-ask | FR-057 |
+| the same at 0.86, **nothing evictable** | **refuse**, naming memory — the case revision 4 deliberately left unasserted (E-2, now ruled) | FR-057, FR-053 |
+| the gate on macOS or Windows | `availableRAMBytes` is **0** (`meminfo_other.go`), so the gate has no signal — the run **fails** rather than passing quietly; **red until §0.5 E-6 is ruled** | FR-057, FR-061 |
+| any per-key Chrome launch | argv contains **no** `--renderer-process-limit` at any value; two cross-site tabs still occupy **distinct** renderer processes | FR-062 |
 | W's browser: 0 tabs, 0 viewers, past idle window | process closed; `LiveKeys()` shrinks; profile dir present | FR-040 |
 | W1's Chrome killed, W2 live with a viewer | W2 pid/tabs/stream unaffected; W2's manager not reset | FR-041 |
 | W1 relaunched after kill | logged in (profile survived) | FR-041, FR-043 |
@@ -2010,12 +2037,17 @@ The previous draft said "unmodified" and that was **unsatisfiable, at compile le
 | workspace W deleted with a live browser | exactly one `pool.Close(ws:W)` | FR-026 |
 | K sub-turns run to completion | pool and manager counts equal baseline | FR-026c |
 | attach frame `session_id` from B's chat, agent on A and B | resolves to `ws:B` | FR-016, FR-017 |
-| `tools.browser.max_browsers = 0` (and `-1`) | **no operator ceiling**; the derived target still binds — a fifth concurrent workspace evicts rather than being admitted | FR-038a, FR-056 |
-| `max_browsers = 2`, `max_total_tabs = 3`, browsers live for W1+W2 | 3 tabs **total** across both, not 3 each | FR-038a |
-| agent A opens 5 tabs at `max_tabs=5`; agent B on the same workspace opens 1 | A's 6th refused; **B's 1st succeeds** | FR-049 |
+| ~~`tools.browser.max_browsers = 0` (and `-1`)~~ | ~~no operator ceiling; the derived target still binds~~ **TOMBSTONED — the key is deleted (D1.5a); there is no ceiling and no edge case** | ~~FR-038a, FR-056~~ |
+| ~~`max_browsers = 2`, `max_total_tabs = 3`, browsers live for W1+W2~~ | ~~3 tabs **total** across both, not 3 each~~ **TOMBSTONED — `max_total_tabs` is deleted; there is no global tab budget to keep global** | ~~FR-038a~~ |
+| ~~agent A opens 5 tabs at `max_tabs=5`; agent B opens 1~~ | ~~A's 6th refused; B's 1st succeeds~~ **TOMBSTONED — `max_tabs` is deleted; the per-agent tab SETS survive (row below), the per-agent CAP does not** | ~~FR-049~~ |
+| `config.json` carrying `tools.browser.max_tabs` or `max_total_tabs` | **rejected at load** with a named error identifying the removed key — never silently ignored | FR-059 |
+| repo-wide search for `MaxTabs`, `MaxTotalTabs`, `TryOpenTab`, `ReleaseTab`, `reservedTabs`, `reserveGlobalTab`, `releaseGlobalTab`, `maxTabsReachedErr` | **zero** hits, production **and** `_test.go`; `totalTabCountLocked` **survives** (counting, not enforcing) | FR-059 |
+| agent loops `browser_open_tab`; fixture memory crosses the threshold at tab *k* | tab *k+1* **refused** with `memory_pressure`; the gate was consulted at all five sites (`manager.go:1139, 2005, 2047, 2216, 2286`) | FR-060, FR-063 |
+| a reaper sweep in which nothing is ever closed / a gate that admits every input | **both FAIL** — the assertion is on the control having acted, not on the absence of an error | FR-061 |
+| `browser_click` spawns a tab; gate refuses to adopt it | reason `tabAdoptReasonMemoryPressure` (`"memory_pressure"`); its **own** switch arm; text names memory **and** a real remedy; names **no config key**; **never** the `default:` arm | FR-063 |
 | agent A opens a tab; agent B lists tabs; operator opens a tab | B sees the operator's tab, labelled as the workspace's, and **not** A's | FR-048 |
-| two goroutines `Acquire` two **different** keys with one slot left, LRU idle | **both** succeed; the LRU is evicted exactly once; `LiveKeys()` never exceeds the target | FR-038, FR-050 |
-| the same, every instance pinned | `LiveKeys()` reaches exactly `target+1`; one WARN; **no refusal** | FR-053 |
+| two goroutines `Acquire` two **different** keys while the gate refuses, LRU idle | **both** succeed; the LRU is evicted exactly once; the gate is re-asked between them, so the second does not launch on a stale reading | FR-050, FR-057 |
+| the same, every instance pinned | **no growth at all**; both callers wait, then both are refused naming memory; `LiveKeys()` unchanged | FR-053, FR-057 |
 | W idle-closed, then a tool call arrives | Chrome relaunches from W's profile, login intact, `LiveKeys()` +1, **same** manager | FR-040a |
 | `ReapIdleSessions` cancels `se.browserCancel` while `ws:W` is live in the pool | next `Acquire(ws:W)` yields a drivable browser; no live-but-dead key | FR-040a, CRIT-102 |
 | stale `SingletonLock` in `<profileRoot>/ws/W/` after a crash | W's next launch succeeds; the file is removed first | FR-042b |
