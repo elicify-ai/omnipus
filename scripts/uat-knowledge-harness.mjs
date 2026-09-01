@@ -27,10 +27,22 @@ const DEFAULT_BASE = 'http://127.0.0.1:5000';
 // low-level REST
 // --------------------------------------------------------------------------
 
-export function cliToken(home) {
-  // The gateway mints this on every `omnipus start`; it is a machine
-  // credential decoupled from any human account, which is why it is the right
-  // one to script with rather than a login token.
+/**
+ * Resolves the bearer token, preferring an explicitly supplied one.
+ *
+ * `cli.token` is the machine credential and the right thing to script with —
+ * decoupled from any human account. But it is NOT always there: on a genuinely
+ * fresh $OMNIPUS_HOME, `omnipus start` cannot mint it because it writes through
+ * config.json, which does not exist yet, and the startup log carries only
+ * `Warning: could not ensure cli token: ... open .../config.json: no such file`.
+ * Observed on a clean run, not hypothesised.
+ *
+ * So the caller may pass the token that `POST /onboarding/complete` returns
+ * instead. Falling back to cli.token keeps the ordinary path unchanged.
+ */
+export function resolveToken({ home, token, tokenFile }) {
+  if (token) return token.trim();
+  if (tokenFile) return readFileSync(tokenFile, 'utf8').trim();
   return readFileSync(join(home, 'cli.token'), 'utf8').trim();
 }
 
@@ -291,6 +303,8 @@ export async function preflight(base, token, { agentID, workspaceID, model, know
 const HELP = `omnipus knowledge-tools UAT harness
 
   --home <dir>        OMNIPUS_HOME of the target gateway (for cli.token)
+  --token <tok>       bearer token, overriding cli.token (or $OMNIPUS_UAT_TOKEN)
+  --token-file <p>    read the bearer token from a file
   --base <url>        gateway base URL (default ${DEFAULT_BASE})
   --agent <id>        tester agent id
   --workspace <id>    workspace id (REQUIRED: knowledge scope comes from it)
@@ -312,7 +326,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   const base = arg('base', DEFAULT_BASE);
   const home = arg('home', process.env.OMNIPUS_HOME);
-  const token = cliToken(home);
+  const token = resolveToken({
+    home, token: arg('token', process.env.OMNIPUS_UAT_TOKEN), tokenFile: arg('token-file'),
+  });
   const agentID = arg('agent');
   const workspaceID = arg('workspace');
   const model = arg('model', 'z-ai/glm-5.3-flash');
