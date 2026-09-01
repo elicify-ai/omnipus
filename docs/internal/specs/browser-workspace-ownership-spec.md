@@ -307,10 +307,11 @@ settled, and revision 3 carried no ADR revision pin, so a reader could not detec
 rulings are absorbed above. This section records the places where absorbing them — and then
 absorbing D1.5a on top (§0.6) — left something that **this spec cannot decide on its own** — written as escalations rather than as
 assumptions, because an assumption in a spec reads as a decision to whoever implements it.
-**Five are live** (E-1, E-3, E-4, E-5, E-6); **E-2 is ruled and kept struck through** so a reader
-arriving from an earlier review sees it answered rather than dropped. **E-6 is new with D1.5a and
-is the most consequential of them** — it asks whether the one control that remains can run at all
-on two of the three supported platforms.
+**Four are live** (E-1, E-3, E-4, E-5); **E-2 and E-6 are ruled and kept struck through** so a
+reader arriving from an earlier review sees each answered rather than dropped. **E-6 was the most
+consequential of them** — it asked whether the one control that remains can run at all on two of
+the three supported platforms — and **ADR D1.5b (2026-09-01) answers it: the macOS reader is in
+scope and must be written; Windows is foreseen and explicitly NOT in scope. See §0.6a.**
 
 | # | The question | Where it sits now | Who must answer |
 |---|---|---|---|
@@ -319,7 +320,7 @@ on two of the three supported platforms.
 | **E-3** | **Is `browser_snapshot` reachable at all under D1.9a?** Out of this spec's scope (it is a D2 tool), but D1.9a changes what it reads: a snapshot taken by agent A now sees A's own tab, not the workspace's. | Recorded, not decided. | D2 spec |
 | **E-4** | **Three ADR §6 "open" questions this document has already answered.** See §12 A24 — capture-session-per-workspace (FR-016a), per-workspace profile disk (§16 MAJ-111), and instances-vs-bytes (**closed by D1.5a: bytes, and nothing else**). Two are kept with the ADR named as needing to close them; **one is reopened** because this spec's closure of it did not hold. | §12 A24 | ADR owner |
 | **E-5** | **Is a per-tab headroom floor needed, and what is it?** FR-060 puts the pressure gate in the tab-open path, expressed as a **ratio** with no per-tab byte constant — because the ADR withdrew the 85 MB constant on measured evidence (30 MB → 327 MB in one snapshot, an 11× spread). A *browser* launch has a measured floor (`PER_BROWSER_COST` ≈182 MB, FR-062); a *tab* has none, and this spec declines to invent one. | Recorded, not decided. A ratio-only tab gate is what FR-060 specifies; if measurement later shows the ratio moves too slowly to catch a fast tab loop, a floor is a design change, not a tuning change. | Operator / G-1's Linux pass |
-| **E-6** | **The only admission control there is cannot run on macOS or Windows.** `readMemAvailableBytes` returns **0** off Linux by deliberate design (`pkg/config/meminfo_other.go`, `//go:build !linux`: *"this project takes on no per-OS memory-query code… that real implementation is future work"*), and `readCgroupMemoryAvailableBytes` returns `(0, false)`, so `availableRAMBytes` (`pkg/config/config.go:655`) is **0** on every non-Linux host. Revision 4 could accept a non-Linux no-op because a **counter** still bounded the pool there. **D1.5a deletes the counter, so a no-op gate on macOS/Windows is not a degraded limit — it is no limit at all (FR-061), on the platform where `PER_BROWSER_COST` was actually measured.** | Recorded, **not decided**. FR-057 states the gap and FR-061 forbids defaulting through it silently. Three shapes exist and this spec may not choose between them: (a) implement a real macOS/Windows memory reader (crosses the "no per-OS memory-query code" line that file draws, though `golang.org/x/sys/unix` keeps it pure-Go and CGo-free on Darwin); (b) ship browser support **Linux-only** until one exists; (c) accept an unbounded browser pool off Linux and **say so in the release notes**. | **Operator** — this is a scope ruling, not a spec detail |
+| ~~**E-6**~~ | ~~**The only admission control there is cannot run on macOS or Windows.**~~ **RULED — no longer an escalation (ADR D1.5b, operator, 2026-09-01).** The finding stands exactly as written: `readMemAvailableBytes` returns **0** off Linux by deliberate design (`pkg/config/meminfo_other.go`, `//go:build !linux` at `:5`, `return 0` at `:43`) and `readCgroupMemoryAvailableBytes` returns `(0, false)` (`:48-50`), so `availableRAMBytes` (`pkg/config/config.go:655`) is **0** on every non-Linux host — and D1.5a's deletion of the counters turned that from a degraded limit into **no limit at all**, on the very platform where `PER_BROWSER_COST` was measured. **The ruling picks shape (a), narrowed:** *writing the macOS reader is IN SCOPE and must work on macOS and Linux; Windows must be foreseen but is explicitly NOT in scope.* | **§0.6a specifies it, and three new FRs carry it.** Shape (b) (browser support Linux-only) is declined outright; shape (c) (an unbounded pool, said so in the release notes) is declined for macOS and **accepted for Windows alone, with three obligations attached** so the gap is declared rather than defaulted through — a code placeholder (FR-066), a release note and a config-doc line (FR-066, SC-023). **FR-064** is the Darwin reader; **FR-065** inverts the undeterminable case — where availability cannot be determined the pool **refuses to grow and logs why**, treating an unmeasurable host as full rather than empty; **FR-066** is Windows, foreseen and declared. **AC11a is re-derived** from "recorded, not decided" to the ruled state, and test 72's third case stops being red-until-ruled. | **Answered** (operator, ADR D1.5b) |
 
 ### 0.6 Memory is the only limit — every counter is deleted (operator ruling, 2026-09-01)
 
@@ -471,6 +472,158 @@ that survives.
 | **FR-061** | Idle close and the pressure gate are the entire defence — neither may silently no-op, and each carries a test that fails if it does |
 | **FR-062** | `PER_BROWSER_COST` ≈182 MB is the **launch-headroom minimum**, quoted with its scope; no per-renderer or per-tab constant is used anywhere, and `--renderer-process-limit` appears nowhere in the launch flags |
 | **FR-063** | A reason code naming **memory** replaces `tabAdoptReasonMaxTabs`, so the model-visible refusal message can branch instead of falling to *"it could not be adopted"* — see the message defect below |
+
+### 0.6a The memory reader is in scope, and must work on macOS as well as Linux (operator ruling, 2026-09-01)
+
+**Verbatim:** *"writing the macOS memory reader is IN SCOPE. It must work on macOS and Linux.
+Windows must be foreseen but is explicitly NOT in scope."* Recorded in the ADR as **D1.5b**.
+
+**This closes E-6** (§0.5), which revision 5 escalated rather than assumed. The escalation was
+correct and its finding is unchanged: with D1.5a deleting every counter, and `availableRAMBytes`
+returning **0** on every non-Linux host, macOS would have shipped with **no browser limit at all**
+— on the one platform where `PER_BROWSER_COST` was actually measured. The ruling does not soften
+that; it removes the cause.
+
+#### It is buildable with no CGo and no new dependency — verified, not assumed
+
+| Claim | Verified where |
+|---|---|
+| `golang.org/x/sys` is already a **direct** dependency at **v0.47.0** | `go.mod:200` — the line carries no `// indirect` marker |
+| It is already used in this tree, so the import is not novel | **20 files** under `pkg/` and `cmd/` import `golang.org/x/sys/unix` (e.g. `pkg/tools/browser/coordinator_lock_unix.go:12`, `pkg/fileutil/flock_unix.go`, `pkg/sandbox/self_hardening_linux.go`) |
+| It provides the sysctl readers **for Darwin**, in pure Go | `unix/syscall_bsd.go:5` is `//go:build darwin \|\| dragonfly \|\| freebsd \|\| netbsd \|\| openbsd`; `SysctlUint32` at `:433`, `SysctlUint64` at `:454`, `SysctlRaw` at `:471` |
+| No C, no shelling out | The three functions above wrap the `sysctl(2)` syscall directly; nothing invokes `sysctl(8)`, `vm_stat` or `top` |
+
+**Hard Constraint #2 (pure Go, no CGo) and #1 (single binary, no new runtime deps) both hold.**
+This is the specific objection `meminfo_other.go:9-13` records against writing the reader
+(*"this project takes on no per-OS memory-query code… that real implementation is future work"*),
+and it is answered by a dependency the project already ships rather than overruled.
+
+#### The parity is APPROXIMATE, and this spec says so rather than implying equivalence
+
+Linux exposes `MemAvailable` **directly** — a single kernel-computed estimate that already
+accounts for reclaimable page cache and slab (`pkg/config/meminfo_linux.go:33-44`). **macOS has no
+such field.** The analogue must be assembled, and it must contend with two things the Linux figure
+does not:
+
+- **Memory compression.** macOS compresses inactive anonymous pages in place rather than paging
+  them out. A compressed page is neither free nor straightforwardly reclaimable, and no counter
+  reports "bytes that would be freed by decompressing nothing".
+- **Purgeable pages.** Volatile allocations the kernel may discard under pressure without writing
+  them anywhere. They are available in a sense Linux's `MemAvailable` has no equivalent for.
+
+**So the macOS number is a considered approximation of the same idea, not the same measurement,
+and the two platforms will differ by some margin on comparable hardware.** That margin is expected
+and is not a defect in either reader.
+
+**What sysctl actually exposes on Darwin — verified on a real host** (macOS 26.5.2, Darwin
+25.5.0, x86_64, `sysctl -n <name>`), because the formula may only be built from keys that exist:
+
+| Key | Present | Note |
+|---|---|---|
+| `hw.memsize` | **yes** (`34359738368` on the test host) | Total physical bytes. **This is `readMemTotalBytes`'s source and the test oracle** |
+| `hw.pagesize`, `vm.pagesize` | **yes** (`4096`) | Page size for every `vm.page_*` count below |
+| `vm.pages` | **yes** (`8137872`) | Total *managed* pages — **smaller than `hw.memsize / hw.pagesize` (`8388608`)** because firmware- and kernel-reserved pages are excluded. Do **not** derive total from it |
+| `vm.page_free_count` | **yes** | Free pages |
+| `vm.page_purgeable_count` | **yes** | Discardable under pressure |
+| `vm.page_speculative_count` | **yes** | Read-ahead file cache, freely reclaimable |
+| `vm.page_pageable_external_count` | **yes** | File-backed pageable — the closest analogue to Linux's reclaimable cache |
+| `vm.page_pageable_internal_count` | **yes** | Anonymous pageable; **not** available memory |
+| `vm.compressor_bytes_used` | **yes** | The compressor's own footprint, in bytes (not pages) |
+| `vm.swapusage` | **yes** | `struct xsw_usage` via `SysctlRaw` |
+| `vm.page_active_count`, `vm.page_inactive_count`, `vm.page_wire_count`, `vm.page_free_target` | **NO — `unknown oid`** | These are `vm_stat`'s fields, sourced from Mach `host_statistics64(HOST_VM_INFO64)`, **not** from sysctl. **The formula therefore cannot simply mirror `vm_stat`'s output**, and an implementation that assumes it can will not compile against reality |
+
+**The composition and the double-counting question, stated as a question rather than settled by
+assertion.** The natural starting composition is
+`(page_free_count + page_purgeable_count + page_speculative_count + page_pageable_external_count) × pagesize`,
+but **speculative pages are themselves file-backed**, so whether `page_pageable_external_count`
+already includes them is a per-release kernel detail this spec does not know and may not guess.
+On the test host the two readings bracket **8.56 GB** (no overlap assumed) and **7.63 GB** (full
+overlap assumed) out of 32 GB — a **12 % spread**, which is the size of the error the choice
+carries. **FR-064 requires the implementation to determine which it is, cross-check the answer
+against `vm_stat`'s "Pages free / speculative / purgeable / File-backed pages" on a real host, and
+record that cross-check in the PR body (SC-023)** — not to pick one and move on. §12 A26 records
+the ambiguity so it is not re-litigated silently.
+
+#### The formula must be documented AT THE CALL SITE (FR-064)
+
+Not in this spec, not in a commit message, not in an ADR. **In the doc comment on the Darwin
+reader itself**, naming every sysctl it sums, stating the compression and purgeable caveats, and
+stating plainly that the figure is an approximation of Linux's `MemAvailable` rather than the same
+measurement. **The reason is concrete:** a future reader comparing the two platforms will find them
+disagreeing by some margin, and the only two conclusions available are *"this is the documented
+approximation"* and *"one of these is broken"*. Without the comment they will reach the second one
+and go looking for a bug that is not there.
+
+#### The undeterminable case REFUSES; it does not admit (FR-065)
+
+**This is the part that is easiest to get backwards, and getting it backwards is a false green.** A
+gate that cannot measure must never answer *"plenty of room"* — that reads as success at every
+call site while admitting without limit, which is the precise failure shape
+`docs/internal/false-green-patterns.md` catalogues and the one D1.5a's own text warns against
+(*"Do not let this become a silent no-op"*).
+
+**Rule: where availability cannot be determined, the pool refuses to grow and logs why.** An
+unmeasurable host is treated as **full**, not empty. This deliberately inverts the usual
+fail-soft default, and it is a deliberate inversion rather than an oversight: a refused browse
+costs one tool call; an unbounded browser pool costs the gateway and every session on it.
+
+**Two consequences follow, and both are requirements rather than implementation taste:**
+
+1. **The availability signal must become two-valued.** `availableRAMBytes()` returns a bare
+   `uint64` (`pkg/config/config.go:655-661`), so **`0` cannot be distinguished from "unknown"** —
+   and today `0` *is* the unknown sentinel on every non-Linux host. FR-057 already requires this
+   accessor to be **exported** for `pkg/tools/browser` to call at all; FR-065 fixes its **shape**
+   at the same time: `(bytes uint64, ok bool)`, with `ok=false` meaning *not measurable here*.
+2. **A fallback constant is not a measurement either.** On Linux with an unreadable
+   `/proc/meminfo`, `readMemAvailableBytes` returns `readMemTotalBytes()/2` and
+   `readMemTotalBytes` returns the hardcoded `fallbackTotalRAMBytes` of 4 GB
+   (`pkg/config/meminfo_linux.go:16,26-30,40-45`) — a fabricated **2 GiB** with no relationship to
+   the machine, which is exactly the MAJOR-2 defect `meminfo_other.go:15-23` records having been
+   fixed *off* Linux while it survives *on* it. For the browser gate that constant would read as
+   *"2 GiB free, launch away"*. **So `ok=false` covers the fallback path too** (gVisor and other
+   `/proc`-less Linux sandboxes reach it). **`autoDetectMaxParallel`'s behaviour is deliberately
+   unchanged** — it keeps consuming the fallback, because sizing a *default* conservatively and
+   *refusing a launch* are different jobs; FR-065 changes the accessor, not that caller's answer.
+
+#### Windows: foreseen, NOT scoped — and it is not simply "the Darwin job again" (FR-066)
+
+Windows keeps returning the unmeasurable signal, **therefore Windows has no memory-derived limit**
+and, under FR-065, no browser or tab may be admitted through the gate there at all. That is
+consistent with the platform's existing posture in this codebase — no sandbox backend
+(`selectBackendPlatform` returns `FallbackBackend`, `pkg/sandbox/sandbox_other.go`),
+`fileutil.WithFlock` a documented no-op (`pkg/fileutil/flock_windows.go`), `pidAlive`
+unconditionally `true` — but **consistency is not an excuse for silence.**
+
+**Why it is a separate piece of work rather than the same one twice, verified:**
+`golang.org/x/sys/windows` **v0.47.0 contains no `GlobalMemoryStatusEx` wrapper and no
+`MEMORYSTATUSEX` type** — `grep -rn "GlobalMemoryStatusEx\|MEMORYSTATUSEX"` over the module's
+`windows/` directory returns **nothing**. The path is therefore a hand-rolled
+`NewLazySystemDLL("kernel32.dll").NewProc("GlobalMemoryStatusEx")` call
+(`windows/dll_windows.go:234,249`) with a struct layout to get right — still pure Go and still
+CGo-free, but not the two-line sysctl read Darwin gets. That difference is the reason the operator
+scoped one and not the other, and it belongs in the record.
+
+**Three obligations, none optional:**
+
+1. **A code placeholder**, in a `meminfo_windows.go` of its own, so the gap is visible **at the
+   point someone would fix it** rather than only in a spec nobody reads while editing. It returns
+   the same `ok=false` FR-065 defines, and its doc comment names `GlobalMemoryStatusEx` and the
+   `LazyDLL` route above.
+2. **A release-note line** stating that the browser pool has no memory-derived limit on Windows.
+3. **A config-documentation line** in the same place the browser keys are documented.
+
+**Windows browser support is specified as `degraded-unsupported` until that reader exists** — the
+tools register and run, but the admission gate refuses to grow the pool, so the platform is
+usable for a single browser and explicitly not supported for the workspace pool. It is a stated
+posture, not a discovered one.
+
+#### New requirements this ruling adds
+
+| FR | What it requires |
+|---|---|
+| **FR-064** | A **Darwin** implementation of `readMemAvailableBytes` and `readMemTotalBytes`, in a new `pkg/config/meminfo_darwin.go` sibling to `meminfo_linux.go`, with `meminfo_other.go` narrowed to `//go:build !linux && !darwin`; pure Go via `golang.org/x/sys/unix`; the formula and its caveats documented **at the call site** |
+| **FR-065** | **The undeterminable case refuses.** The availability accessor becomes two-valued (`bytes, ok`); where `ok` is false the pool **refuses to grow — at launch and at tab open — and logs why**, once per platform-lifetime rather than per call; an unmeasurable host is treated as full |
+| **FR-066** | **Windows is foreseen and declared, not defaulted through.** A `meminfo_windows.go` placeholder returning the unmeasurable signal and naming the fix route; a release-note line; a config-documentation line; and Windows browser support specified as **degraded-unsupported** |
 
 ---
 
