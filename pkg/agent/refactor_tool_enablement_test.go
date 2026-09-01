@@ -66,6 +66,11 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 		// Communication
 		"send_message", "send_file",
 		// Skills
+		// remove_skill is deliberately NOT checked here: it is a ScopeCore
+		// management tool (systools.SkillRemoveTool) registered by
+		// WireSysagentDeps (pkg/gateway/gateway.go), a gateway-boot-only wiring
+		// step this unit-test harness's mustNewAgentLoop never calls — so it is
+		// legitimately absent from agent.Tools in this narrow construction path.
 		"find_skills", "install_skill",
 		// Agent orchestration
 		"delegate", "switch_agent",

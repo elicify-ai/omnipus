@@ -5111,6 +5111,17 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
 		return
 	}
+	// a.homePath (OMNIPUS_HOME) is the correct root here: ADR-046 FR-009 made
+	// install_skill target the fixed, install-wide GLOBAL skills directory
+	// ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir), not a per-agent
+	// workspace — so this installer's root must be a.homePath (which resolves
+	// to that same $OMNIPUS_HOME/skills once "skills" is joined on below),
+	// not any individual agent's Workspace. Routing this through a specific
+	// agent's workspace (as an earlier version of this handler did, before
+	// ADR-046) would point the installer at a directory install_skill no
+	// longer writes into, so every delete would 404 on a skill that
+	// demonstrably exists.
+	//
 	// Inject the SSRF checker (SEC-24) so that any outbound HTTP calls made by
 	// the installer (e.g. future hash verification against a registry) are
 	// protected. a.ssrfChecker is nil when SSRF is disabled; the constructor

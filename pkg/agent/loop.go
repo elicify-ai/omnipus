@@ -1956,6 +1956,16 @@ func registerSharedTools(
 			// agent.Home, so a skill installed by one agent is discoverable
 			// by every other agent.
 			agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
+			// remove_skill is NOT registered here: it is a ScopeCore
+			// management tool (systools.SkillRemoveTool, "remove_skill"),
+			// wired onto every agent's Tools registry by WireSysagentDeps
+			// (pkg/gateway/gateway.go), which shares its SkillInstaller/
+			// SkillsLoader with this same skill engine. A prior version of
+			// this block registered a second, competing ScopeGeneral
+			// implementation here, constructed against agent.Workspace — a
+			// root that predates ADR-046 FR-009's move to a single global
+			// skills directory and that install_skill above no longer
+			// targets. Do not reintroduce it.
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,

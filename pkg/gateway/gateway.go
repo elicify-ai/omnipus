@@ -2757,15 +2757,34 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	sysRegistryManager := skills.NewRegistryManagerFromConfig(regCfg)
 
-	// SkillInstaller: downloads and installs skills into the operator workspace.
+	// SkillInstaller backs remove_skill (SkillRemoveTool, its only consumer —
+	// see pkg/sysagent/tools/skill.go). skills.SkillInstaller.Uninstall joins
+	// "skills" onto its own root internally (see pkg/skills/installer.go:
+	// NewSkillWriter(filepath.Join(si.workspace, "skills"))), so the value
+	// passed here must be the PARENT of the global skills directory — i.e.
+	// homePath ($OMNIPUS_HOME) — not skillsGlobalDir itself (that would
+	// double-join to $OMNIPUS_HOME/skills/skills) and not skillsWorkspace
+	// ($OMNIPUS_HOME/workspace, a different, effectively-empty directory in
+	// the common case).
+	//
+	// ADR-046 FR-009 made install_skill (the chat tool,
+	// pkg/tools/skills_install.go) target skillsGlobalDir unconditionally —
+	// the same directory sysSkillsLoader's "global" tier above and
+	// sysSkillWriter both already use — so a SkillInstaller resolving
+	// anywhere else can never find what install_skill actually wrote. Rooting
+	// it at skillsWorkspace was exactly this bug: list_skills correctly
+	// reported an installed skill (via the loader's global tier), but
+	// remove_skill always reported it NOT_FOUND, because Uninstall only ever
+	// looked under skillsWorkspace/skills.
+	//
 	// GitHub token/proxy from the first github marketplace entry (optional;
 	// empty → unauthenticated API calls).
 	githubToken, githubProxy := skills.FirstGitHubMarketplaceCreds(cfg, bundle.GetString)
 	sysSkillInstaller, err := skills.NewSkillInstallerWithSSRF(
-		skillsWorkspace, githubToken, githubProxy, ssrfChecker,
+		homePath, githubToken, githubProxy, ssrfChecker,
 	)
 	if err != nil {
-		slog.Warn("gateway: could not create skill installer; system.skill.install unavailable",
+		slog.Warn("gateway: could not create skill installer; remove_skill unavailable",
 			"error", err)
 		sysSkillInstaller = nil
 	}
