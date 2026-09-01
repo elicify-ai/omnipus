@@ -7,6 +7,7 @@ import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { stripUntrustedContentWrapper } from '@/lib/untrustedToolContent'
 
 interface BrowserNavigateArgs {
   url?: string
@@ -35,12 +36,21 @@ function displayUrl(url: string): string {
 function parseResult(result: unknown): BrowserResult {
   if (!result) return {}
   if (typeof result === 'string') {
+    // SEC-25: browser.navigate is classified as untrusted (pkg/agent/
+    // prompt_guard.go) and the gateway sends the PromptGuard-sanitized
+    // string, wrapped in [UNTRUSTED_CONTENT] markers — unwrap before
+    // treating this as JSON, otherwise the real url/title never parse out.
+    const unwrapped = stripUntrustedContentWrapper(result)
+    if (unwrapped === null) {
+      // High-strictness install: the backend fully redacted this result.
+      return { content: '(content withheld by security policy)' }
+    }
     // Try JSON first
     try {
-      return JSON.parse(result) as BrowserResult
+      return JSON.parse(unwrapped) as BrowserResult
     } catch {
       // Not JSON — display as plain content. Expected when backend returns text summary.
-      return { content: result }
+      return { content: unwrapped }
     }
   }
   if (typeof result === 'object') return result as BrowserResult

@@ -6,7 +6,7 @@
  * to build base props where applicable.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserToolBlock } from './BrowserTool'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
@@ -272,6 +272,125 @@ it('renders toolName as visible text', () => {
   )
   expect(screen.getByText('browser.navigate')).toBeInTheDocument()
   expect(screen.getByText('https://example.com')).toBeInTheDocument()
+})
+
+// ── SEC-25 PromptGuard [UNTRUSTED_CONTENT] wrapper (defect: JSON.parse warning spam) ──
+//
+// browser.click/browser.type/browser.wait/browser.evaluate results are sent
+// to the SPA already wrapped by the backend's untrusted-content guard (see
+// src/lib/untrustedToolContent.ts). Before the fix, parseResult tried
+// JSON.parse on the wrapped string directly, always failed, and logged
+// `console.warn('[BrowserTool] ... returned non-JSON string result', ...)`
+// on every single call to these 4 tools — this is the reproduction for
+// that exact regression.
+
+describe('BrowserToolBlock — SEC-25 [UNTRUSTED_CONTENT] wrapper handling', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+  })
+
+  it.each(['browser.click', 'browser.type', 'browser.wait', 'browser.evaluate'])(
+    '%s: does not console.warn and renders the unwrapped JSON result',
+    (toolName) => {
+      const inner = JSON.stringify({ result: 'ok', selector: '#submit' })
+      const wrapped = `[UNTRUSTED_CONTENT]\n${inner}\n[/UNTRUSTED_CONTENT]`
+
+      render(
+        <BrowserToolBlock
+          toolName={toolName}
+          args={{}}
+          result={wrapped}
+          status={{ type: 'complete' }}
+          isError={undefined}
+          summary="test"
+        />
+      )
+
+      expect(warnSpy).not.toHaveBeenCalled()
+    }
+  )
+
+  it('browser.evaluate: unwraps and shows the actual JS evaluate result, not an error', () => {
+    const inner = JSON.stringify({ result: 42 })
+    const wrapped = `[UNTRUSTED_CONTENT]\n${inner}\n[/UNTRUSTED_CONTENT]`
+
+    render(
+      <BrowserToolBlock
+        toolName="browser.evaluate"
+        args={{}}
+        result={wrapped}
+        status={{ type: 'complete' }}
+        isError={undefined}
+        summary="document.title"
+      />
+    )
+
+    // Expand the panel — the "Result" section title only appears once expanded.
+    // Two buttons render per row (toggle + "Watch live"); target the toggle by name.
+    fireEvent.click(screen.getByRole('button', { name: /browser\.evaluate/ }))
+    expect(screen.getByText('42')).toBeInTheDocument()
+    expect(screen.queryByText(/Malformed result/)).not.toBeInTheDocument()
+  })
+
+  it('browser.get_text: unwraps and shows the real text field instead of the raw wrapper markers', () => {
+    const inner = JSON.stringify({ text: 'Welcome to the page' })
+    const wrapped = `[UNTRUSTED_CONTENT]\n${inner}\n[/UNTRUSTED_CONTENT]`
+
+    render(
+      <BrowserToolBlock
+        toolName="browser.get_text"
+        args={{}}
+        result={wrapped}
+        status={{ type: 'complete' }}
+        isError={undefined}
+        summary="#main"
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /browser\.get_text/ }))
+    expect(screen.getByText('Welcome to the page')).toBeInTheDocument()
+    expect(screen.queryByText(/UNTRUSTED_CONTENT/)).not.toBeInTheDocument()
+  })
+
+  it('shows a withheld-content notice (not a parse error) for the High-strictness redaction placeholder', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        args={{}}
+        result="[UNTRUSTED_CONTENT_REDACTED_FOR_SUMMARIZATION]"
+        status={{ type: 'complete' }}
+        isError={undefined}
+        summary="test"
+      />
+    )
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /browser\.click/ }))
+    expect(screen.getByText('(content withheld by security policy)')).toBeInTheDocument()
+  })
+
+  it('still warns and surfaces an error for genuinely malformed, non-wrapped JSON (no false negatives)', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        args={{}}
+        result="{not valid json at all}"
+        status={{ type: 'complete' }}
+        isError={undefined}
+        summary="test"
+      />
+    )
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: /browser\.click/ }))
+    expect(screen.getByText(/Malformed result/)).toBeInTheDocument()
+  })
 })
 
 it('null result with complete status renders without showing a <script> tag (XSS regression)', () => {
