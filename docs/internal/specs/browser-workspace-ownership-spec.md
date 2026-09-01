@@ -3496,15 +3496,20 @@ Each item is **resolved here as a recorded assumption** unless marked otherwise;
 
 ## 14. Annex — the write lease (NORMATIVE; the D2 spec references this, and must not restate it)
 
-**Scope, and it changed on 2026-09-01 — read this before the API.** ADR **D1.9a** rules that tabs stay per agent and only the **operator's** tab is shared. Two agents on their own tabs cannot reach the same page, so **the general contention case this annex was written for no longer exists.** What survives is one case:
+**Scope, and it has now changed twice — read this before the API.** On 2026-09-01 ADR **D1.9a** rescoped this annex from "every action tool" to "the operator's shared tab", on the premise that two agents can never address one tab set. On 2026-09-02 ADR **D1.9c** re-keyed ownership from the agent to the **session**. **The two moves do not compose the way the earlier draft of this note assumed, and the difference is the whole point of this paragraph.**
+
+**The premise was never true, and D1.9c does not make it true.** It said *"two agents never share a tab set"* — correct, and irrelevant, because the contender is not a second **agent**, it is a second **turn**. Under D1.9a one agent could have two concurrent turns (a heartbeat beside a chat; the same agent dispatched twice by parallel delegation) sharing one per-agent tab set with no arbiter at all — that is round-4 blocker **C-402**. Under D1.9c those two cases are genuinely gone: a heartbeat runs on its own standing session and delegated siblings hold distinct `transcriptSessionID`s (§0.2a). **But three other paths start a second turn on an already-live session id** — `/loop`, async system-notify (the code's own comment at `pkg/agent/loop.go:3491-3510` says so and files it as **#505**), and cron `SessionModeMain` — so a session's tab set has exactly the same exposure the per-agent set had. **The general case is therefore rewritten, not deleted** (FR-081).
 
 | Contention | Arbiter | Status |
 |---|---|---|
 | **Operator vs agent**, any tab | `LiveViewRegistry.TakeControl` / `IsControlled` (`live.go::TakeControl` `:1241`, `::IsControlled` `:1313`), ADR-038 D6 | **Unchanged.** Not this annex's business. The `{"deferred": true}` shape and its reason text are untouched, so no prompt needs rewriting |
-| **Agent vs agent**, on the **operator's** workspace-owned tab | **§14's write lease** | The only case the lease arbitrates |
-| **Agent vs agent**, each on their own tab | *nothing — it cannot occur* | Structurally impossible under D1.9a (FR-048). US-9/AC0 asserts it, so a future change that re-merges the tab sets fails the concurrency suite as well as US-22/AC3 |
+| **Two turns**, on the **operator's** workspace-owned tab | **§14's write lease** | Arbitrated. Reached whenever two turns address `TabOwnerWorkspace()`, whatever agent or session each is running as |
+| **Two turns in the SAME session**, on that session's own tab set | **§14's write lease** — same primitive, wider trigger (**FR-081**) | **REWRITTEN 2026-09-02.** This row previously read *"nothing — it cannot occur"*, and both the premise and its supporting scenario were wrong. Three named paths reach it (§0.2a); one is a filed defect, **#505**. **This spec must not depend on #505 being fixed** — §0.5 **E-10** |
+| **Two turns in DIFFERENT sessions**, each on its own session's tab set | *nothing — it cannot occur* | Structurally impossible under D1.9c (FR-080): different sessions hold different `sessionEntry` values. **US-22/AC8** asserts it, so a change that re-merges the tab sets fails the concurrency suite as well as US-22/AC6 |
 
-**The practical effect of the rescope is that the lease is reached far less often, not that it is weaker.** The primitive below is unchanged; what changes is that `leaseWrite` is only called when the resolved `TabOwner` is `TabOwnerWorkspace()` (FR-021), and that the contended path is now narrow enough to be exercised deterministically in a test rather than raced for.
+**The practical effect is that the lease is reached less often than before D1.9a, and more often than the D1.9a-only draft of this annex claimed.** The primitive below is unchanged; what changes is *when* `leaseWrite` is consulted — **FR-081** widens FR-021's `TabOwnerWorkspace()`-only trigger to include a session's own tab set, because "no second writer can reach this set" is true only across sessions, never within one.
+
+> **⚠️ Do not re-narrow this on the reasoning that the three paths are rare or are somebody else's bug.** That is exactly the reasoning that produced the deleted row: a true statement about agents was read as a statement about writers, and the scenario written to defend it asserted the premise rather than the property, so it stayed green while the hole was open. **The lease costs one uncontended mutex acquisition per gated call.** A wrong-way error here is two turns interleaving CDP commands on one page, which ADR §5 names the most expensive failure class in this design.
 
 **How an agent BECOMES a contender here is now RULED, and the annex does not change shape (ADR D1.9b ruling 1, 2026-09-01).** Earlier revisions said this annex *assumed* implicit acquisition on first write *"only as the lease's contended case, and says so"*, with the alternative — an explicit take-control tool — left to the D2 spec (§0.5 E-1). **The operator ruled implicit:** an agent acquires the operator's shared tab **by acting on it**; there is no acquisition call, no seventh tool and no seventh policy entry (§0.7, FR-070). **So the lease is entered by acting, not by asking**, and nothing in §14.1 or §14.2 is rewritten: `acquireWrite`, `leaseWrite`, FR-019…FR-024 and FR-019a all describe what happens *once two agents are contending*, which is a question of the resolved `TabOwner` on each call and never of a prior acquisition. **What the ruling DOES add to this annex is a load-bearing reading of rule 1**, below: the `controlledResult` step is no longer only "a human outranks an agent queue" — it is the sole thing preventing implicit acquisition from being a silent takeover, and FR-071 requires it to be asserted in the **blocked** direction.
 
@@ -3570,9 +3575,17 @@ type leaseClock interface {
 // while m.mu is held — an action tool blocks on CDP for seconds, and the
 // ADR-038 "no lock across a blocking call" discipline forbids it.
 //
-// It is reached ONLY when the resolved TabOwner is TabOwnerWorkspace() — the
-// operator's shared tab (D1.9a, FR-021). On an agent's own tab set there is
-// nothing to arbitrate and no lease is taken.
+// It is reached whenever the resolved TabOwner is TabOwnerWorkspace() — the
+// operator's shared tab — OR a TabOwnerSession() set, i.e. on every leased
+// tool call (D1.9c, FR-080, FR-081). It is NOT reached across sessions,
+// because two sessions hold different sessionEntry values and cannot address
+// one another's tabs at all.
+//
+// FR-021's earlier "TabOwnerWorkspace() only" trigger is SUPERSEDED. It rested
+// on "no second writer can reach an agent's own tab set", which is true across
+// sessions and false WITHIN one: /loop, async system-notify (pkg/agent/
+// loop.go:3491-3510, filed as #505) and cron SessionModeMain each start a
+// second turn on an already-live session id. See §14's scope table.
 //
 // Returns:
 //   ok=true                 -> caller holds the lease; MUST defer release()
@@ -3613,7 +3626,8 @@ func leaseWrite(
 ### 14.2 Rules
 
 1. **Composition order is fixed, and one branch is now short-circuited by ownership.**
-   1. **Ownership first.** If the resolved `TabOwner` is an agent's own set, neither gate is reached — `controlledResult` still applies (a human can take the wheel on any tab, ADR-038 D6) but the **lease is never consulted**, because no second agent can address that tab set (D1.9a, FR-021, FR-048).
+   1. **Ownership first, and it now selects the SCOPE of the lease rather than skipping it (D1.9c, FR-080, FR-081).** The resolved `TabOwner` decides *which* set is being written — `TabOwnerSession(transcriptSessionID)` or `TabOwnerWorkspace()` — and both are leased. `controlledResult` applies to both (a human can take the wheel on any tab, ADR-038 D6). **Two owners are never the same set**, so a lease taken on one never blocks the other, and cross-session contention cannot arise at all.
+      **⚠️ This step used to read *"if the resolved `TabOwner` is an agent's own set, neither gate is reached"*, and that was the deleted general case in disguise.** It is wrong for the same reason: the second writer is a second *turn*, not a second *agent*, and three paths put two turns on one session id (§0.2a, §14's scope table, FR-081). Restoring the skip reintroduces C-402 under a new key.
    2. **`controlledResult` next.** A human holding the wheel outranks an agent queue (ADR-038 D6). When a human holds control the lease is **never acquired** (FR-022), and the result is the existing `{"deferred": true, "reason": …}` shape with its existing text — **unchanged, so no prompt needs rewriting.**
       **⚠️ This step is now the mitigation for implicit acquisition, not only a precedence rule (D1.9b ruling 1).** Because an agent acquires the operator's tab **by acting on it**, this check is the only thing standing between "an agent drove the tab I had finished with" and "an agent drove the tab I am using right now". **Do not reorder it behind `leaseWrite`, and do not skip it on `TabOwnerWorkspace()` on the reasoning that the lease already arbitrates** — the lease serialises two *agents* perfectly while a human sits locked out of their own tab, so every lease test stays green as the mitigation leaves. It also depends on **FR-002c**: `controlledResult` asks `IsControlled(defaultSessionID)` today (`pkg/tools/browser/tools.go:963`), which returns `false` forever once the registry is re-keyed — an intact, populated lock that is never consulted. **FR-071 and test 90 assert the blocked case, the resolved key, and this ordering**, and carry a mutation receipt (SC-025) because the allowed direction alone is green on a build with no lock at all.
    3. **`leaseWrite` last**, and only on `TabOwnerWorkspace()`.
