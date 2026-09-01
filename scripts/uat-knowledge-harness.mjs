@@ -310,6 +310,8 @@ const HELP = `omnipus knowledge-tools UAT harness
   --workspace <id>    workspace id (REQUIRED: knowledge scope comes from it)
   --note <path>       a known-present note, for the Z-03 scope check
   --model <slug>      expected model slug (default z-ai/glm-5.3-flash)
+  --timeout <secs>    per-turn timeout, seconds (default 180). A turn over a
+                      2000-note corpus with several tool calls can exceed this.
 
   preflight           run Suite Z
   ask "<prompt>"      one turn; prints text, tool calls, timing, turn_failed
@@ -341,7 +343,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(r.ok ? 0 : 1);
   } else {
     const prompt = process.argv[process.argv.indexOf('ask') + 1];
-    const r = await new Turn({ base, token, agentID, workspaceID }).ask(prompt);
+    const r = await new Turn({ base, token, agentID, workspaceID })
+      .ask(prompt, { timeoutMs: Number(arg('timeout', '180')) * 1000 });
     console.log(`--- text (${r.ms}ms, turn_failed=${r.turnFailed}) ---\n${r.text}`);
     console.log(`--- tools ---\n${r.toolCalls.map((c) => `${c.tool}${c.status ? `(${c.status})` : ''}`).join(', ') || '(none)'}`);
     // A failed turn must exit non-zero, or a broken run scores as a good one.

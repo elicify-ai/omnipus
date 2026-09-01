@@ -3,7 +3,8 @@
 **Status:** partial run. Suites Z and D executed; A, B, C, E, F not run.
 **Testers:** one Omnipus agent, `type: Main`, created for this run.
 **Model:** `z-ai/glm-5.3-flash`, provider `openrouter` — verified live, not assumed.
-**Build:** working tree at the time of the run, before the G1/G3/G4 fixes landed.
+**Build:** two builds — the G1 failure was found before the fixes and re-tested
+after them on a rebuilt binary. Both states are recorded below.
 **Corpus:** a 3-note smoke vault, hand-built. **Not** the generated corpus the
 plan specifies — so no accuracy or efficiency number here is meaningful, and
 Suites A and B were deliberately not attempted.
@@ -151,6 +152,32 @@ lines away. Nothing warns, nothing logs, and the note reads back with its
 violations flagged only if someone later looks.
 
 Severity: **high**. This is the live agent path, not a retired tool.
+
+#### Re-tested after the fix · **CLOSED**
+
+Same agent, same body, rebuilt binary. **Refused:**
+
+```
+knowledge.note.create: frontmatter.status: knowledge: value does not conform to
+the declared property: company.status holds "liquidated", which is not a single
+enum(active, dormant, acquired); permitted values are active, dormant, acquired
+```
+
+`Foxtrot.md` was not created — verified on disk. The refusal is in the *same
+words* `set_property` uses, which was the design's requirement: one vocabulary,
+not two. The tester noticed the change unprompted — *"the tool validated the
+body-embedded frontmatter even though no `frontmatter` argument was passed"*.
+
+**A stale-instance trap nearly invalidated this result.** The first restart
+reported the gateway "up after 1s" and answered normally — but the OLD binary
+still held port 5000 and the new one had never bound. Matching the listening
+PID against the one just launched is what caught it. Any re-test that does not
+check this is measuring the build it was trying to replace.
+
+**One open question from the tester, worth following up:** the refusal is
+fail-fast on the first invalid property, so `revenue: not-a-number` was never
+mentioned. An agent fixing violations one at a time will need one round trip
+per violation. Not a defect; a usability observation.
 
 ---
 
