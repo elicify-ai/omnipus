@@ -906,9 +906,9 @@ func renderVerbatim(node any) string {
 // type (FR-007a), `if()`'s condition must be a boolean and its branches must
 // share ONE type (FR-143a).
 //
-// So a base formula is not copied — it is TRANSLATED, by four rewrites, each
+// So a base formula is not copied — it is TRANSLATED, by five rewrites, each
 // of which is a proved equivalence and none of which is a guess. What
-// neither rewrite reaches stays a NAMED LOSS at every position that references
+// none of them reaches stays a NAMED LOSS at every position that references
 // it, which is what keeps FR-105 true: a formula that decides a row set and did
 // not translate leaves its view DISABLED, exactly as it is today.
 //
@@ -1098,11 +1098,145 @@ func renderVerbatim(node any) string {
 //	reported at the view that uses the formula, by the same path W1's
 //	divergence is.
 //
-//	WHAT IS STILL NOT REWRITTEN. An else-branch of `true`; a guard on any type
-//	but a single-valued `date`; a guarded expression whose top node is not one
-//	of the three forms above. Each answers false and stays a named loss, on
-//	the same whitelist discipline W2 states: a node kind added to the grammar
-//	tomorrow costs a rewrite that does not fire, never one that fires wrongly.
+//	WHAT IS STILL NOT REWRITTEN BY W4. An else-branch of `true`; a guard on any
+//	type but a single-valued `date`; a guarded expression whose top node is not
+//	one of the three forms above. Each answers false; W5 below is what then
+//	decides whether the guard can at least be SPELLED rather than dropped.
+//
+// W5 — `if(P, X, Y)` becomes `if(P == P, X, Y)`, when P is a bare single-valued
+// DATE property and Y is not one of the two literals W1 and W4 already rule.
+//
+//	WHY A SELF-COMPARISON, WHICH LOOKS LIKE A TAUTOLOGY AND IS NOT. This is the
+//	shape W1, W2 and W4 all miss and it is the founder's own: Hiring.base's
+//	`age_in_stage: if(updated, (today() - date(updated)).days, (today() -
+//	created).days)`. The else-branch is neither `""` nor `false` nor absent —
+//	it is a genuine ALTERNATIVE VALUE computed from a DIFFERENT property. So
+//	there is nothing to drop: X does not already answer Y's value, and no
+//	amount of absence propagation makes the guard redundant. The guard has to
+//	be KEPT, which is W3's move, and the only question is how to SPELL it.
+//
+//	W3 spells a text guard `P != ""`. THAT SPELLING IS UNAVAILABLE HERE, and it
+//	is refused rather than merely unidiomatic: FR-007a makes `""` the ABSENT
+//	state on a date, so there is no empty-date value to compare against, and
+//	inferComparison's R-1 check refuses `date != text` outright — "compares a
+//	date with a text, which are different domains and would answer FALSE on
+//	every record with nothing reported". A formula does not go through the
+//	filter layer where FR-007a's "is set" translation lives (view_write.go's
+//	shapeIsSet); evalComparison hands both operands straight to the comparator.
+//
+//	SO THE GRAMMAR HAS NO PRESENCE PREDICATE FOR A DATE, and that is the real
+//	constraint. FR-143 pins the function set to Obsidian's documented surface
+//	and it contains no `isEmpty`/`isNull`; `isType`'s argument set is closed at
+//	`number`/`string`/`list` (formula_type.go's isTypeNames), and a date answers
+//	FALSE to all three (evalIsType: `string` tests FormulaText, `number` tests
+//	numericReading, `list` tests arity) — so `P.isType(...)` is a constant, not
+//	a guard. `contains` returns ABSENT on an absent operand rather than false.
+//	The one presence test this grammar can express over a date is a comparison
+//	of the property WITH ITSELF, and it is exact:
+//
+//	  state of a date P    Obsidian: bare `P`        ours: `P == P`
+//	  absent               `undefined` -> FALSY      FALSE — §8 R-2, either
+//	                                                 side absent is false for
+//	                                                 every operator but
+//	                                                 IS NULL / IS NOT NULL,
+//	                                                 and a formula reaches the
+//	                                                 comparator DIRECTLY so
+//	                                                 FR-008's absent-rescue
+//	                                                 (Filter.Match, a layer up)
+//	                                                 never applies
+//	  `""`                 falsy                    FALSE — FR-007a makes `""`
+//	                                                 the absent state on a
+//	                                                 date, so this IS the row
+//	                                                 above
+//	  a real date          a Date object ->          TRUE — R-5 compares two
+//	                       TRUTHY                    dates by instant, and an
+//	                                                 instant equals itself
+//
+//	The two columns coincide on every state Obsidian and this product can both
+//	represent, so the rewritten formula holds the SAME VALUE on every record —
+//	an equality, not a subset. That is what makes it safe under a `not:`, which
+//	is the one thing a rewrite here has to earn: resolveTree's header records
+//	that a narrowing becomes a broadening under negation and knowledge_find
+//	negates a combinator as a bare `!inner.matched` with no absence rule of its
+//	own (records/knowledgefind/tree.go's nodeNot). An equality inverts to an
+//	equality, at any depth.
+//
+//	THE STATE THAT IS NOT ONE OF THE THREE is the same one W3 names, in the
+//	same direction, for the same reason, and W5 does not create it. A record
+//	whose date-declared P holds `soon` is NON-CONFORMING (§8 R-4): it arrives
+//	at the evaluator as ABSENCE — evalIsType's own comment says so ("a `cost:`
+//	of \"TBD\" under a declared `decimal` arrives here as absence") — so `P ==
+//	P` is false and the else-branch is taken, where JavaScript reads the
+//	non-empty string as truthy and takes the then-branch (in which Obsidian's
+//	own `date("soon")` is invalid anyway). R-4 is product-wide: ANY formula
+//	referencing that property diverges on that record whether or not it was
+//	rewritten, because the value never reaches the expression. W2's
+//	guard-dropping and W3's guard-spelling both behave identically there.
+//
+//	WHY IT IMPOSES NO CONDITION ON THE BRANCHES, where W2 and W4 do. Like W3,
+//	this rewrite KEEPS the guard: X is evaluated on exactly the records
+//	Obsidian evaluates it on and Y on exactly the rest, so what either branch
+//	does with absence is not this rewrite's question. FR-143a still has to be
+//	satisfied by the two branches AGREEING in type, and that is checked where
+//	it always was — by ValidateFormulaSet over the whole block, after this
+//	rewrite. A rewritten formula whose branches disagree is refused exactly as
+//	the unrewritten one was; W5 changes which SENTENCE the refusal carries, not
+//	whether it happens.
+//
+//	`many` IS EXCLUDED, like W2's and W3's. JavaScript reads an empty ARRAY as
+//	truthy; `==` over a `many` operand is element-wise (R-9) and R-13 bars the
+//	ordering operators there entirely. Not an equivalence, so not a rewrite.
+//
+//	WHAT IT DELIBERATELY DOES NOT COVER, AND THE HONEST REASON. The proof above
+//	is about the GUARD alone, so it would equally license the 2-argument form
+//	`if(P, X)` that W2 declines, and a 3-argument form whose else-branch is a
+//	literal other than `""`/`false`. Neither is done here, for two reasons that
+//	are both worth stating because only the first is a principle: (1) no `.base`
+//	file in the corpus contains either shape, and this file's standing
+//	discipline is that a rewrite fires on a case that exists rather than on a
+//	hypothetical — the same reason absentWhenAbsent is a whitelist; (2) both
+//	widenings change outputs that other tests in this package assert exactly
+//	(formula_rewrite_test.go's "a guard over a DIFFERENT property is never
+//	dropped", guarded_comparison_test.go's `true`/`0`/`"false"` else-branch
+//	rows), and a widening should arrive with the case that needs it rather than
+//	as a side effect. The proof does not run out at this boundary; the evidence
+//	does.
+//
+//	TWO THINGS WOULD BREAK IT, named so neither is discovered later. Both live
+//	in pkg/records rather than here, so neither would show up in a diff of this
+//	file — which is why each is a TEST rather than a paragraph. Both tests are
+//	in w5_spelled_date_guard_test.go and both were confirmed to FAIL against a
+//	deliberate mutation of the rule they defend, not merely to pass today.
+//
+//	  (1) A CONSTANT FOLD of `P == P` to `true`. It is an ordinary optimisation
+//	      and nothing in pkg/records forbids it, and it would be wrong here for
+//	      R-2's sake. TestW5_TheSpelledGuardAdmitsExactlyWhatObsidianTruthiness
+//	      Admits evaluates the EMITTED formula through the real evaluator over
+//	      every state a single-valued date can hold and reads a CONCRETE VALUE
+//	      back from each — so a fold sends the absent rows down the then-branch,
+//	      absence propagates through `date(<absent>)`, and the column goes blank
+//	      in the test instead of in the founder's vault.
+//	  (2) R-2 ANSWERING ABSENT INSTEAD OF PRESENT-FALSE. This is the one that
+//	      the value table above CANNOT see — an absent condition takes the
+//	      else-branch exactly as a false one does, so every value stays right
+//	      while the guard quietly becomes three-valued, and `!(absent)` is
+//	      absent (evalUnary's R-14 branch) at the depth where knowledge_find
+//	      negates with a bare `!inner.matched` (knowledgefind/tree.go's
+//	      nodeNot). That is the shape of the peer failure this rewrite was
+//	      warned about: proved at the leaf, wrong at the view.
+//	      TestW5_TheSpelledGuardIsNeverAbsentSoNegationCannotBroaden measures
+//	      the guard AS A BOOLEAN in isolation, asserts it is never absent, and
+//	      asserts `!(P == P)` is its exact complement on every state.
+//
+//	The durable fix for the awkwardness both tests defend is a presence
+//	predicate in the grammar itself, which is an FR-143 PIN REVISION (a spec
+//	change with its own diff, never a silent code change) and not this file's
+//	to make.
+//
+//	Each of the five rewrites still answers false for everything it cannot
+//	prove, on the whitelist discipline W2 states: a node kind added to the
+//	grammar tomorrow costs a rewrite that does not fire, never one that fires
+//	wrongly.
 // ---------------------------------------------------------------------------
 
 // FormulaTranslation is a base's `formulas:` block, translated.
@@ -1118,7 +1252,7 @@ type FormulaTranslation struct {
 	// so a reference to one can be reported quoting the real fault instead of
 	// "no such formula".
 	Refused map[string]string
-	// Rewritten records, per carried formula, what W1/W2 changed — reported
+	// Rewritten records, per carried formula, what W1..W5 changed — reported
 	// where the formula is USED, because a source that no longer matches the
 	// `.base` file must not be discoverable only by diffing two files.
 	Rewritten map[string]string
@@ -1368,7 +1502,7 @@ func TranslateFormulas(pb *ParsedBase, schema *records.Schema) FormulaTranslatio
 	return out
 }
 
-// rewriteFormulaSource applies W1, W2, W3 and W4 until none fires, returning the
+// rewriteFormulaSource applies W1..W5 until none fires, returning the
 // translated source and a human-readable note naming what changed (empty when
 // the source was carried verbatim).
 //
@@ -1394,6 +1528,13 @@ func rewriteFormulaSource(src string, schema *records.Schema) (out string, note 
 			if guard, guarded, reduced := reduceGuardedComparison(args[0], args[1], schema); reduced {
 				out = guarded
 				notes = append(notes, "its `if("+guard+", …, false)` presence guard was dropped as REDUNDANT — the guarded comparison already answers FALSE wherever `"+guard+"` is absent (spec §8 R-2, `!=` included), which is the else-branch's own value, so the two forms hold the same value on every record")
+				continue
+			}
+		}
+		if len(args) == 3 && !isBareLiteral(args[2]) {
+			if guard, rewritten, ok := spellDateTruthinessGuard(args[0], args[1], args[2], schema); ok {
+				out = rewritten
+				notes = append(notes, "its bare `if("+guard+", …)` truthiness guard was spelled as `"+guard+" == "+guard+"` — the else-branch computes a DIFFERENT value, so there is no redundant guard to drop, and this grammar has no presence predicate for a date (R-1 refuses `"+guard+` != ""`+"` as a cross-domain comparison and `isType` does not name the type); a comparison of a date property with itself is TRUE exactly where the value is present and FALSE where it is absent (§8 R-2), which is the question Obsidian's truthiness asks of a date")
 				continue
 			}
 		}
@@ -1555,6 +1696,83 @@ func presentBooleanWhenAbsent(n records.FormulaNode, prop string) bool {
 			return presentBooleanWhenAbsent(node.Left, prop) && presentBooleanWhenAbsent(node.Right, prop)
 		}
 		return false
+	}
+	return false
+}
+
+// spellDateTruthinessGuard decides W5. It returns the guard's own source text
+// and the whole rewritten `if(...)` when the guard is a bare single-valued DATE
+// property, and reports false otherwise — including for every case it cannot
+// prove, which is the safe answer.
+//
+// IT REWRITES THE CONDITION AND KEEPS BOTH BRANCHES, which is why it needs
+// nothing from either of them: the then-branch is evaluated on exactly the
+// records Obsidian evaluates it on and the else-branch on exactly the rest. See
+// W5's proof in this section's header for the three-state table that makes
+// `P == P` the exact spelling of Obsidian's truthiness on a date — for why the
+// natural spelling `P != ""` is REFUSED here rather than merely unidiomatic
+// (R-1: a date and a text are different domains), and for the single
+// non-conforming state where the two differ, in the same direction and for the
+// same product-wide reason (§8 R-4) that W2's guard-dropping and W3's
+// guard-spelling both have.
+//
+// The ELSE-BRANCH is a parameter this function never INSPECTS — it is copied
+// into the output and nothing about the decision reads it — and that is on
+// purpose. W5's caller has already excluded the two literal else-branches W1
+// and W4 rule, and carrying the parameter keeps this function's signature
+// honest about the fact that it is deciding a THREE-argument `if`: a future
+// caller handing it a two-argument form would be making the widening W5's
+// header declines, not reusing this one.
+func spellDateTruthinessGuard(guard, then, els string, schema *records.Schema) (string, string, bool) {
+	if schema == nil {
+		return "", "", false
+	}
+	guardNode, err := records.ParseFormula(guard)
+	if err != nil {
+		return "", "", false
+	}
+	ref, ok := guardNode.(*records.Ref)
+	if !ok || ref.Kind != records.RefProperty {
+		return "", "", false
+	}
+	prop, found := schema.Property(ref.Name)
+	if !found || prop.Type != records.TypeDate || prop.Many {
+		// A single-valued DATE is the whole permitted set, and it is W2's own
+		// condition unchanged: FR-007a makes `""` the absent state there, so
+		// Obsidian's truthiness and this product's presence are the same
+		// question. On text they are not (that is W3's shape); on a number `0`
+		// and on a checkbox `false` are present and falsy; and a `many` date
+		// reads an empty list as truthy in JavaScript while `==` over a list
+		// operand is element-wise here (R-9).
+		return "", "", false
+	}
+	// The guard's OWN source text is reused rather than re-printed from the
+	// parsed Ref, for W3's reason: this package has no formula printer, and a
+	// name that needed quoting would come back out unquoted from one written to
+	// serve this line.
+	g := strings.TrimSpace(guard)
+	return g, `if(` + g + ` == ` + g + `, ` + strings.TrimSpace(then) + `, ` + strings.TrimSpace(els) + `)`, true
+}
+
+// isBareLiteral reports whether an argument is a single literal — a number, a
+// text or a boolean — rather than an expression that computes something.
+//
+// W5 uses it to stay off the two shapes W1 and W4 already rule and off every
+// other literal else-branch, which no `.base` file in the corpus contains. It
+// parses rather than pattern-matching the text, so `("x")` and `- 1` are
+// classified by what they ARE and not by how they were typed.
+func isBareLiteral(arg string) bool {
+	node, err := records.ParseFormula(arg)
+	if err != nil {
+		// An argument that does not parse is not a literal, and it is also not
+		// something W5 can rewrite: the whole `if(...)` is re-parsed before
+		// rewriteFormulaSource returns, and a source that does not parse is
+		// discarded there in favour of the operator's own text.
+		return false
+	}
+	switch node.(type) {
+	case *records.NumberLit, *records.TextLit, *records.BoolLit:
+		return true
 	}
 	return false
 }
