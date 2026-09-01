@@ -526,6 +526,67 @@ Two things follow from that being ratified rather than merely proposed:
   and its documented defaults change with it; they are not collateral to be
   discovered during implementation.
 
+#### D1.9b Four rulings closing the open questions (2026-09-01)
+
+**1. Taking the operator's tab is IMPLICIT — no new tool.** An agent acquires
+control of the operator's shared tab by acting on it; there is no explicit
+"take control" call. This **reverses my reading** of D1.9a's *"take control on
+request"*, which I had taken as explicit.
+
+*It simplifies rather than costs:* the tool surface stays **11 → 17**, not 18;
+no seventh policy entry is needed in every agent's block; and the Tier-3
+fixture and manifest arithmetic are untouched. The work stream planned around
+the current tool set does not need redoing.
+
+*The exposure is bounded by a control that already exists.* Implicit
+acquisition can only happen when **no human holds the live-view lock** —
+`controlledResult` (`pkg/tools/browser/tools.go:962`) already defers an agent
+while a human is driving (ADR-038 D6). So "an agent took my tab" cannot happen
+while the operator is actually at the wheel. **Stated because it is the whole
+mitigation:** without that lock, implicit acquisition would be a silent
+takeover.
+
+**2. `browser_evaluate` is ENABLED — reality matches the display.**
+`sandbox.browser_evaluate_enabled` is seeded **true**. Today it is unseeded and
+therefore false, while `pkg/coreagent/core.go:1058` and
+`pkg/config/defaults.go:282` both say `allow` — an operator reading the policy
+surface sees a capability that is actually off. The ruling closes the gap by
+making the capability real rather than by hiding it.
+
+**The consequence, stated once and not re-argued:** arbitrary JavaScript
+becomes live for the agent holding that grant, running inside a browser that —
+under D1.10 — carries the operator's logins for every site the workspace has
+visited. That is a genuine widening, it was raised before the ruling, and the
+ruling stands. It belongs in the release notes.
+
+**3. `browser_snapshot` is Tier 3 — searchable only.** Consistent with the
+other eleven browser tools, and **ADR-071's previewed set is left intact**, so
+no other ADR is amended.
+
+**This falsifies a claim in D2.4 and it must be corrected there:** D2.4 calls
+the snapshot *"the default way an agent reads a page"*. A tool an agent must
+search for is not a default. Either the wording changes, or the expectation
+does — and given the ruling, it is the wording. **The honest consequence is
+that agents will keep reaching for screenshots**, because that is what is in
+front of them; the better mechanism exists but is not the path of least
+resistance. That trade was chosen deliberately.
+
+**4. Profile disk is bounded by periodic cache trimming**, not by a quota and
+not by deletion alone. Logins are preserved; the disposable cache is trimmed on
+a schedule. This reopens and answers the question D1.5a left dangling when
+`max_browsers` was deleted — that closure had rested on a key that no longer
+exists, and which bounded processes rather than bytes in any case.
+
+*Rejected, with the reason:* a hard per-workspace size cap. When it binds,
+something must be discarded mid-session, and the only large items are the cache
+**and the logins** — discarding the logins is the one outcome this whole design
+exists to prevent. A trim that only ever removes regenerable data cannot cause
+that failure.
+
+*Context that makes this non-optional rather than tidy:* this project's own
+notes record the host root volume filling **twice**, and browser caches are the
+fastest-growing thing being added to it.
+
 #### D1.5c One memory mechanism, several consumers
 
 **Operator ruling, 2026-09-01, overriding a narrower proposal:**
