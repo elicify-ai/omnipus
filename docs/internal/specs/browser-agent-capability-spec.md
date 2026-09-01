@@ -1513,3 +1513,42 @@ Still exactly **one** genuinely open ruling. Numbered 1–6 across all categorie
 1. **§11 footnote ³ and §12 A-16** — the coverage-vs-resolution distinction is the whole of C1, and the decision it produces (Mia/Ava = `deny`) contradicts the ADR's D2.9 table. If that reading is wrong, S-25, S-48, US-8/AC3, US-12/AC3, order 4 and edit site 6a all move together.
 2. **§14.2's m1 row** — one round-2 finding is **rejected**. The evidence is a line-range re-derivation anyone can repeat in ten seconds (`sed -n '667,681p' pkg/tools/manifest_test.go`). If the rejection is wrong, say so with the same specificity.
 3. **§12 B-6** — resolving M6 surfaced a pre-existing defect nobody filed: the Audit Log viewer already throws on two shipped dotted event names. D2 avoids compounding it and does not fix it. Confirm that is the right boundary, or route the fix.
+
+---
+
+## Relationship to issue #509 / ADR-048 Option B — MUST be closed when this lands
+
+**This work implements what #509 describes.** That issue — *"Per-agent browser
+isolation compatible with WebRTC capture (ADR-048 Option B)"* — specifies
+"one Chrome instance (own user-data-dir) per browser-capable agent, so each
+agent's tabs sit in that instance's own default context (capturable) while
+remaining isolated". That is this design, with **workspace** where #509 says
+**agent**.
+
+**#509 was closed `NOT_PLANNED` on 2026-08-19.** This work revives a
+deliberately declined option, which is a reversal that must be visible rather
+than implicit.
+
+**Required actions, both of them:**
+
+1. **Reopen #509 now** (or file a successor referencing it) so the trail is
+   honest while this is built. A design that silently revives a not-planned
+   issue leaves the next reader unable to tell whether the decline still holds.
+2. **Close #509 when this lands**, citing the implementing PR. It is the
+   issue this work completes, and leaving it closed-as-not-planned after
+   shipping the thing it asked for makes the tracker lie in the other
+   direction.
+
+**One piece of evidence from #509 that strengthens this design and was not
+previously recorded here:** CDP-created browser contexts fail capture for
+**two** independent reasons, not one — `chrome.tabCapture` returns "Invalid tab
+specified", **and** `chrome-extension://` pages will not load in them at all
+(`ERR_BLOCKED_BY_CLIENT`). Both verified on real Chrome 150 (commit
+`687c7c6e`). The second reason is the more final of the two.
+
+**And one existing constraint #509 records that this design must reconcile
+with:** today's v1 is "fenced to effectively single-browser-agent use — capture
+start is denied when another agent has live tabs". A pool of N browsers changes
+that fence's meaning. **Not yet verified against code in this document** — the
+adjacent comment is `pkg/tools/browser/capture_session.go:839`; the precise
+enforcement path must be found and reconciled before implementation.
