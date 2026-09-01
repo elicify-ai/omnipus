@@ -405,6 +405,66 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    them within one instance. The two are different guards and neither replaces
    the other.
 
+#### Measured, 2026-09-01 — operator's own machine, macOS, `top` physical footprint
+
+**The only row that matters is Chrome for Testing** — that is the binary
+Omnipus ships and launches. The operator's other instances are a personal
+profile and a Playwright-driven one; they are useful as contrast and are not
+our workload.
+
+| Instance | Fixed overhead | Per renderer | Total / procs |
+|---|---|---|---|
+| **Chrome for Testing** | **182 MB** (125 browser+utility, 57 GPU) | **30 MB** | 301 MB / 9 |
+| Chrome A — personal profile | 616 MB + **470 MB of the operator's own extensions** | 145 MB | 1,667 MB / 17 |
+| Chrome B — Playwright | 615 MB | 113 MB | 2,082 MB / 19 |
+
+**`PER_BROWSER_COST` ≈ 182 MB.** This is the term G-1 existed to find. It is
+neither the 120 MB the operator first proposed (too low — an instance would
+launch and then fail to load a page) nor the 400–500 MB an earlier revision
+estimated from the inflated RSS reading §8 retracts.
+
+#### The 85 MB per-renderer constant is withdrawn from the capacity path
+
+Google's constant sits between the measurements and matches none of them:
+
+```
+ 30 MB   Chrome for Testing, light pages
+145 MB   real browsing
+327 MB   the heaviest single renderer observed
+```
+
+An **11× spread in one snapshot**. No single value works, so the capacity path
+uses **live measurement** and no per-renderer constant. `--renderer-process-limit`
+is retained for the **site-isolation** reason in D1.6, not as a pricing term.
+
+#### Renderer count is not tab count — measured, not inferred
+
+The operator's Playwright instance reported **2 tabs against 13 renderer
+processes** — cross-origin iframes, spare renderers and app windows. **Six
+processes per tab.** Anything priced per tab is wrong by roughly that factor.
+This settles the unit choice on local evidence rather than published figures.
+
+#### Two costs this design has not accounted for
+
+1. **Our own capture extension.** Omnipus injects one at capture time via CDP
+   `Extensions.loadUnpacked`. The 301 MB above is therefore an **idle,
+   non-capturing** figure — that instance had no extension loaded. A *streaming*
+   browser costs 182 MB fixed **plus the extension plus the encoding work**, and
+   that delta is **unmeasured**.
+   **The operator's 470 MB is not a proxy for it** — those are five of their own
+   personal extensions at ~94 MB each; ours is one lightweight encoder shim.
+   Borrowing that number would overstate by roughly an order of magnitude.
+2. **The GPU process is 57 MB even on Chrome for Testing** — but these are macOS
+   figures on a headful-capable build. On a headless Linux server we pass
+   `--disable-gpu` (`exec_resolver.go:161-178`), so this term may vanish, shrink,
+   or move into the renderers. **Unmeasured on the target platform.**
+
+**Scope of these numbers, stated plainly:** one machine, one snapshot, macOS,
+`top`'s physical-footprint column. They are the best evidence this design has
+and they are not a Linux server baseline. G-1's remaining job is narrower than
+before — the marginal cost of a *second* Chrome for Testing on Linux, with
+capture running.
+
 #### Why this replaced a precomputed cap (operator model, 2026-09-01)
 
 An earlier revision computed `max_browsers` once, at boot, from a formula. **The
