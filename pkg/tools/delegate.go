@@ -85,6 +85,31 @@ type SubTurnConfig struct {
 	// doc comment above).
 	ContextSnapshot *ContextSnapshot
 
+	// RequestedSkill is the ADR-072 D9 "request" mechanism (spec FR-050..056):
+	// action="run" only, an optional skill slug the parent names on the same
+	// discretionary, parent-authored channel ContextSnapshot already rides —
+	// a NAME only, never content (Alternative F in the ADR was rejected for
+	// exactly the shape of sending a skill's body across this boundary).
+	// spawnSubTurn (pkg/agent/subturn.go) resolves this against the CHILD's
+	// (execSource's) own ContextBuilder/grant — never the caller's, D9's
+	// "the gate is the receiver's, structurally, not by convention" — and:
+	//   - if granted, appends the canonical slug to the child's
+	//     processOptions.ForcedSkills so the child's first turn begins with
+	//     it loaded (the same one-shot field the human "/<skill>" command
+	//     already drives);
+	//   - if the receiver is not granted it, the delegation fails at
+	//     dispatch (before the child's first model call) with a structured
+	//     error reusing DelegationDeniedCode (FR-053) — see
+	//     ErrRequestedSkillDenied;
+	//   - if the slug resolves to nothing on any shelf visible to the
+	//     receiver, the delegation fails at dispatch with the SkillNotFoundCode
+	//     discriminator (FR-054) — see ErrRequestedSkillNotFound, distinct
+	//     from the denial above, never conflated.
+	// Empty means "no requested skill" — mechanism 1 (naming the skill in
+	// plain language inside `task`) is unaffected either way and guarantees
+	// nothing on its own (FR-055).
+	RequestedSkill string
+
 	// DelegateSessionID, when non-empty, is the ADR-053 durable session_id
 	// (S2) DelegateTool minted and persisted a `queued` LifecycleRecord
 	// under BEFORE calling Spawn — see agent.SubTurnConfig.DelegateSessionID
@@ -116,6 +141,103 @@ type ContextSnapshot struct {
 // The MANDATORY core (task prompt + criteria + identity) is NEVER subject
 // to this check (m4) — only what this function is handed.
 var ErrSnapshotOverCap = errors.New("tools: curated context snapshot exceeds the discretionary cap")
+
+// ErrRequestedSkillDenied and ErrRequestedSkillNotFound are the two distinct
+// dispatch-time failure sentinels a SubTurnSpawner implementation (in
+// practice, pkg/agent's spawnSubTurn) returns for a `delegate.run` call's
+// RequestedSkill (ADR-072 D9, spec FR-053/FR-054). Declared here — in
+// pkg/tools, the lower package in the tools<->agent duplication this file's
+// own ContextSnapshot/SubTurnConfig doc comments already describe — rather
+// than in pkg/agent, so executeSync/executeAsync below can distinguish them
+// with a plain errors.Is with no import cycle: pkg/agent already imports
+// pkg/tools and MUST return these exact sentinel values (wrapped with %w),
+// never a package-local duplicate, or the discrimination here silently
+// degrades to the generic "Delegate execution failed" path.
+//
+// ErrRequestedSkillDenied: the resolved delegation target exists and the
+// slug exists on some shelf visible to it, but the target is not granted
+// it — reported to the caller via DelegationDeniedCode, reusing the
+// existing discriminator per FR-053 rather than minting a new one.
+//
+// ErrRequestedSkillNotFound: the slug does not resolve to any installed
+// skill on any shelf visible to the resolved delegation target at all —
+// reported via SkillNotFoundCode (result.go), distinct from denial and
+// never conflated with it (FR-054).
+var (
+	ErrRequestedSkillDenied   = errors.New("tools: requested_skill is not granted to the delegation target")
+	ErrRequestedSkillNotFound = errors.New("tools: requested_skill does not resolve to any installed skill visible to the delegation target")
+)
+
+// requestedSkillDispatchFailureResult builds the structured, discriminated
+// ToolResult for a `delegate.run` requested_skill dispatch failure (ADR-072
+// D9, spec FR-053/FR-054): a pure function — it performs no lifecycle
+// transition or task bookkeeping of its own, so both executeSync (which
+// returns the result directly, unwrapped) and executeAsync (which folds it
+// into the same state/lifecycle bookkeeping every other dispatch outcome
+// goes through) can call it identically.
+//
+// dispatchErr MUST be (or wrap) exactly ErrRequestedSkillDenied or
+// ErrRequestedSkillNotFound — callers are expected to have already checked
+// errors.Is before calling this; any other error falls through to the
+// not-found branch defensively rather than panicking, since a wrongly
+// classified error here is still strictly better than losing the
+// distinction entirely.
+func requestedSkillDispatchFailureResult(agentID, skillSlug string, dispatchErr error) *ToolResult {
+	if errors.Is(dispatchErr, ErrRequestedSkillDenied) {
+		return DelegationDeniedResult("delegate", &DelegationDenial{
+			Reason: fmt.Sprintf(
+				"delegation target %q is not granted the requested_skill %q — the receiver's own "+
+					"grant is the only thing consulted (ADR-072 D9); the delegating agent's own skill "+
+					"grants have no bearing on this outcome",
+				agentID, skillSlug,
+			),
+			// No policy axis in the DelegationFailure contract (trust_set |
+			// mode | depth) names a skill-grant refusal specifically — this
+			// reuses the existing DelegationDeniedCode discriminator exactly
+			// as FR-053 requires, without minting a new wire enum value
+			// (Constraint #8: no new schema for this). DenyTrustSet is the
+			// closest existing axis (a permission boundary the caller does
+			// not control), and is also DelegationDeniedResult's own
+			// fallback for a policy value outside the enum — so this is
+			// documentary, not load-bearing.
+			Policy:        DenyTrustSet,
+			TargetAgentID: agentID,
+		})
+	}
+	return requestedSkillNotFoundResult(agentID, skillSlug)
+}
+
+// requestedSkillNotFoundResult builds the structured not-found response for
+// a `delegate.run` requested_skill slug that resolves to nothing on any
+// shelf visible to the resolved delegation target (FR-054's
+// SkillNotFoundCode — the SAME discriminator pkg/tools/skill.go's
+// skillNotFoundResult mints for the `Skill` tool's own load path, minted
+// once in result.go and reused here rather than duplicated). Deliberately a
+// plain map[string]any marshaled with encoding/json, mirroring
+// skillNotFoundResult's own shape exactly — see SkillNotFoundCode's doc
+// comment (result.go) for why no generated wire shape exists or is needed.
+func requestedSkillNotFoundResult(agentID, skillSlug string) *ToolResult {
+	target := agentID
+	if target == "" {
+		target = "(self-delegation)"
+	}
+	message := fmt.Sprintf(
+		"delegate: requested_skill %q does not resolve to any installed skill visible to delegation target %q.",
+		skillSlug, target,
+	)
+	payload := map[string]any{
+		"error":           SkillNotFoundCode,
+		"tool":            "delegate",
+		"skill":           skillSlug,
+		"target_agent_id": agentID,
+		"message":         message,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ErrorResult(message)
+	}
+	return &ToolResult{ForLLM: string(encoded), IsError: true}
+}
 
 // defaultSnapshotMaxBytes/defaultSnapshotMaxRefs mirror
 // agent.defaultSnapshotMaxBytes/defaultSnapshotMaxRefs (ADR §Contract
@@ -1159,6 +1281,17 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "Optional (action=\"run\" only): the DISCRETIONARY portion of the curated " +
 					"context snapshot (deny-by-default, hard-capped). Over-cap is rejected, never truncated.",
 			},
+			"requested_skill": map[string]any{
+				"type": "string",
+				"description": "Optional (action=\"run\" only): the exact slug of a skill you want the " +
+					"delegation target to start its first turn with already loaded. This is a hard request, " +
+					"not a hint — resolved against the TARGET's own grant, never yours: if the target is " +
+					"granted it, its first turn begins with the skill loaded and the result names it; if " +
+					"the target is not granted it, or the slug does not resolve to any installed skill, the " +
+					"whole delegation call fails instead of silently proceeding without it. Merely mentioning " +
+					"a skill by name inside \"task\" does not have this effect — it is only a hopeful hint " +
+					"the target's own judgement may or may not act on.",
+			},
 			"timeout_seconds": map[string]any{
 				"type":        "integer",
 				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (5 min).",
@@ -1314,6 +1447,27 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	timeout, timeoutErr := resolveDelegateTimeoutSeconds(args)
 	if timeoutErr != nil {
 		return ErrorResult(timeoutErr.Error())
+	}
+
+	// ADR-072 D9 / FR-050: requested_skill is OPTIONAL, but — mirroring
+	// agent_id's own "present-but-blank is rejected, absent is fine" rule
+	// just above — a caller that supplies the key must not supply an empty
+	// string, which would silently mean the same thing as omitting it while
+	// looking like a deliberate request. The actual grant/existence
+	// resolution happens against the CHILD's own ContextBuilder inside
+	// spawnSubTurn (pkg/agent/subturn.go) — this file never resolves or
+	// gates the slug itself (D9: "the receiver's grant is the real gate,
+	// structurally, not by convention").
+	var requestedSkill string
+	if raw, present := args["requested_skill"]; present && raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return ErrorResult("requested_skill must be a string")
+		}
+		if strings.TrimSpace(s) == "" {
+			return ErrorResult("requested_skill must be a non-empty string when provided; omit it to request no skill")
+		}
+		requestedSkill = s
 	}
 
 	// R§8.5 curated context snapshot — deny-by-default, hard-capped
@@ -1519,9 +1673,9 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		// delegateSessionID (generation 0) just above; this is a genuine
 		// create, never a resume. Native `follow_up`'s warm resume goes
 		// through spawnCorrectiveFollowUp's own executeAsync call instead.
-		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, false, cb)
+		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, requestedSkill, false, cb)
 	}
-	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap)
+	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, requestedSkill)
 }
 
 // minDelegateTimeoutSeconds/maxDelegateTimeoutSeconds bound a caller-supplied
@@ -1735,6 +1889,7 @@ func (t *DelegateTool) executeAsync(
 	delegateSessionID string,
 	timeout time.Duration,
 	snap *ContextSnapshot,
+	requestedSkill string,
 	isResume bool,
 	cb AsyncCallback,
 ) *ToolResult {
@@ -1868,7 +2023,21 @@ func (t *DelegateTool) executeAsync(
 			ContextSnapshot:   snap,
 			DelegateSessionID: delegateSessionID,
 			IsResume:          isResume,
+			RequestedSkill:    requestedSkill,
 		})
+
+		// ADR-072 D9 / FR-053/054: a requested_skill dispatch failure (the
+		// receiver denied it, or the slug does not resolve at all) is a
+		// distinct, structured outcome — never the generic "Delegate failed"
+		// wrap below, which would flatten DelegationDeniedCode/SkillNotFoundCode
+		// down to opaque prose. Built once, up front, so both the bookkeeping
+		// switch (state.Result) and the result-rebuild switch below use the
+		// SAME structured payload.
+		requestedSkillFailure := errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound)
+		var requestedSkillFailureResult *ToolResult
+		if requestedSkillFailure {
+			requestedSkillFailureResult = requestedSkillDispatchFailureResult(agentID, requestedSkill, err)
+		}
 
 		var lifecycleState session.LifecycleState
 		var lifecycleFailedReason string
@@ -1885,6 +2054,10 @@ func (t *DelegateTool) executeAsync(
 		t.mu.Lock()
 		if state, ok := t.tasks[taskID]; ok {
 			switch {
+			case requestedSkillFailure:
+				state.Status = "failed"
+				state.Result = requestedSkillFailureResult.ForLLM
+				lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
 			case err != nil && ctx.Err() != nil:
 				state.Status = "canceled"
 				state.Result = "Task canceled during execution"
@@ -1914,6 +2087,8 @@ func (t *DelegateTool) executeAsync(
 		}
 
 		switch {
+		case requestedSkillFailure:
+			result = requestedSkillFailureResult
 		case err != nil:
 			// Kill the silent swallow: a spawn that dies before starting
 			// (e.g. a `follow_up` resume whose target session vanished, or
@@ -1978,6 +2153,14 @@ func (t *DelegateTool) executeAsync(
 			if result.ParksTurn {
 				headline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
 			}
+			// ADR-072 D9 / FR-056: report the loaded skill in the delegation
+			// result. Reaching this branch at all (requestedSkillFailure was
+			// false above) means the receiver's own grant permitted it, so a
+			// non-empty requestedSkill here was necessarily granted and
+			// appended to the child's ForcedSkills by spawnSubTurn.
+			if requestedSkill != "" {
+				headline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", requestedSkill)
+			}
 			result = &ToolResult{
 				ForLLM:    fmt.Sprintf("%s:\nLabel: %s\nResult: %s", headline, labelStr, result.ForLLM),
 				IsError:   result.IsError,
@@ -2020,6 +2203,7 @@ func (t *DelegateTool) executeSync(
 	delegateSessionID string,
 	timeout time.Duration,
 	snap *ContextSnapshot,
+	requestedSkill string,
 ) *ToolResult {
 	if t.spawner == nil {
 		return ErrorResult("delegate: no sub-turn spawner configured").WithError(fmt.Errorf("spawner not set"))
@@ -2082,7 +2266,21 @@ func (t *DelegateTool) executeSync(
 		ResolvedMaxDepth:  resolvedMaxDepth,
 		ContextSnapshot:   snap,
 		DelegateSessionID: delegateSessionID,
+		RequestedSkill:    requestedSkill,
 	})
+	// ADR-072 D9 / FR-053/054: a requested_skill dispatch failure gets its
+	// OWN structured result — DelegationDeniedCode for a denial,
+	// SkillNotFoundCode for an unresolvable slug — returned UNWRAPPED,
+	// exactly like the pre-flight trust/mode/depth DelegationDeniedResult
+	// this file's own executeRun already returns directly on denial. Checked
+	// before the generic dispatch-failure shortcut below so neither
+	// discriminator is ever flattened into "Delegate execution failed: %v".
+	if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
+		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
+		failureResult := requestedSkillDispatchFailureResult(agentID, requestedSkill, err)
+		t.finalizeSyncTask(taskID, "failed", failureResult.ForLLM)
+		return failureResult
+	}
 	// Finding F (A-I4 round 5): only take the generic "Delegate execution
 	// failed" shortcut for a genuine dispatch failure — result == nil (e.g.
 	// a panic spawnSubTurn's own recover() deliberately nils result for) or
@@ -2144,6 +2342,13 @@ func (t *DelegateTool) executeSync(
 	llmHeadline := "Subagent task completed"
 	if result.ParksTurn {
 		llmHeadline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
+	}
+	// ADR-072 D9 / FR-056: report the loaded skill in the delegation result.
+	// Reaching here at all means the requestedSkill dispatch-failure check
+	// above did not fire, so a non-empty requestedSkill was necessarily
+	// granted and appended to the child's ForcedSkills by spawnSubTurn.
+	if requestedSkill != "" {
+		llmHeadline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", requestedSkill)
 	}
 	llmContent := fmt.Sprintf("%s:\nLabel: %s\nResult: %s",
 		llmHeadline, labelStr, result.ForLLM)
@@ -3356,7 +3561,9 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 
 	dispatch := t.executeAsync(ctx,
 		fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text),
-		label, rec.AgentID, nil, sessionID, 0, nil, true, cb)
+		// requested_skill is action="run" only (ADR-072 D9) — a resume never
+		// carries one.
+		label, rec.AgentID, nil, sessionID, 0, nil, "", true, cb)
 	if dispatch.IsError {
 		return dispatch
 	}
@@ -3752,7 +3959,9 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// is the very one being resumed. A 3P respawn mints a genuinely NEW
 	// session_id (newSessionID != sessionID), so it is a real create like any
 	// other dispatch and must NOT set IsResume.
-	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, !rec.Is3P, cb)
+	// requested_skill is action="run" only (ADR-072 D9) — a follow_up resume
+	// never carries one.
+	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, "", !rec.Is3P, cb)
 }
 
 func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *ToolResult {
