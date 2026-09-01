@@ -453,6 +453,67 @@ success and admits without limit. **Where availability cannot be determined,
 the pool must refuse to grow and log why**, not proceed. That inverts the
 usual default deliberately: an unmeasurable host is treated as full, not empty.
 
+#### D1.5d The limit is live, not computed from a per-unit constant
+
+**Operator ruling, 2026-09-01:** *"the number must be dynamic based on
+realtime memory consumption."*
+
+This finishes what D1.5c started. One mechanism, and that mechanism **observes**
+rather than **assumes**.
+
+**What goes.** `bytesPerAgent = 3.5 MB` (`pkg/config/config.go:608`) and the
+shape it belongs to — `autoDetectMaxParallel`'s `avail / bytesPerAgent`
+(`:614-618`) — precompute a ceiling from a guessed per-unit cost. Every
+objection D1.5a raised against the browser cap applies here identically:
+
+- The constant is an assumption nobody has re-derived. Its own doc calls it
+  "the assumed marginal memory cost of one concurrent agent".
+- **Real cost varies by more than an order of magnitude**, exactly as browser
+  renderers did (30 MB → 327 MB measured, D1.5). An agent doing bookkeeping and
+  an agent driving a browser are not the same unit.
+- A number fixed at boot is wrong in both directions as load changes.
+
+**What replaces it — the same rule the browser pool already uses.** Admission is
+a **live headroom check at the moment of the decision**, for both consumers:
+
+```
+can_admit = available_memory − reserve  ≥  cost_of_one_more
+```
+
+and where `available_memory` cannot be determined, **refuse** (D1.5b).
+
+**The honest difficulty, stated rather than glossed.** `cost_of_one_more` is
+easy for a browser — D1.5's measured ≈182 MB, a process we launch and can
+observe. It is harder for an agent, which is a goroutine and a context inside
+this process. Two shapes, and the spec must choose one with its reasoning
+visible:
+
+1. **Observed running cost** — track this process's own footprint against the
+   count of live agents and derive a marginal figure that updates as load
+   changes. Truthful, self-correcting, and needs a warm-up period before it
+   means anything.
+2. **No per-unit cost at all** — admit while headroom exists above the reserve,
+   refuse when it does not, and let the reserve absorb the marginal cost of one
+   more. Simpler, no warm-up, and it admits the last agent slightly later than
+   strictly necessary.
+
+**Shape 2 is what the browser pool already does** and is the recommendation on
+consistency grounds: one rule, applied twice, with no constant to drift.
+
+**What this removes.** `performance.max_parallel_agents` stops having a
+computed default at all. The operator's explicit setting still wins where set
+(`EffectiveMaxParallelAgents`); absent one, there is no number — there is a
+gate. That also dissolves D1.5c's 2 → 2000 jump: nothing jumps, because nothing
+is precomputed. **The release-note item in D1.5c changes from "the default
+moved" to "there is no longer a computed default", which is a smaller and more
+honest thing to announce.**
+
+**Scope note.** This reaches beyond the browser into agent concurrency, which
+is not this ADR's domain. It is recorded here because the operator ruled it
+here and because D1.5c's single-mechanism ruling makes the two inseparable —
+but it needs agent-concurrency's owner to ratify, and the spec must say so
+rather than presenting it as settled.
+
 #### D1.5c One memory mechanism, several consumers
 
 **Operator ruling, 2026-09-01, overriding a narrower proposal:**
