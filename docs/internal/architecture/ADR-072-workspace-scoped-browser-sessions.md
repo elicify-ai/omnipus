@@ -407,6 +407,52 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    them within one instance. The two are different guards and neither replaces
    the other.
 
+#### D1.5b The memory reader is in scope, and must work on macOS as well as Linux
+
+**Operator ruling, 2026-09-01.** D1.5a makes memory the only admission control.
+That control **does not exist off Linux**: `readMemAvailableBytes` returns `0`
+and `readCgroupMemoryAvailableBytes` returns `(0, false)` by deliberate design
+(`pkg/config/meminfo_other.go`), so `availableRAMBytes`
+(`pkg/config/config.go:655`) is `0` on every non-Linux host. Before D1.5a a
+counter still bounded the pool there; after it, **macOS would have no limit at
+all** — and macOS is where the ≈182 MB measurement was taken.
+
+**Ruling: writing the macOS reader is in scope. It must work on macOS and
+Linux. Windows must be foreseen but is explicitly NOT in scope.**
+
+**It is buildable under Hard Constraint #2 (no CGo).** `golang.org/x/sys`
+v0.47.0 is already a direct dependency (`go.mod:200`) and provides
+`SysctlUint32` / `SysctlUint64` / `SysctlRaw` for Darwin in pure Go
+(`unix/syscall_bsd.go:433,454,471`). No new dependency, no C.
+
+**The parity is approximate, and the spec must say so rather than imply
+equivalence.** Linux exposes `MemAvailable` directly — a kernel estimate that
+already accounts for reclaimable cache. macOS has no such field. The analogue
+is assembled from `hw.memsize`, `hw.pagesize` and the `vm.page_*` counters, and
+it must contend with two things Linux's figure does not: **memory compression**
+and **purgeable pages**. So the macOS number is a *considered approximation of
+the same idea*, not the same measurement.
+
+**Two consequences that follow, and neither may be silent:**
+
+1. **The approximation's formula must be documented at the call site**, so a
+   future reader can tell why the two platforms disagree by some margin rather
+   than assuming one is broken.
+2. **Windows keeps returning 0, therefore Windows has no limit.** That is
+   consistent with the platform's existing posture — no sandbox backend
+   (`selectBackendPlatform` returns `FallbackBackend`), `fileutil.WithFlock` a
+   documented no-op, `pidAlive` unconditionally `true` — but it must be stated
+   in the release notes and in the config documentation, not left for an
+   operator to discover. **Windows browser support is degraded-unsupported
+   until that reader exists**, and a placeholder must exist in the code saying
+   so, so the gap is visible at the point someone would fix it.
+
+**Do not let this become a silent no-op.** The failure shape to avoid is a gate
+that returns "plenty of room" because it cannot measure — which reads as
+success and admits without limit. **Where availability cannot be determined,
+the pool must refuse to grow and log why**, not proceed. That inverts the
+usual default deliberately: an unmeasurable host is treated as full, not empty.
+
 #### D1.5a Memory is the ONLY limit — every counter is deleted
 
 **Operator ruling, 2026-09-01: the memory gate is the only admission control.
