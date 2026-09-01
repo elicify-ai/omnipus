@@ -604,7 +604,7 @@ its host. Verified per deployment:
 | **Kubernetes, `limits.memory` set** | the pod's cgroup | ✓ |
 | **Kubernetes, no `limits.memory`** | **falls back to the NODE's memory** | ✗ — see below |
 | macOS native | the D1.5b reader | ✓ once written |
-| gVisor / GKE Sandbox | `/proc/meminfo` unreadable | falls back (D1.5b) |
+| gVisor / GKE Sandbox | `/proc/meminfo` unreadable | **✗ FAILS OPEN** — corrected 2026-09-01. This row previously read "falls back", filing it with the conservative cases. It is not: `readMemTotalBytes` returns a fabricated **4 GB** and `readMemAvailableBytes` half of it (`meminfo_linux.go:14-16,40-45`), both with `ok` **true**, so D1.5b's undeterminable branch never runs. Same class as the unlimited pod. D1 spec FR-078/FR-079 delete the fabrication |
 | Windows native | no reader | unsupported |
 
 **The Kubernetes case that lies, and why it is worth a requirement.**
