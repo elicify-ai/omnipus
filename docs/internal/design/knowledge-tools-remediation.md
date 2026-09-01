@@ -660,3 +660,39 @@ Stated plainly by the operator: this cannot be delivered as it stands, because
 the central retrieval surface either cannot be called, cannot be indexed, or
 answers a confident false zero. Alignment first, then build — which is why this
 document is being agreed rather than executed from.
+
+---
+
+## 8. A fifth instance of §1's pattern, and the worst-behaved one
+
+Contributed by the session working on `feat/browser-streaming-performance`, and
+**verified here before being recorded**: `pkg/config/meminfo_linux.go`.
+
+`readMemTotalBytes` returns a hardcoded `fallbackTotalRAMBytes` — 4 GB — when
+`/proc/meminfo` cannot be read or parsed, and its signature is a bare `uint64`.
+There is **no `ok`, no error, no signal of any kind.** A caller cannot
+distinguish "this host has 4 GB" from "I could not look, so I assumed 4 GB".
+The same shape applies to the derived available figure.
+
+**This is worse than the four instances in §1, and the difference is worth
+stating.** Those encode absence as *zero* — an implausible value that a careful
+caller might question, and which at least degrades toward a floor. This one
+encodes absence as a **plausible number carried by a success path**. It is
+unquestionable by construction: nothing downstream has any way to doubt it. On
+gVisor, where `/proc/meminfo` is not readable, the product computes its
+concurrency limit from a figure it invented and reports as fact.
+
+**Two consequences for this plan:**
+
+1. §1's cross-cutting claim gets stronger, not weaker. Five instances across
+   five files is not a coincidence of four; it is a house style — no type in
+   this area could say *"I did not look"*, so every one of them said something
+   else instead.
+2. **ADR-072 D1.5e's deletion of `fallbackTotalRAMBytes` is not cleanup on the
+   way to the darwin reader — it removes an active fabrication.** Worth
+   sequencing on its own merit rather than as a side effect.
+
+Not ours to fix: `pkg/config` belongs to ADR-072's items. Recorded here because
+it is the same defect this document exists to name, and because anything on this
+branch that reasons about host memory on Linux will receive a confident wrong
+answer rather than an error.
