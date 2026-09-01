@@ -366,14 +366,17 @@ Chrome to N, and nothing in ADR-043 anticipates it.
 2. **Derive the instance cap:**
 
    ```
-   budget        = min(host_RAM, cgroup_limit) × 0.5      // Chrome's own policy
-   pool_budget   = budget − gateway_reserve
-   per_instance  = FIXED_FLOOR + (R × 85 MB) + encoder_page
-                 // ^ see the unit note directly below — this line is not
-                 //   dimensionally clean as written and must be fixed
-                 //   before anyone implements it
-   max_browsers  = clamp(pool_budget / per_instance, 1, operator_ceiling)
-   ```
+   budget      = container_limit if present, else machine RAM
+   reserve     = budget × 0.20              // keep a fifth free, always
+   usable      = budget − reserve
+
+   // At every launch, ask what is ACTUALLY free — do not precompute a cap.
+   headroom    = available_memory − (budget − usable)
+   launch_ok   = headroom ≥ PER_BROWSER_COST
+
+   // If not ok: evict the least-recently-used browser and re-ask.
+   // If nothing is evictable: exceed by one and WARN (D1.7).
+```
 
    Terms, all of which must be defined before the formula is evaluated:
 
@@ -402,26 +405,49 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    them within one instance. The two are different guards and neither replaces
    the other.
 
-#### Unit defect in the formula above — fix before implementing (found 2026-09-01)
+#### Why this replaced a precomputed cap (operator model, 2026-09-01)
 
-Three terms, three different kinds of quantity:
+An earlier revision computed `max_browsers` once, at boot, from a formula. **The
+operator replaced it with a live check, and that is the better shape:** memory
+per browser varies more than twentyfold with page content, so any number fixed
+in advance is wrong in both directions — needlessly stingy on light pages,
+dangerously generous on heavy ones. The research reached the same conclusion
+independently: a static cap belongs as a backstop, not as the gate.
 
-- `FIXED_FLOOR` is **marginal PSS**, measured (G-1).
-- `85 MB` is Chromium's internal `kEstimatedWebContentsMemoryUsage` — a
-  **budget constant**, not a measured PSS-per-renderer. This section's own
-  measurement puts real renderers at **74–268 MB**, so the formula
-  **understates by up to ~3×** at the top of its own cited range. That is §8
-  row 3 mirrored: the same class of error, opposite sign.
-- `encoder_page` is described as "+1 renderer" — **a count added to a byte
-  expression**.
+**Operator's model, as given:** keep ~20% of the machine free; decide how many
+browsers can run from what is *available at the moment*; require a minimum
+free amount before launching another.
 
-**Decision.** `encoder_page` becomes a byte value. `85 MB` is **retained
-deliberately**, so that our cap and Chrome's own internal limit reason in the
-same currency rather than drifting apart — but that retention is a choice, not
-an oversight, and it **must be re-derived against G-1's measured figure**. If
-G-1 lands materially above 85 MB, the formula over-provisions, the cap is too
-generous, and the failure direction is an OOM rather than a refusal — the worse
-of the two.
+**Four corrections applied to it, each of which changes a number:**
+
+1. **85 MB is per TAB, not per browser.** The operator's arithmetic — 850 MB
+   free ÷ 85 MB = 10 — is correct for tabs. A *browser* additionally costs its
+   own parent process and helpers. "How many browsers" and "how many tabs" are
+   different sums and must not share a constant.
+2. **A 120 MB launch minimum is too low for a browser.** Measured here, the
+   largest single Chrome process was ~247 MB RSS; a fresh instance on
+   `about:blank` is expected in the 150–250 MB PSS range. At 120 MB the pool
+   would successfully launch an instance that cannot then load a page —
+   a refusal disguised as a success. 120 MB is closer to right for *one more
+   tab*.
+3. **"Available" is not "free" on Linux.** The kernel fills spare RAM with
+   reclaimable page cache. Reading *free* memory reports a healthy machine as
+   full and the pool would refuse to launch on a host with ample headroom.
+   `MemAvailable` (which accounts for reclaimable cache) is the figure; the
+   cgroup equivalent inside a container.
+4. **In a container, machine RAM is the wrong budget.** Use the cgroup limit
+   when one exists. This is not hypothetical: the research could not establish
+   that Chromium itself reads cgroup limits, so Chrome may already be sizing
+   its own internal renderer limit against memory it cannot have.
+
+**And one addition the model needs:** the check must run **continuously, not
+only at launch**. A browser can start comfortably and then have its pages grow
+underneath it. Launch admission plus an ongoing pressure gate are two controls,
+and only the first was in the operator's sketch.
+
+**`PER_BROWSER_COST` remains the one unmeasured term** — G-1. 120 MB is too
+low, the earlier 400–500 MB estimate came from an inflated RSS reading (§8),
+and the honest answer is still the measurement nobody has taken.
 
 #### Cold start, and the four unknowns
 
