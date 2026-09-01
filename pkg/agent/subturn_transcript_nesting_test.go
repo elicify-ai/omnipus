@@ -70,6 +70,21 @@ import (
 func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
+		// CLAUDE.md hard constraint 6 (no default-policy fallback): this bare
+		// config carries no per-agent tool policy, so every tool -- including
+		// ToolSearch, which the scripted child below calls 4 times -- resolves
+		// through the real compositor with NO entry on either side and fails
+		// closed to deny (pkg/tools/compositor.go). Before the ToolSearch
+		// policy-seeding fix (release/v0.1.1, "seed ToolSearch as real allow
+		// data for every agent, remove hardcoded bypasses"), ToolSearch had an
+		// unconditional code-level force-allow independent of any seeded
+		// data, which is exactly what let this test's scripted ToolSearch
+		// calls succeed with a config this bare. That bypass is gone by
+		// design; this global ceiling grant is the real, seeded replacement
+		// for it, scoped to only the one tool this test actually exercises.
+		Sandbox: config.OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"ToolSearch": "allow"},
+		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
