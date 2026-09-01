@@ -559,14 +559,17 @@ func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf) s
 		parts = append(parts, bootstrapContent)
 	}
 
-	// Skills - show summary, AI can read full content with read_file tool.
-	// Filtered by the per-agent allowlist for progressive disclosure (FR-9.4):
-	// the prompt advertises only the skills this agent is permitted to use.
+	// Skills - show summary, full content loaded on demand via the Skill tool
+	// (ADR-072 D1: on-demand activation, not a read_file back door). Filtered
+	// by the per-agent allowlist / project shelf for progressive disclosure
+	// (FR-9.4): the prompt advertises only the skills this agent is permitted
+	// to use. The menu is uncapped (D1.1) and lists every currently-available
+	// skill, so there is no "search find_skills for the rest" caveat to make.
 	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.skillAllowed, shelf)
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool. This list is capped — call find_skills to search the full installed catalog, including any not shown below.
+The following skills extend your capabilities. When a task matches one, call the Skill tool with its name to load its full instructions before proceeding.
 
 %s`, skillsSummary))
 	}
