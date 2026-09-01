@@ -279,6 +279,16 @@ type SubTurnConfig struct {
 	// through.
 	ContextSnapshot *ContextSnapshot
 
+	// RequestedSkill is the ADR-072 D9 "request" mechanism (spec FR-050..056)
+	// — the tools-side mirror of tools.SubTurnConfig.RequestedSkill, which
+	// AgentLoopSpawner.SpawnSubTurn converts this from 1:1 (the same
+	// tools<->agent duplication ContextSnapshot/SubTurnConfig already
+	// document). An optional skill slug the parent names; spawnSubTurn
+	// resolves it against execSource's (the CHILD's) OWN ContextBuilder —
+	// see resolveRequestedSkillForChild — never the parent's, before any
+	// dispatch/session work below. Empty means "no requested skill".
+	RequestedSkill string
+
 	// Can be extended with temperature, topP, etc.
 }
 
@@ -516,6 +526,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 		DelegateSessionID:  cfg.DelegateSessionID,
 		IsResume:           cfg.IsResume,
+		RequestedSkill:     cfg.RequestedSkill,
 	}
 	if cfg.ContextSnapshot != nil {
 		agentCfg.ContextSnapshot = &ContextSnapshot{
@@ -556,6 +567,68 @@ func (s *AgentLoopSpawner) MarkPendingDelegateSpawn(sessionID, channel, chatID s
 		return
 	}
 	s.al.cancelPreArm.markPendingSpawn(time.Now(), keys...)
+}
+
+// requestedSkillOutcome is the closed set of outcomes
+// resolveRequestedSkillForChild can report for a `delegate.run`
+// requested_skill slug (ADR-072 D9, spec FR-050..056).
+type requestedSkillOutcome int
+
+const (
+	// requestedSkillUnresolvable is the zero value deliberately, mirroring
+	// pkg/tools/skill.go's SkillLoadNotFound: an unwired or misbehaving
+	// ContextBuilder fails toward "nothing exists", never toward "granted"
+	// or "installed-but-denied" — either of which would leak information a
+	// missing/nil builder cannot actually back up.
+	requestedSkillUnresolvable requestedSkillOutcome = iota
+	// requestedSkillDenied: the slug exists on some shelf visible to the
+	// child, but the child is not granted it.
+	requestedSkillDenied
+	// requestedSkillGranted: the child may load the slug — the resolved
+	// canonical slug is returned alongside this outcome.
+	requestedSkillGranted
+)
+
+// resolveRequestedSkillForChild resolves requested against cb — the CHILD's
+// (execSource's) OWN ContextBuilder. This is ADR-072 D9's structural gate:
+// "the receiver's grant is the real gate ... there is no code path from the
+// parent's ContextBuilder into this decision" — cb here is ALWAYS
+// execSource's builder, never the delegating parent's, so the parent's own
+// grant list has no bearing on the outcome by construction, not convention.
+//
+// Distinguishes three outcomes (spec FR-053/FR-054, never conflated):
+// granted (with the canonical slug the child may load), denied (the slug
+// exists on some shelf visible to this agent but is not granted), and
+// unresolvable (the slug matches nothing on any shelf visible to this agent
+// at all).
+//
+// cb.ResolveSkillName already applies the full per-shelf grant model
+// (D4/D4.1/D4.2) but, like the human "/<slug>" door it also gates, reports
+// only a single ok bool — ResolveSkillName's own doc comment states an
+// installed-but-ungranted slug "cannot be resolved", the same false a
+// nowhere-installed slug produces. D9 requires the two to be
+// distinguishable, so on a failed resolution this additionally checks
+// whether the slug matches ANY registry/builtin entry regardless of grant
+// (mirroring pkg/skills.ResolveSkillName's own first-pass match, minus the
+// allowed() gate) to tell "installed, not granted" from "installed
+// nowhere". The project shelf needs no separate check here: a project-shelf
+// slug always resolves successfully in the first place (D4.1 — the mount
+// IS the grant, no per-agent list applies), so a failed resolution already
+// implies it is not on the project shelf either.
+func resolveRequestedSkillForChild(cb *ContextBuilder, requested string) (canonical string, outcome requestedSkillOutcome) {
+	trimmed := strings.TrimSpace(requested)
+	if cb == nil || cb.skillsLoader == nil || trimmed == "" {
+		return "", requestedSkillUnresolvable
+	}
+	if slug, ok := cb.ResolveSkillName(trimmed); ok {
+		return slug, requestedSkillGranted
+	}
+	for _, s := range cb.skillsLoader.ListSkills() {
+		if strings.EqualFold(s.ID, trimmed) || strings.EqualFold(s.Name, trimmed) {
+			return "", requestedSkillDenied
+		}
+	}
+	return "", requestedSkillUnresolvable
 }
 
 func spawnSubTurn(
@@ -849,6 +922,30 @@ func spawnSubTurn(
 	if targetAgent != nil {
 		execSource = targetAgent
 	}
+
+	// ADR-072 D9 / spec FR-050..056: requested_skill is resolved against
+	// execSource — the CHILD's own ContextBuilder, never the parent's — and
+	// checked here, before any further dispatch/session/context work below,
+	// so a denial or an unresolvable slug aborts the sub-turn cleanly at
+	// dispatch, before the child's first model call (FR-053), exactly like
+	// the depth-limit and target-unresolved checks immediately above this
+	// one. A granted slug is recorded in canonicalRequestedSkill and
+	// appended to the child's opts.ForcedSkills once opts exists below
+	// (mirrors applyExplicitSkillCommand's own one-shot activation, so the
+	// child's first turn begins with it loaded per FR-052/FR-056).
+	var canonicalRequestedSkill string
+	if requested := strings.TrimSpace(cfg.RequestedSkill); requested != "" {
+		canonical, outcome := resolveRequestedSkillForChild(execSource.ContextBuilder, requested)
+		switch outcome {
+		case requestedSkillDenied:
+			return nil, fmt.Errorf("%w: agent %q, skill %q", tools.ErrRequestedSkillDenied, execSource.ID, requested)
+		case requestedSkillUnresolvable:
+			return nil, fmt.Errorf("%w: skill %q", tools.ErrRequestedSkillNotFound, requested)
+		case requestedSkillGranted:
+			canonicalRequestedSkill = canonical
+		}
+	}
+
 	// Decide dispatch kind from the resolved DELEGATE's own executor config
 	// (not the parent's) — see the comment above. Resolved here, ahead of the
 	// AgentInstance build below, so the external-cli-only field overrides can
@@ -1321,6 +1418,16 @@ func spawnSubTurn(
 		// re-rooting" comment) removed a genuine tie-breaking signal for a
 		// child agent that belongs to more than one workspace's CoreTeam.
 		WorkspaceID: parentTS.opts.WorkspaceID,
+	}
+
+	// ADR-072 D9 / FR-052/FR-056: a granted requested_skill is appended to
+	// the child's ForcedSkills — the SAME one-shot, per-turn field the human
+	// "/<skill>" slash command populates (applyExplicitSkillCommand, loop.go)
+	// — so the child's first turn begins with it already loaded, exactly as
+	// a slash-command activation would. canonicalRequestedSkill is empty
+	// whenever cfg.RequestedSkill was empty (the ordinary, unaffected case).
+	if canonicalRequestedSkill != "" {
+		opts.ForcedSkills = append(opts.ForcedSkills, canonicalRequestedSkill)
 	}
 
 	// Create event scope for the child turn

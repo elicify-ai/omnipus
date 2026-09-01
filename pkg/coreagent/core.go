@@ -1734,11 +1734,19 @@ func SeedConfig(cfg *config.Config) bool {
 			a.Icon = ca.Icon
 			modified = true
 		}
-		// Idempotent skill-allowlist migration (FR-9.4). Apply the seeded
-		// allowlist only when the existing entry declares none — an operator who
-		// has customized the agent's skills keeps their choice. Upgrades from a
-		// release that predated allowlists therefore gain the default matrix.
-		if len(a.Skills) == 0 {
+		// Fresh-install-only skill-allowlist seed (ADR-072 D5.1, FR-034).
+		// Under D5, an empty/absent Skills list means "the operator granted
+		// nothing" — a valid, deliberate state — not "never configured". This
+		// block used to run on every boot (guarded only by len(a.Skills)==0),
+		// framed as an idempotent migration for installs that predated
+		// allowlists (FR-9.4). D5.1 is greenfield with no such installs to
+		// migrate (§6.2), and re-running it on every boot would silently
+		// restore a grant list the operator later emptied on purpose — the
+		// exact ADR-054 D6.4 "reports success, doesn't stick" failure mode.
+		// Gating on isFreshInstall (same flag as the AutoRecap/DefaultAgentID
+		// seeds above) makes this fire once, on the very first boot, and
+		// never again. Do NOT restore this to an unconditional migration.
+		if isFreshInstall && len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
 				a.Skills = seedSkills
 				modified = true

@@ -96,6 +96,14 @@ const (
 	// and /api/v1/onboarding/probe-provider, which spends the operator's
 	// billable vendor quota on an `auth: sign_in` probe.
 	EventOnboardingRefused = "onboarding.refused"
+	// EventSkillCall records every `Skill` tool call (ADR-072 D3.1, MAJ-006):
+	// slug requested, mode (load/search), outcome (loaded/denied/not_found),
+	// shelf, agent and workspace. See skill_call.go's EmitSkillCall. Shares
+	// the "skill.*" event-name family with the FR-071a write-audit sibling,
+	// "skill.write" (pkg/tools/resolvepath.go's SkillWriteAuditEvent,
+	// registered as a bare literal below) — FR-018c: two distinct record
+	// shapes under one audit event kind.
+	EventSkillCall = "skill.call"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -193,6 +201,14 @@ func IsValidEventName(e EventName) bool {
 		EventBrowserWarmUpFailed,
 		// security_change.go.
 		EventSecuritySettingChange,
+		// skill_call.go (ADR-072 D3.1). "skill.write" is the FR-071a write-
+		// audit sibling emitted by pkg/tools/resolvepath.go's
+		// emitSkillPathWriteAudit (SkillWriteAuditEvent) — registered here as
+		// a bare literal per that file's own reconciliation note, since the
+		// constant lives in pkg/tools, not pkg/audit (importing pkg/tools
+		// from pkg/audit would invert this codebase's dependency direction).
+		EventSkillCall,
+		"skill.write",
 		// Misc event names emitted by other packages with stable wire
 		// contracts — keep the predicate aligned with them so they don't
 		// trip the unknown-event warn-once.
