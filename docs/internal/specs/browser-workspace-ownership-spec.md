@@ -15,6 +15,7 @@
   - *2026-08-31* — workspace is the isolation axis, not the agent and not the conversation (**D1.2**); **isolation is by Chrome process + profile directory, not by CDP browser context** (**D1.4**); **every agent on a workspace shares its browser and its logins, including unattended delegated work** (**D1.10**, superseding the earlier same-day ruling); every turn runs in a workspace, no workspace-less fallback (**D1.11**); the browser seed stays Jim + Ray only; the write lease belongs to this spec.
   - *2026-08-31, later* — **the cap manages itself (D1.7): at the cap the pool evicts the least-recently-used instance and launches. There is no "pool full" error surface and no UI change.** This **reverses** revision 3's refusal design in full (§17 C1/M1).
   - *2026-09-01* — **tabs stay per agent; the operator's tab is the shared one (D1.9a).** Verbatim: *"the default is they open a new tab — we have in the current version that an agent has its own tab, we should maintain that. Only if the user starts a tab are the agents able to see it and take control on request."* This rescopes the write lease from "every action tool" to "agent-vs-agent on the operator's shared tab" (§14).
+  - *2026-09-01, later* — **the memory gate is the ONLY admission control; idle tabs and idle browsers are closed; every other limit is deleted from the codebase (ADR D1.5a).** This is not a config change: `tools.browser.max_tabs`, `tools.browser.max_total_tabs` and the reservation machinery that enforces them are **removed from the code**, and the proposed `max_browsers`/`operator_ceiling` and `--renderer-process-limit` are never built. **§0.6 is the single place this ruling is stated**; everything downstream of it is re-derived or tombstoned there and in the sections it names.
 
 **Citation policy.** `pkg/agent/loop.go`, `turn.go` and `subturn.go` are ~11k-line files under constant churn; per the root `CLAUDE.md` this spec cites them as `file::symbol`. Line numbers appear only where the file is stable or where the exact line *is* the evidence (a config seed, a literal string, a hardcoded constant). Every `file:line` below was re-verified on this worktree on 2026-08-31.
 
@@ -63,9 +64,10 @@ requirements on this spec:**
 
 | New section | What it decides | Where it lands here |
 |---|---|---|
-| **D1.5** | The cap is **derived** from a memory formula; `max_browsers` is an `operator_ceiling`; `--renderer-process-limit=R`; the cgroup pressure gate; `max_total_tabs` stays global | FR-055, FR-056, FR-057, FR-038a |
-| **D1.6** | R is a **floor derived from site isolation**, not a memory knob | FR-055, §12 A23 |
-| **D1.7** | **LRU eviction, no error surface, no UI**; two eviction guards; viewer-staleness timeout; thrash detection; bounded `+1` overshoot | FR-050…FR-054, §5, §17 C1/M1 |
+| **D1.5** | Sizing the pool. **Largely superseded by D1.5a** — its derived cap, `operator_ceiling`, `--renderer-process-limit=R` and global `max_total_tabs` are all deleted. What survives is its **item 3**, the live-memory admission gate, which is now the only control | FR-057, FR-060, §0.6 |
+| **D1.5a** | **Memory is the ONLY limit — every counter is deleted from the code.** Idle tabs and idle browsers are closed; eviction under pressure is LRU with D1.7's guards | **§0.6**, FR-059, FR-060, FR-061; tombstones FR-049, FR-055, FR-056 |
+| **D1.6** | R was a **floor derived from site isolation**. **Withdrawn by D1.5a**: `--renderer-process-limit` is never set, so full site isolation is retained and the concern is *dissolved* rather than mitigated | §0.6, §12 A23 (rewritten), ~~FR-055~~ |
+| **D1.7** | **LRU eviction, no error surface, no UI**; two eviction guards; viewer-staleness timeout; thrash detection. Its *bounded `+1` overshoot* was an overshoot of a **cap**, and D1.5a deleted the cap — see §0.6 for what FR-053 becomes | FR-050…FR-054, §5, §17 C1/M1 |
 | **D1.8** | Idle close, crash containment, boot orphan reconciliation via the **launch lock** (not the marker's pid), profile deletion, the upgrade rule, `browser_handle_dialog`'s double exemption, boot-warm | FR-040a, FR-041, FR-042a, FR-043a, FR-043b, §12 A17 |
 | **D1.9** | Platform posture — orphan termination is **Linux-only**; no cross-process guard on Windows | US-19/AC2, SC-016, §12 A20 |
 | **D1.9a** | **Tabs stay per agent; the operator's tab is the shared one** | FR-048, FR-049, §14, §17 C1 |
@@ -135,16 +137,22 @@ agent on the workspace **one shared tab set** and silently deletes the separatio
 requires. **The agent dimension must therefore be carried explicitly on the tab set** —
 FR-048 — and FR-048's test fails if two agents' tabs merge.
 
-**Second-order consequence nobody has owned: `cfg.MaxTabs`.** The per-agent tab cap
-(`BrowserConfig.MaxTabs`, default **5** at `manager.go:36` and `:124`; config key
-`tools.browser.max_tabs`, whose own doc calls it *"the per-agent courtesy cap … the guard most
-operators actually want"*, `config.go:3662-3663`) is enforced by
-`totalTabCountLocked` (`manager.go:1549-1555`), which sums `len(se.tabs)` across **every
-session in the manager** and is checked at `:1139`, `:2005`, `:2047` and `:2216`. One manager
-per agent makes that per-agent today. One manager per **workspace** makes it 5 tabs shared
-across the whole team — a silent tightening from 5-per-agent to 5-per-workspace that no
-document mentions. **FR-049 gives it back its owner:** under FR-048's per-agent tab sets,
-`MaxTabs` is enforced per agent tab set, which is what its config doc already claims it is.
+**Second-order consequence nobody had owned: `cfg.MaxTabs` — and it is now moot.** The
+per-agent tab cap (`BrowserConfig.MaxTabs`, default **5** at `manager.go:36` and `:124`; config
+key `tools.browser.max_tabs`, `config.go:3633`) is enforced by `totalTabCountLocked`
+(`manager.go:1549-1555`), which sums `len(se.tabs)` across **every session in the manager** and
+is checked at `:1139` (`createFirstTab`), `:2005` and `:2047` (`OpenTab`), `:2216` and `:2286`
+(`adoptTarget`). One manager per agent makes that per-agent today; one manager per **workspace**
+would have made it 5 tabs shared across the whole team — a silent tightening nobody had
+noticed. Revision 4 answered that with **FR-049** (enforce `MaxTabs` per agent tab set).
+
+**The operator ruling of 2026-09-01 (ADR D1.5a) removes the question instead of answering it:
+`tools.browser.max_tabs` is DELETED from the code.** There is no per-agent tab cap and no
+per-workspace one; capacity is the memory gate, and idleness is the reaper. **FR-049 is
+tombstoned** with that reason (§9) — it was the right answer to a question that no longer
+exists. FR-048's per-agent tab *sets* are unaffected and still required: ownership ("whose tab
+is this") is a correctness property, not a capacity one, and the ruling touched only capacity.
+See §0.6.
 
 **What this ruling removes from the lease.** §14's write lease was scoped as "two agents
 sharing one tab set". Two agents on **their own** tabs do not contend, so the general case is
@@ -163,21 +171,23 @@ sequenced the pool behind them; the consolidated ADR names four more, all under 
 
 | Gate | Question | Kind | FR / SC |
 |---|---|---|---|
-| **G-1** | `FIXED_FLOOR` — the **marginal PSS** of a second Chrome instance on `about:blank` | human review gate | FR-044 / SC-012 |
+| **G-1** | **Narrowed by measurement (ADR, 2026-09-01).** `PER_BROWSER_COST` is now measured at **≈182 MB** for Chrome for Testing, and D1.5a deleted the formula it was an input to. What remains: the marginal cost of a *second* Chrome **on Linux, with capture running** | human review gate | FR-044 / SC-012 |
 | **G-2** | Does `chrome.tabCapture` succeed against a **second Chrome's default context**? | mechanical | FR-045 / SC-012a |
 | **G-3** | Does Chromium read a **cgroup memory limit**, or does it size itself against host RAM inside a capped container? | mechanical | FR-057a / SC-019 |
 | **G-4** | Does Linux **memory-pressure signalling** still fire for Chrome at all? | mechanical | FR-057a / SC-019 |
 | **G-5** | **Cold-start latency with a warm profile on disk** | human review gate | FR-054 / SC-020 |
-| **G-6** | What binds first on the measured host — **memory or CPU** — once browser, GPU and encoder processes are multiplied by N? | human review gate | FR-056 / SC-021 |
+| **G-6** | What binds first on the measured host — **memory or CPU** — once browser, GPU and encoder processes are multiplied by N? **Sharper under D1.5a, not softer:** with every counter deleted, the memory gate is the *only* admission control, so if CPU binds first there is nothing at all in front of it | human review gate | FR-057 / SC-021 |
 
-- **G-1 — per-Chrome memory (FR-044).** ADR-043's "≈4–5 GB at ten agents" is labelled in its own text as a rough, unmeasured order-of-magnitude estimate, and it was per *agent*. Workspaces are far fewer. **Measure the marginal PSS of the Nth Chrome (browser process only, one blank tab, on the UAT box) before shipping any cap.**
+- **G-1 — per-Chrome memory (FR-044). PARTLY DISCHARGED by measurement, and its remit is now narrower.** The ADR's own measurement pass of 2026-09-01 puts **`PER_BROWSER_COST` ≈ 182 MB** for Chrome for Testing — the binary Omnipus ships — as **125 MB browser + utility processes and 57 MB GPU**. **Carry its scope every time it is quoted:** one machine, one snapshot, **macOS**, `top`'s physical-footprint column, and an **idle, non-capturing** instance. A *capturing* browser costs that **plus the injected capture extension plus the encoding work**, and that delta is **unmeasured** — the operator's own 470 MB of personal extensions is *not* a proxy for it (five extensions at ~94 MB each, against our one lightweight encoder shim; borrowing it would overstate by roughly an order of magnitude). The 57 MB GPU term is a macOS headful-capable figure; on a headless Linux server we pass `--disable-gpu` (`exec_resolver.go:161-178`), so it may vanish, shrink, or move into the renderers. **G-1's remaining job is therefore the marginal cost of a second Chrome for Testing on Linux with capture running** — the number FR-062's launch-headroom minimum needs. ADR-043's "≈4–5 GB at ten agents" is labelled in its own text as a rough, unmeasured order-of-magnitude estimate, and it was per *agent*; it must not be quoted as the figure.
   ⚠️ **PSS, not RSS — and this correction is the ADR's own.** Revision 3 of this spec mandated *"the marginal **RSS**"*, and ADR §8's corrections log carries that as an **open downstream defect** (*"The RSS retraction had a downstream consumer that still specifies RSS"*), pointing at this line. RSS charges Chrome's file-backed program code to every one of its ~12 processes: on the measured box `omnipus-uat-swimlane` (2 cores, 3916 MB) the same sample read **1118 MB RSS** and **434 MB PSS** — RSS over-counts by **2.6×**. A cap sized from RSS is a cap sized from a number the ADR has retracted. **`ps` cannot produce PSS**; use `smem`, or sum the `Pss:` line of `/proc/<pid>/smaps_rollup` over the instance's process tree.
 - **G-2 — capture against a second Chrome's default context (FR-045).** ADR D1.4's claim that "each Chrome carries its own extension, so `chrome.tabCapture` works" is the same *class* of claim that proved false for CDP contexts, and its falsification cost a whole design. **Prove it with a spike against real Chrome before the pool is built** — two Chromes, distinct `--user-data-dir`s, extension loaded in each, capture a tab in the second. If it fails, stop and re-open D1.4; do not build the pool first.
 - **G-3 / G-4 — the two Chromium-behaviour unknowns (FR-057a).** Both are binary and both are cheap: run one Chrome inside a `memory.max`-capped cgroup and read back the renderer limit it computes for itself. If Chromium sizes against host RAM regardless of the cap, D1.5's `budget = min(host_RAM, cgroup_limit) × 0.5` is describing a policy Chrome is not following, and the pool's own bound is the only one. If pressure signalling never fires, Chrome will never self-discard and the same conclusion follows harder. **Neither may stay prose** — §0.3.1's whole argument is that a gate without a failing check is not a gate.
 - **G-5 — cold start from a warm profile (FR-054).** D1.7 defers thrash detection's window and threshold to this number explicitly. ADR-042's ~30–60 s figure covers a *fresh install including a Chromium download* and is not the relevant number. Without G-5 the two constants get guessed, which is the failure mode §0.3 exists to prevent for the cap.
-- **G-6 — memory or CPU (FR-056).** ADR §7's whole argument is that a **CPU** bound solved the problem on a 2-core box at 85–99 % utilisation with **one** Chrome. D1.5 multiplies browser processes, GPU processes and encoder pages by N on that same class of box and bounds **memory only**. One measurement before the ceiling default is chosen.
+- **G-6 — memory or CPU (FR-057).** ADR §7's whole argument is that a **CPU** bound solved the problem on a 2-core box at 85–99 % utilisation with **one** Chrome. The pool multiplies browser processes, GPU processes and encoder pages by N on that same class of box and bounds **memory only**. **D1.5a makes this gate more load-bearing, not less:** revision 4 needed it "before the ceiling default is chosen", and there is no ceiling any more — so if CPU is what binds, the product has *no* admission control in front of it at all. One measurement before FR-057 ships.
 
-**G-1, G-2 and G-6 gate Stream P. G-3, G-4 and G-5 gate the specific FRs they size (FR-057, FR-054) and not the whole stream** — the pool can land with the pressure gate behind a config default of "off on unverified platforms" and thrash detection behind conservative constants, provided each says so. None of the six blocks the §0.4 work.
+**G-1, G-2 and G-6 gate Stream P. G-3, G-4 and G-5 gate the specific FRs they size (FR-057, FR-054) and not the whole stream** — thrash detection may land behind conservative constants provided it says so. None of the six blocks the §0.4 work.
+
+⚠️ **One carve-out revision 4 allowed is WITHDRAWN by D1.5a.** Revision 4 permitted the pool to land "with the pressure gate behind a config default of *off on unverified platforms*". **The pressure gate is now the only admission control there is**, so shipping it off is shipping no limit — see §0.6's second consequence and FR-061. Where the platform gives no pressure signal, the honest posture is the one D1.9 already takes for orphan termination: say so, and do not pretend the gate is present.
 
 #### 0.3.1 How each gate is enforced — three mechanical, three named human gates
 
@@ -262,7 +272,7 @@ state each one's failure condition separately.
 
 Everything that is about *ownership* rather than *partitioning* — and this is the part that fixes the reported defect:
 
-- one manager per workspace, with **per-agent tab sets inside it and a workspace-owned tab set for the operator** (FR-001, FR-002, FR-002a, FR-002b, FR-002c, **FR-048**, **FR-049**) — **this alone fixes ADR criteria 2 and 3**, because handover is broken by the *manager* split, not by any partition, and FR-048 is what stops the fix from deleting the per-agent separation D1.9a preserves;
+- one manager per workspace, with **per-agent tab sets inside it and a workspace-owned tab set for the operator** (FR-001, FR-002, FR-002a, FR-002b, FR-002c, **FR-048**) — **this alone fixes ADR criteria 2 and 3**, because handover is broken by the *manager* split, not by any partition, and FR-048 is what stops the fix from deleting the per-agent separation D1.9a preserves;
 - the resolution ladder, its named failure, and a distinguishable panel failure reason (FR-007, FR-008, FR-008a);
 - the reload prune and per-key idempotent registration (FR-026a, FR-026b);
 - the **two-state** tab answer, the **deletion** of the false shared-browser claim and its **interim** replacement literal (FR-013, FR-014, FR-015, FR-034);
@@ -270,7 +280,9 @@ Everything that is about *ownership* rather than *partitioning* — and this is 
 - audit — now **per write-class action**, with a viewer-safe event name (FR-016, FR-016a, FR-016b, FR-017, FR-018, FR-027, **FR-058**);
 - the team-membership disclosure (FR-047) — it does not depend on the pool's existence, and it is true the moment Stream A lands.
 
-**Sequence: land §0.4 first, run G-1, G-2, G-3 and G-4 in parallel, then build the pool behind G-1/G-2/G-6.**
+- **the deletion of every tab counter** (**FR-059**) — `tools.browser.max_tabs`, `tools.browser.max_total_tabs` and the reservation machinery. It is code deletion in `pkg/tools/browser` and `pkg/config`, it depends on nothing the pool builds, and leaving it until Stream P would leave a per-workspace manager silently enforcing a per-agent cap across a whole team in the interim (§0.6).
+
+**Sequence: land §0.4 first (FR-059 included), run G-1, G-2, G-3 and G-4 in parallel, then build the pool behind G-1/G-2/G-6.**
 
 **What LEFT §0.4 since revision 3, and why.** FR-046's operator-facing browser-close action
 (REST path + SPA control) was in this list as *"the remedy the pool-full refusal names"*.
@@ -293,9 +305,137 @@ assumptions, because an assumption in a spec reads as a decision to whoever impl
 | # | The question | Where it sits now | Who must answer |
 |---|---|---|---|
 | **E-1** | **What does "take control on request" look like to an agent?** D1.9a rules that an agent may drive the operator's tab *on request*; the ADR states plainly that the mechanism — an explicit tool, or implicit acquisition on first write — is a **D2 tool-surface decision** and leaves it in its §6. | FR-048 specifies the **ownership and visibility** model, which is D1's part and is complete without this. The *acquisition verb* is not specified here. §14 assumes the second shape (implicit acquisition on first write to the shared tab) **only** as the lease's contended case, and says so; if the ruling is an explicit tool, §14 changes shape but not substance. | Operator, via the D2 spec |
-| **E-2** | **Pressure gate vs eviction, when they disagree.** D1.5 item 3 says *refuse to grow the pool* above 0.85 cgroup pressure. D1.7 says *never refuse; always evict and launch*. Both cannot hold when every instance is pinned **and** pressure is high. | FR-057 implements the gate and FR-053 the bounded overshoot. **The interaction is left undefined in the ADR itself**, so this spec does not invent an answer; FR-057 records the collision and refuses to pick. | Operator |
+| ~~**E-2**~~ | ~~**Pressure gate vs eviction, when they disagree.**~~ **RULED — no longer an escalation.** D1.5a settles it: *"the memory gate is the ONLY admission control"*, and the ADR states plainly that **the pressure gate is a hard stop and the cap is soft — and with the cap deleted, only the hard stop remains.** So when pressure is high and nothing is evictable, the request is **refused**, with an error naming **memory** and not a cap (the remedies differ, and an operator told the wrong one raises a ceiling that is not the constraint — and there is no ceiling left to raise). | FR-057 is rewritten to state the ruled answer instead of recording a collision; **test 72, which deliberately did not assert that case, now asserts it** (§10). | **Answered** (operator, ADR D1.5a) |
 | **E-3** | **Is `browser_snapshot` reachable at all under D1.9a?** Out of this spec's scope (it is a D2 tool), but D1.9a changes what it reads: a snapshot taken by agent A now sees A's own tab, not the workspace's. | Recorded, not decided. | D2 spec |
-| **E-4** | **Three ADR §6 "open" questions this document has already answered.** See §12 A24 — capture-session-per-workspace (FR-016a), per-workspace profile disk (§16 MAJ-111), and instances-vs-bytes (FR-038/FR-056/FR-057). Two are kept with the ADR named as needing to close them; **one is reopened** because this spec's closure of it did not hold. | §12 A24 | ADR owner |
+| **E-4** | **Three ADR §6 "open" questions this document has already answered.** See §12 A24 — capture-session-per-workspace (FR-016a), per-workspace profile disk (§16 MAJ-111), and instances-vs-bytes (**closed by D1.5a: bytes, and nothing else**). Two are kept with the ADR named as needing to close them; **one is reopened** because this spec's closure of it did not hold. | §12 A24 | ADR owner |
+| **E-5** | **Is a per-tab headroom floor needed, and what is it?** FR-060 puts the pressure gate in the tab-open path, expressed as a **ratio** with no per-tab byte constant — because the ADR withdrew the 85 MB constant on measured evidence (30 MB → 327 MB in one snapshot, an 11× spread). A *browser* launch has a measured floor (`PER_BROWSER_COST` ≈182 MB, FR-062); a *tab* has none, and this spec declines to invent one. | Recorded, not decided. A ratio-only tab gate is what FR-060 specifies; if measurement later shows the ratio moves too slowly to catch a fast tab loop, a floor is a design change, not a tuning change. | Operator / G-1's Linux pass |
+
+### 0.6 Memory is the only limit — every counter is deleted (operator ruling, 2026-09-01)
+
+**Verbatim:** *"the memory gate is the ONLY admission control. Idle tabs and idle browsers are
+closed. Every other limit is deleted from the codebase."* Recorded in the ADR as **D1.5a**,
+which supersedes D1.5's cap arithmetic and D1.6's renderer floor.
+
+**This is a code deletion, not a configuration change.** Revision 4 specified two shipped
+counters and proposed two more. All four go, and the machinery whose only purpose is enforcing
+the shipped two goes with them.
+
+| Deleted | Where, verified on this worktree 2026-09-01 | Status before this ruling |
+|---|---|---|
+| `tools.browser.max_tabs` (default 5) | `pkg/config/config.go:3633` (`MaxTabs int json:"max_tabs"`); default 5 at `pkg/tools/browser/manager.go:36`,`:124`; applied `pkg/agent/loop.go:2314-2315`; **18 executable references** in `pkg/tools/browser` (see the count note below) | **Shipped and enforced** |
+| `tools.browser.max_total_tabs` | `pkg/config/config.go:3678`; coordinator field `:128`, ctor `:226-233`, `SetMaxTotalTabs` `:635-644`, `ApplyRuntimeConfig` `:659-660`, gate `:785-792`; threaded from `loop.go:2452`,`:2455` | **Shipped, never seeded** — `grep MaxTotalTabs pkg/config/defaults.go` returns nothing, and `coordinator.go:246-247` logs *"global tab budget: UNLIMITED"* when it is `<= 0` |
+| `TryOpenTab` / `ReleaseTab` / `reservedTabs`, and the in-flight race handling that exists only for them | `coordinator.go:137` (`reservedTabs`), `:782-804` (`TryOpenTab`), `:806-812` (`ReleaseTab`), `:818` (`totalOpenTabsLocked`); manager side `manager.go:3343-3352` (`reserveGlobalTab`), `:3358-3366` (`releaseGlobalTab`), called from `tabs.go:249`, `:180`, `:260` and `manager.go:3118` | **Shipped**; its entire purpose is enforcing the two keys above |
+| `max_browsers` / `operator_ceiling` | This spec's FR-056 and its `Target()` formula | **Proposed, never built** |
+| `--renderer-process-limit` and the renderer floor `R` | This spec's FR-055 and the `R >= max_tabs` derivation | **Proposed, never built** |
+
+**A note on the count, so the number is checkable rather than asserted.** ADR D1.5a says "17
+references in `pkg/tools/browser/`". Re-counted here as
+`grep -rn "MaxTabs\|max_tabs" pkg/tools/browser --include="*.go" | grep -v _test.go` minus
+comment-only lines: **18**. The one-line difference is a classification question (whether the
+`MaxTabs int` field declaration at `manager.go:36` counts as a reference), not a disagreement
+about what exists. Test-side: **59 references across 10 `_test.go` files**, which is migration
+work FR-059 owns and nobody had budgeted.
+
+#### Removing `--renderer-process-limit` is a security IMPROVEMENT, and the finding is dissolved
+
+D1.6 introduced the flag to bound per-instance cost for a formula, and recorded that it weakens
+site isolation for pages beyond the cap — over-limit navigations reuse same-site processes. That
+was justified as acceptable for *"agent-driven browsing of semi-trusted destinations"*, and
+**`ValidateURL` (`pkg/tools/browser/manager.go:685-708`) does not support that adjective**: it
+blocks five schemes (`blockedSchemes`, `:675-683`) plus private and metadata addresses via the
+SSRF checker (SEC-24), and permits **every other public `http(s)` URL**. There is no allow-list
+anywhere in `pkg/tools/browser/`, and `browser_navigate`'s URL comes from model output that page
+content the agent just read has already influenced.
+
+With capacity governed by live memory there is **no reason to set the flag at all**, so Chrome's
+default site-per-process isolation is retained in full. **The round-2 / round-3 finding (C-303,
+and the C4/C206 concern the ADR names) is therefore DISSOLVED, not mitigated** — there is no
+residual trade-off to accept, no compensating control to remember, and nothing for a future
+reviewer to re-litigate. This is the rare case where deleting a feature removes a security cost
+rather than adding one, and it should be said plainly in the PR body.
+
+#### FR-049 and FR-055 were correct answers to a question that no longer exists
+
+Both are **tombstoned with that reason**, not silently dropped — §16 and §17 cite them as
+CRITICAL resolutions (M7(c) and C4), so a reader arriving from those reviews would otherwise
+read the removal as a regression.
+
+- **FR-049** gave `cfg.MaxTabs` an owner after the re-key, so that a per-agent cap did not
+  silently become a per-team one. Correct, and moot: `max_tabs` is deleted, so there is no cap
+  to own. *(FR-048's per-agent tab **sets** are untouched — that is ownership, not capacity.)*
+- **FR-055** derived `R` from `max_tabs` as a site-isolation floor. Correct, and moot twice
+  over: the flag it configured is never set, and the key it derived from is deleted.
+- **FR-056** (`max_browsers` derived, `tools.browser.max_browsers` as ceiling) is tombstoned
+  with them. It was never built.
+
+#### What replaces all of it
+
+1. **Admission on live memory only.** With no counter anywhere, the pressure gate (FR-057) is
+   the sole hard stop, and the ADR rules it a **hard** stop: refuse, naming memory.
+2. **Idle close, for tabs AND for whole browsers.** Tabs already reap — `ReapIdleSessions`
+   (`manager.go:2986`) with `DefaultIdleTTL` **5 minutes** (`manager.go:130-134`). Whole-browser
+   close is new work (FR-040, FR-040a). **Both are now load-bearing rather than housekeeping**,
+   and FR-061 states what that changes about their criteria.
+3. **Eviction under pressure** — least-recently-used, with D1.7's two guards, **unchanged**
+   (FR-050, FR-051, FR-052). Eviction is what happens when memory says stop and something is
+   reclaimable; refusal is what happens when nothing is.
+
+#### The risk this accepts, and the two consequences the ADR names as non-optional
+
+**Stated plainly: with no counter anywhere, a runaway agent opening tabs in a loop is bounded
+only by memory pressure.** Two things follow, and neither is optional.
+
+- **The pressure check must sit in the TAB-OPEN path, not only the browser-launch path
+  (FR-060).** A loop that opens tabs inside an already-running browser never reaches a launch
+  decision. The tab-open sites are `manager.go::createFirstTab` (`:1139`), `::OpenTab`
+  (`:2005`, `:2047`) and `::adoptTarget` (`:2216`, `:2286`) — **which are exactly the five sites
+  `cfg.MaxTabs` is checked at today.** Deleting the counter without putting the gate there
+  removes the only thing standing between that loop and the OOM killer, and **no counter remains
+  to catch it.**
+- **Idle close and the pressure gate are now the entire defence (FR-061).** Previously a counter
+  caught a runaway before memory did. That backstop is gone **by decision**. So a gap in either
+  control is **not a degraded limit — it is no limit**, and neither may ship disabled, "best
+  effort", or behind an off-by-default flag on platforms where it is unverified (§0.3's
+  withdrawn carve-out).
+
+#### `PER_BROWSER_COST` is measured — ≈182 MB — and its scope travels with it
+
+**≈182 MB** for **Chrome for Testing** (the binary Omnipus ships and launches): **125 MB browser
++ utility processes, 57 MB GPU**; 301 MB total across 9 processes with light pages.
+
+**Scope, which must be quoted whenever the number is:** one machine, one snapshot, **macOS**,
+`top`'s physical-footprint column, and an **idle, non-capturing** instance. A *capturing* browser
+costs this **plus the injected capture extension plus the encoding work**, and that delta is
+**unmeasured**. It is neither the 120 MB first proposed (too low — an instance would launch and
+then fail to load a page) nor the 400–500 MB an earlier revision estimated from the inflated RSS
+reading ADR §8 retracts. FR-062 carries it as the launch-headroom minimum; G-1's remaining job is
+the same figure **on Linux, with capture running**.
+
+#### Anything priced per renderer, or per tab, is gone
+
+The 85 MB constant Chromium uses internally is **withdrawn from this spec's capacity path** on
+measured evidence: real renderers spanned **30 MB → 327 MB in one snapshot** — an 11× spread — so
+**no per-renderer constant works**, and `FIXED_FLOOR + (R × 85MB) + encoder_page` is not an
+arithmetic this spec may perform. Renderer count is also not tab count: the measured Playwright
+instance reported **2 tabs against 13 renderer processes** — cross-origin iframes, spare
+renderers and app windows, roughly **six processes per tab** — so anything priced per tab is
+wrong by about that factor. **The capacity path uses live measurement and no constant.**
+
+#### `max_total_tabs` staying global across N Chromes is moot
+
+Revision 4's FR-038a, §12 A21 and test 53 all carried the rule that the global tab budget stays
+global rather than becoming per-Chrome. There is no global tab budget: the key and its
+enforcement are deleted. The rule, its scenario, its dataset row and that half of test 53 are
+tombstoned, not re-derived.
+
+#### New requirements this ruling adds
+
+| FR | What it requires |
+|---|---|
+| **FR-059** | The deletion itself, as implementation scope: both config keys, the reservation machinery, every call site, and the test migration |
+| **FR-060** | The pressure gate sits in the **tab-open** path as well as the launch path |
+| **FR-061** | Idle close and the pressure gate are the entire defence — neither may silently no-op, and each carries a test that fails if it does |
+| **FR-062** | `PER_BROWSER_COST` ≈182 MB is the **launch-headroom minimum**, quoted with its scope; no per-renderer or per-tab constant is used anywhere |
 
 ---
 
@@ -335,10 +475,11 @@ A login obtained in workspace X is invisible in workspace Y because they are dif
 
 **In scope (D1):**
 
-- **The browser-process pool** — one Chrome + profile dir per workspace browsing key, with a **derived** cap, **LRU eviction** at the cap (D1.7: no error surface, no UI), a bounded `+1` overshoot when nothing is evictable, thrash detection, whole-Chrome idle close, per-Chrome crash containment, and per-Chrome launch locks and ownership markers (FR-037…FR-043, FR-050…FR-057a).
-- **The renderer floor and the memory formula** — `--renderer-process-limit=R` with R derived from the per-agent tab cap as a site-isolation **floor** (D1.6), and `max_browsers` derived from D1.5's formula with `tools.browser.max_browsers` as the operator **ceiling** (FR-055, FR-056).
-- **The pool's lifecycle edges**, which the previous draft left to inference and which are the bulk of round-2's MAJOR findings: cap edge semantics and the cap's relationship to the existing global tab budget (FR-038a); the whole-Chrome idle window as a named config key with a named caller and a specified post-close state (FR-040a); boot reconciliation of the N ownership markers so orphan Chromes cannot sit outside the cap (FR-042a); per-key stale-singleton cleanup, without which FR-043's "the profile survives" is false after a crash (FR-042b); the profile directory's **deletion** path (FR-043a); the profile root's relationship to `cfg.ProfileDir` and to the managed-Chromium install root (FR-037a); and the boot preprovision path, which a lazily-created pool silently breaks (FR-016c).
-- **Per-agent tab ownership and the operator's shared tab** (FR-048), and the per-agent enforcement of `cfg.MaxTabs` that falls out of it (FR-049) — D1.9a.
+- **The browser-process pool** — one Chrome + profile dir per workspace browsing key, admitted on **live memory only** (D1.5a), with **LRU eviction** under pressure (D1.7: no error surface, no UI), thrash detection, whole-Chrome idle close, per-Chrome crash containment, and per-Chrome launch locks and ownership markers (FR-037…FR-043, FR-050…FR-054, FR-057…FR-062).
+- **The deletion of every counter** (**FR-059**, ADR D1.5a) — `tools.browser.max_tabs`, `tools.browser.max_total_tabs` and the `TryOpenTab`/`ReleaseTab`/`reservedTabs` reservation machinery are **removed from the code**, with their call sites and their 59 test-side references. `max_browsers`/`operator_ceiling` and `--renderer-process-limit` are never built. **This is in §0.4 and belongs to Stream A**, not to the pool. See §0.6.
+- **The memory gate as the sole admission control** — the live-pressure check at browser launch *and* at **tab open** (FR-057, FR-060), the measured `PER_BROWSER_COST` launch minimum (FR-062), and the requirement that neither the gate nor idle close may silently no-op, since together they are now the entire defence (FR-061).
+- **The pool's lifecycle edges**, which the previous draft left to inference and which are the bulk of round-2's MAJOR findings: the admission edge semantics that survive the counters' deletion (FR-038a); the whole-Chrome idle window as a named config key with a named caller and a specified post-close state (FR-040a); boot reconciliation of the N ownership markers so orphan Chromes cannot sit outside the cap (FR-042a); per-key stale-singleton cleanup, without which FR-043's "the profile survives" is false after a crash (FR-042b); the profile directory's **deletion** path (FR-043a); the profile root's relationship to `cfg.ProfileDir` and to the managed-Chromium install root (FR-037a); and the boot preprovision path, which a lazily-created pool silently breaks (FR-016c).
+- **Per-agent tab ownership and the operator's shared tab** (FR-048) — D1.9a. *(The per-agent enforcement of `cfg.MaxTabs` that used to fall out of this is **FR-049, tombstoned**: the key is deleted — §0.6.)*
 - **The team-membership elevation-of-privilege disclosure** decided in ADR D2.11 (FR-047): the Workspace → Team editing UI must state, at the point of adding an agent, that the agent gains every live browser session on that workspace. **Claimed here rather than left ownerless.** §1's out-of-scope list excludes only D2.11's *information-disclosure* bullet, so the *elevation-of-privilege* bullet was in scope by wording and owned by neither spec; D1.10 makes it strictly worse than when the ADR wrote it, because unattended delegated work now inherits those logins too.
 - One `BrowserManager` per workspace, with **per-`Execute` manager resolution** replacing registration-time binding (FR-002a).
 - Every `DefaultSessionID` consumer — **37 non-comment references**, enumerated in §2 — re-pointed at the resolved key; the constant deleted (FR-002b), including `controlledResult` (FR-002c).
@@ -349,7 +490,7 @@ A login obtained in workspace X is invisible in workspace Y because they are dif
 - Gateway server-side agent→workspace resolution (FR-016, FR-017, FR-018), capture registry re-keying (FR-016a), boot warm path (FR-016b).
 - Audit: one event on browser creation and **one per write-class browser tool call** (FR-027, D2.11's ruling of 2026-09-01 — first-use-only is rejected by name), with an event name matching `^[a-z_]+$` (FR-058) and provenance asserted (FR-035).
 - Retirement of `tools.browser.capture_shared_context` and the CDP-context machinery it gated (FR-031).
-- The six measurement gates (FR-044, FR-045, FR-054, FR-056, FR-057a — §0.3).
+- The six measurement gates (FR-044, FR-045, FR-054, FR-057, FR-057a — §0.3).
 
 **Out of scope (explicitly):**
 
@@ -382,12 +523,12 @@ A login obtained in workspace X is invisible in workspace Y because they are dif
 | `BrowserCoordinator.launchChrome` (`:1212`) / `ensureLaunched` (`:1127`) | **modifies** | Per-key, single-flight per key |
 | `BrowserCoordinator.watchForCrash` (`:1357`) | **modifies** | Today resets **every** connector manager and relaunches the one Chrome. Must become per-Chrome (FR-041) |
 | `pipeLaunchConfig.userDataDir` (`exec_resolver.go:385` `UserDataDir: cfg.userDataDir`) | **modifies** | The seam D1.4's isolation rides on: one profile dir per workspace (FR-037) |
-| `maxTotalTabs` / `TryOpenTab` (`coordinator.go:782`) | **extends** | A global cross-agent **tab** budget, unlimited by default. Joined by a **browser** cap (FR-038) |
+| `maxTotalTabs` / `TryOpenTab` / `ReleaseTab` / `reservedTabs` (`coordinator.go:128, 137, 635-644, 782-812, 818`) | **RETIRES** | A global cross-agent **tab** budget, unlimited by default and **never seeded**, plus the reservation machinery that exists only to enforce it (and `max_tabs`), including its in-flight race handling. **Deleted outright by ADR D1.5a** — not joined by a browser cap, because there is no cap (FR-059, §0.6). The manager-side halves `reserveGlobalTab` (`manager.go:3343-3352`) and `releaseGlobalTab` (`:3358-3366`) and their four call sites (`tabs.go:180, 249, 260`; `manager.go:3118`) go with them |
 | `BrowserManager.browserCtxID` (`manager.go:381`) | **retires** | Stays a single field and becomes permanently empty — every manager drives its own Chrome's default context (FR-031). **Not a map** (§0.2) |
 | `BrowserManager.sessions` (`manager.go:338`) | **modifies** | `map[string]*sessionEntry`. **NOT one entry per manager.** Under D1.9a the manager holds **one entry per agent that has browsed, plus one workspace-owned entry for the operator's tabs** — the map is where the agent dimension is carried (FR-048). A design that keeps a single entry per manager silently merges every agent's tabs on the workspace |
 | `sessionEntry.tabs` (`manager.go:203-204`, `tabs []*tabEntry`) | **reuses** | **The verified trap (§0.2a).** The tab set belongs to the *sessionEntry*, i.e. to the browsing context (ADR-041 D1) — not to the agent. Agents are separated today only because each has its own manager. FR-001 removes that separation; FR-048 restores it explicitly |
-| `BrowserManager.totalTabCountLocked` (`manager.go:1549-1555`) | **modifies** | Sums `len(se.tabs)` across **every** session in the manager, and is the `cfg.MaxTabs` enforcement point (`:1139`, `:2005`, `:2047`, `:2216`). Per-agent managers make that a per-agent cap today; per-workspace managers would make it 5 tabs for the whole team. FR-049 re-scopes it to the agent's own tab set |
-| `BrowserConfig.MaxTabs` (`manager.go:36`, default **5** at `:124`; config key `tools.browser.max_tabs`, `config.go:3633`, applied `loop.go:2314-2315`) | **modifies (semantics)** | **Appears in neither ADR-072 nor this spec before this revision, and after the re-key it has no owner.** Its own config doc calls it *"the per-agent courtesy cap … the guard most operators actually want"* (`config.go:3662-3663`) — a claim FR-001 would falsify. FR-049 makes the doc true again, and it is the only tab count enforced on a **default** install (FR-055 derives R from it) |
+| `BrowserManager.totalTabCountLocked` (`manager.go:1549-1555`) | **RETIRES as an enforcement point** | Sums `len(se.tabs)` across **every** session in the manager, and is the `cfg.MaxTabs` enforcement point at **five** sites: `:1139` (`createFirstTab`), `:2005` and `:2047` (`OpenTab`), `:2216` and `:2286` (`adoptTarget`). Revision 4's FR-049 re-scoped it to the agent's own tab set; **D1.5a deletes the cap instead, so FR-049 is tombstoned** (§0.6). **Those same five sites are where FR-060 puts the memory gate** — the tab-open path a runaway loop never leaves. The helper itself may survive as a count for logging/telemetry; what must not survive is a *refusal* derived from a counter |
+| `BrowserConfig.MaxTabs` (`manager.go:36`, default **5** at `:124`; config key `tools.browser.max_tabs`, `config.go:3633`, applied `loop.go:2314-2315`) | **RETIRES** | Revision 4 gave it back an owner (FR-049) after the re-key would have turned a 5-tab per-**agent** cap into 5 for the whole team. **ADR D1.5a deletes the key, the field, the default and all 18 executable references instead** (FR-059). Its config doc — *"the per-agent courtesy cap … the guard most operators actually want"* (`config.go:3662-3663`) — is deleted with it; a doc for a key that no longer exists is worse than none |
 | `LiveViewRegistry.TakeControl` / `IsControlled` (`live.go::TakeControl` `:1241`, `::ReleaseControl` `:1287`, `::Controller` `:1298`, `::IsControlled` `:1313`) | **reuses (must NOT be replaced)** | ADR-038 D6's take-the-wheel lock, and **the whole of operator-vs-agent arbitration under D1.9a**. §14's lease is agent-vs-agent only and never substitutes for this. *(Citation corrected: the round-4 brief gave `live.go:1236-1310`, which stops three lines short of `IsControlled` at `:1313`.)* |
 | `BrowserManager.AttachSharedChrome` (`manager.go:537`) | **modifies** | Sets `m.agentID` (`:375`) — the coordinator's Register/Release/RemoveAgent key. Becomes the browsing key |
 | `BrowserManager.ListTabs` (`manager.go:1605`) | **modifies** | `return nil, 0, nil` on a missing session (`:1609-1611`) — the two-state collapse (FR-013) |
@@ -402,7 +543,7 @@ A login obtained in workspace X is invisible in workspace Y because they are dif
 | `BrowserCoordinator.ApplyRuntimeConfig`'s ProfileDir branch (`coordinator.go:681-687`) | **reuses** | Today a `profile_dir` change on reload logs a WARN and is **not applied** to the running Chrome (*"applies after gateway restart"*). FR-037a preserves that behaviour per key rather than inventing a relocation (§12 A18) |
 | `resolveScheduleWorkspaceID` (`pkg/gateway/schedules.go:581-639`) → `stampScheduledSessionWorkspace` (called from `pickSession`, `:513`+`:527-576`, itself called on every fire at `:141`) | **reuses** | **The shipped write path the previous draft did not cite, and whose absence made FR-033's premise wrong (round-2 MAJ-113).** A fired schedule's workspace is resolved and stamped onto the session meta **before** `ProcessScheduled` runs, and `ProcessScheduled` reads it back into `processOptions.WorkspaceID` (`loop.go:6934-6946`, assigned `:6957`). **Heartbeats are workspace-scoped by construction:** the reconciler names each job `heartbeat:<workspaceID>:<agentID>` (`heartbeat_schedule.go:30-33`) and `workspaceIDFromHeartbeatJobName` (`schedules.go:654`) parses it back out — so a heartbeat turn reaches `ResolveBrowsingKey` **rung 1**, never rung 2's ambiguity refusal. See §6 and §16 MAJ-113 for what this leaves as the real residual case |
 | `BrowserConfig.PageTimeout` (`manager.go:35`, default 30s `:123`, config key `tools.browser.page_timeout` → `PageTimeoutSec`, `config.go:3632`, applied `loop.go:2311-2312`) | **reuses** | The "shortest action-tool timeout" §14.1 required `leaseWaitTimeout` to be strictly less than, and never named. Both values are operator-settable and nothing validates the relationship (FR-023a) |
-| `maxTotalTabs`' unlimited semantics (`coordinator.go:785-788`) | **reuses (as the precedent)** | `if c.maxTotalTabs <= 0 { reserve; return true }` — 0 and negative mean **unlimited**, guarded by `TestCoordinator_UnlimitedDefault_AllowsPastOldCap`. `max_browsers` adopts the same *shape* and a different *default*, and FR-038a says why |
+| `maxTotalTabs`' unlimited semantics (`coordinator.go:785-788`) | **RETIRES with the key** | `if c.maxTotalTabs <= 0 { reserve; return true }` — 0 and negative meant **unlimited**, guarded by `TestCoordinator_UnlimitedDefault_AllowsPastOldCap`. Revision 4 used it as the *shape* precedent for `max_browsers`' ceiling; **there is no `max_browsers` and no ceiling** (FR-056 tombstoned), so the precedent has nothing left to precede. The guard test is deleted with the key (§10.1) |
 | `controlledResult` (`tools.go:962-963`) | **modifies** | `mgr.Live().IsControlled(defaultSessionID)` — hardcoded. Silently returns `false` forever once the live registry is re-keyed (FR-002c) |
 | `ListTabsTool` (`tabs.go:28-68`) | **modifies** | Already returns `browser_started` (`:58`, `:66`); description at `:31-39` |
 | `captureRegistry` (`browser_webrtc.go:70-78`) | **modifies** | `sessions map[string]*browser.CaptureSession // keyed by agentID` (FR-016a) |
@@ -475,7 +616,8 @@ Effort, stated rather than implied: ~364 mechanical edits across 25 files, of wh
 
 | Symbol modified | Risk | Direct dependents (d=1) | Indirect (d=2) |
 |---|---|---|---|
-| `BrowserCoordinator` → pool | **CRITICAL** | `Register`, `Release`, `RemoveAgent`, `ensureLaunched`, `launchChrome`, `watchForCrash`, `PID`, launch lock, ownership marker, `TryOpenTab` | crash recovery, hot reload, boot warm, every live surface, host memory |
+| `BrowserCoordinator` → pool | **CRITICAL** | `Register`, `Release`, `RemoveAgent`, `ensureLaunched`, `launchChrome`, `watchForCrash`, `PID`, launch lock, ownership marker | crash recovery, hot reload, boot warm, every live surface, host memory |
+| **Counter deletion** (`max_tabs`, `max_total_tabs`, `TryOpenTab`/`ReleaseTab`/`reservedTabs`) | **HIGH** | `coordinator.go` (7 sites), `manager.go` (13 sites incl. 5 enforcement points), `tabs.go` (3), `config.go` (2 fields), `loop.go` (3); **59 test-side references across 10 files** | **The only remaining bound becomes memory** — a gap in FR-057/FR-060/FR-061 is not a looser limit, it is none (§0.6) |
 | `browserMgrs` keying | **CRITICAL** | `BrowserManagerForAgent`, `BrowserManagers`, reload prune, `Close` | all 3 gateway surfaces, every browser tool, reaping |
 | `RegisterTools` manager binding | **CRITICAL** | 11 tool structs, `registerSharedTools` | **handover itself** — the reported defect |
 | reload prune predicate | **CRITICAL** | `RemoveAgent` → browser close | every login on every workspace, on every Settings save |
@@ -584,12 +726,14 @@ func sessionKey(k BrowsingKey, o TabOwner) string
 // the logins live in the profile directory on disk, so an evicted workspace
 // reopens still signed in and pays only start-up latency.
 //
-// The ONE place an operator can still perceive capacity is the hard ceiling in
-// FR-053: every instance simultaneously watched AND busy, the pool already one
-// over its target, and a second such request waits for its own deadline and
-// then fails with a named error. That is a tool error, not a UI, not a REST
-// path and not a sentinel anyone else tests for. Do not reintroduce a pool-full
-// error surface on the normal path; see §5 and §17 C1.
+// The ONE place an operator can still perceive capacity is FR-053's named
+// error, and under ADR-072 D1.5a it names MEMORY rather than a cap: memory
+// pressure is above the gate's threshold AND nothing is evictable, so the
+// request waits for its own deadline and then fails. There is no cap to
+// overshoot and no ceiling to raise -- every counter is deleted (§0.6). That
+// error is a tool error, not a UI, not a REST path and not a sentinel anyone
+// else tests for. Do not reintroduce a pool-full error surface on the normal
+// path; see §5 and §17 C1.
 ```
 
 ```go
@@ -630,9 +774,10 @@ func ResolveBrowsingKey(ctx context.Context, home string) (BrowsingKey, error)
 // reverse — pkg/tools/browser cannot import pkg/agent.
 type ManagerResolver interface {
     // ManagerFor resolves this turn's browser, launching it on first use —
-    // evicting another workspace's instance if the pool is at its target
-    // (FR-050). Returns ErrNoBrowsingContext, the FR-053 ceiling error, or a
-    // launch error. It NEVER returns "pool full" on the normal path (D1.7).
+    // evicting another workspace's instance when memory pressure says stop and
+    // something is reclaimable (FR-050). Returns ErrNoBrowsingContext, FR-053's
+    // memory-refusal error, or a launch error. It NEVER returns "pool full" —
+    // there is no pool cap at all (D1.5a, §0.6).
     //
     // It also returns the TabOwner this turn addresses: TabOwnerAgent(agentID)
     // for every ordinary tool call. A tool that must reach the operator's
@@ -656,9 +801,10 @@ func RegisterTools(
 
 // BrowserManagerForKey returns (creating on first use) the manager that owns
 // key's browser. Exactly one manager and one Chrome per key, process-wide.
-// At the cap it EVICTS the least recently used evictable instance and launches
-// (FR-050); it does not refuse. It errors only for ErrNoBrowsingContext, a
-// launch failure, or FR-053's ceiling.
+// Under memory pressure it EVICTS the least recently used evictable instance
+// and launches (FR-050); it does not refuse while something is reclaimable. It
+// errors only for ErrNoBrowsingContext, a launch failure, or FR-053's memory
+// refusal (pressure high AND nothing evictable). There is no cap.
 func (al *AgentLoop) BrowserManagerForKey(ctx context.Context, k browser.BrowsingKey) (*browser.BrowserManager, error)
 
 // BrowserManagerForAgent is RETAINED for the gateway. It resolves
@@ -682,13 +828,18 @@ const (
 )
 
 // NO BrowserResolvePoolFull. Revision 3 had one; D1.7 withdrew the state it
-// named. Under eviction the panel never has a capacity reason to render, and
-// FR-053's ceiling is a tool error on an agent's turn, not a panel state.
+// named and D1.5a deleted the cap that would have produced it. Under eviction
+// the panel never has a capacity reason to render, and FR-053's memory refusal
+// is a tool error on an agent's turn, not a panel state.
 ```
 
 ```go
-// pkg/tools/browser/pool.go (new) — ADR-072 D1.4 (mechanism), D1.5 (sizing),
-// D1.6 (renderer floor), D1.7 (cap policy), D1.8 (lifecycle). Stream P.
+// pkg/tools/browser/pool.go (new) — ADR-072 D1.4 (mechanism), D1.5a (memory is
+// the only limit), D1.7 (eviction policy), D1.8 (lifecycle). Stream P.
+//
+// D1.5's cap arithmetic and D1.6's renderer floor are SUPERSEDED by D1.5a and
+// are not implemented: there is no max_browsers, no operator_ceiling, no
+// --renderer-process-limit and no per-renderer constant. See §0.6.
 
 // BrowserPool owns N Chrome processes, one per BrowsingKey, replacing the
 // coordinator's single-Chrome fields (rootCtx/rootCancel/cmd/launched/
@@ -727,12 +878,14 @@ const (
 //
 // INVARIANT P-1: one live Chrome per key, enforced by per-key single-flight
 //                (the existing launched/launching/launchDone triple, per entry).
-// INVARIANT P-2: len(live) <= target + overshoot, where overshoot is 0 on the
-//                normal path and AT MOST 1, TOTAL (not per request), when every
-//                instance is simultaneously watched and busy (FR-053). The cap
-//                is a SOFT TARGET WITH A HARD CEILING and D1.7 requires it to
-//                be documented as one — revision 3 asserted len(live) <= cap
-//                in three places, each of which would fail correct behaviour.
+// INVARIANT P-2: there is NO bound on len(live) expressed as a count. Under
+//                D1.5a the only bound is live memory, so the invariant is
+//                stated on the gate rather than on the number: NO instance is
+//                launched, and NO tab is opened, while the memory gate refuses
+//                (FR-057, FR-060). Revision 3 asserted len(live) <= cap and
+//                revision 4 asserted len(live) <= target+1; both named a
+//                quantity that no longer exists, and a test asserting either
+//                would now pass vacuously against a pool with no gate at all.
 // INVARIANT P-3: no manager path ever calls chromedp.WithNewBrowserContext or
 //                target.CreateBrowserContext. CDP browser contexts are retired
 //                entirely (FR-031); ADR-043 CRIT-003 is preserved by deletion.
@@ -751,11 +904,13 @@ type BrowserPool struct{ /* ... */ }
 // k. The evicted workspace keeps its profile and reopens signed in on next use.
 // Nothing surfaces to the agent or the operator (FR-050).
 //
-// If NOTHING is evictable it overshoots by exactly one, once, logging a WARN
-// naming the target and the workspace (FR-053). At target+1 a further request
-// WAITS for the first instance to become evictable, up to the caller's own
-// deadline, and only then returns a named error. That error is the single
-// place capacity is perceivable and it is deliberate.
+// If the memory gate refuses AND nothing is evictable, Acquire WAITS for an
+// instance to become evictable, up to the caller's own deadline, and only then
+// returns a named error identifying the workspace and naming MEMORY as the
+// constraint (FR-053). That error is the single place capacity is perceivable
+// and it is deliberate. It must NOT name a cap or advise raising one: D1.5a
+// deleted every counter, so an operator told to raise a limit would go looking
+// for a setting that does not exist.
 //
 // Before the launch it runs cleanStaleSingletons against k's OWN profile dir
 // (FR-042b) — the shipped call passes cfg.ProfileDir only
@@ -764,26 +919,35 @@ type BrowserPool struct{ /* ... */ }
 // FR-043's "the profile survives so the login survives" false in the one case
 // it exists for.
 //
-// Admission is additionally gated on real memory pressure where the platform
-// provides the signal (FR-057). Where the pressure gate and eviction disagree
-// — pressure high AND nothing evictable — the pool does NOT invent a rule:
-// see FR-057 and §0.5 E-2.
+// Admission is gated on real memory pressure — and under D1.5a that is the
+// ONLY admission control there is (FR-057). Where the gate and eviction
+// disagree — pressure high AND nothing evictable — the ADR RULES it: the
+// pressure gate is a HARD stop and refuses. §0.5 E-2 is answered, not open.
+//
+// A launch additionally requires PER_BROWSER_COST of headroom (FR-062, ~182 MB
+// measured on macOS for an IDLE Chrome for Testing; a capturing instance costs
+// more by an unmeasured delta). Launching an instance that cannot then load a
+// page is a refusal disguised as a success.
 func (p *BrowserPool) Acquire(ctx context.Context, k BrowsingKey) (*chromeInstance, error)
 
-// Target returns the currently derived instance target and the operator
-// ceiling that clamped it (FR-056). Both are reported because "why is it 3?"
-// is otherwise unanswerable from outside, and because the WARNs in FR-053 and
-// FR-054 must name the number the operator can actually change.
+// NO Target(). Revision 4 specified
 //
-// target = clamp(pool_budget / per_instance, 1, operator_ceiling), where
-//   budget       = min(host_RAM, cgroup_limit) * 0.5
-//   pool_budget  = budget - gateway_reserve
-//   per_instance = FIXED_FLOOR + (R * 85MB) + encoder_page
-// with FIXED_FLOOR from G-1, gateway_reserve measured in the same pass, R from
-// FR-055, and encoder_page counted for WATCHED instances only. NO HARDCODED
-// DEFAULT SHIPS (D1.5): tools.browser.max_browsers is the CEILING, not the
-// value. Recomputed on reload, never on a per-request basis.
-func (p *BrowserPool) Target() (target, operatorCeiling int)
+//   target = clamp((min(host_RAM, cgroup_limit)*0.5 - gateway_reserve)
+//                  / (FIXED_FLOOR + R*85MB + encoder_page), 1, operator_ceiling)
+//
+// and ADR-072 D1.5a deletes every term of it: max_browsers and
+// operator_ceiling were never built, R and --renderer-process-limit are never
+// built, and the 85 MB per-renderer constant is WITHDRAWN on measured evidence
+// (30 MB -> 327 MB in one snapshot, an 11x spread, so no constant works). Do
+// not reintroduce a derived instance count. FR-056 is tombstoned (§0.6).
+//
+// What the pool DOES expose is the live figure the gate actually reads, so
+// "why was I refused?" is answerable from outside:
+//
+// Headroom reports the current available-memory reading and the gate's
+// verdict, from the same source FR-057 admits on. It is a report, never a
+// budget: nothing derives an instance count from it.
+func (p *BrowserPool) Headroom() (availableBytes uint64, pressureRatio float64, admits bool)
 
 // Close shuts down k's Chrome and releases its pool entry. Idempotent. The
 // process-disposal path for idle close, eviction, workspace deletion, roster
@@ -888,14 +1052,15 @@ func (m *BrowserManager) InFlight() int
 ### 3.2 Streams
 
 **Stream A — Key + tab ownership + resolution + per-Execute manager binding [CRITICAL PATH, not gated].**
-Owns `key.go`, `resolve.go` (new); `TabOwner` and `sessionKey` (**FR-048**) and the per-agent `MaxTabs` re-scope (**FR-049**); `ManagerResolver` and the `RegisterTools` signature change plus all 11 tool structs (FR-002a); the `browserMgrs` re-key and `BrowserManagerForKey`/`BrowserManagerForAgent` (`loop.go`); **`controlledResult`'s re-key (FR-002c — it is on the resolution path, not the lease path)**; all 37 `DefaultSessionID` consumers (FR-002b) and the constant's deletion; the reload-prune predicate and per-key idempotent registration (FR-026a, FR-026b); the `loop.go:270-279` comment's replacement (FR-002d).
+Owns `key.go`, `resolve.go` (new); `TabOwner` and `sessionKey` (**FR-048**); **the counter deletion (FR-059)** — `tools.browser.max_tabs`, `tools.browser.max_total_tabs`, `TryOpenTab`/`ReleaseTab`/`reservedTabs`/`totalOpenTabsLocked`/`SetMaxTotalTabs`, `reserveGlobalTab`/`releaseGlobalTab`, their call sites and their 59 test-side references (§0.6); `ManagerResolver` and the `RegisterTools` signature change plus all 11 tool structs (FR-002a); the `browserMgrs` re-key and `BrowserManagerForKey`/`BrowserManagerForAgent` (`loop.go`); **`controlledResult`'s re-key (FR-002c — it is on the resolution path, not the lease path)**; all 37 `DefaultSessionID` consumers (FR-002b) and the constant's deletion; the reload-prune predicate and per-key idempotent registration (FR-026a, FR-026b); the `loop.go:270-279` comment's replacement (FR-002d).
 **FR-048 is not separable from FR-001 and must land in the same commits.** A commit that re-keys `browserMgrs` without carrying the agent dimension on the tab set ships a state D1.9a forbids — every agent on a workspace sharing one tab set — and it ships it *silently*, because every map-level test still passes (§0.2a).
+**FR-059 is not separable from FR-001 either, and for the mirror-image reason.** A commit that re-keys `browserMgrs` while `cfg.MaxTabs` is still enforced ships a 5-tab cap for a whole team; a commit that deletes the counters while the managers are still per-agent removes the only bound before the memory gate exists. **FR-059 lands with FR-001, and FR-060's gate lands in the same commit as FR-059's deletion** — the five `totalTabCountLocked` call sites are vacated and re-occupied in one change, never left empty across a commit boundary.
 Depends on: nothing. Interface out: §3.1.
 
 **Stream P — Browser-process pool [GATED on G-1 + G-2 + G-6; largest].**
-Owns `pool.go`; the coordinator's decomposition into per-key instances; per-key profile dirs (**flat `ws-<id>`**), launch locks and ownership markers (FR-037, FR-037a, FR-042); the **derived** target and the operator ceiling (FR-056), the renderer floor (FR-055), the edge semantics (FR-038, FR-038a) and the **LRU eviction policy with its two guards** (FR-050, FR-051, FR-052); the bounded `+1` overshoot and its ceiling error (FR-053); thrash detection (FR-054); the memory-pressure admission gate and its two Chromium unknowns (FR-057, FR-057a); whole-Chrome idle close with its config key, caller and post-close state (FR-040, FR-040a); boot marker reconciliation via the **launch lock** (FR-042a) and per-key stale-singleton cleanup (FR-042b); per-Chrome crash containment, replacing `watchForCrash`'s reset-everything behaviour (FR-041); profile-based reload survival replacing ADR-043 CRIT-002's context re-adoption (FR-043), the profile's deletion path (FR-043a) and the **upgrade rule** — no workspace inherits the existing global profile (FR-043b); boot preprovision decoupled from `BrowserManagers()` (FR-016c); retirement of `capture_shared_context`, `disposeBrowserContextRaw`, `contextCount()` and the CDP-context branch of `Register` (FR-031).
+Owns `pool.go`; the coordinator's decomposition into per-key instances; per-key profile dirs (**flat `ws-<id>`**), launch locks and ownership markers (FR-037, FR-037a, FR-042); the admission edge semantics (FR-038, FR-038a) and the **LRU eviction policy with its two guards** (FR-050, FR-051, FR-052); the **memory refusal** and its one named error (FR-053); thrash detection (FR-054); the **memory-pressure admission gate — the only admission control there is** — at launch *and* at tab open, its two Chromium unknowns, its no-silent-no-op requirement and the measured launch minimum (FR-057, FR-057a, **FR-060**, **FR-061**, **FR-062**); *(no `max_browsers`, no operator ceiling, no `--renderer-process-limit`, no per-renderer constant — FR-055 and FR-056 are tombstoned by D1.5a, §0.6)*; whole-Chrome idle close with its config key, caller and post-close state (FR-040, FR-040a); boot marker reconciliation via the **launch lock** (FR-042a) and per-key stale-singleton cleanup (FR-042b); per-Chrome crash containment, replacing `watchForCrash`'s reset-everything behaviour (FR-041); profile-based reload survival replacing ADR-043 CRIT-002's context re-adoption (FR-043), the profile's deletion path (FR-043a) and the **upgrade rule** — no workspace inherits the existing global profile (FR-043b); boot preprovision decoupled from `BrowserManagers()` (FR-016c); retirement of `capture_shared_context`, `disposeBrowserContextRaw`, `contextCount()` and the CDP-context branch of `Register` (FR-031).
 **Also owns FR-034a — the final description literals** (§3.3), which must land in the same commit as FR-037 and not before.
-Depends on: A's key type **and A's `TabOwner`** — a pool whose instances hold merged tab sets cannot be un-merged later without touching every call site again. **Do not start before G-2 passes.**
+Depends on: A's key type, **A's `TabOwner`** — a pool whose instances hold merged tab sets cannot be un-merged later without touching every call site again — **and A's FR-059/FR-060 pair**, because between the counters' deletion and the gate's arrival there is no bound at all. **Do not start before G-2 passes.**
 
 **Stream C — Two-state tabs + descriptions (D1.12) [depends on A].**
 Owns `ListTabsState` + `ListTabs` delegation (`manager.go:1605-1613`); `ListTabsTool.Execute` (`tabs.go:48-68`); the five model-visible strings, their **interim** replacement literals (FR-015, FR-034 — §3.3), and the two Go comments (`tabs.go:19,186`). Its payload must also say **whose** tabs it is reporting (FR-048): the agent's own set and the workspace's operator-owned set are distinguishable, because "whose tab is this" is the question ADR §1.1 records being answered wrong.
@@ -959,13 +1124,14 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 14. **Live panel.** Every gateway surface resolves the manager that owns the browser that agent's turns use for the attaching chat session — and when it cannot, says *which* reason (FR-008a).
 15. **Reload.** A Settings save mid-browse leaves each workspace's Chrome pid unchanged and its login intact.
 16. **Audit, per action.** Browser creation is recorded once; **every write-class browser tool call** is recorded with workspace id, agent id, tool name and target host. Read-only tools are not audited per call. First-use-only auditing is **rejected by name** in D2.11 — it fires once per agent per workspace and says nothing about the tenth action, or about which agent made the purchase (FR-027). Every event name matches `^[a-z_]+$`; a dotted name blanks the entire Audit Log viewer (FR-058, issue #667).
-17. **The cap manages itself.** When the target is reached, a request for a **new** workspace's browser **evicts the least recently used evictable instance and launches**. Nothing surfaces to the agent or the operator. The evicted workspace reopens on next use **still signed in**, from its profile on disk, paying start-up latency only. An instance with a live viewer, or with a browser tool call in flight, is never the victim (FR-050, FR-051, FR-052).
-17a. **The ceiling, and the one place capacity is visible.** If every instance is simultaneously watched **and** busy, the pool exceeds the target by **exactly one, total** — not one per request — and logs a WARN. A further request in that state waits for an instance to become evictable, up to the tool call's own deadline, and only then fails with a named error. `tools.browser.max_browsers` is documented as a **soft target with a hard ceiling of +1**, because a field described as a hard limit that silently overshoots is its own defect (FR-053).
-17b. **Thrash is reported, not experienced.** If more workspaces browse concurrently than the target allows, each one pays a cold start continuously with nothing on screen to explain it. The pool detects the evict-then-reopen cycle and logs **one** WARN naming the target, the contending workspaces and the remedy (FR-054).
+17. **Memory is the only limit, and it manages itself.** There is no cap of any kind — no `max_tabs`, no `max_total_tabs`, no `max_browsers` (D1.5a, §0.6). When memory pressure says stop and something is reclaimable, a request for a **new** workspace's browser **evicts the least recently used evictable instance and launches**. Nothing surfaces to the agent or the operator. The evicted workspace reopens on next use **still signed in**, from its profile on disk, paying start-up latency only. An instance with a live viewer, or with a browser tool call in flight, is never the victim (FR-050, FR-051, FR-052).
+17a. **The one place capacity is visible, and it names memory.** If memory pressure is above the gate's threshold **and** nothing is evictable, the request **waits** for an instance to become evictable, up to the tool call's own deadline, and only then fails with a named error identifying the workspace and naming **memory** as the constraint (FR-053). It must not name a cap or advise raising one — there is none to raise, and an operator sent looking for a setting that does not exist is worse off than one told the truth. *(The pressure gate is a **hard** stop: ADR D1.5a, answering §0.5 E-2.)*
+17b. **Thrash is reported, not experienced.** If more workspaces browse concurrently than live memory allows, each one pays a cold start continuously with nothing on screen to explain it. The pool detects the evict-then-reopen cycle and logs **one** WARN naming the contending workspaces, the memory figure that forced the eviction, and what the operator can actually do — **run fewer workspaces concurrently, or give the host more memory.** There is no configuration remedy (FR-054).
+17c. **A tab loop is stopped by the same gate.** Opening a tab inside an already-running browser goes through the **same** memory check as launching one. There is no counter left to catch a runaway `browser_open_tab` loop, and it never reaches a launch decision, so the gate is at the tab-open sites too (FR-060).
 18. **Crash containment.** One workspace's Chrome dying leaves every other workspace's browsing unaffected — its tabs, its panel and its logins survive.
-19. **Idle close.** A workspace browser with no tabs and no viewers for longer than `tools.browser.idle_close_ttl` (default 15 minutes) is closed entirely, releasing its process; its profile — and therefore its logins — remains on disk. The next tool call for that workspace relaunches Chrome from that profile and is **still logged in**.
+19. **Idle close, at both levels, and it is load-bearing.** An idle **tab** is reaped after `tools.browser.idle_ttl` (default 5 minutes, `manager.go:130-134`). A workspace **browser** with no tabs and no live viewers for longer than `tools.browser.idle_close_ttl` (default 15 minutes) is closed entirely, releasing its process; its profile — and therefore its logins — remains on disk, and the next tool call for that workspace relaunches Chrome from it **still logged in**. **Under D1.5a these two are not housekeeping.** With every counter deleted, idle close and the memory gate are the entire defence, so a reaper that silently stops running is not a leak to clean up later — it is the removal of one of two controls (FR-061).
 20. **Unattended work cannot hang.** An `ask`-policy tool reached from a delegated sub-turn is **denied**, not queued against an operator who is not there (FR-032, #659).
-21. ~~**A full pool has a way out.**~~ **WITHDRAWN with FR-046 (D1.7).** There is no refusal to escape from on the normal path: the pool evicts. Raising `tools.browser.max_browsers` still applies on reload without a restart, but it raises the **ceiling** on a derived value (FR-056), so it is not always the binding term — and nothing in the product tells an operator to do it except FR-054's thrash WARN, which is the honest place for that advice.
+21. ~~**A full pool has a way out.**~~ **WITHDRAWN with FR-046 (D1.7), and now doubly so (D1.5a).** There is no refusal to escape from on the normal path: the pool evicts. Revision 4 left "raise `tools.browser.max_browsers`" as the residual advice; **that key is never built** (FR-056 tombstoned), so the only honest remedies are fewer concurrent workspaces or more host memory, and FR-054's thrash WARN is the one place the product says so.
 22. **A crashed gateway leaves nothing behind.** After a `kill -9`, the next boot leaves zero orphan Chromes and zero stale ownership markers under `$OMNIPUS_HOME`, and every workspace's next browser call relaunches cleanly from its own profile — no stale `SingletonLock` refusal.
 23. **Deleting a workspace deletes its logins.** Deleting a workspace closes its Chrome **and removes its profile directory**. The client's cookies and tokens do not outlive the workspace. Idle close, roster change, reload and crash recovery never delete a profile.
 24. **Adding an agent to a team says what it grants.** The Workspace → Team UI states, at the point of adding, that the agent gains every live browser session on that workspace — including on turns nobody is watching.
@@ -979,7 +1145,9 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - The system must **not** give a delegated sub-turn a separate browser, a separate key, or a signed-out jar. That was reversed by ruling; reintroducing it is a design change requiring a new ADR entry, not an optimisation.
 - The system must **not** address a tab set by `BrowsingKey` alone. Every tab operation names a `TabOwner` (FR-048). A call site that resolves a browser and then reads "the" tab set has merged the team's tabs, and it does so without failing any map-level test — which is why this is a non-behaviour rather than a note (§0.2a).
 - The system must **not** let one agent see, list, switch to, drive or close another **agent's** tab. Only the workspace-owned (operator-opened) set crosses agents (D1.9a).
-- The system must **not** silently convert `tools.browser.max_tabs` from a per-agent cap into a per-workspace one. Its own config doc calls it the per-agent cap (`config.go:3662-3663`); FR-049 keeps that true.
+- The system must **not** keep, reintroduce, or replace any tab or browser **counter**. `tools.browser.max_tabs`, `tools.browser.max_total_tabs` and the `TryOpenTab`/`ReleaseTab`/`reservedTabs` machinery are **deleted from the code**, and `max_browsers`/`operator_ceiling` are never built (D1.5a, FR-059). A refusal derived from a count — of tabs, of browsers, of renderers — is forbidden anywhere on the admission path; the only refusal is memory's.
+- The system must **not** leave the five vacated `cfg.MaxTabs` enforcement sites empty. `createFirstTab` (`manager.go:1139`), `OpenTab` (`:2005`, `:2047`) and `adoptTarget` (`:2216`, `:2286`) are exactly where a runaway tab loop lives, and FR-060's memory gate takes the counter's place there **in the same commit** (FR-059).
+- The system must **not** ship the memory gate or the idle reapers disabled, "best effort", or behind an off-by-default flag on any platform. They are the entire defence (FR-061); a gap in either is not a degraded limit, it is no limit. Where a platform provides no pressure signal, that must be **stated** the way D1.9 states the orphan-termination asymmetry — never papered over with a conservative constant, because there is no constant left to be conservative with.
 - The system must **not** construct a `BrowsingKey` anywhere except `ResolveBrowsingKey`, and must **not** add a second key shape.
 - The system must **not** let any tool struct hold a `*BrowserManager` captured at registration (FR-002a).
 - The system must **not** leave any consumer of `DefaultSessionID` behind; the constant is **deleted, not deprecated** (FR-002b).
@@ -998,8 +1166,9 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - The system must **not** hold `m.mu` or `pool.mu` across `acquireWrite`, a Chrome launch, or any CDP call.
 - The system must **not** change the `browser-webrtc[<agent>]` log label to a workspace label — cosmetic, and the agent is still the useful identity in a log line (round-1 review O3).
 - The system must **not** re-key the `serve_web` preview URL. Out of scope, ADR §6 open.
-- The system must **not** ship a `max_browsers` **value** at all. `tools.browser.max_browsers` is an operator **ceiling** clamping a value derived per host from D1.5's formula; no hardcoded default ships, and a shipped ceiling that is not backed by G-1's arithmetic in the PR body is a finding (FR-056, FR-044).
-- The system must **not** treat `--renderer-process-limit` as a memory tuning knob. R is a **floor** derived from how many distinct sites a workspace may hold open at once (D1.6). If the arithmetic yields fewer than one browser on a small host, the answer is to lower the **tab** budget, never R — a memory knob must not be allowed to put the operator's signed-in bank tab and a page an agent found into the same renderer.
+- The system must **not** ship `tools.browser.max_browsers` at all — not as a value, not as a ceiling. FR-056 is tombstoned by D1.5a; there is no derived instance target and no clamp on one (§0.6).
+- The system must **not** pass `--renderer-process-limit` on any launch. Chrome's default site-per-process isolation is retained in full, which is why the round-2/round-3 finding about it is **dissolved rather than mitigated** (§0.6). Reintroducing the flag as a memory knob would put the operator's signed-in bank tab and a page an agent found into the same renderer, against a `ValidateURL` (`manager.go:685-708`) that permits any public URL.
+- The system must **not** derive any capacity quantity from a per-renderer or per-tab byte constant. The 85 MB figure is withdrawn on measured evidence — 30 MB to 327 MB in one snapshot — and a tab is not a renderer (2 tabs against 13 renderer processes in the same snapshot). Capacity is read live (FR-057, FR-062).
 - The system must **not** count a viewer as attached once its transport has been silent past the WebRTC liveness window. Under eviction that is not a leak but a deadlock: one abandoned panel makes a slot permanently unreclaimable (FR-052).
 - The system must **not** emit an audit event whose name fails `^[a-z_]+$`. The Audit Log viewer's contract enforces the pattern (`contracts/components/schemas/AuditEntry.yaml:17`) and a dotted name blanks the **whole** viewer, not just its own row (FR-058, #667).
 
@@ -1007,11 +1176,11 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 
 ## 6. Integration boundaries
 
-- **Chrome processes / CDP.** The count of live Chromes now scales with **workspaces being actively browsed**, bounded by `max_browsers` (FR-038). Each is launched over the pipe transport (`exec_resolver.go`, `cdppipe`) with its own `--user-data-dir`. A launch failure surfaces as a tool error naming the workspace — never a silent join to another workspace's browser. **CDP browser contexts are no longer created at all** (FR-031).
+- **Chrome processes / CDP.** The count of live Chromes now scales with **workspaces being actively browsed**, bounded by **live memory and nothing else** (FR-057; D1.5a deleted every counter). Each is launched over the pipe transport (`exec_resolver.go`, `cdppipe`) with its own `--user-data-dir`. A launch failure surfaces as a tool error naming the workspace — never a silent join to another workspace's browser. **CDP browser contexts are no longer created at all** (FR-031).
 - **Sandbox (Landlock/seccomp).** No new network surface: CDP flows over inherited fds 3/4, and the fixed DevTools port allow-rule was already removed (`pkg/gateway/sandbox_apply.go:412-417`). What *is* new is **N profile directories**, so the filesystem allow-list must cover `<profileRoot>/` as a subtree — the per-key dirs are `ws-<id>` siblings of `cfg.ProfileDir` under it, not a `ws/` sub-tree (`profileRoot = filepath.Dir(cfg.ProfileDir)`; §3.1). Verify against `sandbox_apply.go`'s path rules before the pool lands — this is the one sandbox interaction that is genuinely new.
-- **Host memory, and the unit that actually varies.** The binding cost, and the reason for the cap. G-1 (FR-044) measures `FIXED_FLOOR` in **PSS**; ADR-043's "≈4–5 GB at ten" is unmeasured and per-agent, so it must not be quoted as the figure, and neither may the retracted 1118 MB RSS reading (ADR §8). **The planning unit is the renderer process, not the tab and not the instance:** page type varies more than 20× (an idle article ≈15 MB PSS, a mail client 120–180 MB, video at 1080p 222–341 MB), and under site-per-process a tab is not a process — a cross-site embed can claim its own renderer while same-site embeds collapse into one. That is why the cap is expressed in renderers (FR-055) and why FR-057's pressure gate exists: the formula only has to be approximately right if something catches the tail.
-- **Chrome computes its own renderer limit, and that limit does not compose.** Chromium's `render_process_host_impl.cc` budgets `85 MB` per renderer against half of physical RAM, clamped to at least 3. On the measured 3916 MB box that is `3916 / 2 / 85 = 23` renderers **per Chrome** — four workspaces would each independently permit 23, i.e. ~92 renderers, every one sanctioned by Chrome. **The pool must impose its own bound because Chrome's does not add up.** This is the single largest consequence of going from one Chrome to N and nothing in ADR-043 anticipates it. Whether Chromium even reads a cgroup limit when computing that budget is **unverified in either direction** — gate G-3.
-- **`pkg/config`'s memory readers are the reuse, and they are unexported.** `autoDetectMaxParallel` already sizes a concurrency cap as `availableRAMBytes() / bytesPerAgent`, clamped, and `availableRAMBytes` (`config.go:656-661`) already takes `min(/proc/meminfo MemAvailable, cgroup limit − usage)` over `readMemTotalBytes` / `readCgroupV2LimitBytes` / `readCgroupV1LimitBytes` (`pkg/config/meminfo_linux.go`, with a `meminfo_other.go` non-Linux stub and existing fixture tests). **All of it is unexported, so `pkg/tools/browser` cannot call it as written.** FR-056 states which way that is resolved — `pkg/config` exports a memory-budget accessor — rather than assuming a helper is reachable, because a spec that assumes an unexported symbol is callable is a plan that does not compile.
+- **Host memory, and why there is no planning unit at all any more.** The binding cost, and now the *only* control. **`PER_BROWSER_COST` is measured at ≈182 MB** (Chrome for Testing, macOS, idle, non-capturing — carry the scope, §0.6) and is the launch-headroom minimum (FR-062). Everything else is read live: page type varies more than 20× (an idle article ≈15 MB PSS, a mail client 120–180 MB, video at 1080p 222–341 MB), the measured renderer spread was **30 MB → 327 MB in one snapshot**, and a tab is not a renderer (2 tabs, 13 renderer processes). **So no per-renderer or per-tab constant is used, and no count is derived from memory** — FR-057 gates on the live figure and FR-060 puts the same gate in the tab-open path. ADR-043's "≈4–5 GB at ten" is unmeasured and per-agent; neither it nor the retracted 1118 MB RSS reading (ADR §8) may be quoted as a figure.
+- **Chrome computes its own renderer limit, and that limit does not compose.** Chromium's `render_process_host_impl.cc` budgets `85 MB` per renderer against half of physical RAM, clamped to at least 3. On the measured 3916 MB box that is `3916 / 2 / 85 = 23` renderers **per Chrome** — four workspaces would each independently permit 23, i.e. ~92 renderers, every one sanctioned by Chrome. **The pool must therefore impose its own bound, and under D1.5a that bound is the memory gate — not a counter of our own** (FR-057, FR-060). This is the single largest consequence of going from one Chrome to N and nothing in ADR-043 anticipates it. Whether Chromium even reads a cgroup limit when computing that budget is **unverified in either direction** — gate G-3, and a negative answer makes our gate the only real one, which is exactly what D1.5a already assumes.
+- **`pkg/config`'s memory readers are the reuse, and they are unexported.** `autoDetectMaxParallel` already sizes a concurrency cap as `availableRAMBytes() / bytesPerAgent`, clamped, and `availableRAMBytes` (`config.go:656-661`) already takes `min(/proc/meminfo MemAvailable, cgroup limit − usage)` over `readMemTotalBytes` / `readCgroupV2LimitBytes` / `readCgroupV1LimitBytes` (`pkg/config/meminfo_linux.go`, with a `meminfo_other.go` non-Linux stub and existing fixture tests). **All of it is unexported, so `pkg/tools/browser` cannot call it as written.** **FR-057 states which way that is resolved** — `pkg/config` exports a live memory-availability accessor — rather than assuming a helper is reachable, because a spec that assumes an unexported symbol is callable is a plan that does not compile. *(Revision 4 hung this on FR-056's formula; the formula is gone, the export requirement is not: the gate reads the same numbers.)*
 - **Workspace store** (`pkg/workspace/find_for_agent.go`): read-only. `FindForAgent` tie-breaks by sorted-first id (`:45-48`); `FindForAgentPreferring`'s fast path suppresses the ambiguity WARN (`:168-176`). FR-033 declines that tie-break for browsing keys and requires the WARN on **both** paths whenever it would have arbitrated.
 - **Fresh install.** A fresh install is **not** workspace-less: `ensureDefaultWorkspace` (`rest_workspaces.go:468`, called at `gateway.go:5013` on every boot) creates "My Workspace" with `defaultWorkspaceTeam(cfg)` = `coreagent.All() ∩ configured agents` (`rest_workspace_delegation.go:359-379`), which includes Jim and Ray — the two browser-policy-allowed agents. So the default path resolves. **The residual case is a custom agent**: the system deliberately never auto-adds a custom/pre-existing agent to any workspace team (ADR-046 FR-008, stated at `gateway.go:5018-5025`), so a custom browser-allowed agent resolves to nothing and must be told why (FR-008a, US-14). **That condition already has a shipped boot-time surface and US-14 reuses it rather than inventing a second vocabulary** (round-2 MIN-107): `logWorkspacelessAgents(homePath, cfg)` (`gateway.go:5026`, immediately after `ensureDefaultWorkspace` at `:5013`) exists precisely to list, once at boot, the agents that *"silently cannot execute at all until manually added via a workspace's Team tab"* (`gateway.go:5015-5025`). FR-008a's panel reason and `ErrNoBrowsingContext`'s text must name the **same** remedy in the **same** words as that log line, so an operator who sees both does not think they are two problems.
 - **Host memory and orphan Chromes.** The shipped ownership marker is consulted at **launch** time, not at boot: `acquireLaunchLockWithMarker` (`coordinator.go:1448-1482`) reads the marker and, if its pid is alive and owned by omnipus, **refuses to launch** with a named error rather than adopting or killing; if the pid is dead it clears the stale lock and retries. That is a reasonable single-Chrome story and it is not a boot-time story. With N markers it leaves N orphan Chromes consuming host memory that `LiveKeys()` cannot see, so the cap would bound this *process's* Chromes and not the *host's* — which is the only thing the cap is for. FR-042a adds the boot pass; §12 A20 records the kill-vs-warn trade-off it makes.

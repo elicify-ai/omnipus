@@ -361,7 +361,9 @@ Chrome to N, and nothing in ADR-043 anticipates it.
 
 #### Decision
 
-1. **Bound renderers per instance** with `--renderer-process-limit=R`. **R is a
+1. ~~**Bound renderers per instance** with `--renderer-process-limit=R`.~~
+   **SUPERSEDED by D1.5a** — the limit is deleted, not tuned. Retained below
+   only so the reasoning that led here is legible. **R is a
    floor derived from site isolation, not a memory knob** — see D1.6.
 2. **Derive the instance cap:**
 
@@ -384,7 +386,7 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    |---|---|
    | `gateway_reserve` | The gateway process's own steady-state PSS plus 25% headroom, measured on the same host in the same G-1 pass. Not a constant. |
    | `FIXED_FLOOR` | The **marginal** PSS of a second instance on `about:blank`. Unmeasured — G-1. It will be materially below the first instance's, because code pages are already resident. No trustworthy published figure exists for modern headless Chrome. |
-   | `encoder_page` | +1 renderer on any **watched** instance. The WebRTC encoder page (`pkg/tools/browser/capture_session.go:500`) is excluded from the visible tab budget but is **not** excluded from `--renderer-process-limit`. It must be budgeted explicitly or a watched workspace silently loses one of its R renderers to infrastructure. |
+   | `encoder_page` | +1 renderer on any **watched** instance. The WebRTC encoder page (`pkg/tools/browser/capture_session.go:500`) is excluded from the visible tab budget. **Under D1.5a there is no renderer limit to lose a slot to** — the encoder page now costs only its memory, which the live gate already counts. |
    | `operator_ceiling` | The config key `tools.browser.max_browsers`. Adopts `max_total_tabs`' shape: `<= 0` means unlimited. Reload-applied, no restart. |
 
    **No hardcoded default ships.** The shipped default is computed from the G-1
@@ -401,7 +403,7 @@ Chrome to N, and nothing in ADR-043 anticipates it.
 
 4. **`max_total_tabs` stays a global budget across all N Chromes**
    (`coordinator.go:118-128`, `<= 0` means unlimited), not a per-instance one.
-   It bounds total renderers across the pool; `--renderer-process-limit` bounds
+   **Superseded by D1.5a.** It bounds total renderers across the pool; `--renderer-process-limit` bounded
    them within one instance. The two are different guards and neither replaces
    the other.
 
@@ -525,8 +527,10 @@ Google's constant sits between the measurements and matches none of them:
 ```
 
 An **11× spread in one snapshot**. No single value works, so the capacity path
-uses **live measurement** and no per-renderer constant. `--renderer-process-limit`
-is retained for the **site-isolation** reason in D1.6, not as a pricing term.
+uses **live measurement** and no per-renderer constant. **`--renderer-process-limit`
+is not set at all** (D1.5a) — an earlier revision of this sentence said it was
+"retained for the site-isolation reason", which inverted the argument: the flag
+*weakens* site isolation, so not setting it is what preserves isolation.
 
 #### Renderer count is not tab count — measured, not inferred
 
@@ -610,6 +614,9 @@ install including a Chromium download and is not the relevant number for a
 relaunch from an existing profile.
 
 ### D1.6 Site isolation is a floor, not a knob
+
+**Superseded by D1.5a — the cost below is now AVOIDED, not accepted.** Kept
+because it is the reason the flag was deleted rather than tuned.
 
 `--renderer-process-limit` has a security cost: over-limit navigations reuse
 same-site processes, weakening site isolation for the pages beyond the limit.
@@ -1422,7 +1429,7 @@ Each of these blocks on G-1/G-2 (D1.4) landing first.
 | P5 | Idle close (D1.8) | An instance with zero tabs, zero viewers and no call in flight past `idle_close_ttl` is closed by the reaper sweep; its profile survives; the next tool call relaunches it, still signed in, on the **same** `*BrowserManager` |
 | P6 | Crash containment (D1.8) | `kill -9` one workspace's Chrome: that workspace recovers from its profile; **every other workspace's manager is not reset and its panel keeps streaming** |
 | P7 | `kill -9` the gateway, then boot | Zero orphan Chromes and zero stale markers remain |
-| P8 | **Site isolation (D1.6)** | Two cross-site tabs in one workspace occupy **distinct renderer processes** at the shipped `--renderer-process-limit` |
+| P8 | **Site isolation (D1.5a)** | Two cross-site tabs in one workspace occupy **distinct renderer processes**, and `--renderer-process-limit` appears **nowhere** in the launch flags — the flag is not set, so Chrome's default full site isolation applies |
 | P9 | **A second live gateway on the same `$OMNIPUS_HOME`** | The first gateway's Chromes **survive**. The second refuses to launch that key and names the other gateway. This is the test that distinguishes "reconcile orphans" from "kill the neighbour" (POSIX only — D1.9) |
 | P10 | Workspace deleted | Its profile directory is gone from disk, and no other workspace's profile is touched. Negative cases required: the profile is **present** after idle close, roster change, reload, and crash recovery |
 | P11 | Upgrade from an install with the existing global profile (D1.8) | No workspace inherits it. Every workspace starts logged out. `profiles/default/` is still on disk and unused |
@@ -1478,9 +1485,13 @@ than a wrong answer, and are worth writing first.
 - **Per-workspace profile disk growth.** N profiles with browser caches inside
   them, on a host whose root volume this project has already filled twice. No
   quota is specified (§6).
-- **Site isolation is now a shipped parameter.** `--renderer-process-limit`
-  weakens it above its bound; D1.6 makes it a floor rather than a tuning knob,
-  which means a small host gets fewer browsers rather than weaker isolation.
+- **Site isolation is NOT touched — a gain, not a consequence.** An earlier
+  revision made it "a shipped parameter" by bounding renderers, which weakens
+  isolation above the bound. **D1.5a deletes the flag**, so Chrome's default
+  full site isolation applies unchanged and the blocking review finding about
+  "semi-trusted destinations" being undefined against `ValidateURL`
+  (`manager.go:685-708`, which permits any public URL) is **dissolved rather
+  than mitigated**.
 - **Crash blast radius shrinks but changes shape.** One workspace's crash no
   longer takes down all browsing (D1.8) — but there are now N processes that can
   crash.
@@ -1704,6 +1715,7 @@ row nobody has acted on.
 | "isolation exists (ADR-043 D2); this ADR re-keys it" | **FALSE by default** | `CaptureSharedContext: true` (`pkg/config/defaults.go:671`) makes `Register` return an empty context id and log *"per-agent browser-context isolation is OFF"* (`coordinator.go:349-359`) | Header, D1.3 |
 | "Chrome's footprint is 1.15 GB; a second instance costs 400–500 MB" (stated to the operator, 2026-08-31) | **INFLATED 2.6×** | That was RSS, which charges shared program code to every process — 12 times over in that sample. Re-measured **PSS** on the same box, same moment: **434 MB**, not 1118 | D1.5 |
 | **The RSS retraction had a downstream consumer that still specifies RSS** | **OPEN** | `browser-workspace-ownership-spec.md`'s G-1 (line 56) mandates *"the marginal **RSS** of the Nth Chrome"* — the metric this log retracted, on the same day, in the same worktree. Its artefact list (SC-012) names `ps`, which cannot produce PSS; `smem` can | §9.1 |
+| D1.5a was appended without sweeping the three earlier sections it supersedes — §D1.5 item 1 and the sizing text still prescribed `--renderer-process-limit` after the ruling deleted it | **FIXED 2026-09-01** | The consolidation was supposed to end exactly this. It recurred within two hours, in my own edit, because I added a ruling as a new section instead of removing what it contradicted. Found by the D2 spec, not by me |
 | "the tool is `web_serve`" | **FALSE** | `const ToolNameWebServe = "serve_web"` (`pkg/tools/web_serve.go:46`). Wrong in this ADR, its round-1 review, and root `CLAUDE.md` | D2.5 |
 | **And the SPA still dispatches on the retired name** | **OPEN** | `src/components/chat/tools/WebServeUI.tsx:310` registers `makeWebServeUI('web_serve')` and `src/components/chat/ChatScreen.tsx:1037` matches `tc.tool === 'web_serve'`. Doc-only correction; the live defect is unfixed and unfiled | — |
 | "`browser_snapshot` inherits `browser_get_text`'s redaction posture" | **FALSE** | `RegisterSensitiveValues` appears zero times in `pkg/tools/browser/` | D2.11 |
