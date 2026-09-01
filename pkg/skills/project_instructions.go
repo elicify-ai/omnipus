@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // MaxInstructionsBytes bounds the composed project-instructions block
@@ -108,6 +109,16 @@ func ComposeProjectInstructions(mounts []ProjectInstructionMount) (composed stri
 	}
 	if cut > len(composed) {
 		cut = len(composed)
+	}
+	// Never cut mid-rune (ADR-072 Finding C). composed can contain multi-byte
+	// UTF-8 characters (em-dash, curly quotes, non-ASCII names) from a
+	// mount's CLAUDE.md/AGENTS.md, and a raw byte-offset slice can land
+	// inside one of them — producing invalid UTF-8 injected directly into
+	// the per-turn prompt block. Walk the cut point backward to the nearest
+	// rune boundary: composed[:cut] is only ever shortened further, never
+	// grown, so the byte budget (MaxInstructionsBytes) is never exceeded.
+	for cut > 0 && cut < len(composed) && !utf8.RuneStart(composed[cut]) {
+		cut--
 	}
 	composed = composed[:cut] + marker
 	return composed, true

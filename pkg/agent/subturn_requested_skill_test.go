@@ -13,6 +13,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -293,6 +295,115 @@ func TestDelegate_ParentGrantDoesNotAffectOutcome(t *testing.T) {
 	if calls, _ := fx.provider.snapshot(); calls != 0 {
 		t.Fatalf("mock provider Chat was called %d times — the parent's own grant must never let a "+
 			"target-ungranted requested_skill through to the child's first model call", calls)
+	}
+}
+
+// TestResolveRequestedSkillForChild_DirectOutcomes (ADR-072 Finding D) is a
+// function-level regression test for resolveRequestedSkillForChild itself,
+// covering all three outcomes plus the edge cases the top-level spawnSubTurn
+// tests above don't isolate (nil ContextBuilder, no skillsLoader, empty/
+// whitespace input). This is the direct-level counterpart to Finding D's
+// fix: resolveRequestedSkillForChild used to call the uncached, full-
+// directory-scanning SkillsLoader.ListSkills() TWICE on every denied/
+// not-found outcome — once implicitly inside cb.ResolveSkillName, once again
+// explicitly in the fallback loop. It now fetches the list ONCE
+// (cb.skillsLoader.ListSkills()) and reuses it for both the resolution
+// attempt (via the extracted cb.resolveSkillNameWithList helper) and the
+// fallback membership check — verified here by inspection of the single
+// remaining call site in resolveRequestedSkillForChild's body (subturn.go),
+// since SkillsLoader has no seam to inject a call-counting double without
+// changing production code for the sake of a test. This test instead proves
+// the fix did not change behaviour: every outcome the pre-fix double-scan
+// implementation produced is still produced identically.
+func TestResolveRequestedSkillForChild_DirectOutcomes(t *testing.T) {
+	t.Run("granted: slug installed and allowed", func(t *testing.T) {
+		workspace := t.TempDir()
+		writeSkill(t, workspace, "finance-news")
+		cb := NewContextBuilder(workspace).WithSkillAllowlist([]string{"finance-news"})
+
+		slug, outcome := resolveRequestedSkillForChild(cb, "finance-news")
+		if outcome != requestedSkillGranted {
+			t.Fatalf("outcome = %v, want requestedSkillGranted", outcome)
+		}
+		if slug != "finance-news" {
+			t.Fatalf("slug = %q, want %q", slug, "finance-news")
+		}
+	})
+
+	t.Run("granted: matched by display name, canonical slug returned", func(t *testing.T) {
+		workspace := t.TempDir()
+		writeSkillWithName(t, workspace, "deploy", "Deploy Helper")
+		cb := NewContextBuilder(workspace).WithSkillAllowlist([]string{"deploy"})
+
+		slug, outcome := resolveRequestedSkillForChild(cb, "Deploy Helper")
+		if outcome != requestedSkillGranted {
+			t.Fatalf("outcome = %v, want requestedSkillGranted", outcome)
+		}
+		if slug != "deploy" {
+			t.Fatalf("slug = %q, want canonical slug %q", slug, "deploy")
+		}
+	})
+
+	t.Run("denied: slug installed but not granted", func(t *testing.T) {
+		workspace := t.TempDir()
+		writeSkill(t, workspace, "finance-news")
+		cb := NewContextBuilder(workspace).WithSkillAllowlist([]string{"some-other-skill"})
+
+		slug, outcome := resolveRequestedSkillForChild(cb, "finance-news")
+		if outcome != requestedSkillDenied {
+			t.Fatalf("outcome = %v, want requestedSkillDenied", outcome)
+		}
+		if slug != "" {
+			t.Fatalf("slug = %q, want empty on denial", slug)
+		}
+	})
+
+	t.Run("unresolvable: slug matches nothing on any shelf", func(t *testing.T) {
+		workspace := t.TempDir()
+		cb := NewContextBuilder(workspace).WithSkillAllowlist(nil)
+
+		slug, outcome := resolveRequestedSkillForChild(cb, "totally-unresolvable-zzz")
+		if outcome != requestedSkillUnresolvable {
+			t.Fatalf("outcome = %v, want requestedSkillUnresolvable", outcome)
+		}
+		if slug != "" {
+			t.Fatalf("slug = %q, want empty when unresolvable", slug)
+		}
+	})
+
+	t.Run("nil ContextBuilder is unresolvable, not a panic", func(t *testing.T) {
+		slug, outcome := resolveRequestedSkillForChild(nil, "anything")
+		if outcome != requestedSkillUnresolvable || slug != "" {
+			t.Fatalf("got (%q, %v), want (\"\", requestedSkillUnresolvable)", slug, outcome)
+		}
+	})
+
+	t.Run("empty/whitespace requested is unresolvable", func(t *testing.T) {
+		workspace := t.TempDir()
+		writeSkill(t, workspace, "finance-news")
+		cb := NewContextBuilder(workspace).WithSkillAllowlist([]string{"finance-news"})
+
+		for _, in := range []string{"", "   "} {
+			slug, outcome := resolveRequestedSkillForChild(cb, in)
+			if outcome != requestedSkillUnresolvable || slug != "" {
+				t.Fatalf("input %q: got (%q, %v), want (\"\", requestedSkillUnresolvable)", in, slug, outcome)
+			}
+		}
+	})
+}
+
+// writeSkillWithName creates workspace/skills/<slug>/SKILL.md with a display
+// name distinct from the slug, so a resolution test can prove display-name
+// matching returns the canonical slug rather than the free-form name.
+func writeSkillWithName(t *testing.T, workspace, slug, displayName string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "skills", slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: " + displayName + "\ndescription: A test skill with a sufficiently long description to validate.\n---\n\n# " + slug + "\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

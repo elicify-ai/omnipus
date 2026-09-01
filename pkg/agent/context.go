@@ -1712,7 +1712,25 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 		return "", false
 	}
 
-	resolved, ok, collision := skills.ResolveSkillName(cb.skillsLoader.ListSkills(), cb.skillAllowed, cb.projectShelf, name)
+	resolved, ok := cb.resolveSkillNameWithList(cb.skillsLoader.ListSkills(), name)
+	if !ok {
+		return "", false
+	}
+	return resolved.Slug, true
+}
+
+// resolveSkillNameWithList is ResolveSkillName's core, parameterized on an
+// already-fetched ListSkills() result instead of calling cb.skillsLoader.
+// ListSkills() itself. SkillsLoader.ListSkills() is an uncached, full
+// directory scan (ADR-072 Finding D), so a caller that must ALSO inspect the
+// installed-skill list for a reason ResolveSkillName's single ok bool cannot
+// express — e.g. pkg/agent/subturn.go's resolveRequestedSkillForChild, which
+// needs to distinguish "denied" from "not found" on a failed resolution —
+// can fetch the list once and pass it to both this method and its own
+// fallback check, rather than triggering two full scans back-to-back on
+// every failed delegate.run requested_skill.
+func (cb *ContextBuilder) resolveSkillNameWithList(allSkills []skills.SkillInfo, name string) (skills.ResolvedSkill, bool) {
+	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.skillAllowed, cb.projectShelf, name)
 	if !ok {
 		// FR-9.4/ADR-072 D4: an installed-but-ungranted registry/builtin slug
 		// (or one that exists on no shelf at all) cannot be resolved — so it
@@ -1724,7 +1742,7 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 				"agent_id": cb.agentID,
 				"skill":    name,
 			})
-		return "", false
+		return skills.ResolvedSkill{}, false
 	}
 	if collision != nil {
 		logger.WarnCF("agent", "skill slug collision on resolution; higher-precedence shelf won",
@@ -1734,7 +1752,7 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 				"winner":   collision.WinnerDescription,
 			})
 	}
-	return resolved.Slug, true
+	return resolved, true
 }
 
 // GetSkillsInfo returns information about loaded skills.

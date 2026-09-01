@@ -118,6 +118,54 @@ func TestResolveSkillName_DeniesUngrantedRegistrySlug(t *testing.T) {
 	assert.Equal(t, ResolvedSkill{}, resolvedCased)
 }
 
+// TestResolveSkillName_ProjectShelfMatchesByDisplayName (ADR-072 Finding B)
+// verifies ResolveSkillName's own doc comment promise — matching "a skill
+// slug (or its display name — matched case-insensitively against either)
+// uniformly across shelves" — actually holds for the project shelf, not just
+// the registry/builtin branch. A project skill whose SKILL.md sets a `name:`
+// distinct from its directory slug must be resolvable by that display name,
+// exactly as a registry/builtin skill already is.
+func TestResolveSkillName_ProjectShelfMatchesByDisplayName(t *testing.T) {
+	mountRoot := t.TempDir()
+	skillDir := filepath.Join(mountRoot, ".claude", "skills", "deploy")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	content := "---\nname: Deploy Helper\ndescription: Use when deploying this project\n---\n\n# Deploy Helper\n"
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600))
+
+	projectShelf, collisions := MergeProjectSkills([]ProjectMount{{Name: "repo", Root: mountRoot}})
+	require.Empty(t, collisions)
+	require.Contains(t, projectShelf, "deploy")
+	require.Equal(t, "Deploy Helper", projectShelf["deploy"].Name)
+
+	denyAll := func(string) bool { return false }
+
+	// Resolving by the display name — not the slug — must succeed and return
+	// the canonical slug, mirroring the registry/builtin branch's contract
+	// (ResolvedSkill.Slug is always the canonical slug, never the free-form
+	// display name, even when the caller searched by display name).
+	resolved, ok, collision := ResolveSkillName(nil, denyAll, projectShelf, "Deploy Helper")
+	require.True(t, ok, "a project skill must resolve by its display name, not just its slug")
+	assert.Nil(t, collision)
+	assert.Equal(t, "deploy", resolved.Slug)
+	assert.Equal(t, ShelfProject, resolved.Shelf)
+	assert.Equal(t, "repo", resolved.MountName)
+
+	// Case-insensitive, per the doc comment.
+	resolvedCased, okCased, _ := ResolveSkillName(nil, denyAll, projectShelf, "deploy helper")
+	require.True(t, okCased)
+	assert.Equal(t, "deploy", resolvedCased.Slug)
+
+	// The slug itself must still resolve too (display-name matching is
+	// additive, not a replacement for the existing slug lookup).
+	resolvedBySlug, okBySlug, _ := ResolveSkillName(nil, denyAll, projectShelf, "deploy")
+	require.True(t, okBySlug)
+	assert.Equal(t, "deploy", resolvedBySlug.Slug)
+
+	// A name that matches neither slug nor display name still fails.
+	_, okMiss, _ := ResolveSkillName(nil, denyAll, projectShelf, "nonexistent")
+	assert.False(t, okMiss)
+}
+
 // TestResolve_DanglingRegistryGrantDoesNotShadowProjectSkill (test 51g,
 // MAJ-003, FR-028a) verifies the one-sided nature of D4.2's carve-out: it
 // protects a slug the agent's grant currently REACHES (i.e. still installed),

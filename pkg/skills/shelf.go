@@ -102,9 +102,15 @@ func ResolveSkillName(registryAndBuiltin []SkillInfo, allowed func(slug string) 
 
 	// No granted registry/builtin match — either absent entirely (including
 	// a dangling grant for an uninstalled slug, FR-028a) or present but not
-	// granted. Fall through to the project shelf, keyed by slug alone.
+	// granted. Fall through to the project shelf: slug first, then display
+	// name (lookupByName, ADR-072 Finding B fix) so this shelf matches "a
+	// skill slug (or its display name)" exactly like the registry/builtin
+	// branch above, per this function's own doc comment.
 	if projectShelf != nil {
 		if ps, ok := projectShelf[strings.ToLower(trimmed)]; ok {
+			return ResolvedSkill{Slug: ps.ID, Shelf: ShelfProject, Path: ps.Path, MountName: ps.MountName}, true, nil
+		}
+		if ps, ok := projectShelf.lookupByName(trimmed); ok {
 			return ResolvedSkill{Slug: ps.ID, Shelf: ShelfProject, Path: ps.Path, MountName: ps.MountName}, true, nil
 		}
 	}

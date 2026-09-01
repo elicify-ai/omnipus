@@ -208,6 +208,33 @@ func realWithinRoot(rootReal, candidate string) (real string, ok bool) {
 	return real, strings.HasPrefix(real, rootReal+string(filepath.Separator))
 }
 
+// lookupByName returns the project skill in the shelf whose display name
+// case-insensitively matches name, or ok=false (ADR-072 Finding B fix).
+// ResolveSkillName's doc comment promises matching "a skill slug (or its
+// display name — matched case-insensitively against either) uniformly across
+// shelves"; the registry/builtin branch already checks both s.ID and s.Name,
+// but the project shelf was keyed and matched by slug alone, so a mount's
+// SKILL.md with a `name:` distinct from its directory slug was unreachable by
+// that name via any path (agent, /<skill>, delegate's requested_skill). This
+// closes that gap, matching the registry/builtin branch's behaviour exactly.
+//
+// Iterates in deterministic (sorted slug) order so a display-name collision
+// between two project skills always resolves to the same winner rather than
+// depending on Go's randomised map iteration order.
+func (shelf ProjectShelf) lookupByName(name string) (ProjectSkill, bool) {
+	keys := make([]string, 0, len(shelf))
+	for k := range shelf {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if strings.EqualFold(shelf[k].Name, name) {
+			return shelf[k], true
+		}
+	}
+	return ProjectSkill{}, false
+}
+
 // MergeProjectSkills combines every mount's discovered project skills into
 // one per-workspace project shelf (D4.1 rank 1). A cross-mount slug collision
 // — two mounts on the same workspace carrying the same slug — resolves by

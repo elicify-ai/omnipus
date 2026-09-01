@@ -620,10 +620,17 @@ func resolveRequestedSkillForChild(cb *ContextBuilder, requested string) (canoni
 	if cb == nil || cb.skillsLoader == nil || trimmed == "" {
 		return "", requestedSkillUnresolvable
 	}
-	if slug, ok := cb.ResolveSkillName(trimmed); ok {
-		return slug, requestedSkillGranted
+	// Fetch the installed-skill list ONCE (ADR-072 Finding D). ListSkills()
+	// is an uncached, full-directory scan, and this function previously
+	// triggered it TWICE on every denied/not-found outcome — once implicitly
+	// inside cb.ResolveSkillName, and again explicitly in the fallback loop
+	// below. resolveSkillNameWithList lets both the resolution attempt and
+	// the fallback membership check share this single fetch.
+	allSkills := cb.skillsLoader.ListSkills()
+	if resolved, ok := cb.resolveSkillNameWithList(allSkills, trimmed); ok {
+		return resolved.Slug, requestedSkillGranted
 	}
-	for _, s := range cb.skillsLoader.ListSkills() {
+	for _, s := range allSkills {
 		if strings.EqualFold(s.ID, trimmed) || strings.EqualFold(s.Name, trimmed) {
 			return "", requestedSkillDenied
 		}

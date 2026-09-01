@@ -1,10 +1,12 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,6 +115,39 @@ func TestProjectInstructions_TruncationIsMarked(t *testing.T) {
 		require.True(t, truncated, "three mounts each near half the budget must sum past it")
 		assert.Contains(t, composed, "truncated")
 		assert.LessOrEqual(t, len(composed), MaxInstructionsBytes)
+	})
+
+	t.Run("multi-byte rune straddling the exact cut boundary: never split", func(t *testing.T) {
+		// ADR-072 Finding C: ComposeProjectInstructions used to cut at a raw
+		// byte offset with no UTF-8 rune-boundary adjustment. This test
+		// engineers a 2-byte rune (π, U+03C0 — 0xCF 0x80) whose SECOND byte
+		// lands exactly at the naive (pre-fix) cut offset, so the pre-fix
+		// code would have sliced composed[:cut] with 0xCF as the trailing
+		// byte — a lone leading byte of a multi-byte sequence, i.e. invalid
+		// UTF-8 injected directly into the per-turn prompt block.
+		mountRoot := t.TempDir()
+
+		// Reconstruct the exact marker ComposeProjectInstructions appends,
+		// to compute the exact raw byte offset it naively cuts at.
+		marker := fmt.Sprintf("\n\n[project instructions truncated at %d bytes — content past this point was cut]", MaxInstructionsBytes)
+		cutBudget := MaxInstructionsBytes - len(marker)
+		header := "### m\n\n"
+
+		pos := cutBudget - len(header) - 1
+		require.Greater(t, pos, 0, "test fixture assumption: budget large enough to place the straddling rune")
+		body := strings.Repeat("a", pos) + "π" + strings.Repeat("a", 10000)
+		require.NoError(t, os.WriteFile(filepath.Join(mountRoot, "CLAUDE.md"), []byte(body), 0o600))
+
+		composed, truncated := ComposeProjectInstructions([]ProjectInstructionMount{{Name: "m", Root: mountRoot}})
+		require.True(t, truncated)
+		assert.LessOrEqual(t, len(composed), MaxInstructionsBytes, "truncation must never exceed the byte budget")
+		assert.True(t, utf8.ValidString(composed), "truncated output must be valid UTF-8, never split mid-rune")
+		assert.Contains(t, composed, "truncated")
+		// The straddling rune must be excluded whole, not left half-present:
+		// the cut point only ever moves backward past it, it never re-admits
+		// a partial encoding of it.
+		assert.NotContains(t, composed, "π")
+		assert.NotContains(t, composed, "\xcf", "a lone leading byte of the straddling rune must never survive the cut")
 	})
 
 	t.Run("no instruction file anywhere: no block, not truncated", func(t *testing.T) {
