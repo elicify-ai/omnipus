@@ -573,3 +573,90 @@ path. Item 9 uses an existing AsyncAPI frame and adds no UI.
 3. **Does CI need a non-Linux runner?** `meminfo_other.go` documents that neither it nor
    its test is ever executed here. Fixing the probe without fixing that leaves the next
    regression equally invisible.
+
+---
+
+## 7. Operator rulings, 2026-09-01
+
+The three open questions in §6 are closed, and two of the rulings change the plan.
+
+### O1 · Automatic indexing — YES, and it must cover more than notes
+
+Work-tree collections index automatically, per §6's recommendation.
+
+**Extension the plan did not anticipate:** a vault folder holds more than notes.
+**PDFs and similar documents that live in vault folders must be indexed too.**
+
+The ruling is deliberately narrow, and the narrowness is the point:
+
+- **Full-text extraction from PDFs is NOT required.** Do not run document text
+  through the index.
+- **Title and whatever metadata is available ARE required**, so the file is
+  findable and can be referred to.
+
+**What this means for the work.** `pkg/docextract` already handles `.pdf`,
+`.docx`, `.pptx`, `.xlsx` (`Extract`, `IsExtractable`), so the capability
+exists — but this ruling means we should NOT call `Extract` at index time. The
+cheap path is what is wanted: enumerate the file, take its title from the
+filename and any metadata cheaply available, and index that. Running extraction
+over every PDF in a vault would be the expensive answer to a question nobody
+asked, and would make indexing latency depend on document size.
+
+This changes item 6's scope: the walker admits a document set, not just `*.md`.
+It does **not** change items 3 or 4.
+
+### O2 · macOS memory — ALREADY RULED, elsewhere. Do not reinvent it.
+
+**R4a's open question is closed by a decision that already exists.**
+`ADR-072-workspace-scoped-browser-sessions.md` §D1.5b on
+`feat/browser-streaming-performance`, dated the same day as this document, rules
+on exactly this and rules better than R4a did:
+
+- writing the macOS reader is **in scope**; it must work on macOS and Linux;
+  **Windows is foreseen but explicitly NOT in scope** and keeps returning 0,
+  therefore has no limit — to be stated in release notes, not discovered;
+- it is buildable under Hard Constraint #2: `golang.org/x/sys` is already a
+  direct dependency and provides `SysctlUint32`/`SysctlUint64`/`SysctlRaw` for
+  Darwin in pure Go. No CGo, no new dependency;
+- **the formula is `hw.memsize` + `hw.pagesize` + the `vm.page_*` counters**,
+  contending with memory compression and purgeable pages — which is the precise
+  answer to R4a's worry that substituting total for available would repeat this
+  document's own §1 mistake;
+- it must be documented at the call site and described as *a considered
+  approximation of the same idea*, never as the same measurement.
+
+D1.5b also independently identifies the same defect this UAT hit, from the
+browser side: `availableRAMBytes` is 0 on macOS, so every macOS install floors
+at 2.
+
+**Consequence for this plan: item 2 is NOT ours.** It is cited, not restated,
+and no second reader is written on this branch. `omnipus2-7d` has been messaged
+to confirm ownership and timing. Item 5 (the provenance field) still stands and
+is still ours, because it is about not *presenting* an invented number as
+measured — which is true regardless of who writes the reader.
+
+**Interim, zero code:** operators on macOS set `performance.max_parallel_agents`
+explicitly. Verified on the UAT instance: 2 → 32.
+
+### O3 · CI — the Mac runner already exists; keep normal CI on Linux
+
+GitHub CI already has a macOS runner; this is not new capability to build.
+
+**Ruling: normal CI continues to run on the Linux runner. macOS-specific
+verification runs locally on the founder's machine.**
+
+So §6's third question does not become a CI redesign. What it does mean is that
+`meminfo_other.go`'s own note — that neither it nor its test is executed by this
+pipeline — stays true for the default path, and any macOS-only change must be
+verified locally and said to have been. That is a discipline, not a pipeline.
+
+### O4 · Everything ships — but the solution is aligned before it is built
+
+No item is dropped. P2s are not deferred out of the release.
+
+### O5 · Build after alignment. The core feature does not work today.
+
+Stated plainly by the operator: this cannot be delivered as it stands, because
+the central retrieval surface either cannot be called, cannot be indexed, or
+answers a confident false zero. Alignment first, then build — which is why this
+document is being agreed rather than executed from.
