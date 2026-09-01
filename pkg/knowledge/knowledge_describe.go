@@ -230,7 +230,19 @@ func indexFreshness(d DescribeData) string {
 	}
 	switch {
 	case !d.ManifestKnown:
-		return "NOT INDEXED yet — nothing has been indexed for this collection"
+		// Reuses vaultprops/reader.go::errIndexNotBuilt's wording ("has not
+		// been built yet") rather than inventing a third phrasing for the
+		// same fact — adapted to this collection's own index (the
+		// full-text/manifest index tools.go loads via ManifestExists, not
+		// vaultprops' properties index; the two are separate subsystems and
+		// this must not claim to be the other one). Deliberately names no
+		// remedy: until the indexer enumerates from ResolveScope instead of
+		// the mount store (docs/internal/design/knowledge-tools-remediation.md
+		// R2, plan item 6 — not done here), there is genuinely no agent
+		// tool, CLI verb or REST endpoint that can index this collection.
+		// Naming one would repeat the exact defect (F-3) this branch exists
+		// to fix, in different words.
+		return "NOT INDEXED yet — the index for this collection has not been built yet, so nothing below reflects its contents"
 	case d.NotesCounted && d.NotesOnDisk != d.ManifestCount:
 		return fmt.Sprintf("index holds %s notes, %s on disk — the two disagree; re-index to reconcile",
 			group(d.ManifestCount), group(d.NotesOnDisk))

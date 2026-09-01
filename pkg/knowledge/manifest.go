@@ -190,3 +190,39 @@ func (m *Manifest) Remove(relPath string) { delete(m.Entries, relPath) }
 
 // Len returns the number of recorded files.
 func (m *Manifest) Len() int { return len(m.Entries) }
+
+// ManifestExists reports whether a manifest file is present at path, without
+// attempting to parse it.
+//
+// LoadManifest cannot answer this on its own, by design: it returns
+// (NewManifest(root), nil) — a zero manifest AND a nil error — when the file
+// does not exist, so that a genuine first-ever sync is not mistaken for "the
+// manifest used to exist and is now unusable" (see LoadManifest's doc
+// comment; index.go's SyncWith and drift.go's CheckDrift both depend on that
+// nil error to avoid purging/flagging a fresh, never-synced index as
+// untrusted). The consequence is that "I never looked" and "I looked and
+// found an empty manifest" both arrive at LoadManifest's caller as the
+// identical (zero entries, nil error) result — the same absent-measurement-
+// encoded-as-a-value shape described in
+// docs/internal/design/knowledge-tools-remediation.md §1, just one caller
+// removed from LoadManifest itself.
+//
+// A caller that needs to tell the two apart — knowledge_describe's index
+// section is the first one — stats the manifest file FIRST via this
+// function, and only trusts a subsequently loaded count when a manifest file
+// was actually found on disk. This is deliberately a new, additive function
+// rather than a change to LoadManifest's signature: LoadManifest's contract
+// (missing file ⇒ nil error) is relied on verbatim by index.go, drift.go and
+// their tests, and changing it to report absence as an error would either
+// break that contract or require every existing caller to be re-audited for
+// a distinction they do not need.
+func ManifestExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("knowledge: stat manifest %s: %w", path, err)
+}

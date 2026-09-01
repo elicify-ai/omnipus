@@ -1354,8 +1354,33 @@ func (t *DescribeTool) gather(
 	if opts.Sections[DescribeSectionIndex] {
 		data.IndexProgress = t.progress(root.Path())
 		if dir, derr := IndexDirFor(t.deps.Home, root.Path()); derr == nil {
-			if m, merr := LoadManifest(filepath.Join(dir, ManifestFileName), root.Path()); merr == nil {
-				data.ManifestCount, data.ManifestKnown = m.Len(), true
+			manifestPath := filepath.Join(dir, ManifestFileName)
+			// LoadManifest alone cannot distinguish "never built" from
+			// "built and empty": it returns (NewManifest(root), nil) — a
+			// zero manifest and a NIL error — for a manifest file that
+			// simply does not exist yet (see ManifestExists' doc comment).
+			// Treating that nil error as "known, and the count is zero"
+			// is exactly the absent-measurement-encoded-as-a-value defect
+			// docs/internal/design/knowledge-tools-remediation.md §1/R2
+			// names: it made indexFreshness's "NOT INDEXED yet" branch
+			// below unreachable, so a never-indexed collection rendered as
+			// either "indexed and empty" or a false "drift" state naming
+			// a re-index action that does not exist (F-3, F-6). Stat the
+			// manifest FIRST, and only trust a loaded count when a
+			// manifest file was actually found on disk.
+			switch exists, statErr := ManifestExists(manifestPath); {
+			case statErr != nil:
+				// Cannot tell whether a manifest exists (e.g. a permission
+				// error reaching the index directory). ManifestKnown stays
+				// false — "I did not look" must never render as a
+				// measured zero — but the reason is logged rather than
+				// silently discarded.
+				slog.Warn("knowledge_describe: could not determine whether the index manifest exists",
+					"collection_root", root.Path(), "manifest_path", manifestPath, "error", statErr)
+			case exists:
+				if m, merr := LoadManifest(manifestPath, root.Path()); merr == nil {
+					data.ManifestCount, data.ManifestKnown = m.Len(), true
+				}
 			}
 		}
 	}
