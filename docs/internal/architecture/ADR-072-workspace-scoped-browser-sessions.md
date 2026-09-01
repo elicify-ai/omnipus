@@ -405,6 +405,63 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    them within one instance. The two are different guards and neither replaces
    the other.
 
+#### D1.5a Memory is the ONLY limit — every counter is deleted
+
+**Operator ruling, 2026-09-01: the memory gate is the only admission control.
+Idle tabs and idle browsers are closed. Every other limit is removed from the
+codebase.**
+
+This supersedes the renderer-floor correction below and the cap arithmetic
+above. Both are retained only as the record of how the design reached a single
+control.
+
+**Deleted from the code, not merely unused:**
+
+| Thing | Where | Note |
+|---|---|---|
+| `tools.browser.max_tabs` (default 5) | `pkg/config/config.go:3633`, 17 references in `pkg/tools/browser/` | The per-agent tab cap |
+| `tools.browser.max_total_tabs` | `pkg/config/config.go:3678` | The global cross-agent budget; never seeded |
+| `TryOpenTab` / `ReleaseTab` / `reservedTabs` | `pkg/tools/browser/coordinator.go:137,782-806` | The reservation machinery that exists solely to enforce the above, including its in-flight race handling |
+| `max_browsers` / `operator_ceiling` | proposed here, never built | Delete from this ADR and both specs |
+| `--renderer-process-limit` | proposed here, never built | See the security note below |
+
+**Removing `--renderer-process-limit` is a security improvement, not a
+regression.** D1.6 introduced it to bound per-instance cost for a formula, and
+recorded that it weakens site isolation for pages beyond the cap — an
+acceptable-for-semi-trusted trade that `ValidateURL` (`manager.go:685-708`)
+does not actually justify, since it permits any public URL. With capacity
+governed by live memory, the reason to set it disappears and full site
+isolation is retained. **The C4/C206 concern is dissolved rather than
+mitigated.**
+
+**What replaces all of it:**
+
+1. **Admission on live memory only** — the D1.5 headroom check, which is the
+   hard stop (see the pressure-vs-cap ruling below; with no cap, only the hard
+   stop remains).
+2. **Idle close, for tabs and for browsers.** Tabs already reap
+   (`ReapIdleSessions`, `DefaultIdleTTL` 5 min). Whole-browser idle close is
+   new work (D1.8). Both are now load-bearing rather than housekeeping.
+3. **Eviction under pressure** — least-recently-used, with D1.7's guards.
+
+**The risk this accepts, stated plainly.** With no counter anywhere, a runaway
+agent opening tabs in a loop is bounded **only** by memory pressure. Two
+consequences follow and neither is optional:
+
+- **The pressure check must sit in the tab-open path**, not only the
+  browser-launch path. A loop that opens tabs inside an existing browser never
+  reaches a launch decision, and would otherwise run unchecked to the OOM
+  killer.
+- **Idle close and the pressure gate are now the entire defence.** Previously a
+  counter caught a runaway before memory did. That backstop is gone by
+  decision, so a gap in either control is no longer a degraded limit — it is no
+  limit.
+
+**Downstream:** both specs still specify the deleted counters (D1 spec FR-055,
+FR-056, FR-049, test 53; the `max_tabs`-derived renderer floor; D2's tier
+arithmetic is unaffected). They must be revised to match, and the deletion
+itself becomes implementation scope in Stream A rather than a config change.
+
 #### Correction: the renderer floor derives from `max_tabs` (2026-09-01)
 
 An earlier revision derived `R` from `max_total_tabs`. **That key is never
