@@ -8,6 +8,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -51,6 +52,10 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 
 	// Wire the per-turn working-directory injector for every agent in this registry.
 	wireWorkingDirInjectors(al, registry)
+
+	// Wire the per-turn, per-workspace project-shelf resolver for every agent
+	// in this registry (ADR-072 R1 fix — see wireProjectShelfResolvers).
+	wireProjectShelfResolvers(al, registry)
 }
 
 // wireDelegationInjectors installs a delegation-context callback on every
@@ -317,6 +322,74 @@ func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 			)
 		})
 	}
+}
+
+// wireProjectShelfResolvers installs a per-workspace project-shelf resolver
+// on every agent's ContextBuilder in registry (ADR-072 R1 fix: D4.1's shelf-1
+// grant instrument — "the mount itself" — was defined and unit-tested
+// (skills.MergeProjectSkills, ContextBuilder.WithProjectShelfResolver) but
+// never wired to a real workspace's real mounts anywhere in the live
+// gateway). The resolver is called from effectiveProjectShelf on every turn
+// that reaches BuildSystemPromptWithCacheForWorkspace/BuildMessages (D8's
+// (agent x workspace) cache already keys off the value this returns), so a
+// mount added, removed, or edited takes effect on the very next turn with no
+// agent reload — mirroring wireDelegationInjectors/wireWorkingDirInjectors'
+// exact per-turn-freshness shape, per ContextBuilder.projectShelfResolver's
+// own doc comment naming that pattern as the intended wiring shape.
+//
+// Deliberately does NOT check agent identity or any grant list before
+// merging: D4.1 states the project shelf's grant instrument is the mount
+// itself, not a per-agent slug list — "every agent acting in that workspace
+// may load every skill in that mount". skillAllowed (the registry/builtin
+// grant gate) is untouched by this; ResolveSkillName and BuildSkillsSummaryFunc
+// already consult the project shelf independently of it, exactly as D4.1's
+// per-shelf table requires.
+func wireProjectShelfResolvers(al *AgentLoop, registry *AgentRegistry) {
+	for _, agentID := range registry.ListAgentIDs() {
+		agentInst, ok := registry.GetAgent(agentID)
+		if !ok || agentInst == nil || agentInst.ContextBuilder == nil {
+			continue
+		}
+
+		agentInst.ContextBuilder.WithProjectShelfResolver(func(workspaceID string) skills.ProjectShelf {
+			return resolveProjectShelfForWorkspace(workspaceID)
+		})
+	}
+}
+
+// resolveProjectShelfForWorkspace builds the ADR-072 D4.1 project shelf for
+// workspaceID (falling back to the installation's default workspace when
+// workspaceID is empty, mirroring wireDelegationInjectors' identical
+// fallback) by merging every one of that workspace's live mounts' project
+// skills (skills.MergeProjectSkills). Returns nil — "no project shelf" — when
+// no workspace resolves, the workspace record is unreadable, or it simply has
+// no mounts: this is the overwhelmingly common case (D6: "silent when there
+// is nothing to find"), so it is not escalated to a WARN, matching
+// wireWorkingDirInjectors' identical quiet-"" return for the ordinary
+// not-applicable case.
+func resolveProjectShelfForWorkspace(workspaceID string) skills.ProjectShelf {
+	home := omnipusHome()
+
+	wsID := workspaceID
+	if wsID == "" {
+		def, err := workspace.ResolveDefaultID(home)
+		if err != nil || def == "" {
+			return nil
+		}
+		wsID = def
+	}
+
+	mounts, ok := workspace.LoadMounts(home, wsID)
+	if !ok || len(mounts) == 0 {
+		return nil
+	}
+
+	pm := make([]skills.ProjectMount, 0, len(mounts))
+	for _, m := range mounts {
+		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
+	}
+	shelf, _ := skills.MergeProjectSkills(pm)
+	return shelf
 }
 
 // resolveDelegationLabel looks up an agent in registry and returns a human

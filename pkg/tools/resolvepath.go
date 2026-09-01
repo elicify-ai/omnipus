@@ -487,6 +487,35 @@ func emitSkillPathWriteAudit(fields skillsWriteAuditFields, resolvedPath string)
 	}
 }
 
+// EmitSkillWriteAudit records a D6.1.1/FR-071 write-audit entry for a skill
+// write that never went through ResolvePath at all. ResolvePath's own hook
+// (emitSkillPathWriteAudit, fired from PathHandle.WriteFile) covers every
+// write reaching a recognised skills location through a generic file tool
+// (write_file, edit_file, ...), but the ADR-072 D6.1 authoring path —
+// create_skill/edit_skill/remove_skill resolved against a workspace's
+// project shelf via skills.ResolveProjectSkillWriter — writes through
+// pkg/skills' own confined, raw os.* I/O (mirroring how the registry-shelf
+// authoring path already worked before D6.1.1 moved the hook here), so
+// ResolvePath never sees that path at all. This exported wrapper lets the
+// authoring tools emit the SAME record shape into the SAME process-wide
+// logger SetSkillsWriteAuditLogger installs, so the one boot-time wiring
+// call covers both cases rather than needing a second logger threaded
+// separately into pkg/sysagent/tools.
+//
+// shelf is "project" or "registry" (skillShelfProject/skillShelfRegistry's
+// string values); a nil logger (SetSkillsWriteAuditLogger never called)
+// makes this a no-op, exactly matching emitSkillPathWriteAudit's own
+// contract.
+func EmitSkillWriteAudit(shelf, toolName, agentID, sessionID, workspaceID, resolvedPath string) {
+	emitSkillPathWriteAudit(skillsWriteAuditFields{
+		shelf:       shelf,
+		toolName:    toolName,
+		agentID:     agentID,
+		sessionID:   sessionID,
+		workspaceID: workspaceID,
+	}, resolvedPath)
+}
+
 // PathHandle is the sanctioned I/O handle ResolvePath returns. root is nil
 // exactly when the resolved path was granted under fspolicy.FSScopeUnrestricted
 // via the legacy host-fs back-compat path (an absolute, or escaping, path that

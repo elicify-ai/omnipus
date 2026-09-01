@@ -5,8 +5,10 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -237,4 +239,121 @@ func TestBuildWorkspaceInstructionsNote_ContentIsTrimmed(t *testing.T) {
 
 	note := buildWorkspaceInstructionsNote(id)
 	assert.Equal(t, "# Workspace Instructions\n\nKeep it short.", note)
+}
+
+// ─── ADR-072 R2 fix: mounted-project CLAUDE.md/AGENTS.md reaching the note ──
+//
+// Before this fix, pkg/skills/project_instructions.go's
+// SelectProjectInstructionFile/ComposeProjectInstructions (D7) had zero
+// production callers anywhere outside their own file and tests — confirmed
+// live in docs/internal/qa/uat-report-skill-activation-batch2-groupD-2026-09-02.md
+// (S21: zero trace of a mounted CLAUDE.md's content in the assembled system
+// prompt across every turn). These tests exercise buildWorkspaceInstructionsNote
+// itself (the exact function pkg/agent/loop.go's injectWorkspaceInstructions
+// call site, and pkg/agent/midturn_budget.go's identical call, both use) with
+// a REAL mount record + REAL CLAUDE.md file on disk, rather than only the
+// underlying pure functions those already have unit tests for.
+
+// seedMountForInstructions writes a mount record for wsID under home naming
+// one mount (mountName -> mountRoot), mirroring
+// pkg/workspace/mountstore.go's unexported on-disk JSON shape exactly the way
+// pkg/agent/project_shelf_wiring_test.go's seedProjectShelfWorkspace already
+// does for the R1 tests.
+func seedMountForInstructions(t *testing.T, home, wsID, mountName, mountRoot string) {
+	t.Helper()
+	mountsDir := filepath.Join(home, "entities", "mounts")
+	require.NoError(t, os.MkdirAll(mountsDir, 0o700))
+	rec := struct {
+		WorkspaceID string `json:"workspace_id"`
+		Mounts      []struct {
+			Name     string `json:"name"`
+			HostPath string `json:"host_path"`
+		} `json:"mounts"`
+	}{
+		WorkspaceID: wsID,
+	}
+	rec.Mounts = append(rec.Mounts, struct {
+		Name     string `json:"name"`
+		HostPath string `json:"host_path"`
+	}{Name: mountName, HostPath: mountRoot})
+	data, err := json.Marshal(rec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(mountsDir, wsID+".json"), data, 0o600))
+}
+
+// TestBuildWorkspaceInstructionsNote_MountContributesProjectInstructions is
+// the R2 regression test: a mounted repository's own root CLAUDE.md must
+// reach the per-turn note, labelled with its mount name, AFTER the
+// workspace's own AGENT.md (D7: "the operator's intent outranks the
+// repository's").
+func TestBuildWorkspaceInstructionsNote_MountContributesProjectInstructions(t *testing.T) {
+	tmpDir := t.TempDir()
+	id := seedWorkspace(t, tmpDir, "Be concise and helpful.")
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+
+	mountRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(mountRoot, "CLAUDE.md"),
+		[]byte("# Acme Service\n\nAlways run `make test` before committing.\nUse `make deploy` — never call kubectl directly.\n"),
+		0o644,
+	))
+	seedMountForInstructions(t, tmpDir, id, "acme", mountRoot)
+
+	note := buildWorkspaceInstructionsNote(id)
+
+	require.NotEmpty(t, note)
+	assert.Contains(t, note, "# Workspace Instructions")
+	assert.Contains(t, note, "Be concise and helpful.", "the workspace's own AGENT.md content must still be present")
+	assert.Contains(t, note, "Acme Service", "the mounted CLAUDE.md's content must be present")
+	assert.Contains(t, note, "kubectl", "the mounted CLAUDE.md's content must be present in full")
+	assert.Contains(t, note, "acme", "the mount block must be labelled with its mount name (D7)")
+
+	// D7's stated ordering: the workspace's own instructions come first.
+	ownIdx := strings.Index(note, "Be concise and helpful.")
+	mountIdx := strings.Index(note, "Acme Service")
+	require.NotEqual(t, -1, ownIdx)
+	require.NotEqual(t, -1, mountIdx)
+	assert.Less(t, ownIdx, mountIdx, "the workspace's own instructions must precede the mounted project's")
+}
+
+// TestBuildWorkspaceInstructionsNote_MountOnly_NoWorkspaceInstructions proves
+// a mount's CLAUDE.md reaches the note even when the workspace itself has no
+// AGENT.md at all (the common case for a workspace that exists purely to
+// hold a mounted repository).
+func TestBuildWorkspaceInstructionsNote_MountOnly_NoWorkspaceInstructions(t *testing.T) {
+	tmpDir := t.TempDir()
+	id := seedWorkspace(t, tmpDir, "") // no AGENT.md
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+
+	mountRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(mountRoot, "AGENTS.md"),
+		[]byte("Run the linter before every commit."),
+		0o644,
+	))
+	seedMountForInstructions(t, tmpDir, id, "widget-repo", mountRoot)
+
+	note := buildWorkspaceInstructionsNote(id)
+
+	require.NotEmpty(t, note)
+	assert.Contains(t, note, "# Workspace Instructions")
+	assert.Contains(t, note, "Run the linter before every commit.")
+	assert.Contains(t, note, "widget-repo")
+}
+
+// TestBuildWorkspaceInstructionsNote_MountWithNoInstructionFile_NoOp proves
+// D6's "silent when there is nothing to find": a mount with neither
+// CLAUDE.md nor AGENTS.md at its root contributes nothing, and the note is
+// exactly the workspace-only note (no regression, no stray separator).
+func TestBuildWorkspaceInstructionsNote_MountWithNoInstructionFile_NoOp(t *testing.T) {
+	tmpDir := t.TempDir()
+	id := seedWorkspace(t, tmpDir, "Be concise and helpful.")
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+
+	mountRoot := t.TempDir() // empty — no CLAUDE.md/AGENTS.md
+	seedMountForInstructions(t, tmpDir, id, "empty-repo", mountRoot)
+
+	note := buildWorkspaceInstructionsNote(id)
+	assert.Equal(t, "# Workspace Instructions\n\nBe concise and helpful.", note,
+		"a mount with no root instruction file must contribute nothing")
 }

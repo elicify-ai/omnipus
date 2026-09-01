@@ -1008,6 +1008,19 @@ func NewAgentLoop(
 			// run_retrospective tools would silently lose audit logging (SEC-15)
 			// the first time config reloads.
 			al.wireMemoryAuditLoggerOn(registry, auditLogger)
+
+			// ADR-072 D6.1.1/R4 fix: install the process-wide skills write-audit
+			// logger. tools.SetSkillsWriteAuditLogger's own doc comment names
+			// this exact call site ("a later integration phase wires this at
+			// gateway boot, alongside the other audit-logger wiring") — until
+			// this call existed nowhere in production, tools.ResolvePath's
+			// write hook (and pkg/sysagent/tools' project-shelf authoring path,
+			// via tools.EmitSkillWriteAudit) was a permanent silent no-op:
+			// write_file/edit_file/edit_skill/remove_skill writes into a
+			// recognised skills location produced zero audit entries regardless
+			// of sandbox.audit_log. Idempotent (last caller wins), mirrors
+			// audit.SetProcessChainKey's process-wide-var pattern exactly.
+			tools.SetSkillsWriteAuditLogger(auditLogger)
 		}
 	}
 
@@ -4907,6 +4920,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// al.auditLogger is only non-nil when audit logging was actually enabled.
 	if al.auditLogger != nil {
 		al.wireMemoryAuditLoggerOn(registry, al.auditLogger)
+		// ADR-072 D6.1.1/R4 fix: re-assert the process-wide skills write-audit
+		// logger on reload too, mirroring the memory-tool re-wire immediately
+		// above. SetSkillsWriteAuditLogger is a process-wide var (not
+		// registry-scoped), so this is idempotent, but a hot reload must not
+		// be the one path that silently leaves it unset if a future change
+		// ever makes al.auditLogger's identity or lifetime reload-sensitive.
+		tools.SetSkillsWriteAuditLogger(al.auditLogger)
 	}
 
 	// Re-wire the shared memory-write rate limiter (v0.2 #155 item 6) onto
