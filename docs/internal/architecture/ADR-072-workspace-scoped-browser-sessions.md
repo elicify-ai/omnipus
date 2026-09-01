@@ -405,6 +405,40 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    them within one instance. The two are different guards and neither replaces
    the other.
 
+#### Correction: the renderer floor derives from `max_tabs` (2026-09-01)
+
+An earlier revision derived `R` from `max_total_tabs`. **That key is never
+seeded** — `coordinator.go:240-253` logs *"global tab budget: UNLIMITED"* when
+it is `<= 0`, and nothing sets it — so `R` had no lower bound on a default
+install and the whole sizing chain was unevaluable.
+
+**The right key ships and is enforced: `tools.browser.max_tabs`, default 5**
+(`pkg/tools/browser/manager.go:36,124`, enforced at four call sites). Its own
+config doc calls it *"the per-agent courtesy cap… the guard most operators
+actually want"* (`pkg/config/config.go:3662-3663`).
+
+So **`R >= tools.browser.max_tabs`**, and the floor exists on a fresh install
+with **no product change and no new seeded default**. Found by the D1 spec
+while resolving what looked like a blocking gap.
+
+#### When memory pressure and the soft cap disagree — pressure wins
+
+The pool has two controls that can conflict: the **cap** is a soft target that
+may be exceeded by one when nothing is evictable (D1.7), and the **pressure
+gate** refuses to grow above the available-memory threshold. Both fire when
+pressure is high *and* nothing is evictable, and they give opposite answers.
+
+**Decision: the pressure gate is a hard stop; the cap is soft.** Exceeding a
+soft cap costs latency and a WARN. Exceeding real available memory invokes the
+OOM killer, which does not stop at the browser — it can take the gateway with
+it, ending every session on the host. Between a refused browse and a dead
+gateway there is no trade to make.
+
+So: overshoot the *cap* rather than refuse; **never** overshoot *memory*. When
+both bind, the request is refused with an error naming memory — not the cap —
+because the remedies differ and an operator told the wrong one will raise a
+ceiling that is not the constraint.
+
 #### Measured, 2026-09-01 — operator's own machine, macOS, `top` physical footprint
 
 **The only row that matters is Chrome for Testing** — that is the binary
@@ -541,7 +575,7 @@ from R — not the other way round.**
 
 - **R must be at least the number of tabs a workspace may hold concurrently.**
   That is the only bound we have on "how many distinct sites are open at once",
-  and it is a real one: a tab count is enforced (`maxTotalTabs`), a site count
+  and it is a real one: a tab count is enforced (**`tools.browser.max_tabs`**, not `max_total_tabs`), a site count
   is not.
 - If the resulting `max_browsers` comes out below 1 on a small host, the honest
   answer is that the host cannot run the pool at the configured tab budget.
