@@ -27,6 +27,56 @@
 //     once per revoke, so the count it keeps is the authority and this file
 //     never second-guesses it.
 //
+//     BOOT-TIME ENUMERATION IS knowledge.ResolveScope, NOT THE MOUNT STORE
+//     (R2, docs/internal/design/knowledge-tools-remediation.md). Before this
+//     was true, AttachAllMounts read ONLY workspace.LoadMounts, which is a
+//     narrower answer to "which collections exist" than the one every
+//     knowledge tool (describe/read/find) already consults. A collection
+//     living directly in a workspace's own work tree — the ONLY route
+//     ADR-067 D11 ("workspace-first, movable") leaves available, since a work
+//     tree can never become a mount (pkg/workspace/mount.go's
+//     ErrMountRefused/CheckMountTarget, FR-7.5, refuses any target inside
+//     $OMNIPUS_HOME) — was therefore permanently DISCOVERABLE by every tool
+//     and permanently UNINDEXED, with no tool, REST endpoint or CLI verb able
+//     to change that. AttachAllMounts now enumerates every workspace's
+//     knowledge.ResolveScope(home, workspaceID).Collections() — the same
+//     answer the tools use — so a collection any tool can address is
+//     guaranteed indexable. This is a strict widening: ResolveScope's roots
+//     are themselves built from workspace.AllowedMountRoots (the mount grant)
+//     PLUS the work tree, so a mount-backed collection is still discovered
+//     exactly as before and still flows through AttachMount/RevokeMount
+//     keyed by mount name — see attachResolvedCollection's doc comment for
+//     how a collection is routed to one path or the other, and why that
+//     routing does not trust ScopedCollection.Origin's string value to make
+//     the call.
+//
+//     A DOCUMENT IS NOT ONLY A NOTE (operator ruling O1, same design doc §7).
+//     A vault folder holds PDFs, spreadsheets and other files alongside
+//     notes, and those must be findable too — but full-text extraction from
+//     them is deliberately NOT wanted (it would make indexing latency depend
+//     on document size, to answer a question nobody asked). This file does
+//     not need to do anything new to satisfy that: pkg/knowledge's existing
+//     FR-039a "attachment" path (Scan classifies every non-.md/.markdown file
+//     as ScanKindAttachment; Index.indexAttachment records its path, its
+//     name tokens and its filename-stem TITLE, and reads not one byte of
+//     content) already applies, unconditionally, to any collection this file
+//     attaches — mount-backed or work-tree. pkg/knowledge never imports
+//     pkg/docextract, so there is no code path here or in pkg/knowledge that
+//     could regress into extracting a PDF's text. The admitted file set is
+//     therefore "everything in the collection, with no extension filter" —
+//     the same set describe/read already show an operator — and the title
+//     for a document with no frontmatter is the filename stem (stemTitle),
+//     exactly as it already is for an image or any other attachment. Size,
+//     modification time and extension are already captured cheaply (Scan
+//     never opens a file to record them) and already persist in the
+//     manifest/ScanEntry for freshness and drift purposes; they are
+//     deliberately NOT duplicated onto the bleve index document, because
+//     indexDoc's mapping is closed by design (fields.go's "ONE PARSER, NOT
+//     TWO" / D21.2 header) and name+title search is what O1 asked
+//     for ("findable, and can be referred to") — a size/mtime/kind facet on
+//     search results is a real, separable feature this ruling does not ask
+//     for and this change does not add.
+//
 //  2. PROGRESS → WEBSOCKET. Indexing progress is a value that moves, so it is
 //     pushed as a knowledge_index_progress frame rather than polled (FR-080).
 //     The honesty rule is structural here, not a convention: total_files is
@@ -551,35 +601,185 @@ func (kl *KnowledgeLifecycle) RevokeMount(workspaceID, mountName string) error {
 	return nil
 }
 
-// AttachAllMounts attaches every mount recorded for every workspace under this
-// $OMNIPUS_HOME. This is the restart path: FR-039 requires an existing index to
-// be reopened rather than rebuilt, and reopening is what makes that observable.
+// AttachCollection opens (or joins) the index for one collection and
+// reconciles it, exactly as AttachMount does — the difference is entirely in
+// what identifies the attachment.
 //
-// Failures are logged per mount and never abort the sweep — one moved folder
-// must not stop the other collections from coming back.
-func (kl *KnowledgeLifecycle) AttachAllMounts() {
-	dir := workspace.MountStoreDir(kl.home)
-	entries, err := os.ReadDir(dir)
+// AttachMount is keyed by (workspaceID, mountName), because a mount is a
+// named, revocable grant and RevokeMount must be able to find it again by
+// that same name after the mount record itself is gone. A work-tree
+// collection has no such name: nothing ever "revokes" it through a REST
+// verb, and its own resolved root is already the identity FR-031 keys the
+// index itself on (kl.byRoot). So this is keyed by (workspaceID,
+// collectionRoot) directly — R2's "AttachMount's per-mount key becomes a
+// per-collection key" for the one case that has no mount name to begin with.
+//
+// Two consequences worth being explicit about, both already true of
+// AttachMount and unchanged in kind here:
+//
+//   - a collection reachable from ONE workspace by both a mount AND (this
+//     cannot happen in practice today, since a mount can never resolve
+//     inside $OMNIPUS_HOME — see attachResolvedCollection) the work tree
+//     would hold two independent holders, one per key scheme, both pointing
+//     at the SAME *knowledgeCollection via kl.byRoot. That shared identity is
+//     what makes "attached once, not twice" true regardless of key scheme:
+//     acquire's `fresh` return is false on the second call no matter which
+//     key reached it, so the collection is reconciled once.
+//   - calling this twice for the SAME (workspaceID, root) is the ordinary
+//     idempotent case AttachMount already has (acquire's `existing == root`
+//     branch): a no-op, not a second holder.
+func (kl *KnowledgeLifecycle) AttachCollection(ctx context.Context, workspaceID, collectionRoot string) error {
+	realRoot, err := knowledge.ResolveCollectionRoot(collectionRoot)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("knowledge: cannot list mount store", "dir", dir, "error", err)
-		}
+		return fmt.Errorf("%w: %s: %w", ErrKnowledgeMountUnreachable, collectionRoot, err)
+	}
+
+	collection, fresh, err := kl.acquire(workspaceID, realRoot, realRoot)
+	if err != nil || collection == nil {
+		return err
+	}
+	if !fresh {
+		return nil
+	}
+
+	// Same ordering as AttachMount, for the same reason: index first, THEN
+	// start the drift schedule, so the on-attach check runs against a
+	// reconciled index rather than an empty one.
+	reconcileErr := kl.reconcile(ctx, collection)
+	if wErr := kl.health.Watch(kl.baseCtx, collection.index); wErr != nil {
+		slog.Warn("knowledge: drift schedule not started",
+			"collection", collection.root, "error", wErr)
+	}
+	return reconcileErr
+}
+
+// AttachCollectionAsync runs AttachCollection on the base context in the
+// background and logs any failure. Used by the boot-time scope sweep for a
+// collection that has no mount name (see attachResolvedCollection).
+func (kl *KnowledgeLifecycle) AttachCollectionAsync(workspaceID, collectionRoot string) {
+	// Nil-receiver-safe, for the same reason as AttachMountAsync.
+	if kl == nil {
 		return
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		workspaceID := strings.TrimSuffix(e.Name(), ".json")
-		mounts, ok := workspace.LoadMounts(kl.home, workspaceID)
-		if !ok {
-			slog.Warn("knowledge: mount record unusable", "workspace_id", workspaceID)
-			continue
-		}
-		for _, m := range mounts {
-			kl.AttachMountAsync(workspaceID, m.Name, m.HostPath)
-		}
+	kl.mu.Lock()
+	if kl.closed {
+		kl.mu.Unlock()
+		return
 	}
+	kl.attachWG.Add(1)
+	kl.pendingAttaches++
+	kl.mu.Unlock()
+
+	go func() {
+		defer kl.attachWG.Done()
+		defer func() {
+			kl.mu.Lock()
+			kl.pendingAttaches--
+			kl.mu.Unlock()
+		}()
+		if err := kl.AttachCollection(kl.baseCtx, workspaceID, collectionRoot); err != nil {
+			slog.Warn("knowledge: collection not indexed",
+				"workspace_id", workspaceID, "collection_root", collectionRoot, "error", err)
+		}
+	}()
+}
+
+// AttachAllMounts attaches every collection reachable in every workspace
+// under this $OMNIPUS_HOME — both a workspace's recorded mounts and any
+// knowledge base living directly in its own work tree. This is the restart
+// path: FR-039 requires an existing index to be reopened rather than
+// rebuilt, and reopening is what makes that observable.
+//
+// See this file's header ("BOOT-TIME ENUMERATION IS knowledge.ResolveScope")
+// for why the enumeration source changed from the mount store to
+// knowledge.ResolveScope, and attachResolvedCollection's doc comment for how
+// each discovered collection is routed to the mount-name-keyed path or the
+// root-keyed path.
+//
+// Failures are logged per collection and never abort the sweep — one moved
+// or unreadable collection must not stop the others from coming back.
+func (kl *KnowledgeLifecycle) AttachAllMounts() {
+	ids, err := workspace.ListWorkspaceIDs(kl.home)
+	if err != nil {
+		slog.Warn("knowledge: cannot list workspaces", "home", kl.home, "error", err)
+		return
+	}
+	for _, workspaceID := range ids {
+		kl.attachWorkspaceScope(workspaceID)
+	}
+}
+
+// attachWorkspaceScope resolves one workspace's knowledge.ResolveScope and
+// attaches every collection it names.
+func (kl *KnowledgeLifecycle) attachWorkspaceScope(workspaceID string) {
+	workDirReal := kl.resolvedWorkDir(workspaceID)
+	scope := knowledge.ResolveScope(kl.home, workspaceID)
+	for _, col := range scope.Collections() {
+		kl.attachResolvedCollection(workspaceID, col, workDirReal)
+	}
+}
+
+// resolvedWorkDir returns the workspace's own work tree, real-path-resolved,
+// or "" when it cannot be resolved (an id that fails SafeWorkDir's own
+// safety check, or a work tree that has not been created yet). "" can never
+// match a collection root — every ScopedCollection.Root is itself
+// real-path-resolved and non-empty (ResolveScope's own invariant) — so a
+// resolution failure here can only ever route a collection to the
+// mount-keyed path, never to the work-tree path it was not proven to be in.
+func (kl *KnowledgeLifecycle) resolvedWorkDir(workspaceID string) string {
+	workDir, err := workspace.SafeWorkDir(kl.home, workspaceID)
+	if err != nil {
+		return ""
+	}
+	real, err := knowledge.ResolveCollectionRoot(workDir)
+	if err != nil {
+		return ""
+	}
+	return real
+}
+
+// attachResolvedCollection routes one collection knowledge.ResolveScope
+// returned to whichever attach path matches how it was granted.
+//
+// # Why routing does NOT trust col.Origin's string value
+//
+// ScopedCollection.Origin is either a mount's name or the literal constant
+// knowledge.WorkTreeOrigin ("workspace") — and R3(c) of the remediation
+// design already flags that those two are NOT reliably distinguishable by
+// string comparison alone: nothing stops an operator naming a real mount
+// "workspace" (ErrInvalidMountName forbids a path separator and the literal
+// name "work", not this word), which would collide with the work-tree
+// sentinel. Routing on that string here would misfile such a mount's
+// collection onto the root-keyed path, silently orphaning it from
+// RevokeMount's mount-name lookup — a mount the operator later deletes would
+// never have its index closed.
+//
+// The reliable test is structural instead: a mount's target can never be
+// inside $OMNIPUS_HOME at all (pkg/workspace/mount.go's ErrMountRefused,
+// FR-7.5 — enforced at CreateMount, not re-checked here), so any collection
+// root that IS the workspace's own work tree, or lies beneath it, cannot
+// have come from a mount grant. It is compared against workDirReal, which
+// the caller resolved via the exact same knowledge.ResolveCollectionRoot
+// this collection's own Root was resolved through, so the comparison is
+// between two values produced the same way rather than a raw-vs-resolved
+// mismatch.
+//
+//   - Inside the work tree → attachCollectionAsync, keyed by the collection's
+//     own root. There is no mount name to key on, and none is needed: a
+//     work-tree collection is never revoked through the mount-delete REST
+//     path, so there is no lookup this key must remain compatible with.
+//   - Everywhere else → the EXISTING AttachMountAsync(workspaceID, col.Origin,
+//     col.Root), unchanged from before this change. col.Origin is the
+//     mount's Name here (ScopedCollection's own contract), so this is
+//     byte-for-byte the same call boot used to make from the mount store
+//     directly — RevokeMount(workspaceID, mountName) keeps finding it by the
+//     same key it always has.
+func (kl *KnowledgeLifecycle) attachResolvedCollection(workspaceID string, col knowledge.ScopedCollection, workDirReal string) {
+	if workDirReal != "" && (col.Root == workDirReal || strings.HasPrefix(col.Root, workDirReal+string(filepath.Separator))) {
+		kl.AttachCollectionAsync(workspaceID, col.Root)
+		return
+	}
+	kl.AttachMountAsync(workspaceID, col.Origin, col.Root)
 }
 
 // WaitForAttaches blocks until every asynchronous attach registered by the
