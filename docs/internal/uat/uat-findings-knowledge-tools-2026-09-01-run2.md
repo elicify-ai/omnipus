@@ -143,20 +143,37 @@ returning zero would be far worse. See F-9 for where that protection does not ho
 
 ---
 
-## F-4 · `knowledge_restructure` rename reports "0 inbound links" while two relations point at the note · **UNDER INVESTIGATION**
+## F-4 · rename's "0 inbound links" — **NOT A PRODUCT DEFECT.** My corpus generator's bug.
 
-Renaming `co-0028-trenholme-works-9.md` reported `CASCADE: 0 notes rewritten (inbound
-wikilinks)` and `BACKLINKS (0) — none`, while two project notes carry
-`company: "[[Trenholme Works 9]]"`.
+Renaming a note reported `CASCADE: 0 notes rewritten` and `BACKLINKS (0) — none` while two
+project notes carried `company: "[[Trenholme Works 9]]"`. I suspected silent link
+corruption. **It was not.**
 
-**I am deliberately not calling this a defect yet.** The wikilink text never matched the
-file's basename, before the rename either, and the note's `name:` property is unchanged.
-So the links may resolve by identity rather than filename, in which case nothing broke
-and the fixture is simply odd. Root-cause investigation is running to settle which.
+**Verdict, verified empirically:** wikilinks resolve by **filename/basename only**
+(`knowledge/links.go::NoteIndex.Resolve`, which indexes `path.Base` and its stem and
+nothing else). `[[Trenholme Works 9]]` never resolved — the file was
+`co-0028-trenholme-works-9.md` before the rename too. `BACKLINKS (0)` was correct.
+`0 notes rewritten` was correct. Backlinks, the rename cascade and `check_integrity` all
+use that one resolver, so there is no split between subsystems either.
 
-Recorded this way on purpose: reporting it as corruption before establishing link
-resolution would be exactly the kind of confident-and-wrong finding this process exists
-to prevent.
+**The cascade DOES rewrite frontmatter relations** — proven with a mutation control:
+driving the real `knowledge.Renamer` with the link spelled as the basename gave
+`FilesRewritten=2 LinksRewritten=2`, rewriting `company:` inside both notes' frontmatter.
+The observed `0` was a true zero, not a blind instrument.
+
+**The actual bug is mine**, in `scripts/uat/gen-knowledge-corpus.mjs`: `nextPath()` names
+files from `slugify(label)` while `linkTo()` emits the raw label, so **every filler
+relation in the corpus dangles by construction**. Consequence for coverage: the corpus
+currently does not exercise relation resolution, backlinks, or the rename cascade at all.
+
+**Also learned, worth knowing when writing assertions:** `records.Validate` never reports
+a dangling relation — its findings are syntactic (`not_a_wikilink`, `arity_violation`, …)
+and a syntactically valid wikilink pointing at nothing is a valid value to it, forever.
+`check_integrity` is the only surface that flags unresolved relations.
+
+**Recorded prominently because the process worked.** I nearly filed this as data
+corruption. Establishing link resolution before reporting is what stopped a confident,
+wrong, high-severity finding.
 
 ---
 
@@ -245,6 +262,29 @@ protects the caller and the other misleads it.
 This is worse than F-1's uncallable tool and worse than F-3's dead index. A tool that
 cannot be called is obvious. A tool that answers "0, and I checked everything" is
 believed.
+
+---
+
+## C-03 · Concurrent writes to the same note · **PASS**
+
+Five agents were launched simultaneously, each setting the same property on the same note.
+
+| | |
+|---|---|
+| writers refused with an explicit **version conflict** | 4 |
+| writers that succeeded | 1 |
+| **lost updates** | **0** |
+| file left parseable | yes |
+
+Optimistic concurrency genuinely works: `expect_version` is not merely accepted, it
+prevents the lost update. The losers were told exactly why, and one reported being
+refused twice as the note moved under it again — correct behaviour under contention.
+
+*Non-finding, checked and dismissed:* the winning write landed as `headcount: "102"`
+(quoted) into a property declared `type: integer`, where other corpus values are
+unquoted. `knowledge_read` reports it back as `102` with no violation — the parser
+accepts a quoted numeric. Cosmetic YAML inconsistency from the writer's conservative
+quoting, not a type-safety hole.
 
 ---
 
