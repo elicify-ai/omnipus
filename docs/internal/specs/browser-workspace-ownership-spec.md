@@ -621,37 +621,25 @@ tools register and run, but the admission gate refuses to grow the pool, so the 
 usable for a single browser and explicitly not supported for the workspace pool. It is a stated
 posture, not a discovered one.
 
-#### The side effect this reader has OUTSIDE the browser, and it is not small
+#### The side effect this reader has OUTSIDE the browser — SUPERSEDED, see §0.6b
 
-**`readMemAvailableBytes` has one existing consumer, and giving it a real number on macOS changes
-a shipped default by three orders of magnitude.** `autoDetectMaxParallel`
-(`pkg/config/config.go:614-618`) sizes the **default** concurrency cap as
-`availableRAMBytes() / bytesPerAgent`, clamped by `clampParallel` (`:557-566`).
+**Kept as a pointer, because two later rulings changed both the answer and the question.** This
+subsection used to compute that giving macOS a real reading moves `performance.max_parallel_agents`'
+default from **2** to **2000**, and escalated that as **E-7**. The arithmetic was right for the code
+as it stood; the code it depended on no longer survives the ruling.
 
-| | macOS today | macOS with FR-064's reader |
-|---|---|---|
-| `availableRAMBytes()` | **0** (`meminfo_other.go:43`) | ≈8.5 GB on the reference 32 GB host |
-| `/ bytesPerAgent` (3.5 MB, `:608`) | 0 | ≈2300 |
-| after `clampParallel` | **2** — the `autoDetectFloorParallel` floor (`:558`) | **2000** — the `physicalConcurrencySafetyCeiling` cap (`:586`) |
+**ADR D1.5c** (one mechanism, several consumers) declined the narrower alternative this subsection
+offered — a browser-only accessor — so the browser gate and agent concurrency are now inseparable by
+decision. **ADR D1.5d** then deleted the term the 2 → 2000 arithmetic multiplied through:
+`bytesPerAgent` and `autoDetectMaxParallel`'s division. With no per-unit constant there is no
+computed number to move, so **nothing jumps** — and E-7's two shapes (let the default move, or give
+the browser its own accessor) are **both** dissolved rather than one of them chosen.
 
-**So `performance.max_parallel_agents`' default on macOS moves from 2 to 2000**, as a side effect
-of a browser-capacity fix, for every operator who has not set it explicitly
-(`clampParallelExplicit` still honours an explicit value outright, so anyone who set one is
-unaffected).
-
-**Three things are true at once and none of them cancels the others.** (1) It is arguably the
-*correct* number — the floor of 2 exists precisely because there was no signal, and
-`meminfo_other.go:30-33` says so in as many words. (2) It is nonetheless a **shipped-behaviour
-change well outside this spec's scope**, on a default that feeds `pkg/agent`'s
-`AdmissionController` and `TaskExecutor.syncDispatchCapacity`. (3) 2000 is a *physical* ceiling,
-not a measured one for this workload — the same ceiling a 32 GB Linux box already reaches, so
-this is not a new risk class, but it is a new exposure to it on a platform that has never had it.
-
-**This spec does not decide it. §0.5 E-7 escalates it**, with the two shapes available: let the
-default move (one release-note line), or gate the browser gate's reader behind its own accessor
-so `autoDetectMaxParallel` keeps the floor of 2 on macOS until sized deliberately. **What this
-spec will not do is ship the change unremarked** — that is the "saved, changed nothing" pattern
-inverted: *changed something nobody asked to change, and said nothing.*
+**§0.6b specifies what replaces it, and §0.5 E-7 is marked RULED.** What survives from this
+subsection unchanged is the reason it existed: a browser change must not alter agent-concurrency
+behaviour unremarked. That obligation is now carried by **FR-069** (§0.6b) as release-note and
+config-documentation text, with the announcement corrected from *"the macOS default moved"* to
+*"there is no longer a computed default"*.
 
 #### New requirements this ruling adds
 
@@ -660,6 +648,201 @@ inverted: *changed something nobody asked to change, and said nothing.*
 | **FR-064** | A **Darwin** implementation of `readMemAvailableBytes` and `readMemTotalBytes`, in a new `pkg/config/meminfo_darwin.go` sibling to `meminfo_linux.go`, with `meminfo_other.go` narrowed to `//go:build !linux && !darwin`; pure Go via `golang.org/x/sys/unix`; the formula and its caveats documented **at the call site** |
 | **FR-065** | **The undeterminable case refuses.** The availability accessor becomes two-valued (`bytes, ok`); where `ok` is false the pool **refuses to grow — at launch and at tab open — and logs why**, once per platform-lifetime rather than per call; an unmeasurable host is treated as full |
 | **FR-066** | **Windows is foreseen and declared, not defaulted through.** A `meminfo_windows.go` placeholder returning the unmeasurable signal and naming the fix route; a release-note line; a config-documentation line; and Windows browser support specified as **degraded-unsupported** |
+
+### 0.6b One mechanism, several consumers — and the limit is live, not computed (operator rulings, 2026-09-01)
+
+**Two rulings, recorded in the ADR as D1.5c and D1.5d, and they only make sense together.**
+
+> **D1.5c, verbatim:** *"the memory reader for linux and mac should have multiple use cases — the
+> browser limits but also the concurrent agent limit. Do not create multiple mechanisms; we need one
+> for managing limits and memory constraints."*
+>
+> **D1.5d, verbatim:** *"the number must be dynamic based on realtime memory consumption."*
+
+**D1.5c rules E-7.** §0.5 E-7 offered two shapes and asked the operator to pick; one of them —
+*"give the browser gate its own accessor so `autoDetectMaxParallel` keeps the floor of 2 on macOS"* —
+was **offered and declined by name**. There is one reader, one set of constraints, and several
+consumers. The browser pool and agent concurrency are not two mechanisms that happen to share a
+number; they are one mechanism asked the same question twice.
+
+**D1.5d then rules what that one mechanism computes: nothing.** It observes.
+
+#### Why `bytesPerAgent` goes, in the same terms D1.5a used against the browser cap
+
+`bytesPerAgent` (`pkg/config/config.go:608`) is a compile-time constant of 3.5 MB, and
+`autoDetectMaxParallel` (`:614-618`) turns it into a concurrency ceiling by dividing live
+availability by it. Every objection D1.5a raised against the browser's counters applies to that
+shape without adjustment:
+
+| D1.5a's objection to the browser cap | The same objection, against `bytesPerAgent` |
+|---|---|
+| It is an assumed per-unit cost, not a measured one | Its own doc comment (`config.go:588-589`) calls it *"the **assumed** marginal memory cost of one concurrent agent"* |
+| Real cost varies by more than an order of magnitude — renderers measured 30 MB → 327 MB | The same constant's doc concedes the spread itself (`:602-607`): it *"deliberately does NOT budget for the separate, stochastic ~500 MB Chromium/browser-tool event"*. An agent doing bookkeeping and an agent driving a browser differ by **~140×** against a 3.5 MB unit — by the constant's own citation, not by inference |
+| A number fixed at boot is wrong in both directions as load changes | It is worse than fixed-at-boot: the *constant* is fixed at compile time and only the *dividend* moves, so the answer tracks free memory while pretending per-agent cost is invariant |
+| A cap that overshoots its own stated bound is a defect (ADR criterion P14) | `clampParallel` (`:557-566`) then floors the result at **2** and caps it at **2000**, so on most hosts the division's answer is discarded at one end or the other — the arithmetic in the middle is decorative on exactly the hosts where it matters |
+
+**One asymmetry is worth stating rather than glossing, because it cuts the other way.** Unlike the
+browser cap, `bytesPerAgent` has real measurement behind it: `config.go:590-601` cites two UAT
+documents (`docs/internal/uat/parallelism-cost-browser-bash-2026-08-04.md`,
+`parallelism-cost-measurement-2026-08-04.md`) recording 2.0–3.2 MB gateway-RSS deltas per agent at
+N=4/8/16. That evidence is not being called wrong. What D1.5d rejects is the **shape** — freezing
+*any* per-unit figure, however well measured, when the thing it prices varies by two orders of
+magnitude with workload. The measurement stays true of the workload it measured and stops being
+true the moment an agent opens a browser.
+
+#### The deletion, as implementation scope (FR-067)
+
+Same treatment FR-059 gives the browser counters: a code deletion with its call sites named, not a
+configuration change.
+
+| Deleted | Where, verified on this worktree 2026-09-01 | Status before this ruling |
+|---|---|---|
+| `bytesPerAgent` (3.5 MB) | `pkg/config/config.go:608` (the `const`), plus its 19-line doc block `:588-607` | **Shipped**; one consumer |
+| `autoDetectMaxParallel`'s division | `pkg/config/config.go:614-618` — the whole function: `avail := availableRAMBytes()`, `val := int(float64(avail) / bytesPerAgent)`, `return clampParallel(val)` | **Shipped**; one consumer (`EffectiveMaxParallelAgents`, `:467`) |
+| `clampParallel` and `autoDetectFloorParallel` | `pkg/config/config.go:557-566` — the floor-2/ceiling-2000 clamp that exists **only** to bound the deleted division. `clampParallelExplicit` (`:486`) is **NOT** deleted: it serves the explicit-operator path, which survives intact | **Shipped**; one consumer (`autoDetectMaxParallel`) |
+| The doc claims that describe the deleted shape | `config.go:430-439` (`MaxParallelAgents`' own doc: *"0 means 'use the auto-detected default', sized from available memory"*), `:448-449` (`EffectiveMaxParallelAgents` step 3), `:611-613` (`autoDetectMaxParallel`'s own summary), `meminfo_other.go:19,25-33` (which explains at length why returning 0 lands on the floor of 2) | **Shipped**; each states a mechanism that will not exist |
+
+**`physicalConcurrencySafetyCeiling` = 2000 (`config.go:586`) is NOT deleted, and the distinction
+matters.** It is not a memory guess: its doc (`:568-586`) derives it from Go's hard abort at 10,000
+OS threads, a measured ~999 threads at ~1000 concurrent fsyncing goroutines, and a deliberate 5×
+margin for every other thread-consuming subsystem in the process. Memory availability says nothing
+about OS-thread exhaustion, so the live gate cannot replace it. It stays, as a **physical backstop**
+rather than a capacity default — see FR-067's answer below.
+
+#### What `EffectiveMaxParallelAgents` returns when nothing is set (FR-067)
+
+An explicit operator setting still wins outright, unchanged: env `OMNIPUS_MAX_PARALLEL_AGENTS`
+first, then `p.MaxParallelAgents > 0`, both through `clampParallelExplicit` (`config.go:454-467`).
+Absent one, **there is no number — there is a gate**, and the accessor has to say so in a shape its
+callers can act on. Its callers do expect an `int`, and three of them would break on a bare sentinel:
+
+| Caller | What it does with the value | What a bare `0` would do |
+|---|---|---|
+| `newTaskExecutor` (`pkg/agent/task_executor.go:250-260`) | `newDispatchSemaphore(capacity)` | A zero-capacity semaphore — **every** task dispatch blocks forever |
+| `getSubTurnConfig` (`pkg/agent/subturn.go::getSubTurnConfig` — this file churns, so the symbol is the citation) | in-turn fan-out cap | Same, for delegation |
+| `ResolveRootDelegationCap` (`pkg/agent/admission.go:216-218`) | the root-delegation admission cap | Same |
+| `getPerformance` / `putPerformance` (`pkg/gateway/rest_performance.go:71-78, 149-154`) | `effective_max_parallel_agents` on the wire; `wireMaxParallelAgents` (`:62-66`) substitutes it whenever the configured value is below the schema floor | `PerformanceSettings.yaml` declares `minimum: 1`, so a `0` on the wire is **schema-invalid** — the exact MAJOR-3 shape `:57-61` records having already been fixed once |
+
+**So the answer is two-valued, the same shape FR-065 gives the availability accessor** — one pattern
+used twice rather than a second convention:
+
+```go
+// (n, capped) — capped=false means "n is not the constraint; the live gate is".
+func (p PerformanceConfig) EffectiveMaxParallelAgents() (int, bool)
+```
+
+- env override set and valid → `(clampParallelExplicit(v), true)`
+- `p.MaxParallelAgents > 0` → `(clampParallelExplicit(p.MaxParallelAgents), true)`
+- otherwise → `(physicalConcurrencySafetyCeiling, false)`
+
+**Why the physical backstop and not a sentinel.** Returning 2000 with `capped=false` keeps every
+semaphore constructible, keeps the wire schema-valid, and keeps the one bound that is still true —
+the OS-thread ceiling — in force. Returning `0`, or `math.MaxInt`, hands the callers above a value
+that is either a deadlock or a thread-exhaustion abort. **`capped=false` is the load-bearing half:**
+it tells a caller that the integer it just received is a backstop, not a capacity claim, which is
+what FR-069 needs in order to stop the UI presenting it as one.
+
+#### Which shape: observed running cost, or no per-unit cost (FR-068)
+
+D1.5d names two and requires the spec to choose with its reasoning visible.
+**This spec chooses shape 2 — no per-unit cost.** It is also the ADR's recommendation, but the
+consistency argument is the weakest of the four reasons below, so it is listed last.
+
+1. **Shape 1 cannot attribute, and this is the decisive objection.** Shape 1 derives a marginal
+   figure from *this process's* footprint divided by live agent count. But this process also hosts
+   ~14 channels, the HTTP server, the browser coordinator's bookkeeping and the Go runtime — and,
+   critically, **Chrome is a child process**. Its memory is absent from our footprint and present in
+   the host availability figure the gate reads. So the derived per-agent cost would charge channel
+   traffic to agents and charge browser memory — the single largest, most variable term — to
+   nothing. The number would be systematically wrong in a direction no operator could audit, and the
+   only visible symptom would be admissions that feel arbitrary.
+2. **Shape 1's warm-up window is exactly when it is needed.** A gateway restart with resumed tasks
+   is the canonical burst: agent count goes 0 → N in seconds, with no history to derive from. A
+   marginal figure is meaningless at N=0 and unstable at N=1..2 — so the mechanism is at its least
+   trustworthy at the only moment admission control does real work.
+3. **Shape 1 misreads Go's memory behaviour on the way down.** The Go runtime does not return heap
+   promptly to the OS (scavenger + `MADV_FREE`), so as agents finish, footprint stays flat while the
+   denominator falls — and "cost per agent" *rises* during idle recovery. A gate consuming that
+   figure refuses admission most firmly when the host is emptiest. That is not a tuning problem; it
+   is the arithmetic.
+4. **Shape 2 is what the browser pool already does.** FR-060's tab gate is a ratio with no per-tab
+   byte constant, for the same reason: a tab has no measured floor and inventing one was declined
+   (§0.5 E-5). One rule applied twice, and no constant to drift.
+
+**The cost of shape 2, stated rather than glossed.** With no per-unit cost, the reserve absorbs the
+marginal agent — so the reserve must be big enough for one more agent of the heaviest realistic
+kind, and the gate can admit an agent that then turns out to be expensive. **What bounds that
+exposure is the browser gate itself:** the expensive tail D1.5c named (the ~500 MB
+Chromium event, `config.go:602-607`) cannot arrive unmetered, because an agent reaching for a
+browser must pass FR-057's launch gate at `PER_BROWSER_COST` and FR-060's tab gate first. The
+agent gate handles the ordinary case; the browser gate handles the tail. That is the whole reason
+one mechanism with two call sites is safer here than two mechanisms with one each.
+
+**Mechanically, FR-068 is FR-060's gate at a different call site.** Same exported two-valued
+accessor (FR-065), same ratio, same `ok=false` ⇒ refuse rule, same "logged once, not per call"
+discipline. No new threshold constant is introduced by this FR; if the agent path needs a different
+threshold from the browser path, that is a tuning decision for agent-concurrency's owner (E-8), not
+a second mechanism.
+
+#### The release-note item changes (FR-069)
+
+**§0.6a's earlier text — and D1.5c's own — announced *"the macOS default moves 2 → 2000"*. That
+announcement is dissolved and must not ship.** Nothing jumps, because nothing is precomputed:
+`bytesPerAgent` is gone, so there is no division whose result could move.
+
+**What must be announced instead, and it is smaller and truer:**
+
+- **There is no longer a computed default for `performance.max_parallel_agents`.** An explicit
+  setting is honoured exactly as before. Absent one, concurrency is bounded by **live available
+  memory** at the moment of each admission decision, plus the unchanged physical OS-thread backstop.
+- **On a host where availability cannot be determined, that gate has nothing to read** — see E-8,
+  which is the reason this bullet is written as a warning and not as behaviour.
+
+**And the number an operator can see does change, which is a different claim from "the default
+moved" and must not be conflated with it.** `GET /api/v1/performance` returns
+`effective_max_parallel_agents`, and with nothing set it will now report the physical backstop
+(2000) on every platform instead of a memory-derived figure — 2 on macOS today, `avail / 3.5 MB`
+clamped on Linux. Reporting 2000 as a capacity would be a fresh instance of the defect this project
+keeps catching: *a displayed number that is not the constraint*. FR-069 therefore requires the
+`capped=false` case to be surfaced as **"automatic — bounded by available memory"**, not as the
+integer 2000. That is a contract-and-SPA change (`contracts/components/schemas/PerformanceSettings.yaml`)
+and it is inside E-8's ratification, not outside it.
+
+#### Scope boundary, stated rather than assumed
+
+**This is not this spec's domain.** Agent concurrency is `pkg/agent` and `pkg/config`'s performance
+key; this is a browser-ownership spec. It is here for exactly two reasons, both of them external:
+the operator ruled it here, and D1.5c's single-mechanism ruling makes the two consumers
+inseparable — a browser fix now determines an agent-concurrency default on a platform where that
+path has never run.
+
+**It is recorded as an escalation (§0.5 E-8), not as settled.** FR-067, FR-068 and FR-069 are
+written to be implementable, but they are **not ratified** by a browser ruling and must not be
+implemented until agent-concurrency's owner signs off — with one branch of FR-068 (the unmeasurable
+host) explicitly un-ratified even then, because taken literally it stops the product rather than
+degrading it.
+
+**The browser-side requirements stay independently landable, and this is a requirement on the
+implementation plan, not a hope.** Streams are split so that FR-057, FR-059 through FR-066 land
+without FR-067/FR-068/FR-069:
+
+- The only artefact the two sides share is the **exported two-valued availability accessor**
+  (FR-065). The browser needs it regardless; the agent gate consumes the same one. It is written
+  once, in FR-065's commit, on the browser side.
+- FR-067's deletions touch **no file under `pkg/tools/browser`**, and the browser FRs touch **no
+  symbol in `EffectiveMaxParallelAgents`' call graph**. There is no shared edit to serialise.
+- Therefore: **if E-8 is not answered by the time the browser work is ready, the browser work ships
+  and FR-067/068/069 wait.** What may **not** happen is the reverse — the deletions landing on a
+  browser ruling's authority. *(A green browser build is not evidence for FR-067: the two sets of
+  tests do not overlap.)*
+
+#### New requirements these rulings add
+
+| FR | What it requires |
+|---|---|
+| **FR-067** | **`bytesPerAgent` and the computed default are deleted**, with call sites; `EffectiveMaxParallelAgents` becomes `(n int, capped bool)`; unset returns `(physicalConcurrencySafetyCeiling, false)` — a backstop, not a capacity |
+| **FR-068** | **Agent admission consults the same live headroom gate as the browser pool**, shape 2 (no per-unit cost), same accessor and same refusal rule — with the unmeasurable-host branch un-ratified pending E-8 |
+| **FR-069** | **The announcement is corrected.** Release note and config documentation say *"there is no longer a computed default"*, **not** *"the macOS default moved 2 → 2000"*; and `capped=false` is surfaced as "automatic — bounded by available memory", never as the integer 2000 |
 
 ---
 
