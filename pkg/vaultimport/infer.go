@@ -95,6 +95,32 @@ const (
 	// observations / distinct values) — the signal that the vocabulary is
 	// actually CLOSED rather than merely short so far.
 	enumMinAvgRepeat = 2.0
+	// adoptedEnumMaxDistinct: the ceiling for a vocabulary ASSEMBLED BY UNION
+	// across record types, which is a different question from the one
+	// enumMaxDistinct answers and therefore gets a different answer.
+	//
+	// enumMaxDistinct asks "is `closed vocabulary` a credible reading of the
+	// values THIS type's own notes hold" — a judgement about data, where 15 is
+	// generous. A union asks something else entirely: nineteen record types
+	// each carry a short, credible `status` vocabulary of their own, and the
+	// union of nineteen credible sets is not itself an incredible set, it is
+	// just a longer one. Holding a union to the single-type bound refuses
+	// every union of more than a handful of types on principle.
+	//
+	// THE COST OF THIS CEILING, RATIFIED BY THE FOUNDER 2026-09-01 AFTER BEING
+	// SHOWN THE EXACT SCHEMA IT WRITES. A record type with no notes gets a
+	// vocabulary borrowed from types that are not it: `invoice.status` becomes
+	// the 26-value union, which admits `ratified-partial` (a decision's status)
+	// and REFUSES `sent` (an invoice's). Until that type has one note of its
+	// own, a value outside the union is rejected. The alternative was leaving
+	// it `text`, which accepts anything and splits the untyped domain, taking
+	// the Inbox-Triage view down with it. He chose the working view over the
+	// honest fallback, with the rejection quoted to him.
+	//
+	// The moment ONE note of such a type exists, its own values decide and this
+	// never applies again — AdoptObservedDomains' clause 2, the same "data
+	// beats a base file" that contains every other rule in this file.
+	adoptedEnumMaxDistinct = 64
 )
 
 // ambiguousMatchFloorNum/Den: when the single best-matching non-text
@@ -1703,8 +1729,14 @@ type EnumWidening struct {
 	// Refused to know what changed.
 	Added []string
 	// Refused is set when admitting Requested would have pushed the set past
-	// enumMaxDistinct, so nothing was added at all.
+	// Bound, so nothing was added at all.
 	Refused bool
+	// Bound is the ceiling this widening was judged against — enumMaxDistinct
+	// for a vocabulary this type's own notes produced, adoptedEnumMaxDistinct
+	// for one it adopted from other types. Carried rather than recomputed at
+	// render time because the message quotes it to the operator, and a refusal
+	// naming the wrong ceiling sends him to correct a limit never applied.
+	Bound int
 	// Bases names every `.base` file that filtered on one of these values,
 	// sorted — the operator has to be told which file to go and look at.
 	Bases []string
@@ -1722,7 +1754,7 @@ func (w EnumWidening) ReportLines() []string {
 		lines = append(lines, fmt.Sprintf(
 			"%s.%s: NOT widened. %s filter(s) on %s, which no note of this type carries; admitting them would take the closed set to %d values, past the %d at which this run stops treating a property as an enum at all. The set is left exactly as the notes made it (%s) and those clauses stay named losses — a closed set that large is evidence the property was mis-inferred, not evidence for a wider set.",
 			w.RecordType, w.Property, joinBaseFiles(w.Bases), quoteJoin(w.Requested),
-			len(w.Observed)+len(w.Requested), enumMaxDistinct, quoteJoin(w.Observed)))
+			len(w.Observed)+len(w.Requested), w.Bound, quoteJoin(w.Observed)))
 	} else {
 		lines = append(lines, fmt.Sprintf(
 			"%s.%s: the closed set gained %s, which no note of this type carries — %s filter(s) on it, so it is the operator's own word for a legal value rather than an observation. Observed values were %s. An imported view filtering on it returns exactly what the Obsidian original returns, which today is no rows.",
@@ -1847,7 +1879,19 @@ func WidenEnumsFromBases(inferred map[string][]InferredProperty, relPaths []stri
 				Bases:      sortedStringKeys(a.bases),
 				Nearest:    nearestWithinOneEdit(requested, observed),
 			}
-			if len(observed)+len(requested) > enumMaxDistinct {
+			if inferred[rt][idx].DomainAdopted != nil {
+				w.Bound = adoptedEnumMaxDistinct
+			} else {
+				w.Bound = enumMaxDistinct
+			}
+			// An ADOPTED vocabulary is already a union and is held to the
+			// union bound; an OBSERVED one is this type's own data and keeps
+			// the single-type ceiling it was inferred under. Without this
+			// split the adoption above is self-defeating: `invoice.status`
+			// takes the 26-value union, the base file then asks for `paid`,
+			// and widening refuses at 15 — leaving the view working and the
+			// filter that motivated it broken.
+			if len(observed)+len(requested) > w.Bound {
 				w.Refused = true
 			} else {
 				w.Added = requested
@@ -3179,10 +3223,10 @@ func AdoptObservedDomains(inferred map[string][]InferredProperty, notes []NoteRe
 			if !ok {
 				continue
 			}
-			if domain.Type == records.TypeEnum && len(domain.EnumValues) > enumMaxDistinct {
+			if domain.Type == records.TypeEnum && len(domain.EnumValues) > adoptedEnumMaxDistinct {
 				d := DeclinedAdoption{
 					RecordType: rt, Property: name, Sources: sources,
-					UnionSize: len(domain.EnumValues), Bound: enumMaxDistinct,
+					UnionSize: len(domain.EnumValues), Bound: adoptedEnumMaxDistinct,
 				}
 				declined = append(declined, d)
 				if idx := indexOfProperty(inferred[rt], name); idx >= 0 {

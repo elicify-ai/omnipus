@@ -103,8 +103,16 @@ func TestAdoptObservedDomains_DeclinesAVocabularyTooLargeToBeClosed(t *testing.T
 	)
 	// Four observing types, five values each, no overlap: each is comfortably
 	// an enum on its own; together they are twenty, past the bound.
+	// ENOUGH TYPES TO PASS adoptedEnumMaxDistinct, computed from the constant
+	// rather than written as a number, so raising or lowering that ceiling
+	// moves this fixture with it instead of silently making the test vacuous.
+	// Each type stays at five values, comfortably an enum on its own — the
+	// union is what has to be too large, never any single contributor.
 	perType := 5
-	types := []string{"alpha", "gamma", "delta", "epsilon"}
+	var types []string
+	for i := 0; len(types)*perType <= adoptedEnumMaxDistinct; i++ {
+		types = append(types, fmt.Sprintf("rt%02d", i))
+	}
 	for ti, rt := range types {
 		for i := 0; i < perType; i++ {
 			notes = append(notes, noteOnDisk(t, dir,
@@ -134,8 +142,8 @@ func TestAdoptObservedDomains_DeclinesAVocabularyTooLargeToBeClosed(t *testing.T
 			union[records.FoldKey(v)] = true
 		}
 	}
-	if len(union) <= enumMaxDistinct {
-		t.Fatalf("fixture not exercising the rule: the union is %d values, within the %d bound, so nothing would decline", len(union), enumMaxDistinct)
+	if len(union) <= adoptedEnumMaxDistinct {
+		t.Fatalf("fixture not exercising the rule: the union is %d values, within the %d bound, so nothing would decline", len(union), adoptedEnumMaxDistinct)
 	}
 
 	adopted, declined := AdoptObservedDomains(inferred, notes)
@@ -143,7 +151,7 @@ func TestAdoptObservedDomains_DeclinesAVocabularyTooLargeToBeClosed(t *testing.T
 	got, _ := findInferredProperty(inferred["beta"], "stage")
 	if got.Type != records.TypeText {
 		t.Fatalf("beta.stage was adopted as %q although the observed union is %d values, past the %d bound past which this package stops calling a set closed",
-			got.Type, len(union), enumMaxDistinct)
+			got.Type, len(union), adoptedEnumMaxDistinct)
 	}
 	for _, a := range adopted {
 		if a.RecordType == "beta" && a.Property == "stage" {
