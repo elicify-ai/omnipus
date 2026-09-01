@@ -822,33 +822,64 @@ keeps catching: *a displayed number that is not the constraint*. FR-069 therefor
 integer 2000. That is a contract-and-SPA change (`contracts/components/schemas/PerformanceSettings.yaml`)
 and it is inside E-8's ratification, not outside it.
 
-#### Scope boundary, stated rather than assumed
+#### Scope, and it is signed off
 
-**This is not this spec's domain.** Agent concurrency is `pkg/agent` and `pkg/config`'s performance
-key; this is a browser-ownership spec. It is here for exactly two reasons, both of them external:
-the operator ruled it here, and D1.5c's single-mechanism ruling makes the two consumers
-inseparable — a browser fix now determines an agent-concurrency default on a platform where that
-path has never run.
+**This reaches beyond the browser into agent concurrency, and that is ratified, not proposed.**
+Operator scope sign-off **2026-09-01**, ADR commit `ddd9789a4` — *"D1.5d scope signed off — one
+deliverable, both consumers"*. §0.5 **E-8 is RULED** on the strength of it.
 
-**It is recorded as an escalation (§0.5 E-8), not as settled.** FR-067, FR-068 and FR-069 are
-written to be implementable, but they are **not ratified** by a browser ruling and must not be
-implemented until agent-concurrency's owner signs off — with one branch of FR-068 (the unmeasurable
-host) explicitly un-ratified even then, because taken literally it stops the product rather than
-degrading it.
+**Two things follow, and both are requirements on how this ships:**
 
-**The browser-side requirements stay independently landable, and this is a requirement on the
-implementation plan, not a hope.** Streams are split so that FR-057, FR-059 through FR-066 land
-without FR-067/FR-068/FR-069:
+1. **One deliverable, one set of tests.** The memory reader (FR-064/065/066), the browser pool's
+   admission (FR-057/060) and agent admission (FR-067/068/068a) are **one piece of work**. An earlier
+   revision of this section split them, keeping the browser side independently landable so it would
+   not wait behind someone else's approval. **That hedge is withdrawn**, and not merely as
+   unnecessary: shipping the reader with one of its two consumers adopted is precisely the split
+   D1.5c ruled against — *one mechanism half-adopted is two mechanisms*, with the second one arriving
+   later as a second set of thresholds nobody reconciled.
+2. **Agent concurrency's existing behaviour is in scope to change**, not adjacent to it. Its tests
+   and its documented defaults change with it. They are enumerated below with `file:line`, the same
+   treatment FR-059 gives the browser counters, so an implementer inherits a list rather than a
+   discovery exercise.
 
-- The only artefact the two sides share is the **exported two-valued availability accessor**
-  (FR-065). The browser needs it regardless; the agent gate consumes the same one. It is written
-  once, in FR-065's commit, on the browser side.
-- FR-067's deletions touch **no file under `pkg/tools/browser`**, and the browser FRs touch **no
-  symbol in `EffectiveMaxParallelAgents`' call graph**. There is no shared edit to serialise.
-- Therefore: **if E-8 is not answered by the time the browser work is ready, the browser work ships
-  and FR-067/068/069 wait.** What may **not** happen is the reverse — the deletions landing on a
-  browser ruling's authority. *(A green browser build is not evidence for FR-067: the two sets of
-  tests do not overlap.)*
+#### The agent-side deliverables, enumerated (FR-067)
+
+**Nothing in this table is collateral.** Each row is work the change owes, and each is verified on
+this worktree 2026-09-01.
+
+**Tests that assert the deleted formula and must be re-derived or deleted with it:**
+
+| Test | Where | What it asserts today, and why it cannot survive |
+|---|---|---|
+| `TestEffectiveMaxParallelAgents_Auto_MatchesMemoryFormula` | `pkg/config/parallel_clamp_test.go:110-121` | Asserts the auto default **equals** `clampParallel(int(float64(availableRAMBytes()) / bytesPerAgent))` — it is the formula, written twice. **Deleted with the formula**, not adapted: adapting it to the new answer would leave a test named after an arithmetic that no longer exists |
+| `TestEffectiveMaxParallelAgents_Auto` | `:94-108` | Asserts the auto value is `>= 2` and `<= physicalConcurrencySafetyCeiling`. **Re-derived**, not deleted: it becomes the FR-067 shape assertion — unset returns `(physicalConcurrencySafetyCeiling, false)`, and the test **fails if `capped` is true** |
+| `TestClampParallel` (table) | `:20-35` | Exercises `clampParallel`'s floor/ceiling directly. **Deleted with `clampParallel`.** `TestClampParallelExplicit` (`:55-64`) and `TestClampParallelExplicit_NeverLowers` (`:163-170`) are **kept unchanged** — the explicit path survives intact |
+| `TestEffectiveMaxParallelAgents_ExplicitOverridesAuto_BothDirections` | `:139-160` | Computes `autoDefault := PerformanceConfig{MaxParallelAgents: 0}.EffectiveMaxParallelAgents()` and picks values around it. **Re-derived** against the backstop, keeping its real assertion (an explicit value wins in **both** directions) |
+| `TestReadMemAvailableBytes_NonLinux_ReturnsZero`'s end-to-end half | `pkg/config/meminfo_other_test.go:45-53` | Asserts `autoDetectMaxParallel()` returns the floor of 2 off Linux. **The function is deleted**; the assertion's *intent* — no signal must not fail open — moves to FR-068a's floor test |
+| the cgroup end-to-end assertion | `pkg/config/meminfo_linux_test.go:238, 307-310` | Asserts `autoDetectMaxParallel() > 2` when a container has real headroom. **Deleted with the function**; FR-068's gate test replaces the property it was protecting |
+| `TestGetPerformance_UnconfiguredReturnsContractMinimum` | `pkg/gateway/rest_performance_test.go:40-49` | Asserts unconfigured `max_parallel_agents >= 2` and `effective >= 2`. **It would still pass** against FR-067 (the backstop is 2000) — **which is the problem**: it would pass while the field's *meaning* changed underneath it. **Re-derived to assert the `capped=false` representation** FR-069 requires, so it can fail on the change it is supposed to notice. *(Note its comment is already stale — it says "minimum 2"; `PerformanceSettings.yaml:12` says `minimum: 1`.)* |
+| the PUT-0 round trip | `pkg/gateway/rest_performance_ceiling_test.go:108-121, 125-158` | PUTs `max_parallel_agents: 0` ("reset to auto") and asserts the response is schema-valid. **Kept, and it is the regression guard for FR-067's shape choice** — it is the test that fails if a bare `0` sentinel is ever returned |
+
+**Call sites that break on the signature change** — `EffectiveMaxParallelAgents()` becomes
+two-valued, so every single-value use is a compile error. **29 non-test uses** across `pkg/agent`
+and `pkg/gateway` and **54 test-side uses across 9 files** (`pkg/config/parallel_clamp_test.go`,
+`config_adr057_test.go`; `pkg/agent/admission_test.go`, `wiring_adr057_fix_test.go`,
+`admission_adr057_test.go`, `fanout_cap_test.go`, `admission_consolidation_test.go`,
+`admission_failclosed_adr057_test.go`; `pkg/gateway/rest_performance_ceiling_test.go`). **This is
+mechanical but it is not free, and it is in the same commit** — the compiler finds every one, which
+is exactly why the two-valued shape is safer than an int sentinel: a sentinel would have compiled
+everywhere and been wrong at four call sites silently.
+
+**Documented defaults that describe the deleted mechanism:**
+
+| Artefact | Where | What it says that stops being true |
+|---|---|---|
+| `MaxParallelAgents`' own field doc | `pkg/config/config.go:430-439` | *"0 means 'use the auto-detected default', sized from available memory"* |
+| `EffectiveMaxParallelAgents`' doc, step 3 | `:448-449` | *"An auto-detect DEFAULT: availableMemory / bytesPerAgent"* |
+| `meminfo_other.go`'s rationale block | `pkg/config/meminfo_other.go:19, 25-33` | Nine lines explaining why returning 0 lands on the floor of 2 via `clampParallel` |
+| **The SPA's "Live system recommendation"** | `src/components/settings/PerformanceSection.tsx:218-229` | Presents `effective_max_parallel_agents` to the operator as a *recommendation*, with a comment naming the deleted formula verbatim: *"availableRAM / ~3.5 MB per concurrent agent, floored at 2 — see autoDetectMaxParallel"*. **This is the single most visible artefact in the list** — left alone it would recommend **2000** to every operator, in the UI, as a number the system chose for them. FR-069 fixes it |
+| the wire schema | `contracts/components/schemas/PerformanceSettings.yaml:10-16, 27-29` | `max_parallel_agents`' description explains the auto-detect contract; `minimum: 1` on both fields is what forbids a bare-`0` sentinel |
+| the UAT record `bytesPerAgent` cites | `docs/internal/uat/parallelism-cost-measurement-2026-08-04.md`, `parallelism-cost-browser-bash-2026-08-04.md`, `docs/internal/architecture/max-parallel-formula-research-2026-08-04.md` | **Not edited — they are records of a measurement that was correctly taken.** They are named here so a future reader finds the constant's provenance rather than concluding it was invented. What changed is the *shape*, not the arithmetic they contain |
 
 #### New requirements these rulings add
 
