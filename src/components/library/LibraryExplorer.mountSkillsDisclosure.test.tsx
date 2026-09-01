@@ -8,11 +8,11 @@
 // standalone component (LibraryExplorer owns the mount-creation mutation;
 // there is no separate "AddMount" component to import).
 //
-// createWorkspaceMount is mocked to resolve with the real
-// WorkspaceMountCreateResponse fields PLUS the (not-yet-committed-to-the-
-// wire-contract, see lib/api.ts::extractMountSkillsDisclosure) extra
-// `skills_count`/`skills_grants_message`/`skills_threshold_warning` keys —
-// exercising `mountSkillsDisclosure()`'s real read path end to end, not a
+// createWorkspaceMount is mocked to resolve with the real, committed
+// WorkspaceMountCreateResponse shape — including its
+// `skills_count`/`skills_grants_message`/`skills_threshold_warning` fields
+// (contracts/components/schemas/WorkspaceMountCreateResponse.yaml) — so this
+// exercises `mountSkillsDisclosure()`'s real read path end to end, not a
 // re-implementation of it.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -56,29 +56,33 @@ function makeWorkspaceNode(over: Partial<LibraryWorkspaceNode> = {}): LibraryWor
 
 /**
  * A successful mount-creation response, as `createWorkspaceMount()` itself
- * returns it — i.e. AFTER it has already merged the raw wire's
- * `skills_count`/`skills_grants_message`/`skills_threshold_warning` keys
- * into a nested `skills_disclosure` object (see `mountSkillsDisclosure`'s
- * doc comment in lib/api.ts). This test mocks `createWorkspaceMount` itself
- * (LibraryExplorer's own call site), so it must match THAT function's
- * output shape, not the raw wire shape — the raw-to-nested merge itself is
- * covered separately in api.workspaces.test.ts. Cast through `unknown`
- * because `skills_disclosure` is deliberately NOT part of the generated
- * `WorkspaceMountCreateResponse` type.
+ * returns it — i.e. the real, schema-validated `WorkspaceMountCreateResponse`
+ * wire shape (contracts/components/schemas/WorkspaceMountCreateResponse.yaml),
+ * carrying `skills_count`/`skills_grants_message`/`skills_threshold_warning`
+ * directly as top-level fields now that ADR-072 D1.2's disclosure is wired
+ * into `pkg/gateway/rest_workspace_mounts.go::mountToCreateResponse`. This
+ * test mocks `createWorkspaceMount` itself (LibraryExplorer's own call
+ * site), so it must match the real generated response shape —
+ * `mountSkillsDisclosure()`'s own camelCase transform of these fields is
+ * covered separately in api.workspaces.test.ts.
  */
 function mountResponseWithDisclosure(
   over: { count?: number; grantsMessage?: string; thresholdWarning?: string } = {},
 ): WorkspaceMountCreateResponse {
   const disclosure =
     over.count !== undefined
-      ? { count: over.count, grantsMessage: over.grantsMessage ?? '', thresholdWarning: over.thresholdWarning ?? null }
-      : undefined
+      ? {
+          skills_count: over.count,
+          skills_grants_message: over.grantsMessage ?? '',
+          ...(over.thresholdWarning !== undefined ? { skills_threshold_warning: over.thresholdWarning } : {}),
+        }
+      : {}
   return {
     name: 'client-repo',
     host_path: '/Users/operator/code/client-repo',
     status: 'ok',
-    ...(disclosure ? { skills_disclosure: disclosure } : {}),
-  } as unknown as WorkspaceMountCreateResponse
+    ...disclosure,
+  }
 }
 
 async function openAddMountDialogAndConfirm(hostPath: string) {

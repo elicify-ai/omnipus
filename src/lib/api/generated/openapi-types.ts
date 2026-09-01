@@ -6766,6 +6766,12 @@ export interface components {
              * @example [topic]
              */
             argument_hint?: string;
+            /**
+             * Format: date-time
+             * @description ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was requested by name through the Skill tool's load path (pkg/audit.Logger ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count, a search match does not). Null when the skill has never been invoked by name, or its invocation history could not be determined.
+             * @example 2026-08-15T10:00:00Z
+             */
+            last_invoked?: string | null;
         };
         /** @description A single slash command available on a given surface, as returned by GET /api/v1/commands. The web chat palette renders these. Aliases and deprecated command names are NOT returned as separate entries. */
         SlashCommand: {
@@ -9663,6 +9669,21 @@ export interface components {
              * @example mounting "/Users/operator" contains this Omnipus installation's own data directory (/Users/operator/.omnipus) — the installation's own secrets remain protected independently of this mount, but every OTHER file under /Users/operator becomes writable by any agent on this workspace
              */
             warning?: string;
+            /**
+             * @description ADR-072 D1.2/FR-074/FR-074a: how many project skills this mount's recognised skills directory contributes, as counted by pkg/skills/mount_threshold.go's EvaluateMountSkillsDisclosure at mount-creation time. Present only when the mount carries a recognised skills directory with at least one skill — absent (not zero) when the mount has none, mirroring `warning`'s own absent-not-empty convention.
+             * @example 3
+             */
+            skills_count?: number;
+            /**
+             * @description FR-074a: states, every time skills_count is present — even a single-digit count — that this mount's skills directory grants agents new, auto-loadable instructions in this workspace, not merely files sitting in the repository. Independent of skills_threshold_warning: set whenever skills_count is present, regardless of whether the threshold was exceeded. Absent exactly when skills_count is absent.
+             * @example This mount's skills directory grants 3 skills to every agent working in this workspace as auto-loadable agent instructions — not just files sitting in the repository. Any agent acting here may call and run them, with no separate grant needed.
+             */
+            skills_grants_message?: string;
+            /**
+             * @description FR-074: present only when skills_count exceeds the mount-add-time threshold (pkg/skills/mount_threshold.go's DefaultMountSkillsWarnThreshold, spec default 500) — states the count and its per-turn consequence. The mount is still created either way (FR-075): this is information, never a refusal. Absent when the threshold was not exceeded, including whenever skills_count itself is absent.
+             * @example This mount would contribute 5000 skills — well beyond a plausible hand-authored collection (threshold: 500). Every one of them will appear in the skills menu on every turn in this workspace. The mount is being created anyway; you may want to confirm this isn't a vendored or generated tree before relying on it.
+             */
+            skills_threshold_warning?: string;
         };
         /**
          * Plan

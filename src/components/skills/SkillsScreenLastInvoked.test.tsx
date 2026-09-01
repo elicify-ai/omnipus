@@ -11,11 +11,12 @@
  * tested directly since skill rows are rendered inline, not as a standalone
  * SkillCard component.
  *
- * `skillLastInvoked()` reads `last_invoked` off the raw (pre-schema)
- * response body (see lib/api.ts::extractLastInvoked) — the committed Skill
- * wire contract does not declare that field yet, so these tests attach it to
- * the mocked `fetchSkills` resolution the same way the real (not-yet-landed)
- * backend endpoint eventually will: as an extra JSON key on each skill.
+ * `skillLastInvoked()` reads `last_invoked` off the real, schema-validated
+ * `Skill` (contracts/components/schemas/Skill.yaml), populated by
+ * `pkg/gateway/rest.go::listSkills` from `pkg/audit.Logger
+ * ::LastInvokedForSkill`. These tests attach it to the mocked `fetchSkills`
+ * resolution the same way the real backend response does: as a JSON key on
+ * each skill.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'

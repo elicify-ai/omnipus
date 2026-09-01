@@ -2927,6 +2927,7 @@ export const Skill = z.object({
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),
   argument_hint: z.string().optional(),
+  last_invoked: z.string().datetime({ offset: true }).nullish(),
 });
 export const SkillSearchResult = z.object({
   slug: z.string(),
@@ -3543,6 +3544,9 @@ export const WorkspaceMountCreateResponse = z.object({
   host_path: z.string().min(1),
   status: z.enum(["ok", "broken"]),
   warning: z.string().min(1).optional(),
+  skills_count: z.number().int().gte(1).optional(),
+  skills_grants_message: z.string().min(1).optional(),
+  skills_threshold_warning: z.string().min(1).optional(),
 });
 export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
 export const WorkspaceInstructionsRequest = z.object({

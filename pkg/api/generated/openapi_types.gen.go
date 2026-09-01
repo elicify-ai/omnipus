@@ -13417,6 +13417,9 @@ type Skill struct {
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
 
+	// LastInvoked ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was requested by name through the Skill tool's load path (pkg/audit.Logger ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count, a search match does not). Null when the skill has never been invoked by name, or its invocation history could not be determined.
+	LastInvoked *time.Time `json:"last_invoked,omitempty"`
+
 	// Name Human-readable skill name.
 	Name string `json:"name"`
 
@@ -14827,6 +14830,15 @@ type WorkspaceMountCreateResponse struct {
 
 	// Name The mount's name, as created (see WorkspaceMountCreateRequest.name).
 	Name string `json:"name"`
+
+	// SkillsCount ADR-072 D1.2/FR-074/FR-074a: how many project skills this mount's recognised skills directory contributes, as counted by pkg/skills/mount_threshold.go's EvaluateMountSkillsDisclosure at mount-creation time. Present only when the mount carries a recognised skills directory with at least one skill — absent (not zero) when the mount has none, mirroring `warning`'s own absent-not-empty convention.
+	SkillsCount *int `json:"skills_count,omitempty"`
+
+	// SkillsGrantsMessage FR-074a: states, every time skills_count is present — even a single-digit count — that this mount's skills directory grants agents new, auto-loadable instructions in this workspace, not merely files sitting in the repository. Independent of skills_threshold_warning: set whenever skills_count is present, regardless of whether the threshold was exceeded. Absent exactly when skills_count is absent.
+	SkillsGrantsMessage *string `json:"skills_grants_message,omitempty"`
+
+	// SkillsThresholdWarning FR-074: present only when skills_count exceeds the mount-add-time threshold (pkg/skills/mount_threshold.go's DefaultMountSkillsWarnThreshold, spec default 500) — states the count and its per-turn consequence. The mount is still created either way (FR-075): this is information, never a refusal. Absent when the threshold was not exceeded, including whenever skills_count itself is absent.
+	SkillsThresholdWarning *string `json:"skills_threshold_warning,omitempty"`
 
 	// Status Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
 	Status WorkspaceMountCreateResponseStatus `json:"status"`

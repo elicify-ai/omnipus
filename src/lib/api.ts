@@ -3164,44 +3164,16 @@ export function deleteAgentMailbox(agentId: string, workspaceId: string): Promis
 // See contracts/components/schemas/McpServerCreate.yaml.
 
 /**
- * ADR-072 D3.1: extract a skill's raw `last_invoked` field, straight off the
- * PRE-schema-validation response body.
- *
- * `last_invoked` is not yet part of the committed wire contract —
- * contracts/components/schemas/Skill.yaml declares no such property
- * (`additionalProperties: false`) — because the audit-backed endpoint that
- * would populate it (ADR-072 D3.1: "a per-skill `last_invoked` timestamp is
- * surfaced in the Skills UI") is a separate, concurrently-developed backend
- * workflow that has not landed the contract change yet. Adding the field to
- * Skill.yaml and regenerating pkg/api/generated (Go) + src/lib/api/generated
- * (TS) is cross-cutting Go+TS codegen work outside this frontend-only
- * change's scope (Constraint #8).
- *
- * Reading it off the RAW body rather than through `SkillSchema` matters:
- * `SkillSchema` has no `.passthrough()`, and Zod's default `z.object()` mode
- * silently STRIPS any property the schema doesn't declare. So once the
- * backend starts sending `last_invoked` in the JSON payload, going through
- * `SkillSchema` alone would keep discarding it until the contract itself is
- * regenerated. Merging the raw value back onto the validated `Skill` here
- * means the UI starts showing it the moment the server sends it, with no
- * further frontend change required — and today, since the backend does not
- * send it yet, this always returns `null`, so the UI correctly (not
- * fictitiously) shows every skill as never-invoked.
- */
-function extractLastInvoked(rawItem: unknown): string | null {
-  if (!rawItem || typeof rawItem !== 'object') return null
-  const value = (rawItem as Record<string, unknown>).last_invoked
-  return typeof value === 'string' ? value : null
-}
-
-/**
  * Read a skill's last-invocation timestamp (ISO 8601), or `null` when the
- * skill has never been invoked or the backend does not report it yet. See
- * `extractLastInvoked`'s doc comment for why this isn't a declared `Skill`
- * property today.
+ * skill has never been invoked or the backend has no audit history for it.
+ * `last_invoked` is a real `Skill` wire field (ADR-072 D3.1,
+ * contracts/components/schemas/Skill.yaml) populated by
+ * `pkg/gateway/rest.go::listSkills` from `pkg/audit.Logger
+ * ::LastInvokedForSkill` — validated by `SkillSchema` like every other
+ * `Skill` field, no raw-body access involved.
  */
 export function skillLastInvoked(skill: Skill): string | null {
-  return (skill as unknown as { last_invoked?: string | null }).last_invoked ?? null
+  return skill.last_invoked ?? null
 }
 
 export async function fetchSkills(): Promise<Skill[]> {
@@ -3216,12 +3188,7 @@ export async function fetchSkills(): Promise<Skill[]> {
   for (const item of raw) {
     const parsed = SkillSchema.safeParse(item)
     if (parsed.success) {
-      const skill = parsed.data as Skill
-      const lastInvoked = extractLastInvoked(item)
-      if (lastInvoked !== null) {
-        ;(skill as unknown as { last_invoked?: string | null }).last_invoked = lastInvoked
-      }
-      out.push(skill)
+      out.push(parsed.data as Skill)
     } else dropped++
   }
   if (dropped > 0 && import.meta.env?.DEV) {
@@ -4354,20 +4321,17 @@ export function fetchHostFolders(path?: string): Promise<HostFolderListing> {
 
 /**
  * ADR-072 D1.2/FR-074/FR-074a: what mount-creation time discloses about a
- * mount's recognised skills directory. Mirrors the shape of the (currently
- * unwired) backend evaluator `pkg/skills/mount_threshold.go
- * ::MountSkillsDisclosure` — `Count`/`GrantsMessage`/`ThresholdWarning` —
- * verified present in that file on this branch but NOT yet called from
- * `pkg/gateway/rest_workspace_mounts.go::handleWorkspaceMountCreate`, and NOT
- * yet part of `contracts/components/schemas/WorkspaceMountCreateResponse.yaml`
- * (`additionalProperties: false`, no skills-related property). This is a
- * frontend-local, forward-compatible type (`// not-wire-format`) for reading
- * those fields defensively off the RAW response the moment the backend
- * starts sending them — see `extractMountSkillsDisclosure` below. It is NOT
- * a claim about the eventual committed field names; those must still be
- * settled in the contract by whoever wires the backend call.
+ * mount's recognised skills directory. SPA-shaped (camelCase) transform of
+ * the real wire fields `WorkspaceMountCreateResponse.skills_count` /
+ * `.skills_grants_message` / `.skills_threshold_warning` — see
+ * contracts/components/schemas/WorkspaceMountCreateResponse.yaml, populated
+ * by `pkg/gateway/rest_workspace_mounts.go::mountToCreateResponse` from
+ * `pkg/skills/mount_threshold.go::EvaluateMountSkillsDisclosure`. Mirrors
+ * the transformation-type convention used elsewhere in this file (e.g.
+ * `Session`, `ToolCall`): the wire shape is the generated
+ * `WorkspaceMountCreateResponse` type; this is the SPA's normalised view.
  */
-export interface MountSkillsDisclosure { // not-wire-format: forward-compatible local read of an ADR-072 D1.2 field the committed contract does not declare yet — see doc comment above
+export interface MountSkillsDisclosure { // not-wire-format: SPA transformation type (camelCase view over the real wire fields WorkspaceMountCreateResponse.skills_count/skills_grants_message/skills_threshold_warning) — see doc comment above
   /** How many project skills the mount's recognised skills directory carries. */
   count: number
   /**
@@ -4386,37 +4350,27 @@ export interface MountSkillsDisclosure { // not-wire-format: forward-compatible 
 }
 
 /**
- * Extract ADR-072 D1.2's mount-time skills disclosure from the RAW (pre-
- * schema-validation) mount-creation response body, tolerating its total
- * absence (today's committed contract has no such fields at all — see
- * `MountSkillsDisclosure`'s doc comment). Returns `null` when the raw body
- * carries none of the expected keys, which is the correct, non-fabricated
- * answer until the backend wiring and contract change land.
- */
-function extractMountSkillsDisclosure(rawBody: unknown): MountSkillsDisclosure | null {
-  if (!rawBody || typeof rawBody !== 'object') return null
-  const raw = rawBody as Record<string, unknown>
-  const count = raw.skills_count
-  const grantsMessage = raw.skills_grants_message
-  if (typeof count !== 'number' || count <= 0 || typeof grantsMessage !== 'string') return null
-  const thresholdWarning = raw.skills_threshold_warning
-  return {
-    count,
-    grantsMessage,
-    thresholdWarning: typeof thresholdWarning === 'string' ? thresholdWarning : null,
-  }
-}
-
-/**
- * Read the ADR-072 D1.2 skills disclosure merged onto a
- * `WorkspaceMountCreateResponse` by `createWorkspaceMount`, or `null` when
- * the mount carries no recognised skills directory (or the backend does not
- * report it yet — see `MountSkillsDisclosure`'s doc comment).
+ * Read the ADR-072 D1.2 skills disclosure off a real
+ * `WorkspaceMountCreateResponse` (already validated against the generated
+ * schema by `createWorkspaceMount`), or `null` when the mount carries no
+ * recognised skills directory (`skills_count` absent — see
+ * `EvaluateMountSkillsDisclosure`'s zero-count contract).
  */
 export function mountSkillsDisclosure(
   resp: WorkspaceMountCreateResponse,
 ): MountSkillsDisclosure | null {
-  return (resp as unknown as { skills_disclosure?: MountSkillsDisclosure }).skills_disclosure ?? null
+  if (
+    typeof resp.skills_count !== 'number' ||
+    resp.skills_count <= 0 ||
+    typeof resp.skills_grants_message !== 'string'
+  ) {
+    return null
+  }
+  return {
+    count: resp.skills_count,
+    grantsMessage: resp.skills_grants_message,
+    thresholdWarning: resp.skills_threshold_warning ?? null,
+  }
 }
 
 /**
@@ -4429,32 +4383,22 @@ export function mountSkillsDisclosure(
  *
  * Also carries an ADR-072 D1.2 skills disclosure when the mounted folder has
  * a recognised skills directory — read it via `mountSkillsDisclosure(resp)`.
- * Validated manually against the raw body (rather than passed straight to
- * `request<T>`'s schema argument) so that raw merge can happen — see
- * `extractMountSkillsDisclosure`'s doc comment for why going through the
- * schema alone would silently strip those fields.
+ * Goes through the standard `request<T>()` schema-validated path like every
+ * other endpoint (drop + counter + dev-toast on a schema mismatch, per
+ * Constraint #8) — no manual raw-body reimplementation needed now that
+ * `skills_count`/`skills_grants_message`/`skills_threshold_warning` are real
+ * `WorkspaceMountCreateResponse` fields.
  */
-export async function createWorkspaceMount(
+export function createWorkspaceMount(
   workspaceId: string,
   body: WorkspaceMountCreateRequest,
 ): Promise<WorkspaceMountCreateResponse> {
   const path = `/workspaces/${encodeURIComponent(workspaceId)}/mounts`
-  const raw = await request<unknown>(path, { method: 'POST', body: JSON.stringify(body) })
-  const parsed = WorkspaceMountCreateResponseSchema.safeParse(raw)
-  if (!parsed.success) {
-    _recordApiSchemaError(`POST /api/v1${path}`, parsed.error.issues.length)
-    throw new ApiSchemaError(
-      `POST /api/v1${path}`,
-      parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message })),
-      raw,
-    )
-  }
-  const resp = parsed.data as WorkspaceMountCreateResponse
-  const disclosure = extractMountSkillsDisclosure(raw)
-  if (disclosure) {
-    ;(resp as unknown as { skills_disclosure?: MountSkillsDisclosure }).skills_disclosure = disclosure
-  }
-  return resp
+  return request<WorkspaceMountCreateResponse>(
+    path,
+    { method: 'POST', body: JSON.stringify(body) },
+    WorkspaceMountCreateResponseSchema as ZodType<WorkspaceMountCreateResponse>,
+  )
 }
 
 /**

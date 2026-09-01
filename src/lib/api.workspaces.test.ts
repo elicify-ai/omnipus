@@ -844,14 +844,16 @@ describe('setTaskDependencies', () => {
 
 // ── createWorkspaceMount / mountSkillsDisclosure (ADR-072 D1.2, FR-074/074a) ────
 //
-// `skills_count`/`skills_grants_message`/`skills_threshold_warning` are not
-// yet declared in contracts/components/schemas/WorkspaceMountCreateResponse.yaml
-// (additionalProperties: false) — see extractMountSkillsDisclosure's doc
-// comment in lib/api.ts. createWorkspaceMount validates the response
-// manually (rather than handing the schema straight to request<T>()) so it
-// can still merge those fields back from the RAW body. These tests exercise
-// that merge against a real (mocked) HTTP response, matching the
-// fetchSkills/last_invoked tests above.
+// `skills_count`/`skills_grants_message`/`skills_threshold_warning` are real,
+// committed fields on WorkspaceMountCreateResponse
+// (contracts/components/schemas/WorkspaceMountCreateResponse.yaml), populated
+// by pkg/gateway/rest_workspace_mounts.go::mountToCreateResponse from
+// pkg/skills/mount_threshold.go::EvaluateMountSkillsDisclosure.
+// createWorkspaceMount validates the response through the standard schema-
+// checked request<T>() path like every other endpoint; mountSkillsDisclosure()
+// reads the validated fields directly off the real WorkspaceMountCreateResponse
+// (no raw-body access). These tests exercise that path against a real (mocked)
+// HTTP response, matching the fetchSkills/last_invoked tests above.
 
 describe('createWorkspaceMount / mountSkillsDisclosure', () => {
   it('returns the ordinary WorkspaceMountCreateResponse fields untouched when the backend sends no skills disclosure', async () => {
