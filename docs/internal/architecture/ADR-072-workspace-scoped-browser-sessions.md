@@ -587,6 +587,55 @@ that failure.
 notes record the host root volume filling **twice**, and browser caches are the
 fastest-growing thing being added to it.
 
+#### D1.5e Where the reading comes from, per deployment — and the one that lies
+
+**Operator ruling, 2026-09-01: specify the Kubernetes case.**
+
+`availableRAMBytes` (`pkg/config/config.go:655`) takes the **smaller** of the
+machine figure and the cgroup figure, so a container never sizes itself against
+its host. Verified per deployment:
+
+| Deployment | Source | Correct? |
+|---|---|---|
+| Linux bare metal | `/proc/meminfo` | ✓ |
+| Linux + Docker | cgroup v2 `memory.max` / v1 `memory.limit_in_bytes` | ✓ |
+| Docker Desktop on macOS or Windows | the Linux VM's cgroup — the container **is** Linux | ✓ |
+| Fly.io (Firecracker microVM) | the VM's own `/proc/meminfo` | ✓ |
+| **Kubernetes, `limits.memory` set** | the pod's cgroup | ✓ |
+| **Kubernetes, no `limits.memory`** | **falls back to the NODE's memory** | ✗ — see below |
+| macOS native | the D1.5b reader | ✓ once written |
+| gVisor / GKE Sandbox | `/proc/meminfo` unreadable | falls back (D1.5b) |
+| Windows native | no reader | unsupported |
+
+**The Kubernetes case that lies, and why it is worth a requirement.**
+`readCgroupV2LimitBytes` (`pkg/config/meminfo_linux.go:226-240`) correctly
+returns `(0, false)` when the limit reads `max` — i.e. **no limit set**. The
+fallback is then `/proc/meminfo`, which **inside a pod reports the whole
+node**. So a pod deployed without `limits.memory` sizes itself against a 64 GB
+node while the scheduler may never let it have a fraction of that. It launches
+browsers and agents until the node's OOM killer intervenes — and Kubernetes
+kills **the pod**, not the browser that caused it.
+
+This is a deployment misconfiguration rather than a code defect, and
+`limits.memory` is optional — plenty of manifests set only `requests`. But it
+is the **worst** failure available to this design, because every other
+unmeasurable case fails conservative (D1.5b) while this one **fails open**: it
+reads a large, confident, wrong number.
+
+**Decision: it is detectable, so it must be reported.** Reading `max` is an
+unambiguous signal that no container limit exists. When the process is
+containerised and no cgroup limit is found, log a **WARN at startup naming the
+condition and the remedy** — *"no container memory limit set; sizing against
+node memory — set `resources.limits.memory`"*. Not a refusal: a bare-metal
+Linux host also has no cgroup limit and is perfectly correct, so refusing would
+break the ordinary case.
+
+**The distinction the implementation must draw:** "no cgroup limit" means
+*correct* on bare metal and *dangerous* in a pod. Detecting containerisation
+independently of the limit (e.g. the presence of a container cgroup path) is
+what separates them; without that the warning either never fires or fires
+constantly, and a warning that always fires is not a warning.
+
 #### D1.5c One memory mechanism, several consumers
 
 **Operator ruling, 2026-09-01, overriding a narrower proposal:**
