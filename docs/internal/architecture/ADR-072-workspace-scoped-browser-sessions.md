@@ -369,6 +369,9 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    budget        = min(host_RAM, cgroup_limit) × 0.5      // Chrome's own policy
    pool_budget   = budget − gateway_reserve
    per_instance  = FIXED_FLOOR + (R × 85 MB) + encoder_page
+                 // ^ see the unit note directly below — this line is not
+                 //   dimensionally clean as written and must be fixed
+                 //   before anyone implements it
    max_browsers  = clamp(pool_budget / per_instance, 1, operator_ceiling)
    ```
 
@@ -398,6 +401,27 @@ Chrome to N, and nothing in ADR-043 anticipates it.
    It bounds total renderers across the pool; `--renderer-process-limit` bounds
    them within one instance. The two are different guards and neither replaces
    the other.
+
+#### Unit defect in the formula above — fix before implementing (found 2026-09-01)
+
+Three terms, three different kinds of quantity:
+
+- `FIXED_FLOOR` is **marginal PSS**, measured (G-1).
+- `85 MB` is Chromium's internal `kEstimatedWebContentsMemoryUsage` — a
+  **budget constant**, not a measured PSS-per-renderer. This section's own
+  measurement puts real renderers at **74–268 MB**, so the formula
+  **understates by up to ~3×** at the top of its own cited range. That is §8
+  row 3 mirrored: the same class of error, opposite sign.
+- `encoder_page` is described as "+1 renderer" — **a count added to a byte
+  expression**.
+
+**Decision.** `encoder_page` becomes a byte value. `85 MB` is **retained
+deliberately**, so that our cap and Chrome's own internal limit reason in the
+same currency rather than drifting apart — but that retention is a choice, not
+an oversight, and it **must be re-derived against G-1's measured figure**. If
+G-1 lands materially above 85 MB, the formula over-provisions, the cap is too
+generous, and the failure direction is an OOM rather than a refusal — the worse
+of the two.
 
 #### Cold start, and the four unknowns
 
@@ -1184,6 +1208,11 @@ with their own scope. §6 carries it.
 | 1 | Mia browses; operator watches and takes over | Works as today — unchanged |
 | 2 | Operator switches the chat from Mia to Jim mid-session | Jim sees and drives the same tabs. No handover step, no command |
 | 3 | Operator browses first, **then** asks an agent to take over | Any agent on that workspace **whose tool policy allows the browser surface** sees the tab |
+> **Criterion 4 is deliberately absent.** It required a delegated sub-agent not
+> to hijack the operator's tab. D1.10's sharing ruling makes that behaviour
+> *intended*, so the criterion was withdrawn rather than renumbered — the gap
+> in the sequence is the record. Criterion 17 asserts the opposite deliberately.
+
 | 5 | `browser_list_tabs` with no browsing context | Says so. Must not be indistinguishable from an empty tab set |
 | 5b | **Isolation exists and is workspace-scoped.** Log in to a site in workspace X; open the same site in workspace Y | Y is **logged out**. The test that proves isolation was turned on and keyed correctly |
 | 5c | **No surprise logout.** Log in during one chat; start a **new chat in the same workspace** and visit the same site | Still **logged in**. This is what the workspace axis buys over the conversation axis |
