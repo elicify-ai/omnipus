@@ -1812,6 +1812,20 @@ Owns the **per-action** write-class audit events (FR-027), their name constraint
 
 **Stream G — Tests + regression (cross-cutting).** Owns §10. **Does not own the 364-reference test migration** — that is Stream A's, in Stream A's own commits, because it is a compile dependency of FR-002b rather than a test-quality task (§2.2a).
 
+**Stream M — the one memory mechanism, both consumers (cross-cutting; owns files outside `pkg/tools/browser`).** Owns **FR-067** (`bytesPerAgent` and the computed default deleted; `EffectiveMaxParallelAgents` returns `(n, capped)`), **FR-068** and **FR-068a** (agent admission on the same live accessor and threshold as the pool; the unmeasurable host holds at the floor of 2), **FR-069** (the corrected announcement and the SPA's backstop text) and **FR-075** (the two `ok=false` responses, asserted as a pair). Files: `pkg/config/meminfo_*.go`, `pkg/config/config.go`, `pkg/config/parallel_clamp*.go`, the agent admission path, `pkg/gateway/rest_performance*.go`, and the Performance settings component. **Recorded here because the previous pass left FR-067…FR-069 with no stream at all** — they were ruled into this document by ADR D1.5c/D1.5d and signed off as scope (`ddd9789a4`) after §3.2 was last written, and an unassigned requirement is one nobody is holding.
+Depends on: **FR-064/FR-065's two-valued accessor** (Stream P owns the Darwin reader itself). **Ships in the same deliverable as the browser gate** — the sign-off withdrew the "independently landable" split. **Its own regression surface is larger than the browser's** and is enumerated in §10.1's second out-of-package list.
+
+**Where D1.9b's six new FRs land — no new stream needed for any of them.**
+
+| FR | Stream | Why there |
+|---|---|---|
+| **FR-070** (implicit acquisition has no surface) | **D** | It is a statement about the tool registry and the `controlledResult`/lease composition D already owns. The requirement is an *absence*, so it costs D a structural test and no new file |
+| **FR-071** (the control lock gates acquisition; the blocked case is asserted) | **D** | §14.2 rule 1's ordering is D's, and this is that ordering's mitigation reading. **It also depends on Stream A's FR-002c** — the lock must be asked about the resolved key or the assertion passes vacuously — so D cannot land it before A |
+| **FR-072** (periodic cache trimming) | **P** | P already owns the per-key profile directories, the launch locks that decide eligibility, and idle close, which is trigger 1. Trimming from anywhere else would need a second liveness test |
+| **FR-073** (the protected set survives) | **P** | Same files; its real-Chrome half shares Stream P's gating |
+| **FR-074** (the continuously-driven residual is declared) | **P** | Config doc, release note and log line, alongside FR-066's Windows declaration in the same artefacts |
+| **FR-075** (one predicate, two responses) | **M** | It is an assertion *about both consumers at once*, so it belongs with the mechanism rather than with either caller |
+
 **Parallelization:** A lands its interface first, with the §2.2a migration in the same commits. C/D/E/F fan out on disjoint files. P runs behind its gates and lands last.
 
 **Why "last" is safe for the mechanism but not for the words (round-2 MAJ-107).** Until P lands the product has one Chrome and therefore one cookie partition — which is exactly today's behaviour, so the intermediate state is not a *behavioural* regression. The previous draft stopped there and used that to justify shipping the description corrections in Stream C. **That was wrong**, because FR-034's replacement literal asserted the browser is *"shared across this workspace"* — a sentence whose implicature is that it is **not** shared beyond it, while `capture_shared_context: true` (`defaults.go:671`) still means one partition across **all** workspaces until P lands. That is a false ownership claim made to the model and shown to the operator: the exact defect class ADR-072 §1.1 exists to fix, reintroduced by the fix for it.
