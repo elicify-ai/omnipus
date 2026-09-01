@@ -1503,7 +1503,12 @@ structure an agent needs to decide **what is on the page and what it can do
 next**.
 
 **Decision:** add an accessibility-tree snapshot — roles, accessible names, and
-the handles needed to act on them — as the default way an agent reads a page.
+the handles needed to act on them. **It is Tier 3 — searchable only (D1.9b
+ruling 3)**, so an agent must find it before using it. An earlier revision of
+this sentence called it *"the default way an agent reads a page"*; that was
+falsified by the ruling and is **deleted here rather than annotated**, because
+the banner above it left the claim itself standing and an implementer reads the
+Decision, not the banner.
 This shares its source with D2.1: the same AX tree that answers "what is here"
 answers "which node did you mean". Build them together or the second one is
 built twice.
@@ -1583,7 +1588,7 @@ literals in `manifest_test.go`.
 | Tool | Tier | Why |
 |---|---|---|
 | `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_upload_file`, `browser_handle_dialog` | 3 — search-only | Same posture as the eleven existing browser tools |
-| `browser_snapshot` (D2.4) | **open question** — §6 | D2.4 calls it "the default way an agent reads a page". A tool reached only through search is a poor default. Either it earns Tier 2 (and `previewedLazyToolNames` grows from 7 to 8) or D2.4's wording overclaims. |
+| `browser_snapshot` | **3 — search-only** | Ruled 2026-09-02 (D1.9b ruling 3). ADR-071's previewed set is left intact. The consequence is accepted: agents reach for `browser_screenshot` instead, because that is what is in front of them | D2.4 calls it "the default way an agent reads a page". A tool reached only through search is a poor default. Either it earns Tier 2 (and `previewedLazyToolNames` grows from 7 to 8) or D2.4's wording overclaims. |
 
 ### D2.9 Tool policy seeding (Hard Constraint #6)
 
