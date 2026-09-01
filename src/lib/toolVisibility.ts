@@ -123,6 +123,15 @@ export function shouldRenderToolCall(
       // of falling through to `default: return true`.
       return isError
 
+    case 'Skill':
+      // ADR-072 D3: mirrors ToolSearch exactly. A successful `Skill` call is
+      // the silent "check the menu" habit D3 deliberately does not narrate —
+      // hidden by default. A refused/denied or not-found load is a real,
+      // security-relevant outcome (D3.1: every call is audited regardless of
+      // render visibility) the reader needs to see, so an error/failure
+      // outcome still forces visibility, same as ToolSearch.
+      return isError
+
     case 'delegate': {
       // action defaults to "run" (pkg/tools/delegate.go execute()).
       const action = paramString(params, 'action') ?? 'run'
