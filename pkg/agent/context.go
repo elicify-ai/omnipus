@@ -1632,6 +1632,61 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 	return names
 }
 
+// ProjectShelfForWorkspace exposes effectiveProjectShelf (ADR-072 D8) to
+// callers outside this file — the Skill tool's search-mode corpus builder
+// (pkg/agent/loop.go, ADR-072 D1) needs the SAME per-workspace project shelf
+// the menu and ResolveSkillFullForWorkspace consult, without duplicating the
+// resolver-vs-single-shelf fallback logic effectiveProjectShelf already
+// implements.
+func (cb *ContextBuilder) ProjectShelfForWorkspace(workspaceID string) skills.ProjectShelf {
+	return cb.effectiveProjectShelf(workspaceID)
+}
+
+// ResolveSkillFullForWorkspace resolves name to its full ResolvedSkill
+// (canonical slug, shelf, on-disk path) under the same per-shelf grant model
+// as ResolveSkillName, but against workspaceID's OWN project shelf (ADR-072
+// D8) rather than the single workspace-blind cb.projectShelf ResolveSkillName
+// still uses for the pre-existing "/<skill>" command and delegate's
+// requested_skill path (D9). This is the workspace-aware counterpart the
+// Skill tool's load/search paths use (pkg/tools/skill.go via
+// pkg/agent/loop.go's resolver) so a project skill resolves against exactly
+// the mounts BuildSystemPromptForWorkspace advertised in that workspace's
+// menu.
+//
+// Callers that need only the canonical slug should keep using
+// ResolveSkillName; callers that need to know WHICH shelf a skill came from
+// and where to actually read its body from (the audit trail ADR-072 D3.1
+// requires, and loading a project-shelf skill's content — which lives
+// outside SkillsLoader's static roots and therefore cannot be found by
+// SkillsLoader.LoadSkill) need this method's full ResolvedSkill instead.
+func (cb *ContextBuilder) ResolveSkillFullForWorkspace(workspaceID, name string) (skills.ResolvedSkill, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || cb.skillsLoader == nil {
+		return skills.ResolvedSkill{}, false
+	}
+
+	resolved, ok, collision := skills.ResolveSkillName(cb.skillsLoader.ListSkills(), cb.skillAllowed, cb.effectiveProjectShelf(workspaceID), name)
+	if !ok {
+		logger.WarnCF("agent", "skill resolution denied or not found",
+			map[string]any{
+				"agent_id":     cb.agentID,
+				"skill":        name,
+				"workspace_id": workspaceID,
+			})
+		return skills.ResolvedSkill{}, false
+	}
+	if collision != nil {
+		logger.WarnCF("agent", "skill slug collision on resolution; higher-precedence shelf won",
+			map[string]any{
+				"agent_id":     cb.agentID,
+				"slug":         collision.Slug,
+				"winner":       collision.WinnerDescription,
+				"workspace_id": workspaceID,
+			})
+	}
+	return resolved, true
+}
+
 // ResolveSkillName resolves name (a slug or display name, matched
 // case-insensitively against either) to its canonical slug, gated by the
 // full per-shelf grant model (ADR-072 D4/D4.1/D4.2). This is the single

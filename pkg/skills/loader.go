@@ -258,6 +258,26 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 	return "", false
 }
 
+// LoadSkillFile reads the skill body at an ALREADY-RESOLVED on-disk SKILL.md
+// path and strips its YAML frontmatter, returning ok=false if the file
+// cannot be read. Unlike LoadSkill (which re-derives the path by searching
+// this loader's own workspace/global/builtin roots), this loads from a path
+// the caller already resolved — the only way to load a project-shelf skill's
+// content, since a workspace mount's skills directory is not among this
+// loader's three static roots and therefore cannot be found by LoadSkill.
+// pkg/skills.ResolveSkillName's ResolvedSkill.Path is exactly such a
+// resolved path, for every shelf (project, registry, builtin) alike.
+// Exported for the ADR-072 D1 `Skill` tool's load resolver
+// (pkg/agent/loop.go, pkg/tools/skill.go).
+func LoadSkillFile(path string) (string, bool) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	_, body := splitFrontmatter(string(content))
+	return body, true
+}
+
 func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 	if len(skillNames) == 0 {
 		return ""

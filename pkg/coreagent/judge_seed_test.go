@@ -16,15 +16,17 @@ import (
 
 // judgeAllowedTools is the Judge's exact seeded verifier-role allow-set
 // (ADR-052 R3-2/FR-011/FR-012/FR-033): read-only file inspection plus the
-// verifier-scoped inspect_session tool, plus ToolSearch — the structural
-// floor every agent gets (CLAUDE.md constraint 6) so it can reach any tiered
-// (lazy/search-only) tool at all, applying even to a System Agent. Every
-// other static builtin name must resolve to explicit deny.
+// verifier-scoped inspect_session tool, plus ToolSearch and Skill — the two
+// structural floors every agent gets (CLAUDE.md constraint 6; ADR-072 D1) so
+// it can reach any tiered (lazy/search-only) tool or any skill's content at
+// all, applying even to a System Agent. Every other static builtin name must
+// resolve to explicit deny.
 var judgeAllowedTools = map[string]bool{
 	"read_file":       true,
 	"list_directory":  true,
 	"inspect_session": true,
 	"ToolSearch":      true,
+	"Skill":           true,
 }
 
 // TestSeed_JudgeSystemAgent verifies ADR-049 D3 / US-4 Acceptance Scenario 1,

@@ -2844,6 +2844,145 @@ func registerSharedTools(
 				agent.Tools.RegisterReplacing(toolsTool)
 			}
 		}
+
+		// Register the ADR-072 D1 `Skill` tool (load-by-slug + search-by-query
+		// paths) — this codebase's second instance of the "index in context,
+		// content on demand" pattern ADR-071 established for ToolSearch
+		// immediately above, one layer up for skills. ALWAYS registered
+		// unconditionally, mirroring ToolSearch's own registration exactly:
+		// Constraint #6 seeds "Skill": allow for every agent
+		// (pkg/coreagent/core.go, pkg/config/defaults.go), so the tool must
+		// exist to be governed by that policy regardless of whether this
+		// installation has any skills installed yet. Resolver closures read
+		// per-call state from ctx at call time, avoiding data races on the
+		// shared instance across concurrent turns on the same agent.
+		{
+			capturedAgentID := agentID
+
+			skillMaxResults := cfg.Tools.MCP.Discovery.MaxSearchResults
+			if skillMaxResults <= 0 {
+				// ADR-072 D1.2/MIN-003: Skill's search mode deliberately
+				// inherits ToolSearch's own result cap rather than
+				// introducing a second number to reason about.
+				skillMaxResults = 5
+			}
+
+			if _, already := agent.Tools.Get("Skill"); !already {
+				skillTool := tools.NewSkillTool(skillMaxResults)
+				skillTool.SetResolver(
+					// load resolves slug for the acting agent through the full
+					// per-shelf grant model (ADR-072 D4/D4.1, via
+					// ContextBuilder.ResolveSkillFullForWorkspace) and loads its
+					// body directly from the resolved shelf's own on-disk path
+					// for this turn only — every Skill call audited (D3.1).
+					func(ctx context.Context, slug string) tools.SkillLoadOutcome {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+						}
+
+						if resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug); resolvedOK {
+							if content, readOK := skills.LoadSkillFile(resolved.Path); readOK {
+								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, resolved.Slug,
+									audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(resolved.Shelf))
+								return tools.SkillLoadOutcome{
+									Status:        tools.SkillLoadLoaded,
+									Content:       content,
+									Shelf:         resolved.Shelf,
+									CanonicalSlug: resolved.Slug,
+								}
+							}
+							// Resolved but the file vanished or became unreadable
+							// between resolution and read (rare race) — report
+							// not-found rather than a silent empty load.
+							logger.WarnCF("agent", "skill resolved but its content could not be read",
+								map[string]any{"agent_id": callerID, "skill": slug, "path": resolved.Path})
+							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+						}
+
+						// Not resolved — distinguish "exists but this agent is
+						// not granted it" (registry/builtin shelf, unfiltered
+						// via ListSkillsDetailed) from "genuinely absent on any
+						// shelf" (ADR-072 D4/FR-054's SkillNotFoundCode).
+						for _, s := range callerAgent.ContextBuilder.ListSkillsDetailed() {
+							if strings.EqualFold(s.ID, slug) || strings.EqualFold(s.Name, slug) {
+								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+									audit.SkillCallModeLoad, audit.SkillCallOutcomeDenied, "")
+								return tools.SkillLoadOutcome{Status: tools.SkillLoadDenied}
+							}
+						}
+						audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+							audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+						return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+					},
+					// canUse reports whether the acting agent may load slug —
+					// the SAME per-shelf grant model `load` consults, exposed
+					// separately so the search path can filter the ranked
+					// match list without loading every candidate's full body.
+					func(ctx context.Context, slug string) bool {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return false
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						_, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug)
+						return resolvedOK
+					},
+					// corpus returns every installed skill's slug+description
+					// across every shelf visible to the acting agent's
+					// workspace — registry+builtin (UNFILTERED by any grant)
+					// plus that workspace's own project shelf — for BM25
+					// ranking (ADR-071 §3.2.2, applied to skills by ADR-072
+					// D1): the corpus must never be pre-filtered, only the
+					// ranked match list (via canUse above).
+					func(ctx context.Context) []tools.SkillSearchDoc {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return nil
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						all := callerAgent.ContextBuilder.ListSkillsDetailed()
+						projectShelf := callerAgent.ContextBuilder.ProjectShelfForWorkspace(workspaceID)
+
+						docs := make([]tools.SkillSearchDoc, 0, len(all)+len(projectShelf))
+						seen := make(map[string]struct{}, len(all)+len(projectShelf))
+						for _, s := range all {
+							docs = append(docs, tools.SkillSearchDoc{Slug: s.ID, Description: s.Description})
+							seen[strings.ToLower(s.ID)] = struct{}{}
+						}
+						for key, ps := range projectShelf {
+							if _, dup := seen[key]; dup {
+								// D4.2 carve-out: a granted registry/builtin
+								// slug already claims this name in the menu and
+								// on resolution — the search corpus must not
+								// offer it twice under two different shelves.
+								continue
+							}
+							docs = append(docs, tools.SkillSearchDoc{Slug: ps.ID, Description: ps.Description})
+						}
+						return docs
+					},
+				)
+				agent.Tools.RegisterReplacing(skillTool)
+			}
+		}
 	}
 
 	// W4 (agent-removal doesn't dispose context): a REMOVED agent is skipped by
