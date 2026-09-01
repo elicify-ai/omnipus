@@ -1353,6 +1353,14 @@ answering.
 
 ### D2.4 Reading a page as structure
 
+> **Corrected 2026-09-01 by D1.9b ruling 3.** This section called the snapshot
+> *"the default way an agent reads a page"*. It is **Tier 3 — searchable
+> only**, so it is not a default: an agent must go looking for it. The
+> capability is unchanged; the expectation is not. **Agents will keep reaching
+> for `browser_screenshot`**, because that is what is in front of them. That
+> trade was chosen deliberately to leave ADR-071's previewed set intact.
+
+
 An agent reads a page today via `browser_screenshot` (pixels, needing vision) or
 `browser_get_text` (requires already knowing a CSS selector). Neither gives the
 structure an agent needs to decide **what is on the page and what it can do
