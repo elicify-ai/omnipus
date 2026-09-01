@@ -26,6 +26,18 @@ const (
 	MaxDescriptionLength = 1024
 )
 
+// ValidSlug reports whether s is a syntactically valid skill slug — the same
+// pattern SkillInfo's ID field and SkillWriter.resolveSkillDir enforce
+// (alphanumeric segments joined by single hyphens, at most MaxNameLength
+// characters). Exported so callers outside this package (ADR-072's `Skill`
+// tool, pkg/tools/skill.go) can reject a malformed identifier — an empty
+// string, a traversal attempt, an over-length name, or non-ASCII input —
+// before ever consulting the shelf-resolution model, without duplicating the
+// pattern (spec FR-021/Dataset B).
+func ValidSlug(s string) bool {
+	return s != "" && len(s) <= MaxNameLength && namePattern.MatchString(s)
+}
+
 // SkillMetadata holds parsed SKILL.md frontmatter fields.
 // Supports both basic (name/description) and ClawHub-extended fields.
 type SkillMetadata struct {
@@ -266,19 +278,16 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 	return sl.BuildSkillsSummaryFunc(nil)
 }
 
-// maxSkillsInSummary caps how many skills BuildSkillsSummaryFunc renders in
-// full: the summary used to dump every allowed skill's full XML entry into
-// the system prompt every turn with no limit, so an install with a large or
-// growing skill catalog paid an unbounded, ever-increasing per-turn cost.
-// The cap keeps the block bounded; truncated skills are still discoverable
-// via find_skills (mentioned in the footer appended when truncation occurs).
-const maxSkillsInSummary = 20
-
-// skillSourceRank orders SkillInfo.Source values by the same precedence
-// ListSkills uses to resolve name collisions: workspace overrides global
-// overrides builtin. Unknown sources sort last (defensive: should not occur
-// for skills produced by ListSkills).
+// skillSourceRank orders SkillInfo.Source values for the menu's (now purely
+// cosmetic — ADR-072 D1.1) ordering: most specific first. "project" is
+// ADR-072 D4.1's shelf 1 (a mount's own skills, see
+// BuildSkillsSummaryFuncWithProject below); "workspace" is the pre-D4.1
+// loader's own vestigial per-agent-workspace shelf, kept at the same rank for
+// any caller still passing unmerged workspace-shelf skills through
+// BuildSkillsSummaryFunc directly. Unknown sources sort last (defensive:
+// should not occur for skills produced by ListSkills or MergeProjectSkills).
 var skillSourceRank = map[string]int{
+	"project":   0,
 	"workspace": 0,
 	"global":    1,
 	"builtin":   2,
@@ -288,43 +297,73 @@ var skillSourceRank = map[string]int{
 // by an allow predicate. When allow is non-nil, only skills for which
 // allow(name) is true are listed — this implements per-agent progressive
 // disclosure so an agent's system prompt advertises only its allowlisted skills
-// (FR-9.4). When allow is nil, every loaded skill is eligible for listing.
+// (FR-9.4/ADR-072 D4). When allow is nil, every loaded skill is eligible for
+// listing.
 //
-// The eligible set is capped at maxSkillsInSummary. Previously the
-// cap kept the most-recently-modified skills, ranked by an os.Stat of each
-// skill's SKILL.md inside the sort comparator — an uncached syscall on every
-// system-prompt build (this runs every turn), and a meaningless ordering to
-// begin with: a git clone, cp -r, rsync, or container rebuild rewrites mtimes
-// wholesale (often to identical values), so which skills survived the cap
-// could change silently between deploys with no code change at all.
-//
-// The cap now keeps the same precedence ListSkills already uses to resolve
-// slug collisions — workspace skills first, then global, then builtin, tied
-// broken by display name then by slug — which is both a meaningful ordering
-// (more specific overrides survive) and free: it is computed once via
-// decorate-sort-undecorate over fields SkillInfo already carries, with no
-// filesystem access at all. A footer names how many were cut and points at
-// find_skills to search the full catalog, including anything not shown here.
+// Equivalent to BuildSkillsSummaryFuncWithProject(allow, nil) — see that
+// function for the full contract, including ADR-072 D1.1 (no cap, ever) and
+// FR-006 (no filesystem location in any entry).
 func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) string {
-	allSkills := sl.ListSkills()
-	if len(allSkills) == 0 {
-		return ""
-	}
+	return sl.BuildSkillsSummaryFuncWithProject(allow, nil)
+}
 
-	// Filter to the allowed set first, then rank by the same
-	// workspace>global>builtin precedence ListSkills uses, tie-broken by
-	// name then slug for full determinism.
-	eligible := make([]SkillInfo, 0, len(allSkills))
+// BuildSkillsSummaryFuncWithProject is BuildSkillsSummaryFunc extended with a
+// workspace's already-merged project shelf (ADR-072 D4.1 shelf 1 — see
+// ProjectShelf/MergeProjectSkills in project.go). project may be nil, which
+// reduces this to exactly BuildSkillsSummaryFunc's own behaviour; passing one
+// is a later integration phase's responsibility once a workspace's mounts are
+// wired through to the caller (this loader has no notion of "workspace" or
+// "mount" on its own).
+//
+// Three things changed from the pre-D1.1/D4.1 version of this function:
+//
+//  1. NO CAP (D1.1). The summary used to truncate at maxSkillsInSummary and
+//     append a footer pointing at find_skills — which cannot see installed
+//     skills at all, so the footer was always a wrong signpost. Both the cap
+//     and the footer are deleted, not resized: every eligible skill is
+//     listed, always. The sort below is now purely cosmetic (stable,
+//     deterministic output) rather than a survival ranking.
+//  2. NO LOCATION (FR-006/N1). The old <location> line printed the skill's
+//     filesystem path into the model's own context — a disclosure with no
+//     legitimate use once loading goes through the `Skill` tool rather than
+//     `read_file`. <source> (registry/builtin/project) stays; <location>
+//     does not.
+//  3. A PROJECT SHELF, gated by mount membership alone (D4.1) — allow is
+//     NEVER consulted for a project entry, only for the registry/builtin
+//     entries from ListSkills. D4.2's carve-out is honoured by construction:
+//     a project skill whose slug already won a spot from the allow-filtered
+//     registry/builtin set is dropped from the merge (that shelf's grant
+//     already wins the same slug — see ResolveSkillName's identical
+//     carve-out in shelf.go), so the same slug is never emitted twice.
+func (sl *SkillsLoader) BuildSkillsSummaryFuncWithProject(allow func(name string) bool, project ProjectShelf) string {
+	allSkills := sl.ListSkills()
+
+	eligible := make([]SkillInfo, 0, len(allSkills)+len(project))
+	seen := make(map[string]struct{}, len(allSkills)+len(project))
 	for _, s := range allSkills {
 		if allow != nil && !allow(s.ID) {
 			continue
 		}
 		eligible = append(eligible, s)
+		seen[strings.ToLower(s.ID)] = struct{}{}
+	}
+	for _, ps := range project {
+		key := strings.ToLower(ps.ID)
+		if _, dup := seen[key]; dup {
+			// D4.2 carve-out: a granted registry/builtin slug already claimed
+			// this name — the project skill of the same slug never displaces
+			// it, in the menu any more than in resolution.
+			continue
+		}
+		eligible = append(eligible, ps.SkillInfo)
+		seen[key] = struct{}{}
 	}
 	if len(eligible) == 0 {
 		return ""
 	}
 
+	// Purely cosmetic now (D1.1) — kept for stable, deterministic output
+	// rather than to decide who survives a cap that no longer exists.
 	sort.SliceStable(eligible, func(i, j int) bool {
 		si, sj := eligible[i], eligible[j]
 		ri, rj := skillSourceRank[si.Source], skillSourceRank[sj.Source]
@@ -337,17 +376,9 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 		return si.ID < sj.ID
 	})
 
-	shown := eligible
-	truncated := 0
-	if len(eligible) > maxSkillsInSummary {
-		shown = eligible[:maxSkillsInSummary]
-		truncated = len(eligible) - maxSkillsInSummary
-	}
-
 	var lines []string
 	lines = append(lines, "<skills>")
-	emitted := 0
-	for _, s := range shown {
+	for _, s := range eligible {
 		// The agent invokes a skill by the slug (ID) — that is the identifier
 		// ResolveSkillName/LoadSkill resolve against — so <name> carries the
 		// slug. The human-readable display name is surfaced separately so the
@@ -355,7 +386,6 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 		escapedName := escapeXML(s.ID)
 		escapedDisplay := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
-		escapedPath := escapeXML(s.Path)
 
 		lines = append(lines, "  <skill>")
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
@@ -363,25 +393,13 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 			lines = append(lines, fmt.Sprintf("    <display_name>%s</display_name>", escapedDisplay))
 		}
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
+		// No <location> line (ADR-072 FR-006/N1) — see the function doc above.
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
 		lines = append(lines, "  </skill>")
-		emitted++
 	}
 	lines = append(lines, "</skills>")
 
-	if emitted == 0 {
-		return ""
-	}
-	out := strings.Join(lines, "\n")
-	if truncated > 0 {
-		noun := "skills"
-		if truncated == 1 {
-			noun = "skill"
-		}
-		out += fmt.Sprintf("\n\n%d more installed %s not shown above — call find_skills to search the full catalog.", truncated, noun)
-	}
-	return out
+	return strings.Join(lines, "\n")
 }
 
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -36,6 +37,16 @@ var ErrAlreadyExists = errors.New("skill already exists")
 // ErrNotFound is returned by EditSkill / ListVersions when no source skill
 // exists to edit.
 var ErrNotFound = errors.New("skill not found")
+
+// ErrProjectWriteEscapesMount is returned by ResolveProjectSkillWriter when a
+// project skill's resolved on-disk location does not actually lie within the
+// mount root it claims to belong to — a tampered or otherwise inconsistent
+// ProjectShelf entry. Defense in depth: every entry DiscoverProjectSkills /
+// MergeProjectSkills produce already satisfies this by construction (they
+// real-path-confine every candidate to the mount at discovery time, D6
+// FR-077/078), so this only fires against a shelf built or mutated some
+// other way.
+var ErrProjectWriteEscapesMount = errors.New("project skill write escapes its mount root")
 
 // SkillWriter writes and versions skills under a single, fixed skills root
 // directory. All writes are path-confined to that root, validated against the
@@ -129,10 +140,71 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 		}
 	}
 
+	if err := ValidateSkillDescription(expectedName, info.Description); err != nil {
+		return fmt.Errorf("invalid SKILL.md: %w", err)
+	}
 	if err := info.validate(); err != nil {
 		return fmt.Errorf("invalid SKILL.md: %w", err)
 	}
 	return nil
+}
+
+// ValidateSkillDescription enforces ADR-072 D2 / spec FR-010/FR-011/FR-012:
+// once nothing loads automatically, a skill's one-line description is the
+// ONLY thing the model sees before deciding whether to call it, so this is
+// an authoring-time rule, not a hope. It rejects:
+//
+//   - an empty or whitespace-only description (FR-010);
+//   - a description that merely restates the skill's own name/slug (FR-011),
+//     under the EXACT comparison the spec names — case-fold both sides, then
+//     strip every whitespace and punctuation rune, then test equality. This
+//     is deliberately NOT fuzzy matching and NOT edit distance: a
+//     description that adds real words ("Handles release notes" for slug
+//     "release-notes") is a restatement of nothing and must be accepted —
+//     only an exact echo, differing solely in case/spacing/punctuation
+//     ("Release Notes", "release notes."), is rejected;
+//   - a description exceeding MaxDescriptionLength characters (FR-012).
+//
+// Deliberately scoped to the AUTHORING path only (ValidateSkillMarkdown,
+// called by CreateSkill/EditSkill) — NOT folded into SkillInfo.validate(),
+// which also runs for skills merely discovered on disk (ListSkills,
+// DiscoverProjectSkills). D2 states this is "enforced where skills are
+// authored", not a retroactive check on every already-installed skill file;
+// running the name-echo rule there too would risk silently hiding an
+// already-installed skill whose description happens to echo its name, which
+// is a availability regression this ADR never asked for.
+func ValidateSkillDescription(skillName, description string) error {
+	trimmed := strings.TrimSpace(description)
+	if trimmed == "" {
+		return errors.New("description is required and must not be empty or whitespace-only")
+	}
+	if len(description) > MaxDescriptionLength {
+		return fmt.Errorf("description exceeds the %d-character limit (got %d)", MaxDescriptionLength, len(description))
+	}
+	if skillName != "" && normalizeDescriptionForEcho(description) == normalizeDescriptionForEcho(skillName) {
+		return fmt.Errorf(
+			"description merely restates the skill's name %q — state WHEN to use the skill instead, "+
+				"e.g. \"Use when the user asks to cut a release or publish notes\" rather than \"%s\"",
+			skillName, skillName,
+		)
+	}
+	return nil
+}
+
+// normalizeDescriptionForEcho implements FR-011's exact, non-fuzzy
+// comparison: case-fold, then strip every whitespace and punctuation rune.
+// No edit distance, no fuzzy matching — "Handles release notes" must NOT
+// collapse to the same normalized string as "release-notes" (Dataset F row
+// 10, deliberately accepted); only an actual restatement does.
+func normalizeDescriptionForEcho(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			continue
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // snapshotExisting copies the current SKILL.md (if any) into the skill's
@@ -276,6 +348,81 @@ func (w *SkillWriter) ListVersions(name string) ([]string, error) {
 		versions[i], versions[j] = versions[j], versions[i]
 	}
 	return versions, nil
+}
+
+// RemoveSkill permanently deletes the named skill's whole directory — its
+// SKILL.md and any .versions/ snapshots — from this writer's root. There is
+// no undo. It returns ErrNotFound when no such skill exists locally in this
+// root; unlike EditSkill, there is no "source"/override fallback, since there
+// is nothing sensible to fall back to when the operation is a delete.
+func (w *SkillWriter) RemoveSkill(name string) error {
+	skillDir, err := w.resolveSkillDir(name)
+	if err != nil {
+		return err
+	}
+	if _, statErr := os.Stat(filepath.Join(skillDir, "SKILL.md")); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("stat skill: %w", statErr)
+	}
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("remove skill: %w", err)
+	}
+	slog.Info("skills: removed skill", "name", name, "path", skillDir)
+	return nil
+}
+
+// ResolveProjectSkillWriter resolves slug against a workspace's already-built
+// project shelf (ADR-072 D6.1, FR-065/066/068) and, when it names a project
+// skill, returns a SkillWriter rooted at that skill's OWN recognised skills
+// directory inside the mount that owns it — never the central (global)
+// skills root that NewSkillWriter is normally called with elsewhere. Every
+// write or removal performed through the returned writer therefore lands
+// directly in the project's own repository (D6.1: "the write goes into that
+// project's own file... it does not fork a copy into the central registry")
+// and never anywhere else — there is no code path here that can also touch a
+// central-library copy.
+//
+// Before constructing anything, the resolved skill's location is confined to
+// its claimed mount root using the same lexical-containment rule
+// resolveSkillDir applies to every ordinary write (FR-068): a shelf entry
+// whose Path does not actually lie under its own MountRoot is refused with
+// ErrProjectWriteEscapesMount rather than silently handed a writer that could
+// touch something outside the mount. Every legitimate shelf entry (built by
+// DiscoverProjectSkills / MergeProjectSkills) already satisfies this, since
+// discovery itself real-path-confines every candidate to the mount before
+// admitting it (FR-077/078) — this is a second, independent check against a
+// shelf built or hand-edited some other way, not a load-bearing path for the
+// happy case.
+//
+// ResolveProjectSkillWriter returns ErrNotFound when slug is not present on
+// this project shelf — callers use that to fall through to the ordinary
+// (global-root) authoring path for a registry, builtin, or brand-new skill.
+// It resolves an EXISTING project skill only; authoring a brand-new project
+// skill from nothing is out of scope (D6.1's own scenarios are "editing"/
+// "removing" a project skill that is already discovered on the shelf).
+func ResolveProjectSkillWriter(shelf ProjectShelf, slug string) (*SkillWriter, ProjectSkill, error) {
+	trimmed := strings.TrimSpace(slug)
+	if trimmed == "" || shelf == nil {
+		return nil, ProjectSkill{}, ErrNotFound
+	}
+	ps, ok := shelf[strings.ToLower(trimmed)]
+	if !ok {
+		return nil, ProjectSkill{}, ErrNotFound
+	}
+
+	skillDir := filepath.Dir(filepath.Clean(ps.Path)) // .../<recognised-dir>/<slug>
+	recognisedDir := filepath.Dir(skillDir)           // .../<recognised-dir>
+	mountRoot := filepath.Clean(ps.MountRoot)
+
+	rel, relErr := filepath.Rel(mountRoot, recognisedDir)
+	if relErr != nil || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, ProjectSkill{}, ErrProjectWriteEscapesMount
+	}
+
+	return NewSkillWriter(recognisedDir), ps, nil
 }
 
 // ReadVersion returns the content of a specific snapshot file (as returned by
