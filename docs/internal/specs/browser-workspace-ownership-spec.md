@@ -925,6 +925,75 @@ everywhere and been wrong at four call sites silently.
 
 ---
 
+### 0.7 Taking the operator's tab is IMPLICIT — and the control lock is the whole mitigation (operator ruling, ADR **D1.9b** ruling 1, 2026-09-01)
+
+**ADR D1.9b carries four rulings; two land on this document and two do not.** Rulings **1** (implicit acquisition, below) and **4** (profile disk, §0.8) are absorbed here. Rulings **2** (`sandbox.browser_evaluate_enabled` seeded **true**, so the capability matches the policy surface an operator reads) and **3** (`browser_snapshot` is **Tier 3 — searchable only**, which falsifies D2.4's *"the default way an agent reads a page"*) land on the **sibling D2 capability spec**. This document's references to those two tools — §14 rule 3's table rows for `browser_evaluate` and `browser_snapshot`, and §0.5 **E-3** — are updated to point at the rulings, and **this spec creates no requirement for either**: `browser_evaluate`'s lease membership is unchanged by being enabled, and a tool's tier does not change whether it takes the lease.
+
+**Verbatim (D1.9b ruling 1):** *"An agent acquires control of the operator's shared tab by acting on it; there is no explicit 'take control' call."*
+
+#### It closes E-1, and it closes it by SIMPLIFYING
+
+§0.5 **E-1** asked what D1.9a's *"take control on request"* looks like to an agent, and priced the explicit reading — a seventh browser tool. The ruling picks the other shape, and every cost E-1 anticipated is withdrawn rather than paid:
+
+| What E-1 priced | Under the ruling |
+|---|---|
+| A seventh browser tool in the D2 surface | **None.** The surface stays **11 → 17**, not 18 |
+| A seventh policy entry in every agent's `tools.builtin.policies` block | **None.** Hard Constraint #6's explicit per-agent coverage arithmetic is untouched |
+| A Tier-3 fixture row and a tool-manifest count change | **Neither.** Both are unaffected |
+| Rework of the work stream planned around the current tool set | **None** |
+
+#### What "acting on it" means, precisely — and it is not a new mechanism
+
+An agent addresses the operator's tab set the way it addresses any tab set: with the resolved `BrowsingKey` plus `TabOwnerWorkspace()` (FR-048). **Acquisition is the ordinary execution of a `controlledResult`-gated tool against that owner.** There is no acquisition verb, no state an agent can request, and no result field reporting *"you now hold it"* — the tool result is the tool's own result. That is **FR-070**.
+
+**One consequence is worth stating rather than leaving to be discovered:** §12 **A25** left open *"whether an agent may **close** a workspace-owned tab it did not open"*, and answered it provisionally — *"treat closing the operator's tab as requiring the same acquisition as writing to it."* Under this ruling that provisional answer resolves: `browser_close_tab` is `controlledResult`-gated (`tabs.go:171`) and therefore leased (§14 rule 3), so closing the operator's tab **is** acting on it and acquires implicitly, under the same lock gate and the same lease as a write. FR-048's prohibition is unaffected — it forbids closing another **agent's** tab, which remains impossible. A25 is updated in place to record this as the ruling's consequence rather than as a separate decision.
+
+#### The mitigation is an EXISTING control, and it must be ASSERTED rather than assumed
+
+Implicit acquisition may occur **only when no human holds the live-view lock**. `controlledResult` (`pkg/tools/browser/tools.go:962`) already defers an agent while a human is driving (ADR-038 D6), and §14.2 rule 1 already orders the gates so it runs **before** the lease. **The ADR states this because it IS the whole mitigation:** without that lock, an agent's first write to the operator's tab is a **silent takeover** of a tab a human is using at that moment.
+
+That ordering is now load-bearing in a way it was not before the ruling, and there are **two ways it can silently stop working — both already known defects in this document, now promoted to mitigation-critical:**
+
+1. **`controlledResult` asks the wrong key today.** It calls `mgr.Live().IsControlled(defaultSessionID)` (`pkg/tools/browser/tools.go:963`). Once the live registry is re-keyed, that constant resolves nothing and the function returns `false` **forever** — the lock is intact, populated, and never consulted. This is **FR-002c**, and the mitigation now depends on it. A regression there is not "a stale key": it is the takeover the ruling says cannot happen.
+2. **A plausible future edit removes it without failing a test that names it.** Moving the lease ahead of the control check, or skipping `controlledResult` on `TabOwnerWorkspace()` *"because the lease already arbitrates"*, deletes the mitigation while every lease test stays green — the lease still serialises two agents perfectly with a human locked out of their own tab.
+
+#### Therefore the requirement is a test that FAILS when the lock stops gating acquisition (FR-071)
+
+**The passing direction alone is worthless.** A test asserting *"an agent can act on the operator's tab"* is green on a build with no lock at all, on a build with `IsControlled` hard-wired to `false`, and on a build with `controlledResult` deleted from every call site. It cannot fail for the defect it exists to catch.
+
+**The assertion that carries the mitigation is the BLOCKED one**, and FR-071 requires both directions in one test, driven through the **real registered tool path** and against the **resolved** key:
+
+| Case | Setup | Required outcome | What its failure means |
+|---|---|---|---|
+| **Blocked (the mitigation)** | A human holds the live-view control lock on the resolved key `ws:W`; agent A calls a `controlledResult`-gated tool against `TabOwnerWorkspace()` | The ADR-038 D6 deferral, **the lease is never acquired**, and no ownership or driver state changes | The lock has stopped gating implicit acquisition — a silent takeover |
+| **Blocked, via the key** | The lock is held on `ws:W`; `controlledResult` is invoked from a tool whose manager resolved `ws:W` | Same as above — proving the lock was consulted **against the resolved key**, not against a constant | FR-002c has regressed and case 1 would pass vacuously |
+| **Allowed** | No human holds the lock; agent A acts on `TabOwnerWorkspace()` | The call proceeds; A becomes the contender at §14's lease with no acquisition call of any kind | Implicit acquisition does not work |
+| **Ordering** | The lock is held **and** another agent holds the write lease | The deferral is the **ADR-038 D6** text, not the lease's — proving `controlledResult` ran first | The gates have been reordered, which removes the mitigation |
+
+#### §14, FR-020 and FR-021 re-read under the ruling — they hold, and here is the check
+
+§14's scope note says the lease *"assumes the second shape (implicit acquisition on first write to the shared tab) **only** as the lease's contended case, and says so."* **The ruling makes that assumption a ruling, and nothing in the annex changes shape.** Checked line by line:
+
+| Where | Reads correctly under implicit acquisition? | Why |
+|---|---|---|
+| §14 scope table, row *"Agent vs agent, on the operator's workspace-owned tab"* | **Yes** | The lease still arbitrates exactly that case. Implicit acquisition is *how an agent becomes a contender in it*, not a step before it |
+| §14.2 rule 1's composition order (ownership → `controlledResult` → `leaseWrite`) | **Yes, and it is now the mitigation** — restated as such in place | Step 2 running before step 3 is what stops a takeover. It was correct before for a different reason (a human outranks an agent queue); it is now correct for two |
+| **FR-020** (the loser retries inside the tool; both writers eventually complete) | **Yes** | It describes what happens *once two agents are contending*. Neither writer asked for the tab; both are there by having acted |
+| **FR-021** (no tool is leased when it addresses an agent's own tab set) | **Yes** | The trigger is the resolved `TabOwner`, which is a property of the call, not of a prior acquisition |
+| **US-9/AC1**, scenario *two-writers-shared-tab* | **Yes** | Two agents simply issue `browser_navigate` against the workspace-owned tab. There was never an acquisition step in the scenario to remove |
+| **FR-019a** / §14 rule 3's biconditional | **Yes, and unchanged** | Membership follows `controlledResult`. A seventh tool would have needed a row and a classification; there is no seventh tool |
+
+**Nothing in §14 is renumbered, rewritten or withdrawn by this ruling.** The only edits are the scope note's *"assumes"* becoming *"is ruled"*, and rule 1 naming itself as the mitigation.
+
+#### New requirements this ruling adds
+
+| FR | What it requires |
+|---|---|
+| **FR-070** | **Acquisition of the operator's shared tab is implicit and has no surface.** No tool, no policy entry, no wire field, no result key. An agent becomes the driver of `TabOwnerWorkspace()` by executing a `controlledResult`-gated tool against it. A structural assertion forbids a `browser_take_control`-shaped registration ever appearing |
+| **FR-071** | **The control lock gates implicit acquisition, and the BLOCKED case is asserted.** One test, four cases (blocked; blocked-via-the-resolved-key; allowed; ordering), through the real registered tool path. It must be **red** against a build where `IsControlled` always returns `false` — that is its falsifiability receipt |
+
+---
+
 ## 1. Overview / Actors / Scope
 
 **Problem.** The browser — its tab set *and* its logins — is owned by the **agent**, so it strands the moment the operator switches who they are talking to. `AgentLoop.browserMgrs` is `map[agentID]*browser.BrowserManager` (`pkg/agent/loop.go::AgentLoop`), populated by a **per-agent** registration loop (`loop.go::registerSharedTools`) that calls `browser.RegisterTools` and then `mgr.AttachSharedChrome(coordinator, agentID)`. `RegisterTools` (`pkg/tools/browser/register.go:41-84`) constructs a manager and **binds it into eleven tool structs** — `&NavigateTool{mgr: mgr}` at `:65` through `&OpenTabTool{mgr: mgr}` at `:81`. Every tool then addresses its tabs through one hardcoded key, `DefaultSessionID = "default"` (`pkg/tools/browser/tools.go:63`). The operator browses with Mia, switches the chat to Jim, and Jim — correctly, for his own manager — reports zero tabs while telling the operator the browser is "shared across the workspace", because five model-visible strings say exactly that (`tabs.go:32,86,143,206`; `tools.go:415`).
