@@ -1,6 +1,6 @@
 # Spec — Browser ownership: workspace-scoped browsers (ADR-072 **D1**)
 
-- **Source ADR:** `docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions.md`, **consolidated revision of 2026-09-01** (commits `22ceff6f1` "consolidating rewrite — one document, each decision stated once", `809555fcf` "D1.9a" and **`86666daaa` "D1.9b — four operator rulings closing the open questions"**). **D1 only — D1.1 … D1.13** in the consolidated numbering, plus the write lease the ADR files under D2.10 (see §14) and the two D2 sections that place obligations here (D2.9, D2.11).
+- **Source ADR:** `docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions.md`, **consolidated revision of 2026-09-01** (commits `22ceff6f1` "consolidating rewrite — one document, each decision stated once", `809555fcf` "D1.9a", `86666daaa` "D1.9b — four operator rulings closing the open questions" and **`c1f21da69` "D1.9c tabs belong to sessions (supersedes D1.9a); D1.9d delete the decoy flag"**). **D1 only — D1.1 … D1.13** in the consolidated numbering, plus the write lease the ADR files under D2.10 (see §14) and the two D2 sections that place obligations here (D2.9, D2.11).
   ⚠️ **The consolidation RENUMBERED every D1 section.** Revision 3 of this spec cited the pre-consolidation numbers, several of which now resolve to *different* content. **§0.0 carries the full old→new map and is the only place it lives.** Do not re-derive it by find-and-replace.
 - **Round-1 ADR review folded in:** `docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions-review.md`.
 - **Round-1 spec review folded in:** `docs/internal/specs/browser-workspace-ownership-spec-review.md` — verdict **BLOCK**, 29 findings. Every one is dispositioned in **§15**; one is rejected with evidence and says so there.
@@ -10,13 +10,14 @@
 - **Amends:** **ADR-043 D1** (one shared Chrome for the process — *this spec replaces it with a pool*), **ADR-043 D2** (per-agent CDP browser context — *replaced by per-workspace Chrome profiles*) and **ADR-043 D3** (live-view binding). Read ADR-043 first; D1 has the largest blast radius of anything in ADR-072.
 - **Sibling spec:** D2 (capability). **This spec owns the write lease — §14 is its single normative definition.** The D2 spec must delete its own lease FR/US/stream/test and reference §14 (operator ruling, 2026-08-31).
 - **Worktree:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf` · **Branch:** `feat/browser-streaming-performance`
-- **Status:** Draft for implementation, **gated on six measurements** (§0.3). Operator rulings postdating revision 3 are absorbed here (D1.7's eviction policy, D1.9a's tab ownership, D1.5a–D1.5d's memory rulings, and **D1.9b's two rulings that land on this document — §0.7 and §0.8**); the design questions they reopened are closed, and the ones this spec cannot close are listed in §0.5 as escalations rather than assumptions. **After D1.9b, E-1 and §12 A24(b) are ruled and one new escalation is opened (E-9, the continuously-driven profile cache).**
+- **Status:** Draft for implementation, **gated on six measurements** (§0.3). Operator rulings postdating revision 3 are absorbed here (D1.7's eviction policy, ~~D1.9a's tab ownership~~ **D1.9c's session-owned tabs**, D1.5a–D1.5d's memory rulings, and **D1.9b's two rulings that land on this document — §0.7 and §0.8**); the design questions they reopened are closed, and the ones this spec cannot close are listed in §0.5 as escalations rather than assumptions. **After D1.9b, E-1 and §12 A24(b) are ruled and one new escalation is opened (E-9, the continuously-driven profile cache).**
 - **Operator rulings folded in (Daniel Piatkowski):**
   - *2026-08-31* — workspace is the isolation axis, not the agent and not the conversation (**D1.2**); **isolation is by Chrome process + profile directory, not by CDP browser context** (**D1.4**); **every agent on a workspace shares its browser and its logins, including unattended delegated work** (**D1.10**, superseding the earlier same-day ruling); every turn runs in a workspace, no workspace-less fallback (**D1.11**); the browser seed stays Jim + Ray only; the write lease belongs to this spec.
   - *2026-08-31, later* — **the cap manages itself (D1.7): at the cap the pool evicts the least-recently-used instance and launches. There is no "pool full" error surface and no UI change.** This **reverses** revision 3's refusal design in full (§17 C1/M1).
   - *2026-09-01* — **tabs stay per agent; the operator's tab is the shared one (D1.9a).** Verbatim: *"the default is they open a new tab — we have in the current version that an agent has its own tab, we should maintain that. Only if the user starts a tab are the agents able to see it and take control on request."* This rescopes the write lease from "every action tool" to "agent-vs-agent on the operator's shared tab" (§14).
   - *2026-09-01, later* — **the memory gate is the ONLY admission control; idle tabs and idle browsers are closed; every other limit is deleted from the codebase (ADR D1.5a).** This is not a config change: `tools.browser.max_tabs`, `tools.browser.max_total_tabs` and the reservation machinery that enforces them are **removed from the code**, and the proposed `max_browsers`/`operator_ceiling` and `--renderer-process-limit` are never built. **§0.6 is the single place this ruling is stated**; everything downstream of it is re-derived or tombstoned there and in the sections it names.
   - *2026-09-01, later still* — **ADR D1.9b, four rulings.** Two land here: **taking the operator's shared tab is IMPLICIT — an agent acquires it by acting on it, there is no "take control" tool** (§0.7, closing E-1), and **profile disk is bounded by PERIODIC CACHE TRIMMING, not a quota and not deletion alone — logins preserved, disposable cache trimmed on a schedule** (§0.8, closing §12 A24(b) and §16 MAJ-111's "no quota" clause). The other two — `browser_evaluate` seeded **enabled**, and `browser_snapshot` at **Tier 3** — land on the sibling **D2 capability spec**; this document updates its references to them and creates no requirement for either (§0.7 opening).
+  - *2026-09-02* — **tabs are owned by the SESSION, not the agent (ADR D1.9c), superseding D1.9a.** Verbatim: *"it should not be per agent but per session, no matter which agent is on it. Tabs are owned by sessions."* One browser per workspace and one cookie jar are unchanged; **only the tab-ownership key moves, agent → session** (§0.2a, FR-080, tombstoning FR-048). The operator's own tab stays **workspace**-owned and acquisition stays implicit — both halves of D1.9a that D1.9c preserves. **The residual it names is established here from code rather than inherited: two concurrent turns in one session CAN occur** (three paths), so §14's general lease case is **rewritten, not deleted** (FR-081), and the new escalation **E-10** records that this spec must not depend on issue #505 fixing it.
   - *2026-09-01, on FR-068a* — **"the windows refusal is fine for now, we are not supporting windows yet."** The browser pool's refusal on Windows is **accepted on the platform's unsupported status**, not softened and not re-argued technically. The same ruling forces the distinction §0.9 records: **one `ok=false` predicate, two consumers, two different correct responses** — the pool refuses to grow, agent admission holds at the conservative floor of 2 — and **gVisor is Linux, supported, and not the Windows case**.
 
 **Citation policy.** `pkg/agent/loop.go`, `turn.go` and `subturn.go` are ~11k-line files under constant churn; per the root `CLAUDE.md` this spec cites them as `file::symbol`. Line numbers appear only where the file is stable or where the exact line *is* the evidence (a config seed, a literal string, a hardcoded constant). Every `file:line` below was re-verified on this worktree on 2026-08-31.
@@ -72,7 +73,9 @@ requirements on this spec:**
 | **D1.7** | **LRU eviction, no error surface, no UI**; two eviction guards; viewer-staleness timeout; thrash detection. Its *bounded `+1` overshoot* was an overshoot of a **cap**, and D1.5a deleted the cap — see §0.6 for what FR-053 becomes | FR-050…FR-054, §5, §17 C1/M1 |
 | **D1.8** | Idle close, crash containment, boot orphan reconciliation via the **launch lock** (not the marker's pid), profile deletion, the upgrade rule, `browser_handle_dialog`'s double exemption, boot-warm | FR-040a, FR-041, FR-042a, FR-043a, FR-043b, §12 A17 |
 | **D1.9** | Platform posture — orphan termination is **Linux-only**; no cross-process guard on Windows | US-19/AC2, SC-016, §12 A20 |
-| **D1.9a** | **Tabs stay per agent; the operator's tab is the shared one** | FR-048, FR-049, §14, §17 C1 |
+| ~~**D1.9a**~~ | ~~**Tabs stay per agent; the operator's tab is the shared one**~~ — **SUPERSEDED by D1.9c** for the agent half. Its **second** half stands: the operator's tab is workspace-owned | ~~FR-048~~, ~~FR-049~~, §14, §17 C1 |
+| **D1.9c** | **Tabs are owned by the SESSION, not the agent** — supersedes D1.9a's first half; one browser per workspace and one cookie jar unchanged. **The residual it defers to this spec — two concurrent turns in one session — is answered YES from code (§0.2a), so §14's general lease case survives** | **FR-080**, **FR-081**, §0.2a, §14, §0.5 E-10 |
+| **D1.9d** | The dead `Tools.Browser.EvaluateEnabled` field, its JSON tag and its env var are deleted outright (one live switch, not two) | **Lands on the sibling D2 capability spec** — this document creates no requirement for it; noted so a reader does not go looking for one here |
 | **D1.13** | Live-panel resolution: agent → workspace **server-side**, wire keeps `agent_id`, three schema descriptions are a semantic reversal | FR-016, FR-017, US-10 |
 
 **These numbers ship inside Go doc comments** (`key.go`, `resolve.go`, `pool.go` — §3.1), so a
@@ -110,59 +113,145 @@ ADR D1.10 was rewritten by a superseding ruling: **every agent on a workspace sh
 
 **The accepted risk, stated once and only once:** an unattended agent can act as the operator on any site its workspace is signed into — a purchase, a post, a message sent by a process nobody is watching. The single remaining gate is `browser_upload_file`'s global `ask` seed (ADR D2.9), and **issue #659 is its prerequisite** (FR-032).
 
-### 0.2a Tabs stay per agent — and that does not survive the re-key by itself
+### 0.2a Tabs are owned by the SESSION — the re-key that D1.9c replaced, and the arbiter it does NOT remove
 
-**Operator ruling, 2026-09-01 (ADR D1.9a), verbatim:** *"the default is they open a new tab — we
-have in the current version that an agent has its own tab, we should maintain that. Only if the
-user starts a tab are the agents able to see it and take control on request."*
+**Operator ruling, 2026-09-02 (ADR D1.9c), verbatim:** *"it should not be per agent but per
+session, no matter which agent is on it. Tabs are owned by sessions."*
+
+**This supersedes D1.9a**, whose per-agent ownership this section used to specify and which
+FR-048 carried. One Chrome per workspace and one cookie jar (D1.3, D1.10) are **unchanged**.
+**Only the tab-ownership key moves: agent → session.**
 
 | | Owner | Who can see it | Who can drive it |
 |---|---|---|---|
-| A tab an **agent** opens | that agent | that agent | that agent |
-| A tab the **operator** opens | the workspace | **every agent on the workspace** | the operator; an agent **on request** |
+| A tab an **agent** opens | the **session** the turn ran in | every agent on that session — *the tab stays with the chat, not with whoever is on it* | any agent on that session |
+| A tab the **operator** opens | the **workspace** | **every agent on the workspace** | the operator; an agent **on request** |
+| — *superseded* — a tab an agent opens | ~~that agent~~ | ~~that agent alone~~ | ~~that agent alone~~ |
 
-One Chrome per workspace, one cookie jar (D1.3, D1.10) — and **inside it, tab ownership stays
-per agent, exactly as today**.
+**This fixes ADR §1.1's defect twice over, and the second half is new.** §1.1 records the operator
+browsing in the panel, switching the chat from Mia to Jim, and Jim reporting zero tabs. D1.9a fixed
+only the *operator's* tab, by making it workspace-owned. **D1.9c also fixes the agent's tab**:
+switching the chat from Mia to Jim does not change the session, so **Jim sees the tab Mia opened in
+that chat** — it was never Mia's. Under D1.9a it still was, and the operator would have got the
+right answer about their own tab and the wrong one about Mia's, in the same reply.
 
-**This is what actually fixes ADR §1.1's defect.** The operator opened the panel, browsed, and
-the tab was attributed to whichever agent's panel happened to be on screen — so Jim could not
-see it. Under this ruling an operator-opened tab is **not owned by an agent at all**: it belongs
-to the workspace. Jim sees it because it was never Mia's.
+#### The trap, re-derived under the session key rather than carried forward
 
-**The trap, verified against source rather than inferred.** Today's tab set belongs to the
-*browsing context*, not to the agent: `BrowserManager.sessions` is
-`map[string]*sessionEntry` (`manager.go:338`) and each `sessionEntry` owns
-`tabs []*tabEntry` (`manager.go:203-204`), reached by session id — which every tool
-hardcodes to `DefaultSessionID` (ADR-041 D1). Agents are separated **only** because each has
-its own manager. FR-001 collapses managers to one per workspace, so a re-key alone gives every
-agent on the workspace **one shared tab set** and silently deletes the separation this ruling
-requires. **The agent dimension must therefore be carried explicitly on the tab set** —
-FR-048 — and FR-048's test fails if two agents' tabs merge.
+Today's tab set already belongs to a **session**, nominally: `BrowserManager.sessions` is
+`map[string]*sessionEntry` (`manager.go:338`) and each `sessionEntry` owns `tabs []*tabEntry`
+(`manager.go:203-204`), reached by session id. **The field name was right and the value was a
+constant** — every tool hardcodes `DefaultSessionID = "default"` (`tools.go:63`, ADR-041 D1), so
+the map has exactly one live key and agents are separated **only** by each having its own
+manager.
 
-**Second-order consequence nobody had owned: `cfg.MaxTabs` — and it is now moot.** The
+So the shape of the trap is unchanged from D1.9a's, and only its remedy is simpler. FR-001
+collapses managers to one per workspace; a re-key that leaves `DefaultSessionID` in place gives
+every session on the workspace **one shared tab set**, silently. **The difference is that D1.9c's
+remedy needs no new dimension** — it needs the map's existing key to carry the turn's real session
+id instead of a constant, which is work FR-002b is already doing for all 37 consumers.
+**FR-080** states it; **FR-048 is tombstoned** (§9) rather than amended, because its subject —
+the agent dimension — no longer exists.
+
+#### Which session id, and this is not a free choice
+
+**`transcriptSessionID`, never `routingSessionID`.** Both exist on a turn and a delegated child
+carries different values for them (ADR-057 D2/FR-011): `spawnSubTurn` gives the child its own
+`TranscriptSessionID: childID` (`pkg/agent/subturn.go:1282`, whose comment reads *"FR-007: the
+child's OWN session id, not the parent's"*) while **inheriting** `childTS.routingSessionID =
+parentTS.routingSessionID` (`:1339`).
+
+Two reasons, and the first is a prohibition already written into the code:
+
+1. **`routingSessionID`'s doc comment forbids exactly this use.** `pkg/agent/turn.go:348-353`
+   states it *"MUST NOT be read for any purpose other than routing/interrupt scoping — never as a
+   session store key … **ownership predicate** … uploads-directory key"*. Tab ownership is an
+   ownership predicate, by name.
+2. **It would re-merge a whole delegation subtree.** `routingSessionID` is *"inherited VERBATIM
+   through an entire delegation subtree — for a grandchild it equals the ROOT's own session id"*
+   (`pkg/agent/turn.go:322-364`). Keying tabs on it would give a root turn and every descendant
+   one shared tab set — and `delegate`'s `async` defaults to **true** (`pkg/tools/delegate.go:1298`)
+   with `executeAsync` detaching each spawn onto its own goroutine (`:1853-1856`), so N `delegate`
+   calls in one turn produce N children running **concurrently** on that one merged set. That is
+   the very collision D1.9c is credited with closing, reintroduced by picking the wrong id.
+
+Keyed on `transcriptSessionID`, **parallel delegation is safe by construction**: siblings hold
+distinct ids and therefore distinct tab sets.
+
+#### The residual D1.9c names — established from code, and the answer is YES
+
+The ADR says the residual *"must be specified rather than assumed away"*: two concurrent turns
+**in the same session** would still contend, and *"whether that can occur is a question about
+session-level turn serialisation, not about the browser."*
+
+> **It can occur. Three live paths do it, and none of them is exotic.**
+
+**There is no per-session turn lock.** `runAgentLoop` (`pkg/agent/loop.go:7749-7791`) contains no
+admission check, no lock and no session-busy test — anything that reaches it starts a turn on
+whatever session id it was handed. What serialisation exists is one **`sessionWorker` goroutine
+per scope** (`pkg/agent/session_worker.go:33-36`, scope resolved at `pkg/agent/loop.go:7546-7550`),
+and it is structural rather than a lock: `runLoop` calls `w.processTurn` inline (`:206`), and a
+message arriving mid-turn is folded into the running turn as steering rather than run beside it
+(`:117-124`). **It only protects the bus path.** Three paths bypass it and call `runAgentLoop`
+directly:
+
+| Path | Session id it runs on | Why it collides | Evidence |
+|---|---|---|---|
+| **`/loop`** | **the user's own live chat session id** | The chat id is stored as the cron payload and handed back to `ProcessScheduled` on every tick, while the user may be mid-turn in that same session through the worker. Cron's overlap guard checks `job.State.Running` (`pkg/cron/service.go:604-613`) and knows nothing about a user turn | `pkg/agent/loop_command.go:90`, `pkg/agent/loop_scheduler.go:118`, `:215` |
+| **Async system-notify** (a delegate completion notifying its origin) | **the origin chat session id** | Dispatched as a bare `go func()` before the worker logic is reached; binds `transcriptSessionID` from the message and calls `runAgentLoop` | `pkg/agent/loop.go:3512`, `:7640-7643`, `:7734` |
+| **cron `SessionModeMain`** | `"sched-main-" + owner` — **shared across different jobs** | The overlap guard is strictly per job, and dispatch spawns a goroutine per due job (`pkg/cron/service.go:568-590`), so two `main`-mode jobs owned by one agent run together on one id | `pkg/gateway/schedules.go:546` |
+
+**The second row is not an inference — the code says so, and files it as a known defect.**
+`pkg/agent/loop.go:3491-3510`, verbatim:
+
+> *"…this goroutine **CAN run a real turn concurrently against the SAME origin session as a live
+> user turn** (unlike every other inbound message, which IS serialized per session via the
+> sessionWorker pool below). … **the single-writer-per-session invariant other turn types rely on
+> no longer holds for this specific path.** See #505 for the suggested follow-up."*
+
+**Two consequences, and they point in opposite directions from the ADR's expectation.**
+
+**(a) The collisions D1.9c was credited with closing ARE closed.** A heartbeat runs on a
+dedicated standing session minted per (workspace, agent) and reused every fire
+(`pkg/gateway/rest_workspaces.go:1236`, `pkg/session/unified.go:696-697`,
+`pkg/gateway/schedules.go:527-543`), so a heartbeat firing while a chat is live is now **two
+sessions, two tab sets**. Parallel delegation is two sessions per §"Which session id" above.
+Both of C-402's named cases are gone by construction, exactly as the ADR says.
+
+**(b) The general lease case is NOT dissolved, and §14's scope table must say so.** Its third row
+currently reads *"nothing — it cannot occur"* on the premise that no two turns can address one tab
+set. Under D1.9a that premise was false for a different reason (one agent, two turns); under
+D1.9c it is false for this one (one session, two turns, three paths). **The row is rewritten, not
+deleted** — §14 — and its supporting scenario is rewritten with it, because the scenario currently
+*asserts the premise* and therefore passes while the hole is open.
+
+**What the arbiter is.** Not a new mechanism: **§14's existing write lease, applied to the
+session's tab set as well as the workspace's** (FR-081). The lease is per-browser mutual exclusion
+held for the duration of one action-tool call; widening *when it is consulted* costs nothing at
+the call sites and no new primitive.
+
+**What this spec does NOT do about #505.** Routing those three paths through the `sessionWorker`
+would remove the contention at its source and is the right long-term fix — it is #505's own
+proposal. **It is not in this spec's scope**, it is not a browser change, and this document must
+not depend on it: the lease has to hold whether or not #505 is ever done. Recorded in §0.5 as
+**E-10** so the dependency is visible rather than assumed.
+
+#### What this ruling does NOT change — stated explicitly, because two halves of D1.9a survive it
+
+- **The operator's own tab stays WORKSPACE-owned** and visible to every agent on the workspace,
+  not session-owned. `TabOwnerWorkspace()` is untouched. **This is the half that fixes §1.1's
+  reported defect** and D1.9c preserves it deliberately: a tab the operator opened is not the
+  property of whichever chat happened to be on screen.
+- **Acquisition of that tab stays IMPLICIT** (D1.9b ruling 1) — no tool, no policy entry, no wire
+  field (§0.7, FR-070, FR-071). D1.9c touches the ownership key, not the acquisition mechanism.
+
+**Second-order consequence, and it is now moot for the same reason it was under D1.9a.** The
 per-agent tab cap (`BrowserConfig.MaxTabs`, default **5** at `manager.go:36` and `:124`; config
-key `tools.browser.max_tabs`, `config.go:3633`) is enforced by `totalTabCountLocked`
-(`manager.go:1549-1555`), which sums `len(se.tabs)` across **every session in the manager** and
-is checked at `:1139` (`createFirstTab`), `:2005` and `:2047` (`OpenTab`), `:2216` and `:2286`
-(`adoptTarget`). One manager per agent makes that per-agent today; one manager per **workspace**
-would have made it 5 tabs shared across the whole team — a silent tightening nobody had
-noticed. Revision 4 answered that with **FR-049** (enforce `MaxTabs` per agent tab set).
-
-**The operator ruling of 2026-09-01 (ADR D1.5a) removes the question instead of answering it:
-`tools.browser.max_tabs` is DELETED from the code.** There is no per-agent tab cap and no
-per-workspace one; capacity is the memory gate, and idleness is the reaper. **FR-049 is
-tombstoned** with that reason (§9) — it was the right answer to a question that no longer
-exists. FR-048's per-agent tab *sets* are unaffected and still required: ownership ("whose tab
-is this") is a correctness property, not a capacity one, and the ruling touched only capacity.
-See §0.6.
-
-**What this ruling removes from the lease.** §14's write lease was scoped as "two agents
-sharing one tab set". Two agents on **their own** tabs do not contend, so the general case is
-gone. What remains is narrow: **agent-vs-agent on the operator's shared tab**. Operator-vs-agent
-is the existing `LiveViewRegistry.TakeControl` / `IsControlled` (`live.go::TakeControl` at
-`:1241`, `::IsControlled` at `:1313`, ADR-038 D6) and is untouched. §14 is rescoped
-accordingly; the change is smaller than either answer to the old retry-vs-defer question
-implied, because the operator removed the premise.
+key `tools.browser.max_tabs`, `config.go:3633`) was enforced by `totalTabCountLocked`
+(`manager.go:1549-1555`), which sums `len(se.tabs)` across **every** session in the manager. Under
+one manager per workspace that would have become 5 tabs for the whole team — the tightening
+**FR-049** was written to prevent. **`tools.browser.max_tabs` is DELETED from the code** by ADR
+D1.5a, so there is no cap to re-own and FR-049 stays tombstoned (§0.6, §9). Ownership — *whose tab
+set is this* — is a correctness property and is untouched by that ruling; only capacity moved.
 
 ### 0.3 What still gates implementation — six measurements
 
