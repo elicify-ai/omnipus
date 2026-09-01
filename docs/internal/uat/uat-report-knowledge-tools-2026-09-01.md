@@ -66,6 +66,60 @@ loop, and did not retry the same write.
 
 **The bar the design sets is already met on this path.**
 
+### D-04 — misspelled property name · **PASS**
+
+Asked to set a property named `stauts`. Refused:
+
+```
+knowledge.note.edit: knowledge: record schema declares no such property:
+company declares no property "stauts"; declared properties are name, status,
+revenue, founded
+```
+
+No stray property was created — verified on disk (`grep -c '^stauts:'` → 0).
+
+**This honestly downgrades one piece of planned work.** The design proposed
+adding a nearest-match "did you mean?" to this refusal. With four declared
+properties, listing all of them already makes the intended spelling obvious and
+the agent said so unprompted. The improvement is real but it is a
+**nice-to-have on wide record types**, not a fix for a defect. It should be
+described that way rather than as closing a gap.
+
+### D-06 — repairing an already-invalid note · **PASS**
+
+`Delta.md` was left invalid by the G1 failure below (`status: liquidated`,
+`revenue: not-a-number`). Asked to set `status` to `dormant`: accepted, and the
+vault confirms `status: dormant` while `revenue: not-a-number` remains.
+
+This is the design's §4 ruling — *judge the value being written, not the whole
+record* — already correctly implemented. An agent can repair a partly-invalid
+note one property at a time, which is exactly what the founder's vault (27
+invalid records) will need.
+
+### G3 — write to a note whose record type has no schema · **FAIL (as designed, and that is the problem)**
+
+Planted `Echo.md` with `type: spaceship`, which no schema declares. Asked to
+set `warp` to `banana` — an undeclared property, on an undeclared type,
+replacing a number with prose.
+
+**Accepted. Verified on disk: `warp: banana`.**
+
+The write proceeding is the specified behaviour and the design does not propose
+changing it — untyped notes are a supported state. **The defect is the
+silence.** Asked whether anything had been validated, the tester had to run
+`knowledge_describe`, inspect the schema list and re-read the note to work out
+that nothing had been. Its own words: *"Essentially no content validation was
+observable"* — a conclusion it reached by investigation, not because the tool
+said so.
+
+That is G3 exactly: the agent cannot distinguish "validated and fine" from
+"nothing was checked", and the three distinct misses (unparseable frontmatter,
+absent type, undeclared type) are indistinguishable from each other too.
+
+**This doubles as the first Suite F result.** Unprompted, the tester produced a
+precise four-point account of what was not checked and how it knew. The
+adversarial framing works.
+
 ### G1 / E-01 — `op: create` with a body carrying its own frontmatter · **FAIL**
 
 The defect, reproduced with a live agent. Asked to create `Delta.md` passing
@@ -128,9 +182,9 @@ Recorded as not-run rather than omitted, per the plan's own rule.
 | A — search accuracy | **not run** | needs the generated corpus and its committed answer key; the smoke vault has no ground truth, so any number would be meaningless |
 | B — search efficiency | **not run** | same; 3 notes cannot show scaling |
 | C — concurrency | **not run** | needs the multi-agent harness path; single-agent only so far |
-| D-01/02/04/05/06/07 | **not run** | only D-03 and D-08 were exercised |
+| D-01/02/05/07 | **not run** | D-03, D-04, D-06, D-08 and G1/G3 were exercised |
 | E — tool coverage | **partial** | `knowledge_read`, `knowledge_edit` (`set_property`, `create`) only. `find`, `describe`, `restructure`, `configure` untouched |
-| F — critical feedback | **not run** | scripted probes only so far |
+| F — critical feedback | **partial** | not run as its own suite, but G3's probe produced exactly the unprompted critical account F is for |
 
 ---
 
