@@ -36,18 +36,17 @@
 // disjoint Details keys — a call record's {slug, mode, outcome, shelf,
 // workspace_id} never includes {path, op}, and vice versa.
 //
-// # Wiring gap (documented, not this file's job to close)
+// # Wiring (closed)
 //
-// EmitSkillCall is the primitive; nothing in this codebase calls it yet.
-// pkg/tools/skill.go's SkillTool (ADR-072 D1) implements the tool's shape
-// and search but is deliberately not registered or resolver-wired — its own
-// header comment defers that to "a later integration phase that also wires
-// SetResolver". Wiring EmitSkillCall into SkillTool's execLoad/execSearch
-// (or into whatever loop.go integration point ends up calling SkillTool) is
-// that same later integration phase's job, not this one's — this phase's
-// assigned scope is the reminder (skill_reminder.go) and the audit
-// primitives themselves. See this task's final report for the explicit
-// call-site contract the integration phase should follow.
+// EmitSkillCall is now called from both call sites: the load path's resolver
+// closure in pkg/agent/loop.go (wired as part of SkillTool's integration
+// phase — it has direct access to the per-outcome shelf/slug detail that
+// closure resolves), and the search path directly inside
+// pkg/tools/skill.go's execSearch, via SkillTool.auditLogger
+// (SetAuditLogger, injected by the tool registry's auditLoggerAware
+// propagation — S67 fix, UAT batch 3 groups E-J, 2026-09-02: execSearch had
+// no audit call at all until then, so ADR-072 D3.1's "every Skill call is
+// audited" guarantee silently did not hold for search).
 package audit
 
 import (

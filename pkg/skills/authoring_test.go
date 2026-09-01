@@ -210,6 +210,102 @@ func TestValidateSkillMarkdown_Valid(t *testing.T) {
 	}
 }
 
+// TestSkillCreateEdit_RejectsEmptyFrontmatterDescription is the regression
+// test for UAT S59: create_skill (and edit_skill) accepted a skill whose YAML
+// frontmatter declared an empty/whitespace-only `description:` field, because
+// ValidateSkillMarkdown silently fell back to the body's first paragraph as
+// the "description" it validated — even though the author's actual
+// frontmatter said nothing. Each fixture below deliberately includes a real,
+// description-shaped paragraph in the BODY, so a false pass here can only be
+// caused by that silent fallback, not by an accidentally-empty body too.
+//
+// Covers, against BOTH CreateSkill and EditSkill:
+//   - an empty `description:` field is rejected with ValidateSkillDescription's
+//     own "description is required..." message (FR-010, via ValidateSkillMarkdown);
+//   - a whitespace-only `description:` field is rejected identically
+//     (regression matching ValidateSkillDescription's own existing behavior);
+//   - a valid, non-empty description is still accepted (no false-positive
+//     rejection introduced by the fix).
+func TestSkillCreateEdit_RejectsEmptyFrontmatterDescription(t *testing.T) {
+	const bodyWithRealParagraph = "\n\n# decoy\n\nThis is a real, sentence-shaped paragraph that a naive " +
+		"fallback would mistake for the skill's description.\n"
+
+	cases := []struct {
+		name           string
+		descriptionRaw string // raw YAML scalar for the frontmatter `description:` field, incl. quoting
+		wantErr        bool
+		wantErrSub     string
+	}{
+		{
+			name:           "empty description is rejected",
+			descriptionRaw: `""`,
+			wantErr:        true,
+			wantErrSub:     "description is required",
+		},
+		{
+			name:           "null description is rejected",
+			descriptionRaw: "null",
+			wantErr:        true,
+			wantErrSub:     "description is required",
+		},
+		{
+			name:           "whitespace-only description is rejected",
+			descriptionRaw: `"   "`,
+			wantErr:        true,
+			wantErrSub:     "description is required",
+		},
+		{
+			name:           "valid description is accepted",
+			descriptionRaw: `"Use when the user asks to decoy-test something long enough to pass validation."`,
+			wantErr:        false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run("CreateSkill/"+tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			w := NewSkillWriter(root)
+			slug := "decoy"
+			content := "---\nname: " + slug + "\ndescription: " + tc.descriptionRaw + "\n---" + bodyWithRealParagraph
+
+			_, err := w.CreateSkill(slug, content)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected CreateSkill to reject an empty/whitespace frontmatter description, but it succeeded")
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Fatalf("expected error to contain %q, got: %v", tc.wantErrSub, err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected a valid description to be accepted, got: %v", err)
+			}
+		})
+
+		t.Run("EditSkill/"+tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			w := NewSkillWriter(root)
+			slug := "decoy"
+			// Seed an existing, valid skill so EditSkill edits rather than creates.
+			if _, err := w.CreateSkill(slug, validFor(slug)); err != nil {
+				t.Fatalf("seed CreateSkill: %v", err)
+			}
+
+			content := "---\nname: " + slug + "\ndescription: " + tc.descriptionRaw + "\n---" + bodyWithRealParagraph
+			_, _, err := w.EditSkill(slug, content, false)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected EditSkill to reject an empty/whitespace frontmatter description, but it succeeded")
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Fatalf("expected error to contain %q, got: %v", tc.wantErrSub, err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected a valid description to be accepted, got: %v", err)
+			}
+		})
+	}
+}
+
 // newProjectSkillFixture seeds a "<mountRoot>/.omnipus/skills/<slug>/SKILL.md"
 // file and returns the mount root, the skill's absolute path, and a
 // ProjectShelf keyed on slug pointing at it — the shape DiscoverProjectSkills

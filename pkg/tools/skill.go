@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -118,6 +119,25 @@ type SkillTool struct {
 	// SkillSearchDoc doc comment for why). Nil ⇒ search always reports no
 	// matches, rather than panicking or disclosing anything.
 	corpus func(ctx context.Context) []SkillSearchDoc
+
+	// auditLogger records one audit.EmitSkillCall entry per Skill call.
+	// Injected by the tool registry (see auditLoggerAware in registry.go) via
+	// SetAuditLogger — nil until then, in which case EmitSkillCall is a
+	// documented no-op (ADR-072 D3.1 still requires no data loss; a nil
+	// logger just means audit logging is disabled for this installation, the
+	// same contract every other auditLoggerAware tool in this package uses).
+	// The load path is audited by its resolver closure (pkg/agent/loop.go),
+	// which has direct access to per-outcome shelf/slug detail this tool
+	// does not resolve itself; this field exists so the search path — owned
+	// entirely inside this file — can audit itself the same way (S67).
+	auditLogger *audit.Logger
+}
+
+// SetAuditLogger satisfies auditLoggerAware (registry.go) so the tool
+// registry injects the installation's audit.Logger automatically on
+// registration, mirroring every other builtin tool's SetAuditLogger.
+func (t *SkillTool) SetAuditLogger(l *audit.Logger) {
+	t.auditLogger = l
 }
 
 // NewSkillTool constructs a Skill tool with no resolver wired — Name(),
@@ -219,6 +239,25 @@ func (t *SkillTool) execLoad(ctx context.Context, name string) *ToolResult {
 // ── search path ──────────────────────────────────────────────────────────
 
 func (t *SkillTool) execSearch(ctx context.Context, query string) *ToolResult {
+	// ADR-072 D3.1/FR-018 (S67 fix): every Skill call — search included, not
+	// just load — must produce exactly one audit record. A search call names
+	// no single slug and resolves to no single shelf (it ranks across all of
+	// them), so those two fields are always "" for mode "search" — matching
+	// the shape pkg/audit/skill_call_test.go's own fixtures already expect.
+	// outcome reflects whether the search actually produced a match the
+	// caller could load: "loaded" when it did, "not_found" when it did not
+	// (for any reason — no corpus, no ranked hits, or every rank filtered out
+	// by canUse). "denied" does not apply here: search never singles out one
+	// ungranted slug the way a load does, it just silently omits it from the
+	// list. The defer fires on every return path below exactly once.
+	outcome := audit.SkillCallOutcomeNotFound
+	defer func() {
+		audit.EmitSkillCall(
+			t.auditLogger, ToolAgentID(ctx), ToolWorkspaceID(ctx), "",
+			audit.SkillCallModeSearch, outcome, "",
+		)
+	}()
+
 	if t.corpus == nil {
 		return SilentResult("No skills found matching the query.")
 	}
@@ -262,6 +301,7 @@ func (t *SkillTool) execSearch(ctx context.Context, query string) *ToolResult {
 	if len(matches) == 0 {
 		return SilentResult("No skills found matching the query.")
 	}
+	outcome = audit.SkillCallOutcomeLoaded
 
 	encoded, err := json.Marshal(map[string]any{"matches": matches})
 	if err != nil {
