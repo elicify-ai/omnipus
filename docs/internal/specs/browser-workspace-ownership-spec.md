@@ -2163,6 +2163,40 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **And** Windows browser support is recorded as **degraded-unsupported** for the pool
 - *The placeholder is not decoration: it puts the gap at the point someone would fix it. A note in a spec is read by whoever reads the spec; a file named `meminfo_windows.go` is read by whoever goes looking for why Windows has no limit.*
 
+**Scenario: the computed default is gone, and the accessor says the number is a backstop (*no-computed-default-remains*) — US-15/AC19, FR-067**
+- **Given** a `PerformanceConfig` with `MaxParallelAgents: 0` and no `OMNIPUS_MAX_PARALLEL_AGENTS` in the environment
+- **When** `EffectiveMaxParallelAgents()` is called
+- **Then** it returns `(physicalConcurrencySafetyCeiling, false)`
+- **And** the test **fails if the second value is `true`** — a backstop reported as a capacity is the whole defect FR-069 exists to prevent
+- **And given** `MaxParallelAgents: 40`, **then** it returns `(40, true)`; **and given** `OMNIPUS_MAX_PARALLEL_AGENTS=50` alongside `MaxParallelAgents: 8`, **then** it returns `(50, true)` — the env-over-config precedence is unchanged
+- **And** a repo-wide symbol search for `bytesPerAgent`, `autoDetectMaxParallel` and `clampParallel` returns **zero** hits, `_test.go` included
+- **And** `clampParallelExplicit` **still exists** and still never lowers a large explicit value — *a deletion sweep that took the explicit path with it would satisfy every other assertion here*
+
+**Scenario: one gate, two consumers, same answer (*one-gate-two-consumers*) — US-15/AC20, FR-068**
+- **Given** the exported two-valued availability accessor stubbed to the same fixture readings the browser gate is tested against, at pressure ratios 0.84, 0.85 and 0.86
+- **When** a browser launch and an agent admission are each requested at each ratio
+- **Then** the two consumers return the **same** admit/refuse answer at all three ratios
+- **And** both reached it through the **same** exported accessor and the **same** threshold value — asserted by seam, not by coincidence of outcome
+- **And** a structural search finds **no** per-agent byte constant anywhere in the admission path, under any name
+- **And** the run **fails** if a second threshold constant exists — *two numbers that happen to be equal today are two mechanisms tomorrow, which is what D1.5c ruled against*
+
+**Scenario: an unmeasurable host holds at the floor and refuses to grow (*unmeasurable-host-holds-at-the-floor*) — US-15/AC21, FR-068a**
+- **Given** the availability accessor forced to `ok=false` — the Windows case **and**, as a second fixture, Linux fallen through to `fallbackTotalRAMBytes/2`
+- **When** three concurrent agent admissions are requested
+- **Then** the first two are **admitted**
+- **And** the third is **REFUSED**, and the refusal names **memory** and carries FR-063's reason code
+- **And** the test **fails if the third is admitted** — *this is the assertion; "admits when memory is free" passes against a stub that always admits and proves nothing*
+- **And** the explanation is logged **exactly once** for the process — the run fails on zero log lines **and** on one-per-call
+- **And** the gateway still completes an ordinary turn on that host — *refuse to grow, never refuse to run; a test that only asserted the refusal would be satisfied by a gateway that admits nothing at all*
+
+**Scenario: the announcement is the true one, and the UI does not recommend a backstop (*no-computed-default-is-what-is-announced*) — US-15/AC22, FR-069**
+- **Given** the shipped release with nothing set for `performance.max_parallel_agents`
+- **Then** the release note states **there is no longer a computed default**
+- **And** it contains **no** claim that a default "moved", "changed", or went "from 2 to 2000" — the assertion is on the **absence** of that sentence, because it is the sentence an earlier revision of this spec and of ADR D1.5c both prescribed
+- **And** the config documentation for that key says the same
+- **And** the Settings → Performance panel renders **"automatic — bounded by available memory"**, and the rendered output contains **no** `2000` presented as a recommendation (`src/components/settings/PerformanceSection.tsx:218-229`)
+- **And given** an explicit value of 40 instead, **then** the panel renders `40` exactly as it does today — *the unset case is what changed; the set case must not*
+
 **Scenario: the managed-Chromium download still starts at boot — FR-016c**
 - **Given** a fresh install with no Chromium on `$PATH` and no managed install, and **zero** live browsing keys
 - **When** the gateway boots
