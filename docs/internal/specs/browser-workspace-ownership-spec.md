@@ -1074,6 +1074,55 @@ That last row is a requirement, not a formatting note. A deny-list trim silently
 
 ---
 
+### 0.9 One predicate, two responses — and Windows' refusal is ACCEPTED, not argued (operator ruling, 2026-09-01)
+
+**Verbatim:** *"the windows refusal is fine for now, we are not supporting windows yet."*
+
+This ruling does **two** things, and they are separable. It **accepts** the browser pool's refusal on Windows, on the ground that Windows is not a supported platform rather than on any technical argument — so nothing in FR-065 or FR-066 is softened on Windows' account. And it forces a distinction this document had been carrying implicitly: **`ok=false` is ONE predicate reaching TWO consumers whose correct responses are DIFFERENT.** D1.5c ruled one *mechanism*; it did not rule one *response*, and an implementer who collapses the two has broken a supported deployment. **FR-075** makes the divergence assertable.
+
+#### Windows and gVisor are not the same case, and grouping them is the mistake
+
+Both reach `ok=false`, which is why this document has repeatedly written *"Windows and gVisor"* in one breath. They arrive there by different roads and carry different support status:
+
+| | Windows | gVisor (and other `/proc`-less Linux sandboxes) |
+|---|---|---|
+| Which file compiles | `meminfo_other.go` (`//go:build !linux`) | **`meminfo_linux.go` — this is Linux** |
+| Why the reading fails | the platform has **no reader**; none is written (FR-066) | `/proc/meminfo` is **unreadable**, so `readMeminfoFieldBytesAt` returns `ok=false` and `readMemAvailableBytes` falls through to `readMemTotalBytes()/2` = a fabricated **2 GiB** (`pkg/config/meminfo_linux.go:16`, `:26-30`, `:40-45`) |
+| Support status | **not supported yet** — no sandbox backend either (root `CLAUDE.md`: `selectBackendPlatform` returns `FallbackBackend`) | **a supported Linux deployment.** A container platform an operator can legitimately be running on |
+| Browser pool response | **refuse to grow. Accepted by this ruling**, and the reason recorded is the platform's unsupported status | **refuse to grow.** Same response, but on the technical ground of FR-065 — a fabricated constant is not a measurement |
+| Agent admission response | **hold at the conservative floor of 2** (FR-068a) | **hold at the conservative floor of 2** (FR-068a) — and here it matters, because refusing every turn would break a supported deployment |
+
+**So the divergence is by consumer, not by platform.** Both platforms get the same answer from each consumer; the two consumers give different answers from the same reading. Writing it the other way round — *"Windows refuses, gVisor degrades"* — would be wrong in both halves.
+
+#### The agent floor is EXISTING SHIPPED BEHAVIOUR, and the code says why
+
+FR-068a's floor of 2 is not a concession invented to keep the product working on an awkward host. It is what ships today, and `pkg/config/meminfo_other.go:15-33` records the decision and the regression that produced it, in the code, verbatim:
+
+> *"…that fictitious value produced a default of **585 concurrent agents on ANY** macOS/Windows/BSD box (**or a Linux box whose `/proc/meminfo` is unreadable, e.g. gVisor**) regardless of its actual hardware — a 'fails open' default, replacing the old (conservative-by-construction) default of 2."* (`:20-23`)
+>
+> *"This now deliberately returns 0: with no real signal … lands on the same **conservative floor of 2** … — failing CONSERVATIVE and saying so, rather than failing open on a number invented from a constant that was never meant to model availability in the first place."* (`:25-33`)
+
+Two things follow that this spec must not undo. **The 585-agent history is the argument against fail-open**, and it is the same argument FR-065 makes for the browser — so the two consumers agree about the *predicate* and about *never fabricating a number*, and disagree only about what to do next. And **the file names gVisor itself**, which is why the Linux-versus-Windows distinction above is the code's own distinction rather than one introduced here.
+
+#### The rule, stated once so an implementer cannot collapse it (FR-075)
+
+> **One exported accessor. One threshold. One `ok=false` predicate. TWO responses, and they are not interchangeable.**
+>
+> - **Browser pool, `ok=false` ⇒ refuse to grow.** Everywhere, Windows included. A refused browse costs one tool call (FR-065, FR-053, FR-063).
+> - **Agent admission, `ok=false` ⇒ hold at the conservative floor of 2 and refuse beyond it.** Everywhere, gVisor included. A refused turn is a gateway that cannot answer a message (FR-068a).
+
+**And it must be able to fail.** A test that stubs the accessor to `ok=false` and asserts only *"the pool refused"* passes on a build that refuses everything, agent turns included — which is the exact defect this section exists to prevent. **FR-075's assertion is the pair, in one test, off one stub:** the pool refuses to grow **and**, in the same run, the agent gate still admits two turns and refuses the third. Either half alone is green on a build that has collapsed the two responses into one.
+
+#### What changes in the requirements — nothing is rewritten, one row is added
+
+FR-065, FR-066 and FR-068a are **correct as written** and are not amended; this ruling adds the citation for Windows' acceptance and one new row.
+
+| FR | What it requires |
+|---|---|
+| **FR-075** | **One predicate, two responses — asserted as a pair.** From a single stubbed `ok=false` accessor, in one test: the **browser pool refuses to grow**, and **agent admission still admits up to 2 and refuses the third naming memory**. Plus a doc assertion that Windows' browser refusal is recorded as **accepted because Windows is not yet a supported platform** (operator ruling 2026-09-01), not as a technical limitation, and that the release note distinguishes Windows (unsupported) from a `/proc`-less **Linux** host (supported, same response) |
+
+---
+
 ## 1. Overview / Actors / Scope
 
 **Problem.** The browser — its tab set *and* its logins — is owned by the **agent**, so it strands the moment the operator switches who they are talking to. `AgentLoop.browserMgrs` is `map[agentID]*browser.BrowserManager` (`pkg/agent/loop.go::AgentLoop`), populated by a **per-agent** registration loop (`loop.go::registerSharedTools`) that calls `browser.RegisterTools` and then `mgr.AttachSharedChrome(coordinator, agentID)`. `RegisterTools` (`pkg/tools/browser/register.go:41-84`) constructs a manager and **binds it into eleven tool structs** — `&NavigateTool{mgr: mgr}` at `:65` through `&OpenTabTool{mgr: mgr}` at `:81`. Every tool then addresses its tabs through one hardcoded key, `DefaultSessionID = "default"` (`pkg/tools/browser/tools.go:63`). The operator browses with Mia, switches the chat to Jim, and Jim — correctly, for his own manager — reports zero tabs while telling the operator the browser is "shared across the workspace", because five model-visible strings say exactly that (`tabs.go:32,86,143,206`; `tools.go:415`).
