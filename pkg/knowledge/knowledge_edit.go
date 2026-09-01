@@ -328,12 +328,22 @@ func (t *EditTool) refuseOp(target mutationTarget, op string) *tools.ToolResult 
 		fmt.Sprintf("unsupported op %q; supported ops are %s", op, strings.Join(knowledgeEditOps, ", ")))
 }
 
-func (t *EditTool) loadSchemas(target mutationTarget) (*records.SchemaSet, error) {
-	set, _, err := records.LoadSchemas(target.collection.Root())
+// loadSchemas loads this write's governing schema set AND the load report
+// naming any schema file the loader rejected (G4). The report used to be
+// discarded (`set, _, err :=`) — a malformed schema file silently degraded
+// its own record type to unconstrained, with no signal anywhere that it had
+// happened. Every call site now threads the report through to
+// knowledgeEditResolveSchema, which — when the type being WRITTEN is one of
+// the rejected ones — reports knowledgeEditRejectedSchema instead of the
+// indistinguishable knowledgeEditUnknownType. See knowledgeEditGovernance.Note
+// for the disposition (a loud warning in the result, not a refusal) and its
+// own doc comment for the argument against §4 of the design.
+func (t *EditTool) loadSchemas(target mutationTarget) (*records.SchemaSet, *records.SchemaLoadReport, error) {
+	set, report, err := records.LoadSchemas(target.collection.Root())
 	if err != nil {
-		return nil, fmt.Errorf("loading record schemas: %w", err)
+		return nil, nil, fmt.Errorf("loading record schemas: %w", err)
 	}
-	return set, nil
+	return set, report, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +374,7 @@ func (t *EditTool) execCreate(target mutationTarget, args map[string]any) *tools
 		content = []byte(stringArg(args["body"]))
 	}
 
-	set, serr := t.loadSchemas(target)
+	set, report, serr := t.loadSchemas(target)
 	if serr != nil {
 		return t.deps.refuse(AuthorOpCreate, target, []string{rel}, serr.Error())
 	}
@@ -373,12 +383,30 @@ func (t *EditTool) execCreate(target mutationTarget, args map[string]any) *tools
 		return t.deps.refuse(AuthorOpCreate, target, []string{rel}, perr.Error())
 	}
 	for _, p := range pairs {
-		next, eerr := knowledgeEditSetPropertyEdit(set, p.Key, p.Values, p.IsList)(content)
+		// gov is nil here deliberately: the per-pair splice's OWN governance
+		// outcome is not what the caller needs reported — the assembled-
+		// frontmatter check just below runs after every pair has landed and
+		// reports governance for the note as a WHOLE (G1/G3), which is the
+		// answer that also covers properties this loop never touches (raw
+		// body/template bytes).
+		next, eerr := knowledgeEditSetPropertyEdit(set, report, p.Key, p.Values, p.IsList, nil)(content)
 		if eerr != nil {
 			return t.deps.refuse(AuthorOpCreate, target, []string{rel},
 				fmt.Sprintf("frontmatter.%s: %v", p.Key, eerr))
 		}
 		content = next
+	}
+
+	// G1: op:create's frontmatter ARGUMENT was already validated above, one
+	// property at a time, but raw `body` and expanded `template` bytes reach
+	// this point completely unchecked — a body containing its own
+	// `---\ntype: company\nrevenue: not-a-number\n---` block used to be
+	// written verbatim. Validate the FULLY ASSEMBLED content's frontmatter,
+	// every property present in it, through the exact same authority, before
+	// it ever reaches CreateNote.
+	gov, verr := knowledgeEditValidateAssembledFrontmatter(set, report, content)
+	if verr != nil {
+		return t.deps.refuse(AuthorOpCreate, target, []string{rel}, verr.Error())
 	}
 
 	res, err := CreateNote(OSLinkFS(), target.collection, CreateNoteRequest{
@@ -396,6 +424,7 @@ func (t *EditTool) execCreate(target mutationTarget, args map[string]any) *tools
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opCreate, Path: res.RelPath, Version: res.Version,
 		Changed: true, Bytes: res.Bytes, Template: template,
+		SchemaNote: gov.Note(),
 	}))
 }
 
@@ -471,11 +500,16 @@ func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *
 	if !present || raw == nil {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'value' is required")
 	}
-	set, serr := t.loadSchemas(target)
+	set, report, serr := t.loadSchemas(target)
 	if serr != nil {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, serr.Error())
 	}
 
+	// gov is filled in by the edit closure when it actually runs (inside
+	// EditNote, synchronously, before EditNote returns) — G3: the caller
+	// needs to know whether nothing was checked, and why, not just whether
+	// the write succeeded.
+	var gov knowledgeEditGovernance
 	var edit NoteEdit
 	if listOp != "" {
 		value, ok := jsonScalarToString(raw)
@@ -483,13 +517,13 @@ func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
 				fmt.Sprintf("'value' must be a single text value when 'list_op' is set (got %T)", raw))
 		}
-		edit = knowledgeEditListOpEdit(set, property, value, listOp == "add")
+		edit = knowledgeEditListOpEdit(set, report, property, value, listOp == "add", &gov)
 	} else {
 		values, isList, verr := decodeValueArg(raw)
 		if verr != nil {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, verr.Error())
 		}
-		edit = knowledgeEditSetPropertyEdit(set, property, values, isList)
+		edit = knowledgeEditSetPropertyEdit(set, report, property, values, isList, &gov)
 	}
 
 	res, err := EditNote(OSLinkFS(), target.collection, EditNoteRequest{
@@ -502,6 +536,7 @@ func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opSetProperty, Path: res.RelPath, Version: res.Version,
 		Property: property, ListOp: listOp, Changed: res.Changed,
+		SchemaNote: gov.Note(),
 	}))
 }
 
@@ -585,13 +620,17 @@ func (t *EditTool) execLink(target mutationTarget, args map[string]any) *tools.T
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
 	relation := strings.TrimSpace(stringArg(args["relation"]))
 
+	// gov stays zero-value (Reason knowledgeEditGoverned, Note() == "") on
+	// the non-relation branch below — a body wikilink never touches schema
+	// governance at all, so there is nothing to report either way.
+	var gov knowledgeEditGovernance
 	var edit NoteEdit
 	if relation != "" {
-		set, serr := t.loadSchemas(target)
+		set, report, serr := t.loadSchemas(target)
 		if serr != nil {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, serr.Error())
 		}
-		edit = knowledgeEditLinkPropertyEdit(set, relation, "[["+linkTarget+"]]")
+		edit = knowledgeEditLinkPropertyEdit(set, report, relation, "[["+linkTarget+"]]", &gov)
 	} else {
 		edit = AddWikilink(linkTarget,
 			strings.TrimSpace(stringArg(args["alias"])),
@@ -608,6 +647,7 @@ func (t *EditTool) execLink(target mutationTarget, args map[string]any) *tools.T
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opLink, Path: res.RelPath, Version: res.Version,
 		Target: linkTarget, Relation: relation, Changed: res.Changed,
+		SchemaNote: gov.Note(),
 	}))
 }
 
@@ -690,6 +730,13 @@ type EditData struct {
 	Heading  string
 	Target   string
 	Relation string
+	// SchemaNote is knowledgeEditGovernance.Note() (G3) — empty when a
+	// schema governed the write (nothing further to say) or the op never
+	// resolves one (append_section, replace_body, a body-only link); a
+	// non-empty line otherwise, naming WHY nothing was checked, so the
+	// caller can tell "validated and fine" from "nothing was checked" as
+	// required by the design's acceptance scenario D-08.
+	SchemaNote string
 }
 
 // RenderEdit renders a successful knowledge_edit response as compact text
@@ -727,6 +774,9 @@ func RenderEdit(d EditData) string {
 		}
 	case opReplaceBody:
 		fmt.Fprintf(&b, "REPLACE_BODY (%s)\n", changedWord(d.Changed))
+	}
+	if d.SchemaNote != "" {
+		fmt.Fprintf(&b, "%s\n", d.SchemaNote)
 	}
 	return b.String()
 }

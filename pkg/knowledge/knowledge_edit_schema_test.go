@@ -41,10 +41,11 @@ func TestKnowledgeEditResolveSchema_UnparsableFrontmatterIsNotApplicable(t *test
 	set := records.NewSchemaSet()
 	unparsable := []byte("---\ntitle: Old\n\nbody with no closing fence\n")
 
-	schema, typeName, ok := knowledgeEditResolveSchema(set, unparsable, "title")
-	assert.False(t, ok, "unparsable frontmatter must resolve to no schema applies")
+	schema, typeName, reason, detail := knowledgeEditResolveSchema(set, nil, unparsable)
+	assert.Equal(t, knowledgeEditUnparsable, reason, "unparsable frontmatter must resolve to no schema applies")
 	assert.Nil(t, schema)
 	assert.Equal(t, "", typeName)
+	assert.Equal(t, "", detail)
 }
 
 // TestKnowledgeEditSetPropertyEdit_UnparsableFrontmatterStillRefusesTheWrite is
@@ -60,7 +61,7 @@ func TestKnowledgeEditSetPropertyEdit_UnparsableFrontmatterStillRefusesTheWrite(
 	set := records.NewSchemaSet()
 	unparsable := []byte("---\ntitle: Old\n\nbody with no closing fence\n")
 
-	edit := knowledgeEditSetPropertyEdit(set, "title", []string{"New"}, false)
+	edit := knowledgeEditSetPropertyEdit(set, nil, "title", []string{"New"}, false, nil)
 	_, err := edit(unparsable)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrFrontmatterUnterminated,
@@ -74,7 +75,7 @@ func TestKnowledgeEditPropertyDeclared_UnparsableFrontmatterIsNotDeclared(t *tes
 	set := records.NewSchemaSet()
 	unparsable := []byte("---\ntitle: Old\n\nbody with no closing fence\n")
 
-	declared, many := knowledgeEditPropertyDeclared(set, unparsable, "title")
+	declared, many := knowledgeEditPropertyDeclared(set, nil, unparsable, "title")
 	assert.False(t, declared)
 	assert.False(t, many)
 }
