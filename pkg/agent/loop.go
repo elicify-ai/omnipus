@@ -12804,21 +12804,32 @@ func (al *AgentLoop) handleCommand(
 	}
 }
 
+// activeSkillNames returns the skills active for THIS turn only — never the
+// agent's full grant list (ADR-072 D1/D3: skills are loaded on demand via the
+// Skill tool, not force-injected into every turn's context).
+//
+// Before ADR-072, this unioned agent.SkillsFilter (the agent's ENTIRE
+// per-agent grant list, agentCfg.Skills) with opts.ForcedSkills every single
+// message — the exact force-load mechanism the on-demand Skill tool
+// (pkg/tools/skill.go) replaces. A turn's active skills are now only what was
+// explicitly loaded this turn: via opts.ForcedSkills, which the Skill tool's
+// "load" outcome and the pre-existing /<slug> slash-command
+// (applyExplicitSkillCommand) and delegate's requested_skill (D9,
+// spawnSubTurn's ForcedSkills append) all populate one-shot, per turn — never
+// via the agent's static grant list, which only gates WHICH skills may be
+// loaded (skillAllowed/D5), not which ones are.
 func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	if agent == nil {
 		return nil
 	}
 
-	combined := make([]string, 0, len(agent.SkillsFilter)+len(opts.ForcedSkills))
-	combined = append(combined, agent.SkillsFilter...)
-	combined = append(combined, opts.ForcedSkills...)
-	if len(combined) == 0 {
+	if len(opts.ForcedSkills) == 0 {
 		return nil
 	}
 
 	var resolved []string
-	seen := make(map[string]struct{}, len(combined))
-	for _, name := range combined {
+	seen := make(map[string]struct{}, len(opts.ForcedSkills))
+	for _, name := range opts.ForcedSkills {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue

@@ -181,6 +181,12 @@ func TestBuildCarveOuts_MergedSecretSet(t *testing.T) {
 		filepath.Join(home, "auth.json"),
 		filepath.Join(home, "backups"),
 		filepath.Join(home, "system"),
+		// ADR-072 D10 Part A / D10.1: skills is path-denied like the entries
+		// above (SecretEntriesAlwaysPathOnly), but — unlike them — is
+		// deliberately excluded from pkg/tools/shell.go's literal-text guard,
+		// because "skills" is an ordinary English word. See
+		// TestSecretEntries_SkillsDeniedForPathsNotTextGuard for that half.
+		filepath.Join(home, "skills"),
 		filepath.Join(home, "agents"),
 		filepath.Join(home, "workspaces"),
 	}

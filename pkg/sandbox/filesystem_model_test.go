@@ -157,6 +157,11 @@ func TestSecretPaths(t *testing.T) {
 		"/home/x/.omnipus/auth.json",
 		"/home/x/.omnipus/backups",
 		"/home/x/.omnipus/system",
+		// skills — ADR-072 D10 Part A / D10.1 (SecretEntriesAlwaysPathOnly):
+		// context-free like the entries above, so it is in the BOOT set too,
+		// but deliberately excluded from pkg/tools/shell.go's literal-text
+		// guard (see fspolicy.SecretEntriesAlwaysPathOnly's doc comment).
+		"/home/x/.omnipus/skills",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SecretPaths = %v, want %v", got, want)

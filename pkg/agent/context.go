@@ -41,12 +41,14 @@ type ContextBuilder struct {
 	manifestDiscoveryActive bool
 
 	// skillAllowlist enforces the per-agent skill allowlist at skill resolution
-	// time (FR-9.4, default-DENY). When non-nil, only skills whose name appears
+	// time (FR-9.4, ADR-072 D5, default-DENY). Only skills whose name appears
 	// in this set can be resolved/invoked by this agent — a skill not on the
-	// allowlist cannot be loaded into context or armed via /use, even though it
-	// exists on disk. When nil, no allowlist is enforced (unrestricted): this is
-	// the back-compatible default for agents that do not declare an allowlist.
-	// Keys are lower-cased skill names.
+	// allowlist cannot be loaded into context or activated via /<slug>, even
+	// though it exists on disk. A nil map (WithSkillAllowlist never called)
+	// and an empty, non-nil map (WithSkillAllowlist called with nil or an
+	// empty slice) are semantically IDENTICAL: both deny every name. There is
+	// no "unrestricted" state — see skillAllowed's own doc comment. Keys are
+	// lower-cased, trimmed skill names.
 	skillAllowlist map[string]struct{}
 
 	// Cache for system prompt to avoid rebuilding on every call.
@@ -190,20 +192,21 @@ func (cb *ContextBuilder) WithAgentInfo(id, name string) *ContextBuilder {
 }
 
 // WithSkillAllowlist installs a per-agent skill allowlist that is enforced at
-// skill-resolution time (FR-9.4, default-DENY). When allowlist is non-nil, only
-// the named skills can be resolved or invoked by this agent; any other skill —
-// even one present on disk — is denied. When allowlist is nil, no allowlist is
-// enforced (unrestricted), preserving the behavior of agents that declare no
-// allowlist. Names are matched case-insensitively.
+// skill-resolution time (FR-9.4, ADR-072 D5). Only the named skills can be
+// resolved or invoked by this agent; any other skill — even one present on
+// disk — is denied. Names are matched case-insensitively.
 //
-// Passing a non-nil but empty slice installs a deny-all allowlist (the agent
-// can resolve no skills), which is the correct default-DENY behavior for an
-// agent that explicitly opts into allowlisting with an empty set.
+// ADR-072 D5: "absence of a grant list means *no* skills, matching the
+// shipped contract" (contracts/components/schemas/Agent.yaml already says
+// "opt-in, default none" — absence of the field and an empty array are
+// semantically identical). So a nil allowlist is NOT treated specially any
+// more — it is not "unrestricted", it is the same deny-all state an empty
+// slice already produced. Both a nil and an empty allowlist install an empty,
+// non-nil map, and skillAllowed denies every name against it. A ContextBuilder
+// on which this method is never called at all is denied identically (its
+// skillAllowlist field's zero value is nil, and skillAllowed treats a nil map
+// the same as an empty one — see skillAllowed's own doc comment).
 func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder {
-	if allowlist == nil {
-		cb.skillAllowlist = nil
-		return cb
-	}
 	set := make(map[string]struct{}, len(allowlist))
 	for _, name := range allowlist {
 		trimmed := strings.TrimSpace(name)
@@ -217,12 +220,19 @@ func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder
 }
 
 // skillAllowed reports whether the named skill may be resolved/invoked by this
-// agent under its allowlist (FR-9.4). When no allowlist is configured (nil) all
-// skills are allowed. Otherwise only names present in the allowlist are allowed.
+// agent under its allowlist (FR-9.4, ADR-072 D5/FR-032/FR-033). A nil OR
+// empty allowlist denies EVERY name — opt-in, default none, matching
+// contracts/components/schemas/Agent.yaml's "absence of the field and an
+// empty array are semantically identical" contract text. There is no
+// "unrestricted" state any more: only a name explicitly present in the
+// allowlist (case-insensitive, trimmed) is allowed.
+//
+// This governs the REGISTRY shelf only (D4.1 shelf 2/3 — the per-agent grant
+// list). The PROJECT shelf (a workspace mount's own skills, D4.1 shelf 1) is
+// gated separately, by the mount itself — see ResolveSkillName and the
+// project-shelf callers, which consult cb.projectShelf independently of this
+// method.
 func (cb *ContextBuilder) skillAllowed(name string) bool {
-	if cb.skillAllowlist == nil {
-		return true
-	}
 	_, ok := cb.skillAllowlist[strings.ToLower(strings.TrimSpace(name))]
 	return ok
 }
