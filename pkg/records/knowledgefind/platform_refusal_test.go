@@ -69,6 +69,15 @@ func (silentText) NearestTerms(context.Context, string, int) ([]generated.VaultT
 	return nil, nil
 }
 
+// Populated's answer is irrelevant on this build: every test in this file
+// exercises a typed filter, a join, a grouping or an aggregate — none of
+// which carry `words` — so findRecords' zero-hit words branch, the only
+// caller of Populated, is never reached; the SQLite-less platform gate
+// refuses first. true is returned rather than false so this stub is never
+// mistaken for an unbuilt-index fixture if a future test in this file does
+// add words.
+func (silentText) Populated(context.Context) (bool, error) { return true, nil }
+
 func refusalDeps(t *testing.T) Deps {
 	t.Helper()
 	// Store is deliberately nil: on a build without SQLite there IS no store to

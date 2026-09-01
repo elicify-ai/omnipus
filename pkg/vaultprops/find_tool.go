@@ -10,9 +10,12 @@ package vaultprops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -103,12 +106,47 @@ func (t *FindTool) Parameters() map[string]any { return knowledgefind.Parameters
 // collection the workspace has mounted; a workspace with zero or more than
 // one is reported, by name, rather than guessed at.
 func (t *FindTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	// AN UNKNOWN ARGUMENT IS REFUSED BEFORE THE SCOPE GATE, AND THE ORDER IS THE
+	// WHOLE POINT OF THIS BLOCK.
+	//
+	// This tool carries no `collection` argument (see the doc comment above),
+	// but knowledge_describe and knowledge_read both do, so an agent that has
+	// just used one of those reasonably tries `collection:` here. Until this
+	// check existed, that attempt hit the scope gate below and came back with a
+	// refusal naming the collections in scope — which reads as "you named the
+	// wrong one" and invites another attempt at naming one. There is no
+	// argument to name one WITH, so every retry failed identically.
+	//
+	// Measured, not theorised: a UAT agent made 24 such calls in one turn, each
+	// returning in about a millisecond, until the turn budget ran out. The
+	// honest refusal it needed already existed one layer down
+	// (knowledgefind/tool.go's "%s is not an argument of %s; accepted: %s") and
+	// was simply unreachable, because Call() cannot run until buildDeps has a
+	// collection. Checking the keys first — which needs no collection at all —
+	// turns that 24-call timeout into one useful answer.
+	//
+	// AcceptedParameters is the same exported list knowledgefind itself decodes
+	// against, so this cannot drift into a second, staler idea of what is legal.
+	if unknown := unacceptedFindArgs(args); len(unknown) > 0 {
+		return tools.ErrorResult(fmt.Sprintf(
+			"knowledge_find: %s is not an argument of knowledge_find; accepted: %s",
+			strings.Join(unknown, ", "), strings.Join(knowledgefind.AcceptedParameters, ", ")))
+	}
+
 	scope, _ := knowledge.ResolveTurnScope(ctx, t.home)
 	col, ok := scope.Select("")
 	if !ok {
+		// NAMES THE REMEDY, NOT JUST THE OBSTACLE. Listing the collections in
+		// scope without saying what to do with them is what made the earlier
+		// refusal read as recoverable when it was not: this tool has no
+		// argument that accepts one of those names.
 		return tools.ErrorResult(fmt.Sprintf(
 			"knowledge_find: no single knowledge base is unambiguously in scope for this workspace "+
-				"(none mounted, or more than one); in scope: %s", joinFindScopeNames(scope.Names())))
+				"(none mounted, or more than one); in scope: %s. knowledge_find has NO `collection` "+
+				"argument — it queries the one knowledge base in scope, so naming one here is not "+
+				"possible. Use knowledge_describe or knowledge_read, which do take a `collection`, "+
+				"or run this query in a workspace with exactly one knowledge base",
+			joinFindScopeNames(scope.Names())))
 	}
 
 	raw, err := json.Marshal(args)
@@ -130,6 +168,27 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult(text)
 	}
 	return tools.NewToolResult(text)
+}
+
+// unacceptedFindArgs returns the argument names this tool does not accept, in
+// the caller's own spelling, sorted so the message is stable between runs.
+//
+// It compares against knowledgefind.AcceptedParameters rather than a local
+// list. That package already refuses unknown keys during decode; this is the
+// same question asked earlier, not a second opinion about it.
+func unacceptedFindArgs(args map[string]any) []string {
+	accepted := make(map[string]bool, len(knowledgefind.AcceptedParameters))
+	for _, n := range knowledgefind.AcceptedParameters {
+		accepted[n] = true
+	}
+	var unknown []string
+	for k := range args {
+		if !accepted[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
 }
 
 // buildDeps opens everything one call needs and returns a cleanup function
@@ -282,6 +341,35 @@ func (s *findTextSearcher) NearestTerms(_ context.Context, words string, limit i
 
 func (s *findTextSearcher) SourceHash(_ context.Context, path string) (string, bool, error) {
 	return s.ix.SourceHashForPath(path)
+}
+
+// Populated answers knowledgefind.TextSearcher's build-state question from the
+// MANIFEST'S EXISTENCE, not from a document count.
+//
+// The manifest is written when a build pass completes, so its presence means
+// "this collection has been walked at least once" regardless of what that walk
+// found. That is exactly the distinction the interface asks for and the reason
+// DocCount cannot answer it: a genuinely empty vault whose index finished
+// building reports 0 documents, and so does one that was never built at all.
+// Reading the count would collapse an honest zero and an unsearched vault back
+// into the single indistinguishable answer that produced F-9.
+//
+// A stat error other than not-exists is returned rather than swallowed. Per the
+// interface's own note the caller folds an error into "not populated", which is
+// the right default here: a zero-hit answer this layer cannot confirm was
+// searched deserves no more trust than one it knows was not.
+func (s *findTextSearcher) Populated(_ context.Context) (bool, error) {
+	if s == nil || s.ix == nil {
+		return false, nil
+	}
+	switch _, err := os.Stat(s.ix.ManifestPath()); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // openFindStore opens the properties index for one collection, best-effort.

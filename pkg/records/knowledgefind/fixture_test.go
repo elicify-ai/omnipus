@@ -158,6 +158,15 @@ type stubText struct {
 	only  []string
 	terms []generated.VaultTermCount
 	err   error
+
+	// populated controls Populated()'s answer. nil means true — an ordinary,
+	// built index — which is the default every existing test in this package
+	// relies on, since none of them are about build state. A test exercising
+	// R1's fix (F-9: a words query over a never-built index falsely answering
+	// complete:true) sets this to a pointer to false. populatedErr, when set,
+	// takes priority and simulates the build-state check itself failing.
+	populated    *bool
+	populatedErr error
 }
 
 // Search returns s.only, filtered through s.hits, IN ORDER — and, since F6's
@@ -193,6 +202,20 @@ func (s *stubText) SourceHash(_ context.Context, path string) (string, bool, err
 
 func (s *stubText) NearestTerms(_ context.Context, _ string, _ int) ([]generated.VaultTermCount, error) {
 	return s.terms, nil
+}
+
+// Populated answers R1's build-state check. See the field comment above for
+// why the default (nil) is true rather than false: an unset build state must
+// not silently turn every existing zero-hit test in this package into a
+// refusal.
+func (s *stubText) Populated(_ context.Context) (bool, error) {
+	if s.populatedErr != nil {
+		return false, s.populatedErr
+	}
+	if s.populated != nil {
+		return *s.populated, nil
+	}
+	return true, nil
 }
 
 // notNode lives HERE rather than in the untagged builders file because only the

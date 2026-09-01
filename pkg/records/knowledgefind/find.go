@@ -47,6 +47,28 @@ type TextSearcher interface {
 	// ok=false means the text index holds no document for that path, which is
 	// UNKNOWN freshness and is flagged — never assumed fresh.
 	SourceHash(ctx context.Context, path string) (hash string, ok bool, err error)
+
+	// Populated reports whether this text index has completed at least one
+	// build pass over its collection, INDEPENDENT of how many documents that
+	// pass found. A genuinely empty vault (0 notes on disk) whose index has
+	// finished building reports populated=true, and a query that then finds
+	// zero hits is an honest zero. A vault that has never been indexed at
+	// all — the index opened, never built — reports populated=false, and a
+	// query finding zero hits there has not searched anything.
+	//
+	// This exists to close the exact hole that produced F-9
+	// (docs/internal/uat/uat-findings-knowledge-tools-2026-09-01-run2.md):
+	// an unbuilt bleve index answers d.Text.Search with zero hits, which is
+	// byte-for-byte indistinguishable from a real miss over a searched
+	// corpus — so findRecords cannot tell "0 because nothing matched" from
+	// "0 because nothing was ever indexed" from Search's return alone. This
+	// is the population accessor a caller needs to tell them apart.
+	//
+	// err != nil means the build state itself could not be read — folded
+	// into "not populated" by the caller rather than treated as a third
+	// state, because a zero-hit answer this layer cannot even confirm was
+	// searched is no more trustworthy than one it positively knows was not.
+	Populated(ctx context.Context) (populated bool, err error)
 }
 
 // ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
@@ -435,6 +457,18 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// ordinary zero-survivor query does), which is where the truncation
 		// problem is actually recorded.
 		if len(wordPaths) == 0 && !wordsTruncated {
+			// R1 (docs/internal/design/knowledge-tools-remediation.md):
+			// complete:true over zero hits is a claim that the corpus was
+			// actually searched. Search's own zero return cannot make that
+			// claim by itself — it is silent about whether the index has
+			// ever been built — so that has to be checked here, BEFORE the
+			// zero is reported as complete, not after. This is the one-line
+			// fix for F-9: the query that reproduced it (`words="Vorlex"`
+			// over an unindexed vault with 11 matching notes on disk)
+			// reached this exact branch and returned Complete:true.
+			if r := checkTextIndexPopulated(ctx, d.Text); r != nil {
+				return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+			}
 			return zeroHitResponse(ctx, d, q, echo), nil
 		}
 	}
@@ -565,6 +599,47 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	return ev.assemble(ctx, d, echo), nil
+}
+
+// checkTextIndexPopulated refuses a words-carrying, zero-hit query whose text
+// index has never completed a build — R1's rule made concrete.
+//
+// CHOICE OF CHECK, STATED EXPLICITLY: this asks "has a build ever completed",
+// NOT "does the index currently hold zero documents". Those read as the same
+// question and are not. `knowledge.Index.DocCount()` reports the SECOND one,
+// and gating on it directly would be wrong in both directions:
+//
+//   - An index that has never been built and holds zero documents would be
+//     refused correctly, by coincidence — but so would a HEALTHY index over a
+//     genuinely empty collection (0 notes on disk), which is exactly the
+//     regression this fix must not introduce: an honest "complete: true, 0
+//     rows" answer turned into a false refusal because the true answer and the
+//     unbuilt one happen to share a document count of zero.
+//   - Conversely, DocCount alone says nothing about a corpus that HAS notes
+//     but whose index build genuinely failed partway through and left a
+//     handful of documents behind — DocCount() > 0 there would wrongly read
+//     as "populated" and let exactly F-9's shape back in for a query whose
+//     words happen to miss the partial index.
+//
+// A build-completion flag does not have this ambiguity: it is orthogonal to
+// how many documents the build found, so "populated, 0 docs" (an honest empty
+// vault) and "not populated" (an unbuilt or partially-built index) stay
+// distinguishable regardless of what DocCount happens to read.
+func checkTextIndexPopulated(ctx context.Context, text TextSearcher) *RefusalError {
+	populated, err := text.Populated(ctx)
+	if err != nil {
+		return refuse(problem(generated.IndexUnavailable,
+			fmt.Sprintf("the text index's build state could not be read: %v", err),
+			"re-run, or run knowledge_describe check_integrity to see the index state"), err)
+	}
+	if !populated {
+		return refuse(problem(generated.IndexUnavailable,
+			"the text index has never finished indexing this vault, so a zero-hit answer "+
+				"here cannot be trusted — it would be indistinguishable from a real miss over a "+
+				"vault that was actually searched",
+			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+	}
+	return nil
 }
 
 // textFanout is how many text hits to ask for. It is deliberately wider than the
