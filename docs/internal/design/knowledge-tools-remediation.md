@@ -630,10 +630,40 @@ browser side: `availableRAMBytes` is 0 on macOS, so every macOS install floors
 at 2.
 
 **Consequence for this plan: item 2 is NOT ours.** It is cited, not restated,
-and no second reader is written on this branch. `omnipus2-7d` has been messaged
-to confirm ownership and timing. Item 5 (the provenance field) still stands and
-is still ours, because it is about not *presenting* an invented number as
-measured — which is true regardless of who writes the reader.
+and no second reader is written on this branch.
+
+**Ownership and status, confirmed 2026-09-01 by the session that owns ADR-072:**
+
+- **It is design-only. Nothing is written.** Every `pkg/config` change D1.5b–e
+  describes is spec text with a citation and no code behind it. So there is
+  nothing to collide with **and nothing to build on** — cite it as the owner of
+  the item, not as a landed dependency.
+- **It covers the general agent pool as well as the browser pool, by operator
+  ruling, not by inference.** D1.5c, verbatim: *"the memory reader for linux and
+  mac should have multiple use cases — the browser limits but also the
+  concurrent agent limit. Do not create multiple mechanisms; we need one for
+  managing limits and memory constraints."* The narrower option — give the
+  browser pool its own accessor and leave agent concurrency alone — was
+  **proposed and declined**. The wider scope is signed off (`ddd9789a4`).
+- **D1.5d then removes the computed default entirely**, deleting `bytesPerAgent`
+  and `autoDetectMaxParallel`'s division and making admission a live headroom
+  check for both consumers.
+
+**That last point corrects something this document implied.** R4a treated
+"write the reader" as the fix, which would move macOS's default from **2 to
+2000** — 2 only because the reader is stubbed, not by choice. A jump of that
+size is not a fix, it is the same invented-number problem with a bigger number.
+D1.5d dissolves it by deleting the computed default rather than letting it jump.
+
+**Item 5 (the provenance field) needs re-scoping in light of that.** Its purpose
+— stop *presenting* an invented number as measured — is right and remains ours
+while the current shape exists. But if D1.5d removes the computed default
+outright, a field describing how that default was derived describes something
+that no longer exists. **Item 5 should be held until D1.5d's shape is settled**,
+rather than built against a surface that is being deleted. The honest-prose half
+stands on its own: `PerformanceSettings.yaml` currently claims a memory
+heuristic ran, on every Mac, falsely — and that is worth correcting whatever
+replaces it.
 
 **Interim, zero code:** operators on macOS set `performance.max_parallel_agents`
 explicitly. Verified on the UAT instance: 2 → 32.
