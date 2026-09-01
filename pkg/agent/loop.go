@@ -4949,6 +4949,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// reasoning: a workspace's core_team can change via hot-reload too.
 	wireWorkingDirInjectors(al, registry)
 
+	// Re-wire per-workspace project-shelf resolvers (ADR-072 R1 fix regression,
+	// live UAT 2026-09-02): this was missing here, so a mounted project's
+	// skills silently stopped resolving for every agent after this reload path
+	// ran even once — which onboarding itself triggers, so it hit nearly every
+	// real install. Mirror the two siblings above.
+	wireProjectShelfResolvers(al, registry)
+
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
 	al.mu.Lock()

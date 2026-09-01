@@ -6,6 +6,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -145,6 +146,51 @@ func TestWireProjectShelfResolvers_MountedProjectSkillResolvesEndToEnd(t *testin
 	// actually lists it — the concrete fix for S17's "menu never rendered".
 	prompt := cb.BuildSystemPromptForWorkspace(wsID)
 	assert.Contains(t, prompt, "deploy-helper", "the assembled system prompt's Skills menu must list the mounted project skill")
+}
+
+// TestWireProjectShelfResolvers_SurvivesConfigReload is the regression test
+// for a bug in the R1 fix itself, found by live UAT re-verification
+// (2026-09-02, docs/internal/qa/uat-report-skill-activation-reverify-2026-09-02.md):
+// wireProjectShelfResolvers was only ever called once, from NewAgentLoop at
+// boot. Its siblings wireDelegationInjectors/wireWorkingDirInjectors are
+// re-called on every ReloadProviderAndConfig, but wireProjectShelfResolvers
+// was not — so a mounted project's skills silently stopped resolving for
+// EVERY agent after the very first config reload of the process. Onboarding
+// itself triggers one such reload, so this hit nearly every real install
+// (reproduced live twice: the natural onboard->mount->chat flow, and by
+// isolating the exact before/after-reload transition in one process).
+func TestWireProjectShelfResolvers_SurvivesConfigReload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	const wsID = "01PSHELFWIRING000000004"
+	mountRoot := t.TempDir()
+	writeProjectSkillFixture(t, mountRoot, "deploy-helper", "Use when the user asks to deploy the service")
+	seedProjectShelfWorkspace(t, home, wsID, "acme", mountRoot)
+
+	cfg := minimalTestConfig(t)
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
+	cfg.Agents.Defaults.MaxTokens = 4096
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(func() { msgBus.Close() })
+	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	require.NoError(t, err)
+	t.Cleanup(al.Close)
+
+	inst, ok := al.GetRegistry().GetAgent("ava")
+	require.True(t, ok)
+	_, ok = inst.ContextBuilder.ResolveSkillFullForWorkspace(wsID, "deploy-helper")
+	require.True(t, ok, "sanity: the mounted skill must resolve before any reload")
+
+	require.NoError(t, al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, cfg))
+
+	inst, ok = al.GetRegistry().GetAgent("ava")
+	require.True(t, ok, "agent must still be in the registry after reload")
+	resolved, ok := inst.ContextBuilder.ResolveSkillFullForWorkspace(wsID, "deploy-helper")
+	require.True(t, ok, "the mounted project skill must STILL resolve after a hot config reload — this is the regression")
+	assert.Equal(t, "deploy-helper", resolved.Slug)
+	assert.Equal(t, skills.ShelfProject, resolved.Shelf)
 }
 
 // TestWireProjectShelfResolvers_WorkspaceScoped_NoLeakToOtherWorkspace proves
