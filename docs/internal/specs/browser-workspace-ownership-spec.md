@@ -2563,6 +2563,69 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **Then** all match
 - **And** a deliberately dotted name in the test fixture **fails** the assertion — a check that cannot fail for a dotted name is not checking anything (#667)
 
+**Scenario: the operator's tab is taken by ACTING on it (*operator-tab-is-taken-by-acting*) (Happy Path) — US-22/AC5, FR-070**
+- **Given** the operator opened a tab on workspace W through the live panel, and **no** human holds the control lock
+- **When** agent Jim executes `browser_navigate` against `TabOwnerWorkspace()` through the real registered tool path
+- **Then** the navigation happens and Jim is the workspace tab's driver
+- **And** no acquisition tool was called, because the registry contains **no** `browser_take_control`-shaped tool at all
+- **And** no additional policy decision was consulted beyond `browser_navigate`'s own
+- **And** the result body contains no field announcing a transfer of control
+- *This scenario alone proves nothing about safety — it is green on a build with no control lock. Its partner below is the one that can fail.*
+
+**Scenario: implicit acquisition is blocked while a human drives (*implicit-acquisition-is-blocked-while-a-human-drives*) (Error) — US-9/AC6, FR-071, FR-002c**
+- **Given** a human viewer holds the live-view control lock, taken under the **resolved** key `ws:W`
+- **When** agent Jim executes `browser_navigate` against `TabOwnerWorkspace()`
+- **Then** the result is the existing ADR-038 D6 deferral — `IsError=false`, body `{"deferred": true, "reason": …}` with D6's text, **not** the lease's
+- **And** `acquireWrite` was **never called** — asserted at the seam, not inferred from the outcome
+- **And** no driver, owner or tab-set state changed
+- **And Given** the lock is held *and* Ray concurrently holds the write lease, **Then** Jim's reason text is still **D6's**, proving `controlledResult` ran before `leaseWrite`
+- **And** the whole scenario is **red** against a build where `IsControlled` always returns `false` — the falsifiability receipt (SC-025)
+
+**Scenario: a closed profile's cache is trimmed and its logins are not (*cache-trim-removes-only-regenerable-data*) — US-25/AC1+AC2+AC6, FR-072, FR-073**
+- **Given** workspace W's profile holds a session cookie, a saved credential, a `Local Storage` entry, an `IndexedDB` database, a populated `Default/Cache/`, a `Default/Code Cache/`, and a directory name the implementation has never seen
+- **And** W's Chrome has been closed by `pool.Close(ws:W)`
+- **When** the trim runs
+- **Then** every allow-listed path is gone and `<profileRoot>/ws-W/` itself still exists
+- **And** the cookie, the credential, the `Local Storage` entry and the `IndexedDB` database are **byte-identical**
+- **And** the unrecognised directory is **untouched** — the default is KEEP
+- **And** one INFO records the key and the bytes reclaimed
+- *The last three assertions are the ones that can fail; the first passes against an implementation that deletes the whole directory.*
+
+**Scenario: a trimmed workspace reopens still logged in (*login-survives-the-trim*) — US-25/AC3, FR-073**
+- **Given** workspace W is logged into a real site and its Chrome has been idle-closed
+- **When** the trim runs and W's next browser call relaunches it
+- **Then** the site reports the session as still authenticated
+- **And** the first page load re-fetched assets from the network — the accepted cost of a cold cache
+
+**Scenario: the trim fires on close, at boot, and on the sweep (*trim-fires-on-close-and-on-the-sweep*) — US-25/AC4, FR-072**
+- **Given** three keys: one closed by `pool.Close`, one whose profile survived a `kill -9` with no close ever running, and one whose close-time trim returned an error
+- **When** the close happens, the gateway boots, and one `tools.browser.cache_trim_interval` tick elapses, respectively
+- **Then** the first is trimmed **immediately**, without waiting for any interval
+- **And** the second is trimmed by the boot pass, after FR-042a's marker reconciliation has established liveness
+- **And** the third is trimmed by the scheduled pass
+- **And** a run in which the schedule never ticks still leaves the first key trimmed — *the interval is the net, not the mechanism*
+
+**Scenario: a live profile is never trimmed (*trim-never-touches-a-live-profile*) (Edge Case) — US-25/AC5, FR-072**
+- **Given** workspace W has a **live** Chrome and therefore a **held** per-key launch lock
+- **When** each of the three triggers fires
+- **Then** W is skipped every time and nothing under `<profileRoot>/ws-W/` is modified — not even a stat-visible mtime change on an allow-listed directory
+- **And** eligibility was decided by FR-042a's discriminator (no live instance **and** the launch lock acquirable), not by a separate liveness test
+
+**Scenario: the unbounded case is declared, not discovered (*the-continuously-driven-case-is-declared*) — US-25/AC7, FR-074**
+- **Given** the shipped config documentation, the release note and the trim's own logging
+- **When** each is inspected
+- **Then** all three state that a workspace under continuous drive is never eligible for trimming and its cache is not bounded
+- **And** the config doc for `tools.browser.cache_trim_interval` does **not** imply the interval bounds it
+- *This is FR-066's pattern applied to disk: a gap that is declared is a decision; a gap that is silent is a defect waiting to present as a full root volume.*
+
+**Scenario: one unmeasurable reading, two different correct answers (*one-predicate-two-responses*) (Edge Case) — US-15/AC23, FR-075, FR-065, FR-068a**
+- **Given** one stubbed availability accessor returning `ok=false`, shared by both consumers
+- **When** the pool is asked for a **second** browser instance and three concurrent agent turns are requested, in the same run
+- **Then** the pool **refuses to grow**, naming memory
+- **And** agent admission **admits two turns and refuses the third**, naming memory
+- **And** the refusal messages come from the same reason code (FR-063) with different remedies
+- *Either assertion alone is green on a build that collapsed the two responses: "the pool refused" passes when everything refuses, "two turns ran" passes when nothing is gated. The pair is the assertion.*
+
 ---
 
 ## 9. Traceability matrix (FR ↔ US ↔ BDD ↔ test ↔ ADR/review)
