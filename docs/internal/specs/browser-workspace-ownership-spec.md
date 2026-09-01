@@ -1116,6 +1116,14 @@ Two things follow that this spec must not undo. **The 585-agent history is the a
 
 **And it must be able to fail.** A test that stubs the accessor to `ok=false` and asserts only *"the pool refused"* passes on a build that refuses everything, agent turns included — which is the exact defect this section exists to prevent. **FR-075's assertion is the pair, in one test, off one stub:** the pool refuses to grow **and**, in the same run, the agent gate still admits two turns and refuses the third. Either half alone is green on a build that has collapsed the two responses into one.
 
+#### ⚠️ A THIRD case exists and is NOT absorbed here — ADR D1.5e, landed after this pass (2026-09-01, commit `969a90ffc`)
+
+This section is about the `ok=false` predicate — a host that **says it cannot be measured**. **ADR D1.5e names a case that is neither of the two above:** a host that returns `ok=true` with a **confident, large, wrong** number. A Kubernetes pod with no `limits.memory` reads `max` from its cgroup, so `readCgroupV2LimitBytes` correctly returns `(0, false)` (`pkg/config/meminfo_linux.go:226-240`, verified), `availableRAMBytes` (`pkg/config/config.go:655-661`, verified: it takes the **smaller** of the two figures) therefore falls through to `/proc/meminfo` — **which inside a pod reports the whole node**.
+
+**Why it matters to this section rather than being a separate topic:** every case §0.9 arbitrates fails **conservative**. This one **fails OPEN**, which is the failure mode `pkg/config/meminfo_other.go:20-23` records having already shipped once. So the sentence *"an unmeasurable host is treated as full"* (FR-065) is true and **not sufficient on its own** — a host that is measurable but lying is not covered by it, in either consumer.
+
+**Not absorbed here, deliberately.** D1.5e postdates this pass's brief, and its decision is a **startup WARN naming the condition and the remedy** (not a refusal — a bare-metal Linux host also has no cgroup limit and is correct there), which requires the implementation to detect **containerisation independently of the limit**. That is a requirement this document does not yet carry. **Recorded as a gap so a reader does not take §0.9 as complete**; whoever absorbs D1.5e owns it.
+
 #### What changes in the requirements — nothing is rewritten, one row is added
 
 FR-065, FR-066 and FR-068a are **correct as written** and are not amended; this ruling adds the citation for Windows' acceptance and one new row.
