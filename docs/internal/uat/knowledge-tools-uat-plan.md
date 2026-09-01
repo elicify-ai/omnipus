@@ -48,11 +48,36 @@ us nothing.
 
 | item | value |
 |---|---|
-| Gateway | local binary, embedded SPA, isolated `OMNIPUS_HOME` |
+| Gateway | local binary, isolated `OMNIPUS_HOME`, port 5000 (`pkg/config/defaults.go`) |
 | Vault | a purpose-built fixture corpus (§3), never the founder's real vault |
-| Tester model | GLM 5.3 Flash via OpenRouter |
-| Tester agent | new, dedicated; all `knowledge_*` tools explicitly allowed |
-| Transport | HTTP + WebSocket against the gateway API |
+| Tester model | `model: "z-ai/glm-5.3-flash"`, `provider: "openrouter"` — **two fields, bare slug** |
+| Tester agent | new, `type: Main`, six knowledge tools explicitly `allow` |
+| Auth | `Authorization: Bearer <token>` from `$OMNIPUS_HOME/cli.token` |
+| Transport | REST for setup, **WebSocket `/api/v1/chat/ws`** to drive turns |
+
+**The model field is two fields, not one.** An earlier draft of this plan said
+the id was `openrouter/z-ai/glm-5.3-flash`, inferred from `pkg/config/defaults.go`.
+That combined form is **legacy** — the config loader splits it on migration.
+The API takes a bare vendor slug in `model` and the routing key separately in
+`provider`. The vendor namespace before the slash (`z-ai`) is not the provider.
+
+**Setup is scriptable end to end**, in this order:
+
+1. `omnipus start` with a throwaway `OMNIPUS_HOME` — this mints both
+   `master.key` and `cli.token`, so there is no credential-unlock step.
+2. `POST /api/v1/onboarding/complete` — creates the admin AND stores the
+   OpenRouter key encrypted, in one CSRF-exempt, unauthenticated call.
+   ⚠️ **It performs a real, billable provider probe.** A key the provider
+   rejects returns 400 and persists nothing, so a placeholder will not do.
+   Rate limited to 3/IP/min and can take ~25s.
+3. `POST /api/v1/workspaces` with `core_team: [agentID]` — see §2.2, this is
+   not optional.
+4. `POST /api/v1/agents` — §2.1.
+5. WebSocket, auth frame first, then message frames.
+
+`--allow-empty` is deprecated and inert. `gateway.dev_mode_bypass` must stay
+**off** — with a real CLI token it is unnecessary, and it makes some admin
+routes return 503.
 
 **The founder's real vault is never the target.** Every run works on a
 disposable copy or a synthetic corpus. Write scenarios mutate data by design.
@@ -64,12 +89,62 @@ Ava or Ray — reusing a roster agent would contaminate its persona and its tool
 policy, and would make a tool-policy failure indistinguishable from a
 roster-seeding difference.
 
-Because this repo forbids any default tool-policy fallback, the create request
-must carry an **explicit, literal, wildcard-free `allow` entry for every
-`knowledge_*` tool the suite exercises**. A missing entry is a boot-time abort
-or a 400, not a silent denial — which is good, and the suite should verify it
-by asserting the agent can actually call each tool before any scenario runs
-(§4, Suite Z).
+It is `type: Main`. `Subagent` and `subagent_3p` are delegation-only workers
+and are structurally excluded from chat (`AgentInstance.IsWorker` — "a worker
+is never a chat target"), so neither can be driven this way. `core` and
+`system` are not creatable at all.
+
+```json
+POST /api/v1/agents
+{
+  "type": "Main",
+  "name": "UAT Tester",
+  "soul": "...",
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "openrouter",
+  "tools_cfg": { "builtin": { "policies": {
+    "knowledge_describe": "allow", "knowledge_find": "allow",
+    "knowledge_read": "allow", "knowledge_edit": "allow",
+    "knowledge_restructure": "allow", "knowledge_configure": "allow"
+  } } }
+}
+```
+
+**The policy map may be sparse here.** `POST /agents` seeds a complete
+deny-everything map first and merges these entries on top, so coverage is
+satisfied. That is specific to create — `PUT /agents/{id}/tools` does not merge
+and a sparse map there can 400.
+
+**Use `allow`, never `ask`.** An `ask` policy emits a `tool_approval_required`
+frame and blocks the turn until a REST call resolves it. The built-in roster
+seeds `knowledge_edit`/`restructure`/`configure` as `ask` — for an unattended
+run that is a hang, and it is a second reason not to reuse a roster agent.
+
+**A coverage gap does not fail loudly.** Boot repairs-then-validates: a missing
+entry is backfilled to `deny` with one WARN line, so a forgotten tool ships
+silently denied rather than aborting. Z-02 exists because of this.
+
+### 2.2 Workspace scope — the trap that makes every knowledge tool a no-op
+
+All six tools resolve their scope from the **turn's workspace**, never from a
+tool argument (`pkg/knowledge/scope_turn.go::ResolveTurnScope`). A freshly
+created agent belongs to no workspace's `core_team`, so the fallback finds
+nothing, the scope is empty, and **the agent is told in plain words that no
+knowledge base is available — no error, no log, no failed turn.**
+
+Every scenario would "pass" by finding nothing.
+
+So the harness must do BOTH, belt and braces:
+
+- create the workspace with the tester in `core_team`, and
+- send `metadata.workspace_id` on every message frame.
+
+Z-03 asserts a known note is readable before any scenario runs, which is what
+turns this from a silent zero into a caught misconfiguration.
+
+*Unverified:* whether the server checks that `metadata.workspace_id` names a
+workspace the agent actually belongs to. Worth confirming before relying on the
+header alone.
 
 ---
 
@@ -108,12 +183,16 @@ requires, and — mandatory — **what a FAIL looks like**.
 
 | id | scenario | pass | fail |
 |---|---|---|---|
-| Z-01 | Tester agent exists with the intended model | agent responds and reports its own model as the GLM id | wrong model → every later timing and quality number is about a different model |
-| Z-02 | Every `knowledge_*` tool is callable | each tool invoked once, returns a non-denial | a denial here means the tool policy is wrong and all later "tool did nothing" results are misattributed |
-| Z-03 | The corpus loaded and the schema is as expected | note count and per-type counts match the answer key | a short corpus silently makes every recall number optimistic |
+| Z-01 | Tester agent runs the intended model | `GET /api/v1/agents/{id}` reports `model: z-ai/glm-5.3-flash`, `provider: openrouter`, and a turn completes | wrong or unroutable model → every later timing and quality number describes a different model. Ids are free-form config, not a whitelist, so a typo fails at CALL time, not create time |
+| Z-02 | All six tools resolve to `allow` | `GET /api/v1/agents/{id}/tools` shows `effective_policy == "allow"` for all six | any `ask` (turn hangs unattended) or `deny`. **Check `effective_policy`, not `configured_policy`** — resolution is most-restrictive-wins across global × agent, so a global ceiling silently overrules a per-agent allow |
+| Z-03 | The agent can actually see the corpus | a `knowledge_read` of a known planted note returns its content | empty scope → the agent is told "no knowledge base is available", every scenario finds nothing, and every suite passes vacuously. **This is the single most dangerous failure in the plan** (§2.2) |
+| Z-04 | Corpus matches its answer key | note count and per-type counts equal the key's metadata | a short corpus makes every recall number optimistic |
+| Z-05 | The harness detects a failed turn | a deliberately impossible request yields `done.stats.turn_failed == true` and the harness reports it | harness ignores the flag → a failed turn is indistinguishable from a successful one, and every later "the agent did nothing" result is misattributed |
 
-**Z is not a formality.** Three of the four false readings recorded in this
-project came from a harness that was not measuring what it claimed to measure.
+**Z is not a formality.** Z-03 and Z-05 are both silent-zero classes: without
+them a completely broken run reports green. Three of the four false readings
+recorded in this project came from a harness that was not measuring what it
+claimed to.
 
 ### Suite A — Search accuracy
 
@@ -190,14 +269,38 @@ leaves the agent stuck has moved the problem, not solved it.
 
 ### Suite E — Coverage of every vault tool
 
-Every tool gets at least one happy path and one failure path. Tools with no
-scenario are listed explicitly as untested rather than omitted silently.
+**There are SIX registered knowledge tools, not sixteen.** An earlier draft of
+this plan listed sixteen names harvested by grep. Ten of those
+(`knowledge_create`, `knowledge_set_property`, `knowledge_append_section`,
+`knowledge_link`, `knowledge_move`, `knowledge_rename`, `knowledge_search`,
+`knowledge_graph`, `knowledge_tasks`, `knowledge_version_conflict`) are
+**retired and unregistered** — they compile, they have no production caller,
+and no agent can invoke them. Writing scenarios for them would have produced
+ten permanently-skipped tests, or worse, ten that appeared to pass.
 
-`knowledge_create`, `knowledge_read`, `knowledge_edit`, `knowledge_set_property`,
-`knowledge_append_section`, `knowledge_link`, `knowledge_move`,
-`knowledge_rename`, `knowledge_restructure`, `knowledge_search`,
-`knowledge_find`, `knowledge_describe`, `knowledge_graph`, `knowledge_tasks`,
-`knowledge_configure`, `knowledge_version_conflict`.
+The six live tools, registered unconditionally for every agent by
+`pkg/agent/knowledge_tools.go::registerKnowledgeTools`:
+
+| tool | writes? | must cover |
+|---|---|---|
+| `knowledge_describe` | no | schema discovery — this is how an agent learns the vault |
+| `knowledge_find` | no | Suites A and B in full |
+| `knowledge_read` | no | happy path + a note that does not exist |
+| `knowledge_edit` | **yes** | every `op`: `create`, `set_property`, `link`, `append_section`, `replace_body` |
+| `knowledge_restructure` | **yes** | every `op`: `rename`, `move`, `trash`, `restore` |
+| `knowledge_configure` | **yes** | schema create / edit / delete, and the cascade report |
+
+Two write paths deserve their own scenarios because recon identified them as
+under-checked:
+
+- **E-01 — `knowledge_edit` `op: create` with a `body` that contains its own
+  `---` frontmatter block.** Historically unvalidated (gap G1 in the design).
+  PASS: refused or validated. FAIL: written unchecked.
+- **E-02 — `knowledge_restructure` rename, where inbound notes reference the
+  renamed note from a `relation` property.** The rename rewrites wikilinks
+  *inside frontmatter* by byte offset with no schema awareness (gap G2). PASS:
+  every rewritten note still validates. FAIL: a rewrite that leaves a note
+  non-conforming.
 
 ### Suite F — Critical feedback (unscripted)
 
@@ -228,15 +331,36 @@ never omitted.
 
 ## 6. Open questions
 
-- Exact OpenRouter model id string for GLM 5.3 Flash. This codebase prefixes
-  OpenRouter models with `openrouter/` (`pkg/config/defaults.go` carries
-  `openrouter/auto` and `openrouter/openai/gpt-5.4`, both against API base
-  `https://openrouter.ai/api/v1`), so the expected string is
-  **`openrouter/z-ai/glm-5.3-flash`**. Model ids are free-form config, not a
-  whitelist, so a wrong id fails at CALL time rather than at create time —
-  which is exactly why Z-01 asserts the model before any scenario runs.
-- Whether the API exposes a synchronous ask-and-wait path or the harness must
-  consume WS frames (affects harness shape, not scenarios).
-- Whether concurrency scenarios need separate agents or separate sessions of
-  one agent — C-03's meaning differs between the two, and this must be settled
-  before C is run.
+Most of the original opens are now closed by recon and recorded inline (§2,
+§2.1, §2.2, Suite E). What remains:
+
+- **Does the server validate `metadata.workspace_id` against the agent's actual
+  membership?** Untraced. If it does not, the header alone is enough; if it
+  does, `core_team` membership is mandatory. The plan does both, so this is a
+  simplification question rather than a blocker.
+- **Separate agents or separate sessions for the concurrency suite?** C-03's
+  meaning differs between the two — separate sessions of one agent share more
+  server-side state than separate agents do. Must be settled before C runs, and
+  the answer recorded in the run report, because a lost-update result means
+  different things under each.
+- **An OpenRouter key with real credit is required.** Onboarding performs a
+  billable probe and refuses a key the provider rejects. There is no
+  `--skip-verify` on the REST path (the CLI has one). Budget for it: the
+  concurrency suite at N=32 across several minutes is the expensive part.
+
+---
+
+## 7. Corrections made to this document
+
+Recorded rather than quietly edited, because a plan that silently changed its
+own facts is a plan nobody can audit:
+
+1. **Sixteen tools → six.** The first draft listed tool names harvested by
+   grep; ten are retired and unregistered, and scenarios for them would have
+   been permanently unrunnable.
+2. **`openrouter/z-ai/glm-5.3-flash` → `model` + `provider` as two fields.**
+   The combined form is a legacy shape the config loader splits on migration;
+   the API takes a bare vendor slug.
+3. **Workspace scope added (§2.2).** It was absent from the first draft, and it
+   is the one misconfiguration that makes every scenario pass while testing
+   nothing.

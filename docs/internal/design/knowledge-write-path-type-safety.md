@@ -7,43 +7,66 @@ types properly without the agent thinking about it."*
 
 ---
 
-## 1. The defect, stated as a fact rather than a worry
+## 1. The defect — corrected after recon
 
-`records.Validate` — the type checker this product already owns — has four
-callers in the whole codebase. Three are in `knowledge_configure` (guarding
-schema CHANGES). One is in the vault importer (guarding an IMPORT). The tools
-that write notes have **none**.
+**An earlier draft of this document was wrong, and the correction matters more
+than the original claim.** It said the write tools perform no schema validation
+at all. That conclusion came from grepping for `records.Validate` and finding
+no caller on the write path. The live write tool does not use
+`records.Validate`; it uses `records.ParseValue`, which the grep never looked
+for.
 
-Verified by inspection of every write-path file — `authoring_tools.go`,
-`knowledge_edit.go`, `lifecycle.go`, `author.go` — none of which contains a
-single schema lookup.
+### 1.1 What is actually already enforced
 
-The consequence is concrete. `knowledge_set_property` takes two free-form
-strings, a property `name` and a `value`, with no record type and no schema
-consultation. So today an agent may:
+`pkg/knowledge/knowledge_edit_schema.go` is a working schema layer for
+`knowledge_edit`, the only registered note-mutating tool. On `set_property` and
+on `link`, `knowledgeEditValidateValue` checks, in order:
 
-- write a value outside a declared enum — **accepted**;
-- misspell a property name, silently creating a new undeclared property —
-  **accepted**;
-- put prose in a date field — **accepted**.
+1. the property is **declared on that record type** — else `ErrUnknownProperty`,
+   which already lists the type's declared property names;
+2. **arity** matches (`isList == prop.Many`) — else `ErrPropertyArity`, whose
+   text names the schema file and how to set `many: true`;
+3. each element through **`records.ParseValue`** — else `ErrPropertyValue`,
+   quoting the expected shape and the permitted values.
 
-Nothing tells the agent. Nothing tells the operator until the next import
-reports it. The schema is enforced everywhere except the one path that writes.
+Validation is composed **into the `NoteEdit` closure**, so a refusal leaves the
+file's bytes untouched. `knowledge_edit_list.go::SetPropertyScalarChecked`
+additionally refuses a scalar write over an existing sequence, and
+`author.go::authorValidatePropertyKey` rejects malformed keys.
 
-### 1.1 What is already right, and must not be broken
+So the headline worry — an agent silently writing an out-of-enum value through
+the normal path — **does not happen today.** The tool refuses it.
 
-Three things already work and are load-bearing:
+### 1.2 Why the original worry still had a real referent
+
+The tools that genuinely validate nothing — `knowledge_set_property`,
+`knowledge_create`, `knowledge_link` and four others in
+`pkg/knowledge/authoring_tools.go` — are **retired and unregistered**. No agent
+can call them. `SetPropertyTool` does call raw `author.go::SetProperty` with no
+schema at all, which is exactly the free-form write the earlier draft
+described; it simply is not reachable.
+
+### 1.3 The five gaps that ARE real
+
+| # | gap | why it matters |
+|---|---|---|
+| **G1** | `op: create` validates only its `frontmatter` **map argument**. Raw `body` and expanded `template` bytes go to `CreateNote` unchecked. | A `body` containing its own `---` block writes arbitrary, unvalidated frontmatter. This is the one true corruption vector on the live path. |
+| **G2** | `knowledge_restructure` rename/move rewrites wikilinks **inside frontmatter** of every inbound note, by byte offset, via `journal.go::ApplyStep`, with no schema awareness. | A rename edits `relation`/`person` values with no check that the result still conforms. |
+| **G3** | An unknown, absent or unparseable record type collapses to **total silence** — no name check, no type check, no arity check, and no statement that none were applied. | The agent cannot distinguish "validated and fine" from "nothing was checked". Three distinct misses produce one indistinguishable outcome. |
+| **G4** | Every write path discards the `*SchemaLoadReport` (`set, _, err :=`). | A malformed schema file silently degrades its notes to unconstrained. The write succeeds, nothing is logged, and the type quietly stops meaning anything. |
+| **G5** | The seven retired tools validate nothing and are one `reg.Register` away from being live. | A latent regression with no guard against it. |
+
+**G3 and G4 are the same failure shape and it is this project's most expensive
+one: a check that silently did not run looks exactly like a check that passed.**
+
+### 1.4 What is already right, and must not be broken
 
 1. **`knowledge_create` starts from the collection's own template**, so a new
-   note arrives with the frontmatter the collection expects instead of blank.
-2. **Agents never write YAML by hand** — the tools do. This already removes a
-   whole class of corruption and is why the problem is limited to *values*.
-3. **`knowledge_configure` validates before and after a schema change**, so a
-   schema edit cannot silently orphan existing notes.
-
-The discipline exists. It is simply not wired to the path agents use most.
-
----
+   note arrives with the frontmatter the collection expects.
+2. **Agents never write YAML by hand.**
+3. **`knowledge_configure` validates before and after a schema change.**
+4. **`knowledge_edit` already refuses bad values on `set_property` and `link`**
+   — §1.1. The work below extends that layer; it does not introduce it.
 
 ## 2. The principle
 
@@ -74,9 +97,23 @@ the tool even if the tool was technically right.
 | 4 | a single value into a list property, or vice versa | **refuse** | which arity is expected |
 | 5 | a property on a note whose record type is unknown | **allow**, and say so | that no schema governed this write |
 
-**Class 1 reuses machinery this repo already has.** The importer's
-`nearestWithinOneEdit` is exactly the typo check needed, already written and
-already tested; the write path should call it rather than grow a second copy.
+**Class 1 reuses machinery this repo already has — but it has to be moved
+first.** The importer's `nearestWithinOneEdit` (with `withinOneEdit` and
+`oneSubstitutionApart`) is exactly the typo check needed and is already tested.
+It is **not** callable from where it is needed, for two independent reasons,
+both verified:
+
+- all three functions are **unexported** in `pkg/vaultimport`; and
+- **`pkg/vaultimport` imports `pkg/knowledge`** (`infer.go`, `run.go`,
+  `scan.go`), so `pkg/knowledge` importing `pkg/vaultimport` to reach them
+  would be an import cycle.
+
+`pkg/records` has no nearest-name helper of its own, and both packages already
+depend on it. The resolution is therefore to **relocate the three functions
+into `pkg/records` and export the entry point**, with `pkg/vaultimport` calling
+the moved version rather than keeping a copy. That is a pure move plus an
+export — no behaviour change on the import side — and it leaves one
+implementation of "did you mean" in the product instead of two that can drift.
 
 **Class 5 is deliberately permissive.** Untyped notes are a legitimate state
 in this product — type inference for untyped notes exists as a feature. A write
@@ -140,14 +177,27 @@ but leaves the agent stuck has relocated the problem, not solved it.
 
 ---
 
-## 7. Open — settled by implementation recon
+## 7. Recon answers
 
-- **The choke point.** Whether all writes funnel through one shared apply/save
-  function (one insertion point) or each tool writes independently (a check per
-  tool, with a shared helper). This decides the shape of the change and is the
-  single most important unknown.
-- **Schema access.** Whether the authoring tools' dependency struct already
-  carries the loaded schema set, or must be extended to.
-- **Per-value entry point.** Whether `records` exposes single-property
-  validation, or only whole-record — §4's "judge the value, not the record"
-  ruling needs the former, and may require adding it.
+- **The choke point.** `author.go::CreateNote` and `author.go::EditNote` are
+  the only note create/mutate primitives, and `EditNote` applies its edits
+  inside one lock between the read and the atomic write. **But three paths
+  bypass them** — `journal.go::ApplyStep` (rename cascade, live), the importer's
+  `typeinfer.go::writeTypeKey` (CLI only), and a dormant CAS writer with no
+  production caller. "Check inside EditNote" therefore covers the agent tools
+  and not the whole surface, which is why G2 is listed separately.
+- **Schema access.** No dependency struct carries a `*records.SchemaSet`.
+  Schemas are loaded **per call** from the collection root by
+  `knowledge_edit.go::EditTool.loadSchemas`. There is no cache anywhere in the
+  package, and 13 non-test `LoadSchemas` call sites.
+- **Per-value entry point. It exists** — `records.ParseValue(p *Property, n
+  Node) (TypedValue, *ValueError)`, which needs no `Record` at all and returns
+  a `ValueError` carrying `Reason`, `Expected`, `Got`, `Permitted` and a
+  `FindingCode`. §4's "judge the value, not the record" ruling is already
+  satisfiable; nothing needs adding.
+- **Typo relocation (§3).** Still required and unchanged: the helpers are
+  unexported in `pkg/vaultimport`, and `vaultimport` already imports
+  `knowledge`, so the move down to `pkg/records` is the only cycle-free route.
+  Note this is now an IMPROVEMENT rather than a gap — `ErrUnknownProperty`
+  already lists every declared property name; adding "did you mean" makes a
+  long list actionable rather than merely complete.
