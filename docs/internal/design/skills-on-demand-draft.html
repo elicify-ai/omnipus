@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skills On Demand</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 0; }
+  img { max-width: 100%; }
+  [hidden]:not([hidden=until-found]) { display: none !important; }
+</style>
+</head>
+<body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ── Tokens: dark-first (Omnipus "The Sovereign Deep"). ───────────────
+     :root carries the DARK palette. Light is redefined twice below so both
+     the OS preference and an explicit toggle resolve correctly.          */
+  :root {
+    --ground:    #0A0A0B;
+    --surface:   #141417;
+    --surface-2: #1C1C21;
+    --ink:       #E2E8F0;
+    --ink-dim:   #B4B7BE;
+    --muted:     #85838E;
+    --line:      #2A2A31;
+    --line-soft: #202027;
+    --gold:      #D4AF37;
+    --gold-dim:  #9C8330;
+    --gold-wash: rgba(212,175,55,0.09);
+    --now:       #C0705A;
+    --now-wash:  rgba(192,112,90,0.10);
+    --next:      #6E9EB4;
+    --next-wash: rgba(110,158,180,0.10);
+    --shadow:    0 1px 2px rgba(0,0,0,.5), 0 8px 28px rgba(0,0,0,.35);
+    color-scheme: dark light;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ground:    #FBFAF6;
+      --surface:   #FFFFFF;
+      --surface-2: #F3F1E9;
+      --ink:       #16161A;
+      --ink-dim:   #35353C;
+      --muted:     #66646E;
+      --line:      #E0DCCF;
+      --line-soft: #EDEAE0;
+      --gold:      #8A6D14;
+      --gold-dim:  #B69633;
+      --gold-wash: rgba(138,109,20,0.07);
+      --now:       #9A462F;
+      --now-wash:  rgba(154,70,47,0.07);
+      --next:      #35657C;
+      --next-wash: rgba(53,101,124,0.07);
+      --shadow:    0 1px 2px rgba(30,26,10,.06), 0 8px 26px rgba(30,26,10,.06);
+    }
+  }
+
+  :root[data-theme="light"] {
+    --ground:    #FBFAF6;
+    --surface:   #FFFFFF;
+    --surface-2: #F3F1E9;
+    --ink:       #16161A;
+    --ink-dim:   #35353C;
+    --muted:     #66646E;
+    --line:      #E0DCCF;
+    --line-soft: #EDEAE0;
+    --gold:      #8A6D14;
+    --gold-dim:  #B69633;
+    --gold-wash: rgba(138,109,20,0.07);
+    --now:       #9A462F;
+    --now-wash:  rgba(154,70,47,0.07);
+    --next:      #35657C;
+    --next-wash: rgba(53,101,124,0.07);
+    --shadow:    0 1px 2px rgba(30,26,10,.06), 0 8px 26px rgba(30,26,10,.06);
+  }
+
+  /* ── Base ───────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+  }
+
+  .wrap { max-width: 780px; margin: 0 auto; padding: 0 26px 132px; }
+
+  p { margin: 0 0 1.05em; color: var(--ink-dim); }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 600; }
+  a { color: var(--gold); text-underline-offset: 3px; }
+
+  code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code {
+    font-size: .845em; background: var(--surface-2);
+    border: 1px solid var(--line-soft); border-radius: 4px;
+    padding: .1em .38em; color: var(--ink); word-break: break-word;
+  }
+
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 3px; }
+
+  /* ── Sticky slim bar ────────────────────────────────────────────────── */
+  .bar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 26px;
+    background: color-mix(in srgb, var(--ground) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .bar-name {
+    font-family: Outfit, sans-serif; font-weight: 500; font-size: 15px;
+    color: var(--ink); letter-spacing: -.01em;
+  }
+  .bar-sp { flex: 1; }
+  .pill {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .1em;
+    border: 1px solid var(--gold-dim); color: var(--gold);
+    background: var(--gold-wash);
+    border-radius: 100px; padding: 3px 10px; white-space: nowrap;
+  }
+
+  /* ── Masthead ───────────────────────────────────────────────────────── */
+  header.mast { padding: 76px 0 0; }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: .17em;
+    color: var(--muted); margin: 0 0 22px;
+  }
+  h1 {
+    font-family: Outfit, sans-serif; font-weight: 300;
+    font-size: clamp(42px, 7.2vw, 66px); line-height: 1.03;
+    letter-spacing: -.032em; margin: 0 0 22px; color: var(--ink);
+    text-wrap: balance;
+  }
+  h1 em { font-style: normal; color: var(--gold); }
+  .standfirst {
+    font-size: 20px; line-height: 1.5; color: var(--ink-dim);
+    max-width: 30em; margin: 0 0 34px; text-wrap: pretty;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 26px;
+    padding: 18px 0; border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted);
+  }
+  .meta b { color: var(--ink-dim); font-weight: 500; }
+
+  /* ── Sections ───────────────────────────────────────────────────────── */
+  section { padding-top: 62px; }
+  .snum {
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+    letter-spacing: .16em; color: var(--gold); display: block; margin-bottom: 12px;
+  }
+  h2 {
+    font-family: Outfit, sans-serif; font-weight: 400;
+    font-size: clamp(27px, 4vw, 35px); line-height: 1.16;
+    letter-spacing: -.022em; margin: 0 0 20px; color: var(--ink); text-wrap: balance;
+  }
+  h3 {
+    font-family: Outfit, sans-serif; font-weight: 500; font-size: 19px;
+    line-height: 1.3; letter-spacing: -.012em; margin: 34px 0 12px;
+    color: var(--ink); text-wrap: balance;
+  }
+  h4 {
+    font-family: "JetBrains Mono", monospace; font-weight: 500; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: .13em; margin: 0 0 10px; color: var(--muted);
+  }
+
+  ul, ol { margin: 0 0 1.05em; padding-left: 1.35em; color: var(--ink-dim); }
+  li { margin-bottom: .5em; }
+  li::marker { color: var(--gold-dim); }
+
+  /* ── Callout ────────────────────────────────────────────────────────── */
+  .note {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px 22px; margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .note.accent { border-left: 3px solid var(--gold); }
+  .note.warn { border-left: 3px solid var(--now); }
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ── Today / Proposed pair ──────────────────────────────────────────── */
+  .pair { display: grid; gap: 14px; margin: 26px 0; }
+  @media (min-width: 700px) { .pair { grid-template-columns: 1fr 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px;
+  }
+  .card.now  { border-left: 3px solid var(--now);  }
+  .card.next { border-left: 3px solid var(--next); }
+  .card .tag {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .13em;
+    display: inline-block; margin-bottom: 9px; border-radius: 3px; padding: 2px 7px;
+  }
+  .card.now  .tag { color: var(--now);  background: var(--now-wash);  }
+  .card.next .tag { color: var(--next); background: var(--next-wash); }
+  .card p { font-size: 15.5px; margin-bottom: .8em; }
+  .card p:last-child { margin-bottom: 0; }
+
+  /* ── Layer stack ────────────────────────────────────────────────────── */
+  .stack { margin: 30px 0 6px; display: grid; gap: 10px; }
+  .layer {
+    display: grid; grid-template-columns: auto 1fr; align-items: baseline;
+    gap: 4px 16px; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--surface); padding: 15px 18px;
+  }
+  @media (max-width: 620px) { .layer { grid-template-columns: 1fr; } }
+  .layer .rank {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--gold); white-space: nowrap;
+  }
+  .layer .lname {
+    font-family: Outfit, sans-serif; font-weight: 500; font-size: 16.5px; color: var(--ink);
+  }
+  .layer .ldesc {
+    grid-column: 2; font-size: 14.5px; color: var(--muted); line-height: 1.5;
+  }
+  @media (max-width: 620px) { .layer .ldesc { grid-column: 1; } }
+  .layer.a1 { border-left: 3px solid var(--gold); }
+  .stack-cap {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); text-align: center; margin: 0 0 26px;
+  }
+
+  /* ── Walkthrough ────────────────────────────────────────────────────── */
+  ol.steps { list-style: none; padding: 0; margin: 26px 0; counter-reset: s; }
+  ol.steps li {
+    counter-increment: s; position: relative; padding: 0 0 20px 46px;
+    margin: 0 0 0 13px; border-left: 1px solid var(--line);
+  }
+  ol.steps li:last-child { border-left-color: transparent; padding-bottom: 0; }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: -13px; top: -2px;
+    width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--gold);
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+  }
+  ol.steps li p { font-size: 15.5px; margin: 0; }
+  ol.steps li p + p { margin-top: .5em; }
+
+  /* ── Decided list ───────────────────────────────────────────────────── */
+  .decided { list-style: none; padding: 0; margin: 24px 0; display: grid; gap: 2px; }
+  .decided li {
+    margin: 0; padding: 13px 0; border-bottom: 1px solid var(--line-soft);
+    font-size: 15.5px; color: var(--ink-dim);
+  }
+  .decided li:first-child { border-top: 1px solid var(--line-soft); }
+
+  /* ── Open questions ─────────────────────────────────────────────────── */
+  .qgroup { margin: 34px 0 0; }
+  .qgroup > h4 { margin-bottom: 14px; }
+  .q {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px; margin-bottom: 12px;
+  }
+  .q.sharp { border-left: 3px solid var(--now); }
+  .q-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 9px; }
+  .q-n {
+    font-family: "JetBrains Mono", monospace; font-size: 12px;
+    color: var(--gold); flex: none; font-variant-numeric: tabular-nums;
+  }
+  .q-t {
+    font-family: Outfit, sans-serif; font-weight: 500; font-size: 16.5px;
+    color: var(--ink); line-height: 1.35; text-wrap: balance;
+  }
+  .q p { font-size: 15px; margin: 0 0 .7em; }
+  .q p:last-child { margin-bottom: 0; }
+  .lean {
+    font-size: 14.5px; color: var(--ink-dim);
+    border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 12px;
+  }
+  .lean b {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--gold);
+    display: block; margin-bottom: 4px; font-weight: 500;
+  }
+
+  hr.rule { border: 0; border-top: 1px solid var(--line); margin: 62px 0 0; }
+  footer { padding-top: 30px; }
+  footer p { color: var(--muted); font-size: 14px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="bar">
+  <span class="bar-name">Skills on demand</span>
+  <span class="bar-sp"></span>
+  <span class="pill">First draft</span>
+</div>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Design proposal &middot; for discussion</p>
+    <h1>Stop carrying every skill <em>everywhere</em>.</h1>
+    <p class="standfirst">
+      How an Omnipus agent should find a skill, be allowed to use it, and load it only
+      at the moment it is needed &mdash; including the skills and instructions that
+      belong to a code project it is working in.
+    </p>
+    <div class="meta">
+      <span><b>Status</b> First draft &middot; nothing decided</span>
+      <span><b>Answers</b> Issue #663</span>
+      <span><b>Phase</b> v0.3</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="note accent">
+      <h4>How to read this</h4>
+      <p>
+        A draft written to start a conversation, not end one. Where I made a call, I say so
+        and you can overturn it. Where the answer is genuinely yours, I have not quietly
+        picked one &mdash; those are collected at the end as thirteen open questions. Nothing
+        here has been built. Everything I say about current behaviour was read in the code
+        rather than taken from documentation, because on this point the documentation and the
+        code disagree in two places.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">01</span>
+    <h2>What goes wrong today</h2>
+
+    <p>
+      A <strong>skill</strong> is a written instruction sheet an agent can follow &mdash;
+      &ldquo;here is how we write release notes&rdquo;, &ldquo;here is our invoice process&rdquo;.
+      Omnipus can find them, install them, write them, refine them and delete them. The one thing
+      it has no proper way to do is <strong>pick one up when it turns out to be needed</strong>.
+    </p>
+
+    <p>
+      In place of that there is a per-agent list of skills. It was meant to say <em>which sheets
+      this agent may pick up</em>. The code reads it as <em>which sheets this agent must always be
+      holding</em> &mdash; and pastes every one of them, in full, into the agent's instructions on
+      <strong>every single message</strong>.
+    </p>
+
+    <div class="pair">
+      <div class="card now">
+        <span class="tag">Today</span>
+        <p>
+          Give Mia five skills. Ask her &ldquo;what's the weather?&rdquo; and she carries all five
+          instruction sheets into that question. And the next one. And every one after that.
+        </p>
+      </div>
+      <div class="card next">
+        <span class="tag">Proposed</span>
+        <p>
+          Mia sees a one-line summary of each of her five skills and carries none of them. When a
+          task actually calls for one, she picks up that one.
+        </p>
+      </div>
+    </div>
+
+    <p>Two things follow, and both get worse over time:</p>
+
+    <ul>
+      <li>
+        <strong>It costs money on every message and crowds out the conversation.</strong> Every
+        model call has a fixed budget. Instruction sheets nobody asked for are spending it. Worse,
+        this particular block sits outside the part of the prompt that gets cached between messages,
+        so it is paid for in full every time.
+      </li>
+      <li>
+        <strong>It punishes exactly what v0.3 is built to encourage.</strong> The concept has
+        agents writing and refining their own skills over time &mdash; skills as a kind of memory
+        that compounds. Under today's rule, a growing skill library makes every conversation more
+        expensive. Being generous with permissions and being cheap to run are currently in direct
+        conflict, and they should not be.
+      </li>
+    </ul>
+
+    <h3>Two things I found that make it worse than the issue says</h3>
+
+    <p>
+      <strong>The permission list is not actually a permission barrier.</strong> Because there is no
+      proper way to activate a skill, the system prompt tells the agent to do it by reading the
+      skill's file with the ordinary file-reading tool. That works &mdash; and it goes nowhere near
+      the permission list, which only governs the menu and the slash-command path. An agent that
+      knows or guesses the path of a skill it was never granted can simply read it. So requirement
+      two is not only tidying up a misused list; it is closing a gate that is currently ajar.
+    </p>
+
+    <p>
+      <strong>An empty list means the opposite of what you would guess.</strong> An agent with
+      <em>no</em> skills listed today has access to <em>everything</em> installed. An agent with a
+      list is restricted to it &mdash; and force-fed it. So the current design punishes being
+      specific twice over. That is worth fixing on its own.
+    </p>
+
+    <div class="note">
+      <h4>The good news</h4>
+      <p>
+        Most of the machinery exists and is pointed the wrong way. Omnipus <em>already</em> builds
+        a short menu of skill names with one-line descriptions; <em>already</em> filters that menu
+        to what an agent is permitted; and its skill loader <em>already</em> searches three
+        locations in priority order. What is missing is the single verb that turns a menu entry
+        into a loaded skill &mdash; and the deletion of the code that force-feeds the whole menu
+        regardless. This is rewiring, not construction.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">02 &nbsp;&middot;&nbsp; Requirement one</span>
+    <h2>Activation that works the way it does in Claude&nbsp;Code</h2>
+
+    <p>
+      You asked for this to behave like the skill tool I use on myself, so let me describe that
+      honestly, from the inside.
+    </p>
+
+    <p>
+      I never carry skills. What I am given is a <strong>menu</strong>: a list of names, each with
+      one line saying what it is for. A few words each. When a task matches one of those lines I
+      call a tool naming that skill, and only then do its full instructions arrive. Then I follow
+      them.
+    </p>
+
+    <p>
+      Two separate moves: <strong>see the menu</strong>, then <strong>order the dish</strong>.
+      Today Omnipus builds the menu and then serves every dish on it anyway.
+    </p>
+
+    <h3>The proposal</h3>
+
+    <p>
+      Keep the menu Omnipus already builds. Add the missing verb: one tool an agent calls with a
+      skill's name, which loads that skill and nothing else. Delete the code that force-loads the
+      list.
+    </p>
+
+    <p>Two consequences worth naming ahead of the mechanics:</p>
+
+    <ul>
+      <li>
+        <strong>A skill's description becomes a product decision, not a label.</strong> That
+        one-line description is the <em>only</em> thing an agent sees before choosing. A vague
+        description means a skill that never gets used. Quality pressure moves from the body of a
+        skill to its first line &mdash; which is also where the skill-authoring workflow should
+        start pushing back.
+      </li>
+      <li>
+        <strong>Permissions become free.</strong> Once nothing loads until it is asked for,
+        granting an agent twenty skills costs nothing until one is used. You can be generous
+        without paying for it.
+      </li>
+    </ul>
+
+    <h3>Where Omnipus differs from my own harness &mdash; deliberately</h3>
+
+    <p>
+      <strong>It has already solved this exact problem once, for tools.</strong> Omnipus has far
+      too many tools to show an agent at once, so it built a search-then-load arrangement: agents
+      see a short searchable index and pull in a tool's details on demand. That work also learned
+      a lesson the expensive way, which we should inherit rather than rediscover &mdash; filtering
+      what an agent may <em>load</em> is not enough while the <em>menu</em> still lists things it
+      may not have. Skill activation should be built on the same shape, with that fix already in
+      it.
+    </p>
+
+    <p>
+      <strong>It has real subagents.</strong> I can only load a skill into my own head. Omnipus can
+      hand a job to another agent. So the tool should offer a second mode: instead of loading the
+      skill here, hand it to a subagent to carry out. The consequence is what matters &mdash; a long
+      instruction sheet never touches your conversation at all, and you get a result back rather
+      than a transcript. The trade is that you lose the back-and-forth; you get an outcome, not a
+      collaboration.
+    </p>
+
+    <p>
+      <strong>Its delegation has a rule that constrains this.</strong> In Omnipus, when one agent
+      hands work to another, the second runs entirely as <em>itself</em> &mdash; its own
+      permissions, its own settings, deliberately not the sender's. That is a decision the project
+      already made and defends, and it is enforced in the code: a delegated agent is handed the
+      target's skill list, never the sender's. So the subagent mode cannot be used to slip a skill
+      past the receiving agent's own permissions. Which list should govern the hand-off is open
+      question&nbsp;2.
+    </p>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">03 &nbsp;&middot;&nbsp; Requirement two</span>
+    <h2>The permission list is the gate &mdash; not a second check bolted on</h2>
+
+    <p>
+      One library, many library cards. There is a single place where installed skills live, shared
+      across the whole installation. Each agent has a card listing which of them it may borrow.
+      Being on the card costs nothing until the agent actually borrows something.
+    </p>
+
+    <p>
+      This is the same shape Omnipus already uses for tools, which is the point &mdash; it should
+      not feel like a new idea to anyone operating the system.
+    </p>
+
+    <h3>The gate has to sit in four places, or it is not a gate</h3>
+
+    <ol>
+      <li>
+        <strong>The tool call.</strong> An agent naming a skill it may not use is refused, with a
+        message saying so plainly rather than failing quietly.
+      </li>
+      <li>
+        <strong>The menu.</strong> An agent should not see the name or description of a skill it
+        cannot use. This is the lesson Omnipus already learned on the tools side, where loading was
+        gated but the search results were not &mdash; so a denied item's name and description leaked
+        through anyway.
+      </li>
+      <li>
+        <strong>The human shortcut.</strong> Typing <code>/some-skill</code> in chat forces a skill
+        on for one message. A person should not be able to push a skill onto an agent that is not
+        permitted it.
+      </li>
+      <li>
+        <strong>The back door.</strong> Reading a skill's file directly with the ordinary
+        file-reading tool must stop being the documented way to activate one. As long as it is,
+        every other check is decoration. This is the finding from section&nbsp;1 and it is not in
+        issue&nbsp;#663.
+      </li>
+    </ol>
+
+    <div class="note">
+      <h4>What existing installations lose</h4>
+      <p>
+        Today, listing a skill on an agent means &ldquo;always on&rdquo;. Afterwards it means
+        &ldquo;may be loaded&rdquo;. Anyone relying on the always-on behaviour &mdash; knowingly or
+        not &mdash; loses it on upgrade. And separately, every agent with an <em>empty</em> list
+        goes from unrestricted access to whatever we decide empty should mean. Nothing breaks
+        loudly; behaviour just quietly changes in two directions at once. That is open
+        question&nbsp;4, and I do not think a release note settles it.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">04 &nbsp;&middot;&nbsp; Requirement three</span>
+    <h2>A project's own skills, and its own instructions</h2>
+
+    <p>You flagged this as contradictory, so let me state the contradiction before resolving it.</p>
+
+    <p>
+      A coding project carries its own skills in its own folder, and its own instruction file
+      (<code>CLAUDE.md</code> or <code>AGENTS.md</code>) explaining how to work on <em>this</em>
+      codebase. That is a filesystem idea. It lives in a directory, travels with the repository,
+      and appears the moment you are working inside it.
+    </p>
+
+    <p>
+      An Omnipus <strong>workspace</strong> is not that. It is a project in the business sense
+      &mdash; a team of agents, a task board, a shared memory, a set of conversations. It might be
+      pointed at a repository. It might be a purely conversational space with an inbox and a
+      calendar and nothing on disk at all.
+    </p>
+
+    <h3>My answer: don't add a concept. Use the one you already built.</h3>
+
+    <p>
+      I am proposing we do <strong>not</strong> introduce a separate &ldquo;project&rdquo; alongside
+      workspaces. Two overlapping containers is exactly the confusion the Workspaces redesign
+      exists to end. And there is a stronger reason: <strong>the answer is already in the
+      codebase.</strong>
+    </p>
+
+    <p>
+      A workspace can already have real folders on your disk attached to it &mdash; you point
+      Omnipus at your <code>acme-api</code> checkout and its agents can work in it directly, without
+      copying anything. Internally these are called <strong>mounts</strong>, and they are how the
+      project decided to answer &ldquo;let agents work in my own folders&rdquo;. An earlier design
+      had a &ldquo;repository&rdquo; field on the workspace instead; it was deleted, on the grounds
+      that it was a setting that did nothing. Mounts replaced it and actually work.
+    </p>
+
+    <div class="note accent">
+      <p>
+        <strong>So the rule is: when a folder you have attached to a workspace looks like a code
+        project, that project's skills and instructions come along.</strong> When nothing attached
+        looks like one, nothing happens &mdash; no setting, no warning, no opt-out.
+      </p>
+    </div>
+
+    <p>
+      That last clause is what dissolves the tension. The mechanism is <em>silent when there is
+      nothing to find</em>. A conversational workspace never encounters it. Nobody has to understand
+      it until it becomes useful to them. And because a workspace can have several folders attached
+      already, work spanning three repositories needs no new design &mdash; though it does need a
+      decision about what happens when all three carry instructions, which is open
+      question&nbsp;8.
+    </p>
+
+    <h3>Three shelves, most specific wins</h3>
+
+    <div class="stack">
+      <div class="layer a1">
+        <span class="rank">First</span>
+        <span class="lname">The project's own skills</span>
+        <span class="ldesc">
+          Found in the folder attached to this workspace. Available only while working here, and
+          travelling with the repository, so a colleague who clones it gets them too.
+        </span>
+      </div>
+      <div class="layer">
+        <span class="rank">Then</span>
+        <span class="lname">Your installed library</span>
+        <span class="ldesc">
+          The one central place skills are installed to, shared across the whole installation.
+          This is the shelf per-agent permissions are about.
+        </span>
+      </div>
+      <div class="layer">
+        <span class="rank">Then</span>
+        <span class="lname">What Omnipus ships with</span>
+        <span class="ldesc">
+          The four skills built into the binary. Always present, always last.
+        </span>
+      </div>
+    </div>
+    <p class="stack-cap">Same name in two places &rarr; the more specific one wins</p>
+
+    <p>
+      Two things make this cheaper than it sounds. First, <strong>the skill loader already has
+      exactly these three shelves in exactly this order</strong> &mdash; the first is currently
+      aimed at a per-agent folder that nothing writes to, so this is largely a change of address for
+      a shelf that already exists and is already understood by the rest of the system. Second,
+      <strong>the file format already matches</strong>: an Omnipus skill and a Claude Code skill are
+      the same thing on disk, deliberately, so a repository's existing skills are already readable
+      as they are.
+    </p>
+
+    <p>
+      There is also a note in the Workspaces concept itself anticipating this exact move &mdash; it
+      says keeping skills global is today's behaviour, and flags re-pointing that first shelf at the
+      workspace as a deliberate choice available to whoever writes the decision record. So this is
+      not me pushing against the direction; it is me taking an option the direction left open.
+    </p>
+
+    <h3>The instruction file rides an existing rail</h3>
+
+    <p>
+      Omnipus already injects one instruction note into every message: the workspace's own
+      instructions, which the product calls Project Instructions. A repository's
+      <code>CLAUDE.md</code> is the same thing, written by a different tool, for the same purpose.
+    </p>
+
+    <p>
+      So it should be a <strong>second source for the layer that already exists</strong>, not a new
+      layer with its own rules. Your workspace instructions first, the repository's file after, each
+      labelled so the agent knows which is yours and which came with the code. No new mechanism, one
+      new source, and the ordering already makes your intent outrank the repository's.
+    </p>
+
+    <div class="note warn">
+      <h4>The part I am least comfortable with</h4>
+      <p>
+        A folder you attach to a workspace is one your agents can <strong>write to</strong> &mdash;
+        that is the whole point of attaching it. Which means an agent could edit the project's own
+        skills, and the project's own <code>CLAUDE.md</code>, and thereby <strong>rewrite its own
+        instructions</strong>.
+      </p>
+      <p>
+        Omnipus takes this seriously elsewhere: the workspace's own instruction file was
+        deliberately moved out of agents' reach for precisely this reason, and permission lists are
+        kept in a directory agents cannot touch at all. This proposal would put a set of
+        agent-followed instructions back inside agent-writable space for the first time. It is a
+        real regression against a principle the project already holds, it is open
+        question&nbsp;9, and I do not think this should ship without an answer to it.
+      </p>
+    </div>
+
+    <h3>And the ordinary trust problem</h3>
+
+    <p>
+      Separately from self-modification: project skills are instructions an agent will follow,
+      sitting in a folder that may have been cloned from someone else. Roughly a fifth of skills in
+      public registries have been found to carry something malicious, which is why installing one
+      through Omnipus is signed, hash-checked and password-gated. Reading one out of a folder is
+      none of those things. My proposal is one switch per workspace &mdash; <em>trust this project's
+      skills</em> &mdash; off by default, plus the rule that project skills are never loaded
+      automatically, so there is always a moment where a person could read one first. That is open
+      question&nbsp;5.
+    </p>
+
+    <h3>One thing this depends on</h3>
+
+    <p>
+      There is a known unfixed problem underneath all of this: an agent's assembled instructions are
+      built once and cached per agent, with no notion of which workspace it is currently working in.
+      Move the same agent from one workspace to another and it can carry the first one's context
+      with it. That is already logged as an open blocker in the concept work. A per-workspace skill
+      menu cannot be correct until it is fixed &mdash; so this is a genuine prerequisite, not a
+      detail. Related: whatever we do must not end up scanning a large repository on every message
+      just to decide whether the cache is stale.
+    </p>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">05</span>
+    <h2>What a real turn looks like</h2>
+
+    <p>
+      Ray is on the Acme workspace, which has your <code>acme-api</code> checkout attached. That
+      repository carries two skills of its own and a <code>CLAUDE.md</code>. Ray is separately
+      permitted six skills from your installed library. You ask him to cut a release.
+    </p>
+
+    <ol class="steps">
+      <li><p>Ray starts the turn carrying <strong>no skill instructions at all</strong> &mdash; just a menu of eight names and their one-line descriptions, filtered to what he is allowed to use.</p></li>
+      <li><p>He <em>is</em> carrying the repository's <code>CLAUDE.md</code>, because instructions are a different kind of thing from skills: they describe where he is working, so they apply to the whole turn rather than to one task.</p></li>
+      <li><p>He reads &ldquo;cut a release&rdquo;, scans the menu, and calls the skill tool naming the project's own <em>release-checklist</em> skill.</p></li>
+      <li><p>The gate checks it: a project skill, in a workspace whose project skills you have trusted. Allowed. Its full instructions arrive &mdash; for this turn only.</p></li>
+      <li><p>Halfway through he needs release notes written. He hands that to Ava as a subagent, with your library's <em>release-notes</em> skill. Ava runs as herself under her own permissions and hands back finished notes &mdash; the instruction sheet never enters your conversation with Ray.</p></li>
+      <li><p>Your next message starts clean. Nothing carries over that the next task has not asked for.</p></li>
+    </ol>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">06</span>
+    <h2>What I decided without asking</h2>
+
+    <p>
+      Five judgement calls I made on my own, so you can overturn any of them cheaply now rather
+      than expensively later.
+    </p>
+
+    <ul class="decided">
+      <li><strong>Reuse the existing three-shelf loader</strong> rather than build a separate mechanism for project skills. It already ranks them correctly and already reads the right file format.</li>
+      <li><strong>Treat a repository's instruction file as another source for the instruction layer that already exists</strong>, not as a new layer with its own rules.</li>
+      <li><strong>Hang project-ness off folders already attached to a workspace</strong> &mdash; no new concept beside workspaces, and no revival of the deleted &ldquo;repository&rdquo; field.</li>
+      <li><strong>Leave the per-agent permission list where it is</strong>, on the agent, for this draft. There is a real argument for moving it &mdash; open question&nbsp;12.</li>
+      <li><strong>Make discovery silent when there is nothing to find</strong>, so conversational workspaces need no configuration and no way to switch it off.</li>
+    </ul>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <span class="snum">07</span>
+    <h2>Open questions</h2>
+
+    <p>
+      Thirteen. Each says what it is and where I lean if forced &mdash; but none of these is mine to
+      close. Two of them (5 and 9) I think should block shipping.
+    </p>
+
+    <div class="qgroup">
+      <h4>About the tool itself</h4>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">01</span><span class="q-t">What is the tool called, and is it one tool or two?</span></div>
+        <p>Naming it <code>Skill</code> matches what the wider ecosystem calls it and what a model will expect. But every other Omnipus tool is a lowercase verb &mdash; <code>find_skills</code>, <code>install_skill</code>. And is &ldquo;load it here&rdquo; versus &ldquo;hand it to a subagent&rdquo; one tool with a mode, or two tools?</p>
+        <p class="lean"><b>I lean</b> One tool, one lowercase name, with a mode for the two behaviours. Fewer menu entries, and the choice between them is genuinely one decision.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">02</span><span class="q-t">When one agent hands a skill to another, whose permission counts?</span></div>
+        <p>If Ray delegates to Ava with a skill, does Ray's permission matter, Ava's, or both? Omnipus's existing rule &mdash; a delegated agent runs entirely as itself &mdash; argues for Ava's alone. But then Ray cannot reliably hand off work, because he cannot see what Ava may use.</p>
+        <p class="lean"><b>I lean</b> Both must permit it, and the refusal names which one blocked. Safer, and it fails in a way that tells you how to fix it.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">03</span><span class="q-t">Does anything stay always-on?</span></div>
+        <p>Some things genuinely should apply to every message &mdash; a house style, a tone of voice. Do we add an explicit &ldquo;always load this one&rdquo; marker, or is the honest answer &ldquo;that isn't a skill, put it in the agent's instructions&rdquo;?</p>
+        <p class="lean"><b>I lean</b> No marker. An always-on skill is an instruction wearing a costume, and the marker would slowly recreate the problem we are fixing. But this is a product call, not a technical one.</p>
+      </div>
+    </div>
+
+    <div class="qgroup">
+      <h4>About the switch-over</h4>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">04</span><span class="q-t">What happens to existing installations on upgrade?</span></div>
+        <p>Behaviour changes in two directions at once. Agents <em>with</em> a list stop carrying those skills. Agents with an <em>empty</em> list currently have unrestricted access to everything installed &mdash; and would presumably stop. Options: do it and note it in the release; show a one-time notice naming the affected agents; or migrate each agent's current list into its instructions so behaviour is preserved and can be cleaned up later.</p>
+        <p class="lean"><b>I lean</b> A one-time in-app notice. A release note is not read by the person whose agent changed behaviour. But the empty-list half needs its own answer &mdash; silently restricting agents that could previously use everything is the larger change of the two.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">10</span><span class="q-t">The &ldquo;inherit skills&rdquo; toggle on the agent form does nothing.</span></div>
+        <p>The new-agent screen offers an inherit-skills switch for subagents. It never reaches the backend &mdash; it only leaves the field out of the request, so the subagent ends up with an empty list, which today means unrestricted. Should a subagent with no list of its own inherit the delegating agent's permitted set, or have none?</p>
+        <p class="lean"><b>I lean</b> Fix the label to match reality rather than build inheritance, since inheritance sits awkwardly against the rule that a delegated agent runs as itself. You may want the inheritance anyway.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">13</span><span class="q-t">How long should the menu be?</span></div>
+        <p>Today the menu silently shows at most twenty skills and hides the rest behind search. Once nothing loads automatically, that cap stops being a cost control and becomes the limit on what an agent can <em>discover</em> &mdash; and v0.3 plans for agents writing their own skills, so catalogues will grow. Keep twenty, raise it, or make it a setting?</p>
+        <p class="lean"><b>I lean</b> Raise it, since the reason it was capped largely disappears with this change. What the right number is, I would not guess without measuring.</p>
+      </div>
+    </div>
+
+    <div class="qgroup">
+      <h4>About project skills</h4>
+
+      <div class="q sharp">
+        <div class="q-head"><span class="q-n">05</span><span class="q-t">Who decides a project's skills can be trusted, and how?</span></div>
+        <p>Project skills are instructions from a folder that may have come from someone else, with none of the signing, hash-checking or password gate that installing a skill goes through. My proposal is one switch per workspace, off by default. Alternatives: trust automatically, on the grounds that you attached that folder yourself; or approve each project skill individually the first time it is used.</p>
+        <p class="lean"><b>I lean</b> The single switch, off by default, for a first version &mdash; but I think this should block shipping rather than be decided in passing.</p>
+      </div>
+
+      <div class="q sharp">
+        <div class="q-head"><span class="q-n">09</span><span class="q-t">An agent could rewrite its own instructions. Is that acceptable, and if not, what stops it?</span></div>
+        <p>A folder attached to a workspace is writable by the agents working there. So an agent could edit the project's skills and its <code>CLAUDE.md</code> &mdash; instructions it will then follow. Omnipus deliberately keeps its own equivalents out of agent reach; this would be the first exception. Options: accept it and say so; record what was approved and re-ask when it changes; or only read project skills and instructions from a location the agent cannot write.</p>
+        <p class="lean"><b>I lean</b> Record what was approved and notice when it changes &mdash; it preserves the feature while removing the silent part, which is the part that actually bites. Like question&nbsp;5, I think this blocks shipping.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">06</span><span class="q-t">Which folder do we read project skills from?</span></div>
+        <p>The <code>.claude/skills</code> convention is what actually exists in repositories today, so reading it means real content works on day one with no author effort. But it is another product's folder name sitting inside our feature.</p>
+        <p class="lean"><b>I lean</b> Read both &mdash; our name and theirs &mdash; with ours winning a name clash. Compatibility is the whole point, and refusing their folder name buys us nothing.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">07</span><span class="q-t">Which instruction files, and how much of them?</span></div>
+        <p>Both <code>CLAUDE.md</code> and <code>AGENTS.md</code> exist in the wild, sometimes both in one repository, sometimes one per sub-folder. And they get long &mdash; this repository's own is thousands of words, a permanent cost on every message. Root file only? Both names? A size limit, and what happens when a file exceeds it?</p>
+        <p class="lean"><b>I lean</b> Root file only, both names accepted, size-capped with a visible warning when it truncates &mdash; silently truncating instructions is worse than not loading them.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">08</span><span class="q-t">What if a workspace has several folders attached?</span></div>
+        <p>That already works today, so multi-repository work needs no new design &mdash; but it does need a rule. If three attached repositories each carry skills and each carry a <code>CLAUDE.md</code>, do we load all three sets, only the one the agent is currently working in, or ask you to mark one as primary?</p>
+        <p class="lean"><b>I lean</b> All attached folders contribute skills (they are only offered, never forced), but only one contributes instructions, because instructions are unconditional and three of them will contradict each other.</p>
+      </div>
+    </div>
+
+    <div class="qgroup">
+      <h4>About scope and direction</h4>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">11</span><span class="q-t">The Workspaces concept says two different things about this. Which one holds?</span></div>
+        <p>One page lists skills as global and &ldquo;available to all agents&rdquo;, which read strictly means no per-agent permission at all. The locked decision ledger says the opposite &mdash; per-agent allow-list, default deny. I have assumed the ledger wins and the other line is loose wording. Separately, the same concept says skills stay global &ldquo;not per-workspace&rdquo; while explicitly flagging the workspace overlay as an option someone could take; I have taken it.</p>
+        <p class="lean"><b>I lean</b> My readings are right, but both are worth one sentence from you &mdash; if the first is wrong, requirement two changes shape entirely.</p>
+      </div>
+
+      <div class="q">
+        <div class="q-head"><span class="q-n">12</span><span class="q-t">Should skill permission belong to the agent, or to the agent's place on a workspace?</span></div>
+        <p>Today it sits on the agent, globally. Omnipus deliberately moved delegation trust the other way &mdash; to a per-workspace setting &mdash; reasoning that the same agent on two projects should be trusted differently in each. The argument applies word for word to skills. One catch: the obvious place to put it, the per-agent settings already stored on a workspace, is a file agents can write &mdash; so it would have to live in the protected store instead, which is more work than it looks.</p>
+        <p class="lean"><b>I lean</b> The argument is real, but it is bigger than issue&nbsp;#663 scoped and I have not assumed it. If you want it, decide now &mdash; it is far cheaper before the tool exists than after.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <footer>
+    <p>
+      Draft for discussion. Grounded in the code on <span class="mono">release/v0.1.1</span> as read
+      on 1 September 2026. Where this describes current behaviour it was verified in the source
+      rather than taken from documentation &mdash; which matters here, because the two disagree
+      about how skills are activated and about whether skill access is per-agent at all.
+    </p>
+  </footer>
+
+</div>
+
+</body></html>
