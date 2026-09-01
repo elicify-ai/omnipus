@@ -1768,7 +1768,7 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **When** a turn resolves to a workspace with no live browser and **at least one instance is evictable**
 - **Then** at 0.84 and 0.85 the pool proceeds; at 0.86 it evicts the LRU instance and re-asks the gate
 - **And when** pressure is 0.86 **and nothing is evictable**, **then** the request is **refused** — this case is now **asserted**, where revision 4 deliberately left it out. *(It was omitted because "refuse to grow" (D1.5 item 3) and "always evict-and-launch, never refuse" (D1.7) gave opposite answers, the ADR had not decided, and a test picking one would have ratified a decision nobody made. **D1.5a decides it**: the gate is a hard stop, the cap is soft, and with the cap deleted only the hard stop remains — §0.5 E-2, now struck through.)*
-- **And given** macOS or Windows, **then** the gate has **no signal to read at all** — `readMemAvailableBytes` returns 0 by design (`pkg/config/meminfo_other.go`) — **and the run must fail rather than pass quietly**, because with every counter deleted a blind gate there is not a weaker limit but no limit. *This scenario is the one that makes §0.5 **E-6** visible instead of latent; it stays red until the operator rules on which of E-6's three shapes ships.*
+- **And given** macOS, **then** the gate reads a **real** figure through the Darwin reader (FR-064) and the same three fixture ratios produce the same three answers as on Linux — the platform is no longer blind. **And given** Windows, **then** availability is **undeterminable**, and the gate **refuses to grow** rather than admitting (FR-065): the run **fails** if the pool launches or opens a tab on an unmeasurable host, and it also **fails** if the refusal is silent. *This scenario is the one that made §0.5 **E-6** visible instead of latent; **E-6 is now RULED** (ADR D1.5b, §0.6a), so it asserts a decided behaviour rather than staying red pending a ruling.*
 
 **Scenario: the counters are gone from the code, not merely unset (*counters-are-gone*) — US-15/AC12, FR-059**
 - **Given** the shipped binary and a repo-wide search
@@ -1799,6 +1799,33 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **And** the text names **no limit and no config key**
 - **And** no adoption refusal reaches the `default:` arm — *"it could not be adopted"*, with no reason and no remedy — which is where every memory refusal would land if the deleted `tabAdoptReasonMaxTabs` were removed without a replacement
 - *An agent that cannot distinguish "the host is out of memory" from "something went wrong" **retries**, straight back into the runaway loop this ruling accepts the risk of. Found by the D2 spec.*
+
+**Scenario: the Darwin reader returns the real machine's memory (*darwin-memory-reader-is-tied-to-the-machine*) — US-15/AC16, FR-064**
+- **Given** a real Darwin host (the test is `//go:build darwin` and is skipped nowhere else)
+- **When** `readMemTotalBytes()` is called
+- **Then** it equals `hw.memsize` read independently through `unix.SysctlUint64` — **not** a constant, and **not** `vm.pages × pagesize`, which is smaller because firmware- and kernel-reserved pages are excluded (`8137872` vs `8388608` pages on the reference host)
+- **And when** `readMemAvailableBytes()` is called, **then** `0 < available < total`, **strictly** at both ends
+- **And** two calls separated by real allocation do **not** return an identical constant
+- **And** the reader's doc comment names every sysctl it sums and states the **compression** and **purgeable** caveats
+- *Why the bounds are strict: "returns non-zero" passes against a stub returning `1`, and "≤ total" passes against a reader that returns `total`. Tying total to `hw.memsize` is an oracle the implementation cannot satisfy by accident; the strict upper bound rejects "everything is available"; the strict lower bound rejects the `0` this platform returns today.*
+
+**Scenario: an unmeasurable host refuses to grow, and says why (*unmeasurable-host-refuses-to-grow*) — US-15/AC17, FR-065**
+- **Given** an availability accessor returning `ok=false` — the Windows placeholder, or Linux fallen through to its 4 GB fallback constant (`pkg/config/meminfo_linux.go:16`)
+- **When** a browser launch is requested, **then** it is **refused**, naming memory (FR-053)
+- **And when** a tab open is requested inside an already-running browser, **then** it is **refused** with FR-063's `memory_pressure` reason code — the refusal covers **both** paths, not only the launch path
+- **And** the reason *"memory availability cannot be determined on this platform"* is logged **exactly once**, not once per call
+- **And** a run in which the pool **grows** on an `ok=false` reading **FAILS**
+- **And** a run in which the pool refuses but logs **nothing** also **FAILS** — the assertion is on the refusal *and* its explanation, not on the absence of a crash
+- *This is a deliberate inversion of the usual fail-soft default: an unmeasurable host is treated as **full**, not empty. A gate that cannot measure and answers "room available" reports success while admitting without limit — the false-green shape `docs/internal/false-green-patterns.md` catalogues, and the one D1.5a's own text forbids.*
+
+**Scenario: Windows is declared, not discovered (*windows-gap-is-declared*) — US-15/AC18, FR-066**
+- **Given** the shipped tree
+- **Then** `pkg/config/meminfo_windows.go` exists and returns the FR-065 unmeasurable signal explicitly — it does **not** fall through to a shared non-Linux stub that also serves BSD
+- **And** its doc comment names the fix route: `GlobalMemoryStatusEx` via `NewLazySystemDLL("kernel32.dll")` (`golang.org/x/sys/windows/dll_windows.go:234,249`), since x/sys v0.47.0 wraps neither that call nor `MEMORYSTATUSEX`
+- **And** the release notes contain a line stating the browser pool has **no memory-derived limit on Windows**
+- **And** the browser section of the config documentation states the same
+- **And** Windows browser support is recorded as **degraded-unsupported** for the pool
+- *The placeholder is not decoration: it puts the gap at the point someone would fix it. A note in a spec is read by whoever reads the spec; a file named `meminfo_windows.go` is read by whoever goes looking for why Windows has no limit.*
 
 **Scenario: the managed-Chromium download still starts at boot — FR-016c**
 - **Given** a fresh install with no Chromium on `$PATH` and no managed install, and **zero** live browsing keys
