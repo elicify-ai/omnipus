@@ -126,23 +126,36 @@ const (
 //     read/list/send for that shelf any more; see the op-dispatch switch
 //     further down in ResolvePath.
 //
-// # Why Part A still exists at all
+// # This gate is the app layer's ONLY skills rule — there is no backstop
+// # underneath it
 //
-// `skills` joining fspolicy's SecretEntriesAlwaysPathOnly (a separate
-// change, pkg/fspolicy/secretset.go — D10.1's "path-denied but not
-// text-guarded" category) already makes ANY file under the registry skills
-// root an fspolicy.IsCarveOut hit, denied unconditionally a few lines above
-// this comment in ResolvePath, for every op, on every platform. That is a
-// coarser, directory-wide deny and is NOT narrowed by D10.3 — it is a
-// defense-in-depth backstop, not this gate's mechanism. classifySkillsGatePath
-// and isSkillInstructionFileLeaf below are this package's OWN, independent,
-// file-level classification: registrySkillsRoot's caller here narrows to
-// instruction-file leaves specifically so a registry skill's bundled files
-// are not swept up by this package's classification even where the
-// secretset-level carve-out (a separate, broader mechanism) may not apply —
-// e.g. once a future change scopes that carve-out more precisely too. This
-// package's own read gate must hold regardless of the exact shape of that
-// concurrently-evolving, independently-owned mechanism.
+// An earlier revision of this comment described the gate below as
+// defense-in-depth behind a broader mechanism: `skills` had joined fspolicy's
+// SecretEntriesAlwaysPathOnly, that list fed SecretEntriesRelative ->
+// SecretPaths -> buildCarveOuts, and so fspolicy.IsCarveOut — consulted a few
+// lines above this gate in ResolvePath — refused EVERY path under
+// $OMNIPUS_HOME/skills before this classification ever ran.
+//
+// That inverted the intended behaviour and made D10.3 dead code in
+// production: the coarse deny answered first, so a registry skill's bundled
+// helper file was refused exactly as it had been before the narrowing, and
+// even the instruction file's refusal came from the wrong mechanism (a bare
+// ErrCarveOut, with no explanation naming the Skill tool). It survived review
+// because every test of this gate builds an fspolicy.FSPolicy literal with
+// CarveOuts left nil — a shape no production caller produces.
+//
+// So `skills` is no longer in the app layer's carve-out roots
+// (fspolicy.appCarveOutSecretPaths, ADR-072 D10.3), and the classification
+// below is the sole, authoritative app-layer rule for both shelves. It has to
+// be correct on its own: there is nothing behind it.
+//
+// The KERNEL layer still denies the whole $OMNIPUS_HOME/skills directory to
+// spawned children on POSIX (fspolicy.KernelDeniedPathsFor still reads
+// SecretEntriesAlwaysPathOnly). That asymmetry is deliberate and documented —
+// narrowing the kernel deny to instruction files needs the Linux child-only
+// spike ADR-072 D10.2/§6.8 flags — and it is why `bash` cannot read a skill's
+// bundled file that read_file now can. On Windows there is no kernel backend
+// at all and nothing is closed there; D10.2 states exactly that.
 //
 // # Recognised locations
 //
@@ -192,6 +205,18 @@ func isSkillInstructionFileLeaf(rawPath string) bool {
 	return skillInstructionFileLeaves[filepath.Base(rawPath)]
 }
 
+// isSkillInstructionFile applies isSkillInstructionFileLeaf to BOTH spellings
+// of the path under judgement: as the caller wrote it, and fully resolved.
+// See classifySkillsGate for why one spelling is not enough — an innocuously
+// named symlink in the work dir has a leaf of "notes.md" and a realpath leaf
+// of "SKILL.md".
+func isSkillInstructionFile(rawPath, realAbs string) bool {
+	if isSkillInstructionFileLeaf(rawPath) {
+		return true
+	}
+	return realAbs != "" && isSkillInstructionFileLeaf(realAbs)
+}
+
 // registrySkillsRoot returns the install-wide skills directory
 // ($OMNIPUS_HOME/skills), realpath-resolved when it already exists on disk.
 // Computed fresh on every call (matches config.OmnipusHomeDir's own
@@ -236,21 +261,91 @@ func classifySkillsGatePath(rawPath string, policy fspolicy.FSPolicy) (shelf str
 	if err != nil {
 		return "", false
 	}
-	candidate := filepath.Join(resolvedDir, remainder)
+	return classifySkillsGateCandidate(filepath.Join(resolvedDir, remainder), policy)
+}
 
-	if isWithinWorkspace(candidate, registrySkillsRoot()) {
+// classifySkillsGateCandidate is classifySkillsGatePath's containment test,
+// over an already-absolute candidate path.
+//
+// # Containment is judged by filesystem IDENTITY, not by comparing bytes
+//
+// fspolicy.CoversForDeny, never pkg/tools' own isWithinWorkspace (which is
+// filepath.Rel + IsLocal, i.e. a byte comparison). This is the deny side of
+// exactly the defect pkg/fspolicy/pathidentity.go's header records: on APFS —
+// case-insensitive by default, and filepath.EvalSymlinks does NOT
+// canonicalise case — $OMNIPUS_HOME/SKILLS/foo/SKILL.md and
+// $OMNIPUS_HOME/skills/foo/SKILL.md are ONE file to the kernel and two
+// different strings to filepath.Rel. That same byte comparison, applied to
+// the secret set, was measured serving the live gateway bearer token and the
+// master key on a real APFS volume through this very resolver. The gate here
+// is now the app layer's only skills rule (see the block comment above), so
+// it has to use the primitive that closes case, Unicode-normalization and
+// symlink-spelling aliases rather than the one that does not.
+//
+// CoversForDeny falls back to a case-FOLDED comparison when the filesystem
+// cannot answer (the container does not exist yet) — the fail-safe direction
+// for a deny, and the reason this must not use CoversForGrant, whose fallback
+// is byte-exact.
+//
+// Residual, stated rather than implied: a HARD LINK to a skill's instruction
+// file, planted under a different name outside the skills root, is a distinct
+// directory entry whose ancestor chain contains no skills-root inode, so
+// neither identity nor bytes classify it. Creating one requires `link(2)` —
+// no in-process tool offers it, so the only route is `bash`, which the kernel
+// layer still denies the whole skills directory to on POSIX. It is therefore
+// open only where ADR-072 D10.2 already states nothing is closed: Windows and
+// any platform with no kernel backend.
+func classifySkillsGateCandidate(candidate string, policy fspolicy.FSPolicy) (shelf string, ok bool) {
+	if fspolicy.CoversForDeny(registrySkillsRoot(), candidate) {
 		return skillShelfRegistry, true
 	}
 
 	for _, root := range policy.AllowedRoots {
 		cleanRoot := filepath.Clean(root)
+		if cleanRoot == "" || cleanRoot == "." {
+			// A mount root that is empty or relative names no absolute
+			// subtree; classifying against it could only produce a
+			// meaningless comparison against the process's own cwd.
+			continue
+		}
 		for _, sub := range skillsGateProjectSubdirs {
-			if isWithinWorkspace(candidate, filepath.Join(cleanRoot, sub)) {
+			if fspolicy.CoversForDeny(filepath.Join(cleanRoot, sub), candidate) {
 				return skillShelfProject, true
 			}
 		}
 	}
 	return "", false
+}
+
+// classifySkillsGate judges BOTH spellings of the path a caller supplied: the
+// path AS WRITTEN (ancestors resolved, leaf left alone) and its FULLY
+// RESOLVED realpath. A match on either classifies.
+//
+// Both are required, and each covers what the other cannot:
+//
+//   - The path as written (FR-078) catches a skill's own instruction file
+//     that is itself a symlink pointing OUT of its shelf. Classifying only
+//     the resolved form would follow that symlink to wherever it lands and
+//     let the file fall through to the open-read rule that governs the
+//     target's location — defeating the gate for exactly the file FR-078
+//     names.
+//   - The resolved realpath catches the opposite direction: a symlink
+//     planted anywhere the agent can write (its own work dir, a mount)
+//     pointing AT a registry skill's instruction file. Its basename is
+//     whatever the attacker chose and its ancestor chain is nowhere near the
+//     skills root, so the as-written form classifies it as an ordinary file.
+//     Until ADR-072 D10.3's app-layer split this direction was covered
+//     incidentally by fspolicy.IsCarveOut, which tests the resolved path;
+//     with `skills` out of the app carve-out list, closing it is this gate's
+//     own job.
+func classifySkillsGate(rawPath, realAbs string, policy fspolicy.FSPolicy) (shelf string, ok bool) {
+	if shelf, ok := classifySkillsGatePath(rawPath, policy); ok {
+		return shelf, true
+	}
+	if realAbs == "" {
+		return "", false
+	}
+	return classifySkillsGateCandidate(filepath.Clean(realAbs), policy)
 }
 
 // skillsGateDenialError builds the typed refusal ResolvePath returns for a
@@ -264,6 +359,30 @@ func classifySkillsGatePath(rawPath string, policy fspolicy.FSPolicy) (shelf str
 func skillsGateDenialError(rawPath string) error {
 	return fmt.Errorf("%w: %q is an installed registry skill's instruction file — load it with the Skill tool, not a file tool (ADR-072 D10.3 Part A)",
 		ErrCarveOut, rawPath)
+}
+
+// skillsRegistryNonReadDenialError refuses a WRITE, SERVE or EXEC whose path
+// lands in the installed registry ($OMNIPUS_HOME/skills).
+//
+// D10.3 narrows the registry gate on the READ side only. Every other op kept
+// the answer it already had: until D10.3 the whole registry was an
+// fspolicy.IsCarveOut root, so ResolvePath refused every op under it
+// unconditionally. Removing it from the app carve-out list (so bundled files
+// could be read) would otherwise have opened writes as a side effect —
+// narrowly but really, since a mount that CONTAINS $OMNIPUS_HOME is allowed
+// with a warning (pkg/workspace/mount.go's CheckMountTarget refuses only a
+// target inside it), and a write under a matched mount root is granted. An
+// agent could then clobber another skill's instructions through write_file.
+// Nothing in D10.3 asks for that, so it stays refused.
+//
+// This costs the sanctioned authoring path nothing: create_skill/edit_skill/
+// install_skill write the registry through pkg/skills' own confined, raw I/O
+// (see the lint allowlist entry for skills_install.go), never through
+// ResolvePath — which is also why this deny is exactly behaviour-preserving
+// rather than a new restriction.
+func skillsRegistryNonReadDenialError(rawPath string, op FSOp) error {
+	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), which no file tool may %s — use the skill authoring tools (ADR-072 D10/D10.3)",
+		ErrCarveOut, rawPath, op)
 }
 
 // skillsWriteAuditFields is the FR-071a write-audit record content captured
@@ -697,13 +816,19 @@ func ResolvePath(
 		return nil, ErrCarveOut
 	}
 
-	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify
-	// rawPath against the two recognised skills locations — the installed
+	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
+	// path against the two recognised skills locations — the installed
 	// registry and any mount's project-skills subdirectory — BEFORE the
 	// ordinary in-workspace/outside-workspace dispatch below, so the gate
 	// applies uniformly regardless of which branch would otherwise handle
 	// this op and regardless of policy.Scope (matching the carve-out check
 	// just above, which is itself unconditional for the same reason).
+	//
+	// The carve-out check above does NOT cover the registry skills directory
+	// (ADR-072 D10.3 removed it from the app layer's carve-out roots so this
+	// finer gate could exist at all — see the block comment on
+	// skillsGateProjectSubdirs). This is the whole app-layer rule for skills;
+	// nothing underneath it will catch what it misses.
 	//
 	// D10.3: only a REGISTRY-shelf path whose leaf is a recognised
 	// instruction filename is refused for a read/list/send (FR-057/061a-c) —
@@ -718,13 +843,16 @@ func ResolvePath(
 	// not just instruction files, since D6.1.1's audit trail is about who
 	// wrote into a recognised skills location, not what they wrote.
 	var skillsWriteAudit *skillsWriteAuditFields
-	if shelf, matched := classifySkillsGatePath(rawPath, policy); matched {
+	if shelf, matched := classifySkillsGate(rawPath, realAbs, policy); matched {
 		switch op {
 		case FSOpRead, FSOpList, FSOpSend:
-			if shelf == skillShelfRegistry && isSkillInstructionFileLeaf(rawPath) {
+			if shelf == skillShelfRegistry && isSkillInstructionFile(rawPath, realAbs) {
 				return nil, skillsGateDenialError(rawPath)
 			}
 		case FSOpWrite, FSOpServe:
+			if shelf == skillShelfRegistry {
+				return nil, skillsRegistryNonReadDenialError(rawPath, op)
+			}
 			skillsWriteAudit = &skillsWriteAuditFields{
 				shelf:       shelf,
 				toolName:    toolName,
@@ -733,7 +861,9 @@ func ResolvePath(
 				workspaceID: ToolWorkspaceID(ctx),
 			}
 		case FSOpExec:
-			// No skills-gate rule applies to exec — unchanged.
+			if shelf == skillShelfRegistry {
+				return nil, skillsRegistryNonReadDenialError(rawPath, op)
+			}
 		}
 	}
 

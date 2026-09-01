@@ -2282,8 +2282,23 @@ func (t *ExecTool) inTurnSecretSet(p string, policy fspolicy.FSPolicy) bool {
 	if fspolicy.IsCarveOut(p, policy) {
 		return true
 	}
+	// The child-only half of the secret set, which IsCarveOut deliberately no
+	// longer covers. ADR-072 D10.3 removed $OMNIPUS_HOME/skills from the app
+	// layer's carve-out roots so the in-process file tools could gate a
+	// skill's INSTRUCTION FILE rather than its whole directory — a distinction
+	// this guard must not inherit. `bash` is a spawned CHILD: on POSIX the
+	// kernel ruleset still denies it the whole skills directory, so following
+	// the narrowing here would only produce a guard that passes a command the
+	// kernel then refuses; on Windows there is no ruleset at all
+	// (selectBackendPlatform returns FallbackBackend), so this guard is the
+	// only thing there is. Both reasons point the same way: keep the
+	// directory-shaped deny for children.
+	home := config.OmnipusHomeDir()
+	if fspolicy.CoversChildOnlySecretPath(p, home) {
+		return true
+	}
 	if resolved, err := resolvePathAgainstExistingAncestor(p); err == nil && resolved != p {
-		if fspolicy.IsCarveOut(resolved, policy) {
+		if fspolicy.IsCarveOut(resolved, policy) || fspolicy.CoversChildOnlySecretPath(resolved, home) {
 			return true
 		}
 	}

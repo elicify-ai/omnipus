@@ -55,7 +55,15 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 	// or delete it erases the record of what it did. The HMAC chain detects
 	// modification; it does not survive rm. So system/ must now be carved out
 	// like any other secret rather than granted as an ordinary subdirectory.
-	wantPaths := []string{"workspace", "sessions", "memory", "skills", "logs"}
+	//
+	// "skills" left this list for the same kind of reason (ADR-072 D10 Part A /
+	// D10.1, corrected here by D10.3): the installed skill registry is a
+	// context-free secret at the KERNEL layer, so a spawned child must not be
+	// granted it. This test asserted the opposite — that DefaultChildPolicy
+	// grants $OMNIPUS_HOME/skills full RWX — because SecretEntriesAlwaysRelative
+	// was never updated when SecretEntriesAlwaysPathOnly was introduced as a
+	// third list. It is asserted as DENIED below.
+	wantPaths := []string{"workspace", "sessions", "memory", "logs"}
 	for _, want := range wantPaths {
 		fullPath := filepath.Join(home, want)
 		var found bool
@@ -73,6 +81,22 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("DefaultChildPolicy must grant subdir %q individually after stripping the home root", fullPath)
+		}
+	}
+
+	// The registry skills directory must NOT be granted. DefaultChildPolicy
+	// carves out the context-free secret set, and ADR-072 D10 Part A put
+	// $OMNIPUS_HOME/skills in it (via fspolicy.SecretEntriesAlwaysPathOnly).
+	// The kernel layer deliberately keeps this as a WHOLE-DIRECTORY deny even
+	// though the app layer narrowed to instruction files in D10.3: narrowing
+	// the kernel deny requires D10.2/§6.8's Linux child-only spike, which has
+	// not happened.
+	skillsPath := filepath.Join(home, "skills")
+	for _, r := range policy.FilesystemRules {
+		if filepath.Clean(r.Path) == filepath.Clean(skillsPath) {
+			t.Errorf("DefaultChildPolicy MUST NOT grant %q (access %#x) — the installed skill "+
+				"registry is a context-free secret at the kernel layer (ADR-072 D10 Part A / D10.1)",
+				skillsPath, r.Access)
 		}
 	}
 }

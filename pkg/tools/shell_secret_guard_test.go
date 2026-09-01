@@ -133,9 +133,20 @@ func TestSecretGuardPatterns_GeneratedFromLiveSecretSet(t *testing.T) {
 // TestSecretGuard_SkillsPathDeniedNotTextGuarded is ADR-072 D10 Part A /
 // D10.1's split, asserted end-to-end through the real command guard (spec
 // test #30d, T7f): a command naming a REAL path under $OMNIPUS_HOME/skills is
-// still refused — via fspolicy.IsCarveOut's path-based check
-// (inTurnSecretSet), NOT via the literal-text guard — while a command that
-// merely mentions the WORD "skills", with no such path, is not.
+// still refused — by inTurnSecretSet's path-based check, NOT by the
+// literal-text guard — while a command that merely mentions the WORD
+// "skills", with no such path, is not.
+//
+// It is also the regression for the CHILD half of D10.3's app/kernel split.
+// D10.3 removed $OMNIPUS_HOME/skills from the app layer's carve-out roots so
+// the in-process file tools could gate a skill's instruction FILE instead of
+// its whole directory — and `bash` must not inherit that narrowing, because
+// it is a spawned child: POSIX kernel rulesets still deny it the whole
+// directory, and on Windows this guard is the only enforcement that exists.
+// So this must keep passing via fspolicy.CoversChildOnlySecretPath even
+// though fspolicy.IsCarveOut no longer answers it. A whole-directory refusal
+// here alongside a file-level gate in ResolvePath is the intended, documented
+// asymmetry, not a contradiction.
 func TestSecretGuard_SkillsPathDeniedNotTextGuarded(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)

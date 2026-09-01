@@ -181,12 +181,14 @@ func TestBuildCarveOuts_MergedSecretSet(t *testing.T) {
 		filepath.Join(home, "auth.json"),
 		filepath.Join(home, "backups"),
 		filepath.Join(home, "system"),
-		// ADR-072 D10 Part A / D10.1: skills is path-denied like the entries
-		// above (SecretEntriesAlwaysPathOnly), but — unlike them — is
-		// deliberately excluded from pkg/tools/shell.go's literal-text guard,
-		// because "skills" is an ordinary English word. See
-		// TestSecretEntries_SkillsDeniedForPathsNotTextGuard for that half.
-		filepath.Join(home, "skills"),
+		// skills is deliberately ABSENT: ADR-072 D10.3 removed
+		// SecretEntriesAlwaysPathOnly from the app layer's carve-out roots,
+		// because the app layer gates the registry shelf at FILE granularity
+		// instead (a skill's instruction file, in pkg/tools/resolvepath.go) and
+		// a whole-directory carve-out here both broke skills that bundle helper
+		// files and silently overrode that finer gate. The KERNEL layer still
+		// denies the whole directory. See
+		// TestSecretEntries_SkillsIsNotAnAppLayerCarveOut.
 		filepath.Join(home, "agents"),
 		filepath.Join(home, "workspaces"),
 	}

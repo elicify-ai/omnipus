@@ -42,7 +42,19 @@ func buildCarveOuts(omnipusHome string) []string {
 	// and the kernel layer gains agents/ and workspaces/ from here. Keeping two
 	// lists in step by hand is what produced that divergence, so there is now
 	// exactly one and neither layer owns it.
-	return SecretPaths(omnipusHome)
+	//
+	// appCarveOutSecretPaths, not SecretPaths: ADR-072 D10.3 carves out ONE
+	// documented exception to "both layers deny the same list" —
+	// SecretEntriesAlwaysPathOnly (`skills`) stays a whole-directory deny at
+	// the kernel layer while the app layer gates it at file granularity
+	// instead, in pkg/tools/resolvepath.go (a skill's instruction file is
+	// routed through the Skill tool; its bundled helper scripts, templates and
+	// reference files are ordinary readable files). Denying the directory here
+	// as well would both break every skill that bundles anything AND silently
+	// override that finer gate, since ResolvePath consults IsCarveOut before
+	// it. It is still derived from the one list, not a second hand-copied one
+	// — see appCarveOutSecretPaths.
+	return appCarveOutSecretPaths(omnipusHome)
 }
 
 // IsCarveOut reports whether resolvedAbsPath falls on or under any of
