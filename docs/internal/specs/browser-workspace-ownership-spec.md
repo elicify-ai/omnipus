@@ -2516,24 +2516,40 @@ The parameter description at `tools.go:415` takes the interim form at both stage
 - **And** `ListTabsTool.Execute` is never entered and no tab payload is produced
 - **And** *(the assertion revision 3 had and this one deliberately does not)* **no** `ModelMessage` is asserted, because the denial path has no production caller for a tool the model was never shown — ADR D1.12 withdrew that state and §17 C3 tombstones FR-014a
 
-**Scenario: an agent's tabs are its own; the operator's are the workspace's (Happy Path) — US-22/AC1+AC2+AC3, FR-048**
-- **Given** agents A and B on workspace W, resolving to the **same** `*BrowserManager`
-- **When** A opens `https://example.com/a` and the **operator** opens `https://example.com/op` through the live panel
-- **Then** A's `browser_list_tabs` returns its own tab **and** the workspace-owned tab, labelled distinctly
-- **And** B's `browser_list_tabs` returns the workspace-owned tab **and not** A's
-- **And** the manager holds **two distinct `sessionEntry` values** and neither one's `tabs` slice contains the other's `tabEntry` — the assertion that fails if the re-key merged the sets
-- **And** B cannot switch to, drive or close A's tab
+~~**Scenario: an agent's tabs are its own; the operator's are the workspace's — US-22/AC1+AC2+AC3, FR-048**~~ **TOMBSTONED by ADR D1.9c.**
+- It asserted that agent B never sees agent A's tab. Under D1.9c that is true only when A and B are in **different sessions**, and **false by design** when they are the same chat — which is the ruling. Replaced by the two scenarios below rather than edited, because the Given it needs (*two sessions*, not *two agents*) is a different setup.
+
+**Scenario: a session's tabs are the chat's, whichever agent is on it (*session-tabs-are-the-chats-operator-tab-is-the-workspaces*) (Happy Path) — US-22/AC6+AC7, FR-080**
+- **Given** session S on workspace W, in which **Mia** has opened `https://example.com/a`, and the **operator** has opened `https://example.com/op` through the live panel
+- **When** the operator switches the chat to **Jim** — the **same** `transcriptSessionID` — and Jim calls `browser_list_tabs`
+- **Then** Jim's result contains **both** tabs: `…/a` in **this session's** set and `…/op` in the workspace-owned set, labelled distinctly
+- **And** Jim can `browser_switch_tab` to `…/a`, drive it and close it — it is the session's tab, not Mia's
+- **And** a turn running in a **different** session S2 on W sees `…/op` and **not** `…/a`
+- *The last two steps are the ones that can fail. The first passes against an implementation that merged every tab set on the workspace — which is the state FR-001 produces if FR-080's key is not carried (§0.2a).*
+
+**Scenario: two sessions on one workspace never merge (*two-sessions-never-contend*) (Happy Path) — US-22/AC8, US-9/AC7, FR-080, FR-081**
+- **Given** one `*BrowserManager` for workspace W and two sessions S1 and S2 on it, a turn in each having opened a tab
+- **Then** the manager holds **two distinct `sessionEntry` values** and neither one's `tabs` slice contains the other's `tabEntry`
+- **And** a turn in S2 can neither list, switch to, drive nor close S1's tab
+- **And when** both turns call `browser_navigate` on their own tabs within the same millisecond, **then** both complete, neither defers, and **neither waits on the other's lease** — asserted at the lease seam, not inferred from both succeeding
+- **And** the ownership key read at every one of those operations is **`transcriptSessionID`** — a build reading `routingSessionID` instead fails this scenario only when the two sessions are a delegation parent and its child, so that case is in the fixture *(`pkg/agent/subturn.go:1282` vs `:1339`)*
 
 ~~**Scenario: the per-agent tab cap survives the re-key (Edge Case) — US-22/AC4, FR-049**~~ **TOMBSTONED by ADR D1.5a.**
 - It drove `tools.browser.max_tabs = 5` and asserted A's sixth tab was refused while B could still open five of its own. **The key, the refusal and `maxTabsReachedErr` are all deleted from the code** (FR-059), so every step of it asserts machinery that will not exist.
 - **Nothing about tab OWNERSHIP is lost with it** — that is *agent's-tabs-are-its-own*, which is untouched. What is lost is the only scenario in which a tab open was ever refused, and its replacement is *runaway-tab-loop-is-stopped-by-memory* below.
 
-**Scenario: two agents on their OWN tabs never contend (Happy Path) — US-9/AC0, FR-048**
-- **Given** Jim and Ray on workspace W, each with a tab of their own
-- **When** both call `browser_navigate` within the same millisecond
-- **Then** both navigations complete
-- **And** neither result carries `deferred`
-- **And** the write lease was never acquired by either — under D1.9a this contention does not exist, and a run in which it does means the tab sets merged
+~~**Scenario: two agents on their OWN tabs never contend — US-9/AC0, FR-048**~~ **TOMBSTONED by ADR D1.9c — and this one is worth reading, because it was GREEN while the hole it was written to guard was open.**
+- It asserted *"the write lease was never acquired by either — under D1.9a this contention does not exist"*. **It asserted the premise, not the property.** Two *agents* never share a tab set; two *turns* can — one agent's heartbeat beside its own chat turn did, under D1.9a, with no arbiter (round-4 **C-402**). A scenario whose Then is *"the thing we assumed cannot happen did not happen"* cannot fail for the case it exists to cover.
+- Replaced by *two-turns-in-one-session-contend-for-the-lease* (below) and by the cross-session half of *two-sessions-never-contend* (above), which assert the **property** — who blocks whom — rather than restating the assumption.
+
+**Scenario: two turns in ONE session contend, and both finish (*two-turns-in-one-session-contend-for-the-lease*) (Edge Case) — US-9/AC7, FR-081**
+- **Given** two turns running **concurrently on one `transcriptSessionID`** — the fixture drives the async system-notify path, a delegate completion notifying a live chat session (`pkg/agent/loop.go:3512` → `:7640-7643` → `:7734`), because it is the path the code itself documents as breaking the single-writer invariant (`:3491-3510`, **#505**)
+- **When** both call `browser_navigate` against that session's tab set within the same millisecond
+- **Then** exactly one navigation is observed by Chrome at any instant
+- **And** **both calls eventually complete** — the loser retries inside the tool, within its own deadline
+- **And** `acquireWrite` **was** called by both, asserted at the seam — a build that skips the lease on a non-workspace owner fails **here** and passes every other lease scenario
+- **And** neither result is a Go error
+- *This scenario is the whole reason §14's third scope row was rewritten rather than deleted. Run it against a build carrying FR-021's original `TabOwnerWorkspace()`-only trigger and it must be **RED**.*
 
 **Scenario: two agents write to the OPERATOR's tab; both eventually complete — US-9/AC1, FR-019, FR-020**
 - **Given** Jim and Ray on workspace W and one workspace-owned tab the operator opened
