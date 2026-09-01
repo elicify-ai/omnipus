@@ -72,6 +72,11 @@ const (
 	// over his own property is stating that it holds a number. Same evidence
 	// class as ClassifyDateFromFormula, different part of the file.
 	ClassifyNumberFromBaseSummary ClassifyKind = "number_from_base_summary_no_values_observed"
+	// ClassifyDomainAdopted: not one value was observed for this property on
+	// THIS record type, and the record types that did observe it agree on one
+	// domain, so this declaration yielded to theirs rather than standing on
+	// the `text` fallback. See AdoptObservedDomains.
+	ClassifyDomainAdopted ClassifyKind = "domain_adopted_from_observing_types"
 )
 
 // Tunable inference thresholds, stated here (not buried in a condition) so a
@@ -669,6 +674,16 @@ type InferredProperty struct {
 	// the set grew or the growth was refused at enumMaxDistinct. See
 	// WidenEnumsFromBases.
 	EnumWidened *EnumWidening
+	// DomainAdopted is set when no note of THIS record type carried a value
+	// for this property and its type was taken from the record types that DID
+	// observe it. It is the honesty payload for the one decision in this
+	// package made on another record type's evidence; see AdoptObservedDomains.
+	DomainAdopted *AdoptedDomain
+	// DomainAdoptionDeclined is set when that same rule found an agreed
+	// observed domain and REFUSED to adopt it, because the enum vocabulary it
+	// would have declared is past enumMaxDistinct. The property keeps a type
+	// nothing observed, which is precisely why the refusal is reported.
+	DomainAdoptionDeclined *DeclinedAdoption
 }
 
 // AmbiguousInference is one property this package refused to classify
@@ -2934,6 +2949,390 @@ func TypePropertiesFromBaseSummaries(
 			stored := fe
 			inferred[rt][idx].FormulaEvidenced = &stored
 			out = append(out, fe)
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// PRECEDENCE BETWEEN EVIDENCE CLASSES: A DECLARATION NOTHING WAS OBSERVED FOR
+// YIELDS TO ONE THE DATA MADE
+//
+// THE DEFECT, MEASURED IN THE FOUNDER'S VAULT RATHER THAN ASSERTED. His
+// Inbox-Triage base is UNTYPED, and knowledge_find refuses an untyped query
+// whose property name resolves in two comparison domains at once. Three of its
+// four clauses were lost to exactly that refusal, and the report named the
+// pair `area` declares `created` date / `brand-kit` declares it text. Look at
+// what stands on each side of that "conflict":
+//
+//   - THIRTY-ONE record types declare `created` as a date, on 700-odd notes
+//     that actually hold a date.
+//   - FIVE declare it `text`: brand-kit, compliance, connected-account,
+//     invoice and round. Every one of them is a record type FR-018d
+//     provisioned from a `.base` file. Not one has a single note. Not one has
+//     a single observed value for `created`, or for anything else.
+//
+// `text` is not a reading of those five types' data. It is this package's
+// FALLBACK, chosen because there was nothing to read — and provisioning has no
+// values to read by construction, so it types every property it declares
+// `text` and cannot do otherwise. That fallback then stood as an equal partner
+// to seven hundred observations and split the domain, and a view the founder
+// wrote lost its filter, its column and its formula to a disagreement that had
+// no data on one side of it.
+//
+// THE RULE. Where a record type's declaration of a property rests on NO
+// observation at all, and the record types that DID observe that property
+// agree on one domain, the unobserved declaration adopts the observed one.
+//
+// It is the same precedence this package already applies twice, one level
+// down. A template may declare a property NAME but "never touches a property
+// real notes carry" (applyTemplateDeclarations). A base formula may type a
+// property only when no note of the type carries a value for it —
+// typeEligibleForFormulaEvidence's clause 2, written down as "data beats a
+// base file, as data beats a name". This is that same sentence applied ACROSS
+// record types, which is the level the untyped-query domain lives at.
+//
+// THE FOUR CLAUSES ON THE SIDE BEING CHANGED (adoptionEligibleTarget)
+//
+//  1. The property must already be declared on that type. This never invents a
+//     property; it only ever settles the type of one that is already there.
+//  2. NO note of that type may carry a genuine value for it, judged over the
+//     FINAL note set by valuedPropertiesByType — the same population and the
+//     same collectNodeValues disposition of null / "" / [] / mapping that the
+//     formula rule uses. This is the clause that makes the change incapable of
+//     invalidating a note: with no value present there is nothing for a
+//     tighter type to reject. FR-007a is what makes that airtight rather than
+//     merely likely — an empty string is ABSENT on every non-text type, so a
+//     note that wrote `status:` or `status: ""` conforms to `enum` exactly as
+//     it conformed to `text`.
+//  3. The current declaration must be `text`. Adoption only ever strengthens
+//     the FALLBACK. It never overrules `enum`, `date`, `relation`, `checkbox`,
+//     or a name- or formula-evidenced type — those are answers this package
+//     already had a reason for, and two rules overwriting each other is how a
+//     schema stops being explicable.
+//  4. Neither side may be `many`. Adoption changes the TYPE and never the
+//     arity: an empty sequence (`tags: []`) carries no value but is
+//     unambiguous arity evidence, and it is the one shape clause 2 cannot see.
+//
+// THE THREE CLAUSES ON THE SIDE BEING BELIEVED (observedDomainFor)
+//
+//  5. At least one record type must have OBSERVED VALUES for the property.
+//     A second unobserved declaration is not evidence — it is the same absence
+//     of evidence wearing a different type name.
+//  6. Every observing type must agree, under the ENGINE'S OWN domain test
+//     (sameInferredDomain: declared type, arity, and relation target). Where
+//     the observations disagree among themselves there is no single answer to
+//     adopt, and inventing one would be this package choosing a winner between
+//     two things the founder actually wrote.
+//  7. An enum domain must still be a CREDIBLE CLOSED SET once unioned. The
+//     engine unions every in-scope type's declared values for an untyped name
+//     (knowledgefind's untypedProperty), so the union is the set the adopting
+//     type would really be declaring — and enumMaxDistinct is already this
+//     package's stated bound on when "closed vocabulary" stops being a
+//     credible read of the data. WidenEnumsFromBases refuses past that same
+//     bound for the same reason, in its own words: past it, a large set "is
+//     evidence the INFERENCE was wrong about the property".
+//
+// WHAT CLAUSE 7 COSTS ON THIS VAULT, STATED RATHER THAN HIDDEN. It DECLINES
+// the `status` adoption, which is the one the founder most wanted. Nineteen
+// record types observe `status` as an enum — and they observe NINETEEN
+// DIFFERENT VOCABULARIES that share a name: task's (blocked, doing, done,
+// open, todo), decision's (accepted, compiled, proposed, ratified,
+// ratified-partial, superseded), content's (archived, published, scheduled),
+// and so on to a union of TWENTY-SIX distinct values. Adopting that union onto
+// `invoice` and `compliance` would type a property with no notes behind it
+// from a set this package's own threshold says is not a vocabulary — and it
+// would be MEASURABLY worse: Finance-AR filters `status != "paid"` and
+// `status != "written-off"` and Compliance filters `status != "filed"`, none of
+// which the union contains, and widening cannot admit them because 26 + 2 is
+// already past the bound. Three views that convert cleanly today would lose
+// their row-set filters and be disabled. So the `status` clause of Triage
+// Queue stays a named loss, and it stays one for the reason above rather than
+// for the alphabetical accident the message used to report.
+// ---------------------------------------------------------------------------
+
+// AdoptedDomain is one property whose type this run took from the record types
+// that observed it, because the type it was standing on rested on nothing. It
+// is the honesty payload for this rule, on the same contract as
+// AmbiguousInference, NameEvidencedInference and EnumWidening: a decision made
+// without local evidence is acceptable when it is REPORTED and correctable in
+// one edit.
+type AdoptedDomain struct {
+	RecordType string
+	Property   string
+	// Was is the declaration this replaced. It is always TypeText — clause 3.
+	Was records.PropertyType
+	// Type, To and EnumValues are the adopted domain. EnumValues is the UNION
+	// of the observing types' sets, which is what the engine itself compares an
+	// untyped name against.
+	Type       records.PropertyType
+	To         string
+	EnumValues []string
+	// Sources are the record types whose observations decided it, in record-
+	// type order, each with the number of notes of that type holding a value.
+	Sources []AdoptionSource
+}
+
+// AdoptionSource is one observing record type behind an adopted domain.
+type AdoptionSource struct {
+	RecordType string
+	Observed   int
+}
+
+// DeclinedAdoption is an adoption this rule REFUSED because the observed
+// domain was an enum whose unioned vocabulary is past enumMaxDistinct. It is
+// recorded rather than dropped because the refusal is the interesting half:
+// the property keeps a type nothing observed, and the operator is the only one
+// who can say which vocabulary this type really uses.
+type DeclinedAdoption struct {
+	RecordType string
+	Property   string
+	// Sources are the observing types, as for AdoptedDomain.
+	Sources []AdoptionSource
+	// UnionSize is how many distinct values the observing types declare
+	// between them, and Bound is the count past which this package stops
+	// calling a set a closed vocabulary.
+	UnionSize int
+	Bound     int
+}
+
+// AccountLine renders one adoption the way the schema file reports it — what
+// changed, what decided it, and the single edit that overrides it.
+func (a AdoptedDomain) AccountLine() string {
+	names := make([]string, 0, len(a.Sources))
+	total := 0
+	for _, s := range a.Sources {
+		names = append(names, s.RecordType)
+		total += s.Observed
+	}
+	shown := names
+	if len(shown) > adoptionSourcesNamed {
+		shown = shown[:adoptionSourcesNamed]
+	}
+	more := ""
+	if len(names) > len(shown) {
+		more = fmt.Sprintf(" and %d more", len(names)-len(shown))
+	}
+	values := ""
+	if a.Type == records.TypeEnum {
+		values = fmt.Sprintf(" values=%s", strings.Join(a.EnumValues, ","))
+	}
+	to := ""
+	if a.To != "" {
+		to = " to=" + a.To
+	}
+	return fmt.Sprintf(
+		"`%s` is declared %s here, adopted from the %d record type(s) that observed it (%s%s — %d note(s) with a value between them). No note of `%s` carries a value for it, so this run had no evidence of its own and %s was only the fallback. Override in one edit: knowledge_configure set schema %s property %s type=%s%s%s",
+		a.Property, a.Type, len(a.Sources), strings.Join(shown, ", "), more, total,
+		a.RecordType, a.Was, a.RecordType, a.Property, a.Type, to, values)
+}
+
+// AccountLine renders one refusal the same way.
+func (d DeclinedAdoption) AccountLine() string {
+	names := make([]string, 0, len(d.Sources))
+	for _, s := range d.Sources {
+		names = append(names, s.RecordType)
+	}
+	shown := names
+	if len(shown) > adoptionSourcesNamed {
+		shown = shown[:adoptionSourcesNamed]
+	}
+	more := ""
+	if len(names) > len(shown) {
+		more = fmt.Sprintf(" and %d more", len(names)-len(shown))
+	}
+	return fmt.Sprintf(
+		"`%s` is left `text`, which is this run's fallback and not a reading of any data: no note of `%s` carries a value for it. %d other record type(s) DO observe it (%s%s) and every one of them declares it an enum, but their vocabularies union to %d distinct values — past the %d at which this run stops treating a set as a closed vocabulary at all. That is evidence they are separate vocabularies sharing a name, not one enum, so nothing was adopted. If this type really does use one of them, one edit says so: knowledge_configure set schema %s property %s type=enum values=<the values it uses>",
+		d.Property, d.RecordType, len(d.Sources), strings.Join(shown, ", "), more,
+		d.UnionSize, d.Bound, d.RecordType, d.Property)
+}
+
+// adoptionSourcesNamed caps how many observing record types an account line
+// names before it counts the rest.
+const adoptionSourcesNamed = 4
+
+// AdoptObservedDomains applies the precedence rule above IN PLACE and returns
+// the account of every adoption and every refusal, in (record type, property)
+// order.
+//
+// IT TAKES `notes` RATHER THAN LEANING ON InferredProperty.ObservedCount, for
+// the reason TypePropertiesFromBaseFormulas states next door: ObservedCount is
+// frozen by CollectTypeGroups BEFORE FR-104b's InferTypesForUntypedNotes writes
+// `type:` into untyped notes. A note that JOINS a record type mid-run is
+// invisible to that count, and this rule's whole safety argument is that no
+// note holds a value the adopted type could reject.
+func AdoptObservedDomains(inferred map[string][]InferredProperty, notes []NoteRecord) ([]AdoptedDomain, []DeclinedAdoption) {
+	valued := valuedPropertiesByType(notes)
+	listed := listShapedPropertiesByType(notes)
+	recordTypes := sortedStringKeys(inferred)
+
+	var adopted []AdoptedDomain
+	var declined []DeclinedAdoption
+	for _, rt := range recordTypes {
+		props := append([]string(nil), propertyNames(inferred[rt])...)
+		sort.Strings(props)
+		for _, name := range props {
+			if !adoptionEligibleTarget(inferred[rt], name, valued[rt], listed[rt]) {
+				continue
+			}
+			domain, sources, ok := observedDomainFor(inferred, recordTypes, rt, name, valued)
+			if !ok {
+				continue
+			}
+			if domain.Type == records.TypeEnum && len(domain.EnumValues) > enumMaxDistinct {
+				d := DeclinedAdoption{
+					RecordType: rt, Property: name, Sources: sources,
+					UnionSize: len(domain.EnumValues), Bound: enumMaxDistinct,
+				}
+				declined = append(declined, d)
+				if idx := indexOfProperty(inferred[rt], name); idx >= 0 {
+					stored := d
+					inferred[rt][idx].DomainAdoptionDeclined = &stored
+				}
+				continue
+			}
+			idx := indexOfProperty(inferred[rt], name)
+			if idx < 0 {
+				continue
+			}
+			acct := AdoptedDomain{
+				RecordType: rt,
+				Property:   name,
+				Was:        inferred[rt][idx].Type,
+				Type:       domain.Type,
+				To:         domain.To,
+				EnumValues: append([]string(nil), domain.EnumValues...),
+				Sources:    sources,
+			}
+			inferred[rt][idx].Type = domain.Type
+			inferred[rt][idx].To = domain.To
+			inferred[rt][idx].EnumValues = append([]string(nil), domain.EnumValues...)
+			inferred[rt][idx].Kind = ClassifyDomainAdopted
+			stored := acct
+			inferred[rt][idx].DomainAdopted = &stored
+			adopted = append(adopted, acct)
+		}
+	}
+	return adopted, declined
+}
+
+// adoptionEligibleTarget is clauses 1-4, in one place, so a reviewer reads them
+// together rather than reconstructing them from the call site.
+func adoptionEligibleTarget(props []InferredProperty, name string, valued, listed map[string]bool) bool {
+	p, ok := findInferredProperty(props, name)
+	if !ok {
+		return false // (1) never invents a property
+	}
+	if valued[records.FoldKey(name)] {
+		return false // (2) data beats an absence of data, as data beats a name
+	}
+	if p.Type != records.TypeText {
+		return false // (3) only ever strengthens the fallback
+	}
+	// (4) adoption changes the type and never the arity, and `tags: []` is the
+	// one shape clause 2 cannot see.
+	return !p.Many && !listed[records.FoldKey(name)]
+}
+
+// observedDomainFor is clauses 5-6: the single domain every record type that
+// OBSERVED this property agrees on, with the observing types named. It returns
+// ok=false when nothing observed the property, when the observers disagree, or
+// when the agreed domain is one there would be nothing to adopt from (`text`,
+// or a `many` the target may not take).
+func observedDomainFor(inferred map[string][]InferredProperty, recordTypes []string, target, name string,
+	valued map[string]map[string]bool) (InferredProperty, []AdoptionSource, bool) {
+	var domain InferredProperty
+	var sources []AdoptionSource
+	var enumUnion []string
+	seenValue := map[string]bool{}
+	first := true
+	for _, rt := range recordTypes {
+		if rt == target || !valued[rt][records.FoldKey(name)] {
+			continue
+		}
+		p, ok := findInferredProperty(inferred[rt], name)
+		if !ok {
+			continue
+		}
+		if first {
+			domain, first = p, false
+		} else if !sameInferredDomain(domain, p) {
+			return InferredProperty{}, nil, false // (6) the observations disagree
+		}
+		sources = append(sources, AdoptionSource{RecordType: rt, Observed: p.ObservedCount})
+		for _, v := range p.EnumValues {
+			key := records.FoldKey(strings.TrimSpace(v))
+			if seenValue[key] {
+				continue
+			}
+			seenValue[key] = true
+			enumUnion = append(enumUnion, v)
+		}
+	}
+	if first {
+		return InferredProperty{}, nil, false // (5) nothing observed it
+	}
+	if domain.Type == records.TypeText || domain.Many {
+		return InferredProperty{}, nil, false // nothing to adopt, or clause 4
+	}
+	sort.Slice(enumUnion, func(i, j int) bool {
+		return records.FoldKey(strings.TrimSpace(enumUnion[i])) < records.FoldKey(strings.TrimSpace(enumUnion[j]))
+	})
+	return InferredProperty{Type: domain.Type, To: domain.To, EnumValues: enumUnion}, sources, true
+}
+
+// listShapedPropertiesByType answers clause 4 over the FINAL note set: for each
+// record type, which of its properties any note wrote as a YAML SEQUENCE —
+// including an EMPTY one. An empty list contributes no value (so
+// valuedPropertiesByType cannot see it) and yet records.Validate reaches the
+// arity check on it, which is exactly the case a type change must not disturb.
+// Property names are FOLDED, for the same reason its sibling folds them.
+func listShapedPropertiesByType(notes []NoteRecord) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for i := range notes {
+		rec := notes[i].Rec
+		rt := rec.TypeName()
+		if rt == "" {
+			continue
+		}
+		for _, key := range rec.Frontmatter.Keys {
+			var po PropertyObservation
+			po.Name = key
+			collectNodeValues(&po, rec.Frontmatter.Values[key], notes[i].RelPath)
+			if len(po.ListNotes) == 0 {
+				continue
+			}
+			byProp := out[rt]
+			if byProp == nil {
+				byProp = map[string]bool{}
+				out[rt] = byProp
+			}
+			byProp[records.FoldKey(key)] = true
+		}
+	}
+	return out
+}
+
+// propertyNames lists an inferred schema's property names in declaration order.
+func propertyNames(props []InferredProperty) []string {
+	out := make([]string, 0, len(props))
+	for _, p := range props {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// CollectDomainAdoptions gathers every adoption account off an inferred schema
+// set, in (record type, property) order — the same shape
+// CollectNameEvidencedInferences and CollectEnumWidenings already have, so a
+// caller asks this package for its own decisions rather than threading a list.
+func CollectDomainAdoptions(inferred map[string][]InferredProperty) []AdoptedDomain {
+	var out []AdoptedDomain
+	for _, rt := range sortedStringKeys(inferred) {
+		for _, p := range inferred[rt] {
+			if p.DomainAdopted != nil {
+				out = append(out, *p.DomainAdopted)
+			}
 		}
 	}
 	return out

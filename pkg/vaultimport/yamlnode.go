@@ -40,6 +40,16 @@ func kv(key string, val any) (*yaml.Node, *yaml.Node) {
 	k := &yaml.Node{}
 	// A key is always a plain string; error is impossible for a string input.
 	_ = k.Encode(key)
+	// A value that is ALREADY a built node is used as-is. Encoding one
+	// round-trips it through a generic value and drops everything the node
+	// carries that a value cannot — HeadComment above all, which is how this
+	// package explains a property to the operator in the file he opens. That
+	// loss is silent: the YAML is still valid, still correct, and simply has
+	// no comments, so the only thing that catches it is a test that reads the
+	// rendered bytes back and looks for the account.
+	if n, ok := val.(*yaml.Node); ok {
+		return k, n
+	}
 	v := &yaml.Node{}
 	_ = v.Encode(val)
 	return k, v

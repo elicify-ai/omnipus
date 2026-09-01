@@ -24,16 +24,26 @@ import (
 // schema_write_roundtrip_test.go — this file is the only place that builds
 // this shape, and pkg/records is the only place that reads it back.
 func RenderSchemaYAML(recordType string, props []InferredProperty) ([]byte, error) {
-	propPairs := make([]ordPair, 0, len(props))
-	for _, p := range props {
-		propPairs = append(propPairs, ordPair{Key: p.Name, Value: renderPropertyDecl(p)})
-	}
 	top := orderedMap(
 		ordPair{Key: "schema_version", Value: records.SupportedSchemaVersion},
 		ordPair{Key: "type", Value: recordType},
-		ordPair{Key: "properties", Value: orderedMap(propPairs...)},
+		ordPair{Key: "properties", Value: propertiesMapping(props)},
 	)
 	return marshalDoc(top)
+}
+
+// propertiesMapping builds the `properties:` mapping in the given order, with
+// each property's own account (propertyAccountComment) as a leading comment on
+// its key. It builds the node here rather than through orderedMap because
+// orderedMap has no comment channel and this is the only caller that needs one.
+func propertiesMapping(props []InferredProperty) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.MappingNode}
+	for _, p := range props {
+		k, v := kv(p.Name, renderPropertyDecl(p))
+		k.HeadComment = propertyAccountComment(p)
+		n.Content = append(n.Content, k, v)
+	}
+	return n
 }
 
 func renderPropertyDecl(p InferredProperty) *yaml.Node {
@@ -98,6 +108,43 @@ func RenderProvisionedSchemaYAML(recordType string, props []InferredProperty, p 
 	b.WriteString("# re-declared from a base file.\n")
 	b.Write(body)
 	return []byte(b.String()), nil
+}
+
+// ---------------------------------------------------------------------------
+// A PROPERTY NO NOTE FILLED IN CARRIES ITS OWN ACCOUNT, ABOVE ITS OWN LINE
+//
+// AdoptObservedDomains (infer.go) settles the type of a property THIS record
+// type has no value for, from the record types that do — and it declines to,
+// when the vocabulary it would have to declare is not a credible closed set.
+// Both halves are decisions made without local evidence, so both are subject
+// to this package's standing contract: a guess is acceptable when it is
+// REPORTED and correctable in one edit.
+//
+// The account goes ABOVE THE PROPERTY, in the file, for the same reason
+// RenderProvisionedSchemaYAML's header does: the file is where the correction
+// is made, and an operator who opens `bank-account.yaml` six weeks after the
+// import — long after the console output scrolled away — should not have to
+// reconstruct why `status` says what it says.
+//
+// YAML comments are not data. records.ParseSchema decodes the document and
+// never sees them, so nothing written here can change what the schema means —
+// which is what makes it safe to write a whole paragraph next to a one-line
+// declaration.
+// ---------------------------------------------------------------------------
+
+// propertyAccountComment renders the account this property owes the operator,
+// or "" for the overwhelming majority that owe none.
+func propertyAccountComment(p InferredProperty) string {
+	var line string
+	switch {
+	case p.DomainAdopted != nil:
+		line = p.DomainAdopted.AccountLine()
+	case p.DomainAdoptionDeclined != nil:
+		line = p.DomainAdoptionDeclined.AccountLine()
+	default:
+		return ""
+	}
+	return strings.Join(wrapComment(line, 74), "\n")
 }
 
 // wrapComment breaks one account line into comment-width chunks on word

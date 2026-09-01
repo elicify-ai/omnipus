@@ -376,6 +376,32 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 	// schema, and both are contained by "data beats a base file", so neither
 	// can speak about a property the notes have already decided.
 	TypePropertiesFromBaseSummaries(inferred, notes, baseRelPaths, parsedBases)
+	// A record type that observed NOTHING for a property is standing on this
+	// package's `text` fallback, not on a reading of its own data — and that
+	// fallback used to stand as an equal partner to seven hundred observations
+	// of the same property name on other types, splitting the untyped-query
+	// domain and costing the founder's Inbox-Triage base its `created` column
+	// and its `formula.age`. Absence of evidence yields to evidence here, on
+	// the same sentence the two rules above already turn on: data beats a base
+	// file, as data beats a name.
+	//
+	// The position is between the two for a reason. AFTER the formula rule,
+	// because a property whose type the operator's own formula states is not
+	// an unobserved fallback and must settle first. BEFORE the widening,
+	// because an adopted enum is an enum like any other and its closed set has
+	// to be offered the operator's own base literals in the same pass every
+	// other enum's is.
+	//
+	// The declined half is not thrown away: `status` is refused here on this
+	// vault, and both halves are reported in the schema files the operator
+	// would open to correct them (schema_write.go).
+	// The two accounts are stored ON the properties themselves
+	// (InferredProperty.DomainAdopted / .DomainAdoptionDeclined) and rendered
+	// into the very schema file each one would be corrected in — see
+	// schema_write.go's propertyAccountComment. The returned slices are the same
+	// decisions in list form, for the tests that grade this rule; a REPORT row
+	// for them is owed and belongs in report.go, which this change does not own.
+	_, _ = AdoptObservedDomains(inferred, notes)
 
 	WidenEnumsFromBases(inferred, baseRelPaths, parsedBases)
 
