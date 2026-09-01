@@ -630,6 +630,64 @@ is bounded by the formula alone **and** has no cross-process guard; the pool is
 supported there in the same degraded sense as the rest of the file-store family
 (ADR-054 §5), not in the same sense as on Linux.
 
+### D1.9a Tabs stay per agent; the operator's tab is the shared one
+
+**Operator ruling, 2026-09-01 (Daniel Piatkowski), restated here for
+correction if misread:**
+
+> the default is they open a new tab — we have in the current version that an
+> agent has its own tab, we should maintain that. Only if the user starts a tab
+> are the agents able to see it and take control on request.
+
+**The model.**
+
+| | Owner | Who can see it | Who can drive it |
+|---|---|---|---|
+| A tab an **agent** opens | that agent | that agent | that agent |
+| A tab the **operator** opens | the workspace | **every agent on the workspace** | the operator; an agent **on request** |
+
+One Chrome per workspace, one cookie jar (D1.3, D1.10) — **and inside it, tab
+ownership stays per agent**, exactly as today.
+
+**This is a preservation, not a new feature — but it does not survive the
+re-key by itself.** Today's tab set belongs to the *browsing context*
+(ADR-041 D1: `Session(defaultSessionID)` returns the active tab of that
+context's `[]*tabEntry`), and agents are separated only because each has its
+own manager. Collapse the managers to one per workspace, as D1.1 does, and a
+single tab set would be shared by everyone — losing the separation this ruling
+requires. **The agent dimension must therefore be carried explicitly on the tab
+set.** An implementation that only re-keys the manager silently deletes this.
+
+**What it fixes, and it is §1.1's actual defect.** The operator opened the
+panel, browsed, and the tab was attributed to whichever agent's panel happened
+to be on screen — so Jim could not see it. Under this ruling an
+operator-opened tab is **not owned by an agent at all**; it belongs to the
+workspace and is visible to every agent on it. Jim sees it because it was
+never Mia's.
+
+**What it removes from this ADR.** Concurrency was scoped as "two agents
+sharing one tab set" and answered with a write lease (previously D2.10). Two
+agents working on **their own tabs do not contend**, so the general case
+disappears. What remains is narrow and already built:
+
+- **Operator vs agent** on the operator's tab — `LiveViewRegistry.TakeControl`
+  / `IsControlled` (`pkg/tools/browser/live.go:1236-1310`), ADR-038 D6, the
+  "on request" in the ruling. Unchanged.
+- **Agent vs agent** on the operator's tab — the only genuine contention left.
+  A lease is justified *here*, on one shared tab, not across the whole surface.
+
+**Superseding the C1 question this ruling answered.** The grill asked whether a
+losing writer should retry-then-error or return a non-error "deferred". The
+operator answered by removing the premise. The retry-vs-defer decision now
+applies **only** to the operator's tab, and the D1 spec's §14 must be rescoped
+from "every action tool" to that case — a much smaller change than either
+answer implied.
+
+**Open, and not decided here:** what "take control on request" looks like to an
+agent — an explicit tool, or an implicit acquisition on first write to the
+operator's tab. The ruling says "on request", which reads as explicit; the
+mechanism is a D2 tool-surface decision and belongs in §6 until ruled.
+
 ### D1.10 Everyone on the workspace shares it — including unattended delegated work
 
 **Operator ruling, 2026-08-31: every agent on a workspace shares that
