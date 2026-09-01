@@ -494,10 +494,26 @@ function buildCorpus(tier, seed) {
 
   // Counters used for stable, zero-padded filenames per bucket.
   const seq = { notes: 0, companies: 0, projects: 0, people: 0, meetings: 0, probes: 0 };
+  // label -> file stem, so a wikilink can be written in the ONE form that
+  // resolves. Omnipus resolves `[[...]]` by FILENAME BASENAME only
+  // (knowledge/links.go::NoteIndex.Resolve indexes path.Base and its stem and
+  // nothing else) — never by a `name:` property, an `id:`, or a title.
+  //
+  // An earlier version emitted `[[${label}]]` while naming the file
+  // `<prefix>-<seq>-<slug(label)>.md`, so EVERY filler relation dangled by
+  // construction. Not cosmetic: the corpus then exercised none of relation
+  // resolution, backlinks, or the rename cascade's frontmatter rewriting while
+  // appearing to, and a UAT run mistook the resulting honest "0 backlinks" for
+  // link corruption.
+  const stemByLabel = new Map();
   const nextPath = (bucket, label) => {
     seq[bucket] += 1;
     const prefix = { notes: 'n', companies: 'co', projects: 'pr', people: 'pe', meetings: 'me', probes: 'pb' }[bucket];
-    return `${bucket}/${prefix}-${String(seq[bucket]).padStart(4, '0')}-${slugify(label)}.md`;
+    const stem = `${prefix}-${String(seq[bucket]).padStart(4, '0')}-${slugify(label)}`;
+    // First writer wins: two notes sharing a label make a link spelling that
+    // label ambiguous anyway, so pick one and stay deterministic.
+    if (!stemByLabel.has(label)) stemByLabel.set(label, stem);
+    return `${bucket}/${stem}.md`;
   };
 
   // A stable pool of link targets so relations point at plausible names.
@@ -1005,7 +1021,13 @@ function buildCorpus(tier, seed) {
     projectNames.push(nm); fillerProjectNames.push(nm);
   }
 
-  const linkTo = (pool, i) => `[[${pool.length ? pool[i % pool.length] : 'Unknown'}]]`;
+  // Emits the target's FILE STEM — the only form Omnipus resolves. A label
+  // with no known stem falls back to the label and therefore dangles; that is
+  // what the 'Unknown' case has always meant, and it must not be the norm.
+  const linkTo = (pool, i) => {
+    const label = pool.length ? pool[i % pool.length] : 'Unknown';
+    return `[[${stemByLabel.get(label) ?? label}]]`;
+  };
 
   // valueFor produces ONE conforming value for a declared property.
   function valueFor(prop, rng, idx) {
@@ -1645,7 +1667,45 @@ function selfCheck(corpus, scenarios, counts) {
     pass('SC-07 (<>) and SC-08 (NOT =) have different answer sets', `${sc07.must_match.length} vs ${sc08.must_match.length} notes`);
   }
 
-  // 6. Every scenario with an empty must_match must say so deliberately.
+  // 6. Frontmatter wikilinks must actually RESOLVE to a file in the corpus.
+  //
+  // Omnipus resolves `[[...]]` by filename basename only, so a link spelling a
+  // note's LABEL rather than its file stem points at nothing. An earlier
+  // version of this generator did exactly that for every filler relation, and
+  // the corpus silently exercised none of relation resolution, backlinks, or
+  // the rename cascade while appearing to — a UAT run then mistook the honest
+  // "0 backlinks" that produced for link corruption.
+  //
+  // Scans entries[].values, which is where a frontmatter link actually lives;
+  // the note's `body` is the markdown BELOW the frontmatter and never carries
+  // the relation values this check exists for.
+  //
+  // The assertion is a FLOOR, not an exact count: some links dangle on purpose
+  // (the deliberately-invalid notes, and probe anchors with no target). Zero
+  // resolving links is the regression that matters, and it is what this catches.
+  {
+    const stems = new Set(corpus.notes.map((nt) => nt.path.replace(/^.*\//, '').replace(/\.md$/, '')));
+    let resolved = 0;
+    let dangling = 0;
+    for (const nt of corpus.notes) {
+      for (const e of nt.entries || []) {
+        for (const v of e.values || []) {
+          for (const m of String(v).matchAll(/\[\[([^\]]+)\]\]/g)) {
+            if (stems.has(m[1])) resolved += 1; else dangling += 1;
+          }
+        }
+      }
+    }
+    if (resolved === 0) {
+      fail('frontmatter wikilinks resolve to real notes',
+        `${dangling} frontmatter links, NONE of which resolve — links are spelling labels rather than file stems, so relation resolution, backlinks and the rename cascade are all untested`);
+    } else {
+      pass('frontmatter wikilinks resolve to real notes',
+        `${resolved} resolve, ${dangling} dangle by design (invalid fixtures and unanchored probes)`);
+    }
+  }
+
+  // 7. Every scenario with an empty must_match must say so deliberately.
   for (const sc of scenarios) {
     if (sc.must_match.length === 0 && !sc.expect_refusal && !sc.policy_dependent) {
       fail(`SC ${sc.id}: an empty expected set must be deliberate`, 'must_match is empty but the scenario is neither a refusal nor policy-dependent');
