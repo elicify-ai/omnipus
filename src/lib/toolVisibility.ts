@@ -55,6 +55,13 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  *     failure in, and the panel hides ToolSearch by default too
  *     (shouldRenderToolCallInPanel below) — so without this exception the
  *     failure would be invisible everywhere except verbose chat.
+ *   - `Skill` (ADR-072 D3): mirrors `ToolSearch` exactly — hidden on success,
+ *     forced visible on error. A refused/denied or not-found skill load is a
+ *     real, security-relevant outcome the reader needs to see; a successful
+ *     load is the silent "check the menu" habit D3 deliberately does not
+ *     narrate (see the ADR's D3 §3 and D3.1's audit-vs-render distinction —
+ *     the call is still audited and still in the transcript either way, this
+ *     is render-only).
  *   - `delegate` and the background-dispatch/poll/read sub-cases of `bash`:
  *     NO error exception. A failed/denied delegation or background shell
  *     command is returned to the CALLING agent's own turn as the tool
