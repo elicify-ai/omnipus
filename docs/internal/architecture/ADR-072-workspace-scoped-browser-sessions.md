@@ -661,11 +661,32 @@ by parallel delegation. Under D1.9a those share one per-agent tab set with **no
 arbiter**. Under D1.9c they are **different sessions**, so they hold different
 tabs and cannot collide. The hole closes by construction.
 
-**Residual, and it must be specified rather than assumed away:** two concurrent
-turns *in the same session* would still contend. Whether that can occur is a
-question about session-level turn serialisation, not about the browser — the
-spec must establish the answer from code rather than inherit this ADR's
-assumption, and if it can occur, §14's lease applies to the session's tab set.
+**Residual — the spec established it from code, and the answer is YES.**
+This paragraph previously left the question open and said the hole closed "by
+construction". **That was overstated and is corrected here.**
+
+Two turns *can* run against one session. `pkg/agent/loop.go:3491-3510` states
+it verbatim: an async-notify goroutine *"CAN run a real turn concurrently
+against the SAME origin session as a live user turn (unlike every other
+inbound message, which IS serialized per session via the sessionWorker pool)"*
+— filed as **#505, not fixed**. Two further paths bypass the same serialiser:
+`/loop`, which runs on the user's own live chat session id, and cron
+`SessionModeMain`, whose `"sched-main-"+owner` id is shared across jobs.
+
+**So D1.9c narrows C-402 rather than closing it.** The two cases the ruling
+names *are* closed by construction — a heartbeat gets its own standing session,
+and delegated siblings get distinct ids. Same-session concurrency is not.
+**§14's third row is therefore rewritten, not deleted, and the lease survives
+for a session's own tab set.**
+
+**And the session id is not a free choice — it must be `transcriptSessionID`.**
+`routingSessionID`'s own doc comment (`pkg/agent/turn.go:348-353`) forbids
+reading it as an *"ownership predicate"* by name, and it is inherited verbatim
+through a delegation subtree (`pkg/agent/subturn.go:1339`). Keying tabs on it
+would merge every descendant's tabs into the root's — and with `delegate`'s
+`async` defaulting true (`pkg/tools/delegate.go:1298`), N children would run
+concurrently on that one merged set. That is the failure D1.9c exists to
+prevent, reintroduced by picking the wrong id.
 
 **What it does NOT change.** The operator's own tab remains workspace-owned and
 visible to every agent (D1.9a's second half stands): a tab the operator opens
