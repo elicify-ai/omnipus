@@ -232,6 +232,31 @@ def cmp_op(o, a, b):
     # the direction that hides a broadened view.
     if b == '' and a is None: a = ''
     if a == '' and b is None: b = ''
+
+    # A WIKILINK VALUE COMPARED AGAINST A BARE STRING MATCHES IN OBSIDIAN.
+    # Established by reading Obsidian 1.12.7's own implementation (obsidian.asar
+    # -> app.js), not from the docs: `==` dispatches to looseEquals, which tries
+    # BOTH directions. Link.looseEquals(String) is false, but String.looseEquals
+    # (Link) inherits the primitive comparison and Link IS a primitive, so it
+    # compares the literal against the link's RAW TARGET TEXT -- pipe stripped,
+    # `#heading` and folder path KEPT.
+    #
+    # Without this, `owner == "Daniel Piatkowski"` scores 0 rows here while it
+    # returns 308 in the founder's own app, and this oracle would then grade a
+    # CORRECT translation as a 0->N broadening. That is the worst failure an
+    # oracle can have: it does not merely miss a defect, it manufactures one.
+    #
+    # Deliberately NOT canonicalising: no case folding, no path stripping, no
+    # anchor stripping. Obsidian's `==` is JavaScript `==` over the raw text, so
+    # `[[Folder/X]]`, `[[X#Sec]]` and `[[x]]` all fail against the bare `X` --
+    # and those are exactly the divergences that make coercing this comparison
+    # unfaithful in our engine, which matches on RESOLVED identity instead.
+    if isinstance(a, str) and isinstance(b, str) and o in ('==', '!='):
+        m = re.fullmatch(r'\[\[([^\]]*)\]\]', a.strip())
+        if m:
+            raw = m.group(1).split('|', 1)[0]
+            return raw == b if o == '==' else raw != b
+
     if o == '==':
         if isinstance(a, list): return b in a
         return a == b
