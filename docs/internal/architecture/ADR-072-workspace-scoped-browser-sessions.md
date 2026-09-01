@@ -636,6 +636,72 @@ independently of the limit (e.g. the presence of a container cgroup path) is
 what separates them; without that the warning either never fires or fires
 constantly, and a warning that always fires is not a warning.
 
+#### D1.9c Tabs are owned by the SESSION, not the agent — superseding D1.9a
+
+**Operator ruling, 2026-09-02:** *"it should not be per agent but per session,
+no matter which agent is on it. Tabs are owned by sessions."*
+
+**This supersedes D1.9a's per-agent tab ownership.** D1.9a preserved "an agent
+has its own tab" from today's behaviour; that is now replaced.
+
+| | D1.9a (superseded) | D1.9c (current) |
+|---|---|---|
+| A tab belongs to | the **agent** that opened it | the **session** it was opened in |
+| Switching agent mid-chat | the tab follows the agent | the tab stays with the chat |
+| A scheduled run | shares the agent's tabs | **its own session, its own tabs** |
+
+One browser per workspace and one cookie jar (D1.3, D1.10) are unchanged. Only
+the tab-ownership key moves: **agent → session**.
+
+**It resolves the round-4 blocker C-402 rather than patching it.** The general
+lease case had been deleted on the premise that two agents never share a tab
+set — true — but the premise missed that **one agent can have two concurrent
+turns**: a heartbeat while a chat is live, or the same agent dispatched twice
+by parallel delegation. Under D1.9a those share one per-agent tab set with **no
+arbiter**. Under D1.9c they are **different sessions**, so they hold different
+tabs and cannot collide. The hole closes by construction.
+
+**Residual, and it must be specified rather than assumed away:** two concurrent
+turns *in the same session* would still contend. Whether that can occur is a
+question about session-level turn serialisation, not about the browser — the
+spec must establish the answer from code rather than inherit this ADR's
+assumption, and if it can occur, §14's lease applies to the session's tab set.
+
+**What it does NOT change.** The operator's own tab remains workspace-owned and
+visible to every agent (D1.9a's second half stands): a tab the operator opens
+belongs to the workspace, not to any session or agent, which is what fixes
+§1.1's reported defect. Acquisition stays implicit (D1.9b ruling 1).
+
+#### D1.9d The dead `evaluate_enabled` flag is deleted outright
+
+**Operator ruling, 2026-09-02: delete the dead code path completely.**
+
+Two settings name the same gate and only one is read:
+
+| Field | Read by production code? |
+|---|---|
+| `Tools.Browser.EvaluateEnabled` (`pkg/config/config.go:3682`, env `OMNIPUS_TOOLS_BROWSER_EVALUATE_ENABLED`) | **No** — the only reference is a comment at `pkg/config/sandbox.go:232` saying it "mirrors" the other |
+| `Sandbox.BrowserEvaluateEnabled` (`pkg/config/sandbox.go:235`) | **Yes** — `pkg/agent/loop.go:2431` |
+
+The dead one's own doc comment reads *"gates browser.evaluate (arbitrary JS
+execution). Defaults to false (deny-by-default per SEC-04/SEC-06). Must be
+explicitly opted in by the operator."* Every word of that describes a control
+it does not implement.
+
+**Why this became urgent rather than untidy.** While both were `false` they
+agreed and the dead one was inert. **D1.9b ruling 2 seeds the live one `true`**,
+so an operator who wants to switch arbitrary JS back off now has two plausible
+switches and one env var, and the most convincing of them does nothing —
+silently. A security control that appears to work and does not is worse than no
+control, because it ends the search.
+
+**Decision: delete the field, its JSON tag and its env var.** Not merged, not
+made authoritative — deleted, so exactly one switch exists. The seven doc
+comments across `config.go`, `sandbox.go`, `defaults.go`, `register.go`,
+`tools.go` and `loop.go` that describe the deny-by-default posture by BRD id
+(SEC-04/SEC-06) must be corrected in the same change, or the code's own record
+will contradict the shipped default.
+
 #### D1.5c One memory mechanism, several consumers
 
 **Operator ruling, 2026-09-01, overriding a narrower proposal:**
