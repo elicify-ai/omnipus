@@ -599,9 +599,9 @@ costs one tool call; an unbounded browser pool costs the gateway and every sessi
    **D1.5d deletes `autoDetectMaxParallel` outright** (FR-067), so there is no caller left whose
    answer could stay unchanged. What survives verbatim is everything above this sentence: `ok=false`
    still covers the Linux fallback path, for the browser gate, exactly as written. **What the agent
-   path does on an `ok=false` host is E-8's open question, not this paragraph's** — and it is open
-   precisely because the *"different jobs"* reasoning deleted here was the only thing that had ever
-   answered it.
+   path does on an `ok=false` host is answered by FR-068a, not by this paragraph** — it admits to the
+   conservative floor of 2 and refuses to grow beyond it. That question only arose because the
+   *"different jobs"* reasoning deleted here had been the sole thing answering it.
 
 #### Windows: foreseen, NOT scoped — and it is not simply "the Darwin job again" (FR-066)
 
@@ -794,9 +794,38 @@ one mechanism with two call sites is safer here than two mechanisms with one eac
 
 **Mechanically, FR-068 is FR-060's gate at a different call site.** Same exported two-valued
 accessor (FR-065), same ratio, same `ok=false` ⇒ refuse rule, same "logged once, not per call"
-discipline. No new threshold constant is introduced by this FR; if the agent path needs a different
-threshold from the browser path, that is a tuning decision for agent-concurrency's owner (E-8), not
-a second mechanism.
+discipline. No new threshold constant is introduced by this FR. **If the agent path is later found to need a
+different threshold from the browser path, that is a tuning value on one mechanism — never a second
+mechanism**, and it must be argued from a measurement, in this spec, not chosen at the call site.
+
+#### The host the gate cannot measure — refuse to GROW, not refuse to RUN (FR-068a)
+
+**This is the one place where reading FR-065 literally would have been wrong, and it is worth
+stating why rather than quietly not doing it.** FR-065's rule is *availability undeterminable ⇒
+refuse*, and it is right for a browser: a refused browse costs one tool call. Applied word-for-word
+to agent admission it refuses **every** agent turn on Windows and on any Linux host that falls
+through to the 4 GB fallback (gVisor and other `/proc`-less sandboxes, `meminfo_linux.go:16`). That
+is not a degraded platform — it is a gateway that cannot answer a message.
+
+**The resolution was already in the ruled text and needed reading, not a new ruling.** FR-065 says
+the pool refuses **to grow**, and §13 holdout 24 already specifies the consequence on Windows
+precisely: *the first browser opens*, and an attempt to **grow** the pool is refused. Growth is what
+is refused; existence is not. Applied to agents, growth means concurrency **above the floor**.
+
+**So: on an `ok=false` host, agent admission admits up to 2 concurrent agents and refuses beyond
+it**, with FR-063's reason code and a message naming memory.
+
+**Why 2, and why this is not the thing D1.5d deleted.** It is a **floor**, not a computed default:
+no availability figure is divided by anything, no per-unit constant survives, nothing is precomputed
+at boot. It is also not invented here — `meminfo_other.go:25-33` documents 2 as the deliberate
+no-signal posture already shipped on exactly these platforms, chosen *because* it fails conservative
+rather than open. FR-067 deletes the arithmetic that produced it as an *answer*; FR-068a keeps it as
+a *floor*, which is the one shape D1.5d's objections do not reach.
+
+**And this branch must be able to fail a test.** *"Admits when memory is free"* passes against a
+stub that always admits, so the assertion that carries this requirement is the **refusal**: with the
+accessor forced to `ok=false`, the **third** concurrent admission is refused, the refusal names
+memory, and the test **fails if it succeeds** (see test 87, AC21).
 
 #### The release-note item changes (FR-069)
 
@@ -809,8 +838,10 @@ announcement is dissolved and must not ship.** Nothing jumps, because nothing is
 - **There is no longer a computed default for `performance.max_parallel_agents`.** An explicit
   setting is honoured exactly as before. Absent one, concurrency is bounded by **live available
   memory** at the moment of each admission decision, plus the unchanged physical OS-thread backstop.
-- **On a host where availability cannot be determined, that gate has nothing to read** — see E-8,
-  which is the reason this bullet is written as a warning and not as behaviour.
+- **On a host where availability cannot be determined** — Windows, or a `/proc`-less Linux sandbox —
+  **the gate has nothing to read, so concurrency holds at the conservative floor of 2 and does not
+  grow** (FR-068a). This is the same posture those hosts have shipped with; what changes is that it
+  is now stated rather than emerging from a stubbed reader.
 
 **And the number an operator can see does change, which is a different claim from "the default
 moved" and must not be conflated with it.** `GET /api/v1/performance` returns
@@ -820,7 +851,9 @@ clamped on Linux. Reporting 2000 as a capacity would be a fresh instance of the 
 keeps catching: *a displayed number that is not the constraint*. FR-069 therefore requires the
 `capped=false` case to be surfaced as **"automatic — bounded by available memory"**, not as the
 integer 2000. That is a contract-and-SPA change (`contracts/components/schemas/PerformanceSettings.yaml`)
-and it is inside E-8's ratification, not outside it.
+and it is inside this deliverable, not adjacent to it — the operator's scope sign-off
+(`ddd9789a4`) covers it, and §0.6b's deliverable table names the SPA and schema artefacts it
+touches.
 
 #### Scope, and it is signed off
 
@@ -886,7 +919,8 @@ everywhere and been wrong at four call sites silently.
 | FR | What it requires |
 |---|---|
 | **FR-067** | **`bytesPerAgent` and the computed default are deleted**, with call sites; `EffectiveMaxParallelAgents` becomes `(n int, capped bool)`; unset returns `(physicalConcurrencySafetyCeiling, false)` — a backstop, not a capacity |
-| **FR-068** | **Agent admission consults the same live headroom gate as the browser pool**, shape 2 (no per-unit cost), same accessor and same refusal rule — with the unmeasurable-host branch un-ratified pending E-8 |
+| **FR-068** | **Agent admission consults the same live headroom gate as the browser pool**, shape 2 (no per-unit cost), same exported accessor, same ratio, same refusal rule, same log-once discipline. One mechanism, two call sites |
+| **FR-068a** | **On a host the gate cannot measure, agent concurrency holds at the floor and refuses to grow.** `ok=false` ⇒ admit up to **2** concurrent agents, refuse the third, naming memory. *Refuse to grow*, not *refuse to run* — the same reading of FR-065 that lets the first browser open on Windows (§13 holdout 24) |
 | **FR-069** | **The announcement is corrected.** Release note and config documentation say *"there is no longer a computed default"*, **not** *"the macOS default moved 2 → 2000"*; and `capped=false` is surfaced as "automatic — bounded by available memory", never as the integer 2000 |
 
 ---
