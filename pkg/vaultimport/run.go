@@ -369,6 +369,14 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 	// exception to.
 	TypePropertiesFromBaseFormulas(inferred, notes, baseRelPaths, parsedBases)
 
+	// The number half of the same evidence class: a view that totals a
+	// property is its operator stating the property holds a number. Runs
+	// AFTER the formula rule and before enum widening, in the same window and
+	// for the same reason — both read a `.base` file as a statement about a
+	// schema, and both are contained by "data beats a base file", so neither
+	// can speak about a property the notes have already decided.
+	TypePropertiesFromBaseSummaries(inferred, notes, baseRelPaths, parsedBases)
+
 	WidenEnumsFromBases(inferred, baseRelPaths, parsedBases)
 
 	if write {

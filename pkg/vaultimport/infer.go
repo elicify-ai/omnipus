@@ -13,6 +13,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 )
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,12 @@ const (
 	// operator's written statement about his own property rather than this
 	// package's reading of English. See TypePropertiesFromBaseFormulas.
 	ClassifyDateFromFormula ClassifyKind = "date_from_base_formula_no_values_observed"
+
+	// ClassifyNumberFromBaseSummary: not one value was ever observed for this
+	// property, and a `.base` view TOTALS it — an operator asking for a sum
+	// over his own property is stating that it holds a number. Same evidence
+	// class as ClassifyDateFromFormula, different part of the file.
+	ClassifyNumberFromBaseSummary ClassifyKind = "number_from_base_summary_no_values_observed"
 )
 
 // Tunable inference thresholds, stated here (not buried in a condition) so a
@@ -2239,6 +2246,12 @@ func joinBaseFiles(vs []string) string {
 
 // FormulaEvidence is one `.base` formula that carried a type declaration.
 type FormulaEvidence struct {
+	// Op is set ONLY when this evidence is a view's `summaries:` entry rather
+	// than a `formulas:` expression. It is what makes ReportLines able to
+	// describe the two in the operator's own vocabulary — he wrote `Sum`
+	// under `summaries:`, not a formula, and being told "reads `amount`
+	// through sum()" would send him looking for a call he never wrote.
+	Op string
 	// Base is the `.base` file's path, relative to the vault root.
 	Base string
 	// Formula is the key in that file's `formulas:` block.
@@ -2344,16 +2357,16 @@ var dateSubtrahendFunctions = map[string]bool{
 type FormulaEvidencedType struct {
 	RecordType string
 	Property   string
-	// Type is what the formula was read as. Only records.TypeDate is ever
-	// produced today; the field is here so a reader of the report does not
-	// have to know that.
+	// Type is what the base file was read as saying: records.TypeDate from a
+	// `formulas:` expression, records.TypeDecimal from a `summaries:` total.
 	Type records.PropertyType
 	// Was is the declaration this replaced — always records.TypeText, by
 	// clause 3, and carried so the report states the change rather than only
 	// the outcome.
 	Was records.PropertyType
-	// Evidence is every base formula that applied `date()` to this property
-	// under a view resolving to this record type, sorted by base then
+	// Evidence is every statement in a `.base` file that typed this property
+	// under a view resolving to this record type — a formula applying `date()`
+	// to it, or a view totalling it under `summaries:` — sorted by base then
 	// formula. All of them are named: the founder overrules the type in one
 	// edit, but he fixes a MISTAKEN formula in the base file, and he cannot
 	// do that without being told which file and which key.
@@ -2374,6 +2387,12 @@ func (f FormulaEvidencedType) ReportLines() []string {
 		// Two shapes, two sentences. The founder is being sent to a specific
 		// piece of his own text, and telling him a subtraction "reads `x`
 		// through today()" would send him looking for a call he never wrote.
+		if e.Op != "" {
+			lines = append(lines, fmt.Sprintf(
+				"evidence: %s totals it — a view there declares `%s` under `summaries:`, and %s is defined over numbers and nothing else, so the only reading under which that view works at all is a number",
+				e.Base, e.Source, e.Op))
+			continue
+		}
 		if dateSubtrahendFunctions[e.Function] {
 			lines = append(lines, fmt.Sprintf(
 				"evidence: %s declares `%s: %s`, which subtracts the bare `%s` against %s() — and `-` is defined over two dates or two numbers, never one of each, so the only reading under which that expression works at all is a date",
@@ -2751,4 +2770,171 @@ func formulaChildren(n records.FormulaNode) []records.FormulaNode {
 		return []records.FormulaNode{node.Receiver}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// A `.base` SUMMARY AS TYPE EVIDENCE (the number half of the rule above)
+//
+// A base view that asks for `Sum` over a property is its operator stating, in
+// his own file, that the property holds a number. That is the SAME class of
+// evidence TypePropertiesFromBaseFormulas reads out of `date(x)` — the
+// operator's own written statement about his own property — and it is read
+// here under the SAME four containment clauses, by calling the same predicate
+// rather than restating it.
+//
+// WHY THIS EXISTS. The founder's vault declares `invoice.amount` and
+// `round.target` nowhere but in the base files that total them: no note of
+// either type exists yet. Inference therefore fell back to text, the summary
+// gate in view_write.go correctly refused `sum` over text, and three views
+// lost their totals — a loss caused entirely by this package declining to read
+// a statement the operator had already written down.
+//
+// WHICH OPS COUNT, AND WHY IT IS DERIVED RATHER THAN LISTED. Only an op that
+// knowledgefind defines for the NUMERIC types and for no other type is
+// evidence: `min`/`max`/`range` are defined over dates too, so they say
+// "number or date" and this rule says nothing on them. That set is COMPUTED
+// from knowledgefind's own table at first use, for the reason view_write.go's
+// gate states about itself — a second copy of the op/type mapping is the
+// mechanism by which the writer and the reader drifted apart, which is the
+// defect that gate exists to close. If a future release moves an op between
+// domains, this rule follows without being edited.
+//
+// WHICH NUMERIC TYPE. `decimal`, always. It is the SAFE side of the choice:
+// every integer parses as a decimal, while a decimal does not parse as an
+// integer, so reading `2500.50` as `integer` would invalidate the founder's
+// first real invoice while reading `2500` as `decimal` invalidates nothing.
+//
+// WHAT PROTECTS THE FOUNDER'S PLACEHOLDER TEXT. Clause 2 of
+// typeEligibleForFormulaEvidence — data beats a base file. If ANY note of the
+// type carries a value for the property, this rule is silent and the observed
+// values decide, exactly as they do today. The rule can only ever speak where
+// there is nothing to contradict it.
+// ---------------------------------------------------------------------------
+
+// numberEvidencingSummaryOps is the set of summary ops that mean `number` and
+// nothing else, derived from knowledgefind's table rather than transcribed
+// from it. See this section's header for why it is computed.
+func numberEvidencingSummaryOps() map[string]bool {
+	numeric := []records.PropertyType{records.TypeInteger, records.TypeDecimal}
+	other := []records.PropertyType{
+		records.TypeText, records.TypeDate, records.TypeCheckbox,
+		records.TypeEnum, records.TypeRelation, records.TypePerson,
+	}
+	out := map[string]bool{}
+	for _, t := range numeric {
+		for _, op := range knowledgefind.SummaryOpsDefinedFor(t) {
+			out[op] = true
+		}
+	}
+	// An op any NON-numeric type also defines is ambiguous, and an ambiguous
+	// statement is not evidence. This removal is what keeps `min`, `max`,
+	// `range` (dates), `empty`, `filled` and `unique` (everything) out.
+	for op := range out {
+		for _, t := range other {
+			if knowledgefind.SummaryOpDefinedForType(op, t) {
+				delete(out, op)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// TypePropertiesFromBaseSummaries types a property as `decimal` when a `.base`
+// view totals it and the vault holds no value that could say otherwise.
+//
+// It is TypePropertiesFromBaseFormulas for the number case, and it is
+// deliberately a SEPARATE function reusing that one's predicate rather than a
+// mode flag on it: the two read different parts of a base file (a `formulas:`
+// block against a view's `summaries:` map) and produce different types, while
+// the containment argument they share is exactly the one they must not be
+// allowed to diverge on.
+func TypePropertiesFromBaseSummaries(
+	inferred map[string][]InferredProperty,
+	notes []NoteRecord,
+	relPaths []string,
+	parsed map[string]*ParsedBase,
+) []FormulaEvidencedType {
+	numberOps := numberEvidencingSummaryOps()
+	byType := map[string]map[string][]FormulaEvidence{}
+	valued := valuedPropertiesByType(notes)
+
+	for _, rel := range relPaths {
+		pb := parsed[rel]
+		if pb == nil {
+			continue
+		}
+		outer := TranslateFilterTree(pb.Filters)
+		for _, vraw := range pb.Views {
+			summ, isMap := vraw["summaries"].(map[string]any)
+			if !isMap || len(summ) == 0 {
+				continue
+			}
+			viewTrans := TranslateFilterTree(vraw["filters"])
+			rt, conflict := resolveViewType(viewTrans.TypeLiterals, outer.TypeLiterals)
+			if conflict != "" || rt == "" {
+				// An UNTYPED view names properties that are not scoped to one
+				// record type, so a declaration in it cannot be attributed to
+				// one schema. Same clause, same reason, as the formula rule.
+				continue
+			}
+			for _, prop := range sortedKeys(summ) {
+				if strings.HasPrefix(prop, formulaNamespace) || records.IsFileNamespace(prop) {
+					// Neither resolves through a schema, so neither is a
+					// statement about a schema property. view_write.go's gate
+					// declines to judge these for the same reason.
+					continue
+				}
+				opRaw := stringOf(summ[prop])
+				opVal, known := aggregateOpFor(opRaw)
+				if !known || !numberOps[string(opVal)] {
+					continue
+				}
+				if !typeEligibleForFormulaEvidence(inferred[rt], prop, valued[rt]) {
+					continue
+				}
+				byProp := byType[rt]
+				if byProp == nil {
+					byProp = map[string][]FormulaEvidence{}
+					byType[rt] = byProp
+				}
+				byProp[prop] = appendUnseenFormulaEvidence(byProp[prop], []FormulaEvidence{{
+					Base:     rel,
+					Source:   fmt.Sprintf("%s: %s", prop, opRaw),
+					Function: string(opVal),
+					Op:       string(opVal),
+				}})
+			}
+		}
+	}
+
+	var out []FormulaEvidencedType
+	for _, rt := range sortedStringKeys(byType) {
+		for _, prop := range sortedStringKeys(byType[rt]) {
+			idx := indexOfProperty(inferred[rt], prop)
+			if idx < 0 {
+				continue
+			}
+			evidence := byType[rt][prop]
+			sort.Slice(evidence, func(i, j int) bool {
+				if evidence[i].Base != evidence[j].Base {
+					return evidence[i].Base < evidence[j].Base
+				}
+				return evidence[i].Source < evidence[j].Source
+			})
+			fe := FormulaEvidencedType{
+				RecordType: rt,
+				Property:   prop,
+				Type:       records.TypeDecimal,
+				Was:        inferred[rt][idx].Type,
+				Evidence:   evidence,
+			}
+			inferred[rt][idx].Type = records.TypeDecimal
+			inferred[rt][idx].Kind = ClassifyNumberFromBaseSummary
+			stored := fe
+			inferred[rt][idx].FormulaEvidenced = &stored
+			out = append(out, fe)
+		}
+	}
+	return out
 }
