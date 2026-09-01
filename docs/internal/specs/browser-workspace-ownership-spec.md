@@ -1116,13 +1116,13 @@ Two things follow that this spec must not undo. **The 585-agent history is the a
 
 **And it must be able to fail.** A test that stubs the accessor to `ok=false` and asserts only *"the pool refused"* passes on a build that refuses everything, agent turns included — which is the exact defect this section exists to prevent. **FR-075's assertion is the pair, in one test, off one stub:** the pool refuses to grow **and**, in the same run, the agent gate still admits two turns and refuses the third. Either half alone is green on a build that has collapsed the two responses into one.
 
-#### ⚠️ A THIRD case exists and is NOT absorbed here — ADR D1.5e, landed after this pass (2026-09-01, commit `969a90ffc`)
+#### A THIRD case exists, and it is ABSORBED — in §0.10 (ADR D1.5e, 2026-09-01, commit `969a90ffc`)
 
 This section is about the `ok=false` predicate — a host that **says it cannot be measured**. **ADR D1.5e names a case that is neither of the two above:** a host that returns `ok=true` with a **confident, large, wrong** number. A Kubernetes pod with no `limits.memory` reads `max` from its cgroup, so `readCgroupV2LimitBytes` correctly returns `(0, false)` (`pkg/config/meminfo_linux.go:226-240`, verified), `availableRAMBytes` (`pkg/config/config.go:655-661`, verified: it takes the **smaller** of the two figures) therefore falls through to `/proc/meminfo` — **which inside a pod reports the whole node**.
 
 **Why it matters to this section rather than being a separate topic:** every case §0.9 arbitrates fails **conservative**. This one **fails OPEN**, which is the failure mode `pkg/config/meminfo_other.go:20-23` records having already shipped once. So the sentence *"an unmeasurable host is treated as full"* (FR-065) is true and **not sufficient on its own** — a host that is measurable but lying is not covered by it, in either consumer.
 
-**Not absorbed here, deliberately.** D1.5e postdates this pass's brief, and its decision is a **startup WARN naming the condition and the remedy** (not a refusal — a bare-metal Linux host also has no cgroup limit and is correct there), which requires the implementation to detect **containerisation independently of the limit**. That is a requirement this document does not yet carry. **Recorded as a gap so a reader does not take §0.9 as complete**; whoever absorbs D1.5e owns it.
+**Absorbed in §0.10, which is the next section.** D1.5e's decision is a **startup WARN naming the condition and the remedy** (not a refusal — a bare-metal Linux host also has no cgroup limit and is correct there), and it requires the implementation to detect **containerisation independently of the limit**. §0.10 carries that as **FR-076** and **FR-077**. *A previous revision recorded this paragraph as an open gap rather than absorbing it, which was the right call at the time and is noted here so a reader arriving from that revision sees it answered rather than dropped.* **§0.10 also adds a SECOND fail-open case D1.5e does not cover** — the Linux reader fabricates an invented 4 GB rather than reporting undeterminable (**FR-078**, **FR-079**) — and **corrects one row of D1.5e's own deployment matrix**, which files that case under §0.9's conservative `ok=false` where it does not belong.
 
 #### What changes in the requirements — nothing is rewritten, one row is added
 
@@ -1131,6 +1131,123 @@ FR-065, FR-066 and FR-068a are **correct as written** and are not amended; this 
 | FR | What it requires |
 |---|---|
 | **FR-075** | **One predicate, two responses — asserted as a pair.** From a single stubbed `ok=false` accessor, in one test: the **browser pool refuses to grow**, and **agent admission still admits up to 2 and refuses the third naming memory**. Plus a doc assertion that Windows' browser refusal is recorded as **accepted because Windows is not yet a supported platform** (operator ruling 2026-09-01), not as a technical limitation, and that the release note distinguishes Windows (unsupported) from a `/proc`-less **Linux** host (supported, same response) |
+
+---
+
+### 0.10 The third case — a host that is measurable and WRONG, and a reader that invents a number (ADR **D1.5e**, absorbed here; 2026-09-01, commit `969a90ffc`)
+
+§0.9 arbitrates **one** predicate: a host that says *"I cannot be measured"* (`ok=false`). **ADR D1.5e names a case that is neither of §0.9's two** — a host that answers with a **confident, large, wrong** number. This section absorbs it. It also carries a **second** instance of the same shape, found while verifying D1.5e and **not** covered by it.
+
+**What makes these two different from everything else in this document:** every other unmeasurable case ends **conservative** — the pool refuses to grow, agents hold at the floor of 2. **These two end with the gate believing there is room that does not exist**, which is the failure `pkg/config/meminfo_other.go:20-23` records this project having already shipped once.
+
+#### The deployment matrix (D1.5e, re-verified against the code on this worktree)
+
+| Deployment | Where the reading comes from | Correct? |
+|---|---|---|
+| Linux bare metal | `/proc/meminfo` | ✓ |
+| Linux + Docker | cgroup v2 `memory.max` / v1 `memory.limit_in_bytes` | ✓ |
+| Docker Desktop on macOS or Windows | the Linux VM's cgroup — the container **is** Linux | ✓ |
+| Fly.io (Firecracker microVM) | the VM's own `/proc/meminfo` | ✓ |
+| Kubernetes, `limits.memory` **set** | the pod's cgroup | ✓ |
+| **Kubernetes, no `limits.memory`** | **the NODE's memory** | ✗ — **case 1**, fails OPEN |
+| macOS native | the D1.5b reader (FR-064) | ✓ once written |
+| **Linux with an unreadable `/proc/meminfo`** (gVisor / GKE Sandbox, a masked or bind-mounted-over `/proc`) | **an invented 4 GB constant, halved** | ✗ — **case 2**, fails OPEN |
+| Windows native | no reader | unsupported (FR-066) |
+
+**The last row is the one D1.5e gets wrong**, and it is the only correction this pass makes to the ADR's matrix. D1.5e records the gVisor row as *"falls back (D1.5b)"* — i.e. as an instance of §0.9's conservative `ok=false`. It is not. See case 2.
+
+#### Case 1 — a Kubernetes pod with no `limits.memory` sizes itself against the whole node
+
+The chain, verified end to end:
+
+1. A pod without `limits.memory` has no cgroup memory limit, so `memory.max` reads the literal string `max`.
+2. `readCgroupV2LimitBytes` (`pkg/config/meminfo_linux.go:226-240`) **correctly** returns `(0, false)` for `max` (`:232-234`). There is no defect here — the reader is right.
+3. `readCgroupMemoryAvailableBytesAt` therefore has no cgroup figure to offer, and `availableRAMBytes` (`pkg/config/config.go:655-661`) falls through to `/proc/meminfo` alone.
+4. **Inside a pod, `/proc/meminfo` reports the whole node.** So the gateway sizes itself against a 64 GB node while the scheduler may never let it have a fraction of that.
+
+The consequence is not a slow degradation. The pod launches browsers and agent turns until the **node's** OOM killer intervenes, and Kubernetes kills **the pod** — not the browser that caused it. The operator sees a restarting pod, not a memory limit doing its job.
+
+**This is a deployment misconfiguration, not a code defect**, and `limits.memory` is optional — plenty of manifests set only `requests`. That is exactly why it is worth a requirement: nothing in the product tells the operator.
+
+**Ruled response: WARN at startup, do NOT refuse (D1.5e).** Reading `max` is an unambiguous signal that no container limit exists — but a bare-metal Linux host also has no cgroup limit and is **perfectly correct**, so refusing would break the ordinary case.
+
+#### The distinction that makes the warning worth having — and that makes it worthless if it is got wrong
+
+> **"No cgroup limit" is *correct* on bare metal and *dangerous* in a pod. The two are indistinguishable from the limit alone.**
+
+So **containerisation must be detected independently of the limit** (FR-076). Without that independent signal the warning has only two possible shapes, and both are useless:
+
+- **Keyed on the limit alone ⇒ it fires on every bare-metal start.** A warning that always fires is not a warning; operators filter it, and it is gone by the time it matters.
+- **Keyed on the limit being *present* ⇒ it never fires in the case it exists for**, because the case *is* the absence of a limit.
+
+**And the obvious reuse in this repo does not work.** `isRunningInDocker` (`pkg/gateway/sandbox_apply.go:185-201`) already answers "am I in a container?" from two signals: `OMNIPUS_IN_DOCKER=1`, and the presence of `/.dockerenv` (`:179`). **`/.dockerenv` is a Docker runtime marker.** Kubernetes runs containerd or CRI-O, neither of which drops that file — so wiring the warning to this predicate produces the *never fires* shape above, **in precisely the deployment D1.5e is about**. FR-076 states the signal set that does cover it, and names the residual it still does not (A29).
+
+#### Case 2 — the Linux reader FABRICATES rather than reporting "unmeasurable" (NOT in D1.5e; verified in this pass)
+
+`pkg/config/meminfo_linux.go:14-16`:
+
+```go
+// fallbackTotalRAMBytes is the conservative assumption used when
+// /proc/meminfo cannot be read or parsed at all.
+const fallbackTotalRAMBytes = 4 * 1024 * 1024 * 1024 // 4 GB
+```
+
+`readMemTotalBytes` (`:26-31`) returns that constant when `/proc/meminfo` cannot be read; `readMemAvailableBytes` (`:40-45`) then returns `readMemTotalBytes() / 2`. **So on a Linux host whose `/proc/meminfo` is unreadable, the reader does not report "unmeasurable" — it reports an invented 2 GiB, and it reports it as a determinable figure.** There is no `ok` flag on either function; `0` is the only value the rest of the system reads as *undeterminable* (`pkg/config/meminfo_other.go:42-44`), and this path never returns it.
+
+**Verified figures, because the brief asked for them rather than assuming them:**
+
+| Input | `readMemTotalBytes()` | `readMemAvailableBytes()` | Reads as undeterminable? |
+|---|---|---|---|
+| `/proc/meminfo` unreadable (open fails) | `fallbackTotalRAMBytes` = **4 GiB** (`:30`) | `4 GiB / 2` = **2 GiB** (`:44`) | **No** |
+| `MemTotal` present, `MemAvailable` absent (pre-3.14 kernel) | the real `MemTotal` | **real `MemTotal` / 2** | No — **and correctly so** |
+| `MemTotal` present, `MemAvailable` malformed | the real `MemTotal` | real `MemTotal` / 2 | No — correctly so |
+| non-Linux | *(deleted; Linux-only symbol)* | **0** (`meminfo_other.go:43`) | **Yes** |
+
+**Two things follow, and the second is why this belongs in this document at all.**
+
+**(a) It defeats FR-065 and FR-068a on that path.** Both branch on *undeterminable*. This path never says undeterminable — it says *"2 GiB"* with confidence. On a 512 MB container the pool cheerfully grows and agent admission cheerfully admits.
+
+**(b) It is the exact pattern this codebase already condemned, in writing, for macOS — and fixed there.** `pkg/config/meminfo_other.go:15-33` records the previous fabricated constant producing *"a default of **585 concurrent agents on ANY** macOS/Windows/BSD box … regardless of its actual hardware — a 'fails open' default"* (`:20-23`), and states the deliberate replacement: *"failing CONSERVATIVE and saying so, rather than failing open on a number invented from a constant that was never meant to model availability in the first place"* (`:25-33`). **The same comment names this very case in parentheses** — *"or a Linux box whose `/proc/meminfo` is unreadable, e.g. gVisor"* — so the code already knows the Linux path has the bug, and fixed only the non-Linux one.
+
+**The arithmetic is not merely analogous, it is identical.** With `bytesPerAgent = 3.5 MB` (`pkg/config/config.go:608`), `autoDetectMaxParallel` (`:614-618`) computes `2 GiB / 3.5 MiB = 585` — **the same 585** the comment condemns, still shipping today on any Linux host with an unreadable `/proc/meminfo`.
+
+**What the fabrication does AFTER this spec's other changes land, which is different and must be said.** FR-067 deletes `bytesPerAgent` and the division, so the *585-agent default* disappears on its own. **The fail-open does not.** The invented 2 GiB then flows into `availableRAMBytes` → the live pressure gate → **both** consumers (FR-068), so the browser pool and agent admission both believe there is 2 GiB of headroom on a host that may have 512 MB. Deleting the division fixes the symptom that was measured in 2026-08; it does not fix the reader.
+
+**Resolution (FR-078), consistent with D1.5b's rule:** an unreadable or unparseable `/proc/meminfo` must be reported as **undeterminable**, so the refuse/floor behaviour §0.9 already specifies engages. **The legitimate half-of-total heuristic is preserved** — when `MemTotal` is real and only `MemAvailable` is missing, half of a real total is a real estimate and stays.
+
+#### What else changes, and for which deployments — flagged rather than discovered
+
+**One behaviour change outside gVisor, and it is a regression the fix would introduce if left unspecified.** `availableRAMBytes` (`pkg/config/config.go:655-661`) combines the two signals like this:
+
+```go
+avail := readMemAvailableBytes()
+if cgAvail, ok := readCgroupMemoryAvailableBytes(); ok && cgAvail < avail {
+    avail = cgAvail
+}
+return avail
+```
+
+It takes the **smaller** of the two. Once FR-078 makes the meminfo half return `0` for undeterminable, `cgAvail < 0` is **never true**, so **a perfectly good cgroup reading is discarded** and the host reads as unmeasurable. That is conservative, not fail-open, so it is not a safety defect — but it is wrong, and it lands on a real deployment: **a container with an unreadable `/proc/meminfo` that DOES set `limits.memory`** (a GKE Sandbox pod with limits is exactly this). Such a host is fully measurable through its cgroup and would nonetheless be held at the floor of 2 for no reason. **FR-079 fixes the combination rule: `min` over the *determinable* signals only; `ok=false` only when *neither* is determinable.**
+
+**No other deployment changes.** Bare metal, Docker, Fly and Kubernetes-with-limits all read `/proc/meminfo` or a cgroup successfully today and continue to.
+
+**And one test currently pins the bug**, which is why FR-078 cannot be delivered as a quiet edit: `TestReadMemAvailableBytes_MissingFile` (`pkg/config/meminfo_linux_test.go:55-64`) asserts the returned value **is** `fallbackTotalRAMBytes / 2`. It is a green test whose oracle is the defect. §10.1 lists it as a **deliberate semantics change** with its new oracle, so it is not mistaken for collateral damage during implementation.
+
+#### Two items this pass deliberately leaves as they are
+
+- **E-9** (a workspace under *continuous* drive never becomes trimmable, so its cache is unbounded) stays an **escalation**, unchanged. Both candidate fixes are design changes — a `--disk-cache-size` value nobody here has measured, or a mid-session trim that closes a browser someone is using — and this document does not get to pick either. §0.5 E-9, FR-074.
+- **§12 A25's consequence** — *an agent may close the operator's tab* — stays recorded plainly where it is. It follows from D1.9b ruling 1 (closing is acting, and `browser_close_tab` is `controlledResult`-gated at `pkg/tools/browser/tabs.go:171`) rather than being new, and nothing in this pass touches it.
+
+#### What changes in the requirements — four new rows, nothing renumbered or rewritten
+
+FR-064 … FR-075 are **correct as written** and are not amended.
+
+| FR | What it requires |
+|---|---|
+| **FR-076** | **Containerisation is detected INDEPENDENTLY of the memory limit.** A `pkg/config` predicate, with test-overridable path/env seams on the existing `procMeminfoPath` / `cgroupRoot` / `dockerenvPath` pattern. **`/.dockerenv` alone is explicitly insufficient** — Kubernetes uses containerd/CRI-O and drops no such file, so the Docker-only reuse never fires in the target case |
+| **FR-077** | **The node-memory WARN fires in the containerised-and-unlimited case and is SILENT everywhere else.** Once at startup, naming the condition and the remedy (`resources.limits.memory`). **A WARN, never a refusal** — bare metal has no cgroup limit and is correct. Asserted in **three** directions, and the two silent ones are load-bearing |
+| **FR-078** | **The Linux reader stops fabricating.** An unreadable or unparseable `/proc/meminfo` reports **undeterminable**, not `fallbackTotalRAMBytes` or half of it; the constant is deleted as a symbol. The pre-3.14 `MemTotal`-real / `MemAvailable`-absent heuristic is **preserved** |
+| **FR-079** | **One undeterminable signal does not discard the other.** `availableRAMBytes` takes the minimum over the **determinable** signals only, and answers `ok=false` only when **neither** is determinable |
 
 ---
 
