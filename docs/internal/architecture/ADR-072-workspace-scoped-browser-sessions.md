@@ -453,6 +453,55 @@ success and admits without limit. **Where availability cannot be determined,
 the pool must refuse to grow and log why**, not proceed. That inverts the
 usual default deliberately: an unmeasurable host is treated as full, not empty.
 
+#### D1.5c One memory mechanism, several consumers
+
+**Operator ruling, 2026-09-01, overriding a narrower proposal:**
+
+> the memory reader for linux and mac should have multiple use cases — the
+> browser limits but also the concurrent agent limit. Do not create multiple
+> mechanisms; we need one for managing limits and memory constraints.
+
+A scoped alternative was offered — give the browser pool its own accessor and
+leave agent concurrency on today's behaviour — and **declined**. One reader,
+one set of constraints, several consumers.
+
+**The consequence, with the arithmetic, because it is large and it is not
+obvious.** `autoDetectMaxParallel` (`pkg/config/config.go:610-618`) already
+consumes `availableRAMBytes`. It returns `avail / bytesPerAgent`, clamped by
+`clampParallel` between a floor of **2** (`:557`) and a ceiling of **2000**
+(`:586`). Today `availableRAMBytes` returns **0** on macOS, so the expression
+is `0 / bytesPerAgent = 0`, clamped up to the floor: **every macOS install has
+been running at 2 parallel agents because the reader was stubbed, not because
+anyone chose 2.**
+
+Give it a real reading and, with `bytesPerAgent = 3.5 MB` (`:608`) and ~8.5 GB
+available on a 32 GB host:
+
+```
+8,500 MB / 3.5 MB  ≈ 2,428  →  clamped to the ceiling  →  2000
+```
+
+**So `performance.max_parallel_agents` moves from 2 to 2000 on macOS** for any
+operator who never set it explicitly. That is the ruled behaviour and it is
+correct in principle — the old value was an artefact of a broken reader — but a
+1000× change arriving inside a browser release must be **announced, not
+discovered**. Release notes, and the config documentation for that key.
+
+**And it puts weight on a constant nobody has re-examined.** `bytesPerAgent` is
+3.5 MB, described in its own doc as "the assumed marginal memory cost of one
+concurrent agent". 3.5 MB is plausible for an agent's *Go-side bookkeeping*; it
+is nowhere near the cost of an agent that is actually running an LLM call, a
+tool, or a browser. On Linux the constant has always been load-bearing and the
+ceiling has presumably rarely been reached; on a 32 GB Mac it produces the
+ceiling immediately.
+
+**This ADR does not change `bytesPerAgent`** — that is agent-concurrency's
+decision, not the browser's, and changing it here would be exactly the
+unilateral cross-domain edit the single-mechanism ruling exists to prevent.
+**It is flagged as a named consequence requiring its own review**, because the
+shared mechanism means a browser fix now determines an agent-concurrency
+default on a platform where that path has never run.
+
 #### D1.5a Memory is the ONLY limit — every counter is deleted
 
 **Operator ruling, 2026-09-01: the memory gate is the only admission control.
