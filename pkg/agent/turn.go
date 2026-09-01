@@ -458,6 +458,32 @@ type turnState struct {
 	// that only ever needs eventual consistency with the rest of turnState,
 	// never linearizability.
 	toolCallProgress atomicToolCallProgress
+
+	// toolFailureStreaks tracks, per (tool name + call-arguments) signature,
+	// how many times IN A ROW the exact same tool call has come back an
+	// error within THIS turn (see tool_failure_circuit_breaker.go). Guarded
+	// by mu — same goroutine that drives the tool loop in runTurn, but
+	// touched from the same helper methods that already take ts.mu for
+	// every other per-turn counter, so it follows that convention rather
+	// than assuming single-goroutine access.
+	//
+	// UAT fix (fix/uat-defects-2026-08-22, Defect 1): a stuck condition
+	// (e.g. run_task hitting a saturated dispatch cap, or create_task
+	// hitting an unwired store) used to be surfaced back to the model with
+	// zero escalation and zero limit — nothing on the dispatch side ever
+	// told the model "this is not transient", and nothing stopped the
+	// model from retrying the identical call dozens of times, each one a
+	// full LLM round trip. This map is this turn's memory of that streak;
+	// toolCircuitBroken (below) is set once the streak trips the hard
+	// breaker.
+	toolFailureStreaks map[string]int
+	// toolCircuitBroken records, per signature, the reason a hard breaker
+	// tripped (toolCircuitBreakThreshold consecutive identical failures).
+	// Once a signature is present here the tool loop refuses to even
+	// dispatch that exact call again for the rest of the turn — see
+	// loop.go's SEC-26-adjacent circuit-breaker check right before the
+	// tool dispatch call.
+	toolCircuitBroken map[string]string
 }
 
 // atomicToolCallProgress is the atomics-based store for turnState's live

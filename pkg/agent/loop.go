@@ -5288,6 +5288,40 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 			}
 		}
 	}
+
+	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface
+	// (create_task_in_workspace, pkg/sysagent/tools) with the real plan store
+	// too. WireSysagentDeps runs at boot BEFORE this store exists — the
+	// gateway constructs sysAgentDeps and calls WireSysagentDeps well ahead
+	// of plan.New/SetPlanStore (see gateway.go's boot wiring region) — so
+	// every system.* tool instance registered by then was built with a nil
+	// deps.PlanStore. Without this, create_task_in_workspace(plan_id=...)
+	// fails closed with "plan store is not configured" FOREVER, for every
+	// agent, even against a plan that was just created in the very same
+	// workspace by the very same turn (the plain create_task tool above was
+	// already re-wired here; the system.* twin was not).
+	//
+	// al.sysagentDeps is read-modify-written under al.mu (mirrors the
+	// al.planStore guard a few lines up in this same function) because the
+	// gateway listener is already live by the time this runs (boot wires
+	// sysAgentDeps and starts serving well before constructing planStore),
+	// so a concurrent hot-reload's ReloadProviderAndConfig could in
+	// principle race the field. wireSysagentDepsLocked itself is called
+	// OUTSIDE the lock — it does not touch al.mu, and holding al.mu across
+	// it would only widen the critical section for no benefit (mirrors the
+	// wirePlanToolsForAgent loop above, which does the same).
+	al.mu.Lock()
+	var sysDeps *systools.Deps
+	if al.sysagentDeps != nil {
+		depsCopy := *al.sysagentDeps
+		depsCopy.PlanStore = store
+		al.sysagentDeps = &depsCopy
+		sysDeps = al.sysagentDeps
+	}
+	al.mu.Unlock()
+	if sysDeps != nil {
+		al.wireSysagentDepsLocked(reg, sysDeps)
+	}
 }
 
 // GetPlanStore returns the installed plan.Store (may be nil in tests or
@@ -10783,6 +10817,41 @@ turnLoop:
 				}
 			}
 
+			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): dispatch-side
+			// circuit breaker for a tool call that has already failed with
+			// this exact same name+arguments toolFailureCircuitBreakThreshold
+			// times in a row THIS turn (see tool_failure_circuit_breaker.go).
+			// Mirrors the SEC-26 rate-limit denial immediately above — fail
+			// closed (do not even call Execute), surface the denial as a
+			// normal tool-result error so the model can react, keep the
+			// turn running rather than aborting it. Skipping Execute here
+			// (rather than only warning post-hoc) is what actually bounds
+			// the token burn: a model that ignores the warning notice below
+			// still cannot force more than toolFailureCircuitBreakThreshold
+			// real dispatch attempts of the identical call in one turn.
+			toolCBSig := toolCallSignature(toolName, toolArgs)
+			if cbReason, tripped := ts.toolCircuitBreakerTripped(toolCBSig); tripped {
+				errMsg := toolCircuitBreakerDenialMessage(toolName, cbReason)
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, deniedMsg)
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: errMsg,
+					},
+				)
+				continue
+			}
+
 			// ADR-071 §4.3.1(a) "Clear": a tool about to be dispatched is, by
 			// definition, no longer an abandoned promotion — delete any
 			// pending search-follow-up entry for it under this agent's
@@ -10848,6 +10917,29 @@ turnLoop:
 
 			if toolResult == nil {
 				toolResult = tools.ErrorResult("hook returned nil tool result")
+			}
+
+			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
+			// exact call's consecutive-failure streak. A success (or a hook
+			// that turned a failure into one) clears the streak outright; a
+			// real failure bumps it and, once it crosses either threshold,
+			// augments the error content the model is about to see (warn),
+			// or trips the pre-dispatch breaker above for every later call
+			// with this identical signature this turn (hard stop). Keyed on
+			// toolCBSig computed before dispatch/hooks so a hook renaming the
+			// tool does not fragment the streak it is meant to track.
+			if toolResult.IsError {
+				streak := ts.recordToolFailure(toolCBSig)
+				switch {
+				case streak >= toolFailureCircuitBreakThreshold:
+					reason := toolFailureCircuitBreakerReason(toolName, streak)
+					ts.tripToolCircuitBreaker(toolCBSig, reason)
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
+				case streak >= toolFailureWarnThreshold:
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
+				}
+			} else {
+				ts.recordToolSuccess(toolCBSig)
 			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
