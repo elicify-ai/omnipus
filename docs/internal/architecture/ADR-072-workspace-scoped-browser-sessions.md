@@ -508,11 +508,23 @@ is precomputed. **The release-note item in D1.5c changes from "the default
 moved" to "there is no longer a computed default", which is a smaller and more
 honest thing to announce.**
 
-**Scope note.** This reaches beyond the browser into agent concurrency, which
-is not this ADR's domain. It is recorded here because the operator ruled it
-here and because D1.5c's single-mechanism ruling makes the two inseparable —
-but it needs agent-concurrency's owner to ratify, and the spec must say so
-rather than presenting it as settled.
+**Scope, and it is signed off.** This reaches beyond the browser into agent
+concurrency, which is not otherwise this ADR's domain. **Operator sign-off,
+2026-09-01** — so it is settled, not pending, and the spec should treat the
+memory mechanism as **one deliverable serving both consumers** rather than a
+browser change with an external dependency.
+
+Two things follow from that being ratified rather than merely proposed:
+
+- **The browser pool and agent admission ship together.** An earlier revision
+  kept the browser side independently landable so it would not be blocked
+  behind someone else's approval. That hedge is no longer needed, and keeping
+  it would produce exactly the split D1.5c ruled against — one mechanism
+  half-adopted is two mechanisms.
+- **Agent concurrency's existing behaviour is in scope to change**, including
+  deleting `bytesPerAgent` and `autoDetectMaxParallel`'s division. Its tests
+  and its documented defaults change with it; they are not collateral to be
+  discovered during implementation.
 
 #### D1.5c One memory mechanism, several consumers
 
