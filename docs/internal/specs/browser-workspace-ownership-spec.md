@@ -994,6 +994,86 @@ That ordering is now load-bearing in a way it was not before the ruling, and the
 
 ---
 
+### 0.8 Profile disk is bounded by PERIODIC CACHE TRIMMING (operator ruling, ADR **D1.9b** ruling 4, 2026-09-01)
+
+**Verbatim (D1.9b ruling 4):** *"Profile disk is bounded by periodic cache trimming, not by a quota and not by deletion alone. Logins are preserved; the disposable cache is trimmed on a schedule."*
+
+#### What this closes
+
+**§12 A24(b)** and the *"no quota"* clause of **§16 MAJ-111**. Both are now answered rather than reopened.
+
+MAJ-111 originally closed the question with *"live profiles are bounded by `max_browsers`, and dead ones are removed by the deletion path, so the unbounded case is closed by deletion rather than by a ceiling."* A24(b) withdrew that closure, correctly and for two independent reasons: **`max_browsers` no longer exists** (FR-056 tombstoned by D1.5a), and **it never bounded bytes anyway** — it bounded live *processes*, while a profile's cache grows during the instance's life and is deliberately **not** reclaimed when that instance is idle-closed or evicted, because surviving is the entire point of the profile (FR-043a, §5). So N workspaces browsed once each left N unbounded cache directories, on a host this project's own notes record filling **twice**. The ruling supplies the bound the withdrawal left missing.
+
+#### A hard per-workspace size cap is REJECTED — recorded with its reason so it is not re-proposed
+
+*"When it binds, something must be discarded mid-session, and the only large items are the cache **and the logins** — discarding the logins is the one outcome this whole design exists to prevent. A trim that only ever removes regenerable data cannot cause that failure."* (D1.9b ruling 4.)
+
+Read that as a **structural** objection, not a tuning one: a size cap over a directory whose contents are *cache + credentials* has no safe action at the moment it binds. Raising the number postpones the moment; it does not change what happens at it. **This is now a §5 non-behaviour** so a later reviewer meeting "just cap the profile directory at 2 GB" can see it was considered and why it was refused, rather than re-deriving it.
+
+#### The rule for what may be removed — a criterion, not a list
+
+A path under `<profileRoot>/ws-<id>/` is **trimmable if and only if** the **browser** wrote it as a performance cache of data it can re-fetch or re-derive, and **no site wrote it through a web storage API**. Everything else is kept. The list below is the derivation of that criterion over the profile layout Chromium ships today; the criterion is what governs when a future Chromium adds a directory nobody here has seen.
+
+**Trimmed (the closed allow-list). Chromium recreates every one of these on the next launch:**
+
+| Path under `<profileRoot>/ws-<id>/` | What it is |
+|---|---|
+| `Default/Cache/` | the HTTP disk cache — the largest and fastest-growing item in the profile |
+| `Default/Code Cache/` | compiled JS and WASM bytecode, re-derived from source on next execution |
+| `Default/GPUCache/`, `GrShaderCache/`, `ShaderCache/` | compiled shader and GPU program caches |
+| `Default/DawnCache/`, `Default/DawnGraphiteCache/`, `Default/DawnWebGPUCache/` | WebGPU pipeline caches |
+| `Default/Service Worker/ScriptCache/` | cached service-worker **script** bodies (the registration itself lives in `Service Worker/Database/` and is **not** trimmed) |
+| `Default/optimization_guide_*` | downloaded optimisation-hint models, re-fetched on demand |
+| `component_crx_cache/` | downloaded component payloads |
+
+**Never trimmed (the protected set) — and the list is exhaustive only in the sense that everything absent from the allow-list above is protected:**
+
+| Path | Why |
+|---|---|
+| `Default/Cookies`, `Default/Network/Cookies` | the session cookies. The whole reason the profile survives eviction |
+| `Default/Login Data`, `Default/Login Data For Account` | saved credentials |
+| `Default/Local Storage/`, `Default/Session Storage/` | web storage — where a great many sites keep the auth token that a cookie alone does not carry |
+| `Default/IndexedDB/`, `Default/Service Worker/CacheStorage/`, `Default/Service Worker/Database/` | **origin-owned quota storage, written deliberately by the site.** Chrome's own UI files `CacheStorage` under "cached files"; this spec does **not**, because the criterion above is about *who wrote it*, and a site did |
+| `Default/Preferences`, `Default/Web Data`, `Default/Trust Tokens`, `Local State` | profile identity and settings |
+| **anything not named in the allow-list** | **the default is KEEP.** The trim is allow-list-driven and must never be deny-list-driven: a Chromium version that adds a new directory must be untouched until someone classifies it |
+
+That last row is a requirement, not a formatting note. A deny-list trim silently widens itself with every Chromium upgrade, and the first thing it would widen into is whatever new place credentials move to.
+
+#### What triggers it
+
+| # | Trigger | Why this one |
+|---|---|---|
+| **1** | **Immediately after `pool.Close(k)` returns** — idle close, eviction, roster change, gateway `Close()` | **The load-bearing trigger.** It is the exact moment the key stops being live, which is the only moment trimming is both *safe* (nothing holds the files) and *free* (the cache is already cold and no relaunch is provoked). It needs no interval and no measurement |
+| **2** | **At boot**, over every `<profileRoot>/ws-*` directory with no live Chrome | Catches profiles orphaned by a `kill -9` (where trigger 1 never ran) and profiles left by any earlier version that never trimmed. Runs after FR-042a's marker reconciliation, so liveness is already established |
+| **3** | **On a schedule** — `tools.browser.cache_trim_interval`, default **1 hour**, over every eligible profile | The ADR's *"on a schedule"*. It is the **net**, not the primary path: it catches keys whose close-time trim failed, was interrupted, or was skipped because the key was still live at the time |
+
+**Never against a live profile, and eligibility reuses an existing discriminator rather than inventing one.** A key is eligible iff the pool holds **no live instance** for it **and** its per-key launch lock is **acquirable** — the same two-part test FR-042a uses to tell an orphan from a live neighbour (`takeLaunchLock`, `pkg/tools/browser/coordinator.go:1442-1480`). The reason is not tidiness: Chromium holds these files open, deleting an open file **fails outright on Windows**, and unlinking one under a running Chromium on POSIX frees the bytes only when it closes while leaving its cache index describing entries that are gone.
+
+**Where the 1-hour default comes from, stated as what it is.** It is a **reasoned default, not a measurement** — the same disclosure §12 A22 makes for `idle_close_ttl`, and for the same reason: a number nobody re-derives becomes load-bearing by accident. The derivation is 4 × `idle_close_ttl`'s 15 minutes, so a key that closes just after a sweep is trimmed within one interval of becoming eligible; and a pass is a directory walk plus `os.RemoveAll` over at most N directories, so a pass that removes nothing costs a stat walk. **The correctness of the design does not rest on this value** — trigger 1 does the work and fires within milliseconds of a close. A wrong value here delays a reclaim; it does not lose one. *(Contrast `idle_close_ttl`, where a too-generous value is indistinguishable from having no idle close at all — FR-061. The trim interval has no such failure mode, because it is not the only trigger.)*
+
+**The cost, stated rather than implied:** the next launch on a trimmed profile has a cold cache, so its first page load re-fetches assets and is slower. That is the definition of *regenerable*, and it is the price the ruling accepts in exchange for never touching a login.
+
+#### What this bounds — and what it does NOT
+
+**Bounded: every workspace not under continuous drive**, which is every workspace almost all of the time. It composes with the two TTLs already specified (§12 A22): a tab idles out after `tools.browser.idle_ttl` (5m) and the browser closes after `tools.browser.idle_close_ttl` (15m), so **about twenty minutes after its last action** a workspace's Chrome closes and trigger 1 fires. Its steady-state disk footprint is then its login-bearing data — kilobytes to a few megabytes — not its cache.
+
+**NOT bounded: a workspace under continuous drive.** Its browser never closes, so it is never eligible, and its cache grows for as long as it is driven. **This residual is DECLARED, not defaulted through** (FR-074) — a config-doc line on `tools.browser.cache_trim_interval`, a release-note line, and an operator-visible log — because the failure it leads to is a full root volume, which this project has hit twice and which presents as something other than a browser problem.
+
+**It is escalated as E-9 rather than solved here**, because both available solutions are design changes and neither is a number this spec may invent:
+
+- **Bound Chromium's own cache at launch** (`--disk-cache-size=<bytes>`). This has the right shape — Chromium evicts its **own** cache entries and can never reach a login, so it is *not* the per-workspace size cap the ruling rejected. But its value is a measurement nobody here has, and adding a launch flag on the strength of a guess is how `--renderer-process-limit` got shipped (§12 A23).
+- **Trim mid-session**, which requires closing a browser someone is using — the thing the ruling exists to prevent.
+
+#### New requirements this ruling adds
+
+| FR | What it requires |
+|---|---|
+| **FR-072** | **The periodic profile cache trim**: the allow-list criterion, the three triggers, the live-profile eligibility test, `tools.browser.cache_trim_interval` (default 1h, reload-applied), and one INFO per pass naming the key and the bytes reclaimed |
+| **FR-073** | **The protected set survives the trim, proved behaviourally and structurally.** A real-Chrome test logs in, closes the key, trims, relaunches and asserts **still logged in**; a structural test asserts the allow-list contains no path under the protected set and that the implementation is allow-list-driven, not deny-list-driven |
+| **FR-074** | **The continuously-driven residual is DECLARED.** Config doc, release note, and a log line naming the unbounded case — the FR-066 pattern, applied to disk |
+
+---
+
 ## 1. Overview / Actors / Scope
 
 **Problem.** The browser — its tab set *and* its logins — is owned by the **agent**, so it strands the moment the operator switches who they are talking to. `AgentLoop.browserMgrs` is `map[agentID]*browser.BrowserManager` (`pkg/agent/loop.go::AgentLoop`), populated by a **per-agent** registration loop (`loop.go::registerSharedTools`) that calls `browser.RegisterTools` and then `mgr.AttachSharedChrome(coordinator, agentID)`. `RegisterTools` (`pkg/tools/browser/register.go:41-84`) constructs a manager and **binds it into eleven tool structs** — `&NavigateTool{mgr: mgr}` at `:65` through `&OpenTabTool{mgr: mgr}` at `:81`. Every tool then addresses its tabs through one hardcoded key, `DefaultSessionID = "default"` (`pkg/tools/browser/tools.go:63`). The operator browses with Mia, switches the chat to Jim, and Jim — correctly, for his own manager — reports zero tabs while telling the operator the browser is "shared across the workspace", because five model-visible strings say exactly that (`tabs.go:32,86,143,206`; `tools.go:415`).
