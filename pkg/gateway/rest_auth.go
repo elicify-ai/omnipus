@@ -1182,7 +1182,19 @@ var reloadWaitTimeout = serviceShutdownTimeout + providerReloadTimeout + 30*time
 // touching one of the other 15 callers can adopt it for that caller's
 // response too.
 func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
-	if err := a.agentLoop.TriggerReload(); err != nil {
+	return waitForReloadOutcome(a.agentLoop)
+}
+
+// waitForReloadOutcome is the free-function core of triggerReloadAndWaitOutcome,
+// taking an explicit *agent.AgentLoop instead of a *restAPI receiver so it can
+// also be wired into pkg/sysagent/tools.Deps.WaitForReloadFunc (AgentDeleteTool
+// — see that field's doc comment for why delete_agent needs this synchronous
+// variant rather than the bare async ReloadFunc every other sysagent CRUD tool
+// uses). Behavior is unchanged from before this extraction; restAPI's method
+// above is now a one-line wrapper so all 16 existing REST call sites keep their
+// exact original behavior.
+func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error) {
+	if err := agentLoop.TriggerReload(); err != nil {
 		if errors.Is(err, agent.ErrReloadNotConfigured) {
 			// Unit-test environment — no reload pipeline wired; nothing is
 			// pending to confirm, so this is a confirmed no-op, not an
@@ -1200,7 +1212,7 @@ func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
 	}
 	deadline := time.Now().Add(reloadWaitTimeout)
 	for time.Now().Before(deadline) {
-		if !a.agentLoop.IsReloadPending() {
+		if !agentLoop.IsReloadPending() {
 			return true, nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -1232,7 +1244,14 @@ func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
 // full gateway reload pipeline is not wired. Production always configures the
 // reload function during startup.
 func (a *restAPI) triggerReloadAndWait() error {
-	confirmed, err := a.triggerReloadAndWaitOutcome()
+	return waitForReload(a.agentLoop)
+}
+
+// waitForReload is the free-function core of triggerReloadAndWait — see
+// waitForReloadOutcome's doc comment for why this is extracted as a plain
+// function rather than kept as a *restAPI-only method.
+func waitForReload(agentLoop *agent.AgentLoop) error {
+	confirmed, err := waitForReloadOutcome(agentLoop)
 	if err != nil {
 		return err
 	}

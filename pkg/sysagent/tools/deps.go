@@ -104,10 +104,33 @@ type Deps struct {
 	//
 	// AgentCreateTool/AgentUpdateTool prefer UpsertAgentFastFunc below when it
 	// is wired (issue #571, sysagent half) and fall back to this full reload
-	// only when UpsertAgentFastFunc is nil. AgentDeleteTool always uses this
-	// field — see UpsertAgentFastFunc's own doc comment for why delete is
-	// deliberately NOT fast-pathed.
+	// only when UpsertAgentFastFunc is nil. AgentDeleteTool prefers
+	// WaitForReloadFunc below and falls back to this field only when
+	// WaitForReloadFunc is nil (tests/degraded wiring) — see
+	// UpsertAgentFastFunc's own doc comment for why delete is deliberately
+	// NOT fast-pathed, and WaitForReloadFunc's doc comment for why delete
+	// specifically must not use this fire-and-forget field on its own.
 	ReloadFunc func() error
+	// WaitForReloadFunc triggers a hot-reload of the agent loop and BLOCKS
+	// until that reload has actually landed in memory (or a bounded timeout
+	// elapses) — the synchronous counterpart to ReloadFunc above, which only
+	// queues the reload and returns immediately. Nil in tests or when not
+	// wired; callers must fall back to ReloadFunc in that case.
+	//
+	// AgentDeleteTool uses this instead of the bare ReloadFunc: delete has no
+	// UpsertAgentFastFunc-shaped fast path (see that field's doc comment), so
+	// the plain agent registry (list_agents, routing) stays stale until the
+	// queued reload cycle actually runs on its own goroutine. A caller that
+	// calls delete_agent and then immediately list_agents in the same turn —
+	// an entirely ordinary agentic pattern — would otherwise still see the
+	// just-deleted agent, because ReloadFunc's success only means "the reload
+	// was queued," not "the registry was rebuilt." REST's own deleteAgent
+	// handler (pkg/gateway/rest.go) has always called the equivalent blocking
+	// triggerReloadAndWait for exactly this reason; this field gives sysagent
+	// tools the same guarantee. The gateway wires this to a closure built on
+	// AgentLoop.TriggerReload + AgentLoop.IsReloadPending polling (the same
+	// primitive backing restAPI.triggerReloadAndWait).
+	WaitForReloadFunc func() error
 	// ReconcileMCP triggers live MCP reconciliation (connect/disconnect servers
 	// and re-sync every agent's tool registry plus the central MCPRegistry)
 	// after a config mutation that adds, removes, or edits an MCP server.

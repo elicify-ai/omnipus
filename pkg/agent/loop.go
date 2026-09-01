@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -2901,8 +2902,33 @@ func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
 		return nil
 	}
 	return func(id string) bool {
-		_, ok := registry.GetAgent(id)
-		return ok
+		if _, ok := registry.GetAgent(id); ok {
+			return true
+		}
+		// Fall back to the durable entity store before concluding the agent
+		// is genuinely nonexistent. The in-memory registry this probe
+		// consults is only refreshed by the reload pipeline (the async,
+		// fire-and-forget gateway.go reloadTrigger for a plain hot-reload;
+		// UpsertAgentFast for create/update's fast path, which itself
+		// defers to that same async reload when one is already in flight —
+		// see UpsertAgentFastFunc's own doc comment), so an agent whose
+		// entity record was JUST durably written (agentstore.Store.Create
+		// always runs synchronously before either publish path — see
+		// UpsertAgentFast's DEFECT 1 fix comment in registry.go, which
+		// establishes this exact "ask the durable entity store, not the
+		// possibly-stale in-memory view" precedent) can be real on disk
+		// before the registry catches up. Without this fallback, a
+		// delegate/switch_agent call landing in that window reports the
+		// misleading "agent %q does not exist" — masking the actual denial
+		// reason (e.g. a missing trust edge) a UAT run observed when the
+		// target agent, in fact, existed. Best-effort: a store read error
+		// here is treated the same as "not found" (the pre-existing
+		// behavior for a target that genuinely never existed) rather than
+		// failing the whole delegation check — this probe is message-only
+		// and never controls the allow/deny outcome (see this function's
+		// own callers' doc comments).
+		_, err := agentstore.New(omnipusHome()).Get(id)
+		return err == nil
 	}
 }
 

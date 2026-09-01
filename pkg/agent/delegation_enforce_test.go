@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -333,6 +334,75 @@ func TestAgentExistsChecker_NilRegistryReturnsNil(t *testing.T) {
 	}
 	if probe("nonexistent-agent") {
 		t.Errorf("non-nil-registry probe must report an unregistered agent as nonexistent")
+	}
+}
+
+// TestAgentExistsChecker_FallsBackToEntityStoreWhenRegistryStale covers the
+// UAT-reported defect this fix closes: a UAT run observed `delegate` refuse a
+// delegation with "agent %q does not exist" for a target that, in fact,
+// existed — the real refusal reason was a missing trust edge, not a missing
+// agent. Root cause: agentExistsChecker(registry) consulted ONLY the
+// in-memory AgentRegistry, which is refreshed exclusively by the reload
+// pipeline (the async, fire-and-forget gateway.go reloadTrigger, or
+// UpsertAgentFast's fast path — which itself defers to that same async
+// reload when a reload is already in flight). An agent whose entity record
+// was just durably written (agentstore.Store.Create always runs
+// synchronously ahead of either publish path — the same fact
+// UpsertAgentFast's own "DEFECT 1" fix in registry.go relies on) can
+// therefore be real on disk before the registry catches up.
+//
+// This test proves the fix: with a target agent written DIRECTLY to the
+// entity store (bypassing the registry entirely, simulating exactly that
+// window) and confirmed ABSENT from the live registry, the probe must still
+// report it as existing — falling through to the correct "not permitted"
+// trust-set denial instead of the misleading "does not exist" one.
+func TestAgentExistsChecker_FallsBackToEntityStoreWhenRegistryStale(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home: filepath.Join(home, "agents"), DefaultModel: config.DefaultModel{Model: "test-model"}},
+			List: []config.AgentConfig{
+				{ID: "caller-agent", Name: "Caller", Type: config.AgentTypeCustom,
+					Home: filepath.Join(home, "agents", "caller-agent")},
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	// Write the target's entity record DIRECTLY to disk — never through
+	// UpsertAgentFast/ReloadProviderAndConfig — so the live registry never
+	// learns about it. This is the exact "durable write, registry not yet
+	// caught up" window the fix targets.
+	if err := agentstore.New(home).Create("just-created-agent", &config.AgentConfig{
+		ID: "just-created-agent", Name: "Just Created", Type: config.AgentTypeCustom,
+	}); err != nil {
+		t.Fatalf("test setup: create entity record: %v", err)
+	}
+
+	// Sanity: confirm the registry genuinely does NOT know about this agent —
+	// otherwise this test would not be exercising the fallback at all.
+	if _, ok := al.GetRegistry().GetAgent("just-created-agent"); ok {
+		t.Fatal("test setup invariant violated: just-created-agent must be absent from the " +
+			"live registry for this test to exercise the entity-store fallback")
+	}
+
+	probe := agentExistsChecker(al.GetRegistry())
+	if probe == nil {
+		t.Fatal("agentExistsChecker(non-nil registry) must return a non-nil probe")
+	}
+	if !probe("just-created-agent") {
+		t.Fatal("probe must report the agent as existing via the entity-store fallback, even " +
+			"though the in-memory registry has not caught up yet — otherwise delegate/switch_agent " +
+			"would misreport this agent as nonexistent instead of surfacing its real denial reason")
+	}
+	// Negative control: an id that exists NOWHERE — not the registry, not the
+	// entity store — must still correctly report false.
+	if probe("truly-nonexistent-agent") {
+		t.Fatal("probe must still report false for an agent that exists in neither the registry " +
+			"nor the entity store")
 	}
 }
 

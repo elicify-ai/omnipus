@@ -362,15 +362,19 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 	// and FOUR of them satisfy a bare "code != nil" check — AGENT_NOT_FOUND
 	// (store.Get miss, e.g. a fixture pointed at the wrong Home), two other
 	// SAVE_FAILED variants (a non-ErrNotFound store.Get error, or a
-	// store.Delete failure), and the intended locked rejection (also
-	// SAVE_FAILED). A regression that resolved this test's store against the
+	// store.Delete failure), and the intended locked rejection, which has its
+	// OWN dedicated AGENT_LOCKED code — not SAVE_FAILED, which a UAT run
+	// found this tool's locked-agent rejection was (incorrectly) reusing,
+	// disagreeing with REST's DELETE /api/v1/agents/{id} handler's dedicated
+	// "agent_locked" code for the identical refusal (pkg/gateway/rest.go's
+	// deleteAgent). A regression that resolved this test's store against the
 	// wrong Home would yield AGENT_NOT_FOUND — non-nil, AND the seeded
 	// record would trivially "survive" (it was never visible to the tool in
 	// the first place) — passing both this check and the survival check
 	// below while the locked-agent guard is never actually exercised. Assert
 	// the exact code AND that the message names the locked-core-agent reason.
-	if errBlock["code"] != "SAVE_FAILED" {
-		t.Errorf("expected error code SAVE_FAILED, got %v", errBlock["code"])
+	if errBlock["code"] != "AGENT_LOCKED" {
+		t.Errorf("expected error code AGENT_LOCKED, got %v", errBlock["code"])
 	}
 	msg, _ := errBlock["message"].(string)
 	if !strings.Contains(msg, "locked core agent") {

@@ -364,6 +364,7 @@ func (t *SwitchAgentTool) Execute(ctx context.Context, args map[string]any) *Too
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 	})
+	var auditWarning string
 	if appendErr != nil {
 		// FR-002: surface the now-possible strict-write error as a counter
 		// increment plus a WARN naming the session id — this remains
@@ -371,6 +372,20 @@ func (t *SwitchAgentTool) Execute(ctx context.Context, args map[string]any) *Too
 		// failure must no longer be invisible.
 		handoffTranscriptWriteFailures.Add(1)
 		slog.Warn("switch_agent: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
+		// Also surface it IN the tool result (fix-wave finding: a UAT run
+		// observed this failure only as a background log line with zero
+		// signal in the ForLLM/ForUser response — the switch itself reported
+		// unqualified success with no hint that its own audit-trail record
+		// did not persist. This mirrors the publish_warning/cascade_warnings
+		// pattern already used by create_agent/update_agent/delete_agent
+		// (pkg/sysagent/tools/agent.go) for their own best-effort steps: a
+		// step failing does not fail the overall operation, but the caller
+		// must be told, not just an operator reading logs.
+		auditWarning = fmt.Sprintf(
+			"Note: the switch to %s succeeded, but its audit-trail transcript entry could not be "+
+				"written (%s). The active agent is correctly updated; only this record is missing.",
+			agentName, appendErr.Error(),
+		)
 	}
 
 	// Step 7: Notify frontend (so the UI can update its active-agent indicator).
@@ -392,6 +407,9 @@ func (t *SwitchAgentTool) Execute(ctx context.Context, args map[string]any) *Too
 
 	// Step 8: Return context for the caller.
 	forLLMParts := []string{forLLMHeadline}
+	if auditWarning != "" {
+		forLLMParts = append(forLLMParts, auditWarning)
+	}
 	if summaryLine != "" {
 		forLLMParts = append(forLLMParts, summaryLine)
 	}

@@ -2780,6 +2780,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		},
 		CredStore:  credStore,
 		ReloadFunc: reloadTrigger,
+		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
+		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
+		// list_agents ghost-listing race this closes). Built on the same
+		// TriggerReload + IsReloadPending polling primitive that backs
+		// restAPI.triggerReloadAndWait, so a delete_agent tool call blocks for
+		// exactly as long as REST's DELETE /api/v1/agents/{id} does before
+		// either call reports success.
+		WaitForReloadFunc: func() error { return waitForReload(agentLoop) },
 		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
