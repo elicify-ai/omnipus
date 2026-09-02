@@ -275,6 +275,25 @@ type sessionEntry struct {
 	// ReapIdleSessions' doc comment). Incremented/decremented via
 	// ViewerAttached/ViewerDetached.
 	viewers int
+	// lastViewerBeat is when a viewer on this browsing context last PROVED it
+	// was still there (ADR-072 FR-052). Stamped by ViewerAttached and
+	// re-stamped by every ViewerHeartbeat; never cleared, because a session
+	// with zero viewers is judged by the count alone.
+	//
+	// It exists because `viewers` on its own is a raw count of attaches that
+	// were never matched by a detach — and "never matched by a detach" is not
+	// the same claim as "somebody is still watching". A live-panel WebSocket
+	// whose cleanup never ran (the process holding it was SIGKILLed, the
+	// socket half-opened behind a NAT that dropped state, a panic that
+	// skipped readLoop's defer) leaves the count at 1 with nobody behind it.
+	// That phantom pins its workspace's Chrome against BOTH eviction (pool.go
+	// `pinned`) and idle close (`idle`) forever — a deadlock, not a leak: the
+	// browser can never be reclaimed, and under memory pressure the pool
+	// refuses to launch others while it holds one open.
+	//
+	// See viewerLivenessWindow for how stale is defined, and
+	// liveViewersLocked for where the two are combined.
+	lastViewerBeat time.Time
 	// listenerTarget tracks which tab's chromedp ctx currently has the
 	// ADR-041 D2 passive Target.targetCreated listener installed (the zero
 	// value, "", means none yet). installTargetListenerLocked (re-)installs
@@ -787,8 +806,55 @@ func (m *BrowserManager) Coordinator() *BrowserCoordinator {
 	return m.coordinator
 }
 
+// viewerLivenessWindow is how long a viewer's last proof of life stays good.
+// Past it the viewer is treated as gone even though nothing ever detached it.
+//
+// It is TWICE the live-panel WebSocket's 60-second read deadline
+// (pkg/gateway/browser_ws.go, where the PongHandler both refreshes that
+// deadline and stamps the heartbeat). The doubling is the whole safety
+// argument and must not be tuned down to 1x:
+//
+// A person can watch a page for an hour without touching anything. Their
+// browser still answers the server's ping with a pong every 30 seconds — the
+// keep-alive is protocol-level and owes nothing to user interaction — so an
+// idle-but-alive viewer keeps stamping. At 1x, ONE pong lost to a garbage
+// collection pause, a scheduling hiccup or a half-second of packet loss would
+// make a watching human look detached, and the pool would close the window
+// they are looking at. At 2x, a viewer must miss four consecutive pings —
+// four chances to speak — before anything reclaims its browser. And a truly
+// dead socket is reclaimed within two minutes either way.
+//
+// The asymmetry is deliberate. Reaping a live viewer's browser out from under
+// them is a worse failure than holding a phantom's browser two minutes longer
+// than strictly necessary, so the window errs long.
+const viewerLivenessWindow = 2 * 60 * time.Second
+
+// liveViewersLocked reports how many of se's attached viewers still count as
+// present at time now — se.viewers if the context's last proof of life is
+// inside viewerLivenessWindow, and 0 if it is not.
+//
+// All-or-nothing per browsing context, by design: liveness is tracked for the
+// context, not per viewer id, because every consumer of this asks a yes/no
+// question ("may this Chrome be reclaimed?") and the answer is the same
+// either way. Two viewers on one context where only one still breathes is
+// still "somebody is watching" — the context must be pinned, which is exactly
+// what returning the raw count does. The count is only ever wrong in the
+// direction that keeps a browser alive.
+//
+// Must be called with m.mu HELD.
+func (m *BrowserManager) liveViewersLocked(se *sessionEntry, now time.Time) int {
+	if se == nil || se.viewers == 0 {
+		return 0
+	}
+	if now.Sub(se.lastViewerBeat) > viewerLivenessWindow {
+		return 0
+	}
+	return se.viewers
+}
+
 // Viewers reports how many live-panel viewers are attached across every
-// browsing context this manager owns (ADR-072 FR-010).
+// browsing context this manager owns AND have proved they are still there
+// within viewerLivenessWindow (ADR-072 FR-010, FR-052).
 //
 // It exists because BOTH lifetime controls need it and neither may guess: the
 // pool refuses to evict a browser somebody is watching (FR-050) and refuses to
@@ -796,14 +862,18 @@ func (m *BrowserManager) Coordinator() *BrowserCoordinator {
 // infer from tab activity — a person reading a page touches nothing for
 // minutes at a time, and treating that as idle closes the window they are
 // looking at.
+//
+// FR-052: this deliberately reports LIVE viewers, not the raw attach count. A
+// viewer whose WebSocket cleanup never ran never decrements the count, and a
+// raw count would let that phantom pin its workspace's Chrome permanently
+// against both controls above. See sessionEntry.lastViewerBeat.
 func (m *BrowserManager) Viewers() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := m.now()
 	n := 0
 	for _, se := range m.sessions {
-		if se != nil {
-			n += se.viewers
-		}
+		n += m.liveViewersLocked(se, now)
 	}
 	return n
 }
@@ -3164,13 +3234,44 @@ func (m *BrowserManager) touchAllTabsLocked(se *sessionEntry) {
 
 // ViewerAttached records that a live-panel viewer attached to sessionID's
 // browsing context. A context with at least one attached viewer is never
-// considered idle — somebody is watching it right now.
+// considered idle — somebody is watching it right now, for as long as they
+// keep saying so.
+//
+// The attach itself is the first proof of life (FR-052): it stamps
+// lastViewerBeat, so a viewer that attaches and then goes silent without ever
+// heart-beating — the socket wedged before the first pong could come back —
+// still ages out of viewerLivenessWindow rather than pinning forever. Every
+// subsequent proof arrives via ViewerHeartbeat.
 func (m *BrowserManager) ViewerAttached(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if se, ok := m.sessions[sessionID]; ok {
 		se.viewers++
+		se.lastViewerBeat = m.now()
 		m.touchAllTabsLocked(se)
+	}
+}
+
+// ViewerHeartbeat records that a viewer on sessionID's browsing context is
+// still there right now (ADR-072 FR-052). Called from the live-panel
+// WebSocket's PongHandler — the peer answering the server's keep-alive ping
+// is the proof, which is why an idle-but-alive watcher keeps pinning its
+// browser without touching anything.
+//
+// Deliberately does NOT touch any tab's lastActivity. A heartbeat means
+// "somebody is still watching", not "somebody used this tab"; the whole
+// context is already protected while live viewers > 0 (see ReapIdleSessions),
+// and stamping tabs here would hand a phantom's tabs a fresh grace period the
+// moment its pin finally expired.
+//
+// A no-op for an unknown session or one with no attached viewers, so a
+// heartbeat that outlives a session recreation cannot conjure a pin from
+// nothing.
+func (m *BrowserManager) ViewerHeartbeat(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if se, ok := m.sessions[sessionID]; ok && se.viewers > 0 {
+		se.lastViewerBeat = m.now()
 	}
 }
 
@@ -3338,7 +3439,14 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 		// The live panel's tab strip shows every tab in this context — a
 		// viewer watching it protects ALL of them, in full, regardless of
 		// any individual tab's idle time. See doc comment above.
-		if se.viewers > 0 {
+		//
+		// LIVE viewers, not the raw attach count (FR-052): the pin belongs to
+		// somebody who is still there. A phantom whose WebSocket cleanup never
+		// ran would otherwise keep every tab in this context off the sweep
+		// forever, which also keeps the instance permanently non-idle
+		// (pool.go's `idle` requires zero tabs) even once eviction has stopped
+		// treating it as watched. See liveViewersLocked.
+		if m.liveViewersLocked(se, now) > 0 {
 			continue
 		}
 

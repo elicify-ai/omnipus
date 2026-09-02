@@ -353,7 +353,11 @@ func TestPool_EvictionSkipsViewerAndInFlight(t *testing.T) {
 	// A live viewer pins it. Somebody is watching this window right now, and
 	// closing it to make room for a workspace they are not looking at is a
 	// panel going black for no reason they can see.
-	mgr.sessions["s"] = &sessionEntry{viewers: 1}
+	// lastViewerBeat is what makes this a LIVE viewer rather than a phantom
+	// (FR-052) — Viewers() counts only viewers that have proved they are
+	// still there inside viewerLivenessWindow. A zero stamp here would read
+	// as decades stale and the browser would be evictable.
+	mgr.sessions["s"] = &sessionEntry{viewers: 1, lastViewerBeat: time.Now()}
 	f.pool.mu.Lock()
 	assert.Nil(t, f.pool.evictableLocked(), "a browser with a live viewer must never be evicted")
 	f.pool.mu.Unlock()

@@ -67,6 +67,11 @@ func TestReapIdleSessions_NeverReapsWatchedContext(t *testing.T) {
 	m.ViewerAttached(testSessionID)
 
 	*clock = clock.Add(72 * time.Hour)
+	// FR-052: the viewer has to still be THERE, not merely still counted.
+	// A real panel answers the keep-alive ping every 30s for the whole 72
+	// hours; this is that, compressed. Without it the viewer is a phantom and
+	// the context is correctly reclaimed — see viewer_heartbeat_test.go.
+	m.ViewerHeartbeat(testSessionID)
 	assert.Empty(t, m.ReapIdleSessions(),
 		"a context with an attached viewer must never be reaped, however long since the last tool call")
 	assert.Contains(t, m.sessions, testSessionID)
@@ -84,7 +89,8 @@ func TestReapIdleSessions_ReapsAfterLastViewerLeaves(t *testing.T) {
 	m.ViewerAttached(testSessionID) // two panels open
 
 	*clock = clock.Add(48 * time.Hour)
-	m.ViewerDetached(testSessionID) // one closes — still watched
+	m.ViewerHeartbeat(testSessionID) // FR-052: both panels were live all along
+	m.ViewerDetached(testSessionID)  // one closes — still watched
 	assert.Empty(t, m.ReapIdleSessions(), "still one viewer attached")
 
 	m.ViewerDetached(testSessionID) // last one closes; clock restarts here

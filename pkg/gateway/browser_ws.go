@@ -1008,6 +1008,42 @@ func (h *BrowserWSHandler) readLoop(
 	conn.SetReadLimit(browserWSMaxMessageBytes)
 
 	var state browserConnState
+
+	// Re-register the PongHandler now that this connection has a viewer
+	// identity and a place to record one. It still does what the handshake's
+	// handler did — refresh the 60s read deadline — and additionally stamps
+	// the manager's viewer heartbeat (ADR-072 FR-052).
+	//
+	// The pong is the right signal precisely because it owes nothing to the
+	// user: pingPump sends a ping every 30s and the peer's browser answers it
+	// whether the person is clicking or just reading. A viewer who has not
+	// touched anything in an hour keeps proving it is there, while a socket
+	// whose owner is gone stops within one deadline. Without this the manager
+	// has only ViewerAttached/ViewerDetached to go on, and a connection whose
+	// cleanup never runs (SIGKILL, a half-open socket, a panic past readLoop's
+	// defer) pins its workspace's Chrome permanently.
+	//
+	// Cheap enough to run inline in gorilla's read path: state.attachment()
+	// and ViewerHeartbeat each take a mutex that is never held across I/O.
+	// Before the first successful browser_attach there is nothing to stamp,
+	// and the deadline refresh still happens.
+	//
+	// It stamps mgr.OperatorSessionID(), NOT the session id state carries.
+	// state's is the CHAT session id — kept for audit and wire echo only —
+	// whereas the live view, and therefore ViewerAttached/ViewerDetached,
+	// always target the workspace-owned tab set (ADR-038 finding #1; see
+	// handleAttach's Live().Attach call and h.detach). Stamping the chat id
+	// here would find no such session on the manager and silently do nothing,
+	// which does not fail loudly: it looks fine until every live viewer ages
+	// out of viewerLivenessWindow and has its browser closed while somebody is
+	// watching it.
+	conn.SetPongHandler(func(_ string) error {
+		if mgr, sessionID := state.attachment(); mgr != nil && sessionID != "" {
+			mgr.ViewerHeartbeat(mgr.OperatorSessionID())
+		}
+		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
+
 	defer func() {
 		// Order matters. close() first, so a browser_attach/browser_viewport
 		// that arrived moments before the socket died is dropped instead of

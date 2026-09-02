@@ -246,6 +246,9 @@ func TestReapIdleSessions_ViewerProtectsEveryTabEvenAfterHours(t *testing.T) {
 	m.ViewerAttached(testSessionID)
 
 	*clock = clock.Add(6 * time.Hour)
+	// FR-052: a viewer pins only while it keeps proving it is there. Six
+	// hours of a real panel is six hours of pongs; see viewer_heartbeat_test.go.
+	m.ViewerHeartbeat(testSessionID)
 	reaped := m.ReapIdleSessions()
 
 	assert.Empty(t, reaped)
@@ -293,6 +296,7 @@ func TestReapIdleSessions_ViewerDetach_RestartsIdleClockFromDetachMoment(t *test
 	m.ViewerAttached(testSessionID)
 
 	*clock = clock.Add(3 * time.Hour) // deep past TTL while "protected"
+	m.ViewerHeartbeat(testSessionID)  // FR-052: still a live panel, not a phantom
 	require.Empty(t, m.ReapIdleSessions(), "must stay protected while the viewer is attached")
 
 	m.ViewerDetached(testSessionID)
@@ -343,6 +347,7 @@ func TestReapIdleSessions_MultipleSessions_OnlyFullyIdleSessionsReturned(t *test
 	*clock = clock.Add(6 * time.Minute) // past the 5-minute TTL
 	setTabActivity(m, bTabs[0], *clock) // B: freshly touched right at sweep time
 	setTabActivity(m, dTabs[1], *clock) // D's second tab: freshly touched
+	m.ViewerHeartbeat("session-c")      // FR-052: C's viewer is live, not a phantom
 
 	reaped := m.ReapIdleSessions()
 

@@ -320,6 +320,7 @@ func TestReap_PerTabTTLAndViewerPin(t *testing.T) {
 	require.Equal(t, 3, pinned)
 
 	*clock = clock.Add(30 * time.Minute)
+	m.ViewerHeartbeat(testSessionID) // FR-052: the pin belongs to a viewer that is still there
 	assert.Empty(t, m.ReapIdleSessions(),
 		"an attached viewer pins the whole browsing context")
 

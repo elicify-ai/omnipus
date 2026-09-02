@@ -261,7 +261,13 @@ func TestPool_IdleCloseSkipsBusyBrowsers(t *testing.T) {
 	working := f.mustAcquire(t, "working")
 	quiet := f.mustAcquire(t, "quiet")
 
-	viewerMgr := &BrowserManager{sessions: map[string]*sessionEntry{"s": {viewers: 1}}}
+	// lastViewerBeat is what makes this a LIVE viewer rather than a phantom
+	// (FR-052): Viewers() counts only viewers that have proved they are still
+	// there inside viewerLivenessWindow, so a zero stamp would read as decades
+	// stale and this browser would be swept as idle.
+	viewerMgr := &BrowserManager{
+		sessions: map[string]*sessionEntry{"s": {viewers: 1, lastViewerBeat: time.Now()}},
+	}
 	workingMgr := &BrowserManager{sessions: map[string]*sessionEntry{}}
 	releaseCall := workingMgr.EnterCall()
 	defer releaseCall()
