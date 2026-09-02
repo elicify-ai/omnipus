@@ -20,8 +20,8 @@ var procMeminfoPath = "/proc/meminfo"
 // readMemTotalBytes reads the total physical memory from /proc/meminfo.
 //
 // It is DETERMINABLE-OR-NOT, never fabricated (FR-078). This function used
-// to return a hardcoded 4 GB constant (fallbackTotalRAMBytes, deleted) when
-// /proc/meminfo could not be read or parsed. That constant was invented
+// to return a hardcoded 4 GB fallback constant (deleted) when /proc/meminfo
+// could not be read or parsed at all. That constant was invented
 // data: on a /proc-less Linux host (gVisor, a distroless container with no
 // procfs mount, a hardened seccomp profile) it reported 4 GB of RAM that
 // nothing had measured, and every consumer downstream treated it as a real

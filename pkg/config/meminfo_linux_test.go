@@ -58,8 +58,8 @@ func TestReadMemAvailableBytes_FallsBackToHalfTotal(t *testing.T) {
 // TestReadMemAvailableBytes_MissingFile is REWRITTEN, deliberately, because
 // its previous oracle WAS the defect it was supposed to guard.
 //
-// It used to assert `want := uint64(fallbackTotalRAMBytes) / 2` — that an
-// unreadable /proc/meminfo yields half of a hardcoded 4 GB constant. That
+// It used to assert "half of the hardcoded 4 GB fallback constant" — that an
+// unreadable /proc/meminfo yields a fixed 2 GiB. That
 // number had measured nothing. On a real /proc-less Linux host (gVisor, a
 // distroless image with no procfs mount, a hardened seccomp profile) the
 // process reported 2 GiB of available memory that did not exist, and every

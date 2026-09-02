@@ -4884,3 +4884,26 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 // model reads and in structured log fields. Change it and both break
 // silently.
 const ReasonMemoryPressure = "memory_pressure"
+
+// MemoryPressureHighFromSignalsForTest builds a MemoryPressureHigh provider
+// from one synthetic (available, total) pair, running the REAL threshold
+// comparison over it.
+//
+// Tests use it rather than stubbing the boolean directly so that a consumer
+// test actually exercises the shared comparison — including the boundary,
+// where "> threshold" and ">= threshold" differ at exactly one value and
+// nowhere else. A test that stubs the boolean proves the consumer branches on
+// what it is told; this proves the consumer branches on what the mechanism
+// decides.
+func MemoryPressureHighFromSignalsForTest(available, total uint64) func() (bool, bool) {
+	return func() (bool, bool) {
+		if total == 0 {
+			return false, false
+		}
+		used := 0.0
+		if available < total {
+			used = float64(total-available) / float64(total)
+		}
+		return used > memoryPressureRatioThreshold, true
+	}
+}
