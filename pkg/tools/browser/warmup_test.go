@@ -56,9 +56,6 @@ func TestBrowserCoordinator_WarmUp_LaunchesRealChrome(t *testing.T) {
 		t.Fatalf("Chrome pid %d reported by PID() is not actually alive: %v", pid, sigErr)
 	}
 
-	if n := coord.contextCount(); n != 0 {
-		t.Fatalf("expected 0 per-agent browser contexts after WarmUp (no per-agent Chrome pool), got %d", n)
-	}
 	if n := coord.managerCount(); n != 0 {
 		t.Fatalf("expected 0 registered managers after WarmUp (WarmUp registers no agent), got %d", n)
 	}
@@ -108,7 +105,7 @@ func TestBrowserCoordinator_WarmUp_ThenRegisterReusesSameChrome(t *testing.T) {
 
 	mgr := newTestManager(t, cfg)
 	mgr.AttachSharedChrome(coord, browserTestKey("post-warmup-agent"))
-	if _, _, err := coord.Register(context.Background(), "post-warmup-agent", mgr); err != nil {
+	if _, err := coord.Register(context.Background(), "post-warmup-agent", mgr); err != nil {
 		t.Fatalf("Register after WarmUp: %v", err)
 	}
 

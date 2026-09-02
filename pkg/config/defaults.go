@@ -713,14 +713,6 @@ func DefaultConfig() *Config {
 				// package Chrome + emits WARN-BROWSER-007). Operators with a
 				// deliberate custom Chrome opt in with true.
 				TrustPathChrome: false,
-				// ADR-048 condition 1/Option A: default TRUE — WebRTC capture
-				// requires the agent's session to share Chrome's default
-				// browser context (see CaptureSharedContext's doc comment on
-				// BrowserToolConfig for the full isolation warning). Operators
-				// who need real cross-agent cookie isolation can set this
-				// false; the JPEG browser_screencast fallback keeps working
-				// either way.
-				CaptureSharedContext: true,
 				// Launch the shared Chrome during boot rather than on the
 				// first browser tool call. Default TRUE: the lazy cold start
 				// is expensive (ADR-042: ~30-60s on a fresh install) and

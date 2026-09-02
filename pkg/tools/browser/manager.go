@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
@@ -448,25 +447,17 @@ type BrowserManager struct {
 	// coordinator (ADR-043) is the gateway-scoped shared-Chrome owner. nil in
 	// remote-CDP-override mode (cfg.CDPURL set) and in tests that exercise the
 	// legacy one-manager-one-Chrome path. When non-nil, ensureStarted's managed-
-	// mode branch asks the coordinator to launch+provide the shared Chrome
-	// instead of building its own ExecAllocator, and bootstrapBrowserCtx
-	// re-adopts the coordinator-owned browserCtxID non-owningly.
+	// mode branch asks the coordinator to launch+provide that key's Chrome
+	// instead of building its own ExecAllocator.
 	//
-	// CRIT-003 (load-bearing): when coordinator != nil, NO manager path ever
-	// calls chromedp.WithNewBrowserContext — that would auto-dispose the
-	// context on the manager's reload-time cancel, destroying cookies every
-	// Settings save. The manager only ever re-adopts via WithExistingBrowserContext.
+	// CRIT-003 is now trivially true rather than carefully maintained: since
+	// ADR-072 FR-031 there are no CDP browser contexts at all, so no path can
+	// create one whose disposal would destroy cookies on a reload. Cookies
+	// live in the workspace's profile directory on disk.
 	coordinator *BrowserCoordinator
 	// agentID identifies this per-agent manager to the coordinator (Register/
 	// Release/RemoveAgent are keyed by it). Set via AttachSharedChrome.
 	agentID string
-	// browserCtxID is the coordinator-owned browser context id this manager
-	// re-adopts. Set by ensureStarted's coordinator branch from Register's
-	// return; cleared by dropConnection/invalidateConnection on reload/crash.
-	// Empty in remote-CDP-override mode + the no-coordinator test fallback
-	// (those paths use Chrome's default "" browser context).
-	browserCtxID cdp.BrowserContextID
-
 	// capture/captureMu (ADR-047, wave-plan W2-A) hold this manager's single
 	// active WebRTC CaptureSession, guarded by their own mutex — see
 	// CaptureSession()/EnsureCaptureSession()'s doc comments for why this is
@@ -614,11 +605,10 @@ func (m *BrowserManager) Live() *LiveViewRegistry {
 	return m.live
 }
 
-// AttachSharedChrome wires this per-agent manager to the gateway-scoped shared
-// Chrome coordinator (ADR-043). When set, ensureStarted asks the coordinator to
-// launch/provide the shared Chrome and re-adopts the coordinator-owned browser
-// context non-owningly (CRIT-003: no WithNewBrowserContext on a manager path).
-// A nil coordinator (the default for direct/test construction) keeps the legacy
+// AttachSharedChrome wires this manager to the coordinator that owns its
+// browsing key's Chrome (ADR-043, re-keyed by ADR-072 FR-001). When set,
+// ensureStarted asks that coordinator to launch/provide the key's Chrome. A
+// nil coordinator (the default for direct/test construction) keeps the legacy
 // per-manager ExecAllocator behavior.
 //
 // key identifies this manager to the coordinator. It is the BROWSING KEY, not
@@ -896,15 +886,12 @@ func (m *BrowserManager) ensureStarted() error {
 	}
 
 	// ADR-043 shared-Chrome mode: when a coordinator is wired (the normal
-	// gateway case), ask it to launch+provide the ONE shared Chrome instead of
+	// gateway case), ask it to launch+provide this KEY's Chrome instead of
 	// building a per-manager ExecAllocator. The coordinator owns the Chrome
-	// process + this agent's browser context; the manager drives it through
-	// chromedp CHILD contexts of the coordinator's rootCtx (CRIT-001 — no
-	// RemoteAllocator dial anymore, the CDP pipe has no ws:// URL and is
-	// private to this OS process; see coordinator.go's Register doc comment)
-	// and re-adopts the coordinator-owned browserCtxID non-owningly
-	// (CRIT-003: WithNewBrowserContext is NEVER called on a manager path —
-	// only the coordinator does that).
+	// process; the manager drives it through chromedp CHILD contexts of the
+	// coordinator's rootCtx (CRIT-001 — no RemoteAllocator dial anymore, the
+	// CDP pipe has no ws:// URL and is private to this OS process; see
+	// coordinator.go's Register doc comment).
 	//
 	// Register blocks on the (possibly cold) Chrome launch, so m.mu is released
 	// around it — same ADR-038 no-lock-across-blocking-call discipline as the
@@ -913,7 +900,7 @@ func (m *BrowserManager) ensureStarted() error {
 	if m.coordinator != nil {
 		agentID := m.agentID
 		m.mu.Unlock()
-		rootCtx, browserCtxID, regErr := m.coordinator.Register(context.Background(), agentID, m)
+		rootCtx, regErr := m.coordinator.Register(context.Background(), agentID, m)
 		m.mu.Lock()
 		if regErr != nil {
 			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
@@ -930,11 +917,9 @@ func (m *BrowserManager) ensureStarted() error {
 		// paths (Shutdown/dropConnection/invalidateConnection) call
 		// unconditionally, so it must be non-nil, not omitted.
 		m.allocCancel = func() {}
-		m.browserCtxID = browserCtxID
 		m.started = true
 		logger.InfoCF("browser", "Browser connected to shared Chrome (coordinator mode)", map[string]any{
-			"agent_id":       agentID,
-			"browser_ctx_id": string(browserCtxID),
+			"agent_id": agentID,
 		})
 		return nil
 	}
@@ -1504,19 +1489,12 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 		ctx, cancel := context.WithCancel(context.Background())
 		return ctx, cancel, nil
 	}
-	var opts []chromedp.ContextOption
-	if m.browserCtxID != "" {
-		// ADR-043 (CRIT-003): re-adopt the coordinator-owned browser context
-		// non-owningly. Safe here because chromedp forces c.first=false for a
-		// RemoteAllocator context (the shared-Chrome + cdp_url paths); it would
-		// panic on a first/root ExecAllocator context, but the manager's
-		// browserCtxID is only set in coordinator/cdp_url mode, never the
-		// no-coordinator managed-mode fallback. Non-owning = no auto-dispose on
-		// cancel, so Shutdown/Release detach tabs + close the WS connection
-		// WITHOUT disposing the browser context or killing Chrome (CRIT-002/C1).
-		opts = append(opts, chromedp.WithExistingBrowserContext(m.browserCtxID))
-	}
-	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
+	// ADR-072 FR-031: no CDP browser context is adopted or created here,
+	// because there are none. Every session bootstraps into Chrome's DEFAULT
+	// context — the only one chrome.tabCapture can reach — and isolation is
+	// the workspace's own Chrome process and profile directory (FR-037), not
+	// a context id.
+	ctx, cancel := chromedp.NewContext(allocCtx)
 	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
@@ -3514,7 +3492,6 @@ func (m *BrowserManager) Shutdown() {
 	allocCancel := m.allocCancel
 	m.allocCancel = nil
 	m.started = false
-	m.browserCtxID = ""
 	m.mu.Unlock()
 
 	for _, cancel := range pending {
@@ -3597,7 +3574,6 @@ func (m *BrowserManager) invalidateConnection() {
 	m.allocCancel = nil
 	m.allocCtx = nil
 	m.started = false
-	m.browserCtxID = ""
 	m.mu.Unlock()
 
 	for _, cancel := range pending {

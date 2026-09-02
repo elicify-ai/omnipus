@@ -100,7 +100,6 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 		cfg.Gateway.Port = port
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 

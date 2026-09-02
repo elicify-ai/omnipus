@@ -38,7 +38,7 @@ func TestCoordinator_Shutdown_KillsTheRealChromeProcess(t *testing.T) {
 	coord := NewBrowserCoordinator(home, cfg)
 	mgr := newTestManager(t, cfg)
 	mgr.AttachSharedChrome(coord, browserTestKey("agent-a"))
-	if _, _, err := coord.Register(context.Background(), "agent-a", mgr); err != nil {
+	if _, err := coord.Register(context.Background(), "agent-a", mgr); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

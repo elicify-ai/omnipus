@@ -169,6 +169,63 @@ func TestNoResidualTabCap(t *testing.T) {
 		len(offenders), strings.Join(offenders, "\n"))
 }
 
+// TestNoCDPBrowserContextIsEverCreated is FR-031's structural half.
+//
+// ADR-072 retired CDP browser contexts outright, along with the
+// tools.browser.capture_shared_context knob that chose between them and
+// Chrome's default context. Isolation is now one Chrome PROCESS and one
+// --user-data-dir profile directory per workspace (FR-037).
+//
+// Why a structural guard and not a runtime one: a CDP browser context that
+// comes back does not break anything visibly. Browsing keeps working. What
+// breaks is capture — chrome.tabCapture answers "Invalid tab specified." for
+// any tab inside such a context, and the ADR-048 finding is that an
+// enableInIncognito extension can SEE those tabs but never capture them. A
+// runtime assertion in a capture test would notice, but only if that test ran
+// against a real Chrome; this one fails on any machine.
+//
+// The forbidden names are the three CDP/chromedp entry points and the retired
+// config field. Note that chromedp.WithExistingBrowserContext is forbidden
+// too: re-adopting a context requires one to exist.
+func TestNoCDPBrowserContextIsEverCreated(t *testing.T) {
+	forbidden := []*regexp.Regexp{
+		regexp.MustCompile(`\btarget\.CreateBrowserContext\b`),
+		regexp.MustCompile(`\btarget\.DisposeBrowserContext\b`),
+		regexp.MustCompile(`\bWithNewBrowserContext\b`),
+		regexp.MustCompile(`\bWithExistingBrowserContext\b`),
+		regexp.MustCompile(`\bCaptureSharedContext\b`),
+		regexp.MustCompile(`\bcaptureSharedContext\b`),
+		regexp.MustCompile(`\bdisposeBrowserContextRaw\b`),
+		regexp.MustCompile(`"capture_shared_context"`),
+		regexp.MustCompile(`OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT`),
+	}
+	allowed := map[string]bool{
+		filepath.Join("pkg", "tools", "browser", "no_residual_test.go"): true,
+	}
+
+	var offenders []string
+	scanGoFiles(t, func(path, content string) {
+		if allowed[path] {
+			return
+		}
+		for i, line := range strings.Split(content, "\n") {
+			for _, pat := range forbidden {
+				if pat.MatchString(line) {
+					offenders = append(offenders, path+":"+itoa(i+1)+": "+strings.TrimSpace(line))
+					break
+				}
+			}
+		}
+	})
+
+	require.Empty(t, offenders,
+		"a CDP browser context or the retired capture_shared_context knob is back in %d place(s). "+
+			"Both were deleted by ADR-072 FR-031: a tab inside a CDP-created context cannot be "+
+			"captured at all, and the isolation it offered was in-memory and did not survive a "+
+			"restart. Per-workspace Chrome processes and profile directories replaced it.\n%s",
+		len(offenders), strings.Join(offenders, "\n"))
+}
+
 // TestNoResidualGuards_CanActuallySeeAFile is the guard on the guards.
 //
 // Both tests above pass trivially if the walk visits nothing — a wrong root, a

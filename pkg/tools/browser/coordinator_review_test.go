@@ -36,11 +36,16 @@ import (
 )
 
 // G1 / CRIT-002 (the headline): a manager reload (Release + new manager
-// AttachSharedChrome + Register for the SAME agentID) must re-adopt the SAME
-// browser context — same BrowserContextID, same Chrome PID, KillCount==0, AND
-// the cookie a tab set BEFORE the reload is still readable AFTER it (login
-// survives a Settings save). Also guards CRIT-003 (no manager path disposes the
-// context).
+// AttachSharedChrome + Register for the SAME key) must land on the SAME live
+// Chrome — same PID, KillCount==0 — AND the cookie a tab set BEFORE the
+// reload must still be readable AFTER it (login survives a Settings save).
+//
+// The context-id half of this assertion is GONE with ADR-072 FR-031, which
+// deleted CDP browser contexts. What persists a login across a reload is now
+// the workspace's own --user-data-dir profile directory on disk (FR-043),
+// which is strictly stronger: the old CDP context was in-memory and did not
+// survive a Chrome restart at all. The cookie assertion below is therefore
+// the load-bearing one and is unchanged.
 func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
@@ -56,12 +61,9 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	mgrA.AttachSharedChrome(coord, browserTestKey("agent-a"))
 
 	// First registration + session: set a cookie in agent-a's browser context.
-	_, ctxID1, err := coord.Register(context.Background(), "agent-a", mgrA)
+	_, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register 1: %v", err)
-	}
-	if ctxID1 == "" {
-		t.Fatal("expected a non-empty browser context id")
 	}
 	tabCtx, err := mgrA.Session(testSessionID)
 	if err != nil {
@@ -86,7 +88,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	}
 
 	// Reload: Release drops only the manager's connection (CRIT-002/C1). The
-	// coordinator-owned browser context survives for the next Register.
+	// Chrome process and its profile directory survive for the next Register.
 	coord.Release("agent-a")
 	if coord.KillCount() != 0 {
 		t.Fatalf("Release must not kill Chrome; KillCount=%d", coord.KillCount())
@@ -95,15 +97,11 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	// A NEW manager for the same agent re-registers (mirrors loop.go's reload).
 	mgrA2 := newTestManager(t, cfg)
 	mgrA2.AttachSharedChrome(coord, browserTestKey("agent-a"))
-	_, ctxID2, err := coord.Register(context.Background(), "agent-a", mgrA2)
-	if err != nil {
+	if _, err := coord.Register(context.Background(), "agent-a", mgrA2); err != nil {
 		t.Fatalf("Register 2: %v", err)
 	}
 
-	// CRIT-002 assertions: same context id, same pid, no kill.
-	if ctxID1 != ctxID2 {
-		t.Fatalf("CRIT-002 VIOLATION: browser context id changed across reload: %q → %q", ctxID1, ctxID2)
-	}
+	// CRIT-002 assertions: same pid, no kill.
 	if coord.PID() != pid1 {
 		t.Fatalf("CRIT-002 VIOLATION: Chrome pid changed across reload: %d → %d", pid1, coord.PID())
 	}
@@ -155,7 +153,7 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	mgrA := newTestManager(t, cfg)
 	mgrA.AttachSharedChrome(coord, browserTestKey("agent-a"))
 
-	_, ctxID1, err := coord.Register(context.Background(), "agent-a", mgrA)
+	_, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register 1: %v", err)
 	}
@@ -198,24 +196,12 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 		t.Fatalf("crash recovery did not produce a fresh pid; still %d", pid1)
 	}
 
-	// CRIT-001: all per-agent contexts are gone with the dead process.
-	if coord.contextCount() != 0 {
-		t.Fatalf("CRIT-001 VIOLATION: expected contextCount==0 after crash (fresh-empty); got %d", coord.contextCount())
-	}
-
-	// Register again → a NEW browser context id (not the stale dead one).
-	_, ctxID2, err := coord.Register(context.Background(), "agent-a", mgrA)
-	if err != nil {
+	// Register again → the relaunched Chrome, reachable through a fresh root
+	// context. There is no context id to compare any more (ADR-072 FR-031
+	// deleted CDP browser contexts); what makes recovery observable is the
+	// fresh pid asserted above plus the usable session asserted below.
+	if _, err := coord.Register(context.Background(), "agent-a", mgrA); err != nil {
 		t.Fatalf("Register after crash: %v", err)
-	}
-	if ctxID2 == "" {
-		t.Fatal("expected a non-empty fresh browser context id after crash")
-	}
-	if ctxID1 == ctxID2 {
-		t.Fatalf(
-			"CRIT-001 VIOLATION: post-crash Register returned the STALE context id %q (expected a fresh one)",
-			ctxID2,
-		)
 	}
 
 	// The relaunched Chrome is usable.

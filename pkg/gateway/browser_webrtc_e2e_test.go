@@ -428,12 +428,6 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		// WebRTCStunServer left "" — host-only ICE (ADR-047 D3 / wave-plan
 		// decision 7), matching the task's explicit requirement.
-		// ADR-048 condition 3 (CaptureVideoCapability): the config-literal
-		// test harness bypasses config.DefaultConfig()'s CaptureSharedContext
-		// default (true), so it must be set explicitly here or the gate
-		// ladder now reports not_capable before ever reaching this test's
-		// faked capture-session machinery.
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 

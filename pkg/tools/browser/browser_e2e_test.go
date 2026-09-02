@@ -545,9 +545,10 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 //     (marked in=chrome-one) is not in chrome.tabs.query's result. Process
 //     separation is real, not nominal.
 //  4. chrome.tabCapture.getMediaStreamId SUCCEEDS for a tab in Chrome #2's
-//     DEFAULT browser context (coord2.contextCount() == 0 proves no CDP
-//     browser context was ever created here), and the returned id yields a
-//     getUserMedia MediaStream carrying a LIVE video track.
+//     DEFAULT browser context — the only context there is, since ADR-072
+//     FR-031 deleted the CDP-browser-context mechanism outright — and the
+//     returned id yields a getUserMedia MediaStream carrying a LIVE video
+//     track.
 //
 // (4) is the load-bearing assertion. The stream id alone is not enough: the
 // id is what the historical failure mode rejected, but a live track is what
@@ -612,9 +613,9 @@ func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
 	//
 	// chromedp.NewContext off the coordinator's rootCtx creates a plain
 	// Target.createTarget with NO browserContextId — i.e. the default browser
-	// context. Register (which is what creates per-agent CDP contexts) is
-	// never called here, and contextCount() is asserted to be 0 below, so
-	// there is no CDP-created context anywhere in this test.
+	// context. Since ADR-072 FR-031 there is no other kind, which
+	// TestNoCDPBrowserContextIsEverCreated asserts structurally so this
+	// e2e does not have to re-prove it against a live Chrome.
 	oneURL := srv.URL + "/?in=chrome-one"
 	twoURL := srv.URL + "/?in=chrome-two"
 
@@ -640,12 +641,6 @@ func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
 		t,
 		chromedp.Run(nav2Ctx, chromedp.Navigate(twoURL), chromedp.WaitReady("#heading", chromedp.ByQuery)),
 		"navigate the SECOND Chrome's tab",
-	)
-
-	require.Zero(
-		t, coord2.contextCount(),
-		"the captured tab must live in the second Chrome's DEFAULT browser context — "+
-			"no CDP browser context may exist in this test, or the gate would be re-proving ADR-048",
 	)
 
 	// --- 4. capture, from the extension page inside the SECOND Chrome ------

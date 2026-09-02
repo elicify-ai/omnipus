@@ -3967,56 +3967,24 @@ type BrowserToolConfig struct {
 	// Set it only when the media address genuinely differs from the web
 	// origin (split DNS, a separate media IP).
 	WebRTCPublicIP string `json:"webrtc_public_ip,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP"`
-	// CaptureSharedContext promotes the former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
-	// experimental env flag to a first-class config knob (ADR-048 condition 1).
-	// When true, a browsing agent's own session is bootstrapped in Chrome's
-	// DEFAULT browser context — the same context the WebRTC capture
-	// extension's encoder page always lives in (capture_session.go's
-	// defaultEncoderStarter) — instead of its own isolated, coordinator-owned
-	// CDP browser context (ADR-043 D2). This is required for WebRTC capture to
-	// work AT ALL: chrome.tabCapture cannot capture a tab living in a
-	// CDP-created browser context ("Invalid tab specified."), and an
-	// enableInIncognito-loaded extension gains VISIBILITY of such tabs
-	// (chrome.tabs.query sees them) but never CAPTURABILITY (ADR-048,
-	// verified against real Chrome 150).
+	// RETIRED — tools.browser.capture_shared_context (ADR-072 FR-031).
+	// Do not reintroduce this key.
 	//
-	// SECURITY / ISOLATION WARNING: enabling this REVERSES ADR-043 D2's
-	// per-agent cookie/localStorage isolation for every agent whose session
-	// lands in the shared default context — all such agents share ONE
-	// cookie/storage partition, and ADR-043 D4's context-persistence-across-
-	// reload and D7's per-agent tab budget no longer apply per-agent. Default
-	// is TRUE (ADR-048 Option A: single-agent-dominant installs are the
-	// common case, and video/audio live-view is a value operators expect out
-	// of the box) — operators who need real cross-agent isolation and are
-	// willing to give up WebRTC capture (the JPEG browser_screencast fallback
-	// keeps working either way, ADR-047 D3) should set this false.
+	// It selected between two ways of placing a browsing session: Chrome's
+	// DEFAULT browser context, or a per-agent CDP-created browser context
+	// (ADR-043 D2). Only one of those two settings ever worked. chrome.tabCapture
+	// cannot capture a tab living in a CDP-created browser context ("Invalid tab
+	// specified."), and an enableInIncognito-loaded extension gains VISIBILITY of
+	// such tabs but never CAPTURABILITY (ADR-048, verified against real Chrome
+	// 150) — so setting it false traded working video for an isolation boundary
+	// that, being in-memory, did not survive a restart either.
 	//
-	// ADR-048 condition 2 (the multi-agent capture-target gap): even with
-	// this enabled, the shared default context's encoder captures whichever
-	// tab is GLOBALLY active, not necessarily the attached agent's tab. When
-	// more than one agent currently holds a live browser session, WHICH
-	// agent's tab a viewer sees can be ambiguous — but a blanket "deny a new
-	// capture whenever ANY other agent has a live session" fence (the
-	// original ADR-048 shape) made the panel permanently video-less in the
-	// most ordinary single-user flow, so the gateway's capture-start path
-	// (pkg/gateway/browser_webrtc.go's handleWebRTCOffer) was re-scoped
-	// (2026-07-18 UAT fix-wave) to: bring the REQUESTING agent's tab to
-	// front before the encoder resolves its target (deterministically binds
-	// THIS agent's tab even with other agents' windows present — see
-	// capture_session.go's Start/bringAgentTabToFront), DENY starting a new
-	// capture only when another agent's capture session is still ACTIVELY
-	// VIEWED (ViewerCount() > 0 — a genuine, real-time focus conflict), and
-	// silently SUPERSEDE (Stop) any other agent's viewerless leftover
-	// session instead of denying against it. Single-agent-viewed-at-a-time
-	// is still the v1 invariant; only the ambient "another agent merely has
-	// a session" trigger was removed.
-	//
-	// OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT is kept as a non-empty-string
-	// override ("1"/"0") of this field, for tests and operators who need to
-	// force a value without touching config.json — the coordinator reads
-	// config, never a bare os.Getenv, for its own decision; the env var is
-	// consulted only as an explicit override layered on top.
-	CaptureSharedContext bool `json:"capture_shared_context" env:"OMNIPUS_TOOLS_BROWSER_CAPTURE_SHARED_CONTEXT"`
+	// Isolation moved DOWN a level instead: one Chrome process and one
+	// --user-data-dir profile directory per workspace (FR-037). That boundary is
+	// enforced by the operating system rather than by a CDP bookkeeping id, it
+	// persists across restarts, and capture works inside it. The CDP-context
+	// mechanism is deleted outright, and a structural test in
+	// pkg/tools/browser/no_residual_test.go fails the build if it returns.
 
 	// WarmAtBoot launches the shared Chrome eagerly during gateway boot
 	// (BrowserCoordinator.WarmUp) instead of lazily on the first browser

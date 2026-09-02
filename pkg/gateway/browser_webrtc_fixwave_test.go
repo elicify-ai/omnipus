@@ -37,7 +37,7 @@ import (
 // newFixWaveHandlerWithAudit mirrors newBrowserWSHandlerWithAudit
 // (browser_ws_test.go) but accepts a mutate func, the way
 // newBrowserWSTestHandler does — this file's tests need both audit
-// visibility AND per-test config control (ExecPath, CaptureSharedContext).
+// visibility AND per-test config control (ExecPath, ProfileDir).
 func newFixWaveHandlerWithAudit(
 	t *testing.T,
 	mutate func(cfg *config.Config),
@@ -109,7 +109,6 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
 	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.CaptureSharedContext = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
 	})
@@ -191,7 +190,6 @@ func webrtcCapableGateMutate(t *testing.T) func(cfg *config.Config) {
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
 	return func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.CaptureSharedContext = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
 	}

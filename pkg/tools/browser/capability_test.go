@@ -332,7 +332,7 @@ func TestClassifyVideoCapabilityWithExec_Table(t *testing.T) {
 // seeded extension still must NOT report Capable=true when the coordinator's
 // shared-default-context capture mode is disabled — capture is certain to
 // fail (chrome.tabCapture cannot reach a tab in a CDP-created context).
-func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
+func TestCaptureVideoCapability_RequiresCoordinatorAttached(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
@@ -346,24 +346,25 @@ func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
 	mgr.cfg.ExtensionDir = t.TempDir()
 	seedBuildBinary(t, mgr.InstallRoot(), "131.0.6778.108", platform, fullChromeBuild())
 
-	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{})
-	// captureSharedContext left at its zero-value (false/disabled) — no
-	// SetCaptureSharedContext(true) call.
-	mgr.AttachSharedChrome(coord, browserTestKey("agent-cap-test"))
-
+	// No AttachSharedChrome yet: this manager drives no Chrome that the
+	// encoder page could share, so capture cannot succeed and the classifier
+	// must say so rather than advertising Capable=true.
 	got := mgr.CaptureVideoCapability()
 	if got.Capable {
-		t.Fatalf("CaptureVideoCapability = Capable=true with shared-context capture disabled, want not-capable")
+		t.Fatalf("CaptureVideoCapability = Capable=true with no coordinator attached, want not-capable")
 	}
 	if got.Reason == "" {
 		t.Fatal("expected a non-empty operator-facing Reason")
 	}
 
-	coord.SetCaptureSharedContext(true)
+	mgr.AttachSharedChrome(
+		NewBrowserCoordinator(t.TempDir(), BrowserConfig{}),
+		browserTestKey("agent-cap-test"),
+	)
 	got = mgr.CaptureVideoCapability()
 	if !got.Capable {
 		t.Fatalf(
-			"CaptureVideoCapability = Capable=false after enabling shared-context capture, want true (reason=%q)",
+			"CaptureVideoCapability = Capable=false once a coordinator is attached, want true (reason=%q)",
 			got.Reason,
 		)
 	}

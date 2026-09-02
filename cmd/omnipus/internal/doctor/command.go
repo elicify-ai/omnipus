@@ -175,16 +175,11 @@ func checkBrowserVideoCapability(cfg *config.Config) []warning {
 		}
 	}
 
-	if !b.CaptureSharedContext {
-		return []warning{
-			{
-				code: "WARN-BROWSER-004",
-				message: "Browser live-view video/audio capture requires tools.browser.capture_shared_context=true " +
-					"(ADR-048): the WebRTC capture extension cannot capture a tab living in an isolated per-agent " +
-					"browser context. With this disabled, the live-view panel will fall back to JPEG screenshots.",
-			},
-		}
-	}
+	// WARN-BROWSER-004 is RETIRED with ADR-072 FR-031. It warned that
+	// tools.browser.capture_shared_context was false; that key no longer
+	// exists, and there is no configuration left under which the capture
+	// extension cannot reach the tab. Do not reintroduce the code without a
+	// condition that can actually be true.
 
 	return nil
 }

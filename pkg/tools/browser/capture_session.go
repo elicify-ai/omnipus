@@ -745,8 +745,7 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 		// while on a cold shared-Chrome launch — long enough for THIS
 		// capture session to have been superseded/Stop()'d by a newer one in
 		// the meantime (e.g. another agent's offer won the ADR-048
-		// condition-2 fence, see config.go's CaptureSharedContext doc
-		// comment). Re-check before stealing window focus: a late-firing
+		// condition-2 fence). Re-check before stealing window focus: a late-firing
 		// BringToFront from an already-stopped session would steal focus
 		// from whichever agent's tab is now legitimately active, for a
 		// capture that is dead either way.

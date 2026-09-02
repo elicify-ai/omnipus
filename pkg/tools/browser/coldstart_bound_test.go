@@ -226,7 +226,7 @@ func TestCoordinator_LoadExtension_HonorsCallerContext(t *testing.T) {
 	// behavior, not coordinator launch latency.
 	mgr := newTestManager(t, cfg)
 	mgr.AttachSharedChrome(coord, browserTestKey("warm-agent"))
-	if _, _, err := coord.Register(context.Background(), "warm-agent", mgr); err != nil {
+	if _, err := coord.Register(context.Background(), "warm-agent", mgr); err != nil {
 		t.Fatalf("Register (warm-up): %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestCoordinator_LoadExtension_SucceedsWithGenerousContext(t *testing.T) {
 
 	mgr := newTestManager(t, cfg)
 	mgr.AttachSharedChrome(coord, browserTestKey("warm-agent"))
-	if _, _, err := coord.Register(context.Background(), "warm-agent", mgr); err != nil {
+	if _, err := coord.Register(context.Background(), "warm-agent", mgr); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

@@ -2520,16 +2520,9 @@ func registerSharedTools(
 				} else {
 					al.browserCoordinator.ApplyRuntimeConfig(browserCfg)
 				}
-				// ADR-048 condition 1: thread tools.browser.capture_shared_context
-				// through to the coordinator on every fresh-seed AND reload pass —
-				// SetCaptureSharedContext (not NewBrowserCoordinator's constructor
-				// args) so this stays a single call site regardless of which
-				// branch above ran.
-				al.browserCoordinator.SetCaptureSharedContext(cfg.Tools.Browser.CaptureSharedContext)
 				// FR-034: push tools.browser.actionability_gate into the
-				// actionability gate's single chokepoint. Same call site and
-				// same shape as SetCaptureSharedContext above, so it runs on
-				// the fresh-seed pass AND on every config reload — the revert
+				// actionability gate's single chokepoint. It runs on the
+				// fresh-seed pass AND on every config reload — the revert
 				// switch takes effect without a restart, which is the whole
 				// reason it exists.
 				browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)

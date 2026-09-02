@@ -78,10 +78,10 @@ func TestCoordinator_Register_CreateTargetParams_PinsWindowSize(t *testing.T) {
 	mgrB := newTestManager(t, cfg)
 	mgrB.AttachSharedChrome(coord, browserTestKey("agent-params-b"))
 
-	if _, _, err := coord.Register(context.Background(), "agent-params-a", mgrA); err != nil {
+	if _, err := coord.Register(context.Background(), "agent-params-a", mgrA); err != nil {
 		t.Fatalf("Register A: %v", err)
 	}
-	if _, _, err := coord.Register(context.Background(), "agent-params-b", mgrB); err != nil {
+	if _, err := coord.Register(context.Background(), "agent-params-b", mgrB); err != nil {
 		t.Fatalf("Register B: %v", err)
 	}
 

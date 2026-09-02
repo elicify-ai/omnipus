@@ -2332,8 +2332,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Operator opt-out: `tools.browser.warm_at_boot`
 	// (config.BrowserToolConfig.WarmAtBoot, env
 	// OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT), default true — following the same
-	// "default true" pattern as LiveViewEnabled/WebRTCEnabled/
-	// CaptureSharedContext. Setting it false keeps browser tools fully
+	// "default true" pattern as LiveViewEnabled/WebRTCEnabled.
+	// Setting it false keeps browser tools fully
 	// available and simply defers the Chrome launch to first use; it does
 	// not disable the browser.
 	//
