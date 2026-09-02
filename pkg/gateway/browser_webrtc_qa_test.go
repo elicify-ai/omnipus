@@ -39,7 +39,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +47,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 
 	"github.com/gorilla/websocket"
 	pion "github.com/pion/webrtc/v4"

@@ -352,3 +352,34 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatalf("write fixture file %s: %v", path, err)
 	}
 }
+
+// TestReadCgroupMemoryAvailableBytes_UsesTheRealRoot pins the production
+// wrapper, not just its parameterized twin.
+//
+// readCgroupMemoryAvailableBytes was flagged `unused` by CI's Linux linter and
+// nowhere else: its only callers were the darwin and non-Linux tests, which
+// assert it returns false because cgroups are Linux-only. So the symbol existed
+// on every platform, was exercised on the ones where it does nothing, and was
+// dead on the one where it works.
+//
+// Deleting it would have removed a real platform-parity assertion; a //nolint
+// would have hidden the gap rather than closed it. Calling it here does what
+// the linter was actually pointing at — the wrapper reads cgroupRoot, and
+// nothing proved that.
+func TestReadCgroupMemoryAvailableBytes_UsesTheRealRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "memory.max"), "8000000")
+	writeFile(t, filepath.Join(dir, "memory.current"), "3000000")
+
+	orig := cgroupRoot
+	cgroupRoot = dir
+	t.Cleanup(func() { cgroupRoot = orig })
+
+	got, ok := readCgroupMemoryAvailableBytes()
+	if !ok {
+		t.Fatal("readCgroupMemoryAvailableBytes() ok = false, want true (fixture root has v2 files)")
+	}
+	if want := uint64(5000000); got != want {
+		t.Fatalf("readCgroupMemoryAvailableBytes() = %d, want %d (limit - current, read via cgroupRoot)", got, want)
+	}
+}

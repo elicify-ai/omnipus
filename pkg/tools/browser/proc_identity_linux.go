@@ -38,12 +38,12 @@ func confirmProcessIsOurChrome(pid int) bool {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(exe))
-	switch {
-	case base == "chrome", base == "chromium", base == "chromium-browser":
+	switch base {
+	case "chrome", "chromium", "chromium-browser":
 		return true
-	case base == "google-chrome", base == "google-chrome-stable":
+	case "google-chrome", "google-chrome-stable":
 		return true
-	case base == "chrome-headless-shell":
+	case "chrome-headless-shell":
 		return true
 	}
 	return false
