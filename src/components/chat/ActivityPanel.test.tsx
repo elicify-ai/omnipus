@@ -10,6 +10,7 @@ import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
 
 beforeEach(() => {
   act(() => {
@@ -531,3 +532,151 @@ describe('ActivityPanel — bash-kind error state', () => {
 // header comment. This describe block covered that removed surface and is
 // gone with it; makeAgentItem above no longer accepts the now-deleted
 // sessionMessages/lifecycleState/lifecycleSessionId/steeringReceipt fields.
+
+// ── browser-agent-capability-spec FR-039 / S-63, panel half ──────────────
+//
+// The chat thread does NOT show a delegated browser call at the default
+// (asserted in src/lib/toolVisibility.test.ts). The ActivityPanel is the only
+// partial fallback, and "partial" is the load-bearing word — the panel is
+// narrower than "fully transparent" and these tests assert what it actually
+// does, not what it is assumed to do:
+//
+//   - it aggregates ONLY subagent delegation spans, background bash sessions
+//     and judge verdicts (useRunningActivity.ts's own header). A PARENT-turn
+//     tool call is none of those, so it never appears here at all — which is
+//     why ADR-072 D2.11's "a browser_snapshot never appears there" is right
+//     for the parent case and wrong for the delegated one.
+//   - a span must still be running, or inside RECENTLY_FINISHED_CAP = 8
+//     (useRunningActivity.ts:148), to be listed.
+//   - the operator must open the panel AND expand that span.
+//   - an external-CLI (3p) sub-agent's steps are dropped upstream at
+//     useRunningActivity.ts:549 (`steps: resolved.agentType === '3p' ? [] :
+//     span.steps`), so nothing of its browsing reaches any surface.
+//
+// TESTS ONLY — no SPA source changes.
+
+describe('ActivityPanel — delegated browser call, the partial fallback (FR-039, S-63)', () => {
+  function makeBrowserSnapshotStep() {
+    return {
+      kind: 'tool' as const,
+      tool: {
+        id: 'snap1',
+        call_id: 'snap1',
+        tool: 'browser_snapshot',
+        params: {},
+        status: 'success' as const,
+        result: 'textbox "Card number" value="4111 1111 1111 1111"',
+      },
+    }
+  }
+
+  it('direction 3: a NATIVE sub-agent span carries the browser_snapshot call in its expanded steps', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[
+          makeAgentItem({
+            status: 'running',
+            agentType: 'native',
+            taskLabel: 'check the checkout form',
+            steps: [makeBrowserSnapshotStep()],
+          }),
+        ]}
+        recentlyFinished={[]}
+      />,
+    )
+    // The expand is a real precondition, not a formality — this is limit (3).
+    // Before the click the badge must not be present.
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'browser_snapshot')
+  })
+
+  it('the same is true for a finished native span, which is the case an operator actually reads after the fact', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'success',
+            agentType: 'native',
+            durationMs: 1200,
+            steps: [makeBrowserSnapshotStep()],
+          }),
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    expect(screen.getByTestId('tool-call-badge')).toHaveAttribute('data-tool', 'browser_snapshot')
+  })
+
+  // Direction 4 — and this is the assertion that stops direction 3's green
+  // from being read as "the panel covers delegated browsing". It does not
+  // cover the external-CLI population at all.
+  //
+  // Asserted at the PANEL rather than at the hook on purpose: the upstream
+  // mapping (useRunningActivity.ts:549) already empties `steps` for a 3p
+  // agent, so handing the panel a 3p item WITH steps is the stronger test —
+  // it proves the panel itself refuses to render them, so the guarantee does
+  // not rest on that one upstream ternary staying correct.
+  it('direction 4: an external-CLI (3p) span renders NO browser step, even when handed one', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[
+          makeAgentItem({
+            status: 'running',
+            agentType: '3p',
+            agentName: 'ClaudeCode',
+            taskLabel: 'check the checkout form',
+            steps: [makeBrowserSnapshotStep()],
+          }),
+        ]}
+        recentlyFinished={[]}
+      />,
+    )
+    // The 3p row is not expandable at all — it shows a static notice instead.
+    expect(screen.getByText('No live step detail yet')).toBeInTheDocument()
+    const header = screen.getByText('check the checkout form').closest('button')
+    expect(header).toBeDisabled()
+    fireEvent.click(header as HTMLButtonElement)
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+    // And the captured value never reaches the DOM on any path.
+    expect(screen.queryByText(/4111 1111 1111 1111/)).not.toBeInTheDocument()
+  })
+
+  // The panel's OTHER real limit, asserted rather than assumed: it renders
+  // only what it is handed. A parent-turn browser call is not a span, not a
+  // background bash session and not a judge verdict, so useRunningActivity
+  // never produces an item for it — and with no items the panel shows its
+  // empty state. This is why the panel is not a fallback for the parent case
+  // and the chat thread is the only surface there.
+  it('a parent-turn browser call is not something the panel can show — with no spans it is empty', () => {
+    render(<ActivityPanel open onOpenChange={() => {}} running={[]} recentlyFinished={[]} />)
+    expect(screen.getByText('No background activity yet.')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  })
+
+  // The panel's step policy is the INVERSE of the thread's, and a browser tool
+  // must be on the visible side of it. Pinned separately from the render
+  // assertions above so a regression in the predicate is distinguishable from
+  // a regression in the component.
+  it('shouldRenderToolCallInPanel admits every one of the six new browser tools', () => {
+    for (const tool of [
+      'browser_select_option',
+      'browser_press_key',
+      'browser_hover',
+      'browser_upload_file',
+      'browser_handle_dialog',
+      'browser_snapshot',
+    ]) {
+      expect(shouldRenderToolCallInPanel(tool, false)).toBe(true)
+    }
+  })
+})
