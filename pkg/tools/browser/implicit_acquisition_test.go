@@ -175,27 +175,72 @@ func TestImplicitAcquisition_BlockedWhileHumanControls(t *testing.T) {
 				"retry against a tab a person is driving")
 	})
 
-	// (e) The exemption's price, stated. browser_handle_dialog is D2's and does
-	//     not exist yet — so what is asserted here is the property that makes
-	//     the future exemption safe: a tool exempt from BOTH gates must not
-	//     carry the side effects a leased tool's success implies. Today the
-	//     read-only exempt tools are the closest live analogue, and they must
-	//     leave ownership untouched.
-	t.Run("a doubly-exempt tool changes no ownership", func(t *testing.T) {
+	// (e) The exemption's price, against the tool that actually pays it.
+	//
+	// THIS SUBTEST USED TO DRIVE browser_list_tabs, and it could not fail.
+	// It was written when browser_handle_dialog was still D2's and unbuilt, so
+	// it reached for "the closest live analogue" among the read-only exempt
+	// tools. But browser_list_tabs enumerates a slice and returns; it has no
+	// code path that could take a lease or move a tab set, so asserting that
+	// it does neither was a statement about a tool that could not have done
+	// either. The property was never in question for the stand-in, and was
+	// never checked for the real subject.
+	//
+	// browser_handle_dialog now exists (tools_dialog.go) and it is the one
+	// tool exempt from BOTH gates while still ACTING on the page: FR-035 makes
+	// it the recovery verb, because the click that raised the dialog still
+	// holds the lease and the human staring at the wedged tab has no button
+	// either, so gating it behind the mechanisms the fault itself disables is
+	// a deadlock rather than a safety property.
+	//
+	// That exemption is what has to be paid for here. A write-shaped tool that
+	// answers while a human drives, and takes no lease doing it, is exactly
+	// the shape that could become an implicit-acquisition path by accident —
+	// and FR-070's whole design is that acting on the operator's tab transfers
+	// nothing. Both gates are stacked against it deliberately: a human holds
+	// control AND another turn holds the write lease, so a tool that consulted
+	// either would defer instead of answering.
+	t.Run("the doubly-exempt dialog verb answers past both gates and moves no ownership", func(t *testing.T) {
 		registry, mgr := newFixture(t)
+		fakeSession(t, mgr, operatorSet)
+		seedDialogOnActiveTab(t, mgr, operatorSet, &PendingDialog{Type: "alert", Message: "are you sure?"})
+
+		// Gate 1: a human is driving the operator's tab.
 		require.True(t, mgr.Live().TakeControl(operatorSet, "human-viewer"))
+		// Gate 2: another turn holds the write lease on that same set — this
+		// is the wedge FR-035 describes, not a contrived one.
+		release, leased, _ := mgr.acquireWrite(context.Background(), testKey, owner, "the-turn-that-wedged-it")
+		require.True(t, leased, "test setup: the blocking lease must be held")
+		defer release()
 
 		before := mgr.OperatorSessionID()
-		listTabs, ok := registry.Get("browser_list_tabs")
-		require.True(t, ok)
-		result := listTabs.Execute(context.Background(), map[string]any{})
+		dialog, ok := registry.Get("browser_handle_dialog")
+		require.True(t, ok, "browser_handle_dialog must be registered — it is the subject of this assertion")
+
+		result := dialog.Execute(context.Background(), map[string]any{"accept": false})
 		require.NotNil(t, result)
+
+		// It ANSWERS. Without this the three assertions below would be
+		// satisfied by a tool that deferred and did nothing at all.
 		require.NotContains(t, result.ForLLM, humanControlDeferralMarker,
-			"a doubly-exempt tool must answer even while a human holds the wheel")
-		require.False(t, leaseWasTaken(mgr, testKey, owner),
-			"a doubly-exempt tool must take no lease")
+			"browser_handle_dialog deferred to the human holding the live view. It is the verb that "+
+				"unwedges the tab, and the human has no button either (FR-035) — deferring here "+
+				"leaves the tab stuck for both of them")
+		require.NotContains(t, result.ForLLM, leaseDeferralMarker,
+			"browser_handle_dialog deferred to the write lease. The lease is held by the very call "+
+				"the dialog is blocking, so waiting for it is a deadlock by construction")
+
+		// NOTE ON WHAT IS *NOT* ASSERTED HERE, because getting it wrong is
+		// easy and silent: leaseWasTaken() cannot be used in this subtest.
+		// The setup above holds the lease itself, so isHeld() is true whether
+		// or not the tool touched it, and the assertion would be reporting the
+		// fixture rather than the tool. The lease exemption is proved instead
+		// by the deferral marker being ABSENT while another turn holds the
+		// lease and mgr.cfg.LeaseWait is 20ms: a tool that tried to take it
+		// would block for that budget and say so.
 		require.Equal(t, before, mgr.OperatorSessionID(),
-			"the tab must still be workspace-owned before and after — an exempt tool is not an "+
-				"implicit-acquisition path and must not become one")
+			"the operator's tab set moved. Acting on it transfers nothing (FR-070) — and a "+
+				"write-shaped tool that answers while a human drives is the likeliest thing to "+
+				"become an implicit-acquisition path by accident")
 	})
 }
