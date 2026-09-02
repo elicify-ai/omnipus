@@ -65,10 +65,24 @@ g345() {
   elif [ "${old:-1}" -ne 0 ]; then verdict G-4 1 "STALE DOCUMENT — the old term still matches after the edit"
   else verdict G-4 1 "the new content is not findable after an external edit"; fi
 
-  rm -f "$f"; sleep 6
-  local gone; gone=$(ask 200 "Use knowledge_find with words=\"$t2\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
-  [ "${gone:-1}" -eq 0 ] && verdict G-5 0 "deletion reflected" \
-                         || verdict G-5 1 "DELETED FILE STILL MATCHES — a search returns a note that no longer exists"
+  # G-5 NEEDS ITS PRECONDITION ASSERTED, and the first version of this script
+  # did not do it. It deleted the file and checked the term no longer matched —
+  # but if the term NEVER matched (because the file was not indexed in the first
+  # place), that check passes trivially. On the first run it did exactly that:
+  # G-3 and G-4 had already failed, so nothing was ever findable, and G-5
+  # reported "deletion reflected" over a file that had never been searchable.
+  #
+  # A test that cannot tell "correctly removed" from "never there" measures
+  # nothing. The precondition below is the difference.
+  local before; before=$(ask 200 "Use knowledge_find with words=\"$t2\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+  if [ "${before:-0}" -lt 1 ]; then
+    skip G-5 "PRECONDITION FAILED: the file was not findable before deletion, so a post-deletion zero proves nothing"
+  else
+    rm -f "$f"; sleep 6
+    local gone; gone=$(ask 200 "Use knowledge_find with words=\"$t2\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+    [ "${gone:-1}" -eq 0 ] && verdict G-5 0 "deletion reflected (was findable=$before, now 0)" \
+                           || verdict G-5 1 "DELETED FILE STILL MATCHES — a search returns a note that no longer exists"
+  fi
 }
 
 # ---------------------------------------------------------------------------
