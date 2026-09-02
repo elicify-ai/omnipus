@@ -1694,19 +1694,72 @@ func (m *BrowserManager) SetTabsChangedFunc(cb func(sessionID string, tabs []Tab
 	m.mu.Unlock()
 }
 
-// ListTabs returns a snapshot of sessionID's tab set and which index is
-// active. Returns a nil, empty slice with no error when the browsing
-// context doesn't exist yet (no tool has navigated there) — "nothing open
-// yet" is not treated as a failure, mirroring LiveViewRegistry.lookup's
-// convention for a not-yet-attached session.
-func (m *BrowserManager) ListTabs(sessionID string) (tabs []Tab, activeIdx int, err error) {
+// TabState is the CLOSED three-value answer to "what is there to see in this
+// tab set?" (ADR-072 FR-013). It exists because `ListTabs` used to return the
+// identical `nil, 0, nil` for two genuinely different situations, and the tool
+// on top of it told the model "no tabs" in a case where the truthful answer was
+// "there is no browser here at all". §1.1 of the ADR records what that
+// ambiguity cost.
+//
+// Three members, and DELIBERATELY no fourth. In particular there is NO
+// "denied" member: ADR D1.12 withdrew it as unreachable, because
+// FilterToolsByPolicy (pkg/tools/compositor.go) `continue`s past a deny
+// verdict, so a policy-denied agent is never shown browser_list_tabs, never
+// calls it, and answers from the tool's ABSENCE. A state nothing can ever
+// return is not a state — it is a lie with a name.
+type TabState string
+
+const (
+	// TabStateNoContext — this browser has no tab set for this owner at all.
+	// No tool has ever browsed here. NOT "zero tabs": there is nothing to
+	// have tabs.
+	TabStateNoContext TabState = "no_context"
+	// TabStateOpen — a live tab set with at least one tab in it.
+	TabStateOpen TabState = "open"
+	// TabStateEmpty — a live tab set that currently holds no tabs. Reachable
+	// in production through CloseTab's last-tab path (it empties se.tabs and
+	// then calls createFirstTab to restore the never-zero invariant; a failed
+	// replacement leaves the entry live and empty until the reaper takes it).
+	TabStateEmpty TabState = "empty"
+)
+
+// ListTabsState returns which of the three TabStates sessionID is in, together
+// with a snapshot of its tab set and which index is active.
+//
+// sessionID is the MANAGER-LEVEL session key — sessionKey(BrowsingKey,
+// TabOwner) — exactly as every sibling method on this type takes it
+// (Session/SwitchTab/CloseTab/OpenTab). It is deliberately NOT addressed by
+// BrowsingKey alone: one key names one browser, and a browser holds one tab set
+// per session that has browsed plus the operator's workspace-owned one, so a
+// key on its own cannot say whose tabs are being asked for (FR-080).
+//
+// The error is reserved for a genuine failure. "Nothing here" is a STATE, not
+// an error and not an empty success.
+func (m *BrowserManager) ListTabsState(sessionID string) (TabState, []Tab, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	se, ok := m.sessions[sessionID]
 	if !ok {
-		return nil, 0, nil
+		return TabStateNoContext, nil, 0, nil
 	}
-	return snapshotTabsLocked(se), se.activeIdx, nil
+	tabs := snapshotTabsLocked(se)
+	if len(tabs) == 0 {
+		return TabStateEmpty, tabs, se.activeIdx, nil
+	}
+	return TabStateOpen, tabs, se.activeIdx, nil
+}
+
+// ListTabs returns a snapshot of sessionID's tab set and which index is active.
+//
+// It DELEGATES to ListTabsState and drops the state. That is the whole point of
+// the split: the (tabs, activeIdx, err) triple cannot distinguish "no browsing
+// context here" from "a context with no tabs" — it returned the same empty
+// answer for both, with no error, for as long as this method has existed
+// (FR-013). Callers that need to tell the two apart MUST call ListTabsState;
+// this signature is retained for the callers that genuinely only want the tabs.
+func (m *BrowserManager) ListTabs(sessionID string) (tabs []Tab, activeIdx int, err error) {
+	_, tabs, activeIdx, err = m.ListTabsState(sessionID)
+	return tabs, activeIdx, err
 }
 
 // SwitchTab makes tab `index` the active tab of sessionID's browsing

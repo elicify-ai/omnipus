@@ -420,8 +420,8 @@ func (t *TypeTool) Parameters() map[string]any {
 				"type": "boolean",
 				"description": "If true, clear the field's existing value before typing (replace mode). If " +
 					"false (the default), the text is APPENDED to whatever the field already contains — this " +
-					"preserves existing behavior and anything a human or another turn already typed into a " +
-					"shared browser session. Default: false.",
+					"preserves existing behavior and anything a human or another turn already typed into " +
+					"the browser this workspace's agents share. Default: false.",
 			},
 		},
 		"required": []string{"selector", "text"},

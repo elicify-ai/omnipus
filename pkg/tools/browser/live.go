@@ -471,7 +471,15 @@ func (r *LiveViewRegistry) Attach(
 	// immediately — a session with only one tab may never emit another
 	// tabs-changed event during this viewer's whole attachment.
 	if onTabs != nil {
-		if tabs, activeIdx, terr := r.mgr.ListTabs(sessionID); terr == nil && len(tabs) > 0 {
+		// FR-013: asks for the STATE, not just the tabs. The two states that
+		// do not push (TabStateNoContext — nothing has ever browsed here — and
+		// TabStateEmpty — a live context between CloseTab's last-tab removal
+		// and its replacement) are the pair the old `len(tabs) > 0` guard
+		// conflated. Both still skip the push, and deliberately so: pushing an
+		// empty strip would blank a panel that is about to receive a real
+		// tabs-changed event. What changes is that the two are now visibly
+		// distinct at the call site rather than indistinguishable.
+		if state, tabs, activeIdx, terr := r.mgr.ListTabsState(sessionID); terr == nil && state == TabStateOpen {
 			onTabs(tabs, activeIdx)
 		}
 	}
