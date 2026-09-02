@@ -244,8 +244,10 @@ func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
 	// loop on the SAME tab — every chromedp.Run for one browser process
 	// funnels through a single fixed-capacity command queue drained by one
 	// goroutine (see inspectEvalTimeout's doc comment and live.go's
-	// handleScreencastEvent for the full ADR-038 analysis), so this
-	// reproduces the exact contention shape the UAT incident hit.
+	// runCDPWithTimeout / attach for the ADR-038 analysis — the older
+	// citation named handleScreencastEvent, which ADR-061 deleted along with
+	// the whole JPEG screencast pipeline), so this reproduces the exact
+	// contention shape the UAT incident hit.
 	const busyLoopJS = `(function(){var s=Date.now(); while(Date.now()-s<8000){} return true;})()`
 	go func() {
 		_ = chromedp.Run(tabCtx, chromedp.Evaluate(busyLoopJS, nil))
