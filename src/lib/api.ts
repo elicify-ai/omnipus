@@ -1903,11 +1903,34 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
   }
 }
 
-export async function createSession(agentId: string): Promise<Session> {
+/**
+ * Create a session for an agent, optionally inside a workspace.
+ *
+ * `workspaceId` is the workspace the chat this session backs belongs to. Pass
+ * it whenever the caller knows one — omit it only for the global/inbox chat,
+ * which genuinely belongs to no workspace.
+ *
+ * It matters beyond bookkeeping: the live browser panel decides which
+ * workspace's browser, and whose live logins, it shows by reading the
+ * workspace off the attaching chat session's own meta on the server (ADR-072
+ * FR-016/FR-017 — no workspace travels on the attach frame itself). A session
+ * created without one leaves that read empty, and an agent on more than one
+ * workspace's team is then refused as ambiguous. Sending it here means a chat
+ * carries its workspace from birth instead of from its first message.
+ */
+export async function createSession(agentId: string, workspaceId?: string): Promise<Session> {
+  const trimmedWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : ''
   // Wire returns the wire Session shape (nested stats); transform to SPA Session.
   const raw = await request<RawSession>('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ agent_id: agentId }),
+    body: JSON.stringify({
+      agent_id: agentId,
+      // Omitted entirely when absent: the contract caps it at 128 chars and
+      // rejects a workspace that does not exist, and "" is not a workspace.
+      ...(trimmedWorkspaceId.length > 0 && trimmedWorkspaceId.length <= 128
+        ? { workspace_id: trimmedWorkspaceId }
+        : {}),
+    }),
   }, WireSessionSchema as ZodType<RawSession>)
   return rawToSession(raw)
 }

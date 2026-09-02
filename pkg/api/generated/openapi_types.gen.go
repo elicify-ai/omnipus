@@ -12444,6 +12444,11 @@ type SessionCreateRequest struct {
 
 	// Type Session type. Defaults to "chat" when omitted.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
+
+	// WorkspaceId The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
+	// Stamped straight onto the new session's meta, so a session created for a workspace chat carries its workspace from birth rather than from its first message. That gap is what ADR-072 FR-017 tripped over: the live browser panel reads the workspace off the attaching chat session's own meta, server-side, and the SPA's "Open browser" launcher creates its session here — with no workspace — before any message has been sent. An agent on more than one workspace's team was therefore refused (FR-033) and told to open the panel from a chat belonging to the workspace it meant, which is exactly where the click had come from.
+	// Must name a workspace that exists (400 otherwise). Membership is NOT checked here: the value is a preference, and every consumer that grants access on it re-checks membership itself — browser.ResolveBrowsingKeyForAgent honours it only when the agent really is on that workspace's team.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SessionCreateRequestType Session type. Defaults to "chat" when omitted.

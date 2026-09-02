@@ -74,7 +74,21 @@ async function ensureSession(): Promise<string> {
   if (!sessionEnsure) {
     sessionEnsure = (async () => {
       if (!activeAgentId) throw new Error("Select an agent before sending files");
-      const created = await createSession(activeAgentId);
+      // U2: carry the chat's workspace into the session at birth.
+      //
+      // The session this mints becomes the ACTIVE one, and it is the session
+      // the live browser panel would attach against if the user opened it
+      // before sending anything. The gateway reads which workspace's browser
+      // to show off that session's own meta, server-side (ADR-072 FR-017), so
+      // a session created with no workspace gets a multi-workspace agent
+      // refused as ambiguous — advised to open the panel from a workspace
+      // chat, which is where they already are. Waiting for the first message
+      // to stamp it is exactly the gap. `undefined` outside a workspace is
+      // correct: no workspace is not a default one.
+      const created = await createSession(
+        activeAgentId,
+        useWorkspacesStore.getState().activeWorkspaceId ?? undefined,
+      );
       setActiveSession(created.id, created.agent_id, null);
       return created.id;
     })().finally(() => {
