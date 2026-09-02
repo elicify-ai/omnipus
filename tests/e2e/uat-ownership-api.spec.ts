@@ -225,6 +225,12 @@ interface Fixture {
   chatA1: string;
   chatA2: string;
   chatB1: string;
+  /**
+   * An agent this file puts on EXACTLY TWO workspace teams, so UAT-07r's
+   * ambiguity is something the fixture builds rather than something it hopes
+   * to find. See the beforeAll note on why a seeded agent cannot play this
+   * part.
+   */
   multiAgent: string;
   loneChat: string;
   noTeamAgent: string;
@@ -233,14 +239,26 @@ interface Fixture {
 let fx: Fixture;
 
 /**
- * Build the plan's §2.4 shape, with one deviation that is forced and is itself
- * worth reading: the plan's Alpha/Bravo rosters use the seeded Jim and Ray, but
- * BOTH are already on the default workspace's team, so both are on two
- * workspaces and both hit FR-033's ambiguity refusal on any workspace-less
- * request. The two per-workspace probes are therefore purpose-made agents on
- * EXACTLY ONE workspace each, which is the only shape that can prove "agent X
- * reached workspace Y's browser" without the answer being "refused as
- * ambiguous" every time.
+ * Build the plan's §2.4 shape. Every agent this file needs is purpose-made,
+ * and its workspace membership is set here rather than inherited, because
+ * membership is the whole subject of these cases and a seeded agent's
+ * membership is a property of the machine rather than of the test:
+ *
+ *   - the two per-workspace probes are on EXACTLY ONE workspace each, which is
+ *     the only shape that can prove "agent X reached workspace Y's browser"
+ *     without the answer being "refused as ambiguous" every time;
+ *   - multiAgent is on EXACTLY TWO, which is what UAT-07r's FR-033 refusal is
+ *     about.
+ *
+ * multiAgent used to be the seeded `jim`, on the reasoning that jim is on the
+ * default workspace's team AND on a per-workspace team, so he is on two. That
+ * is true of a machine where a human has been doing UAT by hand, and false of
+ * every fresh install: SeedConfig puts jim on the ONE default workspace, this
+ * file's own workspaces do not include him, so `FindAllForAgent` returns a
+ * single candidate and the panel resolves it — correctly. UAT-07r then failed
+ * on the assertion that it must be refused, having never built the ambiguity
+ * it was asserting about. An agent the fixture puts on two teams itself is
+ * true on every machine.
  */
 test.beforeAll(async ({ playwright }) => {
   const request = await playwright.request.newContext({
@@ -280,8 +298,28 @@ test.beforeAll(async ({ playwright }) => {
   const agentA2 = await mkAgent(`uat-own-a2-${stamp}`);
   const agentB = await mkAgent(`uat-own-b-${stamp}`);
   const noTeamAgent = await mkAgent(`uat-own-noteam-${stamp}`);
-  await setTeam(wsA, [agentA, agentA2]);
-  await setTeam(wsB, [agentB]);
+  // On BOTH teams, and on nothing else — the FR-033 ambiguity, constructed.
+  // It never attaches successfully, so it never opens a Chrome in either
+  // workspace and cannot contaminate the tab strips the other cases count.
+  const multiAgent = await mkAgent(`uat-own-multi-${stamp}`);
+  await setTeam(wsA, [agentA, agentA2, multiAgent]);
+  await setTeam(wsB, [agentB, multiAgent]);
+
+  // READ THE MEMBERSHIP BACK, and refuse to run on a shape nobody built.
+  //
+  // UAT-07r asserts a refusal that only exists when the agent is on more than
+  // one workspace. When the premise silently is not there, the panel resolves —
+  // correctly — and the case fails as though the product had guessed, which is
+  // the most alarming possible way to report a fixture bug. This turns that
+  // into a BLOCKED setup failure that says which membership is missing.
+  const teams = await json<Array<{ id: string; core_team?: string[] }>>(await request.get('/api/v1/workspaces'));
+  const multiOn = teams.filter((w) => (w.core_team ?? []).includes(multiAgent)).map((w) => w.id).sort();
+  const wanted = [wsA, wsB].sort();
+  if (multiOn.join(',') !== wanted.join(',')) {
+    throw new Error(
+      `BLOCKED: the ambiguity fixture was not built — agent ${multiAgent} is on [${multiOn.join(',')}], expected exactly [${wanted.join(',')}]`,
+    );
+  }
 
   const chatA1 = await mkSession(agentA);
   const chatA2 = await mkSession(agentA);
@@ -308,7 +346,7 @@ test.beforeAll(async ({ playwright }) => {
     );
   }
 
-  fx = { wsA, wsB, agentA, agentA2, agentB, chatA1, chatA2, chatB1, multiAgent: 'jim', loneChat, noTeamAgent };
+  fx = { wsA, wsB, agentA, agentA2, agentB, chatA1, chatA2, chatB1, multiAgent, loneChat, noTeamAgent };
   await request.dispose();
 });
 
@@ -331,7 +369,7 @@ test.afterAll(async ({ playwright }) => {
       const res = await request.delete(`/api/v1/workspaces/${id}`, { headers });
       if (!res.ok()) console.log(`[UAT cleanup] DELETE workspace ${id} returned ${res.status()}`);
     }
-    for (const id of [fx.agentA, fx.agentA2, fx.agentB, fx.noTeamAgent]) {
+    for (const id of [fx.agentA, fx.agentA2, fx.agentB, fx.noTeamAgent, fx.multiAgent]) {
       const res = await request.delete(`/api/v1/agents/${id}`, { headers });
       if (!res.ok()) console.log(`[UAT cleanup] DELETE agent ${id} returned ${res.status()}`);
     }
@@ -548,6 +586,13 @@ test('UAT-11 an agent on no workspace is refused with the team reason', async ({
  * FR-033 — the ambiguity refusal UAT-07 rests on. An agent on more than one
  * workspace, asked from a chat that names none, must be refused rather than
  * given one by luck, and the log must name BOTH candidates.
+ *
+ * BOTH halves of the premise are built, not assumed: multiAgent is put on
+ * exactly two of this file's workspaces and the membership is read back in
+ * beforeAll, and loneChat is created with POST /sessions carrying no
+ * workspace_id and never messaged, so its meta has no workspace and the panel
+ * supplies no preference. If either half were missing, resolving would be the
+ * CORRECT behaviour and this case would be accusing the product of guessing.
  */
 test('UAT-07r an agent on two workspaces with a workspace-less chat is refused as ambiguous', async ({}, testInfo) => {
   const refused = await attach(fx.loneChat, fx.multiAgent, [], 12_000);
