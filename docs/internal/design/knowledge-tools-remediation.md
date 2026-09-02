@@ -726,3 +726,80 @@ Not ours to fix: `pkg/config` belongs to ADR-072's items. Recorded here because
 it is the same defect this document exists to name, and because anything on this
 branch that reasons about host memory on Linux will receive a confident wrong
 answer rather than an error.
+
+---
+
+## 9. Index freshness — operator requirements, 2026-09-02
+
+Three rulings, and they define when the index must be current rather than
+eventually current.
+
+1. **A write through Omnipus's own vault tools updates the index INSTANTLY.**
+2. **Startup indexing is INCREMENTAL** — it reconciles changes, it does not
+   rebuild.
+3. **A file a human adds through the UI is indexed INSTANTLY.** A file added
+   OUTSIDE Omnipus — copied in with Finder — is the only case that may wait for
+   the startup sweep.
+
+### 9.1 Where each stands, measured
+
+| # | requirement | status |
+|---|---|---|
+| 2 | startup is incremental | **already met** |
+| 1 | tools update instantly | **not met** |
+| 3 | UI adds update instantly | **not met** |
+
+**Requirement 2 needs no work.** `Index.SyncWith` reconciles against the
+manifest and skips files whose hash is unchanged, reporting `Indexed` and
+`Unchanged` separately (FR-033). It is already a reconcile, not a rebuild.
+
+**Requirements 1 and 3 are the same gap.** No write path in the product touches
+either index. Verified with the instrument checked first — a grep that finds 21
+`EditNote` references in the same files finds zero index calls:
+
+- the agent-facing writers `knowledge_edit` and `knowledge_restructure`;
+- the five UI handlers `rest_library.go` names — content-put, upload, mkdir,
+  rename, transfer.
+
+### 9.2 The shape this should take, and the precedent for it
+
+`rest_library.go` already solved this exact class of problem once, and its own
+comment says why: FR-0001a made all five create/rename handlers call **one**
+validation helper, observing that *"the one that forgot would silently accept
+what the other four refuse"*, and that a one-line call is *"the smallest thing a
+sixth handler's author can copy correctly"*.
+
+**Index notification should take the same shape**: one entry point, called by
+every writer, agent-facing and UI alike. A per-caller implementation would
+guarantee that the next writer added is the one that forgets — and a missing
+index update is invisible, which is worse than a missing validation.
+
+### 9.3 What has to exist first
+
+The two indexes are asymmetric:
+
+- The **properties index** already does single-note work —
+  `propindex.(*Index).UpsertNote`, `UpsertNotes`, `DeleteNote`.
+- The **text index** has **no** single-path update. Its per-file work lives
+  inside `SyncWith`'s batched walk.
+
+So the capability comes before the wiring. A single-path text update must reuse
+`SyncWith`'s own per-file logic rather than growing a second implementation —
+two answers to "how does a file become a document" will drift, and silently.
+
+**Two properties it must not break**, both already load-bearing:
+
+- **Manifest consistency.** A document indexed without its manifest entry
+  updated makes the next sync skip it as unchanged against a document that no
+  longer matches. `index.go` already carries a comment warning about precisely
+  this.
+- **Attachments stay body-free.** Non-markdown files are indexed by filename
+  stem with zero bytes read. An instant update must not start reading document
+  bodies — that would quietly reverse O1's ruling through a side door.
+
+### 9.4 What this does NOT cover
+
+A file changed outside Omnipus while it is running is still caught only at the
+next startup. That is the operator's own model and is deliberate, not a gap: a
+filesystem watcher is a separate decision with its own cost, and requirement 3
+scopes instant indexing to changes that come THROUGH the product.
