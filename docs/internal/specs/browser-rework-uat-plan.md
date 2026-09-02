@@ -1281,3 +1281,745 @@ himself and the retry works, without you telling him what the obstacle was.
   The agent reports success; on a real site that is a click on the banner, not on the button.
 
 ---
+
+### Group E — Two turns writing at once
+
+> **Where contention is even possible.** Two different chats have two different sets of tabs, so they
+> cannot collide (that is UAT-03). Collisions happen in exactly two places: on a tab **you** opened,
+> which the whole workspace shares, and between two turns running in **one** conversation. Group E
+> exercises both, and also checks that the *non*-colliding case does not block for no reason.
+
+#### UAT-28 — Two agents told to act on the same tab at once
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-9/AC1, AC7; ADR criterion 16; D1 H-8 |
+| **Preconditions** | You have opened a tab yourself in the panel on workspace Alpha (so it is the workspace's tab) and released control. Two chats, A1 and A2, both on Alpha. |
+
+**Steps**
+
+1. In chat **A1**, ask Jim: *"On the tab I opened, navigate to
+   `https://the-internet.herokuapp.com/dropdown`."*
+2. **Within a second or two**, in chat **A2**, ask Jim: *"On the tab I opened, navigate to
+   `https://the-internet.herokuapp.com/hovers`."* Getting these close together is the point; have
+   both messages typed and ready.
+3. Watch the panel throughout.
+4. Read both transcripts to the end.
+
+**Expected observable result**
+
+**Both requests eventually complete.** One may report that it waited or was deferred and then went
+ahead — at most one deferral each. The panel shows one navigation, then the other. It never shows a
+half-loaded mixture of the two pages.
+
+**What a silent failure looks like**
+
+- One agent reports success and **nothing happened for it** — the page went to the other agent's
+  destination and the first agent narrated a navigation it lost. Read both transcripts against what
+  the panel actually showed, in order.
+- One agent **returns an error**. Contention is meant to make a caller wait, never fail.
+- One agent returns `deferred` and **stops there, treating it as finished**. A deferral means "not
+  yet"; an agent that reports it as done has silently dropped the task. **This is a defect even
+  though nothing crashed** — see §5, N-2.
+- The two turns **deadlock**: both sit there and neither ever completes. Give it two minutes before
+  calling it.
+
+---
+
+#### UAT-29 — Two conversations that do not share a tab do not block each other
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-9/AC7 (second half) |
+| **Preconditions** | Chats A1 and A2 on Alpha, each with **its own** tab open (from UAT-03) |
+
+**Steps**
+
+1. In chat **A1**, start something slow on A1's own tab — ask Jim to open a heavy page and read all
+   its text.
+2. **While that is running**, in chat **A2**, ask Jim to do something quick on A2's own tab.
+3. Time how long A2 waits before it starts doing anything.
+
+**Expected observable result**
+
+A2 proceeds immediately. Neither waits on the other, and neither reports a deferral — they are
+working on separate tab sets and have nothing to contend over.
+
+**What a silent failure looks like**
+
+- A2 reports a **deferral** and waits for A1. Everything still "works", just slowly and mysteriously.
+  On a busy install this turns into every conversation queueing behind every other one, and no error
+  is ever produced to explain it. A safety mechanism that serialises work it never needed to
+  serialise is a performance defect, not a conservative choice.
+
+---
+
+#### UAT-30 — A deferral is legible to the agent
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D2 H-12 |
+| **Preconditions** | Set up a deferral deliberately — repeat UAT-28, or hold the wheel (UAT-31) |
+
+**Steps**
+
+1. Cause a deferral by any of the routes above.
+2. Read **exactly what the agent was told**, and **what it then did**.
+
+**Expected observable result**
+
+The agent can tell "not right now, try again" apart from "this failed". It waits and retries, or it
+says plainly that it is waiting. The message it received says which of the two situations it is in.
+
+**What a silent failure looks like**
+
+- The agent reads the deferral as a failure and **gives up on the task**, reporting to you that it
+  could not do the thing. The mechanism worked perfectly; the outcome for the user is a dropped
+  request.
+- The agent reads the deferral as **success** and moves on to the next step of a multi-step task,
+  building on a page state that never happened.
+
+---
+
+### Group F — Human control of the wheel
+
+#### UAT-31 — While you hold the wheel, an agent stands down
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-9/AC2, US-22/AC6; ADR-038 D6; D1 H-27 (second half) |
+| **Preconditions** | Chat A1, live panel open on a page you can see clearly |
+
+**Steps**
+
+1. **Take control** of the panel and keep holding it. Do not release.
+2. Put the page in a state you will recognise — scroll to a specific spot, type something in a field.
+3. While still holding control, ask Jim in chat A1: *"Click the Login button on this page."*
+4. Watch the page for five seconds.
+5. Read Jim's reply.
+6. Release control and ask him again.
+
+**Expected observable result**
+
+At step 4 **the page does not move under your hands.** At step 5 Jim reports that he is standing down
+because a human holds control — a *deferral*, not an error, with a reason that says so. At step 6 the
+same request works.
+
+**What a silent failure looks like**
+
+- **The page changes anyway.** Everything else about the interaction looks fine; the operator's
+  control was decorative. This is the case an implementation loses most easily, because the *allowed*
+  direction (step 6) still passes on a build with no lock at all.
+- Jim reports success at step 3 and the page did not change. He was refused and did not notice.
+- Jim reports a hard **error** rather than a deferral. Behaviour is right, the agent's next move is
+  wrong — it will give up instead of retrying after you release.
+
+---
+
+#### UAT-32 — Two actions are still allowed while you hold the wheel
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D2 US-9/AC6, US-10/AC5; D2 H-12 |
+| **Preconditions** | Continue from UAT-31 — you are holding control |
+
+**Steps**
+
+1. Still holding control, ask Jim to **take a structured snapshot** of the page.
+2. Navigate the page yourself to `https://the-internet.herokuapp.com/javascript_alerts` and click
+   "Click for JS Alert" so a popup is open, **while still holding control**.
+3. Ask Jim to **dismiss the popup**.
+
+**Expected observable result**
+
+Both work. A snapshot only reads; it is never deferred. Dismissing a popup is a **recovery** action —
+it must work even when a human holds the wheel, because a stuck popup is exactly the state you would
+need an agent to get you out of.
+
+**What a silent failure looks like**
+
+- The snapshot is **deferred**. Reading a page is now blocked by a lock that exists to stop *writing*
+  to it, and an agent asked "what's on screen?" while you drive answers "I can't look".
+- Dismissing the popup is deferred. **The tab is now stuck and the one thing that could unstick it is
+  refusing to run.** Nothing errors; the browser is simply dead until someone restarts something.
+- Dismissing the popup works and the result claims the agent has **taken over the tab**. Answering a
+  popup changes nothing about who owns the tab; a message saying otherwise means ownership moved when
+  it should not have.
+
+---
+
+### Group G — Memory pressure
+
+> ## ⚠️ How to constrain memory safely
+>
+> **Do NOT use a `MemoryMax` cgroup cap with swap enabled.** On this project's machines that has
+> repeatedly produced processes that thrash and then cannot be killed at all, taking the host with
+> them. This is not a style preference; it has happened.
+>
+> Use one of these instead, in order of preference:
+>
+> 1. **Use a genuinely small machine.** A 4 GB VM or a small cloud box gives you real pressure with
+>    no tricks. This is the best option and the one the specs were reasoned against.
+> 2. **Fill the memory with ordinary applications.** Start a large video call, open a browser with
+>    many tabs, run a couple of heavy builds. Watch `top` or Activity Monitor until free memory is
+>    genuinely low. Crude, safe, and closest to what an operator will actually hit.
+> 3. **If you must cap on Linux**, cap swap to zero at the same time so a runaway dies instantly
+>    instead of thrashing:
+>    `systemd-run --scope -p MemoryMax=3G -p MemorySwapMax=0 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/omnipus-uat gateway`
+>    Never set `MemoryMax` without `MemorySwapMax=0`.
+>
+> Record which method you used on every Group G case. The results are not comparable across methods.
+
+#### UAT-33 — Idle browsers are closed rather than the machine swapping
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-15/AC1, AC2; D1 H-12 |
+| **Preconditions** | A constrained host per the box above. Create as many workspaces as it takes to fill it (Charlie, Delta, Echo…). |
+
+**Steps**
+
+1. Browse a page in each workspace in turn until the machine has as many browsers as it has room
+   for. **Leave them idle** — close no panels, but stop interacting.
+2. Note which workspace you browsed **first** (the least recently used one).
+3. Log in to the dummy site (§3.3) in that first workspace before leaving it idle.
+4. Create one **more** workspace and browse a page in it.
+5. Watch `ps ax | grep user-data-dir | grep -v grep` before and after step 4.
+6. Now return to the first workspace and ask an agent to open
+   `https://the-internet.herokuapp.com/secure`.
+
+**Expected observable result**
+
+Step 4 **just works.** Nothing is refused, no error appears, and nothing is said to you. The Chrome
+count does not keep climbing — the oldest idle browser was closed to make room. At step 6 the first
+workspace **reopens after a visible pause and is still logged in**.
+
+**That pause is the entire cost of the mechanism, and confirming it is a pause and not a logout is
+the point of this case.**
+
+**What a silent failure looks like**
+
+- Step 6 comes back **logged out**. The browser was not closed and reopened, it was thrown away. This
+  is not a capacity policy, it is data loss — and it presents to the operator as "the site logged me
+  out again", which they will blame on the site.
+- The Chrome count keeps climbing at step 4 and the machine starts swapping (everything, including
+  the UI, becomes treacle). Nothing was closed and nothing was refused. Watch the process count, not
+  just whether step 4 succeeded.
+- Step 4 is **refused** even though the browsers were idle. Idle browsers are supposed to be closed
+  silently; a refusal here means the eviction path is not running and only the refusal is.
+
+---
+
+#### UAT-34 — When nothing can be closed, the refusal names memory
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-15/AC6, AC15; D1 H-12a |
+| **Preconditions** | Same constrained host. This time **keep a tab and a live panel open in every workspace**, so none of them is idle. |
+
+**Steps**
+
+1. With every workspace pinned (a tab open and a panel attached in each), ask an agent in **one more**
+   workspace to browse.
+2. Wait. Read the error when it arrives.
+3. Check the panels and tabs you had open.
+4. Close **one** panel, wait a few seconds, and retry step 1.
+
+**Expected observable result**
+
+Step 2: after a pause, the request **fails with a message saying the host is out of memory**, and
+suggesting something you can actually do — *close a browser or a panel you are finished with, or
+wait*. Step 3: **nothing you had open closed.** Step 4: it now works.
+
+**What a silent failure looks like**
+
+- The message **names a setting to raise** — `max_browsers`, `max_tabs`, a "limit" of any kind. There
+  is no such setting any more, so the message is telling an operator to do something impossible. They
+  will go looking, find nothing, and file a bug against the wrong thing. **Read the message word for
+  word.**
+- The message is generic — "could not be adopted", "browser unavailable". An agent that cannot tell
+  "out of memory" from "something broke" **retries immediately**, straight back into the pressure.
+- One of your open browsers **was** closed to make room. Pinned means pinned; a panel you were
+  watching must not be taken away from you.
+- It succeeds and the machine starts swapping. Confirm with `top` before recording a pass.
+
+---
+
+#### UAT-35 — The first browser always launches
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-15/AC17 (the floor); D1 H-26 |
+| **Preconditions** | A host where memory **cannot be measured** — Windows, or Linux inside a sandbox with no readable `/proc` (gVisor). If you cannot produce one, mark **Blocked** and say so; do not simulate it. |
+
+**Steps**
+
+1. Start the gateway on that host with nothing configured.
+2. Send an ordinary chat message. **It must be answered.**
+3. Ask an agent to open a browser and browse a page.
+4. Then try to open a **second** workspace's browser.
+5. Check the log for how many times the "cannot determine memory" reason is written.
+
+**Expected observable result**
+
+Steps 2 and 3 **succeed** — one browser, one tab. Step 4 is **refused**, and the refusal names
+memory. The reason is logged **once**, not on every call.
+
+**What a silent failure looks like**
+
+- **Nothing is ever refused** and browsers keep launching. The gate had nothing to read and answered
+  "there's room". This is the exact false-green shape the design was written against, and from the
+  outside it looks like a machine with generous capacity.
+- **The first message at step 2 is refused.** Someone read "refuse to grow" as "refuse to run". Every
+  refusal test passes perfectly and the product is dead on that platform.
+- The log fills with the same line on every request, burying everything else.
+
+---
+
+#### UAT-36 — Moving between more workspaces than fit
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-15/AC8; D1 H-12b |
+| **Preconditions** | A host with room for roughly three browsers, and four workspaces |
+
+**Steps**
+
+1. Browse in each of the four workspaces in turn, about a minute each, going round twice.
+2. Watch `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/logs/gateway.log` throughout.
+3. Count the warnings about contention.
+
+**Expected observable result**
+
+Everything works; each switch costs a visible pause. **Exactly one** warning appears, naming the
+workspaces that are contending, naming **memory** as the constraint, and naming a remedy that exists
+— add memory, or browse fewer workspaces at once.
+
+**What a silent failure looks like**
+
+- **A warning on every switch.** A line that appears constantly is filtered out by every operator
+  before the day it means something.
+- **No warning at all.** The operator experiences unexplained pauses and has nothing to search for.
+- A warning that names a **config key**. There is no key; see UAT-34's note.
+
+---
+
+#### UAT-37 — There is no limit setting, and freeing memory takes effect immediately
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-15/AC7, AC22; D1 H-13, H-25 |
+| **Preconditions** | Continue from UAT-36 |
+
+**Steps**
+
+1. Go to **Settings** and look for a browser or tab limit — anything called max browsers, max tabs, or
+   a total tab budget. Search the browser section thoroughly.
+2. Go to **Settings → Performance** and read what is shown for parallel agents on a fresh install
+   where you have never set a value.
+3. Set the parallel-agents value explicitly to `12`. Confirm the screen shows `12`.
+4. Free real memory on the host — quit an unrelated application.
+5. Without restarting the gateway, retry the browse that was refused in UAT-34.
+6. Read the release notes for this version.
+
+**Expected observable result**
+
+Step 1: **you find nothing.** No such setting exists and no help text claims one does. Step 2: the
+value reads as **automatic, bounded by available memory** — it does **not** display a large number,
+and certainly not under a heading like "Live system recommendation". Step 3: an explicitly set value
+is honoured. Step 5: the pool grows, with **no restart**, without disturbing anything already open.
+Step 6: the release note says there is **no longer a computed default**.
+
+**What a silent failure looks like**
+
+- Step 2 shows a big number (`2000` is the specific one to watch for) presented as a recommendation.
+  An operator who never asked for a number is being handed one and will treat it as the capacity.
+- Step 1 finds a setting that **loads and does nothing**. An operator who sets it believes they have
+  a limit they do not have — worse than no setting at all.
+- Step 6's release note contains a sentence about a default "changing from 2 to 2000". That sentence
+  was written down before it was withdrawn and is one copy-paste away from shipping.
+- Step 5 requires a restart, and nobody says so.
+
+---
+
+### Group H — Crash, restart and deletion
+
+#### UAT-38 — Killing one workspace's browser affects only that workspace
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-16/AC1–AC3; D1 H-14 |
+| **Preconditions** | Alpha and Bravo both have live browsers, both with panels attached. Alpha is signed in to the dummy site (§3.3). |
+
+**Steps**
+
+1. Identify the two Chrome processes and which is which:
+   `ps ax | grep "user-data-dir" | grep -v grep`
+   The `--user-data-dir` path contains the workspace id.
+2. Kill **only Alpha's**, by its exact process id: `kill -9 <that one pid>`.
+   *(Do not use `pkill`. Do not match on a pattern. One pid, deliberately chosen.)*
+3. Immediately look at **Bravo's** panel and ask an agent in chat B1 to read the page.
+4. Then go back to chat A1 and ask Jim to open `https://the-internet.herokuapp.com/secure`.
+
+**Expected observable result**
+
+Step 3: **Bravo is completely unaffected** — its panel keeps streaming, its tabs are intact, its
+agent works. Step 4: Alpha's panel showed an error, and Alpha's browser **relaunches from its own
+profile and is still signed in**.
+
+**What a silent failure looks like**
+
+- Bravo's panel goes blank, or Bravo's agent starts failing too. One workspace's crash took the
+  others down; from Bravo's side it looks like an unrelated fault.
+- Alpha relaunches **logged out**. The login was in memory, not on disk, and every crash costs every
+  workspace its sessions — presenting as "the site keeps logging me out".
+- Alpha's panel shows the **last frame from before the crash** and no error. You would happily ask an
+  agent to click something on a browser that no longer exists.
+
+---
+
+#### UAT-39 — Killing the gateway leaves nothing behind
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-19/AC1, AC2, AC2a, AC3; D1 H-16 |
+| **Preconditions** | Three workspaces with live browsers, all signed in |
+
+**Steps**
+
+1. Note the gateway's process id and all Chrome process ids
+   (`ps ax | grep user-data-dir | grep -v grep`).
+2. Kill the **gateway** with `kill -9 <gateway pid>`.
+3. Immediately check for surviving Chrome processes from step 1.
+4. Start the gateway again (§2.3, **without** deleting `$OMNIPUS_HOME`).
+5. Read the startup lines in
+   `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/logs/gateway.log`.
+6. In each of the three workspaces, ask an agent to open the signed-in page.
+
+**Expected observable result**
+
+Step 5: startup reports what it cleaned up, with a count. **On Linux**, leftover Chromes from the
+previous run are terminated. **On macOS**, they are *not* terminated — instead a warning names the
+surviving process id, because the product cannot safely confirm a process is one of its own there.
+Either way, step 6 works in all three workspaces and **all three are still signed in**, with no
+"profile in use" failure.
+
+**What a silent failure looks like**
+
+- A workspace fails to relaunch with a **"profile in use"** style error, because a leftover lock file
+  was not cleared. It looks like a corrupt profile and the obvious remedy — delete the profile — is
+  the one that loses the login.
+- Startup says it cleaned up and orphan Chromes are still running. Check with `ps ax`, do not take the
+  log's word for it.
+- On macOS, orphans survive and **nothing is logged about them**. They consume memory outside
+  everything Group G measures, forever.
+
+---
+
+#### UAT-40 — Restarting the gateway keeps every login
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-12/AC4a, US-19/AC3 |
+| **Preconditions** | Alpha and Bravo both signed in (Alpha to the dummy site; Bravo can be signed in as the same dummy user — they are separate profiles) |
+
+**Steps**
+
+1. Stop the gateway **cleanly** (Ctrl-C in its terminal, once, and let it finish).
+2. Start it again (§2.3, same `$OMNIPUS_HOME`).
+3. In each workspace, ask an agent to open `https://the-internet.herokuapp.com/secure`.
+
+**Expected observable result**
+
+Both workspaces are **still signed in**. Neither is signed in *as the other*.
+
+**What a silent failure looks like**
+
+- Everything is logged out. The profiles were not being persisted at all, and nobody noticed because
+  during a single session it makes no difference.
+- Both are signed in but **as the same account**, because the profiles were merged on restart. On a
+  dummy account this is invisible; with two real clients it is a breach.
+
+---
+
+#### UAT-41 — Deleting a workspace deletes its logins
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-20/AC1–AC3; D1 H-17 |
+| **Preconditions** | Alpha and Bravo both have browsers with tabs open and a live login |
+
+**Steps**
+
+1. List the profile directories and record them:
+   `ls -la /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/browser/profiles/`
+2. Delete workspace **Bravo** in the UI.
+3. List the profile directories again.
+4. Check `ps ax | grep user-data-dir | grep -v grep`.
+5. Confirm Alpha still works and is still signed in.
+
+**Expected observable result**
+
+Bravo's directory is **gone from disk**. Bravo's Chrome has closed. Alpha's directory and Chrome are
+untouched, and Alpha is still signed in. You can answer a client's *"is my data deleted?"* with yes.
+
+**What a silent failure looks like**
+
+- The workspace disappears from the UI and its profile directory **remains on disk**, cookies and all.
+  The deletion looked complete and the client's session tokens are still there.
+- Alpha's directory disappears too, or Alpha is logged out. The wrong thing was deleted and the UI
+  shows nothing about it.
+- Bravo's Chrome is still running against a directory that has been removed (step 4). It will
+  misbehave in ways that get attributed to something else entirely.
+
+---
+
+#### UAT-42 — Saving an unrelated setting does not disturb browsing
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-17/AC1, AC2; D1 H-9 |
+| **Preconditions** | Alpha and Bravo browsing, panels streaming, both signed in |
+
+**Steps**
+
+1. Record both Chrome process ids.
+2. Go to **Settings** and change something unrelated — a display preference. Save.
+3. Immediately re-check the process ids, the panels and the logins.
+
+**Expected observable result**
+
+Both process ids are **unchanged**. Both panels keep streaming without a flicker. Both logins survive.
+
+**What a silent failure looks like**
+
+- The process ids change. Every browser was torn down and rebuilt on a settings save. If the profiles
+  persist, the logins survive and you would never notice except for the pause — and the pause gets
+  blamed on the network.
+- One panel stops streaming and shows a still frame with no error. See UAT-16.
+
+---
+
+### Group I — Idle behaviour
+
+#### UAT-43 — An untouched browser closes, and comes back signed in
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-12/AC4, AC4a; D1 H-15 |
+| **Preconditions** | Alpha has a browser, a tab, and a live login. Default timings: a tab is reaped after about **5 minutes** idle; the whole browser closes after about **15 minutes** with nothing open and nobody watching. |
+
+**Steps**
+
+1. Sign in to the dummy site in Alpha. Confirm the secure area.
+2. **Close the live panel** — an attached panel deliberately keeps the browser alive, so leaving it
+   open invalidates this case.
+3. Leave everything alone for **25 minutes**. Do not chat, do not open the panel.
+4. Check `ps ax | grep user-data-dir | grep -v grep`.
+5. Check the profile directory still exists:
+   `ls -la /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/browser/profiles/`
+6. Ask Jim in chat A1 to open `https://the-internet.herokuapp.com/secure`.
+
+**Expected observable result**
+
+Step 4: **Alpha's Chrome is gone.** Step 5: **Alpha's profile directory is still there.** Step 6:
+Chrome relaunches after a pause and the page shows the **secure area** — still signed in. No error,
+no second browser, nothing to re-configure.
+
+**What a silent failure looks like**
+
+- Step 4 shows Chrome still running. The idle close never fires. On a long-lived install every
+  workspace ever browsed accumulates a browser, and the machine slowly fills. It is invisible for
+  days.
+- Step 5 shows the profile directory **gone** along with the process. Step 6 will then work but
+  logged out — and it will look like a normal session expiry.
+- Step 6 fails, or launches a **second** browser for the same workspace (check the process count).
+
+---
+
+#### UAT-44 — Disk does not fill, and the logins survive the clean-up
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-25/AC1–AC3, AC7; D1 H-28 |
+| **Preconditions** | Five workspaces, each browsed enough to build up a cache (load a few image-heavy pages in each) |
+
+**Steps**
+
+1. Record the size of each profile:
+   `du -sh /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/browser/profiles/*`
+2. Sign in to the dummy site in **one** of them first.
+3. Leave the host idle for **25 minutes** with all panels closed.
+4. Re-measure with the same command.
+5. Ask an agent in the signed-in workspace to open the secure page.
+6. Separately, drive **one** workspace continuously for an hour and measure it again.
+7. Look for a statement about step 6's behaviour in the browser section of the configuration
+   documentation.
+
+**Expected observable result**
+
+Step 4: each profile has **shrunk** to roughly its login-bearing size. Step 5: **still signed in** —
+the first page load is slower because cached assets were discarded, and that is the accepted cost.
+Step 6: the continuously driven one has **not** shrunk. Step 7: that is **stated in the
+documentation**, so an operator can predict their own disk use rather than having to work it out.
+
+**What a silent failure looks like**
+
+- Step 5 comes back **logged out.** The clean-up removed the whole profile instead of just the cache.
+  This passes any check that only looks at whether disk was reclaimed.
+- Nothing shrinks and nobody says anything. Disk fills over weeks and presents as an unrelated
+  outage — this project has filled its root volume twice already.
+- Step 6 does not shrink **and** the documentation is silent. The behaviour is correct and
+  unpredictable, which for a disk-space question is nearly as bad as being wrong.
+
+---
+
+#### UAT-45 — Starting the gateway warms one browser, not one per workspace
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-24/AC1, AC2 |
+| **Preconditions** | Five or more workspaces exist and have all been browsed at some point |
+
+**Steps**
+
+1. Stop the gateway cleanly. Confirm no Chrome processes remain.
+2. Start it again.
+3. Wait one minute without touching anything.
+4. `ps ax | grep user-data-dir | grep -v grep`
+
+**Expected observable result**
+
+**Exactly one** Chrome is running — the one belonging to the default agent's workspace. Not five.
+
+**What a silent failure looks like**
+
+- Five Chromes start. Every workspace is now "busy" from the moment of boot, which erases the
+  distinction the whole memory design rests on, and multiplies the background video encoding by five
+  on a machine that has nothing to display. Startup will just feel slow, and nobody will connect the
+  two.
+- Zero start and nothing is logged. That is *probably* fine — a missed optimisation, and the log
+  should say so at INFO — but confirm the log mentions it rather than assuming.
+
+---
+
+### Group J — Audit trail and disclosure
+
+#### UAT-46 — Every action on a signed-in site is recorded
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-13/AC2–AC4; D1 H-22 |
+| **Preconditions** | Alpha signed in to the dummy site |
+
+**Steps**
+
+1. Ask Jim to perform **ten** distinct actions on the signed-in site — navigate, click, type, select,
+   press a key, and so on. Count them.
+2. Open **Settings → Security → Audit Log**.
+3. Count the browser entries and read what each one names.
+4. If the screen is blank, read the log another way:
+   `tail -50 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/system/audit.jsonl`
+
+**Expected observable result**
+
+**The screen renders**, and there are **ten** entries, each naming the agent, the action and the site.
+You can answer *"which agent did that, on which site"* for any one of them.
+
+**What a silent failure looks like**
+
+- **One** entry, recorded the first time the agent touched the browser. It looks like auditing is on.
+  It cannot tell you who made the tenth action — which is the one that matters when the tenth action
+  was a purchase.
+- The Audit Log screen is **completely blank**. A single malformed entry blanks the whole viewer. An
+  audit trail nobody can read is not a mitigation, and this is easy to mistake for "nothing happened".
+  Always do step 4 before recording a result.
+- Read-only actions flood the log and bury the ones that changed something. Reading a page is not
+  supposed to be audited per call.
+
+---
+
+#### UAT-47 — Adding an agent to a team says what that grants
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-21/AC1–AC3; D1 H-18 |
+| **Preconditions** | Workspace Alpha is signed in to the dummy site |
+
+**Steps**
+
+1. Go to **Alpha → Team** and open the control for adding an agent.
+2. **Before confirming**, read what the screen tells you.
+3. Confirm, then read the release note for this change.
+
+**Expected observable result**
+
+Before you confirm, the UI states the concrete consequence in plain words: **this agent will be able
+to act as whoever this workspace is signed in as, on any site it is signed into, including on turns
+nobody is watching.** Not a mechanism description. Not a tooltip you have to hover for. Not only in
+the release note — though it is in the release note too.
+
+**What a silent failure looks like**
+
+- The disclosure appears **after** you confirm, or in a tooltip, or only in the release note. The
+  operator learns what they granted after granting it.
+- The text describes the *mechanism* ("agents on a workspace share a browser profile") rather than
+  the *consequence*. Technically accurate, and it does not tell a non-engineer that they just handed
+  an unattended process a live login.
+- There is no disclosure at all.
+
+---
+
+#### UAT-48 — What a delegated agent does, and where you can see it
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D2 US-10/AC6, US-18/AC2; D2 H-13 |
+| **Preconditions** | Alpha signed in. Default chat settings — **verbose chat off**. |
+
+**Steps**
+
+1. In chat A1, ask Jim to **delegate** to Ray a task that involves taking a snapshot of the
+   signed-in page.
+2. Read the chat thread. Look for the snapshot and its output.
+3. Open the **Activity panel** and expand Ray's span. Look for it there.
+4. Record your own reaction to step 2 in one sentence.
+
+**Expected observable result**
+
+The snapshot **does not appear in the chat thread** — that is the stated behaviour, not a bug. It
+**does** appear in the Activity panel when you expand the delegated span.
+
+**Step 4 is the deliverable of this case.** If an operator watching a delegated agent read a
+signed-in page finds no trace of it in the conversation, their reaction is the input the open design
+question needs, and no automated test can produce it.
+
+**What a silent failure looks like**
+
+- It is missing from the Activity panel **too**. Then there is no surface at all, and the mitigation
+  the design relies on does not exist.
+- It appears in the chat thread. Different from what the spec says; record it, because a doc and a
+  build disagreeing is a defect in one of them and you cannot tell which from here.
+
+---
