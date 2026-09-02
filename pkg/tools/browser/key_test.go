@@ -122,8 +122,8 @@ func TestTabs_AgentSwitchWithinASessionSeesTheSameTabs(t *testing.T) {
 
 	// No handover step exists, and none is needed (FR-006): Jim reached those
 	// tabs with an ordinary tool call and nothing else.
-	require.Equal(t, 1, jim.calls, "one ordinary tool call, no acquisition step")
-	require.Equal(t, 3, mia.calls, "Mia's three calls each resolved their own manager, per Execute (FR-002a)")
+	require.Equal(t, 1, jim.calls(), "one ordinary tool call, no acquisition step")
+	require.Equal(t, 3, mia.calls(), "Mia's three calls each resolved their own manager, per Execute (FR-002a)")
 }
 
 // TestTabs_WorkspaceOwnedSetIsVisibleToAll: a tab the OPERATOR opened through

@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -89,18 +90,37 @@ type fixedResolver struct {
 	key   BrowsingKey
 	owner TabOwner
 	err   error
-	// calls counts ManagerFor invocations, so a test can assert that a tool
+	// callCount counts ManagerFor invocations, so a test can assert that a tool
 	// resolves its manager PER EXECUTE rather than capturing one (FR-002a).
-	calls int
+	//
+	// Atomic because some tests call Execute from several goroutines at once --
+	// TestDialog_ConcurrentHandlesIssueOneCDPCall exists precisely to drive two
+	// concurrent Executes through one tool. A plain int here is a data race in
+	// the shared helper, not in the code under test, and CI's race detector
+	// reported it as one:
+	//
+	//   WARNING: DATA RACE
+	//   Read at 0x... by goroutine 298:
+	//     (*fixedResolver).ManagerFor()  testsupport_test.go:98
+	//     ... HandleDialogTool.Execute() ... TestDialog_ConcurrentHandlesIssueOneCDPCall
+	//
+	// A racy fixture makes every concurrency test in this package unreliable,
+	// and the report points at the test helper rather than at the defect the
+	// test was written to catch -- which is the worst place for noise to live.
+	callCount atomic.Int64
 }
 
 func (f *fixedResolver) ManagerFor(_ context.Context) (*BrowserManager, BrowsingKey, TabOwner, error) {
-	f.calls++
+	f.callCount.Add(1)
 	if f.err != nil {
 		return nil, BrowsingKey{}, TabOwner{}, f.err
 	}
 	return f.mgr, f.key, f.owner, nil
 }
+
+// calls reports how many times ManagerFor was invoked. Safe to call while other
+// goroutines are still executing tools against this resolver.
+func (f *fixedResolver) calls() int { return int(f.callCount.Load()) }
 
 // newFixedResolver builds a resolver over mgr addressing the package's standard
 // (testKey, testOwner) pair.
