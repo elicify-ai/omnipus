@@ -408,7 +408,7 @@ jobs:
     # test matrix for a reason unrelated to the code under review — the
     # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier]
+    needs: [changes, fast-tier, setup]
     if: success() && needs.changes.outputs.code == 'true'
     env:
       CGO_ENABLED: "0"
@@ -534,6 +534,38 @@ jobs:
             echo "::error::Only $passes tests passed; expected >=180 real-Chrome-capable tests. Coverage has silently shrunk." >&2
             exit 1
           fi
+
+      # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
+      # gitignored, so the package does not COMPILE without a built SPA. This
+      # job ran Go tests against pkg/gateway without ever building one, and
+      # failed at "pattern all:spa: no matching files found" -> "[setup failed]"
+      # -- a compile error wearing a test failure's clothes. Pre-existing: the
+      # same job fails identically on release/v0.1.1.
+      #
+      # Same three steps every other Go-testing job here already uses
+      # (cgo-gate, lint, vuln_check), so there is one way to provision the SPA
+      # rather than two.
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
+      - name: Build SPA for the gateway embed
+        run: |
+          set -euo pipefail
+          npm run build
+          rm -rf pkg/gateway/spa
+          cp -r dist/spa pkg/gateway/spa
+          # Fail loudly here rather than 200 lines later inside `go test`.
+          test -d pkg/gateway/spa/assets || { echo "::error::SPA sync failed: pkg/gateway/spa/assets missing" >&2; exit 1; }
 
       - name: Run pkg/gateway real-Chrome tests
         # Same skip-detection + pass-floor pattern as the pkg/tools/browser
