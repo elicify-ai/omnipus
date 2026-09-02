@@ -370,6 +370,58 @@ func TestCaptureVideoCapability_RequiresCoordinatorAttached(t *testing.T) {
 	}
 }
 
+// TestCaptureVideoCapability_PoolAttachedCountsAsAttached is the regression
+// guard for the ADR-072 FR-037 pool cutover.
+//
+// AttachSharedChrome pins a coordinator at attach time; AttachPool — which is
+// production's ONLY path (pkg/agent/loop.go's browserFactory) — deliberately
+// does not, because which Chrome the manager drives is resolved on every
+// ensureStarted. A capability check that read m.coordinator directly therefore
+// stopped asking "is this manager attached to the workspace's Chrome" and
+// started asking "has that Chrome been launched yet", so every pool-attached
+// manager classified not_capable until something else happened to start it —
+// which is what silently disabled the boot-time capture warm-up for an
+// operator running warm_capture_at_boot with warm_tab_at_boot off, and what
+// made eleven pkg/gateway WebRTC tests report "not_capable" where they expect
+// the real "error" outcome.
+//
+// The load-bearing assertion is the Coordinator()==nil check: it proves the
+// Capable=true verdict came from the ATTACHMENT and not from a Chrome having
+// been launched behind the test's back.
+func TestCaptureVideoCapability_PoolAttachedCountsAsAttached(t *testing.T) {
+	if _, err := cftPlatform(); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	withCapabilitySeams(t, "linux")
+
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Fatalf("cftPlatform: %v", err)
+	}
+	mgr := newCapabilityTestManager(t)
+	mgr.cfg.ExtensionDir = t.TempDir()
+	seedBuildBinary(t, mgr.InstallRoot(), "131.0.6778.108", platform, fullChromeBuild())
+
+	if got := mgr.CaptureVideoCapability(); got.Capable {
+		t.Fatal("test setup: an unattached manager must classify not-capable")
+	}
+
+	pool := NewBrowserPool(t.TempDir(), BrowserConfig{})
+	t.Cleanup(pool.Shutdown)
+	mgr.AttachPool(pool, browserTestKey("agent-pool-cap-test"))
+
+	if mgr.Coordinator() != nil {
+		t.Fatal("AttachPool must NOT pin a coordinator — the whole point is that the pool resolves one per ensureStarted")
+	}
+	got := mgr.CaptureVideoCapability()
+	if !got.Capable {
+		t.Fatalf(
+			"CaptureVideoCapability = Capable=false for a pool-attached manager, want true (reason=%q)",
+			got.Reason,
+		)
+	}
+}
+
 // TestVideoCapability_CachedExecPathFallback proves the fix for the
 // download-vs-launch mismatch (BrowserManager.VideoCapability, manager.go):
 // exec_resolver.go's resolve() checks $PATH for a system google-chrome/

@@ -246,8 +246,9 @@ func videoAndAudio() VideoCapability {
 // own: the gateway-owned capture extension must actually be seeded
 // (ExtensionDir set — capture_session.go's defaultEncoderStarter fails
 // immediately without it, "no ExtensionDir configured") and this manager must
-// be attached to a coordinator at all, because the encoder page and the tab
-// it captures have to live in the same Chrome.
+// be attached to the workspace's Chrome at all — either to a coordinator
+// directly or to the pool that resolves one (attachedToSharedChrome) — because
+// the encoder page and the tab it captures have to live in the same Chrome.
 //
 // The former third check — tools.browser.capture_shared_context — is gone
 // with ADR-072 FR-031. Every session now bootstraps into Chrome's DEFAULT
@@ -275,9 +276,17 @@ func (m *BrowserManager) CaptureVideoCapability() VideoCapability {
 			"capture extension not seeded (ExtensionDir unset — check gateway boot logs for a captureext seed failure)",
 		)
 	}
-	if m.Coordinator() == nil {
+	// Attachment, NOT "Chrome is already running" — see
+	// attachedToSharedChrome (manager.go). A pool-attached manager whose
+	// Chrome has not been launched yet is capable: the very first thing
+	// defaultEncoderStarter does is mgr.Session(), which launches it and
+	// populates m.coordinator, and that starter keeps its own hard nil-check
+	// on Coordinator() for the case where the launch fails. A launch failure
+	// belongs on the "error" branch with a real reason, not behind a static
+	// not_capable that tells the operator their host cannot do video.
+	if !m.attachedToSharedChrome() {
 		return notCapable(
-			"no shared-Chrome coordinator attached — WebRTC capture drives the workspace's own Chrome, " +
+			"no shared-Chrome coordinator or browser pool attached — WebRTC capture drives the workspace's own Chrome, " +
 				"which this manager is not connected to",
 		)
 	}

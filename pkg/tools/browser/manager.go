@@ -919,6 +919,30 @@ func (m *BrowserManager) Coordinator() *BrowserCoordinator {
 	return m.coordinator
 }
 
+// attachedToSharedChrome reports whether this manager is wired to the
+// workspace's Chrome AT ALL — which is a different question from "has that
+// Chrome been launched yet", and the one CaptureVideoCapability means to ask.
+//
+// Both attachment forms count:
+//
+//   - AttachSharedChrome pins one coordinator at attach time, so m.coordinator
+//     is non-nil immediately, before any Chrome exists.
+//   - AttachPool (production's only path, pkg/agent/loop.go's browserFactory)
+//     pins a POOL instead, and deliberately leaves m.coordinator nil: WHICH
+//     Chrome this manager drives is resolved on every ensureStarted, so the
+//     coordinator field is a cache that is only populated once the pool has
+//     actually launched (or re-launched) the workspace's browser.
+//
+// Reading m.coordinator alone therefore stopped meaning "attached" the moment
+// production moved to the pool — it started meaning "Chrome has already been
+// launched at least once", which made a perfectly capable, pool-attached
+// manager classify not_capable until something else happened to start it.
+func (m *BrowserManager) attachedToSharedChrome() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.coordinator != nil || m.pool != nil
+}
+
 // viewerLivenessWindow is how long a viewer's last proof of life stays good.
 // Past it the viewer is treated as gone even though nothing ever detached it.
 //

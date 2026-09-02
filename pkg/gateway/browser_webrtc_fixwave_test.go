@@ -195,6 +195,57 @@ func webrtcCapableGateMutate(t *testing.T) func(cfg *config.Config) {
 	}
 }
 
+// TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate is the
+// gateway-level guard for the ADR-072 FR-037 pool cutover — the same
+// regression pkg/tools/browser's TestCaptureVideoCapability_
+// PoolAttachedCountsAsAttached pins one layer down, asserted here on the
+// function production actually calls.
+//
+// Every manager the gateway ever sees comes from pkg/agent/loop.go's
+// browserFactory, which calls AttachPool — and AttachPool deliberately leaves
+// m.coordinator nil until the pool has launched Chrome. When the ADR-048
+// attachment check still read m.coordinator directly, every such manager
+// classified not_capable until something else happened to start a browser,
+// which is what turned eleven WebRTC tests in this package from their real
+// "error" outcomes into "not_capable" on CI, and what silently skipped the
+// boot capture warm-up for an operator running warm_capture_at_boot with
+// warm_tab_at_boot off.
+//
+// Deliberately NOT gated on runtime.GOOS: the eleven tests it backstops all
+// skip off linux, which is exactly why this regression reached CI unseen from
+// a Mac. The gate here is the host's own base video classification — if this
+// machine cannot classify video-capable at all there is nothing to assert,
+// and that is stated rather than assumed.
+func TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate(t *testing.T) {
+	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	t.Cleanup(handler.Wait)
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
+
+	if !mgr.VideoCapability().Capable {
+		t.Skipf("host cannot classify video-capable at all (%s) — nothing for the ADR-048 attachment check to gate",
+			mgr.VideoCapability().Reason)
+	}
+	if !webrtc.Available {
+		t.Skip("lite build: webrtcUnavailableReason short-circuits before the capability gate")
+	}
+
+	// The load-bearing precondition: no Chrome has been launched, so the
+	// coordinator cache is empty and only the pool attachment can carry the
+	// verdict. Without it this test would pass for the wrong reason on a host
+	// that happened to start a browser.
+	require.Nil(t, mgr.Coordinator(),
+		"test setup: nothing in this test may launch Chrome — the pool attachment is what is under test")
+
+	require.True(t, mgr.CaptureVideoCapability().Capable,
+		"a pool-attached manager must classify capture-capable before its Chrome is launched (reason=%q)",
+		mgr.CaptureVideoCapability().Reason)
+	require.Equal(t, "", webrtcUnavailableReason(al.GetConfig(), mgr),
+		"the gate ladder must let a pool-attached manager through, so a launch failure surfaces as \"error\" and not \"not_capable\"")
+}
+
 // newHandleWebRTCOfferWithFakeCapture pre-seeds mgr's CaptureSession with a
 // fake-relay-backed session (via BrowserManager.EnsureCaptureSession, so
 // handleWebRTCOffer's own ensureCaptureSession call finds it already
@@ -630,7 +681,19 @@ func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 // reason differently.
 func TestWebrtcUnavailableReason_GateLadder(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
-		cfg.Tools.Browser.ProfileDir = t.TempDir() // guaranteed not_capable: no chrome installed here
+		// Nested one level below t.TempDir(), like every other browser test in
+		// this package — NOT the bare t.TempDir() this used to be.
+		// InstallRootForProfileDir is grandparent(profileDir)/chromium, so a
+		// bare t.TempDir() ("$TMPDIR/TestX/001") resolves the managed-Chrome
+		// install root to "$TMPDIR/chromium" — a machine-wide path OUTSIDE
+		// the test's own tree. On any host where an earlier run left a real
+		// Chrome-for-Testing download there (reproduced on a dev Mac
+		// 2026-09-03), the base classifier reports Capable=true and this
+		// subtest's whole premise is false; it only kept passing because the
+		// ADR-048 coordinator check happened to reject the manager for an
+		// unrelated reason. Nesting puts the install root at
+		// "$TMPDIR/TestX/chromium", which t.TempDir() guarantees is empty.
+		cfg.Tools.Browser.ProfileDir = filepath.Join(t.TempDir(), "browser-profile")
 	})
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
