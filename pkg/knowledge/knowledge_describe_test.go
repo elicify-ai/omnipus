@@ -305,9 +305,20 @@ func TestDescribe_IndexFreshnessNeverInventsARatio(t *testing.T) {
 			want: "412 of 1,204 notes",
 		},
 		{
+			// WORDING CHANGED 2026-09-02, INTENT UNCHANGED. This case has always
+			// asserted that a count mismatch is REPORTED; it used to do so by
+			// matching the phrase "the two disagree", which was part of a
+			// sentence ending "re-index to reconcile" — a remedy that does not
+			// exist anywhere in the product (no agent tool, no CLI verb, no REST
+			// endpoint indexes a collection on demand). Naming a fake remedy is
+			// the defect a code review raised, so the sentence was replaced.
+			//
+			// The assertion now matches the SUBSTANCE rather than the phrasing:
+			// both counts must appear, so a reader can see the gap. The
+			// companion assertion below forbids the fake remedy returning.
 			name: "the two counts disagree",
 			data: DescribeData{ManifestKnown: true, ManifestCount: 1200, NotesOnDisk: 1210, NotesCounted: true},
-			want: "the two disagree",
+			want: "1,200 of 1,210",
 		},
 	}
 	for _, tc := range cases {
@@ -318,6 +329,16 @@ func TestDescribe_IndexFreshnessNeverInventsARatio(t *testing.T) {
 			}
 			if tc.noRatio && ratioPattern.MatchString(got) {
 				t.Errorf("FR-036 forbids stating a ratio when the total is unknown; got %q", got)
+			}
+			// NO MESSAGE FROM THIS FUNCTION MAY NAME AN ACTION THAT DOES NOT
+			// EXIST. There is no agent tool, CLI verb or REST endpoint that
+			// re-indexes a collection on demand, so telling an operator to
+			// "re-index" sends them to do something impossible — which is worse
+			// than saying nothing, because it reads as actionable. Applied to
+			// every case rather than one, so a future edit cannot reintroduce it
+			// through a branch this table does not yet cover.
+			if strings.Contains(strings.ToLower(got), "re-index") {
+				t.Errorf("message names a remedy that does not exist (%q); state the situation and its consequence instead", got)
 			}
 		})
 	}

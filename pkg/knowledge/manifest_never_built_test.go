@@ -230,6 +230,24 @@ func TestDescribe_IndexState_BuiltAndFreshIsNotConfusedWithNeverBuilt(t *testing
 // path (merr == nil); collapsing them the other way — reporting drift as
 // "NOT INDEXED yet" — would be the mirror-image regression the task
 // description warns about.
+//
+// WORDING UPDATE (F-9, reopened a second time — see
+// f9_describe_symptom_test.go): this branch's message used to say "the two
+// disagree; re-index to reconcile". That named a remedy no agent tool, CLI
+// verb or REST endpoint performs, for THIS case exactly as much as for the
+// never-fully-synced-at-all case knowledge_edit's instant-indexing path can
+// now also produce (one create on an unswept collection leaves a one-entry
+// manifest that reaches this exact branch). The manifest records no
+// provenance for how each entry got there — nothing distinguishes "built
+// once, then drifted" (this test's own setup) from "never built, only
+// touched" at the data level — so indexFreshness no longer tries to and
+// instead states the one thing it actually knows, honestly, for both: how
+// much of what's on disk the index currently covers. This test now asserts
+// THAT phrasing, and that no remedy is named, rather than the retired
+// "disagree" wording — the three-state distinction it exists to prove
+// (never built vs. built-and-fresh vs. built-and-incomplete) still holds:
+// this collection's message is neither "NOT INDEXED yet" nor the plain
+// "index holds N notes" the fresh case renders.
 func TestDescribe_IndexState_DriftedIsNotConfusedWithNeverBuilt(t *testing.T) {
 	home := b5Home(t)
 	vault := b5Vault(t, filepath.Join(b5Real(t, t.TempDir()), "vault"), "Vault")
@@ -260,7 +278,14 @@ func TestDescribe_IndexState_DriftedIsNotConfusedWithNeverBuilt(t *testing.T) {
 	if strings.Contains(text, "NOT INDEXED") {
 		t.Errorf("a built-but-drifted collection must not be reported as never built; got:\n%s", text)
 	}
-	if !strings.Contains(text, "disagree") {
-		t.Errorf("a built-but-drifted collection must report the disagreement; got:\n%s", text)
+	if strings.Contains(text, "index holds 2 notes") {
+		t.Errorf("a built-but-drifted collection must not render the plain matched-count phrasing "+
+			"the fresh case uses; got:\n%s", text)
+	}
+	if !strings.Contains(text, "index holds 1 of 2 notes on disk") {
+		t.Errorf("a built-but-drifted collection must state its true coverage; got:\n%s", text)
+	}
+	if strings.Contains(text, "re-index") {
+		t.Errorf("the message must not name 're-index' or any other remedy action that does not exist; got:\n%s", text)
 	}
 }

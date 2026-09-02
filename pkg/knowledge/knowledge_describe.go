@@ -244,7 +244,37 @@ func indexFreshness(d DescribeData) string {
 		// to fix, in different words.
 		return "NOT INDEXED yet — the index for this collection has not been built yet, so nothing below reflects its contents"
 	case d.NotesCounted && d.NotesOnDisk != d.ManifestCount:
-		return fmt.Sprintf("index holds %s notes, %s on disk — the two disagree; re-index to reconcile",
+		// NAMES NO REMEDY, FOR THE SAME REASON THE !ManifestKnown CASE ABOVE
+		// NAMES NONE (F-9, reopened a second time). This branch used to read
+		// "the two disagree; re-index to reconcile" — a phrase written when
+		// the manifest was ONLY ever produced by a full CheckIntegrity/
+		// SyncWith sweep, so any mismatch really was "this used to be fully
+		// synced and has since drifted", and "re-index" at least named a real
+		// mental model even though no agent tool, CLI verb or REST endpoint
+		// could actually perform it (that half of the defect survives here:
+		// there genuinely is no on-demand re-index surface — see the
+		// !ManifestKnown case's comment).
+		//
+		// Since pkg/knowledge/author.go's instant-indexing path, a manifest
+		// can ALSO be seeded by nothing but single-path knowledge_edit writes
+		// on a collection nobody has ever swept — Index.UpdatePath saves the
+		// SAME manifest file after touching exactly one path
+		// (docs/internal/design/knowledge-index-freshness.md). One create on
+		// such a collection lands here with ManifestCount=1 against whatever
+		// NotesOnDisk actually is, and "the two disagree" reads as an alarm
+		// about drift when the honest description is "this collection is
+		// still mostly unindexed" — pkg/vaultprops/find_tool.go's Populated()
+		// treats that exact shape as "not populated" for the same reason.
+		//
+		// This function has no way to tell those two histories apart — the
+		// manifest records no provenance for how each entry was written, on
+		// purpose (docs/internal/design/knowledge-index-freshness.md never
+		// asked it to) — so rather than guess, the message states only what
+		// is actually known (how much of what is on disk the index currently
+		// covers) and stops there: no "disagree" framing that implies a
+		// conflict needing resolution, no invented remedy, in either
+		// direction.
+		return fmt.Sprintf("index holds %s of %s notes on disk — the rest are not indexed yet and will not appear in search results",
 			group(d.ManifestCount), group(d.NotesOnDisk))
 	case d.ManifestCount == 0:
 		return "indexed and empty — this collection holds no indexable notes"

@@ -1,29 +1,29 @@
-// Omnipus — diagnostic coverage for the SECOND symptom Finding 2
+// Omnipus — regression coverage for the SECOND symptom Finding 2
 // (docs/internal/uat/uat-findings-knowledge-tools-2026-09-01-run2.md-shaped
 // regression, reported directly rather than filed) names: knowledge_describe
-// flipping from "NOT INDEXED yet" to a false DRIFT report ("index holds 1
-// notes, N on disk — re-index to reconcile") after one knowledge_edit write
-// to a never-swept collection.
+// naming a remedy that does not exist ("re-index to reconcile" — no agent
+// tool, CLI verb or REST endpoint performs that) after one knowledge_edit
+// write lands on a collection nobody has ever swept.
 //
-// THIS FILE DELIBERATELY DOES NOT FIX ANYTHING. knowledge_describe.go is
-// outside this change's file ownership (author.go and
-// pkg/vaultprops/find_tool.go, plus new *_test.go files) — this test exists
-// to answer, with evidence, whether fixing pkg/vaultprops/find_tool.go's
-// Populated() (the knowledge_find-side fix for the reopened F-9) also fixes
-// this knowledge_describe-side symptom, since both read the SAME manifest
-// file author.go's refreshIndexesForNote writes.
+// HISTORY: this file used to document the symptom as still open ("THIS FILE
+// DELIBERATELY DOES NOT FIX ANYTHING" — knowledge_describe.go was outside an
+// earlier task's file ownership). It is now the fix and its regression guard:
+// indexFreshness's drift branch (knowledge_describe.go) no longer says "the
+// two disagree; re-index to reconcile". It states the coverage it actually
+// knows (how many of the notes on disk the index currently holds) and names
+// no remedy, in either direction — the same reasoning
+// pkg/vaultprops/find_tool.go's Populated() doc comment gives for treating a
+// one-entry, instant-write-only manifest as "not (yet) meaningfully
+// searched" rather than as evidence of drift.
 //
-// ANSWER, recorded here so it does not need re-deriving: NO. knowledge_find's
-// fix works by comparing the manifest's entry count against a fresh
-// knowledge.Scan of the collection (found in find_tool.go); knowledge_describe's
-// indexFreshness (knowledge_describe.go) does that SAME comparison already
-// (DescribeData.NotesOnDisk vs ManifestCount) but ONLY when check_integrity
-// is requested — its DEFAULT, cheap path still treats "manifest exists" as
-// "index holds ManifestCount notes" per se, which after one instant write is
-// exactly the "index holds 1 notes, N on disk" false-drift message the
-// finding describes. Fixing that is a knowledge_describe.go change, which
-// this task's file ownership does not include; it is reported here as an
-// open, related defect rather than silently left unverified.
+// WHY THIS IS NOT "NOT INDEXED yet" EITHER: that branch fires only when no
+// manifest exists at all (ManifestKnown == false). One knowledge_edit create
+// on a never-swept collection DOES write a one-entry manifest
+// (Index.UpdatePath, docs/internal/design/knowledge-index-freshness.md), so
+// ManifestKnown is true here — collapsing this case into "NOT INDEXED yet"
+// would require pretending that write never happened, which is exactly the
+// kind of overcorrection the coverage message avoids by stating a number
+// instead of a category.
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -33,22 +33,19 @@ package knowledge
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// TestF9DescribeSymptom_StillMisreportsAfterOneInstantWrite documents the
-// CURRENT (post knowledge_find fix) behaviour of knowledge_describe's
-// default index section after exactly one knowledge_edit create lands on a
-// collection nobody has ever swept. It is written to PASS on today's code —
-// it is not a fix's regression guard, it is the evidence for this task's
-// "does the describe symptom also resolve" question. If a future change to
-// knowledge_describe.go makes this collection correctly report "NOT INDEXED
-// yet" again, this test's second assertion will fail and should be updated
-// (that would be describe.go's own fix landing, not a regression).
-func TestF9DescribeSymptom_StillMisreportsAfterOneInstantWrite(t *testing.T) {
+// TestF9DescribeSymptom_CoverageMessageNamesNoNonexistentRemedy is the
+// regression guard for the fix: after exactly one knowledge_edit create on a
+// collection nobody has ever swept, knowledge_describe's index section must
+// state the true, partial coverage — and must not claim a "disagreement"
+// needing reconciliation, and must not name "re-index" (or any other action)
+// as the way to fix it, because no such action exists on any agent tool, CLI
+// verb or REST endpoint.
+func TestF9DescribeSymptom_CoverageMessageNamesNoNonexistentRemedy(t *testing.T) {
 	home := b5Home(t)
 	vault := b5Vault(t, filepath.Join(b5Real(t, t.TempDir()), "vault"), "Vault")
 	b5Note(t, vault, "one.md", "# One\n\nsomething.\n")
@@ -75,18 +72,21 @@ func TestF9DescribeSymptom_StillMisreportsAfterOneInstantWrite(t *testing.T) {
 
 	after := mnbDescribe(t, home, "mia", ws)
 
-	// This is the CURRENT, still-open symptom: knowledge_describe's default
-	// (non check_integrity) path answers from ManifestKnown/ManifestCount
-	// alone, so one instant write flips it from "NOT INDEXED yet" to a false
-	// drift report naming a remedy ("re-index") the code has no way to
-	// perform. The knowledge_find-side fix (pkg/vaultprops/find_tool.go's
-	// Populated()) does not touch this path, because knowledge_describe never
-	// calls it — describe reads the manifest directly.
-	if strings.Contains(after, "NOT INDEXED yet") {
-		t.Fatalf("knowledge_describe's default index section now correctly reports NOT INDEXED yet "+
-			"after one instant write on a never-swept collection — the describe-message symptom has "+
-			"been independently fixed (in knowledge_describe.go, outside this task's file ownership); "+
-			"update this test's expectation.\ngot: %s", after)
-	}
-	t.Logf("confirmed still-open, out-of-ownership-scope symptom: %s", after)
+	// THE DEFECT: naming a remedy nobody can perform.
+	require.NotContains(t, after, "re-index",
+		"knowledge_describe must never tell an agent to re-index — no agent tool, CLI verb "+
+			"or REST endpoint performs that action\ngot: %s", after)
+	// THE FRAMING: "disagree" casts a still-mostly-unindexed collection (one
+	// instant write against several never-touched notes) as a conflict that
+	// needs resolving, which overstates what is actually known.
+	require.NotContains(t, after, "disagree",
+		"knowledge_describe must not frame partial coverage from instant-only writes as a "+
+			"disagreement needing reconciliation\ngot: %s", after)
+	// THE HONEST REPLACEMENT: the response states the real coverage — the
+	// manifest holds exactly the one note the create touched, out of the four
+	// now on disk (three fixture notes plus New.md) — so a reader can judge
+	// for themselves how much of the collection is actually searchable.
+	require.Contains(t, after, "1 of 4 notes on disk",
+		"knowledge_describe should state the true coverage instead of a drift verdict\ngot: %s", after)
+	t.Logf("confirmed fixed coverage message: %s", after)
 }

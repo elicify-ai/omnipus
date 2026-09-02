@@ -545,13 +545,90 @@ func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.
 		slog.Debug("vaultprops: knowledge_find: properties index could not be opened", "path", path, "error", err)
 		return nil, nil
 	}
+	// NeedsFullIndex() ALONE stopped being sufficient the moment
+	// author.go's instant-indexing path could write to this store, for the
+	// EXACT same reason findTextSearcher.Populated (below) stopped trusting
+	// bare manifest existence — see that method's doc comment for the full
+	// argument; only the mechanics differ here.
+	//
+	// propindex.Index.open (sqlite.go) sets its needsFull flag from ONE
+	// `SELECT COUNT(*) FROM notes` read at open time: needsFull = (notes ==
+	// 0). That is a snapshot of "did this database hold zero rows the
+	// instant I opened it", not "has this collection ever been fully
+	// swept". A single knowledge_edit create on a collection nobody has
+	// ever synced writes exactly one row into properties.db
+	// (pkg/knowledge's own TestIndexFreshness_Create_PropertiesIndexRowLandsInstantly
+	// proves it happens instantly). openFindStore opens a FRESH
+	// propindex.Index on every knowledge_find call, so the very next call
+	// reads notes=1, needsFull=false, and this function used to hand the
+	// caller a store it trusted as complete — even though every other note
+	// on disk, of any declared type, had never reached the properties index
+	// at all. Reproduced and confirmed through the real tool surface in
+	// pkg/vaultprops/f9b_typed_only_reproduction_test.go: a type=deal query
+	// with no words= answered "COMPLETE: yes — 0 records matched" over a
+	// store holding 1 of 4 deals.
+	//
+	// The fix asks the SAME question Populated() asks, translated to this
+	// store's own shape: does the number of paths the store actually holds
+	// match a fresh stat-only scan of what is on disk right now? A store
+	// seeded by nothing but single-path instant writes fails that
+	// comparison and is correctly treated as not (yet) usable for a typed
+	// query, exactly like NeedsFullIndex() already would have reported had
+	// the count still been zero. A store a real sync produced — however
+	// many rows it holds, including zero for a genuinely empty collection —
+	// passes it.
 	if store.NeedsFullIndex() {
 		if cerr := store.Close(); cerr != nil {
 			slog.Warn("vaultprops: knowledge_find: closing an unusable properties index failed", "path", path, "error", cerr)
 		}
 		return nil, nil
 	}
+	covered, coverErr := propertiesStoreCoversCollection(ctx, store, collectionRoot)
+	if coverErr != nil {
+		// "I could not confirm coverage" gets the same treatment as "I know
+		// it is not covered" — a zero-hit answer this layer cannot verify
+		// deserves no more trust than one it knows is incomplete. The
+		// reason is logged, not swallowed.
+		slog.Warn("vaultprops: knowledge_find: could not verify properties index coverage; "+
+			"treating it as unusable for this call", "path", path, "collection_root", collectionRoot, "error", coverErr)
+		covered = false
+	}
+	if !covered {
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("vaultprops: knowledge_find: closing an incompletely-covering properties index failed",
+				"path", path, "error", cerr)
+		}
+		return nil, nil
+	}
 	return store, store.Close
+}
+
+// propertiesStoreCoversCollection compares the number of paths the
+// properties store currently holds against a fresh, stat-only
+// knowledge.Scan of the collection — the same inventory function
+// findTextSearcher.Populated compares the text-index manifest against, and
+// for the identical reason: it is the one count that means "this store was
+// actually built against everything on disk right now", independent of how
+// each row got there (a full vaultprops.Sync, or however many single-path
+// instant writes).
+//
+// AllPaths is used rather than a raw COUNT(*), because AllPaths is the
+// store's own documented "every path currently held" walk (store.go); a
+// second, parallel counting query would be a second idea of what "every
+// row" means to drift out of sync with the first.
+func propertiesStoreCoversCollection(ctx context.Context, store propindex.Store, collectionRoot string) (bool, error) {
+	rowCount := 0
+	if err := store.AllPaths(ctx, func(propindex.IndexedNote) error {
+		rowCount++
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("walking the properties index: %w", err)
+	}
+	scan, err := knowledge.Scan(collectionRoot)
+	if err != nil {
+		return false, fmt.Errorf("scanning the collection: %w", err)
+	}
+	return rowCount == len(scan.Entries), nil
 }
 
 // joinFindScopeNames renders a workspace's addressable collection names for
