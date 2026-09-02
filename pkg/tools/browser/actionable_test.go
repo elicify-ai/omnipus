@@ -115,7 +115,10 @@ func TestErrNotActionable_HitTestNamesTheOccluder(t *testing.T) {
 // FR-037: a post-gate failure is translated, never surfaced bare.
 func TestTranslatePostGateErr_MapsDeadlineToVisible(t *testing.T) {
 	for _, in := range []error{context.DeadlineExceeded, errors.New("context deadline exceeded")} {
-		out := translatePostGateErr(in, "browser_click", "#go")
+		out, ok := postGateErr(in, "browser_click", "#go")
+		if !ok {
+			t.Fatalf("a post-gate deadline must be recognised; got ok=false for %v", in)
+		}
 		var na *ErrNotActionable
 		if !errors.As(out, &na) {
 			t.Fatalf("want *ErrNotActionable, got %T: %v", out, out)
@@ -131,11 +134,11 @@ func TestTranslatePostGateErr_MapsDeadlineToVisible(t *testing.T) {
 
 func TestTranslatePostGateErr_PassesUnrelatedErrorsThrough(t *testing.T) {
 	in := errors.New("could not find node with given selector")
-	if out := translatePostGateErr(in, "browser_click", "#go"); out != in {
-		t.Errorf("an unrelated error must pass through unchanged; got %v", out)
+	if _, ok := postGateErr(in, "browser_click", "#go"); ok {
+		t.Error("an unrelated error must not be translated into a gate failure — a specific message beats a generic one laid over it")
 	}
-	if translatePostGateErr(nil, "browser_click", "#go") != nil {
-		t.Error("nil must stay nil")
+	if _, ok := postGateErr(nil, "browser_click", "#go"); ok {
+		t.Error("nil must not be reported as a post-gate failure")
 	}
 }
 

@@ -537,8 +537,8 @@ func TestDialog_UnhandledDialogNamedInTimeout(t *testing.T) {
 	fakeSession(t, mgr, testSessionID)
 	seedDialogOnActiveTab(t, mgr, testSessionID, &PendingDialog{Type: "confirm", Message: "Leave site?"})
 
-	err := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded)
-	if err == nil {
+	err, ok := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded)
+	if !ok || err == nil {
 		t.Fatal("want a rewritten error")
 	}
 	msg := err.Error()
@@ -566,7 +566,7 @@ func TestDialog_PreListenerDialogIsSuspected(t *testing.T) {
 	fakeSession(t, mgr, testSessionID)
 	// No dialog recorded, and no activation either — the adopted-tab case.
 
-	err := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded)
+	err, _ := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded)
 	msg := err.Error()
 
 	if !strings.Contains(msg, "browser_handle_dialog") {
@@ -582,7 +582,8 @@ func TestDialog_PreListenerDialogIsSuspected(t *testing.T) {
 	// The two messages must be textually distinct, or an operator reading a
 	// log cannot tell a known dialog from a guess.
 	seedDialogOnActiveTab(t, mgr, testSessionID, &PendingDialog{Type: "alert", Message: "x"})
-	confirmed := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded).Error()
+	confirmedErr, _ := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded)
+	confirmed := confirmedErr.Error()
 	if confirmed == msg {
 		t.Error("the confirmed and suspected messages must differ")
 	}
@@ -594,7 +595,8 @@ func TestDialog_SuspectedMessageNamesTheLastAction(t *testing.T) {
 	fakeSession(t, mgr, testSessionID)
 	mgr.NoteActivation(testSessionID, "a click")
 
-	msg := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded).Error()
+	routed, _ := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.DeadlineExceeded)
+	msg := routed.Error()
 	if !strings.Contains(msg, "after a click") {
 		t.Errorf("when the last action IS known the message should say so; got %q", msg)
 	}
@@ -607,9 +609,8 @@ func TestDialog_NonTimeoutErrorsPassThrough(t *testing.T) {
 	fakeSession(t, mgr, testSessionID)
 	seedDialogOnActiveTab(t, mgr, testSessionID, &PendingDialog{Type: "alert"})
 
-	in := context.Canceled
-	if out := dialogAwareTimeout(mgr, testSessionID, "browser_click", in); out != in {
-		t.Errorf("a non-timeout error must pass through unchanged; got %v", out)
+	if _, ok := dialogAwareTimeout(mgr, testSessionID, "browser_click", context.Canceled); ok {
+		t.Error("a non-timeout error must not be rewritten as a dialog guess — a real, specific failure is more useful than one laid over it")
 	}
 }
 

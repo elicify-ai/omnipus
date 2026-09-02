@@ -153,18 +153,15 @@ func (t *HandleDialogTool) Execute(ctx context.Context, args map[string]any) *to
 		return tools.ErrorResult(fmt.Sprintf("browser_handle_dialog: answering %s failed: %s", dlg.Summary(), err))
 	}
 
-	result := map[string]any{
-		"dialog": map[string]any{
-			"type":    dlg.Type,
-			"message": dlg.Message,
-			"url":     dlg.URL,
-		},
-		"accepted": accept,
+	answered := map[string]any{
+		"type":    dlg.Type,
+		"message": dlg.Message,
+		"url":     dlg.URL,
 	}
 	if dlg.DefaultPrompt != "" {
-		result["dialog"].(map[string]any)["default_prompt"] = dlg.DefaultPrompt
+		answered["default_prompt"] = dlg.DefaultPrompt
 	}
-	return jsonResult(result)
+	return jsonResult(map[string]any{"dialog": answered, "accepted": accept})
 }
 
 // ---------------------------------------------------------------------------
@@ -367,15 +364,19 @@ func (m *BrowserManager) lastActivationOn(sessionID string) string {
 // one hedged sentence in an error the agent was already getting; a false
 // negative costs the entire requirement.
 //
-// Returns err unchanged when it is not a timeout.
-func dialogAwareTimeout(mgr *BrowserManager, sessionID, toolName string, err error) error {
+// Returns (rewritten, true) when err was a CDP timeout it could say something
+// better about, and (nil, false) otherwise. The bool is what callers branch on
+// rather than comparing the result against the input: an identity comparison
+// on an error reads as an errors.Is mistake, and is one wrapping away from
+// being one.
+func dialogAwareTimeout(mgr *BrowserManager, sessionID, toolName string, err error) (error, bool) {
 	if err == nil || mgr == nil || !isCDPTimeout(err) {
-		return err
+		return nil, false
 	}
 
 	if dlg := mgr.PendingDialogOn(sessionID); dlg != nil {
 		return fmt.Errorf("%s: the tab is blocked by %s — answer it with browser_handle_dialog{accept:false} and retry",
-			toolName, dlg.Summary())
+			toolName, dlg.Summary()), true
 	}
 
 	after := ""
@@ -383,7 +384,7 @@ func dialogAwareTimeout(mgr *BrowserManager, sessionID, toolName string, err err
 		after = " after " + act
 	}
 	return fmt.Errorf("%s: the tab stopped answering%s and may have an open dialog that predates this session's listener — try browser_handle_dialog{accept:false}",
-		toolName, after)
+		toolName, after), true
 }
 
 // isCDPTimeout reports whether err is the "the tab stopped answering" shape,

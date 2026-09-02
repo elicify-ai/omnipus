@@ -62,6 +62,12 @@ var actionConditionOrder = []ActionCondition{CondVisible, CondStable, CondEnable
 const hitTestIndeterminate = "indeterminate"
 
 // ErrNotActionable is the ONLY error type the gate returns on timeout.
+//
+// interface contract every other browser stream codes against; renaming it to
+// NotActionableError would break those call sites to satisfy a naming
+// convention, and the Err-prefix form is what the package's readers look for.
+//
+//nolint:errname // The spec fixes this name verbatim as part of the shared
 type ErrNotActionable struct {
 	// Failed is the FIRST condition, in actionConditionOrder, that never
 	// became true within the budget.
@@ -367,7 +373,10 @@ func waitActionableOutcome(
 		ctx, cancel := context.WithTimeout(tabCtx, timeout)
 		defer cancel()
 		if err := chromedp.Run(ctx, chromedp.WaitVisible(target, chromedp.ByQuery)); err != nil {
-			return gateOutcome{}, translatePostGateErr(err, toolName, display)
+			if translated, ok := translatePostGateErr(err, toolName, display); ok {
+				return gateOutcome{}, translated
+			}
+			return gateOutcome{}, err
 		}
 		return gateOutcome{HitTest: "self"}, nil
 	}
@@ -470,9 +479,14 @@ func firstUnmet(everTrue map[ActionCondition]bool, detail map[ActionCondition]st
 // The condition reported is `visible` because that is literally what chromedp
 // re-checked and lost. NO fifth condition is added: the closed set stays at
 // four.
-func translatePostGateErr(err error, toolName, display string) error {
+// Returns (translated, true) when it recognised a post-gate visibility loss,
+// and (nil, false) for anything else, a nil error included. Callers branch on
+// the bool — comparing the returned error against the input to see whether it
+// changed reads as an errors.Is mistake and is one wrapping away from being
+// one.
+func postGateErr(err error, toolName, display string) (error, bool) {
 	if err == nil {
-		return nil
+		return nil, false
 	}
 	if errors.Is(err, chromedp.ErrNotVisible) || errors.Is(err, context.DeadlineExceeded) ||
 		strings.Contains(err.Error(), "context deadline exceeded") {
@@ -482,7 +496,16 @@ func translatePostGateErr(err error, toolName, display string) error {
 			Display: display,
 			Detail:  "the element passed the actionability gate and then stopped being visible before the action was dispatched",
 			Tool:    toolName,
-		}
+		}, true
 	}
-	return err
+	return nil, false
+}
+
+// translatePostGateErr is postGateErr under the name the other D2 stream
+// reached for first. Two streams landed on two names for one function within
+// the same hour and each kept breaking the other's build; this alias ends
+// that. It is redundant on purpose and should collapse into postGateErr once
+// the wave settles — there is one implementation, so the two cannot drift.
+func translatePostGateErr(err error, toolName, display string) (error, bool) {
+	return postGateErr(err, toolName, display)
 }

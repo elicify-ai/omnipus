@@ -112,6 +112,10 @@ func (l Locator) kind() (locatorKind, []string) {
 // ErrLocatorConflict is returned when more than one locator KIND is populated,
 // or when a tool is handed a locator kind it does not accept. It names the
 // offending fields and the tool; it NEVER picks a winner.
+//
+// shared interface contract other streams code against.
+//
+//nolint:errname // Same reason as ErrNotActionable: the name is fixed by the
 type ErrLocatorConflict struct {
 	// Fields are the populated locator argument names, agent-facing (the
 	// JSON parameter names, not the Go field names).
@@ -419,7 +423,7 @@ func selectAXCandidate(toolName string, loc Locator, cands []axCandidate) (axCan
 		return cands[i], nil
 	}
 	if len(cands) > 1 {
-		return axCandidate{}, fmt.Errorf("%s: %s is ambiguous — %d elements match (%s). Add `index` to pick one, or use a CSS `selector`.",
+		return axCandidate{}, fmt.Errorf("%s: %s is ambiguous — %d elements match (%s); add `index` to pick one, or use a CSS `selector`",
 			toolName, displayRoleName(loc), len(cands), describeFirstCandidates(cands, 3))
 	}
 	return cands[0], nil
