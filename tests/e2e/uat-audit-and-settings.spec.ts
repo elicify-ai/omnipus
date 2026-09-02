@@ -215,28 +215,120 @@ test.describe('operator controls', () => {
     }
   });
 
-  test('(e) Performance shows "automatic", never a 2000-shaped recommendation', async ({ page }) => {
+  /**
+   * The environment fact this test is built on, established rather than assumed:
+   *
+   *   GET /api/v1/performance is registered with adminWrap — withAuth THEN
+   *   RequireNotBypass (pkg/gateway/rest.go, `a.adminWrap(a.HandlePerformance)`)
+   *   — and RequireNotBypass answers 503 on every high-blast-radius admin route
+   *   while `gateway.dev_mode_bypass` is true. The E2E gateway is seeded with
+   *   `"dev_mode_bypass": true` (.github/workflows/pr.yml, "Seed gateway config";
+   *   the same value tests/e2e/global-setup.ts writes when no config exists),
+   *   because that is what lets the suite drive onboarding before an admin
+   *   account exists.
+   *
+   * So the endpoint CANNOT return settings here. The previous version of this
+   * test asked the panel to render loaded content anyway, and once the panel was
+   * fixed to say WHY a load failed instead of rendering blank (3f3068104) that
+   * correct behaviour is what the assertion caught. Its own guard against a
+   * blank read could not have saved it either: it looked for "Could not load
+   * performance settings", a string the product has never emitted — the real
+   * wording is "Failed to load performance settings".
+   *
+   * Turning bypass off for the suite was rejected: it is load-bearing for
+   * onboarding and for auth.spec.ts (c), which asserts the bypass banner itself,
+   * and RequireNotBypass is a deliberate security control.
+   *
+   * The UAT-37 property is therefore checked in the two places it CAN be:
+   *
+   *   (e1) unintercepted — the real 503 must be EXPLAINED, never blank and never
+   *        a number, which is the 3f3068104 guarantee in its real environment;
+   *   (e2) intercepted — the shipped bundle, handed the payload a genuinely
+   *        unconfigured install produces, must render "automatic" and must not
+   *        present the backstop integer as a recommendation.
+   *
+   * (e2) follows the interception precedent this file already sets for the audit
+   * log above: the gateway cannot supply the state, so the state is supplied and
+   * the REAL rendering is what gets asserted. The component-level twin lives in
+   * src/components/settings/PerformanceSection.autoDefault.test.tsx.
+   */
+  async function openPerformanceTab(page: Page) {
     await page.goto('/#/settings?tab=performance');
     const perfTab = page.locator('button[role="tab"]', { hasText: 'Performance' });
     await expect(perfTab).toBeVisible({ timeout: 20_000 });
     await perfTab.click();
-
     const panel = page.locator('[role="tabpanel"][data-state="active"]').first();
     await expect(panel).toBeVisible({ timeout: 20_000 });
+    return panel;
+  }
 
-    // The specific silent failure UAT-37 names: an unasked-for number presented
-    // as capacity on an install where nothing was configured.
+  test('(e1) a Performance read the gateway refuses is explained, never blank', async ({ page }) => {
+    const panel = await openPerformanceTab(page);
+
+    // The panel must SAY something went wrong and offer the way out. A blank
+    // tab is the failure mode 3f3068104 fixed, and it is indistinguishable
+    // from "this install has no performance settings" to the operator reading
+    // it. Asserting the Retry control (not just the sentence) also proves the
+    // error branch rendered in full rather than a stray toast.
+    await expect(panel).toContainText(/Failed to load performance settings/i);
+    await expect(panel.locator('[data-testid="performance-retry-btn"]')).toBeVisible();
+
+    // And even while failing it must not invent capacity.
     await expect(panel).not.toContainText(/Live system recommendation/i);
     await expect(panel).not.toContainText(/2000 parallel agents/);
+  });
 
-    // ...but "no 2000" is worthless if the tab rendered nothing at all, so the
-    // read has to be proved to have happened. GET /api/v1/performance is behind
-    // adminWrap/RequireNotBypass, which 503s a READ while dev_mode_bypass is on.
-    const text = (await panel.innerText()).trim();
-    expect(
-      text,
-      `Performance tab did not render its settings — panel text was: "${text}"`,
-    ).not.toMatch(/Could not load performance settings/i);
+  test('(e2) an unconfigured install shows "automatic", never a 2000-shaped recommendation', async ({
+    page,
+  }) => {
+    // Exactly what getPerformance (pkg/gateway/rest_performance.go) returns on
+    // an install where nothing is configured: max_parallel_agents echoes the
+    // resolved effective value because 0 on disk is a sentinel that is never
+    // schema-valid to send, effective_max_parallel_agents carries the PHYSICAL
+    // OS-thread backstop, and max_parallel_agents_configured:false is the only
+    // thing distinguishing this from an operator who deliberately typed 2000.
+    //
+    // The backstop is put in BOTH integers on purpose. This payload hands the
+    // SPA the very number the shipped defect displayed, so an assertion that
+    // "2000 parallel agents" is absent can only pass if the SPA is genuinely
+    // reading max_parallel_agents_configured rather than rendering the integer.
+    await page.route('**/api/v1/performance', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          max_parallel_agents: 2000,
+          effective_max_parallel_agents: 2000,
+          max_parallel_agents_configured: false,
+          tools_on_demand: true,
+        }),
+      });
+    });
+
+    const panel = await openPerformanceTab(page);
+
+    // The read is proved to have happened before anything is concluded from an
+    // absence: a panel still showing the load error tells us nothing about
+    // whether 2000 would have been rendered.
+    await expect(panel.locator('[data-testid="performance-retry-btn"]')).toHaveCount(0);
+    await expect(panel).toContainText(/Max parallel agents/i);
+
+    // The UAT-37 property itself. The backstop integer must not appear AT ALL
+    // — not as a recommendation, not as the effective value, not in the input.
+    // Under this payload 2000 has no legitimate source other than the field
+    // the panel is required to ignore, so the bare-number assertion is the
+    // strongest available here and carries no false positives.
+    //
+    // (Deliberately NOT a bare /Recommended/i: the Tool-loading control below
+    // says "Smaller messages, lower token use. Recommended." about an entirely
+    // different setting, and a guard that trips on it would be reporting the
+    // wrong defect. MEASURED — that is exactly what the first draft did.)
     await expect(panel).toContainText(/automatic/i);
+    await expect(panel).not.toContainText(/Live system recommendation/i);
+    await expect(panel).not.toContainText('2000');
   });
 });
