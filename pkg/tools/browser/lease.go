@@ -79,6 +79,18 @@ var leaseClockImpl leaseClock = realLeaseClock{}
 type writeLeaseTable struct {
 	tableMu sync.Mutex
 	held    map[string]string // sessionKey(key, owner) -> holder agent id
+
+	// takenEver counts successful acquisitions per lease key and is NEVER
+	// decremented on release. It exists because "is the lease held?" is
+	// unanswerable after the fact: every acquisition is released before the
+	// Execute that took it returns, so isHeld is false at that moment whether
+	// the lease was taken or not.
+	//
+	// A test asserting "no lease was taken while a human held control" via
+	// isHeld therefore passes on a build that takes the lease anyway. That was
+	// a real hollow test in this package, found by the branch review. The
+	// durable count is the only observation that discriminates.
+	takenEver map[string]int
 }
 
 // leaseHolderUnknown is what a deferral reports when the holder registered no
@@ -173,6 +185,10 @@ func (t *writeLeaseTable) tryAcquire(lk, holderAgentID string) (bool, string) {
 		return false, cur
 	}
 	t.held[lk] = holderAgentID
+	if t.takenEver == nil {
+		t.takenEver = make(map[string]int, 2)
+	}
+	t.takenEver[lk]++
 	return true, ""
 }
 
@@ -194,6 +210,18 @@ func (t *writeLeaseTable) isHeld(lk string) bool {
 	defer t.tableMu.Unlock()
 	_, busy := t.held[lk]
 	return busy
+}
+
+// timesTaken reports how many times lk was successfully acquired since this
+// table was created, including leases already released.
+//
+// Use this, not isHeld, to assert that a call did or did not take the lease:
+// isHeld answers about NOW, and by the time a test can ask, every lease the
+// call took has been released by its own defer.
+func (t *writeLeaseTable) timesTaken(lk string) int {
+	t.tableMu.Lock()
+	defer t.tableMu.Unlock()
+	return t.takenEver[lk]
 }
 
 // leaseWrite is the convenience wrapper every action tool actually calls.

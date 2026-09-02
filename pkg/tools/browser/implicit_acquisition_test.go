@@ -29,8 +29,17 @@ import (
 //
 // The seam is the table's own isHeld: if the control lock short-circuits first,
 // no lease is ever taken, and the table stays empty for the whole call.
+// leaseWasTaken reports whether the lease for this key was EVER acquired, not
+// whether it is held right now.
+//
+// It used to ask isHeld, and that made every assertion built on it vacuous: a
+// leased Execute releases via defer, so by the time the test can look, isHeld
+// is false whether or not the lease was taken. `require.False(leaseWasTaken)`
+// passed on a build that took the lease while a human held control — the exact
+// rule it claimed to prove. Found by the branch review; the durable count in
+// writeLeaseTable.takenEver is what discriminates.
 func leaseWasTaken(m *BrowserManager, key BrowsingKey, owner TabOwner) bool {
-	return m.writeLeases().isHeld(sessionKey(key, owner))
+	return m.writeLeases().timesTaken(sessionKey(key, owner)) > 0
 }
 
 // TestTabs_OperatorTabIsAcquiredByActing is FR-070's behavioural half.
