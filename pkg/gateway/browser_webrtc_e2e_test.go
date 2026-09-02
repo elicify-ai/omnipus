@@ -62,6 +62,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	"github.com/gorilla/websocket"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -437,8 +439,8 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	// Plant a fake, non-functional "chrome" binary at the exact path
 	// ClassifyVideoCapability/findInstalledBuild look for, so the capability

@@ -28,7 +28,7 @@ import (
 func TestBrowserCoordinator_WarmUp_LaunchesRealChrome(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 5)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	if pid := coord.PID(); pid != 0 {
@@ -70,7 +70,7 @@ func TestBrowserCoordinator_WarmUp_LaunchesRealChrome(t *testing.T) {
 func TestBrowserCoordinator_WarmUp_IdempotentSameChrome(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 5)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	if err := coord.WarmUp(context.Background()); err != nil {
@@ -98,7 +98,7 @@ func TestBrowserCoordinator_WarmUp_IdempotentSameChrome(t *testing.T) {
 func TestBrowserCoordinator_WarmUp_ThenRegisterReusesSameChrome(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 5)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	if err := coord.WarmUp(context.Background()); err != nil {
@@ -107,7 +107,7 @@ func TestBrowserCoordinator_WarmUp_ThenRegisterReusesSameChrome(t *testing.T) {
 	warmPID := coord.PID()
 
 	mgr := newTestManager(t, cfg)
-	mgr.AttachSharedChrome(coord, "post-warmup-agent")
+	mgr.AttachSharedChrome(coord, browserTestKey("post-warmup-agent"))
 	if _, _, err := coord.Register(context.Background(), "post-warmup-agent", mgr); err != nil {
 		t.Fatalf("Register after WarmUp: %v", err)
 	}

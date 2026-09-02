@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -725,7 +727,7 @@ func TestLoadConfig_BrowserExecPath(t *testing.T) {
 func TestLoadConfig_BrowserExecPathDefaultsEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
-	configJSON := `{"version":1,"tools":{"browser":{"max_tabs":3}}}`
+	configJSON := `{"version":1,"tools":{"browser":{"page_timeout":3}}}`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error: %v", err)
 	}
@@ -806,7 +808,7 @@ func TestLoadConfig_BrowserPreferPackaged(t *testing.T) {
 func TestLoadConfig_BrowserPreferPackagedDefaultsFalse(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
-	configJSON := `{"version":1,"tools":{"browser":{"max_tabs":3}}}`
+	configJSON := `{"version":1,"tools":{"browser":{"page_timeout":3}}}`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error: %v", err)
 	}
@@ -861,7 +863,7 @@ func TestLoadConfig_BrowserTrustPathChrome(t *testing.T) {
 func TestLoadConfig_BrowserTrustPathChromeDefaultsFalse(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
-	configJSON := `{"version":1,"tools":{"browser":{"max_tabs":3}}}`
+	configJSON := `{"version":1,"tools":{"browser":{"page_timeout":3}}}`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error: %v", err)
 	}
@@ -2100,5 +2102,92 @@ func TestLoadConfig_MissingVersionField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing a version field") {
 		t.Fatalf("error = %q, want it to name the missing version field", err.Error())
+	}
+}
+
+// TestConfig_NoBrowserCountKeyExists is FR-059's config half.
+//
+// ADR-072 D1.5a deleted every browser tab counter. BrowserToolConfig must carry
+// no field whose JSON key names a tab count — not max_tabs, not max_total_tabs,
+// and not a renamed successor. The check is by SHAPE (the json tag) rather than
+// by field name, because the way this comes back is a rename.
+func TestConfig_NoBrowserCountKeyExists(t *testing.T) {
+	typ := reflect.TypeOf(BrowserToolConfig{})
+	// Assembled, not literal: the repo-wide TestNoResidualTabCap guard forbids
+	// these key names appearing verbatim in any .go file, and a test asserting
+	// their absence must not spell them out.
+	forbidden := []string{
+		"max_" + "tabs",
+		"max_" + "total_tabs",
+		"tab_" + "limit",
+		"tab_" + "cap",
+		"max_" + "browsers",
+	}
+
+	var keys []string
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		keys = append(keys, name)
+		for _, bad := range forbidden {
+			if name == bad {
+				t.Errorf(
+					"tools.browser.%s is back as field %s. Every browser tab counter was deleted "+
+						"(ADR-072 D1.5a): the only limit is live memory, and a refusal that names a "+
+						"cap sends an operator looking for a setting this build does not have.",
+					name, typ.Field(i).Name)
+			}
+		}
+	}
+
+	// The walk must have seen real keys, or the loop above proves nothing.
+	if len(keys) < 5 {
+		t.Fatalf("only %d json-tagged keys found on BrowserToolConfig — the reflection walk is not "+
+			"seeing the struct", len(keys))
+	}
+	if !slices.Contains(keys, "page_timeout") {
+		t.Errorf("page_timeout is missing from %v — this guard is inspecting the wrong struct", keys)
+	}
+}
+
+// TestConfig_MaxTabsKeyIsRejected: an operator config.json still carrying the
+// deleted key must LOAD, and must not resurrect a cap.
+//
+// Loading rather than rejecting is deliberate — aborting boot over a stale
+// browser tuning key is disproportionate, and an upgrading operator's file will
+// carry it. What must not happen is the key taking effect: unknown JSON keys are
+// ignored by encoding/json, so the guard is that nothing in the loaded config
+// carries the value.
+func TestConfig_MaxTabsKeyIsRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	// Assembled rather than written literally: TestNoResidualTabCap forbids the
+	// literal key appearing in any .go file in this repo.
+	staleKey := "max_" + "tabs"
+	configJSON := `{"version":1,"tools":{"browser":{"` + staleKey + `":3,"page_timeout":30}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("a config.json still carrying the deleted key must LOAD, not abort boot: %v", err)
+	}
+	if cfg.Tools.Browser.PageTimeoutSec != 30 {
+		t.Errorf("the rest of the browser block must still load; page_timeout = %d, want 30",
+			cfg.Tools.Browser.PageTimeoutSec)
+	}
+
+	// Round-tripping the loaded config must not write the key back out — an
+	// operator who saves from the UI should end up with it gone, not preserved.
+	out, err := json.Marshal(cfg.Tools.Browser)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), staleKey) {
+		t.Errorf("the deleted tab-count key survived a config round trip: %s", out)
 	}
 }

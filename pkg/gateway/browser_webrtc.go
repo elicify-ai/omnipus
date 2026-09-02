@@ -276,15 +276,10 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	}
 	sessID := frame.SessionId
 
-	mgr, ok := h.agentLoop.BrowserManagerForAgent(frame.AgentId)
-	if !ok {
-		wc.sendCriticalGen(sessionErrorStatus(
-			sessID,
-			fmt.Sprintf(
-				"no browser manager for agent %q (browser tools may not be registered for this agent)",
-				frame.AgentId,
-			),
-		),
+	mgr, outcome := h.agentLoop.BrowserManagerForAgent(context.Background(), frame.AgentId, "")
+	if outcome != agent.BrowserResolveOK {
+		wc.sendCriticalGen(
+			sessionErrorStatus(sessID, browserResolveReason(outcome, frame.AgentId)),
 			dropContext(sessID, viewerID, "webrtc-offer-no-manager"))
 		return
 	}
@@ -558,7 +553,7 @@ func (h *BrowserWSHandler) applyColdStartRecapture(state *browserConnState, cs *
 	if mgr == nil {
 		return
 	}
-	if w, hgt, ok := mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+	if w, hgt, ok := mgr.Live().CSSViewport(mgr.OperatorSessionID()); ok {
 		cs.RecaptureAt(w, hgt)
 	} else if scale > 0 {
 		cs.Recapture()
@@ -1023,7 +1018,7 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 			return
 		}
 		in := browserInputFrameToLiveInput(frame)
-		if err := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
+		if err := mgr.Live().Input(mgr.OperatorSessionID(), viewerID, in); err != nil {
 			if browser.IsBenignLiveInputError(err) {
 				slog.Debug("browser-webrtc: input rejected (benign)", "error", err, "viewer_id", viewerID)
 				// 2026-07-30 UAT: "benign" must not mean "invisible" for the

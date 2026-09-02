@@ -44,7 +44,7 @@ import (
 func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(func() { coord.Shutdown() })
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -53,7 +53,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-a"))
 
 	// First registration + session: set a cookie in agent-a's browser context.
 	_, ctxID1, err := coord.Register(context.Background(), "agent-a", mgrA)
@@ -63,7 +63,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	if ctxID1 == "" {
 		t.Fatal("expected a non-empty browser context id")
 	}
-	tabCtx, err := mgrA.Session(defaultSessionID)
+	tabCtx, err := mgrA.Session(testSessionID)
 	if err != nil {
 		t.Fatalf("Session 1: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 
 	// A NEW manager for the same agent re-registers (mirrors loop.go's reload).
 	mgrA2 := newTestManager(t, cfg)
-	mgrA2.AttachSharedChrome(coord, "agent-a")
+	mgrA2.AttachSharedChrome(coord, browserTestKey("agent-a"))
 	_, ctxID2, err := coord.Register(context.Background(), "agent-a", mgrA2)
 	if err != nil {
 		t.Fatalf("Register 2: %v", err)
@@ -113,7 +113,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 
 	// The cookie set before the reload must still be present in the re-adopted
 	// context — login/localStorage survives a Settings save.
-	tabCtx2, err := mgrA2.Session(defaultSessionID)
+	tabCtx2, err := mgrA2.Session(testSessionID)
 	if err != nil {
 		t.Fatalf("Session 2: %v", err)
 	}
@@ -149,17 +149,17 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 func TestCoordinator_CrashRecovery(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(func() { coord.Shutdown() })
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-a"))
 
 	_, ctxID1, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register 1: %v", err)
 	}
-	if _, sessErr := mgrA.Session(defaultSessionID); sessErr != nil {
+	if _, sessErr := mgrA.Session(testSessionID); sessErr != nil {
 		t.Fatalf("Session 1: %v", sessErr)
 	}
 	pid1 := coord.PID()
@@ -219,50 +219,8 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	}
 
 	// The relaunched Chrome is usable.
-	if _, err := mgrA.Session(defaultSessionID); err != nil {
+	if _, err := mgrA.Session(testSessionID); err != nil {
 		t.Fatalf("Session after crash recovery: %v", err)
-	}
-}
-
-// G4 / I-1/W3/C1: TryOpenTab atomically checks + RESERVES a slot (live tabs +
-// in-flight reservations) so concurrent openers at the boundary see exactly one
-// winner. Pure unit test over the coordinator's in-memory budget — no Chrome.
-func TestCoordinator_TabBudgetDenial(t *testing.T) {
-	home := t.TempDir()
-	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
-		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
-	}
-	coord := NewBrowserCoordinator(home, cfg, 1) // maxTotalTabs=1
-
-	// First opener at the boundary: allowed + reserves the one slot.
-	ok, reason := coord.TryOpenTab("agent-a")
-	if !ok {
-		t.Fatalf("first TryOpenTab should succeed; got reason=%q", reason)
-	}
-	if reason != "" {
-		t.Fatalf("first TryOpenTab reason should be empty; got %q", reason)
-	}
-
-	// Second concurrent opener: denied — the reservation from the first counts.
-	ok, reason = coord.TryOpenTab("agent-b")
-	if ok {
-		t.Fatal("second TryOpenTab should be denied (budget=1, 1 reservation in flight)")
-	}
-	if reason == "" || !strings.Contains(reason, "budget") {
-		t.Fatalf("denied TryOpenTab reason should mention budget; got %q", reason)
-	}
-
-	// ReleaseTab returns the slot → the next opener succeeds. This proves
-	// ReleaseTab is no longer a no-op (the I-1 fix) and that the reservation
-	// counter is decremented.
-	coord.ReleaseTab("agent-a")
-	ok, reason = coord.TryOpenTab("agent-c")
-	if !ok {
-		t.Fatalf("TryOpenTab after ReleaseTab should succeed; got reason=%q", reason)
 	}
 }
 
@@ -278,10 +236,9 @@ func TestCoordinator_LaunchLock_LiveOwnerRejected(t *testing.T) {
 		Enabled:     true,
 		Headless:    true,
 		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
 		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
 	}
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 
 	if err := os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
 		t.Fatalf("mkdir profile dir: %v", err)

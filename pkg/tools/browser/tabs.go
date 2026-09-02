@@ -22,7 +22,7 @@ import (
 // live view).
 type ListTabsTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *ListTabsTool) Name() string                 { return "browser_list_tabs" }
@@ -55,8 +55,12 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// browser_close_tab both tell the model to "call browser_list_tabs
 	// first", making this the model's likely FIRST call, and it deserves an
 	// unambiguous answer.
-	browserStarted := t.mgr.sessionExists(defaultSessionID)
-	tabs, activeIdx, err := t.mgr.ListTabs(defaultSessionID)
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	browserStarted := mgr.sessionExists(sid)
+	tabs, activeIdx, err := mgr.ListTabs(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_list_tabs: %s", err))
 	}
@@ -76,7 +80,7 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 // for the cursor (ADR-038 D6).
 type SwitchTabTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *SwitchTabTool) Name() string                 { return "browser_switch_tab" }
@@ -110,11 +114,23 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 	if !ok {
 		return tools.ErrorResult("browser_switch_tab: 'index' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tab, err := t.mgr.SwitchTab(defaultSessionID, index)
+	tab, err := mgr.SwitchTab(sid, index)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_switch_tab: %s", err))
 	}
@@ -133,7 +149,7 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 // would fight for the cursor.
 type CloseTabTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *CloseTabTool) Name() string                 { return "browser_close_tab" }
@@ -168,16 +184,26 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if !ok {
 		return tools.ErrorResult("browser_close_tab: 'index' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabs, activeIdx, err := t.mgr.CloseTab(defaultSessionID, index)
+	tabs, activeIdx, err := mgr.CloseTab(sid, index)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_close_tab: %s", err))
 	}
-	// ADR-043 D7: return the global tab-budget slot this tab held.
-	t.mgr.releaseGlobalTab()
 	return jsonResult(map[string]any{"tabs": tabsToWire(tabs), "active_index": activeIdx})
 }
 
@@ -196,7 +222,7 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 // control lock rather than fighting for the cursor (ADR-038 D6).
 type OpenTabTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *OpenTabTool) Name() string                 { return "browser_open_tab" }
@@ -207,10 +233,9 @@ func (t *OpenTabTool) Description() string {
 		"browser_navigate, which reuses the CURRENT tab, this always creates an additional one. " +
 		"Optionally navigate the new tab to a URL right away. Use this when you need a second tab " +
 		"alongside the current one, e.g. to check another source without losing your place on the " +
-		"page you already have open. Subject to a maximum concurrent tab budget SHARED across all agents " +
-		"using this browser (browser_list_tabs does NOT report this limit — it only lists what's " +
-		"currently open); if the budget is reached, this call fails with an explanatory error naming the " +
-		"reason — close a tab with browser_close_tab and retry. A provided url is SSRF-checked the same " +
+		"page you already have open. If the machine is short of memory this call " +
+		"fails with an explanatory error saying so — close a tab with browser_close_tab and retry. " +
+		"A provided url is SSRF-checked the same " +
 		"as browser_navigate. If a human is currently controlling the browser via the live view, this " +
 		"call defers instead of opening a tab — the result is {\"deferred\": true, \"reason\": ...} " +
 		"instead; wait for them to release control and retry."
@@ -231,33 +256,33 @@ func (t *OpenTabTool) Parameters() map[string]any {
 
 func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	rawURL, _ := args["url"].(string)
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
 	if rawURL != "" {
-		if err := t.mgr.ValidateURL(ctx, rawURL); err != nil {
+		if err := mgr.ValidateURL(ctx, rawURL); err != nil {
 			return tools.ErrorResult(err.Error())
 		}
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
-
-	// ADR-043 D7: global tab budget across all agents' contexts. Deny a new tab
-	// when the shared Chrome is at the cap; the agent can browser_close_tab first.
-	// I-1/W3/C1: reserveGlobalTab atomically RESERVES a slot (live tabs + in-flight
-	// reservations) under the coordinator lock; if the subsequent OpenTab itself
-	// fails, that reservation MUST be returned (releaseGlobalTab) so the budget
-	// doesn't grow permanently conservative on every failed open.
-	if ok, reason := t.mgr.reserveGlobalTab(); !ok {
-		return tools.ErrorResult(
-			fmt.Sprintf(
-				"browser_open_tab: global tab budget reached (%s) — close a tab with browser_close_tab first",
-				reason,
-			),
-		)
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
 	}
+	defer release()
 
-	tab, err := t.mgr.OpenTab(defaultSessionID)
+	// ADR-072 D1.5a/FR-059: there is no tab budget to reserve any more. Every
+	// counter is deleted; the only limit is live memory, and it is enforced one
+	// level down inside OpenTab (FR-060) so a refusal names memory rather than
+	// a cap an operator would go looking for and not find.
+	tab, err := mgr.OpenTab(sid)
 	if err != nil {
-		t.mgr.releaseGlobalTab()
 		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
 	}
 
@@ -270,16 +295,16 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		})
 	}
 
-	// OpenTab already made the new tab active, so Session(default) now
+	// OpenTab already made the new tab active, so Session(sid) now
 	// resolves ITS context — mirrors NavigateTool.Execute's own
 	// navigate-then-verify-redirect flow (tools.go) so a provided url gets
 	// the SAME two-stage SSRF gate (initial + post-redirect), not a weaker
 	// one-off check.
-	sessionCtx, err := t.mgr.Session(defaultSessionID)
+	sessionCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
 	}
-	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	hops := watchRedirectHops(tabCtx)
@@ -289,7 +314,7 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		// SECURITY: same gap as NavigateTool -- a failed load must not leave
 		// the NEW tab parked on the target (see abandonTabAfterFailedLoad).
 		return tools.ErrorResult(abandonTabAfterFailedLoad(
-			ctx, t.mgr, sessionCtx, "browser_open_tab", rawURL, hops, err,
+			ctx, mgr, sessionCtx, "browser_open_tab", rawURL, hops, err,
 		))
 	}
 
@@ -307,7 +332,7 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// redirect to a private IP (e.g. 169.254.169.254). Validate the final
 	// URL and steer the new tab to about:blank if it lands somewhere blocked.
 	if finalURL != rawURL {
-		if err := t.mgr.ValidateURL(ctx, finalURL); err != nil {
+		if err := mgr.ValidateURL(ctx, finalURL); err != nil {
 			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
 			return tools.ErrorResult(fmt.Sprintf(
 				"browser_open_tab: redirect from %s landed on blocked URL: %s", rawURL, err,

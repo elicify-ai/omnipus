@@ -282,7 +282,7 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	})
 
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(func() { coord.Shutdown() })
 
 	type result struct {
@@ -298,13 +298,13 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	for i := 0; i < numAgents; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		mgr := newTestManager(t, cfg)
-		mgr.AttachSharedChrome(coord, agentID)
+		mgr.AttachSharedChrome(coord, browserTestKey(agentID))
 
 		wg.Add(1)
 		go func(i int, agentID string, mgr *BrowserManager) {
 			defer wg.Done()
 			<-start
-			tabCtx, err := mgr.Session(defaultSessionID)
+			tabCtx, err := mgr.Session(testSessionID)
 			if err != nil {
 				results[i] = result{agentID: agentID, err: fmt.Errorf("Session: %w", err)}
 				return

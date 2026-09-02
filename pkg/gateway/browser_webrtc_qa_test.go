@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -105,8 +106,8 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	// Plant a fake, non-functional "chrome" binary so the capability gate in
 	// handleWebRTCOffer reports Capable=true — it is NEVER executed: capture

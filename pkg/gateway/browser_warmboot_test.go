@@ -131,7 +131,7 @@ func newWarmTestManager(t *testing.T, coord *browser.BrowserCoordinator, agentID
 		t.Fatalf("browser.NewBrowserManager: %v", err)
 	}
 	if coord != nil {
-		mgr.AttachSharedChrome(coord, agentID)
+		mgr.AttachSharedChrome(coord, browserTestKey(t, agentID))
 	}
 	return mgr
 }
@@ -151,7 +151,7 @@ func newWarmTestCoordinator(t *testing.T) *browser.BrowserCoordinator {
 	if err != nil {
 		t.Fatalf("browser.DefaultConfig: %v", err)
 	}
-	return browser.NewBrowserCoordinator(t.TempDir(), cfg, 5)
+	return browser.NewBrowserCoordinator(t.TempDir(), cfg)
 }
 
 func TestPickWarmBrowserManager_PrefersTheDefaultAgent(t *testing.T) {

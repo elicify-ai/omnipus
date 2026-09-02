@@ -82,12 +82,12 @@ func canLockWithin(m *BrowserManager, d time.Duration) bool {
 // browserCtx and no tabs.
 func TestReapIdleSessions_StrandedEmptySession_ReapedAfterTTL(t *testing.T) {
 	m, clock := newReapableManager(t, 5*time.Minute)
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	var browserCancelled bool
 	m.mu.Lock()
-	se := m.sessions[DefaultSessionID]
+	se := m.sessions[testSessionID]
 	se.tabs = nil // simulate CloseTab's replacement having failed
 	se.browserCancel = func() { browserCancelled = true }
 	m.mu.Unlock()
@@ -95,20 +95,20 @@ func TestReapIdleSessions_StrandedEmptySession_ReapedAfterTTL(t *testing.T) {
 	// First sweep only STAMPS it — an empty session must not be torn down on
 	// sight, or it would race CloseTab's legitimate momentary empty window.
 	assert.Empty(t, m.ReapIdleSessions(), "an empty session must be stamped, not reaped on sight")
-	assert.Contains(t, m.sessions, DefaultSessionID)
+	assert.Contains(t, m.sessions, testSessionID)
 	assert.False(t, browserCancelled)
 
 	// Still inside the TTL: survives.
 	*clock = clock.Add(4 * time.Minute)
 	assert.Empty(t, m.ReapIdleSessions(), "still inside the TTL")
-	assert.Contains(t, m.sessions, DefaultSessionID)
+	assert.Contains(t, m.sessions, testSessionID)
 
 	// Past it: the browsing context goes, and the session is reported.
 	*clock = clock.Add(2 * time.Minute)
-	assert.Equal(t, []string{DefaultSessionID}, m.ReapIdleSessions(),
+	assert.Equal(t, []string{testSessionID}, m.ReapIdleSessions(),
 		"a session stranded empty for a whole TTL must be reaped — it holds a live browsing context")
 	assert.True(t, browserCancelled, "the stranded browsing context must actually be canceled")
-	assert.NotContains(t, m.sessions, DefaultSessionID)
+	assert.NotContains(t, m.sessions, testSessionID)
 }
 
 // A session that goes empty and is REFILLED (CloseTab's normal path) must have
@@ -116,11 +116,11 @@ func TestReapIdleSessions_StrandedEmptySession_ReapedAfterTTL(t *testing.T) {
 // and be reaped early.
 func TestReapIdleSessions_EmptyThenRefilled_StampIsCleared(t *testing.T) {
 	m, clock := newReapableManager(t, 5*time.Minute)
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	m.mu.Lock()
-	se := m.sessions[DefaultSessionID]
+	se := m.sessions[testSessionID]
 	keep := se.tabs
 	se.tabs = nil
 	m.mu.Unlock()
@@ -135,7 +135,7 @@ func TestReapIdleSessions_EmptyThenRefilled_StampIsCleared(t *testing.T) {
 	assert.Empty(t, m.ReapIdleSessions(), "a refilled session must not carry its old empty-stamp")
 
 	m.mu.Lock()
-	stamp := m.sessions[DefaultSessionID].emptySince
+	stamp := m.sessions[testSessionID].emptySince
 	m.mu.Unlock()
 	assert.True(t, stamp.IsZero(), "emptySince must be cleared once the session has tabs again")
 }
@@ -151,7 +151,7 @@ func TestReapIdleSessions_WedgedCancel_SweepStillCompletes(t *testing.T) {
 	m, clock := newReapableManager(t, 5*time.Minute)
 	fn, entered := blockingTabFactory(release)
 	m.createTabFn = fn
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	*clock = clock.Add(6 * time.Minute)
@@ -161,7 +161,7 @@ func TestReapIdleSessions_WedgedCancel_SweepStillCompletes(t *testing.T) {
 
 	select {
 	case reaped := <-done:
-		assert.Equal(t, []string{DefaultSessionID}, reaped,
+		assert.Equal(t, []string{testSessionID}, reaped,
 			"the sweep must still report the session it removed, even though the cancel wedged")
 	case <-time.After(cancelBoundedTimeout + 20*time.Second):
 		t.Fatal("ReapIdleSessions never returned — a wedged cancel must be abandoned at the bound, not block the sweep")
@@ -178,7 +178,7 @@ func TestReapIdleSessions_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 	m, clock := newReapableManager(t, 5*time.Minute)
 	fn, entered := blockingTabFactory(release)
 	m.createTabFn = fn
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	*clock = clock.Add(6 * time.Minute)
@@ -196,10 +196,10 @@ func TestReapIdleSessions_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 // under m.mu here stalls far more than the browser subsystem.
 func TestShutdown_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 	release := make(chan struct{})
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	fn, entered := blockingTabFactory(release)
 	m.createTabFn = fn
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	go m.Shutdown()
@@ -215,13 +215,13 @@ func TestShutdown_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 // canceling under the lock is fine here.
 func TestCloseSession_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 	release := make(chan struct{})
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	fn, entered := blockingTabFactory(release)
 	m.createTabFn = fn
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
-	go m.CloseSession(DefaultSessionID)
+	go m.CloseSession(testSessionID)
 
 	entered.Wait()
 	assert.True(t, canLockWithin(m, 3*time.Second),

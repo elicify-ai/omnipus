@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +36,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/task"
-	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
 // newBrowserInspectTestAPI builds a restAPI via the shared newTestRestAPIWithHome
@@ -323,9 +324,10 @@ func TestHandleBrowserInspect_InspectPointHardError_SoftErrorWithReason(t *testi
 
 	defaultAgent := api.agentLoop.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
-	_, ok := api.agentLoop.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager even though its "+
-		"profile dir is unusable — the failure only surfaces lazily, on first Session() call")
+	_, outcome := api.agentLoop.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome,
+		"registerSharedTools must have built a browser even though its "+
+			"profile dir is unusable — the failure only surfaces lazily, on first Session() call")
 
 	body := inspectRequestBody(t, gen.BrowserInspectRequest{
 		AgentId: defaultAgent.ID, SessionId: "sess-hard-error", X: 10, Y: 10,
@@ -391,16 +393,15 @@ func TestHandleBrowserInspect_Success_MarshalsTagTextHtml(t *testing.T) {
 		cfg.Tools.Browser.Headless = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.PageTimeoutSec = 30
-		cfg.Tools.Browser.MaxTabs = 5
 	})
 
 	defaultAgent := api.agentLoop.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
-	mgr, ok := api.agentLoop.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := api.agentLoop.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	t.Cleanup(mgr.Shutdown)
 
-	tabCtx, err := mgr.Session(browser.DefaultSessionID)
+	tabCtx, err := mgr.Session(mgr.OperatorSessionID())
 	require.NoError(t, err)
 	navCtx, cancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer cancel()

@@ -39,19 +39,19 @@ import (
 // the fix the switched-to tab was only brought to front, so focusTreatment
 // reports "unknown" (bringToFront with no focus emulation) and this fails.
 func TestSwitchTab_FocusEmulatesTheTabItSwitchesTo(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	m.mu.Lock()
-	wantCtx := m.sessions[DefaultSessionID].tabs[0].ctx
+	wantCtx := m.sessions[testSessionID].tabs[0].ctx
 	m.mu.Unlock()
 
 	before := len(rec.calls())
-	_, err = m.SwitchTab(DefaultSessionID, 0)
+	_, err = m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
 
 	fg := rec.calls()
@@ -67,20 +67,20 @@ func TestSwitchTab_FocusEmulatesTheTabItSwitchesTo(t *testing.T) {
 // compositing at ~30 fps in the background, for every tab the agent ever
 // visits.
 func TestSwitchTab_ReleasesFocusEmulationOnTheTabItLeaves(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	m.mu.Lock()
-	se := m.sessions[DefaultSessionID]
+	se := m.sessions[testSessionID]
 	leavingCtx := se.tabs[se.activeIdx].ctx
 	m.mu.Unlock()
 
 	beforeBlur := len(rec.blurCalls())
-	_, err = m.SwitchTab(DefaultSessionID, 0)
+	_, err = m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
 
 	blurred := rec.blurCalls()
@@ -95,15 +95,15 @@ func TestSwitchTab_ReleasesFocusEmulationOnTheTabItLeaves(t *testing.T) {
 // that is already active must not blur the tab it just foregrounded. Getting
 // this wrong would leave the ACTIVE tab un-emulated: the exact defect, inverted.
 func TestSwitchTab_ToTheSameTabDoesNotReleaseItsOwnFocus(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID) // active index is now 1
+	_, err = m.OpenTab(testSessionID) // active index is now 1
 	require.NoError(t, err)
 
 	beforeBlur := len(rec.blurCalls())
-	_, err = m.SwitchTab(DefaultSessionID, 1) // switch to the ALREADY-active tab
+	_, err = m.SwitchTab(testSessionID, 1) // switch to the ALREADY-active tab
 	require.NoError(t, err)
 
 	assert.Len(t, rec.blurCalls(), beforeBlur,
@@ -116,24 +116,24 @@ func TestSwitchTab_ToTheSameTabDoesNotReleaseItsOwnFocus(t *testing.T) {
 // call whatsoever, so the encoder re-bound to a tab Chrome had never been told
 // about.
 func TestOpenTab_FocusEmulatesTheNewTabAndReleasesThePrevious(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	m.mu.Lock()
-	previousCtx := m.sessions[DefaultSessionID].tabs[0].ctx
+	previousCtx := m.sessions[testSessionID].tabs[0].ctx
 	m.mu.Unlock()
 
 	beforeFg, beforeBlur := len(rec.calls()), len(rec.blurCalls())
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	fg, blurred := rec.calls(), rec.blurCalls()
 	require.Len(t, fg, beforeFg+1, "the newly-opened tab must get the foreground treatment")
 	require.Len(t, blurred, beforeBlur+1, "the tab it displaced must have its focus emulation released")
 
-	newCtx, err := m.Session(DefaultSessionID)
+	newCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	assert.Same(t, newCtx, fg[len(fg)-1],
 		"the foreground treatment must land on the tab Session() now resolves — the one the "+
@@ -156,14 +156,14 @@ func TestFocusTreatmentActions(t *testing.T) {
 // production that is a guaranteed PageTimeout stall for a tab that cannot be
 // focused either way. Mirrors the same guarantee activateTabInChrome has.
 func TestReleaseTabFocusInChrome_SkipsDeadContexts(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	before := len(rec.blurCalls())
-	m.releaseTabFocusInChrome(dead, DefaultSessionID)
-	m.releaseTabFocusInChrome(nil, DefaultSessionID)
+	m.releaseTabFocusInChrome(dead, testSessionID)
+	m.releaseTabFocusInChrome(nil, testSessionID)
 	assert.Len(t, rec.blurCalls(), before,
 		"a canceled or nil tab context must be skipped, not dispatched to CDP")
 }
@@ -177,24 +177,24 @@ func TestReleaseTabFocusInChrome_SkipsDeadContexts(t *testing.T) {
 // capture-follows-the-wrong-tab failure activateTabInChrome exists to
 // prevent (see its doc comment, root-caused live 2026-08-03).
 func TestCloseTab_ActivatesTheTabThatBecomesActive(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	// Close the ACTIVE tab (index 2, opened last): index 1 becomes active.
 	m.mu.Lock()
-	require.Len(t, m.sessions[DefaultSessionID].tabs, 3)
-	require.Equal(t, 2, m.sessions[DefaultSessionID].activeIdx)
-	wantCtx := m.sessions[DefaultSessionID].tabs[1].ctx
+	require.Len(t, m.sessions[testSessionID].tabs, 3)
+	require.Equal(t, 2, m.sessions[testSessionID].activeIdx)
+	wantCtx := m.sessions[testSessionID].tabs[1].ctx
 	m.mu.Unlock()
 
 	before := len(rec.calls())
-	_, activeIdx, err := m.CloseTab(DefaultSessionID, 2)
+	_, activeIdx, err := m.CloseTab(testSessionID, 2)
 	require.NoError(t, err)
 	require.Equal(t, 1, activeIdx)
 

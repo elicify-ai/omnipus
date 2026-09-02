@@ -70,13 +70,13 @@ func TestCoordinator_Register_CreateTargetParams_PinsWindowSize(t *testing.T) {
 	t.Cleanup(func() { createTargetParamsForTest = prev })
 
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-params-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-params-a"))
 	mgrB := newTestManager(t, cfg)
-	mgrB.AttachSharedChrome(coord, "agent-params-b")
+	mgrB.AttachSharedChrome(coord, browserTestKey("agent-params-b"))
 
 	if _, _, err := coord.Register(context.Background(), "agent-params-a", mgrA); err != nil {
 		t.Fatalf("Register A: %v", err)
@@ -147,13 +147,13 @@ func windowBoundsForSession(t *testing.T, tabCtx context.Context) *browser.Bound
 func TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-window-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-window-a"))
 	mgrB := newTestManager(t, cfg)
-	mgrB.AttachSharedChrome(coord, "agent-window-b")
+	mgrB.AttachSharedChrome(coord, browserTestKey("agent-window-b"))
 
 	// Session (not a bare Register call) is what every real browser tool
 	// call goes through: it drives ensureStarted -> coordinator.Register ->

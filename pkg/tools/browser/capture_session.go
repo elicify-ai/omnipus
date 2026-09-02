@@ -497,7 +497,7 @@ type captureInjectPayload struct {
 // UNTRACKED CDP target in the DEFAULT browser context (see the step-3 comment
 // below for why it cannot live in the agent's own CDP context; deliberately
 // NOT via mgr.OpenTab, which would register the target in the agent's
-// visible tab strip/MaxTabs budget — the encoder page is a gateway-internal
+// visible tab strip — the encoder page is a gateway-internal
 // target the agent/user never see), injects window.__omnipusCapture BEFORE
 // navigating (Page.addScriptToEvaluateOnNewDocument runs before any of the
 // target document's own scripts, per its CDP doc comment), then navigates to
@@ -515,7 +515,7 @@ func defaultEncoderStarter(
 	// 1. Ensure the agent's default tab/browsing context exists — the
 	// encoder page must share ITS window (see coordinator.go's
 	// LoadExtension / this file's top-of-file doc comment for why).
-	if _, err := mgr.Session(DefaultSessionID); err != nil {
+	if _, err := mgr.Session(mgr.OperatorSessionID()); err != nil {
 		return nil, nil, fmt.Errorf("capture session: ensure agent browsing context: %w", err)
 	}
 
@@ -553,7 +553,7 @@ func defaultEncoderStarter(
 	// per-agent one. Like the previous
 	// same-context design, the target is deliberately created WITHOUT
 	// mgr.OpenTab so it never appears in the agent's visible tab
-	// strip/MaxTabs budget (and the default context isn't an agent context
+	// strip (and the default context isn't an agent context
 	// anyway).
 	rootCtx := coord.rootContext()
 	if rootCtx == nil {
@@ -705,7 +705,7 @@ const bringToFrontTimeout = 5 * time.Second
 const foregroundReassertDelay = 6 * time.Second
 
 // bringAgentTabToFront focuses this agent's current active tab (Page.
-// bringToFront on the DefaultSessionID session's active-tab context) so
+// bringToFront on the workspace-owned session's active-tab context) so
 // encoder.js's active-in-last-focused-window tab resolution binds THIS
 // agent's tab — see the call site in Start for the full rationale.
 // Best-effort by design: on any failure OR timeout the capture proceeds with
@@ -724,7 +724,19 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tabCtx, err := cs.mgr.Session(DefaultSessionID)
+		sid := cs.mgr.OperatorSessionID()
+		// Focus the tab that EXISTS; never manufacture one as a side effect of
+		// focusing. By the time this runs on the real path the encoder starter
+		// has already ensured the workspace-owned browsing context (step 1 of
+		// defaultEncoderStarter), so a missing context here means the capture is
+		// running against a manager that has none — and lazily creating one
+		// would open a tab nobody asked for, on a code path whose whole
+		// contract is best-effort.
+		if !cs.mgr.sessionExists(sid) {
+			cs.logf("capture[%s]: bring agent tab to front: no browsing context to focus", cs.agentID)
+			return
+		}
+		tabCtx, err := cs.mgr.Session(sid)
 		if err != nil {
 			cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
 			return

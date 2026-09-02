@@ -101,7 +101,7 @@ func newPermissiveRegistry(t *testing.T, cfg BrowserConfig) (*tools.ToolRegistry
 	t.Helper()
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, true /* evaluateEnabled */, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, true /* evaluateEnabled */, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 	return registry, mgr
@@ -123,7 +123,6 @@ func testBrowserCfg(t *testing.T) BrowserConfig {
 		Enabled:         true,
 		Headless:        true,
 		PageTimeout:     15 * time.Second,
-		MaxTabs:         5,
 		ProfileDir:      t.TempDir(),
 		TrustPathChrome: true,
 	}
@@ -352,7 +351,6 @@ func TestExecute_Evaluate_Edges(t *testing.T) {
 			Enabled:         true,
 			Headless:        true,
 			PageTimeout:     3 * time.Second,
-			MaxTabs:         2,
 			ProfileDir:      t.TempDir(),
 			TrustPathChrome: true,
 		}
@@ -400,7 +398,7 @@ func TestExecute_Evaluate_DisabledGate(t *testing.T) {
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
 	// evaluateEnabled=false: Execute must deny before touching Chrome.
-	_, regErr := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	_, regErr := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	evalTool := mustGetTool(t, registry, "browser_evaluate")
@@ -432,7 +430,7 @@ func TestExecute_Navigate_SchemeBlocks(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	_, regErr := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	_, regErr := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	navTool := mustGetTool(t, registry, "browser_navigate")
@@ -493,7 +491,7 @@ func TestExecute_Navigate_PostRedirectSSRF(t *testing.T) {
 	// 127.0.0.1 is allowed so the fixture server itself passes the pre-check.
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
@@ -632,7 +630,7 @@ func TestExecute_Screenshot_WritesUnderAgentHome(t *testing.T) {
 	agentHome := t.TempDir()
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, agentHome, true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, agentHome, true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
@@ -689,7 +687,6 @@ func TestExecute_Wait_TimeoutForAbsentSelector(t *testing.T) {
 		Enabled:         true,
 		Headless:        true,
 		PageTimeout:     3 * time.Second,
-		MaxTabs:         2,
 		ProfileDir:      t.TempDir(),
 		TrustPathChrome: true,
 	}
@@ -746,7 +743,6 @@ func TestExecute_GetText_FailsFastOnInvisibleOrMissingSelector(t *testing.T) {
 		Enabled:         true,
 		Headless:        true,
 		PageTimeout:     20 * time.Second,
-		MaxTabs:         2,
 		ProfileDir:      t.TempDir(),
 		TrustPathChrome: true,
 	}
@@ -793,7 +789,7 @@ func TestExecute_GetText_FailsFastOnInvisibleOrMissingSelector(t *testing.T) {
 //	When browser_get_text is called next (without another navigate),
 //	Then get_text reads from the same tab as navigate (session persists).
 //
-// Traces to: manager.go Session / defaultSessionID
+// Traces to: manager.go Session / testSessionID
 // Issue #445 §3.18 case 7
 // ---------------------------------------------------------------------------
 
@@ -825,9 +821,9 @@ func TestExecute_SessionPersistence(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Case 7c — MaxTabs limit: Session returns error when at capacity
+// Case 7c — the tab limit: Session returns an error at capacity
 //
-// BDD: Given MaxTabs=1 and one tab already open,
+// BDD: Given the memory gate refusing and one tab already open,
 //
 //	When a second browser_navigate is called with a new_session_id (via Session()),
 //	Then the manager returns "maximum concurrent tabs" error.
@@ -839,43 +835,6 @@ func TestExecute_SessionPersistence(t *testing.T) {
 // Traces to: manager.go Session (line 326), manager_wave4_test.go TestMaxTabsExceeded_SessionReturnsError
 // Issue #445 §3.18 case 7
 // ---------------------------------------------------------------------------
-
-func TestExecute_MaxTabs_LimitError(t *testing.T) {
-	skipIfNoBrowser(t)
-
-	srv := executeTestServer(t)
-	// Set MaxTabs=1 so the first call occupies the only slot.
-	cfg := BrowserConfig{
-		Enabled:         true,
-		Headless:        true,
-		PageTimeout:     10 * time.Second,
-		MaxTabs:         1,
-		ProfileDir:      t.TempDir(),
-		TrustPathChrome: true,
-	}
-	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
-	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
-	require.NoError(t, err)
-	t.Cleanup(mgr.Shutdown)
-	ctx := context.Background()
-
-	// 1. First navigate occupies the "default" tab (the only allowed slot).
-	navTool := mustGetTool(t, registry, "browser_navigate")
-	firstResult := navTool.Execute(ctx, map[string]any{"url": srv.URL})
-	require.False(t, firstResult.IsError,
-		"first navigate must succeed (MaxTabs=1, 0 tabs open); got: %s", firstResult.ForLLM)
-
-	// 2. Request a SECOND session directly on the manager — this should fail.
-	// The "default" session is already held; a new session ID attempts a second tab.
-	_, sessionErr := mgr.Session("second-tab-must-fail")
-	require.Error(t, sessionErr,
-		"requesting a second tab when MaxTabs=1 must return an error")
-	assert.Contains(t, sessionErr.Error(), "maximum concurrent tabs",
-		"error must mention 'maximum concurrent tabs'; got: %s", sessionErr.Error())
-	assert.Contains(t, sessionErr.Error(), "1",
-		"error must mention the limit (1); got: %s", sessionErr.Error())
-}
 
 // ---------------------------------------------------------------------------
 // Case 8 — browser_type: text is typed into input and readable back
@@ -965,7 +924,7 @@ func TestExecute_ParameterValidation(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	_, regErr := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
+	_, regErr := registerToolsForTest(t, registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	ctx := context.Background()

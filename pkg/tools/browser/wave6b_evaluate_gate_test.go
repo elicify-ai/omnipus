@@ -55,7 +55,7 @@ func TestBrowserEvaluate_FlagFalse_StillRegistered(t *testing.T) {
 
 	// evaluateEnabled=false is forwarded to EvaluateTool.executeEnabled
 	// so Execute() can gate at invocation time.
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err, "RegisterTools must not fail when evaluateEnabled=false")
 	require.NotNil(t, mgr)
 
@@ -91,7 +91,7 @@ func TestBrowserEvaluate_FlagTrue_PolicyDeny_RegisteredButDenied(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker(nil)
 
-	mgr, err := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
 
@@ -115,7 +115,7 @@ func TestBrowserEvaluate_FlagTrue_PolicyAllow_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker(nil)
 
-	mgr, err := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
 

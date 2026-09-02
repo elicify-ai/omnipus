@@ -81,13 +81,51 @@ type teamRecord struct {
 // malformed/unreadable workspace file is skipped rather than aborting the
 // whole scan over one bad file.
 func FindForAgent(home, agentID string) (string, bool) {
-	if agentID == "" {
+	matches, implicit := findAllForAgent(home, agentID)
+	if len(matches) == 0 {
 		return "", false
+	}
+	if len(matches) > 1 && !implicit {
+		logger.WarnCF(
+			"workspace",
+			"agent belongs to more than one workspace's core team; using the first by sorted id order",
+			map[string]any{
+				"agent_id":   agentID,
+				"workspaces": strings.Join(matches, ","),
+				"chosen":     matches[0],
+			},
+		)
+	}
+	return matches[0], true
+}
+
+// FindAllForAgent returns EVERY workspace whose CoreTeam claims agentID, in
+// sorted id order, plus whether the agent is an implicit member of all of them
+// (a System Agent, for which multi-membership is the normal state rather than
+// an ambiguity).
+//
+// FindForAgent answers "which one" by applying a sorted-first tie-break; this
+// answers "how many, and which", for the caller that must REFUSE rather than
+// tie-break. The browser's ResolveBrowsingKey is that caller (ADR-072 FR-033):
+// choosing arbitrarily between two workspaces there would silently pick which
+// set of live logins a turn acts with, which is not a filesystem-rerooting
+// question and must not inherit the filesystem answer.
+func FindAllForAgent(home, agentID string) (ids []string, implicitMember bool) {
+	return findAllForAgent(home, agentID)
+}
+
+// findAllForAgent is the shared scan FindForAgent and FindAllForAgent both
+// read. It logs nothing — the ambiguity WARN belongs to the caller that
+// actually resolves an ambiguity, and FindAllForAgent's callers report it
+// their own way.
+func findAllForAgent(home, agentID string) ([]string, bool) {
+	if agentID == "" {
+		return nil, false
 	}
 	dir := dirFor(home)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 
 	implicit := isImplicitMember(agentID)
@@ -124,22 +162,8 @@ func FindForAgent(home, agentID string) (string, bool) {
 		matches = append(matches, wsID)
 	}
 
-	if len(matches) == 0 {
-		return "", false
-	}
 	sort.Strings(matches)
-	if len(matches) > 1 && !implicit {
-		logger.WarnCF(
-			"workspace",
-			"agent belongs to more than one workspace's core team; using the first by sorted id order",
-			map[string]any{
-				"agent_id":   agentID,
-				"workspaces": strings.Join(matches, ","),
-				"chosen":     matches[0],
-			},
-		)
-	}
-	return matches[0], true
+	return matches, implicit
 }
 
 // FindForAgentPreferring resolves the same question as FindForAgent — which

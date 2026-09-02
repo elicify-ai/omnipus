@@ -77,7 +77,6 @@ func TestInspectPoint_SessionError(t *testing.T) {
 		ProfileDir:  filepath.Join(tmpDir, "profile"),
 		ExecPath:    filepath.Join(tmpDir, "no-such-chromium-binary"),
 		PageTimeout: 2 * time.Second,
-		MaxTabs:     5,
 	}
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
@@ -121,11 +120,11 @@ func newInspectTestManager(t *testing.T) *BrowserManager {
 		ProfileDir:      filepath.Join(tmpDir, "profile"),
 		Headless:        true,
 		PageTimeout:     15 * time.Second,
-		MaxTabs:         5,
 		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
+	mgr.key = testKey
 	t.Cleanup(mgr.Shutdown)
 	return mgr
 }
@@ -146,7 +145,10 @@ func TestInspectPoint_ResolvesElementAtPoint(t *testing.T) {
 
 	mgr := newInspectTestManager(t)
 
-	tabCtx, err := mgr.Session(DefaultSessionID)
+	// InspectPoint reads the WORKSPACE-OWNED tab set (the live panel is the
+	// operator), so the page under test must be loaded into THAT tab, not into a
+	// chat session's own.
+	tabCtx, err := mgr.Session(mgr.OperatorSessionID())
 	require.NoError(t, err)
 	navCtx, cancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer cancel()
@@ -175,7 +177,10 @@ func TestInspectPoint_NoElementAtPoint(t *testing.T) {
 
 	mgr := newInspectTestManager(t)
 
-	tabCtx, err := mgr.Session(DefaultSessionID)
+	// InspectPoint reads the WORKSPACE-OWNED tab set (the live panel is the
+	// operator), so the page under test must be loaded into THAT tab, not into a
+	// chat session's own.
+	tabCtx, err := mgr.Session(mgr.OperatorSessionID())
 	require.NoError(t, err)
 	navCtx, cancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer cancel()
@@ -220,14 +225,16 @@ func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
 		ProfileDir:      filepath.Join(tmpDir, "profile"),
 		Headless:        true,
 		PageTimeout:     45 * time.Second, // deliberately large — proves InspectPoint does NOT wait anywhere near this long
-		MaxTabs:         5,
-		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
+		TrustPathChrome: true,             // skipIfNoBrowser already probed $PATH Chrome
 	}
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
-	tabCtx, err := mgr.Session(DefaultSessionID)
+	// InspectPoint reads the WORKSPACE-OWNED tab set (the live panel is the
+	// operator), so the page under test must be loaded into THAT tab, not into a
+	// chat session's own.
+	tabCtx, err := mgr.Session(mgr.OperatorSessionID())
 	require.NoError(t, err)
 	navCtx, cancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer cancel()
@@ -270,19 +277,23 @@ func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
 // proxy, which is the user-visible symptom this whole fix addresses.
 //
 // No real Chromium needed: the manager is hand-built (white-box, same
-// package) with started=true and a pre-populated DefaultSessionID session
+// package) with started=true and a pre-populated workspace-owned session
 // entry, so m.Session() resolves without ever touching ensureStarted()/CDP —
 // only evalCDP (the substitute that panics) is ever invoked.
 func TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult(t *testing.T) {
 	mgr := &BrowserManager{
-		cfg:     BrowserConfig{PageTimeout: 5 * time.Second, MaxTabs: 5},
-		started: true,
-		sessions: map[string]*sessionEntry{
-			DefaultSessionID: {tabs: []*tabEntry{{ctx: context.Background(), cancel: func() {}}}, activeIdx: 0},
-		},
+		cfg:      BrowserConfig{PageTimeout: 5 * time.Second},
+		key:      testKey,
+		started:  true,
+		sessions: map[string]*sessionEntry{},
 		evalCDP: func(ctx context.Context, actions ...chromedp.Action) error {
 			panic("simulated chromedp/cdproto-internal panic")
 		},
+	}
+	// InspectPoint resolves the WORKSPACE-OWNED tab set — the live panel is the
+	// operator (ADR-072 §0.2a) — so the hand-planted entry is keyed that way.
+	mgr.sessions[mgr.OperatorSessionID()] = &sessionEntry{
+		tabs: []*tabEntry{{ctx: context.Background(), cancel: func() {}}}, activeIdx: 0,
 	}
 
 	require.NotPanics(t, func() {

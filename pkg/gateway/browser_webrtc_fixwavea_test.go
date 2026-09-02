@@ -11,6 +11,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -71,8 +74,8 @@ func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	require.True(t, mgr.CaptureVideoCapability().Capable,
 		"capability gate must report Capable=true via the exec_path filename heuristic, so the ladder reaches "+
 			"Start()/HandleViewerOffer instead of stopping earlier at not_capable")
@@ -172,8 +175,8 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	require.True(t, mgr.CaptureVideoCapability().Capable)
 
 	offerBlock := make(chan struct{})
@@ -296,8 +299,8 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	installRoot := mgr.InstallRoot()
 	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")

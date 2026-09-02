@@ -151,7 +151,8 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// sessionID is the CLIENT-supplied (chat) session id from the attach
 	// frame, kept only for logging and for echoing back on outgoing wire
 	// frames (ADR-038 finding #1). It is NEVER passed to mgr.Live() — every
-	// interaction with the live-view engine uses browser.DefaultSessionID,
+	// interaction with the live-view engine uses the browser's WORKSPACE-OWNED
+	// tab set (mgr.OperatorSessionID()),
 	// the one tab the agent's browser_* tools actually drive. A non-empty
 	// value also doubles as "this connection currently has a live view
 	// attached."
@@ -1204,14 +1205,15 @@ func (h *BrowserWSHandler) dispatchViewport(
 // an already-attached connection first detaches the previous attachment —
 // one connection, one live view at a time.
 //
-// ADR-038 finding #1: the live view ALWAYS binds to browser.DefaultSessionID
+// ADR-038 finding #1: the live view ALWAYS binds to the WORKSPACE-OWNED tab
+// set (mgr.OperatorSessionID())
 // — the one Chromium tab the target agent's browser_* tools actually drive —
 // never to frame.SessionId. frame.SessionId is the client's chat session id;
 // before this fix it was passed straight to mgr.Live().Attach(), which
 // lazily created a brand-new, blank tab keyed by that chat UUID, distinct
 // from the tab the agent was navigating. The result: the live view showed an
 // unrelated blank tab, and browser_control{take} locked a session the
-// agent's own tools (which always check IsControlled(DefaultSessionID)) never
+// agent's own tools (which check IsControlled on their own resolved owner) never
 // consulted — "take control" was a no-op from the agent's perspective.
 // frame.SessionId is retained ONLY as chatSessionID below, for logging and
 // for echoing back on outgoing wire frames so the client can correlate
@@ -1249,21 +1251,16 @@ func (h *BrowserWSHandler) handleAttach(
 		h.detach(prev, prevSession, viewerID, userID)
 	}
 
-	mgr, ok := h.agentLoop.BrowserManagerForAgent(frame.AgentId)
-	if !ok {
-		wc.sendCriticalGen(sessionErrorStatus(
-			frame.SessionId,
-			fmt.Sprintf(
-				"no browser manager for agent %q (browser tools may not be registered for this agent)",
-				frame.AgentId,
-			),
-		),
+	mgr, outcome := h.agentLoop.BrowserManagerForAgent(context.Background(), frame.AgentId, "")
+	if outcome != agent.BrowserResolveOK {
+		wc.sendCriticalGen(
+			sessionErrorStatus(frame.SessionId, browserResolveReason(outcome, frame.AgentId)),
 			dropContext(frame.SessionId, viewerID, "attach-no-manager"))
 		return
 	}
 
 	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
-	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(message string) {
+	controlledByOther, err := mgr.Live().Attach(mgr.OperatorSessionID(), viewerID, func(message string) {
 		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
 		// context died without an explicit browser_detach — e.g. this
 		// connection is still holding a reference to a BrowserManager that
@@ -1393,7 +1390,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 
 	in := browserInputFrameToLiveInput(frame)
 
-	if err := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
+	if err := mgr.Live().Input(mgr.OperatorSessionID(), viewerID, in); err != nil {
 		if browser.IsBenignLiveInputError(err) {
 			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", sessionID)
 			// The not-controller repair that lived here is gone: input is
@@ -1434,7 +1431,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 // (handleInput, above) and the WebRTC data-channel input path
 // (browser_webrtc.go's webrtcInputSink) convert EXACTLY the same way and can
 // never drift — both funnel into the SAME
-// state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in) call this
+// state.mgr.Live().Input(<the workspace-owned tab set>, viewerID, in) call this
 // function's result feeds.
 func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.LiveInput {
 	in := browser.LiveInput{Kind: frame.Kind}
@@ -1523,7 +1520,7 @@ func (h *BrowserWSHandler) handleControl(
 	// One snapshot under attachMu for the whole handler — see handleInput.
 	//
 	// chatSessionID is echoed on outgoing frames / audit entries; every call
-	// into mgr.Live() below uses browser.DefaultSessionID, the agent's actual
+	// into mgr.Live() below uses the workspace-owned tab set, the operator's actual
 	// tab (ADR-038 finding #1) — see handleAttach's doc comment.
 	mgr, chatSessionID := state.attachment()
 	if mgr == nil || chatSessionID == "" {
@@ -1546,7 +1543,7 @@ func (h *BrowserWSHandler) handleControl(
 				dropContext(chatSessionID, viewerID, "control-take-disabled"))
 			return
 		}
-		if !mgr.Live().TakeControl(browser.DefaultSessionID, viewerID) {
+		if !mgr.Live().TakeControl(mgr.OperatorSessionID(), viewerID) {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"),
 				dropContext(chatSessionID, viewerID, "control-take-denied"))
@@ -1561,7 +1558,7 @@ func (h *BrowserWSHandler) handleControl(
 			Controller: &controller,
 		}, dropContext(chatSessionID, viewerID, "control-take-ok"))
 	case "release":
-		mgr.Live().ReleaseControl(browser.DefaultSessionID, viewerID)
+		mgr.Live().ReleaseControl(mgr.OperatorSessionID(), viewerID)
 		h.auditRelease(userID, chatSessionID, viewerID)
 		wc.sendCriticalGen(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
@@ -1576,7 +1573,7 @@ func (h *BrowserWSHandler) handleControl(
 
 // handleTabAction processes a browser_tab_action frame (ADR-041 D3/D4):
 // switch/close/open a tab in the attached session's browsing context (always
-// browser.DefaultSessionID — the agent's actual tab set, same convention as
+// the WORKSPACE-OWNED tab set — the operator's own tabs, same convention as
 // handleControl/handleInput). The resulting browser_tabs broadcast to every
 // attached viewer (including this one) is delivered automatically via the
 // BrowserManager.tabsChanged → LiveView.onTabsChanged → TabsSink fan-out
@@ -1616,10 +1613,10 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	}
 
 	// chatSessionID is echoed on outgoing error frames; every call into mgr
-	// below uses browser.DefaultSessionID, the agent's actual tab set
+	// below uses the workspace-owned tab set, the operator's own tabs
 	// (ADR-038 finding #1 / ADR-041) — see handleAttach's doc comment.
 
-	if controller := mgr.Live().Controller(browser.DefaultSessionID); controller != "" && controller != viewerID {
+	if controller := mgr.Live().Controller(mgr.OperatorSessionID()); controller != "" && controller != viewerID {
 		wc.sendCriticalGen(
 			sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
 			dropContext(chatSessionID, viewerID, "tab-action-not-controller"),
@@ -1634,7 +1631,7 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"))
 			return
 		}
-		if _, err := mgr.SwitchTab(browser.DefaultSessionID, *frame.Index); err != nil {
+		if _, err := mgr.SwitchTab(mgr.OperatorSessionID(), *frame.Index); err != nil {
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
 		}
@@ -1644,12 +1641,12 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 				dropContext(chatSessionID, viewerID, "tab-close-missing-index"))
 			return
 		}
-		if _, _, err := mgr.CloseTab(browser.DefaultSessionID, *frame.Index); err != nil {
+		if _, _, err := mgr.CloseTab(mgr.OperatorSessionID(), *frame.Index); err != nil {
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-close-failed"))
 		}
 	case "open":
-		if _, err := mgr.OpenTab(browser.DefaultSessionID); err != nil {
+		if _, err := mgr.OpenTab(mgr.OperatorSessionID()); err != nil {
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-open-failed"))
 		}
@@ -1719,10 +1716,10 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 // readLoop's disconnect cleanup, so a dropped connection is indistinguishable
 // from a clean detach for audit and resource-cleanup purposes. chatSessionID
 // is used only for the audit entry / log context; the live-view call always
-// targets browser.DefaultSessionID (ADR-038 finding #1).
+// targets the workspace-owned tab set (ADR-038 finding #1).
 func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, viewerID, userID string) {
-	wasController := mgr.Live().Controller(browser.DefaultSessionID) == viewerID
-	mgr.Live().Detach(browser.DefaultSessionID, viewerID)
+	wasController := mgr.Live().Controller(mgr.OperatorSessionID()) == viewerID
+	mgr.Live().Detach(mgr.OperatorSessionID(), viewerID)
 	if wasController {
 		h.auditRelease(userID, chatSessionID, viewerID)
 	}
@@ -1829,7 +1826,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	}
 
 	// Control gate, mirroring handleTabAction's F3 check in this same file.
-	// browser.DefaultSessionID is ONE tab shared by every attached viewer AND
+	// the workspace-owned tab set is ONE tab shared by every attached viewer AND
 	// by the agent's own browser_* tools. Without this, any merely-attached
 	// viewer — a second panel, a pop-out — could resize the tab out from under
 	// whoever holds control, or under an agent tool call mid-flight. A resize
@@ -1855,7 +1852,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// resize drag emits one frame per debounce interval for as long as the
 	// drag lasts and every one of them is refused the same way — the same
 	// flood handleInput's cooldown exists to prevent.
-	if controller := mgr.Live().Controller(browser.DefaultSessionID); controller != "" && controller != viewerID {
+	if controller := mgr.Live().Controller(mgr.OperatorSessionID()); controller != "" && controller != viewerID {
 		slog.Debug("browser-ws: refusing viewport from a non-controlling viewer",
 			"viewer_id", viewerID, "controller", controller)
 		const message = "another viewer is driving this browser, so the shared tab keeps their window size — " +
@@ -1904,7 +1901,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 		att.capture.SetCaptureScale(dsf)
 	}
 
-	applied, err := mgr.Live().SetViewport(browser.DefaultSessionID, frame.Width, frame.Height, dsf)
+	applied, err := mgr.Live().SetViewport(mgr.OperatorSessionID(), frame.Width, frame.Height, dsf)
 	if err != nil {
 		slog.Warn("browser-ws: viewport resize failed",
 			"error", err, "viewer_id", viewerID, "width", frame.Width, "height", frame.Height)
@@ -1942,11 +1939,38 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// back to the no-hint Recapture() if the cache came back empty (e.g.
 	// SetViewport's own read-back was invalidated).
 	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
-		if w, h, ok := mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+		if w, h, ok := mgr.Live().CSSViewport(mgr.OperatorSessionID()); ok {
 			// scale already recorded above, before the resize attempt
 			att.capture.RecaptureAt(w, h)
 		} else {
 			att.capture.Recapture()
 		}
 	}
+}
+
+// browserResolveReason renders an agent.BrowserResolveOutcome as the sentence a
+// panel shows. The three failure reasons are DIFFERENT operator problems and
+// were indistinguishable before ADR-072 FR-008a — every one of them reported
+// "browser tools may not be registered for this agent", which is actionable
+// advice for exactly one of them and a wild goose chase for the other two.
+func browserResolveReason(outcome agent.BrowserResolveOutcome, agentID string) string {
+	switch outcome {
+	case agent.BrowserResolveNoWorkspace:
+		return fmt.Sprintf(
+			"agent %q is not on any workspace's team, so it has no browser of its own — "+
+				"add it to a workspace's team, or open this panel from a workspace chat", agentID)
+	case agent.BrowserResolveAmbiguous:
+		return fmt.Sprintf(
+			"agent %q is on more than one workspace's team, so which browser this panel should "+
+				"show is ambiguous — open the panel from a workspace chat", agentID)
+	case agent.BrowserResolveLaunchFailed:
+		return fmt.Sprintf(
+			"the browser for agent %q could not be started — ensure Chromium/Chrome is installed "+
+				"or set tools.browser.cdp_url", agentID)
+	case agent.BrowserResolveNotRegistered:
+		return fmt.Sprintf("browser tools are not registered for agent %q", agentID)
+	case agent.BrowserResolveOK:
+		return ""
+	}
+	return fmt.Sprintf("the browser for agent %q could not be resolved", agentID)
 }

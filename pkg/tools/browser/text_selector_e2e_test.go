@@ -139,7 +139,7 @@ func TestTextSel_Click_HasTextPseudo_ClicksLink(t *testing.T) {
 		clickRes.ForLLM,
 	)
 
-	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
+	tabs, activeIdx, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs, 2)
 	assert.True(t, strings.Contains(tabs[activeIdx].URL, "/booked"))
@@ -414,7 +414,7 @@ func TestTextSel_ParameterValidation_BothEmpty_ErrorsLikeBefore(t *testing.T) {
 	require.NoError(t, err)
 	registry := tools.NewToolRegistry()
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
-	_, regErr := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
+	_, regErr := registerToolsForTest(t, registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	ctx := context.Background()
@@ -930,7 +930,7 @@ func TestTextSel_ResolveThenActRace_ErrorNamesOriginalLocator(t *testing.T) {
 	cfg := testBrowserCfg(t)
 	_, mgr := newPermissiveRegistry(t, cfg)
 
-	tabCtx, err := mgr.Session(defaultSessionID)
+	tabCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tabCtx, chromedp.Navigate(srv.URL)))
 

@@ -3817,7 +3817,6 @@ type BrowserToolConfig struct {
 	// — the TRUST_PATH_CHROME bug, which shipped and was invisible because
 	// nothing failed, the variable simply never took effect.
 	ActionabilityGate string `json:"actionability_gate" env:"OMNIPUS_TOOLS_BROWSER_ACTIONABILITY_GATE"`
-	MaxTabs           int    `                                   json:"max_tabs"        env:"OMNIPUS_TOOLS_BROWSER_MAX_TABS"`
 	PersistSession    bool   `                                   json:"persist_session" env:"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION"`
 	ProfileDir        string `                                   json:"profile_dir"     env:"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR"`
 	// IdleTTLSec is how long an individual TAB may sit untouched before it is
@@ -3842,27 +3841,15 @@ type BrowserToolConfig struct {
 	// a validated google-chrome/chromium binary on $PATH, else a managed
 	// install under <profile_dir>/../chromium/.
 	ExecPath string `json:"exec_path" env:"OMNIPUS_TOOLS_BROWSER_EXEC_PATH"`
-	// MaxTotalTabs is the GLOBAL tab budget across ALL agents' browser contexts
-	// in the shared Chrome (ADR-043 D7). 0/unset → UNLIMITED, like a normal
-	// Chrome browser — this is the default. A positive value opts back into a
-	// hard cross-agent ceiling for operators who want one. The per-agent
-	// courtesy cap (tools.browser.max_tabs, default 5) is unaffected either
-	// way and is the guard most operators actually want.
-	//
-	// The real limit on an unbounded tab count is host RAM, not a counter —
-	// each renderer measured 74-268MB RSS on the UAT box — so an operator
-	// running many agents on a small host should set this explicitly rather
-	// than rely on the per-agent cap alone. Unlimited is safe as the default
-	// because each BrowserManager's own idle reaper (ReapIdleSessions — a
-	// manager method, swept per agent by the gateway; the coordinator has no
-	// reaping role at all) runs per-tab on a short
-	// TTL (tools.browser.idle_ttl, default 5 minutes as of the same change
-	// that removed this cap), so steady-state tab count — and therefore RSS —
-	// stays low without a global ceiling. Enforced by the coordinator's
-	// TryOpenTab, which short-circuits with no budget arithmetic at all when
-	// this is <=0 (browser_open_tab is only ever denied on this axis when a
-	// positive value is configured and reached).
-	MaxTotalTabs int `json:"max_total_tabs" env:"OMNIPUS_TOOLS_BROWSER_MAX_TOTAL_TABS"`
+	// There is deliberately NO per-agent tab cap and NO global tab budget key
+	// here.
+	// ADR-072 D1.5a deleted every browser tab counter — the per-agent
+	// courtesy cap and the global cross-agent budget alike — because a cap
+	// is a number that has to be right on every host, and no single number
+	// ever was. The only limit is live memory, checked at each tab open
+	// (pkg/tools/browser's FR-060 gate). Do not reintroduce either key: a
+	// refusal that names a cap sends an operator looking for a setting this
+	// build does not have.
 	// LiveViewEnabled gates the ADR-038 live interactive browser panel: the
 	// /api/v1/browser/ws screencast relay. Defaults to true.
 	//
@@ -4071,8 +4058,8 @@ type BrowserToolConfig struct {
 	// parked on a static local page costs almost nothing to keep (one idle
 	// renderer) and removes that wait.
 	//
-	// It warms the SAME session the live panel and the agent's own browser
-	// tools use (browser.DefaultSessionID) on ONE agent — the default agent
+	// It warms the SAME session the live panel uses — the WORKSPACE-OWNED tab
+	// set (BrowserManager.OperatorSessionID) — on ONE agent: the default agent
 	// (agents.defaults.default_agent_id), or, when that is unset/has no
 	// browser manager, the lexicographically-first agent that has one. It is
 	// not a per-agent pool: warming every agent would spawn one renderer per
@@ -4907,7 +4894,7 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 // For the case of "globally disable tool X", set its entry in
 // security.tool_policies to "deny".
 //
-// Sub-structs in ToolsConfig (e.g. Browser.MaxTabs) are retained — they
+// Sub-structs in ToolsConfig (e.g. Browser.PageTimeoutSec) are retained — they
 // carry non-enable configuration like timeouts and limits that the tools
 // still read at runtime.
 

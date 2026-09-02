@@ -55,7 +55,7 @@ package browser
 //     (gateway Close). Release + reload never touch the process.
 //
 // Locking discipline (ADR-038 / spec round-2 MAJ-007): Register/Release/
-// RemoveAgent/TryOpenTab/ReleaseTab/PID take c.mu for bookkeeping only; Register
+// RemoveAgent/PID take c.mu for bookkeeping only; Register
 // (and the crash-relaunch path) RELEASE c.mu across the blocking Chrome launch +
 // CDP context-create, mirroring manager.go ensureStarted's unlock/relock pattern —
 // never hold c.mu across a CDP/exec call.
@@ -115,27 +115,6 @@ type BrowserCoordinator struct {
 	homeDir string // $OMNIPUS_HOME; ownership marker + profile dir root
 	cfg     BrowserConfig
 
-	// maxTotalTabs is the global cross-agent tab budget (spec D7). <=0 means
-	// UNLIMITED — the default as of the "remove the global cap" change: Chrome
-	// itself has no fixed tab maximum, and the real bound is host RAM, not a
-	// counter (measured 74-268MB RSS per renderer on the UAT box). A positive
-	// value opts back into a hard ceiling for operators who want one.
-	// TryOpenTab short-circuits (no budget arithmetic at all) when this is
-	// <=0 — see defaultTotalTabs' removal comment below for why unlimited is
-	// safe now. Mutable under c.mu — SetMaxTotalTabs/ApplyRuntimeConfig update
-	// it on reload so a config change to max_total_tabs takes effect without a
-	// gateway restart, in EITHER direction (capped -> unlimited included).
-	maxTotalTabs int
-	// reservedTabs counts in-flight tab RESERVATIONS (I-1/W3/C1): each
-	// TryOpenTab that passes the budget check increments this BEFORE the
-	// opener's createTab actually opens the tab, so N concurrent openers at
-	// the boundary see exactly one winner instead of all passing the
-	// check-then-act race. Decremented by ReleaseTab (on close) and by the
-	// OpenTab-failure return path (when reserve succeeded but the open itself
-	// failed). totalOpenTabsLocked()+reservedTabs is the true live+in-flight
-	// count TryOpenTab must gate on.
-	reservedTabs int
-
 	// execPath holds the exec-path resolution caches, reused from the manager
 	// (resolveBrowserExecPath). Resolved once per process; a successful
 	// resolution is cached and re-validated with os.Stat on each use.
@@ -180,7 +159,7 @@ type BrowserCoordinator struct {
 	// contexts are in-memory, lost on process restart) and on Shutdown.
 	contexts map[string]*agentBrowserContext
 
-	// Registered managers — for totalOpenTabsLocked (sum OpenTabCount) and crash
+	// Registered managers — for crash
 	// notification (invalidateConnection on each). The manager ref is dropped
 	// on Release; the context entry above intentionally is NOT.
 	managers map[string]*BrowserManager
@@ -209,10 +188,8 @@ type BrowserCoordinator struct {
 
 // NewBrowserCoordinator constructs a coordinator. homeDir is $OMNIPUS_HOME (the
 // ownership marker lands at <homeDir>/browser/shared-chrome.pid; the profile
-// dir comes from cfg.ProfileDir). maxTotalTabs is the global tab budget: <=0
-// means UNLIMITED (the default — see the removed-cap rationale below);
-// a positive value opts back into a hard ceiling. Negative input normalizes
-// to 0 rather than being rejected.
+// dir comes from cfg.ProfileDir). There is no tab budget parameter: ADR-072
+// D1.5a deleted every tab counter, and live memory is the only limit.
 // startPageURL mirrors BrowserManager.StartPageURL for the coordinator's own
 // target-creation path, which builds targets from c.cfg rather than through a
 // manager. Same fallback: about:blank when nothing is configured.
@@ -223,60 +200,38 @@ func (c *BrowserCoordinator) startPageURL() string {
 	return BlankPageURL
 }
 
-func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) *BrowserCoordinator {
-	if maxTotalTabs < 0 {
-		maxTotalTabs = 0
-	}
+func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinator {
 	c := &BrowserCoordinator{
 		homeDir:      homeDir,
 		cfg:          cfg,
-		maxTotalTabs: maxTotalTabs,
 		contexts:     make(map[string]*agentBrowserContext),
 		managers:     make(map[string]*BrowserManager),
 		pipeLauncher: launchManagedPipe,
 	}
 	c.launchDone = sync.NewCond(&c.mu)
-	// Surface the effective budget at construction. The default changed from a
-	// hard 30 to UNLIMITED, and max_total_tabs was never seeded into anyone's
-	// config.json — it only ever existed as a runtime fallback — so an
-	// upgrading operator gets the new behavior with no config diff and no
-	// other signal. One line at boot is what makes that visible instead of
-	// silent. Also states the real bound, since "unlimited" is only true of the
-	// counter: RAM is the limit, at 74-268MB RSS per renderer as measured.
-	if maxTotalTabs <= 0 {
-		logger.InfoCF("browser", "global tab budget: UNLIMITED (tools.browser.max_total_tabs unset or <=0)",
-			map[string]any{
-				"max_total_tabs":   "unlimited",
-				"per_agent_cap":    cfg.MaxTabs,
-				"idle_ttl":         cfg.IdleTTL.String(),
-				"real_bound":       "host RAM — idle reaping does not bound tabs kept actively in use",
-				"set_a_ceiling_by": "tools.browser.max_total_tabs > 0",
-			})
-	} else {
-		logger.InfoCF("browser", "global tab budget: capped by operator config",
-			map[string]any{"max_total_tabs": maxTotalTabs, "per_agent_cap": cfg.MaxTabs})
-	}
+	// ADR-072 D1.5a/FR-059: there is no tab budget to report. Every counter —
+	// the global one and the per-agent one — is deleted, and the only limit is
+	// live memory, enforced at each tab open by the manager's own gate. An
+	// operator reading this line used to be told a number to raise; there is no
+	// number now, and telling them one that no longer exists is worse than
+	// telling them nothing.
+	logger.InfoCF("browser", "browser tab count is bounded by live memory, not by a configured cap",
+		map[string]any{
+			"idle_ttl":   cfg.IdleTTL.String(),
+			"real_bound": "host RAM — idle reaping does not bound tabs kept actively in use",
+		})
 	return c
 }
 
-// There is no defaultTotalTabs constant anymore. Spec D7 originally seeded a
-// global cross-agent budget of 30, sized from the measured ~91 MB Chrome
-// baseline + a blended per-tab average to keep total browsing RSS under
-// ~2.5 GB on a typical 8 GB+ host — but that number was a proxy for a memory
-// guard, not a correctness guard (ADR-043: the coordinator owns ONE shared
-// Chrome; managers are per agent), and Chrome itself has no fixed tab
-// maximum. The operator directive is to behave like Chrome: unlimited tabs
-// cross-agent, bounded only by host RAM (measured 74-268MB RSS per renderer
-// on the UAT box), while keeping the PER-AGENT courtesy cap (BrowserConfig.
-// MaxTabs, default 5, enforced in manager.go — untouched by this change).
-// This is safe alongside a companion change (same wave, manager.go) that
-// drops the idle-context reaper from a 30-minute sweep to a 5-minute,
-// PER-TAB TTL: steady-state tab count (and therefore RSS) stays low without a
-// global ceiling to fall back on. The two changes are load-bearing together
-// — do not remove the global cap without also keeping the tighter reaper.
-// See maxTotalTabs' field doc and TryOpenTab for the enforcement
-// side; NewBrowserCoordinator/SetMaxTotalTabs for how <=0 now means
-// unlimited instead of falling back to a hardcoded number.
+// HISTORICAL NOTE — there is no tab counter of any kind here any more.
+// Spec D7 originally seeded a global cross-agent budget of 30, sized from the
+// measured ~91 MB Chrome baseline + a blended per-tab average. That number was
+// a proxy for a memory guard, not a correctness guard, and ADR-072 D1.5a
+// replaced the whole family — the global budget, the per-agent courtesy cap and
+// the in-flight reservation bookkeeping — with a live-memory gate at each tab
+// open (FR-059, FR-060). Do not reintroduce a counter here: a cap an operator
+// can raise is a number that has to be right on every host, and the reason it
+// was removed is that no single number ever was.
 
 // Register associates mgr with the coordinator and returns the coordinator's
 // SHARED root chromedp context (rootCtx) + the agent's STABLE browser-context
@@ -368,7 +323,7 @@ func (c *BrowserCoordinator) Register(
 	// early-return path below MUST install the new manager so TotalOpenTabs +
 	// Release find it, and that path never creates a context. A failed
 	// context-create on the fresh-agent path leaves a manager with no context
-	// in the map, but that is harmless — a fresh manager has OpenTabCount()==0
+	// in the map, but that is harmless — a fresh manager has no tabs
 	// (so it doesn't inflate the budget) and Release's dropConnection on a
 	// never-started manager is a no-op.
 	c.mu.Lock()
@@ -620,44 +575,14 @@ func (c *BrowserCoordinator) RegisteredAgents() []string {
 	return out
 }
 
-// SetMaxTotalTabs updates the global tab budget at runtime (MED-1). Cheap and
-// live: TryOpenTab reads c.maxTotalTabs under c.mu on every open, so a reload
-// that changes tools.browser.max_total_tabs takes effect immediately — no
-// gateway restart needed. n<=0 means UNLIMITED (the default — matches
-// NewBrowserCoordinator's constructor semantics), so a reload can move the
-// budget in EITHER direction: capping down to a positive ceiling, or back up
-// to unlimited by unsetting/zeroing tools.browser.max_total_tabs. Negative
-// input normalizes to 0 (unlimited) rather than being rejected. This
-// intentionally no longer special-cases n<=0 as "ignore the update" — under
-// the old always-30-if-unset semantics that guard prevented an accidental
-// zero from silently blocking every open; under the new semantics 0 is a
-// valid, deliberate target state, not an accident.
-func (c *BrowserCoordinator) SetMaxTotalTabs(n int) {
-	if n < 0 {
-		n = 0
-	}
-	c.mu.Lock()
-	old := c.maxTotalTabs
-	c.maxTotalTabs = n
-	c.mu.Unlock()
-	if old != n {
-		logger.InfoCF("browser", "coordinator: max_total_tabs updated on reload", map[string]any{
-			"old": old,
-			"new": n,
-		})
-	}
-}
-
 // ApplyRuntimeConfig applies the runtime-cheap portions of an updated
 // BrowserConfig to a coordinator that survived a reload (MED-1).
-// max_total_tabs is a live policy (TryOpenTab reads it under c.mu) and is
-// applied immediately via SetMaxTotalTabs. headless/exec_path/profile_dir are
+// headless/exec_path/profile_dir are
 // launch-time properties of the ALREADY-RUNNING Chrome and cannot take effect
 // without restarting the gateway; changes to them are warn-logged as "applies
 // after gateway restart" so an operator is not silently misled. CRIT-002 stays
 // intact: the coordinator itself is never rebuilt on reload.
-func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTotalTabs int) {
-	c.SetMaxTotalTabs(newMaxTotalTabs)
+func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig) {
 	c.mu.Lock()
 	oldCfg := c.cfg
 	c.mu.Unlock()
@@ -759,70 +684,6 @@ func (c *BrowserCoordinator) SetCaptureSharedContext(v bool) {
 // attached to this coordinator.
 func (c *BrowserCoordinator) CaptureSharedContextEnabled() bool {
 	return c.captureSharedContextResolved()
-}
-
-// TryOpenTab atomically checks the global tab budget AND reserves a slot under
-// ONE coordinator lock — so concurrent openers at the boundary see exactly one
-// winner (I-1/W3/C1, spec round-2 MAJ-007). It counts live tabs
-// (totalOpenTabsLocked — the sum of every registered manager's OpenTabCount)
-// PLUS in-flight reservations (c.reservedTabs — slots held by openers between
-// this reserve and their createTab completing). Returns (allowed, reason). The
-// per-agent manager still enforces its own MaxTabs courtesy cap (default 5,
-// LEFT ALONE by this change — only the cross-agent budget below is affected).
-// The caller MUST return the slot via ReleaseTab when the open SUCCEEDS, or
-// via the manager's releaseGlobalTab when the open FAILS after reserve
-// succeeded — in BOTH the capped and unlimited paths below, so the
-// reserve/release pairing never drifts regardless of mode.
-//
-// c.maxTotalTabs<=0 means UNLIMITED (the default): short-circuit before any
-// budget arithmetic — no totalOpenTabsLocked() sum, no comparison — and just
-// reserve+allow. See maxTotalTabs' field doc / the removed defaultTotalTabs
-// comment above for why an unbounded cross-agent count is safe now (paired
-// with the tightened per-tab idle reaper).
-func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.maxTotalTabs <= 0 {
-		c.reservedTabs++
-		return true, ""
-	}
-	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
-		return false, fmt.Sprintf(
-			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
-			c.maxTotalTabs,
-		)
-	}
-	c.reservedTabs++
-	return true, ""
-}
-
-// ReleaseTab returns a reserved global-tab slot when an agent closes a tab
-// (decrements c.reservedTabs). Each successful TryOpenTab reserved one slot;
-// the matching return is: ReleaseTab on a successful open+later close, OR the
-// OpenTab-failure return path (manager.releaseGlobalTab) when the open itself
-// failed after the reserve. A close that forgets to call ReleaseTab would leak
-// a reservation (the coordinator grows conservative, never permissive); the
-// OpenTab-failure path forgetting to return its reservation would do the same.
-func (c *BrowserCoordinator) ReleaseTab(agentID string) {
-	c.mu.Lock()
-	if c.reservedTabs > 0 {
-		c.reservedTabs--
-	}
-	c.mu.Unlock()
-}
-
-// totalOpenTabsLocked sums open tabs across all registered managers'
-// OpenTabCount (spec round-1 MAJ-001). Used by TryOpenTab's budget check (which
-// adds c.reservedTabs for the live+in-flight count). Must be called with c.mu
-// held.
-func (c *BrowserCoordinator) totalOpenTabsLocked() int {
-	n := 0
-	for _, mgr := range c.managers {
-		if mgr != nil {
-			n += mgr.OpenTabCount()
-		}
-	}
-	return n
 }
 
 // RootContext returns the coordinator's SHARED, session-independent root

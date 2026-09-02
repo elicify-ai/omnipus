@@ -32,6 +32,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -130,8 +133,8 @@ func TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording(t *testi
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -190,8 +193,8 @@ func TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording(t *testing.T
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -262,8 +265,8 @@ func TestBrowserWS_HandleViewport_ScaleClampBoundaries(t *testing.T) {
 
 			defaultAgent := al.GetRegistry().GetDefaultAgent()
 			require.NotNil(t, defaultAgent)
-			mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-			require.True(t, ok)
+			mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+			require.Equal(t, agent.BrowserResolveOK, outcome)
 
 			relay := &fakeRelay{}
 			var calls int32
@@ -343,8 +346,8 @@ func TestBrowserWS_ApplyColdStartRecapture_AppliesRememberedScale(t *testing.T) 
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -388,8 +391,8 @@ func TestBrowserWS_ApplyColdStartRecapture_NoPendingScale_LeavesDefault(t *testi
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -436,8 +439,8 @@ func TestCaptureIngest_Recapture_AlwaysSendsCaptureScale(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32

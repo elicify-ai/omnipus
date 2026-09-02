@@ -159,18 +159,18 @@ func TestFindSharedBrowserCoordinator_FindsTheSharedInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("browser.DefaultConfig: %v", err)
 	}
-	coord := browser.NewBrowserCoordinator(t.TempDir(), coordCfg, 5)
+	coord := browser.NewBrowserCoordinator(t.TempDir(), coordCfg)
 
 	// Realistic shape: some agents' managers never got attached (e.g. an
 	// earlier registration error), one or more share the SAME coordinator —
-	// exactly loop.go's per-agent AttachSharedChrome(coordinator, agentID)
+	// exactly loop.go's per-key AttachSharedChrome(coordinator, key)
 	// wiring (every agent's manager attached to the ONE gateway-scoped
 	// coordinator instance).
 	unattached := newTestBrowserManager(t)
 	attachedA := newTestBrowserManager(t)
-	attachedA.AttachSharedChrome(coord, "agent-a")
+	attachedA.AttachSharedChrome(coord, browserTestKey(t, "agent-a"))
 	attachedB := newTestBrowserManager(t)
-	attachedB.AttachSharedChrome(coord, "agent-b")
+	attachedB.AttachSharedChrome(coord, browserTestKey(t, "agent-b"))
 
 	got := findSharedBrowserCoordinator([]*browser.BrowserManager{unattached, attachedA, attachedB})
 	if got == nil {

@@ -47,32 +47,11 @@ func capGetText(text string) string {
 // tool's work (e.g. the subsequent chromedp.Text call).
 const getTextWaitTimeout = 8 * time.Second
 
-// DefaultSessionID is the session used by all browser tools. Sequential tool
-// calls (navigate → click → get_text) operate on the same Chromium tab.
-//
-// Exported (ADR-038 finding #1) so the gateway's live-view WS handler
-// (pkg/gateway/browser_ws.go) can bind the live view to this SAME tab
-// instead of a session keyed by the client-supplied (chat) session id. Before
-// this fix, browser_attach{session_id: <chat session uuid>} caused
-// BrowserManager.Session to lazily create a brand-new, blank tab distinct
-// from the one the agent's tools drive — the live view showed a different
-// tab than the agent controlled, and "take control" locked a session the
-// tools never checked. The client's session_id is still accepted on the wire
-// for context/logging (see BrowserAttachFrame), but the gateway must always
-// resolve/attach/control DefaultSessionID, never the raw client value.
-const DefaultSessionID = "default"
-
-// defaultSessionID is a package-private alias retained so every existing
-// call site inside this package (which predates the export) keeps working
-// unchanged. New code — inside or outside this package — should prefer
-// DefaultSessionID directly.
-const defaultSessionID = DefaultSessionID
-
 // --- browser_navigate (US-5) ---
 
 type NavigateTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *NavigateTool) Name() string                 { return "browser_navigate" }
@@ -116,20 +95,32 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if rawURL == "" {
 		return tools.ErrorResult("browser_navigate: 'url' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	if err := t.mgr.ValidateURL(ctx, rawURL); err != nil {
+	if err := mgr.ValidateURL(ctx, rawURL); err != nil {
 		return tools.ErrorResult(err.Error())
 	}
 
-	sessionCtx, err := t.mgr.Session(defaultSessionID)
+	sessionCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_navigate: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	hops := watchRedirectHops(tabCtx)
@@ -144,7 +135,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		// SECURITY (2026-08-13): a failed load must not leave the tab
 		// PARKED on the target -- see abandonTabAfterFailedLoad.
 		return tools.ErrorResult(abandonTabAfterFailedLoad(
-			ctx, t.mgr, sessionCtx, "browser_navigate", rawURL, hops, err,
+			ctx, mgr, sessionCtx, "browser_navigate", rawURL, hops, err,
 		))
 	}
 
@@ -161,7 +152,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// internally, so a public URL could redirect to a private IP (e.g.
 	// 169.254.169.254). Validate the final URL and kill the page if blocked.
 	if finalURL != rawURL {
-		if err := t.mgr.ValidateURL(ctx, finalURL); err != nil {
+		if err := mgr.ValidateURL(ctx, finalURL); err != nil {
 			// Navigate away from the blocked page to prevent data exfiltration
 			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
 			return tools.ErrorResult(fmt.Sprintf(
@@ -184,7 +175,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 type ClickTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *ClickTool) Name() string                 { return "browser_click" }
@@ -229,16 +220,28 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if selector == "" && text == "" {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_click: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// The ORIGINAL user-facing locator — never the internal marker selector
@@ -246,7 +249,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// success payload (7-reviewer finding #6).
 	displayTarget := displayLocator(selector, text)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_click", selector, text, t.mgr.PageTimeout())
+	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_click", selector, text, mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
@@ -292,7 +295,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// of continuing to act on the (now-background) opener page. This is
 	// what fixes the headline ADR-041 failure: a Cal.com-style booking
 	// button that opens its flow in a new tab.
-	if outcome, rerr := t.mgr.ReconcileTabs(defaultSessionID); rerr != nil {
+	if outcome, rerr := mgr.ReconcileTabs(sid); rerr != nil {
 		logger.WarnCF("browser", "browser_click: tab reconcile failed", map[string]any{"error": rerr.Error()})
 	} else {
 		applyReconcileOutcome(result, outcome)
@@ -303,7 +306,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 
 // applyReconcileOutcome maps a BrowserManager.ReconcileOutcome onto
 // browser_click's result map (ADR-041 fix F2 — the ADR headline bug
-// re-created: a click that spawns a new tab beyond MaxTabs, or whose CDP
+// re-created: a click that spawns a new tab the memory gate refuses, or whose CDP
 // attach fails, used to surface as a plain success with no signal). Factored
 // out of ClickTool.Execute so the mapping logic is unit-testable without a
 // live Chromium/CDP connection (see tabs_test.go's
@@ -344,9 +347,15 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 			lead = "the click also opened another new tab, but"
 		}
 		switch outcome.Reason {
-		case tabAdoptReasonMaxTabs:
-			notes = append(notes, lead+" the maximum concurrent tabs limit was reached, so it could not "+
-				"be adopted. Close a tab with browser_close_tab and retry, or tell the user a tab could "+
+		case tabAdoptReasonMemoryPressure:
+			// FR-063. The text names MEMORY and a remedy that exists, and
+			// names NO limit and NO config key — there is no cap to raise any
+			// more (ADR-072 D1.5a), so telling the model to raise one sends it
+			// looking for a setting this build does not have. Without this arm
+			// the refusal falls to the default "it could not be adopted" text
+			// and the model retries the same open in a loop.
+			notes = append(notes, lead+" this machine is low on memory, so it could not be adopted. "+
+				"Close a tab with browser_close_tab and retry, or tell the user a tab could "+
 				"not be opened.")
 		case tabAdoptReasonAttachFailed:
 			notes = append(notes, lead+" attaching to it failed — it may not be usable. Call "+
@@ -365,7 +374,7 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 
 type TypeTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *TypeTool) Name() string                 { return "browser_type" }
@@ -426,22 +435,34 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if selector == "" {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// browser_type has no separate "locate by visible text" PARAMETER (its
 	// `text` arg is already the value to type) — only the pseudo-selector
 	// route applies here. See resolvePseudoOnlySelector's doc comment.
-	target, cleanup, rerr := resolvePseudoOnlySelector(tabCtx, "browser_type", selector, t.mgr.PageTimeout())
+	target, cleanup, rerr := resolvePseudoOnlySelector(tabCtx, "browser_type", selector, mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
@@ -485,7 +506,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 type ScreenshotTool struct {
 	tools.BaseTool
 
-	mgr *BrowserManager
+	res ManagerResolver
 	// agentHome is the agent's fixed home directory (ADR-046's
 	// fspolicy.EffectiveFSPolicy agentHome argument). When the turn carries a
 	// TurnWorkspaceDir (the agent is a member of that turn's Workspace),
@@ -514,12 +535,17 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 }
 
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// Wait for the page to finish rendering before capturing.
@@ -615,7 +641,7 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 
 type GetTextTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *GetTextTool) Name() string                 { return "browser_get_text" }
@@ -656,12 +682,17 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// The ORIGINAL user-facing locator — never the internal marker selector
@@ -710,7 +741,7 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 
 type WaitTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	res ManagerResolver
 }
 
 func (t *WaitTool) Name() string                 { return "browser_wait" }
@@ -773,12 +804,17 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		waitTimeout = time.Duration(ms) * time.Millisecond
 	}
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_wait: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// Used for the timeout error message below: prefer echoing the CSS
@@ -839,7 +875,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 // at runtime, and always was.
 type EvaluateTool struct {
 	tools.BaseTool
-	mgr            *BrowserManager
+	res            ManagerResolver
 	executeEnabled bool
 }
 
@@ -884,16 +920,28 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if js == "" {
 		return tools.ErrorResult("browser_evaluate: 'js' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	var raw []byte
@@ -967,8 +1015,16 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 // success-shaped no-op. The body is now JSON: {"deferred": true, "reason":
 // "..."}, so a caller can check for the "deferred" key the same way it would
 // check any other tool's result shape.
-func controlledResult(mgr *BrowserManager, toolName string) *tools.ToolResult {
-	if !mgr.Live().IsControlled(defaultSessionID) {
+func controlledResult(mgr *BrowserManager, key BrowsingKey, owner TabOwner, toolName string) *tools.ToolResult {
+	// FR-002c. This asked the live registry about a hardcoded shared session id
+	// until ADR-072 D1
+	// re-keyed the live-view registry. Left on the constant it would match
+	// nothing and return false FOREVER — an intact, populated human-control
+	// lock that is never consulted, with no error, no log line and every lease
+	// test still green. It MUST ask about the (BrowsingKey, TabOwner) pair the
+	// call has already resolved, which is the same string the live panel takes
+	// control of (BrowserManager.OperatorSessionID for the operator's own tabs).
+	if !mgr.Live().IsControlled(sessionKey(key, owner)) {
 		return nil
 	}
 	reason := "a human is currently controlling this browser via the live view — " +

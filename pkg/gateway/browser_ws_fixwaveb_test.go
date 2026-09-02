@@ -460,7 +460,7 @@ func TestBrowserWS_HandleViewport_NonControllingViewer_ExplainsRefusal(t *testin
 	wc, state := newControlTestFixtures(t)
 
 	mgr, _ := state.attachment()
-	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewer-A"),
+	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewer-A"),
 		"viewer A must be able to take control of a fresh session")
 
 	handler.handleViewport(wc, state, "viewer-B", marshalViewportFrame(t, 900, 1010))
@@ -485,7 +485,7 @@ func TestBrowserWS_HandleViewport_RefusalIsThrottled(t *testing.T) {
 	wc, state := newControlTestFixtures(t)
 
 	mgr, _ := state.attachment()
-	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewer-A"))
+	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewer-A"))
 
 	handler.handleViewport(wc, state, "viewer-B", marshalViewportFrame(t, 900, 1010))
 	handler.handleViewport(wc, state, "viewer-B", marshalViewportFrame(t, 901, 1011))
@@ -507,7 +507,7 @@ func TestBrowserWS_HandleViewport_ControllingViewer_NotRefused(t *testing.T) {
 	wc, state := newControlTestFixtures(t)
 
 	mgr, _ := state.attachment()
-	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewer-A"))
+	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewer-A"))
 
 	// No live tab is bound on this never-started manager, so SetViewport
 	// returns (false, nil) and handleViewport takes its documented "no live

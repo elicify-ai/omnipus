@@ -41,7 +41,6 @@ func controlTestCfg(t *testing.T) BrowserConfig {
 		Enabled:     true,
 		Headless:    true,
 		PageTimeout: 3 * time.Second,
-		MaxTabs:     5,
 		ProfileDir:  t.TempDir(),
 		CDPURL:      "ws://127.0.0.1:1/unreachable-by-design",
 	}
@@ -49,7 +48,7 @@ func controlTestCfg(t *testing.T) BrowserConfig {
 
 // TestExecute_ControlLock_InteractiveToolsDeferWhileControlled drives
 // NavigateTool/ClickTool/TypeTool/EvaluateTool through Execute while a human
-// viewer holds control of DefaultSessionID, and asserts each returns the
+// viewer holds control of testSessionID, and asserts each returns the
 // soft, non-error deferral result instead of touching chromedp at all.
 //
 // BDD: Given a human viewer currently controls the live browser session,
@@ -60,7 +59,7 @@ func TestExecute_ControlLock_InteractiveToolsDeferWhileControlled(t *testing.T) 
 	registry, mgr := newPermissiveRegistry(t, controlTestCfg(t))
 	ctx := context.Background()
 
-	require.True(t, mgr.Live().TakeControl(DefaultSessionID, "human-viewer"),
+	require.True(t, mgr.Live().TakeControl(testSessionID, "human-viewer"),
 		"test setup: taking control must succeed on an uncontrolled session")
 
 	cases := []struct {
@@ -107,7 +106,7 @@ func TestExecute_ControlLock_ReadOnlyToolsAreNotGated(t *testing.T) {
 	registry, mgr := newPermissiveRegistry(t, controlTestCfg(t))
 	ctx := context.Background()
 
-	require.True(t, mgr.Live().TakeControl(DefaultSessionID, "human-viewer"))
+	require.True(t, mgr.Live().TakeControl(testSessionID, "human-viewer"))
 
 	cases := []struct {
 		tool string
@@ -155,14 +154,14 @@ func TestExecute_ControlLock_ReleaseUngatesInteractiveTools(t *testing.T) {
 	ctx := context.Background()
 	navTool := mustGetTool(t, registry, "browser_navigate")
 
-	require.True(t, mgr.Live().TakeControl(DefaultSessionID, "human-viewer"))
+	require.True(t, mgr.Live().TakeControl(testSessionID, "human-viewer"))
 	deferred := navTool.Execute(ctx, map[string]any{"url": "http://127.0.0.1/a"})
 	require.NotNil(t, deferred)
 	require.False(t, deferred.IsError)
 	require.Contains(t, deferred.ForLLM, "human is currently controlling")
 
-	mgr.Live().ReleaseControl(DefaultSessionID, "human-viewer")
-	require.False(t, mgr.Live().IsControlled(DefaultSessionID), "test setup: release must actually clear the lock")
+	mgr.Live().ReleaseControl(testSessionID, "human-viewer")
+	require.False(t, mgr.Live().IsControlled(testSessionID), "test setup: release must actually clear the lock")
 
 	released := navTool.Execute(ctx, map[string]any{"url": "http://127.0.0.1/a"})
 	require.NotNil(t, released)
@@ -174,4 +173,56 @@ func TestExecute_ControlLock_ReleaseUngatesInteractiveTools(t *testing.T) {
 
 	assert.NotEqual(t, deferred.ForLLM, released.ForLLM,
 		"deferred vs. post-release results must be genuinely different outcomes (differentiation check)")
+}
+
+// TestControlledResult_UsesResolvedKey is FR-002c, and it is the single most
+// likely false green in this whole change.
+//
+// controlledResult used to ask the live-view registry about a hardcoded shared
+// session id. The registry is now keyed by sessionKey(BrowsingKey, TabOwner),
+// so left on that constant the lookup matches nothing and returns false
+// FOREVER: an intact, populated human-control lock that is never consulted.
+// Nothing errors. Nothing logs. Every lease test still passes. A human takes
+// the wheel in the live panel and agents keep driving over them.
+//
+// So this asserts the BLOCKED direction against the RESOLVED key, and — case
+// (c) — that a lock held on a DIFFERENT key does not block, which is what fails
+// if the function ever goes back to asking about one fixed id.
+func TestControlledResult_UsesResolvedKey(t *testing.T) {
+	_, mgr := newPermissiveRegistry(t, controlTestCfg(t))
+
+	otherKey := newTestBrowsingKey(t, "some-other-workspace")
+	otherOwner, err := TabOwnerSession("some-other-chat")
+	require.NoError(t, err)
+
+	// (a) Uncontrolled: nothing is deferred.
+	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
+		"an uncontrolled tab set must not defer")
+
+	// (b) A human takes control of exactly the (key, owner) pair this call
+	//     resolves — the call must defer.
+	resolved := sessionKey(testKey, testOwner)
+	require.True(t, mgr.Live().TakeControl(resolved, "human-viewer"))
+
+	deferred := controlledResult(mgr, testKey, testOwner, "browser_click")
+	require.NotNil(t, deferred,
+		"FR-002c: the control lock is held on the RESOLVED key and MUST be consulted against it. "+
+			"A nil here means controlledResult is asking about something else — most likely a fixed "+
+			"session id, which matches nothing after the re-key and disables the lock permanently.")
+	require.False(t, deferred.IsError, "a deferral is coordination, not a tool failure")
+	require.Contains(t, deferred.ForLLM, "human is currently controlling")
+
+	// (c) The lock is scoped, not global. A call on a DIFFERENT owner in the
+	//     SAME browser, and a call on a different browser entirely, are both
+	//     unaffected — this is what distinguishes "asks about the resolved key"
+	//     from "asks about any key at all".
+	require.Nil(t, controlledResult(mgr, testKey, TabOwnerWorkspace(), "browser_click"),
+		"a lock on one chat's tabs must not freeze the operator's own tabs")
+	require.Nil(t, controlledResult(mgr, otherKey, otherOwner, "browser_click"),
+		"a lock in one workspace's browser must not freeze another workspace's")
+
+	// (d) Releasing un-gates it again.
+	mgr.Live().ReleaseControl(resolved, "human-viewer")
+	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
+		"releasing control must un-gate the tool")
 }

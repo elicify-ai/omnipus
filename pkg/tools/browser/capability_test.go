@@ -346,10 +346,10 @@ func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
 	mgr.cfg.ExtensionDir = t.TempDir()
 	seedBuildBinary(t, mgr.InstallRoot(), "131.0.6778.108", platform, fullChromeBuild())
 
-	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{})
 	// captureSharedContext left at its zero-value (false/disabled) — no
 	// SetCaptureSharedContext(true) call.
-	mgr.AttachSharedChrome(coord, "agent-cap-test")
+	mgr.AttachSharedChrome(coord, browserTestKey("agent-cap-test"))
 
 	got := mgr.CaptureVideoCapability()
 	if got.Capable {

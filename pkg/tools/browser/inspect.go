@@ -113,7 +113,8 @@ func formatCoord(v float64) string {
 }
 
 // InspectPoint resolves the DOM element at device (CSS) pixel (x, y) on the
-// agent's shared live-view tab (DefaultSessionID) and returns its tag name,
+// live-view tab — the WORKSPACE-OWNED set the operator drives
+// (BrowserManager.OperatorSessionID) — and returns its tag name,
 // trimmed innerText, and trimmed outerHTML (ADR-039 D-B3).
 //
 // Best-effort by design: a point with no element under it, or a CDP round
@@ -155,13 +156,13 @@ func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err e
 			logger.ErrorCF("browser", "inspect: panic recovered, reporting best-effort no-result", map[string]any{
 				"panic":      fmt.Sprintf("%v", rec),
 				"stack":      string(debug.Stack()),
-				"session_id": DefaultSessionID,
+				"session_id": m.OperatorSessionID(),
 			})
 			result, err = InspectResult{}, nil
 		}
 	}()
 
-	tabCtx, sessionErr := m.Session(DefaultSessionID)
+	tabCtx, sessionErr := m.Session(m.OperatorSessionID())
 	if sessionErr != nil {
 		return InspectResult{}, fmt.Errorf("browser: inspect: cannot resolve session: %w", sessionErr)
 	}
@@ -191,7 +192,7 @@ func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err e
 		// infrastructure problem undiagnosable from the logs.
 		logger.WarnCF("browser", "inspect: CDP/eval round trip failed, reporting best-effort no-result", map[string]any{
 			"error":      runErr.Error(),
-			"session_id": DefaultSessionID,
+			"session_id": m.OperatorSessionID(),
 		})
 		return InspectResult{}, nil
 	}

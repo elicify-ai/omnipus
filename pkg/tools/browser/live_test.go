@@ -627,14 +627,23 @@ func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
 //     public surface the gateway's WS handler drives. ---
 
 func newTestRegistry() (*BrowserManager, *LiveViewRegistry) {
-	mgr := &BrowserManager{sessions: make(map[string]*sessionEntry)}
+	mgr := &BrowserManager{sessions: make(map[string]*sessionEntry), key: testKey}
 	reg := newLiveViewRegistry(mgr)
 	return mgr, reg
 }
 
-func TestResolveSessionID_DefaultsEmptyToDefaultSession(t *testing.T) {
-	require.Equal(t, defaultSessionID, resolveSessionID(""))
-	require.Equal(t, "custom-session", resolveSessionID("custom-session"))
+// An omitted session id on a gateway-originated live-panel frame resolves to
+// the WORKSPACE-OWNED tab set — the operator's own tabs (ADR-072 §0.2a). It
+// used to resolve to the deleted shared session constant, which is the merge
+// FR-080 exists to prevent; and it must NOT become ErrNoTabOwner, which is the
+// right answer for a TOOL with no transcript session and the wrong one for the
+// operator's own panel.
+func TestResolveSessionID_DefaultsEmptyToTheOperatorsOwnTabs(t *testing.T) {
+	mgr, reg := newTestRegistry()
+	require.Equal(t, mgr.OperatorSessionID(), reg.resolveSessionID(""))
+	require.NotEqual(t, testSessionID, reg.resolveSessionID(""),
+		"the operator's tabs and a chat session's tabs are different sets")
+	require.Equal(t, "custom-session", reg.resolveSessionID("custom-session"))
 }
 
 func TestLiveViewRegistry_ControlLifecycle(t *testing.T) {
@@ -927,18 +936,20 @@ func TestControlledResult(t *testing.T) {
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 
-	require.Nil(t, controlledResult(mgr, "browser_click"), "an uncontrolled session must not defer")
+	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
+		"an uncontrolled session must not defer")
 
-	require.True(t, mgr.Live().TakeControl(defaultSessionID, "viewer1"))
+	require.True(t, mgr.Live().TakeControl(testSessionID, "viewer1"))
 
-	result := controlledResult(mgr, "browser_click")
+	result := controlledResult(mgr, testKey, testOwner, "browser_click")
 	require.NotNil(t, result, "a controlled session must defer the interactive tool")
 	require.False(t, result.IsError, "deferral is not a tool failure")
 	require.Contains(t, result.ForLLM, "browser_click")
 	require.Contains(t, result.ForLLM, "human is currently controlling")
 
-	mgr.Live().ReleaseControl(defaultSessionID, "viewer1")
-	require.Nil(t, controlledResult(mgr, "browser_click"), "releasing control must un-gate the tool again")
+	mgr.Live().ReleaseControl(testSessionID, "viewer1")
+	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
+		"releasing control must un-gate the tool again")
 }
 
 // ---------------------------------------------------------------------------

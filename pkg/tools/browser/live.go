@@ -313,11 +313,16 @@ type TabsSink func(tabs []Tab, activeIdx int)
 // gateway's per-connection sendCh already does for status frames.
 type ControlSink func(controlledByOther bool)
 
-// LiveViewRegistry manages one LiveView per browser session for a single
-// BrowserManager. Since a BrowserManager is itself scoped to one agent
-// (pkg/agent/loop.go's per-agent manager map, ADR-038 D4), keying LiveViews
-// by session ID here already gives the (agentID, sessionID) uniqueness
-// ADR-038 D3 calls for. Safe for concurrent use.
+// LiveViewRegistry manages one LiveView per tab set for a single
+// BrowserManager. Safe for concurrent use.
+//
+// ⚠️ A BrowserManager is NOT "scoped to one agent" any more, and this comment
+// used to say it was (ADR-038 D4's per-agent manager map). ADR-072 FR-001
+// re-keyed that map to the BROWSING KEY: one manager per WORKSPACE, shared by
+// every agent on it. What gives a LiveView its identity is therefore the map
+// key itself — sessionKey(BrowsingKey, TabOwner) — not the manager it hangs
+// off. Reading this registry as "one agent's views" merges every session on the
+// workspace, which is the exact defect FR-080 exists to prevent.
 type LiveViewRegistry struct {
 	mgr *BrowserManager
 
@@ -345,7 +350,7 @@ func newLiveViewRegistry(mgr *BrowserManager) *LiveViewRegistry {
 // would allocate state nobody is watching (mirrors the lookup-vs-view
 // rationale documented on LiveViewRegistry.lookup).
 func (r *LiveViewRegistry) handleTabsChanged(sessionID string, tabs []Tab, activeIdx int) {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
 		return
@@ -372,12 +377,18 @@ func runCDPWithTimeout(ctx context.Context, timeout time.Duration, actions ...ch
 	return chromedp.Run(boundedCtx, actions...)
 }
 
-// resolveSessionID applies the same default-session convention the rest of
-// pkg/tools/browser uses (tools.go's defaultSessionID) so callers can omit
-// session_id and mean "the agent's one shared tab."
-func resolveSessionID(sessionID string) string {
+// resolveSessionID resolves an omitted session id to the WORKSPACE-OWNED tab
+// set — the operator's own tabs (ADR-072 §0.2a).
+//
+// Empty is a real, reachable input here and it comes from exactly one place:
+// a gateway-originated live-panel frame that carried no session id. The panel
+// IS the operator, so the workspace-owned set is the correct answer for it.
+// It is deliberately NOT ErrNoTabOwner, which is the correct answer for a
+// TOOL with no transcript session — the two cases are one line apart and mean
+// opposite things.
+func (r *LiveViewRegistry) resolveSessionID(sessionID string) string {
 	if sessionID == "" {
-		return defaultSessionID
+		return r.mgr.OperatorSessionID()
 	}
 	return sessionID
 }
@@ -441,7 +452,7 @@ func (r *LiveViewRegistry) Attach(
 	onControl ControlSink,
 	onTabs TabsSink,
 ) (bool, error) {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	if viewerID == "" {
 		return false, fmt.Errorf("browser live: viewer id is required")
 	}
@@ -472,7 +483,7 @@ func (r *LiveViewRegistry) Attach(
 // control if viewerID currently holds it, so a departing viewer never
 // leaves the lock dangling for everyone else.
 func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
 		return
@@ -491,7 +502,7 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 //
 // Returns false if no live view exists for sessionID (nothing to resize).
 func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, deviceScaleFactor float64) (bool, error) {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
 		return false, nil
@@ -1203,7 +1214,7 @@ func (lv *LiveView) invalidateCSSViewportCache() {
 // chrome.tabs.get-based resolution can race the OS window reflow and pin
 // the WebRTC stream to a stale tab size.
 func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, exists := r.lookup(sessionID)
 	if !exists {
 		return 0, 0, false
@@ -1221,7 +1232,7 @@ func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
 // (nothing is applied) when the viewer doesn't hold control, no live view is
 // active for the session, or the event is rate-limited.
 func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
 		// Real, not benign (ADR-038 finding #4): nobody has ever attached
@@ -1239,7 +1250,7 @@ func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error
 // entry if one doesn't exist yet (control can be requested before/without an
 // attached viewer, though the SPA flow always attaches first).
 func (r *LiveViewRegistry) TakeControl(sessionID, viewerID string) bool {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	if viewerID == "" {
 		return false
 	}
@@ -1273,7 +1284,7 @@ func (r *LiveViewRegistry) TakeControl(sessionID, viewerID string) bool {
 // separate agent-working axis), so "a different attached viewer" here always
 // means another human — the one case where refusing is correct.
 func (r *LiveViewRegistry) EnsureControlForInput(sessionID, viewerID string) bool {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	if viewerID == "" {
 		return false
 	}
@@ -1285,7 +1296,7 @@ func (r *LiveViewRegistry) EnsureControlForInput(sessionID, viewerID string) boo
 // controller — releasing twice, or after already losing it (e.g. on detach),
 // is always safe.
 func (r *LiveViewRegistry) ReleaseControl(sessionID, viewerID string) {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
 		return
@@ -1296,7 +1307,7 @@ func (r *LiveViewRegistry) ReleaseControl(sessionID, viewerID string) {
 // Controller returns the viewerID currently holding control of sessionID's
 // live view, or "" if uncontrolled (including when no live view exists yet).
 func (r *LiveViewRegistry) Controller(sessionID string) string {
-	sessionID = resolveSessionID(sessionID)
+	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
 		return ""

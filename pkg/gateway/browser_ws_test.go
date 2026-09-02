@@ -29,6 +29,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -510,7 +511,12 @@ func TestBrowserWS_Attach_NoBrowserManagerForAgent(t *testing.T) {
 	assert.Equal(t, "error", resp.State)
 	assert.Equal(t, "sess-1", resp.SessionID, "error must echo back the client session id")
 	assert.Contains(t, resp.Message, "agent-that-does-not-exist")
-	assert.Contains(t, resp.Message, "no browser manager")
+	// FR-008a: the panel's failure reasons are now DISTINCT. This agent does not
+	// exist at all, so it has no browser tools — which is a different operator
+	// problem, with a different remedy, from "the agent exists but is not on a
+	// workspace team". Both used to render as "no browser manager", which is
+	// actionable advice for neither.
+	assert.Contains(t, resp.Message, "browser tools are not registered")
 
 	// Differentiation + "connection stays open": a SECOND, DIFFERENT missing
 	// agent id must produce a fresh, distinct error, not a dropped connection
@@ -772,7 +778,7 @@ func TestBrowserWS_HandleTabAction_Close_MissingIndex_Rejected(t *testing.T) {
 // TestBrowserWS_HandleTabAction_Switch_DispatchesToManager_NoSessionErrors
 // proves "switch" reaches the REAL BrowserManager.SwitchTab (not a stub, not
 // a silent drop): against a manager that has no browsing context for
-// browser.DefaultSessionID yet, the real error SwitchTab returns
+// the workspace-owned tab set yet, the real error SwitchTab returns
 // ("no active session") comes back as browser_status(error) — never a panic.
 // (Numeric out-of-range coverage against a REAL tab set lives in
 // pkg/tools/browser/tabs_test.go's TestSwitchTab_OutOfRange_ReturnsError,
@@ -864,7 +870,7 @@ func TestBrowserWS_HandleTabAction_ControlGate_OtherViewerControls_Rejected(t *t
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "controlling-viewer"),
+	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "controlling-viewer"),
 		"test setup: first take must succeed on an uncontrolled session")
 
 	handler.handleTabAction(wc, state, "other-viewer", marshalTabActionFrame(t, "switch", intPtr(0)))
@@ -877,7 +883,7 @@ func TestBrowserWS_HandleTabAction_ControlGate_OtherViewerControls_Rejected(t *t
 	assert.NotContains(t, resp.Message, "no active session",
 		"the manager's own error must never appear — the gate must block before dispatch")
 
-	assert.Equal(t, "controlling-viewer", state.mgr.Live().Controller(browser.DefaultSessionID),
+	assert.Equal(t, "controlling-viewer", state.mgr.Live().Controller(state.mgr.OperatorSessionID()),
 		"a rejected tab action must not disturb the existing controller")
 }
 
@@ -889,7 +895,7 @@ func TestBrowserWS_HandleTabAction_ControlGate_IdleAllowsDispatch(t *testing.T) 
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	require.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID), "precondition: uncontrolled")
+	require.False(t, state.mgr.Live().IsControlled(state.mgr.OperatorSessionID()), "precondition: uncontrolled")
 
 	handler.handleTabAction(wc, state, "any-viewer", marshalTabActionFrame(t, "switch", intPtr(0)))
 
@@ -907,7 +913,7 @@ func TestBrowserWS_HandleTabAction_ControlGate_SelfControllerAllowsDispatch(t *t
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "driving-viewer"),
+	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "driving-viewer"),
 		"test setup: take control must succeed on an uncontrolled session")
 
 	handler.handleTabAction(wc, state, "driving-viewer", marshalTabActionFrame(t, "close", intPtr(0)))
@@ -1014,7 +1020,7 @@ func TestBrowserWS_HandleControl_TakeControlDisabled_DeniedAndAudited(t *testing
 	assert.Equal(t, "viewer-disabled", rec.Fields["viewer_id"])
 	assert.Equal(t, state.sessionID, rec.Fields["session_id"])
 
-	assert.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID),
+	assert.False(t, state.mgr.Live().IsControlled(state.mgr.OperatorSessionID()),
 		"a denied take must not leave the session controlled")
 }
 
@@ -1026,7 +1032,7 @@ func TestBrowserWS_HandleControl_AlreadyControlled_DeniedAndAudited(t *testing.T
 	handler, al, auditDir := newBrowserWSHandlerWithAudit(t)
 	wc, state := newControlTestFixtures(t)
 
-	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "other-viewer"),
+	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "other-viewer"),
 		"test setup: first take must succeed on an uncontrolled session")
 
 	handler.handleControl(wc, state, "viewer-latecomer", "user-b", marshalControlFrame(t, "take"), al.GetConfig())
@@ -1041,7 +1047,7 @@ func TestBrowserWS_HandleControl_AlreadyControlled_DeniedAndAudited(t *testing.T
 	assert.Equal(t, "already_controlled", rec.Fields["reason"])
 	assert.Equal(t, "viewer-latecomer", rec.Fields["viewer_id"])
 
-	assert.Equal(t, "other-viewer", state.mgr.Live().Controller(browser.DefaultSessionID),
+	assert.Equal(t, "other-viewer", state.mgr.Live().Controller(state.mgr.OperatorSessionID()),
 		"a denied take-over attempt must not disturb the existing controller")
 }
 
@@ -1053,7 +1059,7 @@ func TestBrowserWS_HandleControl_TakeThenRelease_AllowedAndAudited(t *testing.T)
 	handler, al, auditDir := newBrowserWSHandlerWithAudit(t)
 	wc, state := newControlTestFixtures(t)
 
-	require.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID), "precondition: uncontrolled")
+	require.False(t, state.mgr.Live().IsControlled(state.mgr.OperatorSessionID()), "precondition: uncontrolled")
 
 	handler.handleControl(wc, state, "viewer-ok", "user-c", marshalControlFrame(t, "take"), al.GetConfig())
 
@@ -1062,8 +1068,8 @@ func TestBrowserWS_HandleControl_TakeThenRelease_AllowedAndAudited(t *testing.T)
 	assert.Equal(t, "controlling", takeResp.State)
 	assert.Equal(t, "user-c", takeResp.Controller)
 
-	assert.True(t, state.mgr.Live().IsControlled(browser.DefaultSessionID))
-	assert.Equal(t, "viewer-ok", state.mgr.Live().Controller(browser.DefaultSessionID))
+	assert.True(t, state.mgr.Live().IsControlled(state.mgr.OperatorSessionID()))
+	assert.Equal(t, "viewer-ok", state.mgr.Live().Controller(state.mgr.OperatorSessionID()))
 
 	takeRec := lastBrowserAuditRecord(t, auditDir, audit.EventBrowserLiveControlTaken)
 	assert.Equal(t, audit.SeverityInfo, takeRec.Severity)
@@ -1075,7 +1081,7 @@ func TestBrowserWS_HandleControl_TakeThenRelease_AllowedAndAudited(t *testing.T)
 	assert.Equal(t, "browser_status", releaseResp.Type)
 	assert.Equal(t, "released", releaseResp.State)
 
-	assert.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID),
+	assert.False(t, state.mgr.Live().IsControlled(state.mgr.OperatorSessionID()),
 		"release must actually clear the control lock, not just report success")
 
 	releaseRec := lastBrowserAuditRecord(t, auditDir, audit.EventBrowserLiveControlReleased)
@@ -1097,7 +1103,7 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 	assert.Equal(t, "error", resp.State)
 	assert.Contains(t, resp.Message, "unknown action")
 
-	assert.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID),
+	assert.False(t, state.mgr.Live().IsControlled(state.mgr.OperatorSessionID()),
 		"an unknown action must not grant control as a side effect")
 }
 
@@ -1129,7 +1135,7 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
-	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "viewer1"),
+	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "viewer1"),
 		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
 			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
 
@@ -1189,7 +1195,7 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 func TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
-	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "viewer1"),
+	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "viewer1"),
 		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
 			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
 
@@ -1254,15 +1260,14 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 		cfg.Tools.Browser.Headless = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.PageTimeoutSec = 30
-		cfg.Tools.Browser.MaxTabs = 5
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
-	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome, "registerSharedTools must have registered a browser manager for the default agent")
 	t.Cleanup(mgr.Shutdown)
 
 	srv := httptest.NewServer(handler)
@@ -1349,15 +1354,14 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 		cfg.Tools.Browser.Headless = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.PageTimeoutSec = 30
-		cfg.Tools.Browser.MaxTabs = 5
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
-	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome, "registerSharedTools must have registered a browser manager for the default agent")
 	t.Cleanup(mgr.Shutdown)
 
 	srv := httptest.NewServer(handler)
@@ -1532,15 +1536,14 @@ func TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection(t *testing
 		cfg.Tools.Browser.Headless = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.PageTimeoutSec = 30
-		cfg.Tools.Browser.MaxTabs = 5
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
-	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome, "registerSharedTools must have registered a browser manager for the default agent")
 	t.Cleanup(mgr.Shutdown)
 
 	srv := httptest.NewServer(handler)

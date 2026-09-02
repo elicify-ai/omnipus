@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -30,12 +31,12 @@ func TestRegisterTools_RewireMustApplyNewSecurityState(t *testing.T) {
 	cfg := BrowserConfig{}
 
 	// First wire: permissive — evaluate ON, workspace confinement OFF.
-	if _, err := RegisterTools(reg, cfg, ssrf, true, "/home/first", false); err != nil {
+	if _, err := registerToolsForTest(t, reg, cfg, ssrf, true, "/home/first", false); err != nil {
 		t.Fatalf("first RegisterTools: %v", err)
 	}
 
 	// Operator tightens the settings and saves; the reload re-wires.
-	mgr2, err := RegisterTools(reg, cfg, ssrf, false, "/home/second", true)
+	mgr2, err := registerToolsForTest(t, reg, cfg, ssrf, false, "/home/second", true)
 	if err != nil {
 		t.Fatalf("second RegisterTools: %v", err)
 	}
@@ -72,12 +73,26 @@ func TestRegisterTools_RewireMustApplyNewSecurityState(t *testing.T) {
 			shot.agentHome, "/home/second")
 	}
 
-	// Every registered tool must belong to the CURRENT manager. A stale tool
-	// keeps a manager built with the previous SSRFChecker and browser config.
-	if nav, ok := reg.Get("browser_navigate"); ok {
-		if n, ok := nav.(*NavigateTool); ok && n.mgr != mgr2 {
-			t.Error("SECURITY: browser_navigate still points at the PREVIOUS " +
-				"BrowserManager — it keeps the old SSRFChecker and browser config")
-		}
+	// Every registered tool must resolve through the CURRENT resolver. Under
+	// ADR-072 FR-002a a tool holds no manager at all — it asks its resolver on
+	// every Execute — so the staleness this guards against moved from "which
+	// manager is bolted to the tool" to "which resolver is". The property is
+	// the same one: a discarded re-registration leaves the registry serving
+	// tools wired to the PREVIOUS config's SSRFChecker and browser config.
+	nav, ok := reg.Get("browser_navigate")
+	if !ok {
+		t.Fatal("browser_navigate missing from registry after re-wire")
+	}
+	n, ok := nav.(*NavigateTool)
+	if !ok {
+		t.Fatalf("browser_navigate is %T, want *NavigateTool", nav)
+	}
+	resolved, _, _, resErr := n.res.ManagerFor(context.Background())
+	if resErr != nil {
+		t.Fatalf("browser_navigate could not resolve its manager: %v", resErr)
+	}
+	if resolved != mgr2 {
+		t.Error("SECURITY: browser_navigate still resolves the PREVIOUS " +
+			"BrowserManager — it keeps the old SSRFChecker and browser config")
 	}
 }

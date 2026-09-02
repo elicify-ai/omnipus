@@ -22,6 +22,7 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
@@ -29,11 +30,17 @@ import (
 // BrowserConfig holds browser automation configuration.
 // Mapped from config.json: tools.browser.*
 type BrowserConfig struct {
-	Enabled        bool          `json:"enabled"`
-	Headless       bool          `json:"headless"`
-	CDPURL         string        `json:"cdp_url"`         // Remote CDP WebSocket URL (US-6)
-	PageTimeout    time.Duration `json:"page_timeout"`    // Per-page load timeout (US-7, default 30s)
-	MaxTabs        int           `json:"max_tabs"`        // Max concurrent tabs (US-7, default 5)
+	Enabled     bool          `json:"enabled"`
+	Headless    bool          `json:"headless"`
+	CDPURL      string        `json:"cdp_url"`      // Remote CDP WebSocket URL (US-6)
+	PageTimeout time.Duration `json:"page_timeout"` // Per-page load timeout (US-7, default 30s)
+	// LeaseWait bounds how long a leased browser tool retries for the write
+	// lease before it defers (§14, FR-023). Zero leaves leaseWaitTimeout's 2s
+	// default in force. The operator-facing key is tools.browser.lease_wait,
+	// CLAMPED to at most half PageTimeout at load and on reload
+	// (config.ClampLeaseWait, FR-023a) — the clamp is what keeps the whole
+	// retry window inside the tool's own CDP deadline.
+	LeaseWait      time.Duration `json:"lease_wait"`
 	PersistSession bool          `json:"persist_session"` // Persist cookies/localStorage across restarts
 	ProfileDir     string        `json:"profile_dir"`     // User data dir (default ~/.omnipus/browser/profiles/default/)
 	// ExecPath overrides Chromium discovery. When empty the manager prefers
@@ -121,7 +128,7 @@ func DefaultConfig() (BrowserConfig, error) {
 		Enabled:     false,
 		Headless:    true,
 		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
+		LeaseWait:   leaseWaitTimeout,
 		ProfileDir:  filepath.Join(base, "browser", "profiles", "default"),
 		IdleTTL:     DefaultIdleTTL,
 	}, nil
@@ -168,17 +175,6 @@ type tabEntry struct {
 	// broadcast (ADR-041 D3/D4). Never load-bearing for tool correctness.
 	title string
 	url   string
-	// holdsGlobalReservation records whether THIS tab owns a slot in the
-	// coordinator's global tab budget. Only tabs opened through
-	// browser_open_tab do: that tool reserves via TryOpenTab BEFORE calling
-	// OpenTab. A session's FIRST tab comes from Session()/createFirstTab,
-	// which is deliberately not budget-gated, so it owns nothing.
-	//
-	// The reaper consults this rather than releasing for every tab it closes —
-	// see the release loop in ReapIdleSessions for why an unconditional
-	// release quietly loosens a configured max_total_tabs.
-	holdsGlobalReservation bool
-
 	// lastActivity is when THIS SPECIFIC TAB was last touched — by its own
 	// creation (createTab), an agent tool call resolving it via Session()
 	// (it is the browsing context's active tab at that moment), SwitchTab
@@ -309,7 +305,8 @@ type Tab struct {
 //
 // Session model: tools operate on a persistent "default" session tab so that
 // browser_navigate, browser_click, browser_get_text, etc. act on the same page.
-// Additional sessions can be created for parallel browsing up to MaxTabs.
+// Additional sessions can be created for parallel browsing; the only limit is
+// live memory (ADR-072 D1.5a — every tab counter was deleted).
 type BrowserManager struct {
 	cfg  BrowserConfig
 	ssrf *security.SSRFChecker // never nil — enforced by NewBrowserManager
@@ -336,12 +333,34 @@ type BrowserManager struct {
 	// Chrome. nil-checked at the call site and defaults to launchManagedPipe.
 	pipeLauncherFn func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
 	sessions       map[string]*sessionEntry
+	// memoryPressureFn is the FR-060 gate's test seam — a field, not a direct
+	// config.MemoryPressureHigh call, for exactly the reason createTabFn /
+	// listTargets / evalCDP are fields: a test must be able to drive the gate
+	// deterministically without a host whose real memory it cannot control.
+	// nil in production, where the gate reads the ONE shared accessor
+	// (config.MemoryPressureHigh) against the ONE shared threshold.
+	//
+	// The open-tab count is passed IN rather than read by the fake, because
+	// this is called with m.mu HELD and any accessor that re-takes m.mu would
+	// deadlock.
+	memoryPressureFn func(openTabs int) (high bool, ok bool)
+
+	// key is the BrowsingKey this manager IS — one browser, one workspace,
+	// one profile directory (FR-001). Set at construction; never mutated.
+	// It is half of every sessions-map key (sessionKey(key, owner)), so a
+	// manager that does not know its own key cannot name its own tab sets.
+	key BrowsingKey
+	// leases is the write-lease table for this browser (§14). Its mutex is
+	// deliberately NOT m.mu: a leased tool holds the lease across seconds of
+	// CDP, and the ADR-038 "no lock across a blocking call" discipline forbids
+	// holding m.mu for that long. Lock order is writeLease -> pool.mu -> m.mu.
+	leases writeLeaseTable
 	// pending tracks session IDs currently being created by Session() — see
 	// Session()'s doc comment (ADR-038 deadlock postmortem) for why tab
 	// creation must release m.mu before its blocking chromedp.Run call, and
 	// why a concurrent Session() call for the same ID must wait here instead
 	// of also calling chromedp.NewContext/Run for that ID (which would
-	// create and leak a second tab, and corrupt MaxTabs accounting). Lazily
+	// create and leak a second tab, and corrupt the tab count). Lazily
 	// initialized; nil is a valid empty state.
 	pending map[string]chan struct{}
 	started bool
@@ -532,11 +551,50 @@ func (m *BrowserManager) Live() *LiveViewRegistry {
 // launch/provide the shared Chrome and re-adopts the coordinator-owned browser
 // context non-owningly (CRIT-003: no WithNewBrowserContext on a manager path).
 // A nil coordinator (the default for direct/test construction) keeps the legacy
-// per-manager ExecAllocator behavior. agentID identifies this manager to the
-// coordinator (Register/Release/RemoveAgent are keyed by it).
-func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, agentID string) {
+// per-manager ExecAllocator behavior.
+//
+// key identifies this manager to the coordinator. It is the BROWSING KEY, not
+// an agent id (ADR-072 FR-001): there is one manager, one Chrome and one
+// profile directory per workspace, and N agents on that workspace share it, so
+// the coordinator's Register/Release/RemoveAgent bookkeeping is keyed by the
+// browser rather than by whichever agent happened to touch it first.
+func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, key BrowsingKey) {
 	m.coordinator = coordinator
-	m.agentID = agentID
+	m.key = key
+	m.agentID = key.String()
+}
+
+// OperatorSessionID is the manager-level session id naming the WORKSPACE-OWNED
+// tab set — the tabs the operator opened through the live panel, visible to
+// every agent on this workspace (ADR-072 §0.2a).
+//
+// It is the exported seam the gateway addresses instead of the deleted
+// shared session constant. Exported rather than exposing sessionKey because
+// the gateway has no business minting an arbitrary (key, owner) pair: the live
+// panel is the operator, and the operator's tabs are the only set it drives.
+func (m *BrowserManager) OperatorSessionID() string {
+	return sessionKey(m.key, TabOwnerWorkspace())
+}
+
+// BrowsingKey reports which browser this manager IS.
+func (m *BrowserManager) BrowsingKey() BrowsingKey { return m.key }
+
+// writeLeases returns this browser's write-lease table (§14). Not guarded by
+// m.mu — the table owns its own mutex, and the lock order is
+// writeLease -> pool.mu -> m.mu, never the reverse.
+func (m *BrowserManager) writeLeases() *writeLeaseTable { return &m.leases }
+
+// leaseWait is the bound acquireWrite retries within. Reads the
+// operator-configured, already-CLAMPED value (FR-023a) and falls back to the
+// package default when unset.
+func (m *BrowserManager) leaseWait() time.Duration {
+	m.mu.Lock()
+	d := m.cfg.LeaseWait
+	m.mu.Unlock()
+	if d <= 0 {
+		return leaseWaitTimeout
+	}
+	return d
 }
 
 // InstallRoot returns the managed-Chromium install root this manager's
@@ -983,7 +1041,8 @@ func probeChromiumBinaryWithTimeout(
 
 // Session returns the ACTIVE tab's context for the given browsing context
 // (ADR-041 D1). If the browsing context does not exist, a new one is created
-// with a single tab (subject to MaxTabs). The "default" session is used by
+// with a single tab (subject to the memory gate). The session key is
+// sessionKey(BrowsingKey, TabOwner) — never a shared constant. Used by
 // all tools unless a session_id is specified. Every existing browser tool
 // and the LiveView engine call this and therefore automatically follow
 // whichever tab is active — they never need to know about the tab SET.
@@ -995,7 +1054,7 @@ func probeChromiumBinaryWithTimeout(
 // pkg/tools/browser/live.go's attach() for the sibling bug that hit this
 // same shape) could freeze m.mu forever and, with it, every browser tool —
 // permanently, since a bare sync.Mutex.Lock() has no deadline and produces
-// no error or log line while it waits. The fix: only the MaxTabs check and
+// no error or log line while it waits. The fix: only the memory check and
 // map bookkeeping happen under m.mu; the blocking chromedp.NewContext/Run
 // call runs with m.mu released and bounded by m.cfg.PageTimeout. A
 // concurrent creator for the SAME sessionID that arrives while creation is
@@ -1136,9 +1195,9 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			continue
 		}
 
-		if m.totalTabCountLocked() >= m.cfg.MaxTabs {
+		if m.memoryRefusesTabOpenLocked() {
 			m.mu.Unlock()
-			return maxTabsReachedErr(m.cfg.MaxTabs)
+			return errMemoryPressureTabOpen
 		}
 
 		done := make(chan struct{})
@@ -1376,12 +1435,48 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 	return ctx, cancel, nil
 }
 
-// maxTabsReachedErr is the shared "MaxTabs cap reached" error every
-// tab-creating call site that can return an error to its caller uses
-// (ADR-041 fix F6: this string used to be duplicated across Session/
-// createFirstTab/OpenTab).
-func maxTabsReachedErr(maxTabs int) error {
-	return fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", maxTabs)
+// errMemoryPressureTabOpen is the shared refusal every tab-open site returns
+// when the FR-060 memory gate says stop. It replaces the deleted cap error, which
+// named a cap (tools.browser.max_tabs) that ADR-072 D1.5a DELETED.
+//
+// It names MEMORY and a remedy that exists, and it names NO limit and NO config
+// key — deliberately (FR-053, FR-063). An operator told to raise a limit would
+// go looking for a setting this build does not have, and a model told the same
+// would report a fixable configuration problem where the real answer is "close
+// a tab, or free memory on this machine".
+var errMemoryPressureTabOpen = errors.New(
+	"this machine is low on memory, so no further browser tab can be opened right now. " +
+		"Close a tab with browser_close_tab, or wait for memory to free up, and retry")
+
+// memoryRefusesTabOpenLocked is the FR-060 tab-open gate. It occupies the exact
+// five sites the deleted per-agent tab cap used to occupy (createFirstTab, OpenTab x2,
+// adoptTarget x2) — vacated and re-occupied in ONE change, never left empty
+// across a commit boundary, because an unguarded tab-open path is a runaway
+// window.open loop with nothing between it and the OOM killer.
+//
+// It is a RATIO and carries no per-tab byte constant: the whole point of D1.5a
+// is that a tab's cost is not a constant anybody can name, so the gate asks the
+// one shared question (config.MemoryPressureHigh) against the one shared
+// threshold rather than pricing a tab.
+//
+// The unmeasurable host is the interesting case (FR-065, FR-082). It is treated
+// as FULL rather than empty, but only PAST A FLOOR: the FIRST tab in this
+// browser opens, the second is refused. A floor of zero would remove browsing
+// entirely from gVisor and GKE Sandbox — /proc-less Linux deployments this
+// project SUPPORTS — on the strength of a reading the host declines to give.
+//
+// Must be called with m.mu held: it reads totalTabCountLocked.
+func (m *BrowserManager) memoryRefusesTabOpenLocked() bool {
+	open := m.totalTabCountLocked()
+	ask := m.memoryPressureFn
+	if ask == nil {
+		ask = func(int) (bool, bool) { return config.MemoryPressureHigh() }
+	}
+	high, ok := ask(open)
+	if !ok {
+		return open >= 1
+	}
+	return high
 }
 
 // lookupTabLocked resolves sessionID's browsing context and validates that
@@ -1542,8 +1637,10 @@ func refreshTabMeta(tabCtx context.Context, timeout time.Duration) (title, url s
 }
 
 // totalTabCountLocked sums the number of tabs across every browsing context
-// this manager tracks — the MaxTabs enforcement universe (ADR-041: MaxTabs
-// now caps tabs-in-the-set, generalizing its pre-ADR-041 meaning of "total
+// this manager tracks. It SURVIVED ADR-072 D1.5a's counter deletion as a
+// COUNT — nothing compares it against a cap any more; the FR-082 floor on an
+// unmeasurable host is its one remaining reader, plus OpenTabCount's reporting
+// (ADR-041 generalized its pre-ADR-041 meaning of "total
 // concurrent tabs" from a proxy of len(m.sessions), back when every session
 // held exactly one tab). Must be called with m.mu held.
 func (m *BrowserManager) totalTabCountLocked() int {
@@ -1954,7 +2051,7 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 }
 
 // OpenTab opens a fresh blank tab in sessionID's browsing context and makes
-// it active, subject to MaxTabs (ADR-041 D3). Creates the browsing context
+// it active, subject to the FR-060 memory gate (ADR-041 D3). Creates the browsing context
 // if it doesn't exist yet, mirroring Session()'s lazy-creation semantics.
 func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	m.mu.Lock()
@@ -1976,17 +2073,6 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		if err := m.createFirstTab(sessionID); err != nil {
 			return Tab{}, err
 		}
-		// browser_open_tab reserved a slot before calling us, and this branch
-		// satisfied that request with the session's FIRST tab. Mark it as the
-		// owner so the reservation is returned exactly once, by whichever of
-		// close/reap retires this tab.
-		m.mu.Lock()
-		if first := m.sessions[sessionID]; first != nil {
-			if t := first.active(); t != nil {
-				t.holdsGlobalReservation = true
-			}
-		}
-		m.mu.Unlock()
 		return m.activeTabSnapshot(sessionID)
 	}
 
@@ -2002,9 +2088,9 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	// here is safe because this branch only runs once hasTabs is already
 	// true.)
 	m.mu.Lock()
-	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
+	if m.memoryRefusesTabOpenLocked() {
 		m.mu.Unlock()
-		return Tab{}, maxTabsReachedErr(m.cfg.MaxTabs)
+		return Tab{}, errMemoryPressureTabOpen
 	}
 	se, exists = m.sessions[sessionID]
 	if !exists || len(se.tabs) == 0 {
@@ -2044,14 +2130,11 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		}
 		return m.activeTabSnapshot(sessionID)
 	}
-	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
+	if m.memoryRefusesTabOpenLocked() {
 		m.mu.Unlock()
 		newTab.cancel()
-		return Tab{}, maxTabsReachedErr(m.cfg.MaxTabs)
+		return Tab{}, errMemoryPressureTabOpen
 	}
-	// browser_open_tab reserved a global slot before calling us — record that
-	// THIS tab owns it, so exactly one close/reap hands it back.
-	newTab.holdsGlobalReservation = true
 	// The tab being left, captured before activeIdx moves — same rationale as
 	// SwitchTab's (review finding F9).
 	var prevCtx context.Context
@@ -2102,10 +2185,10 @@ func (m *BrowserManager) activeTabSnapshot(sessionID string) (Tab, error) {
 type tabAdoptReason string
 
 const (
-	// tabAdoptReasonMaxTabs means the target was detected but MaxTabs was
+	// tabAdoptReasonMemoryPressure means the target was detected but memory was
 	// already reached (checked either before or immediately after the CDP
 	// attach — see adoptTarget's doc comment).
-	tabAdoptReasonMaxTabs tabAdoptReason = "max_tabs_reached"
+	tabAdoptReasonMemoryPressure tabAdoptReason = "memory_pressure"
 	// tabAdoptReasonAttachFailed means createTab's CDP attach to the
 	// detected target itself failed (e.g. the target closed before attach,
 	// or a transport error).
@@ -2118,7 +2201,7 @@ const (
 // (already tracked, a racing adoption already claimed it, no browsing
 // context to adopt into, empty targetID) and "a target=\"_blank\" click (or
 // window.open) genuinely spawned a new tab, but it could not be adopted"
-// (MaxTabs cap, or the CDP attach itself failed) — exactly the silent
+// (memory pressure, or the CDP attach itself failed) — exactly the silent
 // failure ADR-041's Motivation section describes: a click succeeds, a new
 // tab opens, and the agent is stranded on the (now-background) opener page
 // with no signal anything happened.
@@ -2166,7 +2249,8 @@ type pendingAdoptEntry struct {
 // comment) and returns its actual result, bounded by m.PageTimeout() so a
 // wedged concurrent attempt cannot hang this caller forever.
 //
-// Enforces MaxTabs: a runaway window.open loop is capped, not unbounded.
+// Enforces the memory gate: a runaway window.open loop is refused when this
+// machine is short of memory, not left unbounded (FR-060).
 // Unlike the pre-fix version, refusal is never silent to the CALLER — it is
 // reported via tabAdoptResult.Unadopted/Reason (ADR-041 fix F2) rather than
 // collapsed into the same nil result as "nothing happened", since the caller
@@ -2213,14 +2297,15 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 				fmt.Errorf("browser: timed out waiting for a concurrent adoption of target %s", targetID)
 		}
 	}
-	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
+	if m.memoryRefusesTabOpenLocked() {
 		m.mu.Unlock()
-		logger.WarnCF("browser", "new tab target detected but MaxTabs reached — not adopting", map[string]any{
-			"session_id": sessionID,
-			"target_id":  string(targetID),
-			"max_tabs":   m.cfg.MaxTabs,
-		})
-		return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMaxTabs}, nil
+		logger.WarnCF("browser", "new tab target detected but this machine is low on memory — not adopting",
+			map[string]any{
+				"session_id": sessionID,
+				"target_id":  string(targetID),
+				"open_tabs":  m.OpenTabCount(),
+			})
+		return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMemoryPressure}, nil
 	}
 	entry := &pendingAdoptEntry{done: make(chan struct{})}
 	m.pendingAdopt[targetID] = entry
@@ -2283,8 +2368,8 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		newTab.cancel()
 		return tabAdoptResult{}, nil
 	}
-	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
-		result := tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMaxTabs}
+	if m.memoryRefusesTabOpenLocked() {
+		result := tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMemoryPressure}
 		entry.result = result
 		close(entry.done)
 		m.mu.Unlock()
@@ -2327,7 +2412,7 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 
 // defaultAdoptRetryBackoff is the bounded backoff schedule
 // adoptTargetWithRetry walks after a FAILED adoption attempt (an ERROR — a
-// refusal such as the MaxTabs cap is a decision, not a failure, and is never
+// refusal such as memory pressure is a decision, not a failure, and is never
 // retried).
 //
 // Why retries exist at all (measured on the operator's box, 2026-08-15): a
@@ -2389,7 +2474,7 @@ func (m *BrowserManager) sessionExists(sessionID string) bool {
 // Only an error is retried. Every non-error outcome ends the loop
 // immediately, and all of them are correct terminal states: a successful
 // adoption, "already ours" (a racing adopter won), "no browsing context"
-// (torn down), and a REFUSAL such as the MaxTabs cap — which is a policy
+// (torn down), and a REFUSAL such as memory pressure — which is a policy
 // decision already reported to the agent via tabAdoptResult.Unadopted, not
 // something a retry could improve.
 //
@@ -2485,7 +2570,7 @@ type ReconcileOutcome struct {
 // LAST one adopted ends up active, same as if they'd been adopted one at a
 // time via the passive listener); Outcome.Unadopted/Reason/UnadoptedCount
 // report a genuinely new target that could NOT be adopted (ADR-041 fix F2)
-// — e.g. the MaxTabs cap, or the CDP attach itself failing — so the caller
+// — e.g. memory pressure, or the CDP attach itself failing — so the caller
 // can surface that to the agent instead of the tab silently vanishing from
 // view. The two signals are tracked independently across the whole pass
 // (see ReconcileOutcome's doc comment) — a click that spawns two new targets
@@ -2839,12 +2924,11 @@ func (m *BrowserManager) ViewerDetached(sessionID string) {
 }
 
 // reapedTabInfo records one tab ReapIdleSessions actually closed during a
-// sweep, carried past the m.mu.Unlock() below so the coordinator tab-budget
-// release, the actual cancel() call, and the log line can all run WITHOUT
-// the lock held (ADR-038 discipline — releaseGlobalTab itself takes m.mu,
-// and cancel() can legitimately block on real work, either of which running
-// under the lock acquired at the top of ReapIdleSessions would freeze every
-// OTHER browser tool call across the whole manager until it returned).
+// sweep, carried past the m.mu.Unlock() below so the actual cancel() call and
+// the log line can both run WITHOUT the lock held (ADR-038 discipline —
+// cancel() can legitimately block on real work, and running it under the lock
+// acquired at the top of ReapIdleSessions would freeze every OTHER browser tool
+// call across the whole manager until it returned).
 type reapedTabInfo struct {
 	sessionID string
 	tab       *tabEntry
@@ -2965,22 +3049,9 @@ func cancelBounded(cancel context.CancelFunc, logFields map[string]any) {
 // TestReapIdleSessions_ActiveTabItselfReaped_ActiveIdxStaysCoherent, which
 // pins only that the index stays in range.
 //
-// ADR-043 D7 tab-budget accounting: every tab this closes releases the
-// global tab-budget slot it may have held (m.releaseGlobalTab() — the exact
-// same call browser_close_tab's tool wrapper makes on an explicit close, see
-// tabs.go's CloseTabTool.Execute). Reaping is just another way a tab closes,
-// and the coordinator's reservedTabs counter has no other way to find out
-// about it. This is guarded at zero by BrowserCoordinator.ReleaseTab, so
-// releasing a tab that was never actually reserved (e.g. a session's first
-// tab, opened via Session()/navigate rather than browser_open_tab) cannot
-// drive the counter negative — it mirrors the exact same "release
-// regardless of whether THIS tab was ever reserved" imprecision
-// browser_close_tab's own unconditional release already accepts today.
-// Without this release, idle reaping — now running on a 5-minute TTL instead
-// of 30 — would permanently and monotonically leak reservations on any
-// install with an operator-configured tools.browser.max_total_tabs,
-// eventually denying every browser_open_tab call regardless of how few tabs
-// are actually live.
+// ADR-072 D1.5a/FR-059: there is NO tab-budget accounting here any more. Every
+// counter was deleted, so a reaped tab hands nothing back — the memory gate
+// re-reads live memory at the next open rather than tracking slots.
 //
 // Safe to call on any schedule; it is a no-op when nothing qualifies.
 func (m *BrowserManager) ReapIdleSessions() []string {
@@ -3105,18 +3176,6 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 
 	for _, rt := range reapedTabs {
 		cancelBounded(rt.tab.cancel, map[string]any{"session_id": rt.sessionID, "target_id": string(rt.tab.targetID)})
-		// ADR-043 D7 — hand back the global slot, but ONLY for a tab that
-		// actually owns one. A session's first tab is created through
-		// createFirstTab, which is deliberately not budget-gated and therefore
-		// never reserved; releasing for it would decrement a counter that only
-		// tracks real reservations and hand back somebody else's concurrent
-		// open, quietly making a configured max_total_tabs more permissive
-		// than the operator asked for. Harmless under the unlimited default,
-		// wrong under any cap — and now on a once-a-minute sweep rather than a
-		// human-paced close.
-		if rt.tab.holdsGlobalReservation {
-			m.releaseGlobalTab()
-		}
 		logger.InfoCF("browser", "reaped idle browser tab (no viewer and no agent activity within idle_ttl)",
 			map[string]any{"session_id": rt.sessionID, "idle_ttl": ttl.String(), "tab_url": rt.tab.url})
 	}
@@ -3320,49 +3379,14 @@ func (m *BrowserManager) Shutdown() {
 }
 
 // OpenTabCount returns the number of currently-open tabs across this manager's
-// browsing contexts (ADR-043 Stream D / spec round-1 MAJ-001). The coordinator
-// sums this across registered managers to enforce the global tab budget. The
-// read takes m.mu briefly (the same lock totalTabCountLocked uses), so callers
-// must NOT already hold m.mu.
+// browsing contexts. It SURVIVED ADR-072 D1.5a's counter deletion as a COUNT —
+// it is reporting and diagnostics, never compared against a cap. The read takes
+// m.mu briefly (the same lock totalTabCountLocked uses), so callers must NOT
+// already hold m.mu.
 func (m *BrowserManager) OpenTabCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.totalTabCountLocked()
-}
-
-// reserveGlobalTab asks the shared-Chrome coordinator for a global tab-budget
-// slot before opening a tab (ADR-043 D7). No-op (always allowed) in legacy mode
-// (no coordinator): the budget only applies to the shared Chrome. Only the
-// agent-facing browser_open_tab tool calls this; an agent's FIRST tab
-// (createFirstTab via Session) is intentionally not gated, so a budget full of
-// OTHER agents' tabs never blocks a new agent from browsing at all.
-//
-// MAJ-2: m.coordinator/m.agentID are set once before use (AttachSharedChrome in
-// registerSharedTools, before any tool call can reach here) but are read under
-// m.mu for consistency with every other field on this struct.
-func (m *BrowserManager) reserveGlobalTab() (bool, string) {
-	m.mu.Lock()
-	coord := m.coordinator
-	agentID := m.agentID
-	m.mu.Unlock()
-	if coord == nil {
-		return true, ""
-	}
-	return coord.TryOpenTab(agentID)
-}
-
-// releaseGlobalTab returns a global tab-budget slot when an agent closes a tab,
-// OR when an OpenTab that reserved a slot then failed the actual createTab
-// (I-1/W3/C1: the reservation must be returned so the budget doesn't grow
-// permanently conservative on every failed open).
-func (m *BrowserManager) releaseGlobalTab() {
-	m.mu.Lock()
-	coord := m.coordinator
-	agentID := m.agentID
-	m.mu.Unlock()
-	if coord != nil {
-		coord.ReleaseTab(agentID)
-	}
 }
 
 // dropConnection closes this manager's remote-allocator connection + all its

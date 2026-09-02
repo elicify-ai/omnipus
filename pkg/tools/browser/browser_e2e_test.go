@@ -253,7 +253,6 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 		Enabled:         true,
 		Headless:        true,
 		PageTimeout:     15 * time.Second,
-		MaxTabs:         3,
 		ProfileDir:      profileDir,
 		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
@@ -372,7 +371,7 @@ func TestBrowserToolRegistration_WithScope(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker(nil)
 	// evaluateEnabled=true: include browser_evaluate in the expected tool set.
-	_, err = RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
+	_, err = registerToolsForTest(t, registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, err)
 
 	expectedTools := []string{
@@ -400,7 +399,7 @@ func TestBrowserToolsAlwaysRegisterRegardlessOfLegacyFlag(t *testing.T) {
 	// RegisterTools succeeds; the browser manager is created but Chromium is
 	// not launched until the first tool is invoked (lazy start).
 	// evaluateEnabled=true: explicitly opt in to browser_evaluate registration.
-	mgr, err := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
 
@@ -427,7 +426,6 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 		Enabled:         true,
 		Headless:        true,
 		PageTimeout:     5 * time.Second,
-		MaxTabs:         1,
 		ProfileDir:      t.TempDir(),
 		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
@@ -437,7 +435,7 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	// evaluateEnabled=false: this test only uses browser_navigate, so no need
 	// to register browser_evaluate.
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	defer mgr.Shutdown()
 
@@ -503,7 +501,6 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 		Enabled:     true,
 		Headless:    true,
 		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
 		ProfileDir:  profileDir,
 		ExecPath:    execPath,
 		// The REAL capture extension, not a minimal stand-in: the gate's
@@ -514,7 +511,7 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 		TrustPathChrome: true, // requireBrowserOrFail already probed this binary
 	}
 
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	launchCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

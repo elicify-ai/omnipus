@@ -10,9 +10,9 @@
 // tools.GeneralBuiltinMetadata):
 //   - Instances returned here are NEVER Execute()d. The per-agent registry
 //     (pkg/agent/loop.go → browser.RegisterTools) remains the sole execution
-//     source, with a live *BrowserManager. The central catalog only calls
+//     source, with a live ManagerResolver. The central catalog only calls
 //     Name(), Description(), and Category().
-//   - Instances are constructed with a nil *BrowserManager. This is safe because
+//   - Instances are constructed with a nil ManagerResolver. This is safe because
 //     every browser tool's Name()/Description()/Category() is a static string
 //     (no mgr dereference). Execute() is never called on these instances.
 //   - browser_evaluate is constructed with executeEnabled=false (the metadata
@@ -32,7 +32,7 @@ import "github.com/elicify-ai/omnipus/pkg/tools"
 // BuiltinRegistry.
 //
 // The returned tools MUST NOT be Execute()d. All instances carry a nil
-// *BrowserManager — safe for metadata only.
+// ManagerResolver — safe for metadata only.
 func BrowserBuiltinMetadata() []tools.Tool {
 	return []tools.Tool{
 		&NavigateTool{},

@@ -218,14 +218,14 @@ func TestCoordinator_LoadExtension_HonorsCallerContext(t *testing.T) {
 	// non-canceled-ctx call against a real extension dir is exercised by
 	// TestCoordinator_LoadExtension_SucceedsWithGenerousContext below.)
 
-	coord := NewBrowserCoordinator(home, cfg, 5)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	// Force Chrome live first via a normal, generous-context Register so the
 	// LoadExtension call under test exercises ONLY the ctx-cancellation
 	// behavior, not coordinator launch latency.
 	mgr := newTestManager(t, cfg)
-	mgr.AttachSharedChrome(coord, "warm-agent")
+	mgr.AttachSharedChrome(coord, browserTestKey("warm-agent"))
 	if _, _, err := coord.Register(context.Background(), "warm-agent", mgr); err != nil {
 		t.Fatalf("Register (warm-up): %v", err)
 	}
@@ -305,11 +305,11 @@ func TestCoordinator_LoadExtension_SucceedsWithGenerousContext(t *testing.T) {
 	writeMinimalUnpackedExtension(t, extDir)
 	cfg.ExtensionDir = extDir
 
-	coord := NewBrowserCoordinator(home, cfg, 5)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	mgr := newTestManager(t, cfg)
-	mgr.AttachSharedChrome(coord, "warm-agent")
+	mgr.AttachSharedChrome(coord, browserTestKey("warm-agent"))
 	if _, _, err := coord.Register(context.Background(), "warm-agent", mgr); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

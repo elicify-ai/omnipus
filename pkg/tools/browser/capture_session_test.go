@@ -292,7 +292,7 @@ func TestCaptureSession_StartPropagatesEncoderError(t *testing.T) {
 // live" }") by constructing a coordinator that is deliberately never
 // launched (rootCtx stays nil by construction — NewBrowserCoordinator never
 // touches it), while making steps 1-2 succeed WITHOUT a real Chrome:
-//   - step 1 (mgr.Session(DefaultSessionID)): a hand-planted sessionEntry
+//   - step 1 (mgr.Session(testSessionID)): a hand-planted sessionEntry
 //     with a live (never-canceled) tab context, mirroring sessionEntry's own
 //     doc comment ("nil only for hand-built sessionEntry literals in tests
 //     that bypass Session()/createFirstTab entirely... every nil-checked at
@@ -305,23 +305,26 @@ func TestCaptureSession_StartPropagatesEncoderError(t *testing.T) {
 //     calling it here would fail for a DIFFERENT reason and mask the one
 //     this test targets.
 func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *testing.T) {
-	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{})
 	// Never Register()'d/launched — coord.rootCtx stays nil, which is exactly
 	// the precondition defaultEncoderStarter's step 3 gate checks for.
 
 	fakeCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	mgr := &BrowserManager{
-		cfg:     BrowserConfig{ProfileDir: t.TempDir() + "/profiles/default"},
-		started: true,
-		sessions: map[string]*sessionEntry{
-			DefaultSessionID: {
-				tabs:      []*tabEntry{{ctx: fakeCtx, cancel: cancel}},
-				activeIdx: 0,
-			},
-		},
+		cfg:      BrowserConfig{ProfileDir: t.TempDir() + "/profiles/default"},
+		started:  true,
+		sessions: map[string]*sessionEntry{},
 	}
-	mgr.AttachSharedChrome(coord, "agent-no-root-ctx")
+	mgr.AttachSharedChrome(coord, browserTestKey("agent-no-root-ctx"))
+	// The capture path resolves the WORKSPACE-OWNED tab set (the live panel is
+	// the operator, ADR-072 §0.2a), so the hand-planted entry must be keyed the
+	// way production will look it up — AttachSharedChrome above is what gives
+	// the manager the browsing key that key is built from.
+	mgr.sessions[mgr.OperatorSessionID()] = &sessionEntry{
+		tabs:      []*tabEntry{{ctx: fakeCtx, cancel: cancel}},
+		activeIdx: 0,
+	}
 
 	coord.mu.Lock()
 	coord.loadedExtensionID = captureext.ExtensionID

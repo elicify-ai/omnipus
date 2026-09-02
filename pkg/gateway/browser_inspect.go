@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -70,11 +72,9 @@ func (a *restAPI) HandleBrowserInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mgr, ok := a.agentLoop.BrowserManagerForAgent(req.AgentId)
-	if !ok {
-		reason := fmt.Sprintf(
-			"no browser manager for agent %q (browser tools may not be registered for this agent)", req.AgentId,
-		)
+	mgr, outcome := a.agentLoop.BrowserManagerForAgent(r.Context(), req.AgentId, "")
+	if outcome != agent.BrowserResolveOK {
+		reason := browserResolveReason(outcome, req.AgentId)
 		jsonOK(w, gen.BrowserInspectResponse{Ok: false, Reason: &reason})
 		return
 	}

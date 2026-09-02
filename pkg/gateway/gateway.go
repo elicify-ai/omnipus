@@ -3627,14 +3627,19 @@ func startBrowserWarmBoot(
 			return
 		}
 
-		// Step 1 — the tab. mgr.Session(browser.DefaultSessionID) is the SAME
-		// call the live panel, the capture's tab resolution and every browser_*
-		// tool make, so this warms the tab they will actually use rather than
-		// parking a stray extra one in the shared Chrome (which the encoder's
-		// fallback tab resolution could then bind to by mistake).
+		// Step 1 — the tab. mgr.Session(mgr.OperatorSessionID()) is the SAME
+		// call the live panel and the capture's tab resolution make, so this
+		// warms the tab they will actually use rather than parking a stray
+		// extra one in the shared Chrome (which the encoder's fallback tab
+		// resolution could then bind to by mistake).
+		//
+		// It is the WORKSPACE-OWNED tab set, not an agent's: under ADR-072
+		// FR-080 a browser_* tool addresses its own SESSION's tabs, which do
+		// not exist until that session browses and cannot be warmed at boot.
+		// The panel's tabs can be, and are.
 		if wantTab {
 			started := time.Now()
-			if _, err := mgr.Session(browser.DefaultSessionID); err != nil {
+			if _, err := mgr.Session(mgr.OperatorSessionID()); err != nil {
 				logger.WarnCF("browser",
 					"boot-time browser tab warm-up failed — the first panel open will build the tab lazily",
 					map[string]any{"agent_id": agentID, "error": err.Error()})

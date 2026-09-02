@@ -117,8 +117,8 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	require.True(t, mgr.CaptureVideoCapability().Capable,
 		"capability gate must report Capable=true via the exec_path filename heuristic, so the ladder reaches Start()")
 
@@ -212,8 +212,8 @@ func newHandleWebRTCOfferWithFakeCapture(
 	relay *fakeRelay,
 ) webrtcStateFrameDecoder {
 	t.Helper()
-	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	var calls int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&calls, nil), nil)
@@ -576,7 +576,7 @@ func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 
 	// viewerA holds control — standing in for a second panel, a pop-out, or an
 	// automation session that never detached.
-	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewerA"),
+	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewerA"),
 		"TakeControl for the first-ever controller of a session must succeed")
 
 	handler, al := newBrowserWSTestHandler(t, nil)
@@ -637,8 +637,8 @@ func TestWebrtcUnavailableReason_GateLadder(t *testing.T) {
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	t.Run("disabled", func(t *testing.T) {
 		cfg := al.GetConfig()
@@ -679,8 +679,8 @@ func TestWebrtcUnavailableReason_AgreesAcrossBothCallers(t *testing.T) {
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	cfg := al.GetConfig()
 
 	directReason := webrtcUnavailableReason(cfg, mgr)
