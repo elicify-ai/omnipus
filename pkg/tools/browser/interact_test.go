@@ -14,6 +14,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestPressKey_RejectsTextLocatorByName is FR-004's press_key row.
@@ -366,5 +368,69 @@ func TestSnapshot_NotDeferredByViewer(t *testing.T) {
 			"precisely so it answers while someone else is driving — deferring it means the one "+
 			"tool that reports what is on the page goes dark exactly when the page is contested: %s",
 			result.ForLLM)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FR-029 — held means UNREGISTERED, not unseeded
+// ---------------------------------------------------------------------------
+
+// TestUploadFile_NotRegistered is FR-029's only gate.
+//
+// It lives in this file rather than scope_test.go because it was silently lost
+// once already when two writers overwrote that file in the same worktree, and
+// register.go's own doc comment cites it by name — a comment pointing at a
+// test that does not exist is worse than no comment, because it reads as
+// evidence.
+//
+// It is deliberately a GREEN test, not a red one, and it needs BOTH halves:
+// asserting only the absence would pass on a build where the tool was never
+// written, and asserting only the presence of the others would pass on a build
+// where upload is fully callable.
+//
+// There is no guard here on #659's issue state. A network call to GitHub in a
+// unit suite is not acceptable, and a local constant would be this comment
+// with extra steps. When #659 closes, the RegisterReplacing line lands and
+// this test is DELETED in the same commit.
+func TestUploadFile_NotRegistered(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	mgr := &BrowserManager{}
+	if err := RegisterTools(registry, newFixedResolver(mgr), true, t.TempDir(), true); err != nil {
+		t.Fatalf("RegisterTools: %v", err)
+	}
+
+	if _, ok := registry.Get("browser_upload_file"); ok {
+		t.Error("browser_upload_file IS registered. FR-029 holds it out of the registry until " +
+			"issue #659 (AutoDenyAsk not inherited by delegated sub-turns) is closed: its seeded " +
+			"policy is `ask`, so an unattended delegated turn that reaches it raises an approval " +
+			"nobody can answer. Registering it early is not a small win — it is the exact hang " +
+			"#659 describes, on the one browser verb that hands the operator's files outward.")
+	}
+
+	// The seeded-but-unregistered half. Absent from BOTH the registry and the
+	// catalog would be a different (and also wrong) state: the catalog-drift
+	// test compares BrowserBuiltinMetadata against coreagent's
+	// allStaticToolNames, and the name must be in both.
+	var inCatalog bool
+	for _, tool := range BrowserBuiltinMetadata() {
+		if tool.Name() == "browser_upload_file" {
+			inCatalog = true
+		}
+	}
+	if !inCatalog {
+		t.Error("browser_upload_file is absent from BrowserBuiltinMetadata. Held means " +
+			"UNREGISTERED, not unseeded — the name must stay in the catalog or the drift test " +
+			"against allStaticToolNames fails and the policy seed describes a tool nothing knows about")
+	}
+
+	// The positive control, in the same test, so the absence above cannot be
+	// read as evidence that registration is broken for everything.
+	for _, name := range []string{
+		"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+	} {
+		if _, ok := registry.Get(name); !ok {
+			t.Errorf("%q is NOT registered, yet it is seeded and catalogued. Every agent's policy "+
+				"then resolves allow for a tool the registry cannot produce", name)
+		}
 	}
 }

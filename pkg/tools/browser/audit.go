@@ -87,6 +87,23 @@ var readOnlyBrowserTools = map[string]bool{
 	// questions and recordBrowserAction refuses a non-write-class name by
 	// design.
 	"browser_snapshot": true,
+	// ADR-072 D2 FR-035 — browser_handle_dialog is exempt for a DIFFERENT
+	// reason from everything else in this map, and the difference is worth
+	// stating rather than letting the shared membership imply sameness.
+	//
+	// It is NOT read-only: HandleJavaScriptDialog changes what the page is
+	// doing. It is exempt because it is the RECOVERY verb. The browser_click
+	// that raised the dialog is still blocked on CDP — that blockage IS the
+	// wedge — and it holds the write lease; controlledResult would defer the
+	// dialog tool for the whole wedge window, and a human on the same tab has
+	// no button either. Gating a recovery verb behind the mechanisms the fault
+	// disables is a deadlock, not a safety property.
+	//
+	// It is listed HERE rather than left out of both maps because the
+	// biconditional test treats an unclassified tool as a defect: a tool in
+	// neither set has an undecided audit treatment, which is exactly how a new
+	// tool would default silently into the exempt half.
+	"browser_handle_dialog": true,
 }
 
 // browserAudit is the audit sink every browser tool embeds. It is populated by
