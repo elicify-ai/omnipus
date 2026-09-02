@@ -737,6 +737,17 @@ func (m *BrowserManager) ClearCaptureSession(cur *CaptureSession) {
 	}
 }
 
+// errFileSchemeBlocked is the file:// refusal. It names the tool that DOES
+// work — serve_web, the actual registered name; there is no tool called
+// "web_serve" and pointing an agent at one would waste a whole turn — and the
+// URL shape it produces, so the agent's next move is obvious instead of being
+// a guess.
+var errFileSchemeBlocked = errors.New(
+	"file:// URLs are blocked: the browser cannot read the agent's filesystem. " +
+		"To look at a local file or a site you have built, serve it with the serve_web tool and " +
+		"navigate to the /preview/<agent>/<token>/ URL it returns (requires the serve_web tool and " +
+		"gateway.preview_enabled)")
+
 // blockedSchemes are URL schemes that bypass network-level SSRF and must be
 // denied at the application layer. file:// would bypass Landlock restrictions.
 var blockedSchemes = map[string]bool{
@@ -760,6 +771,14 @@ func (m *BrowserManager) ValidateURL(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("browser: URL %q has no scheme — use http:// or https://", rawURL)
 	}
 	if blockedSchemes[scheme] {
+		// file:// gets its own message. The other four blocked schemes are
+		// things an agent tried and should stop trying; file:// is almost
+		// always an agent trying to LOOK AT SOMETHING IT JUST BUILT, and
+		// "blocked for security reasons" leaves it with nowhere to go. There
+		// is somewhere to go, so the error says where.
+		if scheme == "file" {
+			return fmt.Errorf("browser: %w", errFileSchemeBlocked)
+		}
 		return fmt.Errorf("browser: %s:// URLs are blocked for security reasons", scheme)
 	}
 	if scheme != "http" && scheme != "https" {
