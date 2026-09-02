@@ -45,6 +45,7 @@ import {
   userMessages,
   waitForConnected,
 } from './fixtures/selectors';
+import { restoreAdminSession } from './fixtures/admin-api';
 
 /**
  * Record an observation. Attached to the Playwright report AND printed to
@@ -137,20 +138,20 @@ async function bindChatToWorkspace(page: Page): Promise<void> {
  * reconnect."
  *
  * That is an environment collision, not a product defect and not a panel
- * defect, so it must never be reported as either. `page.request` shares the
- * browser context's cookie jar, so logging in through it re-arms THIS context
- * with the newest session immediately before the work that needs it.
+ * defect, so it must never be reported as either.
  *
- * The credentials are the harness's own fixture values (see
- * tests/e2e/fixtures/onboard-via-api.ts) — no real credential is involved.
+ * The repair must not itself be a login. `POST /api/v1/auth/login` re-mints the
+ * single slot, so a spec that logs in to save itself evicts the NEXT tester —
+ * the exact crosstalk `scripts/check-e2e-login-crosstalk.sh` forbids, and the
+ * cause of the 2026-08-28 create-agent incident. `restoreAdminSession` instead
+ * copies the shared storageState file forward into this context, minting
+ * nothing: it recovers the case a spec legitimately can (this context is stale,
+ * the shared session on disk is current) and leaves the case it must not
+ * "recover" — the shared session is genuinely gone — to be reported as BLOCKED
+ * by the eviction handling at each call site.
  */
 async function refreshSession(page: Page): Promise<void> {
-  const res = await page.request.post('/api/v1/auth/login', {
-    data: { username: 'admin', password: 'admin123' },
-  });
-  if (!res.ok()) {
-    throw new Error(`BLOCKED: could not re-establish a session: POST /auth/login returned ${res.status()}`);
-  }
+  await restoreAdminSession(page);
 }
 
 /** Did this failure come from another tester's login evicting ours? */

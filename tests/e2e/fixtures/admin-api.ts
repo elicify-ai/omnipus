@@ -1,4 +1,9 @@
-import { request as apiRequest, type APIRequestContext } from '@playwright/test';
+import {
+  request as apiRequest,
+  type APIRequestContext,
+  type Cookie,
+  type Page,
+} from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -104,4 +109,55 @@ export async function newAdminApiContext(): Promise<APIRequestContext> {
     storageState: ADMIN_AUTH_FILE,
     extraHTTPHeaders: { 'X-Csrf-Token': csrf.value },
   });
+}
+
+/**
+ * Re-arm a live browser context with the SHARED admin session, minting nothing.
+ *
+ * ── The problem this replaces ───────────────────────────────────────────────
+ * During a UAT with several people driving one gateway, any other run's login
+ * rotates the single-slot `session_token_hash` and this run's cookie dies
+ * mid-test; the SPA then says "Your session expired". The obvious repair —
+ * `POST /api/v1/auth/login` — fixes the caller and breaks everyone else, which
+ * is precisely the crosstalk `scripts/check-e2e-login-crosstalk.sh` forbids.
+ *
+ * ── What this does instead ──────────────────────────────────────────────────
+ * It re-applies the cookies from the shared storageState file to the context.
+ * That recovers the real case a spec can recover from: `auth.spec.ts`'s
+ * afterAll (and global-setup) REWRITE that file, so a context created before
+ * the rewrite is stale while the file on disk is current. Copying the file
+ * forward costs one local read and rotates nobody's token.
+ *
+ * It deliberately cannot repair a session that is dead everywhere — no spec
+ * should be able to. When the shared session itself is gone, the caller's own
+ * eviction handling reports BLOCKED, which is the honest outcome: an
+ * environment collision, reported as one, rather than a green run bought by
+ * evicting the next tester.
+ *
+ * Returns the session cookie's value so a caller can tell whether the file
+ * actually moved on.
+ */
+export async function restoreAdminSession(page: Page): Promise<string> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(ADMIN_AUTH_FILE, 'utf8');
+  } catch (err) {
+    throw new Error(
+      `restoreAdminSession: cannot read storageState at ${ADMIN_AUTH_FILE} ` +
+        '(global-setup.ts writes it; OMNIPUS_AUTH_FILE overrides the path)',
+      { cause: err },
+    );
+  }
+
+  const cookies = (JSON.parse(raw) as { cookies?: Cookie[] }).cookies ?? [];
+  const session = cookies.find((c) => c.name === SESSION_COOKIE_NAME);
+  if (!session) {
+    throw new Error(
+      `restoreAdminSession: no ${SESSION_COOKIE_NAME} cookie in ${ADMIN_AUTH_FILE}. ` +
+        'The shared session was never established or was rotated out by a stray login.',
+    );
+  }
+
+  await page.context().addCookies(cookies);
+  return session.value;
 }

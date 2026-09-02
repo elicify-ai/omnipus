@@ -105,7 +105,7 @@ func TestProjectInstructions_TruncationIsMarked(t *testing.T) {
 	t.Run("three mounts summing over the budget: cut at budget, marked", func(t *testing.T) {
 		roots := []string{t.TempDir(), t.TempDir(), t.TempDir()}
 		names := []string{"m1", "m2", "m3"}
-		var mounts []ProjectInstructionMount
+		mounts := make([]ProjectInstructionMount, 0, len(roots))
 		for i, root := range roots {
 			require.NoError(t, os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(strings.Repeat("b", MaxInstructionsBytes/2)), 0o600))
 			mounts = append(mounts, ProjectInstructionMount{Name: names[i], Root: root})

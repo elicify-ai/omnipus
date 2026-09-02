@@ -54,7 +54,7 @@ func TestShelfResolution_CollisionIsRecorded(t *testing.T) {
 	assert.Equal(t, "deploy", c.Slug)
 	require.Len(t, c.Locations, 2)
 
-	var names []string
+	names := make([]string, 0, len(c.Locations))
 	for _, loc := range c.Locations {
 		names = append(names, loc.Description)
 	}

@@ -37,6 +37,8 @@
 
 import { expect, test } from '@playwright/test';
 
+import { restoreAdminSession } from './fixtures/admin-api';
+
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 
 
@@ -51,21 +53,30 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
  * anybody else's token in turn.
  */
 async function ensureSession(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto(`${BASE_URL}/#/`);
-  const alive = await page.evaluate(async () => {
-    const res = await fetch('/api/v1/auth/validate', { credentials: 'include' });
-    return res.status === 200;
-  });
-  if (alive) return;
-  await page.evaluate(async () => {
-    await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+  const alive = async () =>
+    page.evaluate(async () => {
+      const res = await fetch('/api/v1/auth/validate', { credentials: 'include' });
+      return res.status === 200;
     });
-  });
+
+  await page.goto(`${BASE_URL}/#/`);
+  if (await alive()) return;
+
+  // Re-arm from the SHARED storageState rather than logging in. A login here
+  // would re-mint the single slot and kill the next spec's cookie in turn —
+  // the crosstalk scripts/check-e2e-login-crosstalk.sh exists to stop, and the
+  // cause of the 2026-08-28 create-agent incident. Copying the file forward
+  // recovers the recoverable case (this context is stale, the file on disk was
+  // rewritten by auth.spec.ts's afterAll) and mints nothing.
+  await restoreAdminSession(page);
   await page.reload();
+  if (await alive()) return;
+
+  throw new Error(
+    'BLOCKED: the shared admin session is dead and cannot be restored from storageState — ' +
+      "another run's login rotated the single-slot session_token_hash. This is an environment " +
+      'collision, not a product defect. Re-run the suite; do NOT log in from a spec.',
+  );
 }
 
 /** Resolve a workspace id to drive against — the default one always exists. */

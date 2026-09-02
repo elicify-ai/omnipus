@@ -256,6 +256,7 @@ export function PerformanceSection(): React.ReactElement {
         </div>
         <button
           type="button"
+          tabIndex={0}
           data-testid="performance-retry-btn"
           onClick={() => void refetch()}
           disabled={isFetching}
