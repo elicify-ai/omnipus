@@ -1308,7 +1308,15 @@ jobs:
         # narrowly.
         run: |
           set +e
-          out=$(go test -tags goolm,stdjson -count=1 ./... 2>&1)
+          # -timeout 30m: go test's DEFAULT is 10 minutes PER PACKAGE, and
+          # pkg/agent has been measured at 752s (12.5 min) on a developer
+          # machine under load. A package that exceeds it fails with
+          # "panic: test timed out after 10m0s" -- a timeout, not an assertion,
+          # and one that looks nothing like the failure it actually is. The
+          # other workflows here already pass -timeout explicitly
+          # (cross-platform.yml, and pr.yml's own e2e steps at 600s/900s/300s);
+          # this step was the one that inherited the default.
+          out=$(go test -tags goolm,stdjson -count=1 -timeout 30m ./... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
