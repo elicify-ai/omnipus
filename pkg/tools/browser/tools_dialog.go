@@ -365,13 +365,23 @@ func (m *BrowserManager) lastActivationOn(sessionID string) string {
 // negative costs the entire requirement.
 //
 // OBSERVED 2026-09-02, and the reason the suspected-case wording names two
-// outcomes instead of one: under heavy parallel load a renderer died mid-test
-// and three tools took this branch on a static page that had no dialog at all.
-// The hedge held — but "may have an open dialog" as the ONLY named cause sends
-// an agent to browser_handle_dialog, which answers "no dialog", leaving it with
-// a dead tab and no next move. Naming the crash outcome too costs nothing when
-// the guess is right and is the whole recovery when it is wrong. Keep BOTH
-// outcomes in this message; do not trim it back to the dialog alone.
+// outcomes instead of one: three tools took this branch on a static fixture
+// page that had no dialog at all and could not have had one.
+//
+// State the cause exactly, because I first recorded it here as "a renderer
+// died under parallel load" and that was WRONG. The tab was alive and the page
+// had not changed. resolveTarget was calling DOM.getDocument, which RESETS the
+// DevTools DOM agent node-id map; chromedp caches ids from that map, so the
+// next command on that tab polled an id the browser no longer recognised and
+// sat there until its deadline. Fixed in f8f28a020. A wedged tab is therefore
+// evidence of neither a dialog NOR a dead tab — stale CDP state alone does it.
+//
+// The hedge held, but "may have an open dialog" as the ONLY named cause sends
+// an agent to browser_handle_dialog, which answers "no dialog", leaving it
+// with no next move. Naming the second outcome costs nothing when the guess is
+// right and is the whole recovery when it is wrong — and re-navigate is the
+// correct action for a dead tab and a stale-node-id one alike, which is why
+// the message commits to the ACTION and hedges the CAUSE. Keep both outcomes.
 //
 // Returns (rewritten, true) when err was a CDP timeout it could say something
 // better about, and (nil, false) otherwise. The bool is what callers branch on
@@ -393,8 +403,8 @@ func dialogAwareTimeout(mgr *BrowserManager, sessionID, toolName string, err err
 		after = " after " + act
 	}
 	return fmt.Errorf("%s: the tab stopped answering%s. It may have an open dialog that predates this session's "+
-		"listener — try browser_handle_dialog{accept:false}; if that reports no dialog, the tab has crashed or "+
-		"closed and only a re-navigate recovers it",
+		"listener — try browser_handle_dialog{accept:false}; if that reports no dialog, the tab is wedged (crashed, "+
+		"closed, or holding stale CDP state) and a re-navigate is what recovers it",
 		toolName, after), true
 }
 

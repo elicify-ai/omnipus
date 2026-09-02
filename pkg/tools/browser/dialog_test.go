@@ -577,12 +577,15 @@ func TestDialog_PreListenerDialogIsSuspected(t *testing.T) {
 	}
 	// A guess that names ONE cause is a wrong turn when the guess is wrong.
 	// This branch fires on any unanswered tab, and the observed real case was
-	// a renderer that had DIED on a page with no dialog: browser_handle_dialog
-	// then answers "no dialog" and the agent is out of moves. The message must
-	// carry the other outcome and its recovery.
-	if !strings.Contains(msg, "crashed") || !strings.Contains(msg, "re-navigate") {
+	// a LIVE tab on a dialog-free page wedged by stale CDP node ids (see
+	// dialogAwareTimeout's comment): browser_handle_dialog answers "no dialog"
+	// and the agent is out of moves. The message must carry the second outcome
+	// and, above all, the recovery — re-navigate fixes a dead tab and a
+	// stale-state one alike.
+	if !strings.Contains(msg, "wedged") || !strings.Contains(msg, "re-navigate") {
 		t.Errorf("a suspected dialog is only ONE explanation for an unanswered tab — the message must "+
-			"also name the crashed/closed tab and its recovery, or a wrong guess strands the agent; got %q", msg)
+			"also name the wedged tab and the re-navigate that recovers it, or a wrong guess strands the "+
+			"agent with a tab that answers nothing; got %q", msg)
 	}
 	if strings.Contains(msg, "context deadline exceeded") {
 		t.Errorf("the bare timeout is exactly what this replaces; got %q", msg)
