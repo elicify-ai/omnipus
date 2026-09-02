@@ -565,6 +565,23 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 // browser-e2e job (.github/workflows/pr.yml) with its own -run filter, so it
 // cannot be swallowed by the whole-package step's >=180 pass floor.
 func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
+	// The gate belongs to the browser-e2e job, which installs a real Chrome via
+	// browser-actions/setup-chrome. The plain "Tests" job does not: it runs
+	// `go test ./...` on a runner whose only browser is /usr/bin/chromium-browser,
+	// a system build that never completes the CDP liveness probe over a pipe —
+	// so the gate failed there with "context deadline exceeded" while PASSING in
+	// the job that owns it (OK:true, VideoTracks:1, ReadyState:live).
+	//
+	// Skipping OUTSIDE its own job is not the "a skipped gate is a failed gate"
+	// hole requireBrowserOrFail exists to close. That rule is about the gate
+	// silently not running INSIDE browser-e2e, where pr.yml asserts exactly one
+	// "--- PASS" and zero "--- SKIP" and fails the step otherwise. Here the
+	// alternative is not a stricter gate, it is a gate that reports the runner's
+	// chromium instead of the question it was written to answer.
+	if os.Getenv("OMNIPUS_BROWSER_E2E") != "1" {
+		t.Skip("G-2 runs in the browser-e2e job, which provides a real Chrome; " +
+			"that job sets OMNIPUS_BROWSER_E2E=1 and fails on a skip")
+	}
 	execPath := requireBrowserOrFail(t)
 	t.Logf("G-2 spike: resolved Chrome at %s", execPath)
 
