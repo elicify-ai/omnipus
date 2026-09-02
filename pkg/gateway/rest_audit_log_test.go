@@ -239,10 +239,18 @@ func TestHandleSandboxAuditLog_EmitsAuditEntry(t *testing.T) {
 //     `event` fails the WHOLE array, and src/lib/api.ts::fetchAuditLog runs
 //     that schema over the response — the viewer blanks entirely.
 //   - Dotted event names are emitted from 19 non-test production sites today
-//     (`pkg/audit/audit.go::EventChannelPairing = "channel.pairing"`,
-//     `pkg/tools/memory.go`'s `memory.remember`, `pkg/gateway/rest_workspaces.go`'s
-//     `workspace.create`, …). So on any real install the screen is already
-//     blank, for reasons that have nothing to do with this spec.
+//     (`pkg/tools/memory.go`'s `memory.remember`, `pkg/gateway/rest_workspaces.go`'s
+//     `workspace.create`, `pkg/gateway/rest.go`'s `agent.delete`, …), PLUS seven
+//     dotted named constants in `pkg/audit/audit.go:53-106` — `boot.abort`,
+//     `channel.pairing`, `cli.validate`, `executor.smoke_test`,
+//     `onboarding.admin_created`, `onboarding.refused`, `skill.call`.
+//   - Two of those make the blank effectively certain rather than likely:
+//     `onboarding.admin_created` is written once per install at admin
+//     registration (`pkg/gateway/rest_onboarding.go:835`), and `skill.call` is
+//     written on every `Skill` tool call (`pkg/audit/skill_call.go:155`,
+//     ADR-072 D3.1). So on any real install the Audit Log screen is ALREADY
+//     blank, for reasons that have nothing to do with this spec — FR-028's
+//     "operator-inspectable" mitigation does not reach an operator today.
 //
 // The failure is therefore CLIENT-side, in zod. The Go handler
 // (rest_settings.go::HandleAuditLog) passes each line through as an opaque
