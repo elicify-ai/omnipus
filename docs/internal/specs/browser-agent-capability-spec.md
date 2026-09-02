@@ -493,9 +493,18 @@ func waitActionable(tabCtx context.Context, toolName, target, display string, ti
 //   requirements FR-019…FR-024 and FR-019a of that spec.
 //
 // What D2 codes against, and must NOT restate:
-//   deferred, release := leaseWrite(ctx, mgr, key, agentID, "browser_click")
+//   deferred, release := leaseWrite(ctx, mgr, key, owner, agentID, "browser_click")
 //   if deferred != nil { return deferred, nil }
 //   defer release()
+//
+// `owner` is the `TabOwner` the call already resolved (D1 §14.2 rule 1
+// step 1) — the session's own set or the workspace's. It is a PARAMETER,
+// not re-derived inside the wrapper: the lease must be taken on the same
+// set the tool is about to write. It was added by D1 round-5 C-502, whose
+// finding was that a lease keyed on the BrowsingKey alone is per-BROWSER,
+// so two sessions on one workspace would block each other — the exact
+// outcome D1's own test 99(b) forbids. D2 restates nothing else about the
+// lease; the six-argument form above is the whole of D2's dependency.
 //
 // SCOPE, AS OF ADR D1.9c (2026-09-02) — the lease is much narrower than when
 // it was relocated. TABS ARE OWNED BY THE SESSION, not by the agent: the tab
