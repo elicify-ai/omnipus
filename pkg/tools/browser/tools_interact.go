@@ -761,7 +761,7 @@ func (t *UploadFileTool) Execute(ctx context.Context, args map[string]any) *tool
 			return tools.PermissionDeniedResult(t.Name(), herr,
 				fmt.Sprintf("%s: %s. Nothing was attached.", t.Name(), herr.Error()))
 		}
-		real, rerr := handle.RealPath()
+		resolved, rerr := handle.RealPath()
 		closeErr := handle.Close()
 		if rerr != nil {
 			return tools.ErrorResult(fmt.Sprintf("%s: %s", t.Name(), rerr))
@@ -772,18 +772,18 @@ func (t *UploadFileTool) Execute(ctx context.Context, args map[string]any) *tool
 		// surfaces as an opaque CDP failure — or, worse, as a success with an
 		// empty attachment. Refusing here is the difference between "that file
 		// is not there" and "the upload silently did nothing".
-		info, serr := os.Stat(real)
+		info, serr := os.Stat(resolved)
 		switch {
 		case serr != nil:
-			t.recordUploadDecision(ctx, key, owner, real, pageOrigin, audit.DecisionDeny, "not_found", serr.Error())
+			t.recordUploadDecision(ctx, key, owner, resolved, pageOrigin, audit.DecisionDeny, "not_found", serr.Error())
 			return tools.ErrorResult(fmt.Sprintf("%s: %q does not exist (%s). Nothing was attached.",
 				t.Name(), raw, serr))
 		case info.IsDir():
-			t.recordUploadDecision(ctx, key, owner, real, pageOrigin, audit.DecisionDeny, "is_a_directory", "")
+			t.recordUploadDecision(ctx, key, owner, resolved, pageOrigin, audit.DecisionDeny, "is_a_directory", "")
 			return tools.ErrorResult(fmt.Sprintf("%s: %q is a directory, not a file. Nothing was attached.",
 				t.Name(), raw))
 		}
-		realPaths = append(realPaths, real)
+		realPaths = append(realPaths, resolved)
 	}
 
 	sessionCtx, err := mgr.Session(sid)

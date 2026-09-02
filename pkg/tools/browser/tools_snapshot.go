@@ -246,13 +246,13 @@ func renderSnapshotLine(depth int, role, name, value string, occurrence map[stri
 	}
 	b.WriteString(role)
 	if name != "" {
-		b.WriteString(fmt.Sprintf(" %q", name))
+		fmt.Fprintf(&b, " %q", name)
 	}
 	if value != "" {
 		// value= is a separate labelled field, never concatenated into the
 		// name: an agent must be able to tell "the button labelled Submit"
 		// from "the field whose current contents are Submit".
-		b.WriteString(fmt.Sprintf(" value=%q", value))
+		fmt.Fprintf(&b, " value=%q", value)
 	}
 	if role != "(unknown)" && name != "" {
 		key := role + "\x00" + name
@@ -262,7 +262,7 @@ func renderSnapshotLine(depth int, role, name, value string, occurrence map[stri
 		// including unique ones. Rendering it only on duplicates would make
 		// the agent's next call depend on a count it cannot see, and index=0
 		// on a unique match resolves correctly (selectAXCandidate).
-		b.WriteString(fmt.Sprintf(" index=%d", idx))
+		fmt.Fprintf(&b, " index=%d", idx)
 	}
 	b.WriteString("\n")
 	return b.String()

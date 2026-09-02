@@ -313,7 +313,7 @@ func toolNamesFor(t *testing.T, receivers []string) []string {
 	byType := map[string]string{}
 	for _, tool := range BrowserBuiltinMetadata() {
 		typ := reflect.TypeOf(tool)
-		for typ.Kind() == reflect.Ptr {
+		for typ.Kind() == reflect.Pointer {
 			typ = typ.Elem()
 		}
 		byType[typ.Name()] = tool.Name()

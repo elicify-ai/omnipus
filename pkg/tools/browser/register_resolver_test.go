@@ -39,7 +39,7 @@ func TestRegisterTools_NoBoundManagerField(t *testing.T) {
 
 	for _, tool := range append(registry.GetAll(), BrowserBuiltinMetadata()...) {
 		v := reflect.ValueOf(tool)
-		for v.Kind() == reflect.Ptr {
+		for v.Kind() == reflect.Pointer {
 			v = v.Elem()
 		}
 		if v.Kind() != reflect.Struct {
