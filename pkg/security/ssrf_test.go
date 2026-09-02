@@ -662,7 +662,7 @@ func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
 		checker := security.NewSSRFChecker(nil)
 		checker.AllowGatewayOrigin("localhost", gwPort)
 
-		err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+		err := checker.CheckURL(ctx, "http://127.0.0.1:5000/preview/agent-1/tok3n/")
 		assert.NoError(t, err, "the resolved IPv4 loopback form at the gateway port must pass")
 	})
 
@@ -670,7 +670,7 @@ func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
 		checker := security.NewSSRFChecker(nil)
 		checker.AllowGatewayOrigin("localhost", gwPort)
 
-		err := checker.CheckURL(ctx, "http://[::1]:5000/x")
+		err := checker.CheckURL(ctx, "http://[::1]:5000/preview/agent-1/tok3n/")
 		assert.NoError(t, err, "the resolved IPv6 loopback form at the gateway port must pass")
 	})
 
@@ -735,10 +735,10 @@ func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
 			checker := security.NewSSRFChecker(nil)
 			checker.AllowGatewayOrigin("gateway.internal.example", gwPort)
 
-			err := checker.CheckURL(ctx, "http://gateway.internal.example:5000/x")
+			err := checker.CheckURL(ctx, "http://gateway.internal.example:5000/preview/agent-1/tok3n/")
 			assert.NoError(t, err, "an exact literal host:port match must pass without needing DNS resolution")
 
-			errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+			errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/preview/agent-1/tok3n/")
 			require.Error(
 				t,
 				errLoopback,
@@ -762,29 +762,75 @@ func TestCloneWithGatewayOrigin_DoesNotMutateSingleton(t *testing.T) {
 	// The CLONE reaches the gateway's own preview origin (literal + resolved forms).
 	assert.NoError(t, clone.CheckURL(ctx, "http://localhost:5000/preview/a/tok/"),
 		"the clone must allow the gateway's own localhost:<port> preview origin")
-	assert.NoError(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+	assert.NoError(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/preview/a/tok/"),
 		"the clone must allow the resolved-loopback gateway origin")
+
+	// ADR-073: host:port matching alone is NOT sufficient — the exception is
+	// scoped to the /preview/ path prefix. Same host:port, non-/preview/ path
+	// (e.g. the gateway's own internal REST API) must still be blocked, even
+	// though it would have passed before ADR-073.
+	require.Error(t, clone.CheckURL(ctx, "http://localhost:5000/api/v1/config"),
+		"ADR-073: the gateway-origin exception must not extend beyond /preview/")
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/api/v1/config"),
+		"ADR-073: the resolved-loopback form must also be scoped to /preview/")
+	require.Error(t, clone.CheckURL(ctx, "http://localhost:5000/"),
+		"ADR-073: the gateway origin's own root is not /preview/ and must still be blocked")
 
 	// The shared singleton is UNCHANGED — still blocks the gateway origin, so
 	// provider/skill URL validation is not silently widened.
 	require.Error(t, singleton.CheckURL(ctx, "http://localhost:5000/preview/a/tok/"),
 		"the shared singleton must NOT be mutated — localhost:<port> stays blocked for provider/skill validation")
-	require.Error(t, singleton.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+	require.Error(t, singleton.CheckURL(ctx, "http://127.0.0.1:5000/preview/a/tok/"),
 		"the shared singleton must still block the resolved-loopback gateway origin")
 
 	// The clone still enforces the shared base block-list — it is not a wide-open
 	// checker, and its exception is scoped to exactly the gateway port.
 	require.Error(t, clone.CheckURL(ctx, "http://169.254.169.254/latest/meta-data/"),
 		"the clone must still block cloud-metadata (shares the base block-list)")
-	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5001/x"),
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5001/preview/a/tok/"),
 		"the clone's exception is scoped to the gateway port only")
 	assert.NoError(t, clone.CheckURL(ctx, "http://8.8.8.8/dns"),
 		"the clone still passes public hosts")
 
 	// Clearing the exception on the clone must not affect any base behavior.
 	clone.AllowGatewayOrigin("", 0)
-	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/preview/a/tok/"),
 		"after clearing, the clone falls back to the fail-closed default")
+}
+
+// TestGatewayOriginException_ScopedToPreviewPath is the dedicated ADR-073
+// regression test: the gateway-origin SSRF exception must require BOTH the
+// exact host:port AND a /preview/ path prefix, not host:port alone. Before
+// ADR-073 this exception matched any path on the gateway's own origin,
+// which — since it runs before every other SSRF check — let the agent's
+// browser reach the gateway's internal REST API (e.g. /api/v1/config)
+// through browser_navigate, bypassing tool-level access restrictions like a
+// denied read_file/http tool.
+func TestGatewayOriginException_ScopedToPreviewPath(t *testing.T) {
+	ctx := context.Background()
+	checker := security.NewSSRFChecker(nil)
+	checker.AllowGatewayOrigin("localhost", 5000)
+
+	allowed := []string{
+		"http://localhost:5000/preview/",
+		"http://localhost:5000/preview/agent-a/tok123/",
+		"http://localhost:5000/preview/agent-a/tok123/index.html?x=1",
+		"https://localhost:5000/preview/agent-a/tok123/",
+	}
+	for _, u := range allowed {
+		assert.NoError(t, checker.CheckURL(ctx, u), "expected %q to pass the /preview/ exception", u)
+	}
+
+	blocked := []string{
+		"http://localhost:5000/",
+		"http://localhost:5000/api/v1/config",
+		"http://localhost:5000/api/v1/agents",
+		"http://localhost:5000/previewer/not-actually-preview",
+		"http://localhost:5000/preview",
+	}
+	for _, u := range blocked {
+		require.Error(t, checker.CheckURL(ctx, u), "expected %q to be blocked despite matching host:port", u)
+	}
 }
 
 // TestAllowGatewayOrigin_ConcurrentWithCheckURL exercises the gwMu RWMutex under
