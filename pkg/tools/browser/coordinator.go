@@ -64,7 +64,6 @@ import (
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/extensions"
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -233,12 +232,16 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinato
 // callers serialize on the single-flight launch (c.launching / c.launchDone);
 // the winner launches, the losers wait and then observe c.launched.
 //
-// createTargetParamsForTest, when non-nil, is invoked with a fully-built
-// target.CreateTargetParams right before it is sent over CDP (D17 test seam).
-// Nil in production; tests restore it via t.Cleanup, matching this package's
-// other for-test seams (e.g. package_chrome.go's packageChromeRootForTest).
-var createTargetParamsForTest func(*target.CreateTargetParams)
-
+// Register creates NO CDP target. It used to: alongside the per-agent browser
+// context it also opened that context's own window, and a createTargetParamsForTest
+// seam here let a test capture the outgoing target.CreateTargetParams and assert
+// the D17 window-size pin. FR-031 deleted the context, the window and the
+// CreateTarget call with it, which left the seam wired to nothing — a hook a
+// test could still install and still be called back on exactly zero times, i.e.
+// a green-looking observation of an absence. It is deleted rather than kept
+// "in case": window size is now pinned at LAUNCH (--window-size,
+// chromeHardeningBaseFlags in exec_resolver.go) and guarded there by
+// TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize.
 func (c *BrowserCoordinator) Register(
 	ctx context.Context,
 	agentID string,
