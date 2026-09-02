@@ -52,17 +52,22 @@ const AUTOSAVE_DEBOUNCE_MS = 600
 // max_parallel_agents input (triggerSave, the debounced autosave settle, and
 // the tools_on_demand toggle guard). Bounds mirror the backend contract
 // (contracts/components/schemas/PerformanceSettingsUpdate.yaml): minimum 0,
-// no ceiling — 0 (or a blank field) restores the auto-detected default, any
+// no ceiling — 0 (or a blank field) clears the explicit cap, any
 // positive integer is honored exactly as configured.
 const INVALID_MAX_PARALLEL_MESSAGE =
-  'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).'
+  'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).'
 
-// physicalThreadCeiling mirrors pkg/config/config.go's
+// PHYSICAL_THREAD_CEILING mirrors pkg/config/config.go's
 // physicalConcurrencySafetyCeiling — the point above which the backend
 // itself logs a WARN (Go's runtime hard-aborts the process past 10,000 OS
 // threads; this leaves a 5x margin). It is NOT enforced as a limit — the
 // backend honors any explicit value in full — so the frontend must only ever
 // caution here, never claim the value will be lowered.
+//
+// It is ALSO the value effective_max_parallel_agents carries when nothing is
+// configured, which is precisely why that case must never be rendered as a
+// recommendation: the backstop answers "what would abort the Go runtime",
+// not "what can this machine run". See max_parallel_agents_configured.
 const PHYSICAL_THREAD_CEILING = 2000
 
 export function PerformanceSection(): React.ReactElement {
@@ -93,7 +98,16 @@ export function PerformanceSection(): React.ReactElement {
   // Sync inputs with fetched values on first load.
   useEffect(() => {
     if (data && !dirty) {
-      const configured = data.max_parallel_agents ?? 0
+      // max_parallel_agents is NOT the configured value when nothing is
+      // configured. The backend substitutes the resolved effective value
+      // there, because 0 is an internal sentinel the schema forbids on the
+      // wire (minimum: 1). So on an unconfigured install this field carries
+      // the physical OS-thread backstop, and prefilling the input with it
+      // would let an operator who saves without touching anything silently
+      // turn a memory-bounded install into one with an explicit cap of 2000.
+      // max_parallel_agents_configured is what distinguishes the two.
+      const configured =
+        data.max_parallel_agents_configured === false ? 0 : (data.max_parallel_agents ?? 0)
       setInputValue(configured === 0 ? '' : String(configured))
       // tools_on_demand defaults to true when absent from the response.
       setToolsOnDemand(data.tools_on_demand ?? true)
@@ -128,7 +142,7 @@ export function PerformanceSection(): React.ReactElement {
     const raw = rawInput.trim()
     const parsed = raw === '' ? 0 : parseInt(raw, 10)
     // Backend bound (PerformanceSettingsUpdate.yaml): minimum 0, no ceiling.
-    // 0 (or blank, which we treat as 0 above) means "restore auto-detect";
+    // 0 (or blank, which we treat as 0 above) means "no explicit cap";
     // any positive integer is honored exactly as configured — there is no
     // upper limit to validate against here.
     if (raw !== '' && (isNaN(parsed) || parsed < 0)) return null
@@ -217,16 +231,24 @@ export function PerformanceSection(): React.ReactElement {
 
   const effective = data?.effective_max_parallel_agents ?? '?'
 
-  // Live system recommendation. The backend's auto-detect default is sized
-  // from available memory (availableRAM / ~3.5 MB per concurrent agent,
-  // floored at 2 — see autoDetectMaxParallel in pkg/config/config.go), which
-  // the browser cannot recompute itself: RAM isn't exposed to client-side JS
-  // for privacy reasons, and CPU core count no longer has any bearing on the
-  // formula (the old CPU-based heuristic this used to mirror is gone). So we
-  // surface the API's own resolved effective_max_parallel_agents directly —
-  // it already IS the auto-detected default whenever the operator hasn't set
-  // an explicit override, with no client-side recomputation needed.
-  const recommended = typeof effective === 'number' ? effective : undefined
+  // Is anything actually configured?
+  //
+  // This is the whole point of the max_parallel_agents_configured field.
+  // There is no longer a computed default: when nothing is configured, the
+  // backend bounds concurrency by LIVE available memory at the moment each
+  // agent turn is admitted, and effective_max_parallel_agents carries a
+  // PHYSICAL OS-thread-safety backstop (2000) rather than a capacity
+  // estimate. Rendering that integer under the words "Recommended" told
+  // every operator on an unconfigured install that the system recommends
+  // 2000 parallel agents — a number nothing in the process was claiming.
+  //
+  // Note the `!== false` rather than a truthy check: the field is optional on
+  // the wire, and an older backend that omits it should keep the previous
+  // (integer) rendering rather than silently switching every install to the
+  // automatic text.
+  const isConfigured = data?.max_parallel_agents_configured !== false
+  const recommended =
+    isConfigured && typeof effective === 'number' ? effective : undefined
 
   // High-value caution: when the typed value exceeds the physical OS-thread
   // safety ceiling the backend itself warns about (physicalConcurrencySafetyCeiling,
@@ -242,8 +264,8 @@ export function PerformanceSection(): React.ReactElement {
 
   const recommendationText =
     typeof recommended === 'number'
-      ? `Recommended: ${recommended} parallel agents (auto-detected from available memory)`
-      : 'Recommended: auto-detect'
+      ? `Currently in use: ${recommended} parallel agents`
+      : 'automatic \u2014 bounded by available memory'
 
   return (
     <div className="space-y-4">
@@ -256,7 +278,7 @@ export function PerformanceSection(): React.ReactElement {
         <AutoSaveIndicator status={saveStatus} />
       </div>
 
-      {/* Live recommendation card — shown above the input */}
+      {/* Live concurrency card — shown above the input */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 flex items-start gap-2">
         <Info size={14} className="text-[var(--color-accent)] mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
@@ -264,7 +286,9 @@ export function PerformanceSection(): React.ReactElement {
             {recommendationText}
           </p>
           <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
-            Auto-detected from available memory (<span className="font-mono">~3.5 MB</span> per concurrent agent, floored at 2). An explicit value has no ceiling — it is always honored exactly as set.
+            {isConfigured
+              ? 'An explicit value has no ceiling — it is always honored exactly as set. Agent turns are still admitted only while the host has memory to spare.'
+              : 'Nothing is configured, so concurrency is bounded by this host\u2019s available memory at the moment each agent turn starts. Set a value below to cap it explicitly instead.'}
           </p>
         </div>
       </div>
@@ -274,11 +298,16 @@ export function PerformanceSection(): React.ReactElement {
         <div className="space-y-1">
           <p className="text-xs text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
-            Leave blank to use the auto-detected default. Changes apply after re-authentication.
+            Leave blank for no explicit cap — concurrency is then bounded by available memory. Changes apply after re-authentication.
           </p>
           <div className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
             <Info size={12} />
-            <span>Effective value in use: <span className="font-mono font-medium text-[var(--color-secondary)]">{effective}</span></span>
+            <span>
+              Effective value in use:{' '}
+              <span className="font-mono font-medium text-[var(--color-secondary)]">
+                {isConfigured ? effective : 'automatic'}
+              </span>
+            </span>
           </div>
         </div>
 

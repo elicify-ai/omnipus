@@ -41,6 +41,7 @@ import { PerformanceSection } from './PerformanceSection'
 const SETTINGS = {
   max_parallel_agents: 4,
   effective_max_parallel_agents: 4,
+  max_parallel_agents_configured: true,
   tools_on_demand: true,
 }
 
@@ -287,27 +288,31 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     expect(screen.queryByTestId('performance-high-value-warning')).not.toBeInTheDocument()
   })
 
-  it('displays a recommendation reflecting the memory-based default, not the old CPU-based heuristic', async () => {
+  it('surfaces the resolved effective value when an operator HAS configured a cap', async () => {
     vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 4,
       effective_max_parallel_agents: 882,
+      max_parallel_agents_configured: true,
       tools_on_demand: true,
     } as never)
 
     renderSection()
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    // The recommendation must surface the API's resolved effective value
-    // (memory-based auto-detect) and explicitly say so. Both the headline
-    // and the sub-text below independently mention "available memory", so
-    // assert there are at least two matches rather than a single unique one.
-    expect(screen.getByText(/Recommended: 882 parallel agents/)).toBeInTheDocument()
-    expect(screen.getAllByText(/available memory/i).length).toBeGreaterThanOrEqual(2)
+    // RE-DERIVED. This used to assert the words "Recommended: 882 parallel
+    // agents". There is no longer a computed default to recommend — when
+    // nothing is configured the backend returns a physical OS-thread backstop
+    // and says so via max_parallel_agents_configured. This case is the
+    // CONFIGURED one, so the panel still shows the resolved number; the
+    // unconfigured case is covered in PerformanceSection.autoDefault.test.tsx.
+    expect(screen.getByText(/Currently in use: 882 parallel agents/)).toBeInTheDocument()
     // The old CPU-based formula text must be gone.
     expect(screen.queryByText(/NumCPU/)).not.toBeInTheDocument()
     expect(screen.queryByText(/RAM_GB\/1\.5/)).not.toBeInTheDocument()
     expect(screen.queryByText(/ceiling of 16/)).not.toBeInTheDocument()
+    // So must the deleted per-agent memory formula it was replaced by.
+    expect(screen.queryByText(/3\.5 MB/)).not.toBeInTheDocument()
   })
 
   it('shows AutoSaveIndicator (no legacy SaveStatus)', async () => {
@@ -448,7 +453,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).',
+        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).',
       })
     })
 
@@ -488,7 +493,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).',
+        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).',
       })
     })
 
@@ -518,7 +523,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).',
+        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).',
       })
     })
 

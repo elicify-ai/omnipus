@@ -20,10 +20,23 @@ import (
 
 // TestGetPerformance_ZeroConfig_SchemaValid is a regression test for the UAT
 // finding that GET /api/v1/performance returned max_parallel_agents:0 on a
-// fresh install (unconfigured), violating the PerformanceSettings contract
-// minimum of 2 and tripping the SPA's zod edge-validation. The handler must
-// surface the effective clamped value (always >= 2) when the on-disk value is
-// the "auto/unset" zero.
+// fresh install (unconfigured), violating the PerformanceSettings contract's
+// `minimum: 1` and tripping the SPA's zod edge-validation. The handler must
+// surface the resolved effective value when the on-disk value is the
+// "unset" zero.
+//
+// RE-DERIVED for FR-069. The previous assertions were `>= 2` on both integers
+// (and the comment claimed a contract minimum of 2, which was already stale —
+// PerformanceSettings.yaml has always said `minimum: 1`). Those assertions
+// would still pass today against the physical backstop, WHILE the field's
+// meaning changed underneath them from "the memory-sized default" to "an
+// OS-thread bound that is not a capacity claim". A test that cannot tell those
+// apart is not testing this handler.
+//
+// The load-bearing new assertion is max_parallel_agents_configured=false: it is
+// the only thing on the wire distinguishing an unconfigured host from one where
+// an operator explicitly typed the same number, and the SPA renders a
+// completely different panel on it.
 func TestGetPerformance_ZeroConfig_SchemaValid(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
@@ -37,15 +50,57 @@ func TestGetPerformance_ZeroConfig_SchemaValid(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	// Contract: PerformanceSettings.max_parallel_agents has minimum 2.
-	if resp.MaxParallelAgents == nil || *resp.MaxParallelAgents < 2 {
-		t.Fatalf(
-			"max_parallel_agents must be >= 2 (contract minimum) even when unconfigured; got %v",
-			resp.MaxParallelAgents,
-		)
+
+	// Contract: both integers carry `minimum: 1`, so the internal 0 sentinel
+	// must never reach the wire.
+	if resp.MaxParallelAgents == nil || *resp.MaxParallelAgents < 1 {
+		t.Fatalf("max_parallel_agents must be >= 1 (contract minimum) even when unconfigured; got %v", resp.MaxParallelAgents)
 	}
-	if resp.EffectiveMaxParallelAgents == nil || *resp.EffectiveMaxParallelAgents < 2 {
-		t.Fatalf("effective_max_parallel_agents must be >= 2; got %v", resp.EffectiveMaxParallelAgents)
+	if resp.EffectiveMaxParallelAgents == nil || *resp.EffectiveMaxParallelAgents < 1 {
+		t.Fatalf("effective_max_parallel_agents must be >= 1; got %v", resp.EffectiveMaxParallelAgents)
+	}
+
+	// FR-069: nothing is configured on this fresh-install fixture, so the flag
+	// must say so. Without it the SPA cannot tell the backstop from a real
+	// setting, and renders 2000 to the operator as a recommendation.
+	if resp.MaxParallelAgentsConfigured == nil {
+		t.Fatal("max_parallel_agents_configured is absent from the response — it is required in responses; the SPA cannot distinguish an unconfigured host from a configured one without it")
+	}
+	if *resp.MaxParallelAgentsConfigured {
+		t.Fatalf("max_parallel_agents_configured = true on a fresh install with nothing configured; want false (effective_max_parallel_agents = %v is the physical OS-thread backstop, not a capacity the system is recommending)", *resp.EffectiveMaxParallelAgents)
+	}
+}
+
+// TestGetPerformance_ExplicitConfig_ReportsConfigured is the other direction,
+// and it is what stops the assertion above from being satisfied by a handler
+// that hardcodes false. An explicitly configured value must report
+// configured=true and echo the operator's own number.
+func TestGetPerformance_ExplicitConfig_ReportsConfigured(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	cfgJSON := []byte(`{"version":1,"agents":{"defaults":{}},"providers":[],"performance":{"max_parallel_agents":7}}`)
+	require.NoError(t, os.WriteFile(api.homePath+"/config.json", cfgJSON, 0o600))
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
+	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
+	w := httptest.NewRecorder()
+	api.HandlePerformance(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/performance: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp gen.PerformanceSettings
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.MaxParallelAgentsConfigured == nil || !*resp.MaxParallelAgentsConfigured {
+		t.Fatalf("max_parallel_agents_configured = %v on a host with performance.max_parallel_agents=7; want true", resp.MaxParallelAgentsConfigured)
+	}
+	if resp.EffectiveMaxParallelAgents == nil || *resp.EffectiveMaxParallelAgents != 7 {
+		t.Fatalf("effective_max_parallel_agents = %v, want 7 (the operator's own value, honored as configured)", resp.EffectiveMaxParallelAgents)
+	}
+	if resp.MaxParallelAgents == nil || *resp.MaxParallelAgents != 7 {
+		t.Fatalf("max_parallel_agents = %v, want 7", resp.MaxParallelAgents)
 	}
 }
 

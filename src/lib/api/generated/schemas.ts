@@ -2536,6 +2536,7 @@ export const PerformanceSettings = z
   .object({
     max_parallel_agents: z.number().int().gte(1),
     effective_max_parallel_agents: z.number().int().gte(1),
+    max_parallel_agents_configured: z.boolean(),
     tools_on_demand: z.boolean(),
   })
   .partial();

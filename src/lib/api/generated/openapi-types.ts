@@ -6022,19 +6022,24 @@ export interface components {
         };
         /**
          * PerformanceSettings
-         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04).
+         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Concurrency is bounded by LIVE available memory at the moment of admission, not by a number precomputed at startup.
          */
         PerformanceSettings: {
             /**
-             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. 0 (on the wire, surfaced here as the resolved effective value — see effective_max_parallel_agents) means "use the auto-detected default", sized from available memory (availableMemory / ~3.5 MB per agent), floored so a small box still functions. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor applies). A configured value is bounded only by a documented PHYSICAL OS-thread-safety ceiling (around 2000) when left on auto-detect; an explicit value above that ceiling is still honored in full, with a server-side warning logged rather than the value being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
+             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
              * @example 4
              */
             max_parallel_agents?: number;
             /**
-             * @description The resolved value actually in use (after applying the auto-detect memory-based heuristic or env-var override). Always present in responses; absent in requests.
+             * @description The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
              * @example 4
              */
             effective_max_parallel_agents?: number;
+            /**
+             * @description Whether max_parallel_agents was actually set by an operator, in config.json or via the OMNIPUS_MAX_PARALLEL_AGENTS env var. false means nothing is configured and concurrency is bounded by live available memory; effective_max_parallel_agents then carries the physical backstop, which is not a number to show an operator as a recommendation. This field exists because the two cases are otherwise indistinguishable on the wire — max_parallel_agents substitutes the effective value whenever the configured value is below the schema floor, so an unconfigured host looks exactly like an explicitly configured one. Always present in responses; absent in requests.
+             * @example false
+             */
+            max_parallel_agents_configured?: boolean;
             /**
              * @description Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
              * @example true
