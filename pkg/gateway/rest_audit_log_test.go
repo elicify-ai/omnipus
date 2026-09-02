@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -218,4 +219,121 @@ func TestHandleSandboxAuditLog_EmitsAuditEntry(t *testing.T) {
 	}
 
 	assert.True(t, found, "security_setting_change record must appear in audit JSONL")
+}
+
+// TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent pins the READ
+// surface FR-028 (browser-agent-capability-spec §10 order 23, US-18/AC4)
+// actually rests on today, and it pins it as it really behaves — not as the
+// spec's prose hopes.
+//
+// FR-028 says a metadata-only `browser_snapshot` audit event is "readable via
+// GET /api/v1/audit-log and $OMNIPUS_HOME/system/audit.jsonl today, and via
+// Settings → Security → Audit Log once #667 lands". This test covers the
+// first half and DELIBERATELY DOES NOT claim the second.
+//
+// What issue #667 actually is, verified in this worktree rather than assumed:
+//   - contracts/components/schemas/AuditEntry.yaml:17 pins `event` to
+//     `^[a-z_]+$`, and the generated client schema carries that verbatim
+//     (src/lib/api/generated/schemas.ts::AuditEntry, `z.string().regex(/^[a-z_]+$/)`).
+//   - AuditLogResponse wraps it in `z.array(AuditEntry)`, so ONE non-matching
+//     `event` fails the WHOLE array, and src/lib/api.ts::fetchAuditLog runs
+//     that schema over the response — the viewer blanks entirely.
+//   - Dotted event names are emitted from 19 non-test production sites today
+//     (`pkg/audit/audit.go::EventChannelPairing = "channel.pairing"`,
+//     `pkg/tools/memory.go`'s `memory.remember`, `pkg/gateway/rest_workspaces.go`'s
+//     `workspace.create`, …). So on any real install the screen is already
+//     blank, for reasons that have nothing to do with this spec.
+//
+// The failure is therefore CLIENT-side, in zod. The Go handler
+// (rest_settings.go::HandleAuditLog) passes each line through as an opaque
+// json.RawMessage and validates nothing, so a dotted legacy record neither
+// drops nor corrupts a well-named one sitting next to it. That is the
+// property this test fixes: `browser_snapshot` stays retrievable from the
+// endpoint even in a log that contains the very record that blanks the SPA.
+//
+// The last two assertions are the honest half. They state, at the contract's
+// own regex, that `browser_snapshot` is innocent of #667 (it matches) and
+// that the co-resident `channel.pairing` is guilty of it (it does not) — so
+// nobody later reads this test's green as evidence that the Audit Log SCREEN
+// shows a snapshot. It does not, and will not until #667 lands.
+func TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	systemDir := filepath.Join(api.homePath, "system")
+	require.NoError(t, os.MkdirAll(systemDir, 0o700))
+
+	// Line 1: a dotted LEGACY event — the exact constant at
+	// pkg/audit/audit.go::EventChannelPairing. This is the #667 trigger.
+	// Line 2: the metadata-only browser_snapshot record FR-028 specifies —
+	// origin, node count, byte count, values-emitted flag, truncated flag,
+	// and deliberately NOT the captured values themselves.
+	lines := []string{
+		`{"timestamp":"2026-09-02T10:00:00Z","event":"channel.pairing","decision":"allow","details":{"channel":"whatsapp_native"}}`,
+		`{"timestamp":"2026-09-02T10:00:01Z","event":"browser_snapshot","decision":"allow","agent_id":"ray",` +
+			`"details":{"page_origin":"https://example.com","node_count":412,"output_bytes":18234,` +
+			`"value_nodes_emitted":7,"truncated":false}}`,
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(systemDir, "audit.jsonl"),
+		[]byte(strings.Join(lines, "\n")+"\n"),
+		0o600,
+	))
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/audit-log", nil)
+	w := httptest.NewRecorder()
+	api.HandleAuditLog(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "endpoint must not fail on a dotted legacy event name")
+
+	var resp struct {
+		Entries     []map[string]any `json:"entries"`
+		ChainStatus string           `json:"chain_status"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Entries, 2, "both records must survive the read")
+
+	byEvent := map[string]map[string]any{}
+	for _, e := range resp.Entries {
+		name, _ := e["event"].(string)
+		byEvent[name] = e
+	}
+
+	// (1) The dotted legacy record is returned, not silently dropped. If the
+	// handler ever started filtering by name this assertion would red, and
+	// the next one would keep passing — which is why both are here.
+	require.Contains(t, byEvent, "channel.pairing",
+		"the handler must pass a dotted legacy record through untouched, not filter it")
+
+	// (2) The browser_snapshot record is still retrievable ALONGSIDE it.
+	snap, ok := byEvent["browser_snapshot"]
+	require.True(t, ok, "browser_snapshot must be retrievable from GET /api/v1/audit-log")
+
+	details, ok := snap["details"].(map[string]any)
+	require.True(t, ok, "browser_snapshot record must carry a details object")
+	assert.Equal(t, "https://example.com", details["page_origin"])
+	assert.Equal(t, float64(412), details["node_count"])
+	assert.Equal(t, float64(18234), details["output_bytes"])
+	assert.Equal(t, false, details["truncated"])
+	assert.Equal(t, "ray", snap["agent_id"])
+
+	// (3) FIXED oracle, not a conditional one: the record is metadata-only.
+	// The whole serialized entry must contain no accessible-name or field-value
+	// text from the page. Asserted over the raw bytes so a value smuggled into
+	// any field, at any nesting depth, reds.
+	rawSnap, err := json.Marshal(snap)
+	require.NoError(t, err)
+	for _, forbidden := range []string{"role=", "textbox", "password", "4111"} {
+		assert.NotContains(t, string(rawSnap), forbidden,
+			"the browser_snapshot audit record must carry metadata only, never captured node text")
+	}
+
+	// (4) The #667 boundary, stated at the contract's own regex
+	// (contracts/components/schemas/AuditEntry.yaml:17). browser_snapshot's
+	// underscore name is NOT what blanks the viewer; the co-resident dotted
+	// legacy name is. This test's green is evidence about the ENDPOINT only.
+	contractEventPattern := regexp.MustCompile(`^[a-z_]+$`)
+	assert.True(t, contractEventPattern.MatchString("browser_snapshot"),
+		"browser_snapshot must satisfy AuditEntry's ^[a-z_]+$ so it is never the cause of #667")
+	assert.False(t, contractEventPattern.MatchString("channel.pairing"),
+		"channel.pairing violates AuditEntry's ^[a-z_]+$ — this is #667, and it is why "+
+			"Settings → Security → Audit Log is blank on a real install regardless of this spec")
 }
