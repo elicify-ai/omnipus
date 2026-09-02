@@ -497,7 +497,12 @@ description: global-v1
 		t.Fatal(err)
 	}
 
-	cb := NewContextBuilder(tmpDir)
+	// ADR-072 D5: a nil/empty allowlist now denies every skill (opt-in,
+	// default none) — this test exercises cache invalidation on file content
+	// change, not grant enforcement, so it needs an explicit grant for the
+	// skill under test (previously relied on the retired "nil = unrestricted"
+	// behavior).
+	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"global-skill"})
 	sp1 := cb.BuildSystemPromptWithCache()
 	if !strings.Contains(sp1, "global-v1") {
 		t.Fatal("expected initial prompt to contain global skill description")
@@ -557,7 +562,9 @@ description: builtin-v1
 		t.Fatal(err)
 	}
 
-	cb := NewContextBuilder(tmpDir)
+	// ADR-072 D5: see TestGlobalSkillFileContentChange's comment — an explicit
+	// grant is now required for the skill to appear at all.
+	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"builtin-skill"})
 	sp1 := cb.BuildSystemPromptWithCache()
 	if !strings.Contains(sp1, "builtin-v1") {
 		t.Fatal("expected initial prompt to contain builtin skill description")
@@ -604,7 +611,9 @@ description: delete-me-v1
 	})
 	defer os.RemoveAll(tmpDir)
 
-	cb := NewContextBuilder(tmpDir)
+	// ADR-072 D5: see TestGlobalSkillFileContentChange's comment — an explicit
+	// grant is now required for the skill to appear at all.
+	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"delete-me"})
 	sp1 := cb.BuildSystemPromptWithCache()
 	if !strings.Contains(sp1, "delete-me-v1") {
 		t.Fatal("expected initial prompt to contain skill description")

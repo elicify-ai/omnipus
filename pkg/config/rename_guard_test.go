@@ -195,7 +195,7 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/skills/registry.go:208":       true,
 	"pkg/skills/config_bridge.go:53":   true,
 	"pkg/skills/config_bridge.go:54":   true,
-	"pkg/agent/loop.go:1965":           true,
+	"pkg/agent/loop.go:1978":           true,
 
 	"pkg/skills/github_registry_test.go:24":  true,
 	"pkg/skills/github_registry_test.go:35":  true,
