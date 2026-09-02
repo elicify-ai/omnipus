@@ -287,11 +287,26 @@ func resolveRoleNameTarget(
 	defer cancel()
 
 	var lastErr error
+	// sawCleanNoMatch records that at least one poll completed and found
+	// nothing — the state the "why did it find nothing" diagnosis explains.
+	// It is kept SEPARATELY from lastErr because the diagnosis is built once,
+	// after the loop, and must survive a final poll that was cut short by our
+	// own deadline rather than by anything about the page.
+	sawCleanNoMatch := false
+	ignoredFromPrimary := 0
 	for {
 		cands, ignoredCount, childFrameCount, qerr := queryAXCandidates(deadlineCtx, loc)
 		switch {
 		case qerr != nil:
-			lastErr = qerr
+			// A query that failed because OUR OWN deadline expired mid-flight
+			// says nothing about the page, so it must not overwrite what an
+			// earlier, complete poll already established. Without this guard
+			// the last ~20 ms of every resolution is a window in which a
+			// clean "found, but hidden" answer is replaced by a transport
+			// error — see the note on noMatchErr.
+			if deadlineCtx.Err() == nil {
+				lastErr = qerr
+			}
 		case len(cands) > 0:
 			winner, serr := selectAXCandidate(toolName, loc, cands)
 			if serr != nil {
@@ -314,14 +329,22 @@ func resolveRoleNameTarget(
 				"%s: %s matched in a child frame; frame targeting is out of scope (ADR-072 D2.6) — use a CSS locator inside that frame",
 				toolName, displayRoleName(loc))
 		default:
-			// Nothing survived. Before reporting a plain "not found", find
-			// out WHY — see countIgnoredCandidates for what Chrome will and
-			// will not tell us here.
-			lastErr = noMatchErr(deadlineCtx, toolName, loc, ignoredCount)
+			// Nothing survived. Record that, but do NOT ask WHY yet: the
+			// "why" costs two extra round trips and only the last poll's
+			// answer is ever used, so it is built once, below, after the
+			// deadline — and on a budget of its own.
+			sawCleanNoMatch = true
+			if ignoredCount > ignoredFromPrimary {
+				ignoredFromPrimary = ignoredCount
+			}
+			lastErr = nil
 		}
 
 		select {
 		case <-deadlineCtx.Done():
+			if sawCleanNoMatch && lastErr == nil {
+				return "", func() {}, noMatchErr(tabCtx, toolName, loc, ignoredFromPrimary)
+			}
 			if lastErr == nil {
 				lastErr = fmt.Errorf("%s: no element matching %s", toolName, displayRoleName(loc))
 			}
@@ -331,16 +354,39 @@ func resolveRoleNameTarget(
 	}
 }
 
+// axDiagnosisBudget bounds the two extra round trips noMatchErr spends to tell
+// "absent" from "hidden". It is deliberately NOT the caller's resolve timeout:
+// by the time this runs that timeout is exhausted by construction, and probing
+// on an expired context returns nothing — which silently degrades the answer
+// to the plain "not found" the whole diagnosis exists to avoid.
+//
+// Measured on real Chrome, each probe is a single ~15 ms queryAXTree round
+// trip, so a second is roughly 30x headroom for a loaded machine. It is spent
+// only on the failure path, and only once per resolution.
+const axDiagnosisBudget = time.Second
+
 // noMatchErr builds the "nothing matched" error, distinguishing the two cases
 // an agent has to act on differently: the element is genuinely absent, versus
 // the element is there but hidden from assistive technology.
 //
 // The second case has to be a SEPARATE sentence or the agent retries the same
 // locator forever. It cannot tell the two apart from "not found".
+//
+// ctx MUST be a LIVE context (the tab's), never the expired resolve deadline.
+// This was the defect that survived e213064d1: the probes ran inside the poll
+// loop on the resolve deadline, so whenever that deadline happened to expire
+// during the ~30 ms the two probes take — about one resolution in six, and
+// more often on a slower machine — both probes returned nothing, the count
+// came back 0, and the error silently fell back to the "no element matching"
+// wording. The fix passed on macOS and failed in Linux CI for that reason
+// alone: it was never a platform difference, it was a race whose window is a
+// larger share of the poll cycle the slower the machine is.
 func noMatchErr(ctx context.Context, toolName string, loc Locator, ignoredFromPrimary int) error {
 	ignored := ignoredFromPrimary
 	if ignored == 0 {
-		ignored = countIgnoredCandidates(ctx, loc)
+		probeCtx, cancel := context.WithTimeout(ctx, axDiagnosisBudget)
+		defer cancel()
+		ignored = countIgnoredCandidates(probeCtx, loc)
 	}
 	// The iframe sentence rides on BOTH branches, not just the plain
 	// not-found one. A page can have a hidden candidate AND the element the
@@ -424,6 +470,15 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 		// found", the most misleading failure this seam could produce.
 		docID, release, derr := documentObjectID(c)
 		if derr != nil {
+			// Only a document that genuinely is not there is ErrEmptyAXTree.
+			// A handle we could not fetch because the caller's deadline
+			// expired mid-flight is a TIMEOUT, and reporting it as "the page
+			// has no committed document" is an accurate-sounding claim about
+			// a page that is fine — the most misleading shape of error this
+			// seam can emit.
+			if cerr := c.Err(); cerr != nil {
+				return cerr
+			}
 			return ErrEmptyAXTree
 		}
 		defer release()

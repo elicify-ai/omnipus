@@ -166,6 +166,45 @@ func TestResolveTarget_AllIgnoredNamesTheCount(t *testing.T) {
 	}
 }
 
+// TestResolveTarget_HiddenDiagnosisSurvivesAnyDeadlinePhase — the "found but
+// hidden" diagnosis must not depend on WHERE IN THE POLL CYCLE the caller's
+// timeout happens to land.
+//
+// TestResolveTarget_AllIgnoredNamesTheCount above asserts the same property at
+// ONE fixed timeout, and that is why it could not see this bug: the diagnosis
+// costs two extra Chrome round trips, those round trips used to run inside the
+// poll loop on the resolve deadline itself, and a deadline expiring during
+// them returned a count of 0 — collapsing "found, but hidden" back into "not
+// found". At 1500 ms that lands in the bad window roughly one run in six, so
+// the single-timeout test passed on a fast machine and failed in Linux CI, and
+// looked for all the world like a platform difference. It was not.
+//
+// Sweeping the timeout across more than one full textResolvePollInterval
+// (150 ms) walks the deadline through every phase of the cycle, so the bad
+// window is entered by construction rather than by luck. MEASURED before the
+// fix: 2 of these 13 timeouts produced the plain "no element matching" wording,
+// byte-identical to the CI failure.
+func TestResolveTarget_HiddenDiagnosisSurvivesAnyDeadlinePhase(t *testing.T) {
+	skipIfNoBrowser(t)
+	tabCtx, _ := axFixtureTab(t)
+
+	for d := 180 * time.Millisecond; d <= 420*time.Millisecond; d += 20 * time.Millisecond {
+		_, cleanup, err := resolveTarget(tabCtx, "browser_click",
+			Locator{Role: "button", Name: "Ghost"}, d)
+		cleanup()
+		if err == nil {
+			t.Fatalf("timeout=%s: an aria-hidden element must not resolve", d)
+		}
+		if !strings.Contains(err.Error(), "hidden from assistive technology") {
+			t.Errorf("timeout=%s: the hidden-candidate diagnosis was lost — an agent told merely "+
+				"\"not found\" retries the same locator forever; got %q", d, err)
+		}
+		if !strings.Contains(err.Error(), "1 element") {
+			t.Errorf("timeout=%s: the count of hidden candidates was lost; got %q", d, err)
+		}
+	}
+}
+
 // TestResolveTarget_ChildFrameMatchErrors — the AX tree crosses frames, the
 // marker stamp and the downstream chromedp query do not. A match in a child
 // frame resolves an attribute the query will never find, so it is refused by
