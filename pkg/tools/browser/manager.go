@@ -445,6 +445,27 @@ type BrowserManager struct {
 	// Chrome. nil-checked at the call site and defaults to launchManagedPipe.
 	pipeLauncherFn func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
 	sessions       map[string]*sessionEntry
+	// tabFocus records, for a chat session that has taken over the operator's
+	// workspace-owned tabs, which tab set its NEXT call addresses. Keyed by
+	// the session's own TabOwner; the value is the TabOwner it is currently
+	// driving. Guarded by m.mu. Lazily created; a nil map is a valid empty
+	// state, and an absent entry means "its own set", which is every turn
+	// that has not taken anything over.
+	//
+	// This is NOT ownership and must not be read as any (ADR-072 FR-070,
+	// §0.7's C-403 note). The operator's tabs stay owned by the workspace:
+	// every session on the workspace can still see them, every session can
+	// still drive them, and nothing here transfers on a take-over. What it
+	// records is where ONE session's cursor is pointing — the thing
+	// browser_switch_tab's own description has always promised ("subsequent
+	// browser_* tool calls follow the newly-active tab") and that had no
+	// referent once a tab set stopped being the only one a turn could reach.
+	//
+	// It self-heals rather than needing a cleanup pass: focusedTabSet drops
+	// an entry whose target set no longer exists, so a reaped operator set
+	// puts the session back on its own tabs instead of silently resurrecting
+	// a workspace-owned one.
+	tabFocus map[string]TabOwner
 	// inFlight counts browser tool calls currently executing against this
 	// manager. Guarded by m.mu — see InFlight()'s doc comment for why it is
 	// deliberately not an atomic.
@@ -709,6 +730,60 @@ func (m *BrowserManager) OperatorSessionID() string {
 
 // BrowsingKey reports which browser this manager IS.
 func (m *BrowserManager) BrowsingKey() BrowsingKey { return m.key }
+
+// focusedTabSet reports which tab set a turn whose OWN set is `home` currently
+// addresses — its own, or the operator's workspace-owned set it has taken over
+// (ADR-072 D1.9b ruling 1, FR-070).
+//
+// Every browser tool resolves through this, on the ONE path resolveTurn takes,
+// which is why "take over the operator's browsing" is a property of the turn
+// rather than of eleven separate tools each having to remember it.
+//
+// The liveness check is load-bearing, not defensive. Without it a session that
+// took over an operator tab set which was later reaped keeps pointing at a
+// dead key, and the next call LAZILY RECREATES a workspace-owned set with a
+// blank tab in it — an agent silently browsing in the operator's name, in a
+// window the operator is not looking at.
+func (m *BrowserManager) focusedTabSet(home TabOwner) TabOwner {
+	if home.IsZero() {
+		return home
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	focused, ok := m.tabFocus[home.String()]
+	if !ok || focused.IsZero() || focused == home {
+		return home
+	}
+	if _, live := m.sessions[sessionKey(m.key, focused)]; !live {
+		delete(m.tabFocus, home.String())
+		return home
+	}
+	return focused
+}
+
+// focusTabSet points `home`'s next call at `target`. Called by
+// browser_switch_tab AFTER a successful switch — acquisition is by ACTING on
+// the tab, so there is nothing to record until the action has happened
+// (FR-070).
+//
+// Pointing a session back at its own set DELETES the entry rather than storing
+// it, so the map holds only the sessions that have actually taken something
+// over.
+func (m *BrowserManager) focusTabSet(home, target TabOwner) {
+	if home.IsZero() || target.IsZero() {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if target == home {
+		delete(m.tabFocus, home.String())
+		return
+	}
+	if m.tabFocus == nil {
+		m.tabFocus = make(map[string]TabOwner)
+	}
+	m.tabFocus[home.String()] = target
+}
 
 // writeLeases returns this browser's write-lease table (§14). Not guarded by
 // m.mu — the table owns its own mutex, and the lock order is

@@ -99,7 +99,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if rawURL == "" {
 		return tools.ErrorResult("browser_navigate: 'url' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -291,7 +291,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if loc.empty() {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -569,7 +569,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if loc.empty() {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -707,7 +707,7 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 }
 
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, _, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -872,7 +872,7 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
-	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, _, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -1019,7 +1019,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		waitTimeout = time.Duration(ms) * time.Millisecond
 	}
 
-	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, _, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -1153,7 +1153,7 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if js == "" {
 		return tools.ErrorResult("browser_evaluate: 'js' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}

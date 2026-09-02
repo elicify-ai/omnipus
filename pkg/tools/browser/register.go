@@ -17,42 +17,61 @@ type ManagerResolver interface {
 	// Returns ErrNoBrowsingContext, ErrNoTabOwner, or a launch error. It NEVER
 	// returns "pool full" — there is no pool cap at all (D1.5a, §0.6).
 	//
-	// It also returns the TabOwner this turn addresses:
+	// It also returns the turn's OWN TabOwner — its "home" tab set:
 	// TabOwnerSession(tools.ToolTranscriptSessionID(ctx)) for every ordinary
 	// tool call. When the turn carries no transcript session id this returns
 	// ErrNoTabOwner — it does NOT fall back to the workspace-owned set, which
 	// would let a transcript-less turn drive the operator's tabs.
 	//
-	// A caller that must reach the operator's shared tab set supplies a
-	// resolver that answers TabOwnerWorkspace(); acquisition is IMPLICIT and
-	// has no tool-facing surface (FR-070).
+	// This is the turn's HOME set, not necessarily the set the call acts on.
+	// An agent reaches the operator's workspace-owned tabs by ACTING on one it
+	// was shown by browser_list_tabs (FR-070: implicit acquisition, no tool,
+	// no policy entry, no wire field) — resolveTurn resolves that, not this
+	// interface, because it is a property of the call rather than of the turn.
 	ManagerFor(ctx context.Context) (*BrowserManager, BrowsingKey, TabOwner, error)
 }
 
 // resolveTurn is the one line every browser tool's Execute starts with. It
-// returns the manager, the manager-level session key the tools address (the
-// (BrowsingKey, TabOwner) pair rendered, FR-002b/FR-080), and a ready-made
-// error result when the turn has no browser or no tabs of its own.
+// returns the manager, the turn's OWN tab set (`home`), the tab set this call
+// actually addresses (`owner`) and that pair rendered as the manager-level
+// session key (FR-002b/FR-080), plus a ready-made error result when the turn
+// has no browser or no tabs of its own.
+//
+// **`home` and `owner` are two different questions and both have to be
+// answered here.** `home` is a property of the TURN — the chat session's own
+// tab set, which is all the ManagerResolver knows about. `owner` is a property
+// of the CALL: a session that has taken over the operator's workspace-owned
+// tabs (by acting on one, FR-070) addresses THOSE until it switches back.
+// Resolving `owner` on this one path is what makes the take-over hold for
+// every tool rather than for whichever tool remembered to ask.
+//
+// The gap this closes was total: before it, `owner` was always
+// TabOwnerSession(...), so (a) no production path could reach the operator's
+// tabs at all, while browser_list_tabs listed them as drivable, and (b) the
+// human-control lock — which the live panel takes on
+// sessionKey(key, TabOwnerWorkspace()) — was asked about a string that can
+// never equal it, so it answered "nobody is driving" every single time.
 //
 // The error is RETURNED, never swallowed into a shared browser or the
 // operator's tab set (FR-008, FR-080) — that swallowing is the whole defect
 // ADR-072 exists to fix.
 func resolveTurn(
 	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
-) (mgr *BrowserManager, key BrowsingKey, owner TabOwner, sid string, failure *tools.ToolResult) {
+) (mgr *BrowserManager, key BrowsingKey, home, owner TabOwner, sid string, failure *tools.ToolResult) {
 	if res == nil {
-		return nil, BrowsingKey{}, TabOwner{}, "",
+		return nil, BrowsingKey{}, TabOwner{}, TabOwner{}, "",
 			tools.ErrorResult(toolName + ": browser tools are not wired to a browser resolver")
 	}
-	mgr, key, owner, err := res.ManagerFor(ctx)
+	mgr, key, home, err := res.ManagerFor(ctx)
 	if err != nil {
-		return nil, BrowsingKey{}, TabOwner{}, "",
+		return nil, BrowsingKey{}, TabOwner{}, TabOwner{}, "",
 			tools.ErrorResult(toolName + ": " + err.Error())
 	}
 	if mgr == nil {
-		return nil, BrowsingKey{}, TabOwner{}, "",
+		return nil, BrowsingKey{}, TabOwner{}, TabOwner{}, "",
 			tools.ErrorResult(toolName + ": " + ErrNoBrowsingContext.Error())
 	}
+	owner = mgr.focusedTabSet(home)
 	// FR-027's instance-creation event. Emitted here, on the ONE path every
 	// browser tool starts with, so that a browser first touched by a read-only
 	// call is still recorded as having come into existence — the alternative
@@ -66,7 +85,7 @@ func resolveTurn(
 	if ba != nil {
 		ba.noteBrowserInstance(ctx, mgr, key)
 	}
-	return mgr, key, owner, sessionKey(key, owner), nil
+	return mgr, key, home, owner, sessionKey(key, owner), nil
 }
 
 // evaluateEnabled does not control registration — browser_evaluate is ALWAYS

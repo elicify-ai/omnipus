@@ -271,7 +271,7 @@ func renderSnapshotLine(depth int, role, name, value string, occurrence map[stri
 func (t *SnapshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	_ = args // takes no arguments — see Parameters.
 
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}

@@ -247,7 +247,7 @@ func (t *SelectOptionTool) Execute(ctx context.Context, args map[string]any) *to
 		return tools.ErrorResult(fmt.Sprintf("%s: `%s` was supplied but empty; name at least one option", t.Name(), by))
 	}
 
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -474,7 +474,7 @@ func (t *PressKeyTool) Execute(ctx context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(t.Name() + ": " + kerr.Error())
 	}
 
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -600,7 +600,7 @@ func (t *HoverTool) Parameters() map[string]any {
 }
 
 func (t *HoverTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -747,7 +747,7 @@ func (t *UploadFileTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(t.Name() + ": 'path' parameter is required")
 	}
 
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}

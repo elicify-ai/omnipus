@@ -107,7 +107,7 @@ func (t *HandleDialogTool) Execute(ctx context.Context, args map[string]any) *to
 	accept, _ := args["accept"].(bool)
 	promptText, _ := args["prompt_text"].(string)
 
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
