@@ -752,6 +752,31 @@ func (m *BrowserManager) focusedTabSet(home TabOwner) TabOwner {
 	defer m.mu.Unlock()
 	focused, ok := m.tabFocus[home.String()]
 	if !ok || focused.IsZero() || focused == home {
+		// No explicit take-over recorded. If this session has NO tabs of its
+		// own and the operator's set HAS tabs, address the operator's set.
+		//
+		// This is what "take over" means to the person asking. UAT found the
+		// headline scenario still failing without it: the operator browses to
+		// a login form, asks the agent to type into it, and the agent types
+		// into a blank tab of its own while the panel — the operator's only
+		// window onto that browser — shows the field still empty. The agent
+		// then reports success. Reproduced 4/4. That is the silent-wrong-action
+		// failure this whole design exists to remove, surviving inside the fix
+		// for it.
+		//
+		// The mechanism was already right: resolveTabIndex could reach the
+		// operator's set, and browser_switch_tab could take it over. Only the
+		// DEFAULT was wrong, and a default that requires the model to know it
+		// must switch first is not a default a user can rely on.
+		//
+		// Deliberately narrow. It applies only when this session has nothing
+		// of its own, so an agent that has been browsing is never diverted
+		// mid-task, and it grants no new reach: the human-control lock still
+		// runs on the resolved owner, so an agent still stands down while a
+		// human is actually driving.
+		if home != TabOwnerWorkspace() && !m.hasTabsLocked(home) && m.hasTabsLocked(TabOwnerWorkspace()) {
+			return TabOwnerWorkspace()
+		}
 		return home
 	}
 	if _, live := m.sessions[sessionKey(m.key, focused)]; !live {
@@ -759,6 +784,19 @@ func (m *BrowserManager) focusedTabSet(home TabOwner) TabOwner {
 		return home
 	}
 	return focused
+}
+
+// hasTabsLocked reports whether owner's set exists AND holds at least one tab.
+// Caller must hold m.mu.
+//
+// "Exists but is empty" and "does not exist" are deliberately the same answer
+// here: neither is somewhere a call can usefully land.
+func (m *BrowserManager) hasTabsLocked(owner TabOwner) bool {
+	se, ok := m.sessions[sessionKey(m.key, owner)]
+	if !ok {
+		return false
+	}
+	return len(snapshotTabsLocked(se)) > 0
 }
 
 // focusTabSet points `home`'s next call at `target`. Called by
