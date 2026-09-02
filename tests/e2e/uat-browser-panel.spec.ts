@@ -660,8 +660,13 @@ test.describe('UAT Group C — the live browser panel', () => {
     }
     const video = browserLiveVideo(page);
 
+    // Anchored to the homepage exactly. A loose /the-internet\.herokuapp\.com/
+    // match let a full-file run measure against whatever page the workspace's
+    // shared operator tab happened to be left on (observed: /exit_intent), and
+    // the click then "missed" for a reason that had nothing to do with the
+    // panel. The operator tab persists across chats and across testers.
     await navigateLiveBrowser(page, `${HEROKU}/`);
-    await expect(addressBar(page)).toHaveValue(new RegExp('the-internet\\.herokuapp\\.com'), { timeout: 45_000 });
+    await expect(addressBar(page)).toHaveValue(/herokuapp\.com\/?$/, { timeout: 45_000 });
     await page.waitForTimeout(2_000);
 
     const media = await video.evaluate((el) => {
@@ -1048,6 +1053,12 @@ test.describe('UAT Group C — the live browser panel', () => {
     }
 
     await note(testInfo, 'failure-panel-text', shown);
+    expect(
+      isMemoryRefusal(shown),
+      'BLOCKED: the panel never got a browser at all — memory admission refused one before the ' +
+        'video path was ever exercised, so this case did not run. That refusal is the feature ' +
+        'working; it is not the WebRTC failure surface under test here.',
+    ).toBe(false);
     expect(
       isSessionEviction(shown),
       'BLOCKED: every attempt was cut short by another tester\'s login evicting this session, so ' +
