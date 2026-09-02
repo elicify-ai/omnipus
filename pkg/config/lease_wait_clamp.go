@@ -66,7 +66,7 @@ func ClampLeaseWait(configuredLeaseWaitSec, configuredPageTimeoutSec int) int {
 		return leaseWait
 	}
 
-	if shouldLogLeaseWaitClampWarn() {
+	if shouldLogLeaseWaitClampWarn(configuredLeaseWaitSec, configuredPageTimeoutSec) {
 		slog.Warn("tools.browser.lease_wait is configured above half of tools.browser.page_timeout and has been lowered — waiting longer than this for the single-driver lease lets a call spend its whole budget queueing and then fail with a page-timeout error that points at the page rather than at contention",
 			"configured_lease_wait_sec", configuredLeaseWaitSec,
 			"page_timeout_sec", pageTimeout,
@@ -76,26 +76,51 @@ func ClampLeaseWait(configuredLeaseWaitSec, configuredPageTimeoutSec int) int {
 	return ceiling
 }
 
-// leaseWaitClampWarned makes the clamp WARN fire once per process.
-//
-// Once, not once-per-call: the clamp is re-applied on every config reload, and
-// a reload can be triggered by any Settings save, so an unthrottled warning
-// would accumulate a line per save for a condition that has not changed. It is
-// re-armed on reload (see ResetLeaseWaitClampWarnForReload) so an operator who
-// EDITS the value and saves does see the warning again for their new value —
-// which is the moment they are actually looking.
-var leaseWaitClampWarned atomic.Bool
-
-func shouldLogLeaseWaitClampWarn() bool {
-	return !leaseWaitClampWarned.Swap(true)
+// leaseWaitClampWarnKey is the pair of CONFIGURED values the warning is about —
+// what the operator wrote, before any defaulting or clamping. Both halves
+// matter: raising page_timeout is a fix for the same lease_wait, and lowering
+// page_timeout can clamp a lease_wait that was fine a moment ago.
+type leaseWaitClampWarnKey struct {
+	leaseWaitSec   int
+	pageTimeoutSec int
 }
 
-// ResetLeaseWaitClampWarnForReload re-arms the clamp warning. Called by the
-// config-reload path so a re-clamp after an operator edits the value warns
-// again — the alternative is an operator changing lease_wait, saving, seeing
-// nothing in the log, and concluding it took effect.
+// leaseWaitClampWarned remembers the configured pair the clamp last warned
+// about, so the WARN fires once per DISTINCT pair rather than once per process.
+//
+// Not once-per-call: the clamp is re-applied on every config reload, and a
+// reload can be triggered by any Settings save, so an unthrottled warning would
+// accumulate a line per save for a condition that has not changed.
+//
+// Not once-per-process either, which is what this used to be and was a real
+// gap: an operator who saw the warning, changed lease_wait to a different
+// still-too-large value and saved got SILENCE — the same "it took effect" read
+// as an operator whose value was fine. A silent clamp is the ADR-037
+// anti-pattern this function exists to avoid, so the throttle keys on the values
+// rather than on the process. There was a ResetLeaseWaitClampWarnForReload for
+// exactly this, documented as "called by the config-reload path", and no
+// production code ever called it; keying on the pair needs no cooperation from
+// the reload path at all and therefore cannot be left uncalled again.
+var leaseWaitClampWarned atomic.Pointer[leaseWaitClampWarnKey]
+
+func shouldLogLeaseWaitClampWarn(configuredLeaseWaitSec, configuredPageTimeoutSec int) bool {
+	key := leaseWaitClampWarnKey{
+		leaseWaitSec:   configuredLeaseWaitSec,
+		pageTimeoutSec: configuredPageTimeoutSec,
+	}
+	prev := leaseWaitClampWarned.Swap(&key)
+	return prev == nil || *prev != key
+}
+
+// ResetLeaseWaitClampWarnForReload forgets the last-warned pair, so the next
+// clamp of ANY value warns again.
+//
+// This is now a TEST seam and nothing else — the throttle above is keyed on the
+// configured values, so a genuine operator edit re-arms itself and no reload
+// hook is needed. It is kept because a test that asserts "this warns" must be
+// able to start from a known state whatever ran before it in the same process.
 func ResetLeaseWaitClampWarnForReload() {
-	leaseWaitClampWarned.Store(false)
+	leaseWaitClampWarned.Store(nil)
 }
 
 // EffectiveLeaseWaitSec is the clamp applied to a live config. It is what both
