@@ -134,12 +134,30 @@ type TrimResult struct {
 // directory, if and only if that key is eligible (FR-072).
 //
 // ELIGIBILITY IS THE FR-042a DISCRIMINATOR, REUSED VERBATIM: no live instance
-// for the key in this pool, AND the per-key launch lock acquirable. There is
-// deliberately no second "is it running?" notion. A separate liveness check
-// would be a second answer to a question the pool already answers, and the two
-// would first disagree in exactly the case that matters — a second gateway
-// against the same $OMNIPUS_HOME, where this pool's instances map knows
-// nothing and only the lock does.
+// for the key in this pool, no launch IN PROGRESS for it, AND the per-key
+// launch lock acquirable. There is deliberately no second "is it running?"
+// notion. A separate liveness check would be a second answer to a question the
+// pool already answers, and the two would first disagree in exactly the case
+// that matters — a second gateway against the same $OMNIPUS_HOME, where this
+// pool's instances map knows nothing and only the lock does.
+//
+// THE LAUNCHING CHECK IS NOT REDUNDANT WITH EITHER OF THE OTHER TWO, and this
+// is the R5 finding-2 defect. A key is registered in p.launching BEFORE
+// p.launch runs, and p.launch does the profile MkdirAll and only then hands
+// off to the coordinator, which takes the launch lock inside takeLaunchLock.
+// For that whole window — a Chrome-for-Testing download makes it seconds, not
+// microseconds — there is no instance in the map and nobody holds the lock, so
+// the old two-part check called the profile eligible and started deleting
+// directories out from under a browser that was starting.
+//
+// Winning the lock first does not save us either, which is why the fix is a
+// refusal rather than a lock-ordering argument. When the trim holds the lock
+// and the launcher arrives, takeLaunchLock finds it held, finds no ownership
+// marker (the trim writes none), concludes "stale lockfile from a crashed
+// process", os.Remove()s it and re-acquires. On Unix that leaves the trim
+// holding a flock on an unlinked inode while Chrome launches into the
+// directory it is mid-walk on. The lock is a guard against another GATEWAY,
+// not against this pool's own launch path; only this pool knows about that.
 //
 // The profile DIRECTORY is never removed here. That has one trigger and it is
 // workspace deletion (FR-043a, DeleteProfile).
@@ -148,8 +166,9 @@ func (p *BrowserPool) TrimProfile(key BrowsingKey) TrimResult {
 
 	p.mu.Lock()
 	_, live := p.instances[key.String()]
+	_, launching := p.launching[key.String()]
 	p.mu.Unlock()
-	if live {
+	if live || launching {
 		res.Skipped = true
 		return res
 	}

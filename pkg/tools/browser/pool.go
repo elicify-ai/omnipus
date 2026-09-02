@@ -126,6 +126,30 @@ var ErrBrowserMemoryRefused = errors.New("browser: refused to start another brow
 // errPoolClosed is returned once Shutdown has run.
 var errPoolClosed = errors.New("browser: the browser pool is shut down")
 
+// ErrBrowserRestarting is what Register returns when this key's browser was
+// torn down in the window between the acquire and the registration — an idle
+// close, an eviction or a workspace deletion landing on exactly the instance
+// the caller was in the middle of attaching to.
+//
+// It exists because the alternative that used to ship here was silent and
+// permanent. Register noticed the instance was no longer live, skipped its
+// bookkeeping, and then returned that instance's coordinator anyway with a
+// nil error. The caller latched the dead coordinator's root context onto
+// itself and marked itself started; because the bookkeeping had been skipped,
+// the instance's mgrs set never contained it, so closeInstance's
+// invalidateConnection sweep could not reach it and NOTHING ever reset it.
+// Every browser call for that workspace then failed with "context canceled"
+// until the gateway was restarted.
+//
+// A refusal is recoverable where that was not: the manager never sets
+// m.started, so its very next tool call runs ensureStarted again, re-registers
+// against the relaunched browser and succeeds. One failed call beats a
+// workspace that cannot browse until someone restarts the process.
+//
+// errors.Is-comparable so a caller can branch on "retry me" without matching
+// prose.
+var ErrBrowserRestarting = errors.New("browser: this workspace's browser was closed while this call was connecting to it — retry")
+
 // memoryRefusedError wraps ErrBrowserMemoryRefused with the workspace whose browser
 // was refused, so a log line or an agent-visible message says WHICH workspace
 // could not start rather than only that something could not.
@@ -234,6 +258,16 @@ type BrowserPool struct {
 	// unmeasurableLogged makes FR-065's "availability cannot be determined"
 	// line fire ONCE per process rather than once per acquire.
 	unmeasurableLogged bool
+
+	// registerRaceHook is a TEST SEAM, nil in production. Register invokes it
+	// after the coordinator registration returns and BEFORE the pool re-checks
+	// that the instance it registered against is still this key's live one.
+	//
+	// It exists because that window is the entirety of the ErrBrowserRestarting
+	// defect and it is a few instructions wide. A test that tried to hit it by
+	// racing goroutines would be proving its own timing, not the guard; with
+	// the seam the close lands inside the window every single run.
+	registerRaceHook func()
 }
 
 // NewBrowserPool constructs the pool. homeDir is $OMNIPUS_HOME (per-key
@@ -494,11 +528,28 @@ func (p *BrowserPool) Register(
 	if regErr != nil {
 		return nil, nil, regErr
 	}
+	if p.registerRaceHook != nil {
+		p.registerRaceHook()
+	}
+	// The instance may have been closed while we were registering against it.
+	// The bookkeeping and the RETURN VALUE must agree about that: recording
+	// nothing and then handing back the dead coordinator anyway is what left a
+	// workspace permanently broken, because a manager the mgrs set never knew
+	// about is a manager closeInstance can never invalidate. See
+	// ErrBrowserRestarting.
 	p.mu.Lock()
-	if live, ok := p.instances[key.String()]; ok && live == inst {
+	live, ok := p.instances[key.String()]
+	stillLive := ok && live == inst
+	if stillLive {
 		inst.mgrs[mgr] = struct{}{}
 	}
 	p.mu.Unlock()
+	if !stillLive {
+		logger.InfoCF("browser", "this workspace's browser was closed while a call was connecting to it — asking the caller to retry", map[string]any{
+			"workspace": key.WorkspaceID(),
+		})
+		return nil, nil, ErrBrowserRestarting
+	}
 	return inst.coord, rootCtx, nil
 }
 

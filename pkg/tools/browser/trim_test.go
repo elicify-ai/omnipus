@@ -153,6 +153,46 @@ func TestTrim_SkipsLiveProfile(t *testing.T) {
 		assert.NoError(t, err, "nothing may be removed from a live profile")
 	})
 
+	t.Run("a launch IN PROGRESS blocks it", func(t *testing.T) {
+		// R5 finding 2. A key is in p.launching from before p.launch runs, and
+		// p.launch does the profile MkdirAll and then blocks in the
+		// coordinator (a Chrome-for-Testing download makes that seconds).
+		// Through that whole window there is no instance in the map and
+		// nobody holds the launch lock — so the two-part eligibility check
+		// called the profile eligible and deleted the cache out from under a
+		// browser that was starting.
+		f := newPoolFixture(t)
+		key := browserTestKey("gamma")
+		dir, err := f.pool.ProfileDirFor(key)
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		seedProfileTree(t, dir)
+
+		// Exactly the state Acquire installs before it calls p.launch: the
+		// single-flight entry, and nothing else. No instance, no lock.
+		done := make(chan struct{})
+		f.pool.mu.Lock()
+		f.pool.launching[key.String()] = done
+		f.pool.mu.Unlock()
+		t.Cleanup(func() { f.pool.finishLaunch(key.String(), done) })
+
+		f.pool.mu.Lock()
+		_, live := f.pool.instances[key.String()]
+		f.pool.mu.Unlock()
+		require.False(t, live, "the fixture must reproduce the real window: launching, but not yet live")
+		probe, acquired, lockErr := acquireLaunchLock(filepath.Join(dir, launchLockFileName))
+		require.NoError(t, lockErr)
+		require.True(t, acquired, "the fixture must reproduce the real window: the launch lock is not held yet")
+		releaseLaunchLock(probe)
+
+		res := f.pool.TrimProfile(key)
+		assert.True(t, res.Skipped,
+			"a launch in progress must make a profile ineligible — the browser about to own it is starting")
+		_, statErr := os.Stat(filepath.Join(dir, "Default", "Cache", "data_0"))
+		assert.NoError(t, statErr,
+			"nothing may be removed from a profile a browser is launching into")
+	})
+
 	t.Run("a launch lock held elsewhere blocks it", func(t *testing.T) {
 		f := newPoolFixture(t)
 		key := browserTestKey("beta")
