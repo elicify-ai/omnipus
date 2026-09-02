@@ -1,9 +1,14 @@
 package browser
 
-// coordinator.go implements ADR-043 / spec "Stream A": the BrowserCoordinator
-// owns the ONE gateway-scoped shared Chrome process + every agent's CDP browser
-// context. Per-agent BrowserManagers connect to it via a remote allocator and
-// re-adopt a coordinator-owned browser context non-owningly.
+// coordinator.go implements ADR-043 / spec "Stream A": a BrowserCoordinator
+// owns ONE Chrome process and the pipe root context every tab in it descends
+// from. There is one coordinator PER WORKSPACE, not one per gateway (ADR-072
+// FR-037: BrowserPool keys them by BrowsingKey and hands each its own
+// --user-data-dir), and it owns no CDP browser contexts at all — those were
+// retired by FR-031; see the HISTORICAL paragraph below before reading any
+// "browser context" in this file as a live object. The BrowserManagers of
+// every agent on that workspace share this one coordinator, connecting as
+// chromedp CHILD contexts of its root, not through a remote allocator.
 //
 // CRIT-001 (live-browser-video-streaming / ADR-044 §6.0.3, ported into this
 // branch by the WebRTC build's W1-A task): CDP now flows over Chromium's
@@ -44,9 +49,11 @@ package browser
 //
 // Locking discipline (ADR-038 / spec round-2 MAJ-007): Register/Release/
 // RemoveAgent/PID take c.mu for bookkeeping only; Register
-// (and the crash-relaunch path) RELEASE c.mu across the blocking Chrome launch +
-// CDP context-create, mirroring manager.go ensureStarted's unlock/relock pattern —
-// never hold c.mu across a CDP/exec call.
+// (and the crash-relaunch path) RELEASE c.mu across the blocking Chrome
+// launch, mirroring manager.go ensureStarted's unlock/relock pattern — never
+// hold c.mu across a CDP/exec call. (The "+ CDP context-create" this line used
+// to name went away with FR-031; the launch alone is what must not be held
+// across, and a Chrome-for-Testing download makes it seconds.)
 
 import (
 	"context"
@@ -78,10 +85,17 @@ import (
 // treated as stale (removable), never silently driven.
 const ownershipMarkerOwner = "omnipus"
 
-// BrowserCoordinator owns the single shared Chrome process and every agent's
-// browser context for one gateway (ADR-043 D1/D4). It lives on *AgentLoop (not
-// per-agent), so it survives ReloadProviderAndConfig — which is the whole basis
-// of CRIT-002 (reload preserves the Chrome process + each agent's context).
+// BrowserCoordinator owns ONE Chrome process — one workspace's (ADR-072
+// FR-037), reached through BrowserPool, which builds and keys these by
+// BrowsingKey. It owns no per-agent browser contexts: FR-031 retired them, and
+// what partitions one workspace's logins from another's is now the profile
+// DIRECTORY on disk that this Chrome was launched with.
+//
+// A coordinator outlives ReloadProviderAndConfig, which is the whole basis of
+// CRIT-002: a Settings save must not log anybody out. Note the mechanism has
+// changed even though the guarantee has not — a login now survives a reload
+// because it is in a --user-data-dir on disk, where it also survives a
+// restart, not because an in-memory CDP context was kept alive.
 type BrowserCoordinator struct {
 	homeDir string // $OMNIPUS_HOME; ownership marker + profile dir root
 	cfg     BrowserConfig
@@ -269,19 +283,21 @@ func (c *BrowserCoordinator) Register(
 	return rootCtx, nil
 }
 
-// Release drops an agent's manager ref on reload. Does NOT kill Chrome and does
-// NOT dispose the agent's browser context (the coordinator owns it; it persists
-// keyed by agentID so the next Register re-adopts it — cookies/localStorage/
-// login survive a Settings save). Open TABS may be lost on reload (the manager
-// drops its remote-allocator connection; targets are connection-scoped and
-// agents reopen them). Returns the remaining registered-manager count.
+// Release drops an agent's manager ref on reload. Does NOT kill Chrome, and
+// has nothing to dispose Chrome-side: there is no per-agent browser context
+// any more (FR-031). Cookies, localStorage and logins survive a Settings save
+// because they live in this workspace's profile directory on disk, not because
+// anything in this process is being preserved for the next Register. Open TABS
+// may still be lost on reload (the manager drops its connection; targets are
+// connection-scoped and agents reopen them). Returns the remaining
+// registered-manager count.
 //
 // D4 invariant 3 (W1/C2/F-INFO-3): the reload path in pkg/agent/loop.go calls
 // this — NOT manager.Shutdown() — so the coordinator's managers map is cleaned
 // on every Settings save. Release internally calls the registered manager's
 // dropConnection (connection-only teardown = Shutdown in coordinator mode,
-// which never kills Chrome or disposes the context), making Release a full
-// substitute for the old prior.Shutdown() reload call.
+// which never kills Chrome), making Release a full substitute for the old
+// prior.Shutdown() reload call.
 func (c *BrowserCoordinator) Release(agentID string) int {
 	c.mu.Lock()
 	mgr := c.managers[agentID]
@@ -405,9 +421,10 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig) {
 	c.mu.Unlock()
 }
 
-// RootContext returns the coordinator's SHARED, session-independent root
-// chromedp context (the same rootCtx Register returns) — the context every
-// agent's browser context is a CHILD of, over the one multiplexed CDP pipe.
+// RootContext returns this coordinator's session-independent root chromedp
+// context (the same rootCtx Register returns) — the context every TAB in this
+// workspace's Chrome is a CHILD of, over the one multiplexed CDP pipe. It is
+// shared by every agent on the workspace, and by nothing outside it.
 // Used by callers that only hold a *BrowserManager (not the coordinator
 // itself).
 //
@@ -635,11 +652,11 @@ func (c *BrowserCoordinator) Shutdown() {
 	)
 }
 
-// WarmUp ensures the shared Chrome process is launched and ready (CDP pipe
-// live, and — when tools.browser.* configured an ExtensionDir/ExtensionID —
-// the capture extension loaded, via launchChrome's existing best-effort
-// auto-load) WITHOUT registering any agent or creating a per-agent browser
-// context. This is the gateway's boot-time warm-up hook: instead of leaving
+// WarmUp ensures this workspace's Chrome process is launched and ready (CDP
+// pipe live, and — when tools.browser.* configured an ExtensionDir/ExtensionID
+// — the capture extension loaded, via launchChrome's existing best-effort
+// auto-load) WITHOUT registering any agent. This is the warm-up hook: instead
+// of leaving
 // Chrome launch, first tab, and extension load entirely lazy until an
 // agent's first browser tool call (the unbounded cold start recorded at
 // 30-60s historically), the gateway calls this once at boot so the first
@@ -650,9 +667,14 @@ func (c *BrowserCoordinator) Shutdown() {
 // Register serializes on the same c.launching/c.launchDone latch — whichever
 // wins launches, the other observes c.launched), idempotent (a no-op once
 // Chrome is already live), and panic-safe (ensureLaunched's own deferred
-// cleanup). A per-agent Chrome pool (one Chrome per agent) is explicitly out
-// of scope here — tracked separately as issue #570; this warms only the ONE
-// shared, gateway-scoped Chrome this file documents (D1/D4).
+// cleanup).
+//
+// SCOPE, and this line has been WRONG since FR-037 landed: it used to say a
+// Chrome pool was out of scope and deferred to issue #570. There IS a pool now
+// — BrowserPool, one Chrome per WORKSPACE — and it is what constructs this
+// coordinator. What WarmUp warms is therefore one workspace's browser, the one
+// this coordinator owns, and never all of them; the pool decides which keys are
+// worth warming and its memory gate decides whether they may start at all.
 func (c *BrowserCoordinator) WarmUp(ctx context.Context) error {
 	return c.ensureLaunched(ctx)
 }
@@ -892,9 +914,19 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 // the shared Chrome's LostConnection channel; when the transport drops (process
 // exited / killed), it marks Chrome dead, resets every connector manager so its
 // next ensureStarted re-asks the coordinator, and proactively relaunches so
-// coordinator.PID() is a fresh live pid within the recovery bound T (CRIT-001:
-// recovery is into FRESH empty contexts — prior per-agent cookies/login are lost
-// by definition since CDP contexts are in-memory).
+// coordinator.PID() is a fresh live pid within the recovery bound T.
+//
+// WHAT SURVIVES A CRASH RELAUNCH — corrected, because the previous sentence
+// here said the opposite and said it confidently. It read "recovery is into
+// FRESH empty contexts — prior per-agent cookies/login are lost by definition
+// since CDP contexts are in-memory", which was true only while a session lived
+// in an in-memory CDP browser context. FR-031 retired those and FR-037 gave
+// each workspace a --user-data-dir on disk, so the relaunched Chrome reopens
+// the SAME profile and its cookies and logins are still there. Open TABS are
+// still lost (targets die with the process and agents reopen them), and that
+// is the whole of what is lost. An operator reading the old sentence would
+// have expected every workspace to be logged out by a browser crash and would
+// have been wrong about the one thing this design exists to protect.
 //
 // HIGH-1/N2: this blocks until chromedp closes LostConnection on transport
 // drop. There is no fallback if it doesn't — chromedp's allocator goroutine
