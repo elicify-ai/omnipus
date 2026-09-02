@@ -640,7 +640,7 @@ func memorySignals() []memorySignal {
 			out = append(out, memorySignal{available: avail, total: total})
 		}
 	}
-	if avail, limit, ok := readCgroupMemoryBudgetBytes(); ok && limit > 0 {
+	if avail, limit, ok := cgroupBudgetProvider(); ok && limit > 0 {
 		out = append(out, memorySignal{available: avail, total: limit})
 	}
 	return out
@@ -726,6 +726,7 @@ const memoryPressureRatioThreshold = 0.85
 // a container at 90% of its cgroup limit is under pressure even if the host
 // it sits on is idle.
 func MemoryPressureHigh() (high bool, ok bool) {
+	WarnOnMemoryMechanismFirstUse()
 	return memoryProvider()
 }
 
@@ -739,7 +740,24 @@ func MemoryPressureHigh() (high bool, ok bool) {
 // the browser pool's per-launch headroom check (does this host have room for
 // one more Chrome), which is a bytes question and not a ratio question.
 func AvailableMemoryBytes() (uint64, bool) {
+	WarnOnMemoryMechanismFirstUse()
 	return availableMemoryProvider()
+}
+
+// cgroupBudgetProvider is the cgroup-signal seam. Package-level and
+// cross-platform (unlike cgroupRoot, which only exists on Linux) so a test can
+// control or forbid the cgroup reading on any platform — notably to prove the
+// containerisation predicate never consults it.
+var cgroupBudgetProvider = readCgroupMemoryBudgetBytes
+
+// SetCgroupBudgetProviderForTest replaces the cgroup memory-limit reader for
+// the duration of a test and returns a restore function. Exported because the
+// FR-076 independence property — containerisation is detected WITHOUT reading
+// the limit — is only assertable by making the reader fail loudly if touched.
+func SetCgroupBudgetProviderForTest(fn func() (uint64, uint64, bool)) func() {
+	prev := cgroupBudgetProvider
+	cgroupBudgetProvider = fn
+	return func() { cgroupBudgetProvider = prev }
 }
 
 // memoryProvider and availableMemoryProvider are the injection seam. They
