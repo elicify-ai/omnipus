@@ -11,6 +11,7 @@
 package browser
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -263,5 +264,107 @@ func TestInteractTools_LocatorMatrixMatchesTheirSchemas(t *testing.T) {
 			t.Errorf("%s does not advertise `role`, but its matrix row accepts a role+name "+
 				"locator — the capability exists and no model will find it", tc.name)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Order 24a — the human-control gate, which IS the write-lease membership
+// ---------------------------------------------------------------------------
+
+// TestActionTools_DeferWhenHumanControls_Table drives all four new verbs
+// through Execute while a human viewer holds control.
+//
+// WHY THIS IS NOT JUST ANOTHER DEFERRAL TEST. Under D1 §14 rule 3 a tool takes
+// the write lease IFF it is controlledResult-gated. So this table is the only
+// local evidence that these four are IN the lease at all — drop the
+// controlledResult call from one of them and the lease silently loses it, with
+// the failure surfacing in the OTHER document's test and no explanation here.
+//
+// The oracle is the NON-ERROR deferral shape, not merely "it did not act": an
+// agent that receives IsError on a deferral treats a temporary condition as a
+// permanent one and gives up.
+//
+// It uses the unreachable-CDP config, so no Chrome is required: any tool that
+// failed to defer would fall through to a connection error instead, which is a
+// visibly different result rather than a hang.
+func TestActionTools_DeferWhenHumanControls_Table(t *testing.T) {
+	registry, mgr := newPermissiveRegistry(t, controlTestCfg(t))
+	ctx := context.Background()
+
+	if !mgr.Live().TakeControl(testSessionID, "human-viewer") {
+		t.Fatal("test setup: taking control must succeed on an uncontrolled session")
+	}
+
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"browser_select_option", map[string]any{"selector": "#country", "label": "Germany"}},
+		{"browser_press_key", map[string]any{"key": "Enter"}},
+		{"browser_hover", map[string]any{"selector": "#menu"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			result := mustGetTool(t, registry, tc.tool).Execute(ctx, tc.args)
+			if result == nil {
+				t.Fatalf("%s returned no result", tc.tool)
+			}
+			if result.IsError {
+				t.Fatalf("%s reported an ERROR while deferring. A deferral is a temporary, "+
+					"non-error condition — an agent that reads it as a failure gives up instead of "+
+					"retrying after the human releases control: %s", tc.tool, result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "human is currently controlling") {
+				t.Errorf("%s did not defer. Under D1 §14 rule 3 that also removes it from the "+
+					"write lease, and THAT failure surfaces only in the other document's test: %s",
+					tc.tool, result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, tc.tool) {
+				t.Errorf("%s's deferral message does not name the deferred tool: %s",
+					tc.tool, result.ForLLM)
+			}
+		})
+	}
+
+	// browser_upload_file is NOT in the registry (FR-029), so it is exercised
+	// directly. Its gate must be wired NOW rather than at registration time,
+	// or the day #659 closes it ships ungated and nobody re-checks.
+	t.Run("browser_upload_file", func(t *testing.T) {
+		tool := &UploadFileTool{res: newFixedResolver(mgr), agentHome: t.TempDir(), restrict: true}
+		result := tool.Execute(ctx, map[string]any{"selector": "input", "path": "x.txt"})
+		if result == nil || result.IsError {
+			t.Fatalf("browser_upload_file did not produce a non-error deferral: %+v", result)
+		}
+		if !strings.Contains(result.ForLLM, "human is currently controlling") {
+			t.Errorf("browser_upload_file is not control-gated: %s", result.ForLLM)
+		}
+	})
+}
+
+// TestSnapshot_NotDeferredByViewer is FR-038's behavioural half, and it is the
+// counterpart the table above needs to not be vacuous.
+//
+// With a human holding the live view, browser_snapshot must still try to reach
+// the browser. On the unreachable-CDP config that means a session/connection
+// error — an error, but a DIFFERENT error, never the deferral text. A test
+// asserting only "the four defer" would pass on a build where every browser
+// tool defers, which would make the one tool that tells an agent what is on
+// the page unavailable exactly when the page is contested.
+func TestSnapshot_NotDeferredByViewer(t *testing.T) {
+	_, mgr := newPermissiveRegistry(t, controlTestCfg(t))
+	if !mgr.Live().TakeControl(testSessionID, "human-viewer") {
+		t.Fatal("test setup: taking control must succeed")
+	}
+
+	tool := &SnapshotTool{res: newFixedResolver(mgr)}
+	result := tool.Execute(context.Background(), map[string]any{})
+	if result == nil {
+		t.Fatal("browser_snapshot returned no result")
+	}
+	if strings.Contains(result.ForLLM, "human is currently controlling") {
+		t.Errorf("browser_snapshot DEFERRED to a human viewer. FR-038 makes it read-only "+
+			"precisely so it answers while someone else is driving — deferring it means the one "+
+			"tool that reports what is on the page goes dark exactly when the page is contested: %s",
+			result.ForLLM)
 	}
 }

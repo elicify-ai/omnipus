@@ -46,6 +46,17 @@ func minimalArgsFor(name string) map[string]any {
 		return map[string]any{"js": "1+1"}
 	case "browser_switch_tab", "browser_close_tab":
 		return map[string]any{"index": float64(0)}
+	// ADR-072 D2. These must get PAST their own parameter validation, or the
+	// tool returns an argument error before reaching either gate and the
+	// biconditional below reads "does not defer" for a tool that in fact does.
+	case "browser_hover":
+		return map[string]any{"selector": "#anything"}
+	case "browser_select_option":
+		return map[string]any{"selector": "#anything", "label": "Anything"}
+	case "browser_press_key":
+		// Deliberately NO locator: that is the one call shape that skips the
+		// actionability gate, and it must still take the lease (spec A-10).
+		return map[string]any{"key": "Enter"}
 	default:
 		return map[string]any{}
 	}
@@ -91,7 +102,12 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 	for _, tool := range lockRegistry.GetAll() {
 		names[tool.Name()] = true
 	}
-	require.Len(t, names, 11, "the browser tool surface is eleven tools")
+	// 11 shipped + ADR-072 D2's four registered tools (select_option,
+	// press_key, hover, snapshot). browser_upload_file is implemented and
+	// seeded but NOT registered while FR-029 holds it, and
+	// browser_handle_dialog belongs to the dialog stream — both raise this
+	// number when they land.
+	require.Len(t, names, 15, "the browser tool surface is fifteen registered tools")
 
 	var leasedCount, exemptCount int
 	for name := range names {
@@ -125,14 +141,17 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 		})
 	}
 
-	// The counts are the spec's normative ones for the SHIPPED surface: seven
-	// leased (navigate, click, type, evaluate, switch_tab, close_tab,
-	// open_tab), four exempt (screenshot, get_text, wait, list_tabs).
+	// Ten leased: the seven shipped (navigate, click, type, evaluate,
+	// switch_tab, close_tab, open_tab) plus D2's three interaction verbs
+	// (select_option, press_key, hover). Five exempt: the four shipped
+	// read-only tools (screenshot, get_text, wait, list_tabs) plus
+	// browser_snapshot, which is read-only by requirement (D2 FR-038) and
+	// must answer while a human drives the tab.
 	//
 	// They are asserted so that a build in which BOTH gates stopped working
 	// cannot pass the biconditional above by agreeing on "never defers".
-	require.Equal(t, 7, leasedCount, "seven shipped tools are control-gated and therefore leased")
-	require.Equal(t, 4, exemptCount, "four shipped tools are read-only and therefore exempt from both gates")
+	require.Equal(t, 10, leasedCount, "ten registered tools are control-gated and therefore leased")
+	require.Equal(t, 5, exemptCount, "five registered tools are read-only and therefore exempt from both gates")
 }
 
 // TestRegister_NoTakeControlTool is FR-070's structural half: acquisition of the
@@ -156,5 +175,5 @@ func TestRegister_NoTakeControlTool(t *testing.T) {
 					"need the D1.9b ruling reopened.", tool.Name())
 		}
 	}
-	require.Len(t, registry.GetAll(), 11, "the tool surface stays at eleven")
+	require.Len(t, registry.GetAll(), 15, "the tool surface stays at fifteen registered tools")
 }

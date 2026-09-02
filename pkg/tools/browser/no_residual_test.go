@@ -138,6 +138,14 @@ func TestNoResidualTabCap(t *testing.T) {
 	}
 	allowed := map[string]bool{
 		filepath.Join("pkg", "tools", "browser", "no_residual_test.go"): true,
+		// Same exemption, same reason as this file's own: it is a GUARD that
+		// names the forbidden strings in order to assert they are ABSENT.
+		// TestBrowserResolveReason_... asserts no panel refusal reason contains
+		// "max_tabs" (among other capacity words), which requires writing
+		// "max_tabs" down. Without this entry the scan reports the guard as the
+		// violation — a false positive that says a counter is back when what is
+		// actually there is the test proving it is gone.
+		filepath.Join("pkg", "gateway", "browser_resolve_test.go"): true,
 	}
 
 	var offenders []string
