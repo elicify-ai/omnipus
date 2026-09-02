@@ -427,6 +427,25 @@ func (p *BrowserPool) PID(key BrowsingKey) int {
 //	NOT MEASURABLE AT ALL           admit exactly ONE browser per HOST, then
 //	                                refuse (FR-065 + FR-082)
 //
+// "How many browsers are there" is len(p.instances) PLUS len(p.launching),
+// and leaving the second term out is how the gate gets overrun. A key is
+// absent from p.instances for the whole duration of its launch, and a launch
+// is not instantaneous — it resolves a binary and, on a cold install,
+// downloads Chrome for Testing first, which is tens of seconds to minutes.
+// Two workspaces whose first browser call lands anywhere inside that window
+// both read "nothing is running", both pass, and both launch. Two scheduled
+// jobs on the same minute is all it takes.
+//
+// The measured branch reserves a full PerBrowserCostBytes for each launch in
+// flight for the same reason: a Chrome that is still starting has not yet
+// allocated anything the host's free-memory reading can see, so that reading
+// still shows room the pending browser is about to consume.
+//
+// It matters most exactly where it can be checked least. On Windows and the
+// BSDs availability cannot be read at all, so FR-082's floor is permanently
+// ONE browser per host however much RAM the machine has — and one is precisely
+// the limit this race steps over.
+//
 // The unmeasurable branch refuses to GROW, never to RUN. A floor of zero would
 // remove browsing entirely from /proc-less deployments this project supports
 // (gVisor, GKE Sandbox) on the strength of a reading the host declines to give.
@@ -443,9 +462,10 @@ func (p *BrowserPool) admitLaunchLocked() (admit, measured bool) {
 				map[string]any{"live_browsers": len(p.instances)},
 			)
 		}
-		return len(p.instances) == 0, false
+		return len(p.instances)+len(p.launching) == 0, false
 	}
-	return avail >= PerBrowserCostBytes, true
+	// pending+1: room for the launches already under way AND for this one.
+	return avail >= PerBrowserCostBytes*uint64(len(p.launching)+1), true
 }
 
 // evictableLocked picks the least-recently-used instance that may be evicted,
@@ -463,9 +483,15 @@ func (p *BrowserPool) admitLaunchLocked() (admit, measured bool) {
 // The in-flight read happens under the SAME p.mu that a call's own increment
 // takes (FR-051), so a call that starts during selection is either seen here
 // or lands on an instance this pass has already declined to evict.
+//
+// Every candidate is re-stamped from observed use before it is ranked, because
+// "least recently used" is only a safe thing to close if it means USED. See
+// chromeInstance.lastUsed.
 func (p *BrowserPool) evictableLocked() *chromeInstance {
+	now := p.clock()
 	var best *chromeInstance
 	for _, inst := range p.instances {
+		p.stampObservedUseLocked(inst, now)
 		if inst.pinned() {
 			continue
 		}
@@ -474,6 +500,75 @@ func (p *BrowserPool) evictableLocked() *chromeInstance {
 		}
 	}
 	return best
+}
+
+// stampObservedUseLocked advances inst.lastUsed to the newest evidence of real
+// use, and never backwards. Must be called with p.mu held.
+func (p *BrowserPool) stampObservedUseLocked(inst *chromeInstance, now time.Time) {
+	if used := inst.observedLastUse(now); used.After(inst.lastUsed) {
+		inst.lastUsed = used
+	}
+}
+
+// observedLastUse is when this instance was really last used, as of now.
+//
+// Two pieces of evidence, in priority order:
+//
+//	a call IN FLIGHT      this browser is being used at this instant, so the
+//	                      answer is now. (Such an instance is also pinned() and
+//	                      so not evictable at all — this matters for the moment
+//	                      AFTER the call ends, when the browser must not look
+//	                      like it has been idle since it launched.)
+//	the newest TAB stamp  tabEntry.lastActivity across every browsing context
+//	                      the instance's managers own. This is the DURABLE
+//	                      evidence, and the only one that survives the call
+//	                      that produced it: every browser_* tool resolves its
+//	                      active tab through BrowserManager.Session(), which
+//	                      stamps it via touchTabLocked.
+//
+// Neither can move the mark backwards; the caller keeps a high-water mark.
+//
+// What this deliberately does NOT do is invent activity for a browser with no
+// tabs left. Once the per-tab reaper has taken the last tab there is no
+// evidence to read, the instance falls back to its stored mark, and idle close
+// proceeds from the last use it actually saw — which is the whole intent of
+// FR-040 rather than a gap in it.
+func (inst *chromeInstance) observedLastUse(now time.Time) time.Time {
+	best := inst.lastUsed
+	for m := range inst.mgrs {
+		if m == nil {
+			continue
+		}
+		if m.InFlight() > 0 {
+			return now
+		}
+		if t := newestTabActivity(m); t.After(best) {
+			best = t
+		}
+	}
+	return best
+}
+
+// newestTabActivity reports the most recent per-tab activity stamp across every
+// browsing context m owns, or the zero time when it has none.
+//
+// Takes m.mu, which is the lock order pinned() already established for this
+// file: p.mu then a manager's mu, never the reverse.
+func newestTabActivity(m *BrowserManager) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var newest time.Time
+	for _, se := range m.sessions {
+		if se == nil {
+			continue
+		}
+		for _, t := range se.tabs {
+			if t != nil && t.lastActivity.After(newest) {
+				newest = t.lastActivity
+			}
+		}
+	}
+	return newest
 }
 
 // pinned reports whether this instance may not be evicted or idle-closed.
@@ -883,6 +978,12 @@ func (p *BrowserPool) CloseIdle(now time.Time) []string {
 	ttl := p.idleCloseTTL
 	var due []*chromeInstance
 	for _, inst := range p.instances {
+		// The sweep is the gateway's one-minute pass, so a browser in use is
+		// observed here many times over while its tabs are still open. That is
+		// where the evidence of use is picked up; without it this TTL runs
+		// from the LAUNCH and every browser is closed earlier than the
+		// setting's own description promises.
+		p.stampObservedUseLocked(inst, now)
 		if now.Sub(inst.lastUsed) < ttl {
 			continue
 		}
@@ -893,8 +994,25 @@ func (p *BrowserPool) CloseIdle(now time.Time) []string {
 	}
 	p.mu.Unlock()
 
+	// Re-check each victim AT THE POINT OF ACTION, not only at the point of
+	// decision. closeInstance kills a Chrome and walks a profile tree, so the
+	// last entry in `due` dies many seconds after it was judged idle — and a
+	// tool call, a viewer attach or a tab open anywhere in that gap makes it
+	// busy. Without this the browser is killed mid-call, silently.
+	//
+	// Both halves matter. `cur == inst` catches the key having been closed and
+	// RELAUNCHED into a different live instance while we walked: closing on
+	// the stale pointer would take down a browser that is seconds old and
+	// still starting. `idle()` catches the same instance having become busy.
 	closed := make([]string, 0, len(due))
 	for _, inst := range due {
+		p.mu.Lock()
+		cur, still := p.instances[inst.key.String()]
+		reap := still && cur == inst && inst.idle()
+		p.mu.Unlock()
+		if !reap {
+			continue
+		}
 		p.closeInstance(inst, "idle past tools.browser.idle_close_ttl")
 		closed = append(closed, inst.key.String())
 	}
