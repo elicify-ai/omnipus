@@ -13,10 +13,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 
@@ -414,7 +416,10 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	h.captureFenceMu.Unlock()
 	if err != nil {
 		slog.Error("browser-webrtc: ensure capture session failed", "error", err, "agent_id", frame.AgentId)
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
+		// UAT case 16: the cause travels WITH the classification. Before this,
+		// `err` reached slog and stopped there, and the panel could only say
+		// "the live browser reported an error starting video".
+		h.sendWebRTCStateFailure(wc, sessID, viewerID, false, "error", err)
 		return
 	}
 
@@ -422,7 +427,12 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	justStarted, startErr := cs.Start(context.Background(), ingestURL)
 	if startErr != nil {
 		slog.Error("browser-webrtc: capture session start failed", "error", startErr, "agent_id", frame.AgentId)
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
+		// UAT case 16, the branch the reported incident actually came down:
+		// "capture session: create encoder target: browser: timed out after
+		// 20s waiting for the browser to attach the tab (target may be
+		// unresponsive)" sat in gateway.log while the operator was told only
+		// that something had gone wrong. It rides the frame now.
+		h.sendWebRTCStateFailure(wc, sessID, viewerID, false, "error", startErr)
 		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
 			map[string]any{"session_id": sessID, "error": startErr.Error()})
 		// Fix 1 (sticky failed capture Start): Stop() is idempotent and its
@@ -494,7 +504,11 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		// starting video". ADR-061 deleted the silent JPEG fallback so a
 		// WebRTC failure would be visible; a visible failure that names the
 		// wrong cause is the same defect one level down.
-		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, reason)
+		// UAT case 16: `reason` classifies, `reason_detail` explains. The
+		// classification alone was already a step up from hardcoding "error"
+		// here, but "ingest_timeout" still does not tell an operator WHICH
+		// wait expired or how long it waited — offerErr does.
+		h.sendWebRTCStateFailure(wc, sessID, viewerID, true, reason, offerErr)
 		return
 	}
 
@@ -738,7 +752,7 @@ func (h *BrowserWSHandler) announceWebRTCAvailability(
 	// Hand the viewer its ICE servers HERE, with the "you may offer" frame:
 	// the SPA needs them before it builds its PeerConnection, and credentials
 	// are minted per viewer with a bounded lifetime (ADR-062 tier 3).
-	h.sendWebRTCStateWithICE(wc, sessID, viewerID, true, false, false, "", h.iceServersForViewer(cfg, viewerID))
+	h.sendWebRTCStateWithICE(wc, sessID, viewerID, true, false, false, "", "", h.iceServersForViewer(cfg, viewerID))
 }
 
 // sendWebRTCState builds and sends a browser_webrtc_state frame.
@@ -748,7 +762,32 @@ func (h *BrowserWSHandler) sendWebRTCState(
 	available, active, hasAudio bool,
 	reason string,
 ) {
-	h.sendWebRTCStateWithICE(wc, sessID, viewerID, available, active, hasAudio, reason, nil)
+	h.sendWebRTCStateWithICE(wc, sessID, viewerID, available, active, hasAudio, reason, "", nil)
+}
+
+// sendWebRTCStateFailure is sendWebRTCState for a failure that HAS a cause:
+// it carries the classified enum AND the free-text reason the operator needs
+// in order to do anything about it (UAT case 16).
+//
+// Split from sendWebRTCState rather than added as a parameter to it because
+// only the three genuine-runtime-failure call sites have an error to report.
+// The capability gates (disabled / lite_build / not_capable /
+// multi_agent_capture_denied) are fully explained by the enum alone and have
+// no error chain; passing them a nil error through a widened signature would
+// have made every one of those call sites read as if it were withholding
+// something.
+//
+// Nil cause is safe and means "no detail" — webrtcReasonDetail returns "",
+// which sendWebRTCStateWithICE omits from the frame.
+func (h *BrowserWSHandler) sendWebRTCStateFailure(
+	wc *browserWSConn,
+	sessID, viewerID string,
+	available bool,
+	reason string,
+	cause error,
+) {
+	h.sendWebRTCStateWithICE(
+		wc, sessID, viewerID, available, false, false, reason, webrtcReasonDetail(cause), nil)
 }
 
 // sendWebRTCStateWithICE is sendWebRTCState plus the viewer's ICE servers
@@ -761,6 +800,7 @@ func (h *BrowserWSHandler) sendWebRTCStateWithICE(
 	sessID, viewerID string,
 	available, active, hasAudio bool,
 	reason string,
+	reasonDetail string,
 	iceServers []iceServerEntry,
 ) {
 	f := generated.BrowserWebRTCStateFrame{
@@ -768,6 +808,9 @@ func (h *BrowserWSHandler) sendWebRTCStateWithICE(
 		Available:  available,
 		SessionId:  &sessID,
 		IceServers: iceServers,
+	}
+	if reasonDetail != "" {
+		f.ReasonDetail = &reasonDetail
 	}
 	if active {
 		f.Active = boolPtr(true)
@@ -1930,4 +1973,90 @@ func (h *BrowserWSHandler) sharedMediaTCP(cfg *config.Config) net.Listener {
 	slog.Info("browser-webrtc: ICE-TCP socket bound", "addr", ln.Addr().String())
 	h.mediaTCP = ln
 	return ln
+}
+
+// ---------------------------------------------------------------------------
+// UAT case 16 — a video failure must name its cause.
+// ---------------------------------------------------------------------------
+
+// webrtcReasonDetailMax bounds the free-text cause shipped alongside the
+// closed `reason` enum on browser_webrtc_state. It sits just under the wire
+// schema's own maxLength (512) so a truncation here is always the one the
+// operator sees, never a schema rejection that would drop the whole frame and
+// leave the panel silent — the precise failure mode ADR-061 exists to
+// prevent.
+const webrtcReasonDetailMax = 480
+
+// webrtcReasonDetailSecretPatterns redacts the two shapes a credential can
+// take inside a Go error chain on this path. Deliberately narrow: a URL, a
+// CDP target id, a port, a file path and a timeout are ALL things the
+// operator needs in order to act, and a broad scrubber that ate them would
+// re-create the very defect this field fixes.
+var webrtcReasonDetailSecretPatterns = []*regexp.Regexp{
+	// A labelled credential: token=..., "api_key": ..., Authorization: ...
+	regexp.MustCompile(`(?i)\b(token|secret|password|passwd|api[_-]?key|apikey|authorization|credential)("?\s*[:=]\s*"?)([^\s",;)]+)`),
+	// Bearer <opaque>.
+	regexp.MustCompile(`(?i)\bBearer\s+[^\s",;)]+`),
+	// A bare long hex run — the capture session's own per-stream token is 32
+	// bytes rendered as 64 hex chars (capture_session.go mints it and
+	// hex-encodes it into the encoder page), so an error that echoed one back
+	// would leak it with no label to match on. 24+ is short enough to catch a
+	// truncated echo and long enough that a CDP target id (a 32-char
+	// uppercase hex handle) is the only false positive; that one is
+	// deliberately accepted, because a redacted target id still leaves the
+	// sentence actionable while a leaked token does not.
+	regexp.MustCompile(`\b[0-9a-f]{24,}\b`),
+}
+
+// webrtcReasonDetailWhitespace collapses every run of whitespace (including
+// the newlines and tabs a wrapped chromedp error carries) into a single
+// space, so the panel renders one readable sentence instead of a ragged
+// block.
+var webrtcReasonDetailWhitespace = regexp.MustCompile(`\s+`)
+
+// webrtcReasonDetail turns a gateway-side WebRTC failure into the
+// operator-facing free text that rides on browser_webrtc_state.reason_detail.
+//
+// Why this exists at all: the `reason` enum is CLOSED (disabled /
+// not_capable / lite_build / error / multi_agent_capture_denied /
+// ingest_timeout), and four of those six collapse wildly different causes
+// into one token. On UAT, "capture session: create encoder target: browser:
+// timed out after 20s waiting for the browser to attach the tab (target may
+// be unresponsive)" reached the operator as "The live browser reported an
+// error starting video" — the enum was all the wire could carry, so the one
+// fact worth acting on stayed in gateway.log. The browser_attach path never
+// had this problem (browser_ws.go sends "browser_attach failed: %s" as free
+// text on browser_status), which is why the two routes reported the same
+// underlying condition at completely different resolutions.
+//
+// Returns "" for a nil error, which callers use to mean "omit the field" —
+// the ordinary capability-gate reasons (disabled / lite_build / not_capable)
+// have no error chain and are fully explained by the enum alone.
+func webrtcReasonDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := webrtcReasonDetailWhitespace.ReplaceAllString(err.Error(), " ")
+	for _, re := range webrtcReasonDetailSecretPatterns {
+		s = re.ReplaceAllStringFunc(s, func(match string) string {
+			if sub := re.FindStringSubmatch(match); len(sub) == 4 {
+				// Labelled form: keep the label and separator, drop the value,
+				// so the sentence still reads ("mint token: token=[redacted]").
+				return sub[1] + sub[2] + "[redacted]"
+			}
+			return "[redacted]"
+		})
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > webrtcReasonDetailMax {
+		// Cut on a rune boundary — an error chain can carry a URL-escaped or
+		// non-ASCII fragment, and a half rune would make the JSON encoder emit
+		// U+FFFD in the middle of the operator's only clue.
+		cut := webrtcReasonDetailMax - len("…")
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
+	}
+	return s
 }

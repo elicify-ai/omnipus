@@ -11258,6 +11258,7 @@ export const BrowserWebRTCStateFrame = z
     session_id: z.string().max(128).optional(),
     available: z.boolean(),
     reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied", "ingest_timeout"]).optional(),
+    reason_detail: z.string().max(512).optional(),
     has_audio: z.boolean().optional(),
     active: z.boolean().optional(),
     ice_servers: z.array(z

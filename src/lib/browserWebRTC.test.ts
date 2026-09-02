@@ -59,6 +59,50 @@ describe('translateWebRTCFallbackReason', () => {
     expect(message.length).toBeGreaterThan(0)
     expect(message).toContain('some-future-reason-not-yet-enumerated')
   })
+
+  // UAT case 16. The enum can only ever name a CATEGORY of failure. When the
+  // gateway also sends the cause (browser_webrtc_state.reason_detail), the
+  // operator must see it — the generic sentence on its own re-hides exactly
+  // what deleting the JPEG fallback was supposed to expose.
+  describe('reason_detail (UAT case 16)', () => {
+    const cause =
+      'capture session: create encoder target: browser: timed out after 20s waiting for the browser to attach the tab (target may be unresponsive)'
+
+    it('carries the gateway-reported cause verbatim, not just the generic sentence', () => {
+      const message = translateWebRTCFallbackReason('error', cause)
+      expect(message).toContain('timed out after 20s waiting for the browser to attach the tab')
+      expect(message).toContain(cause)
+    })
+
+    it('keeps the plain-language category and its retry guidance in front of the cause', () => {
+      const message = translateWebRTCFallbackReason('error', cause)
+      expect(message).toMatch(/reported an error/i)
+      expect(message).toMatch(/retry/i)
+      expect(message.indexOf('reported an error')).toBeLessThan(message.indexOf(cause))
+    })
+
+    it('attaches a cause to a CLASSIFIED reason too — the class alone still does not say which wait expired', () => {
+      const message = translateWebRTCFallbackReason(
+        'ingest_timeout',
+        'webrtc: viewer [v1/x]: no ingest video track after waiting 15s',
+      )
+      expect(message).toMatch(/video capture didn't start in time/i)
+      expect(message).toContain('no ingest video track after waiting 15s')
+    })
+
+    it('is unchanged when the gateway sends no cause, or an empty/whitespace one', () => {
+      const bare = translateWebRTCFallbackReason('error')
+      expect(translateWebRTCFallbackReason('error', undefined)).toBe(bare)
+      expect(translateWebRTCFallbackReason('error', '')).toBe(bare)
+      expect(translateWebRTCFallbackReason('error', '   ')).toBe(bare)
+    })
+
+    it('appends a cause to an unrecognized future reason as well', () => {
+      const message = translateWebRTCFallbackReason('some-future-reason', 'relay refused the allocation')
+      expect(message).toContain('some-future-reason')
+      expect(message).toContain('relay refused the allocation')
+    })
+  })
 })
 
 // jsdom has no `MediaStream` global at all — stub a minimal one (just
@@ -858,6 +902,46 @@ describe('BrowserWebRTCSession — applyState reacts promptly to a reported reas
 
     expect(onFallback).toHaveBeenCalledWith('ingest_timeout')
     expect(machine.state).toBe('fallback')
+  })
+
+  // UAT case 16 — the gateway's free-text cause must reach the panel, not
+  // stop at the machine. Before this, applyState read only `reason` and the
+  // cause the gateway had already computed was discarded one layer below the
+  // component that renders the error.
+  it('forwards the gateway-reported cause (reason_detail) to onFallback alongside the reason', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({
+      pcFactory: () => asRTCPeerConnection(pc),
+      firstAnswerTimeoutMs: 100_000,
+      retryDelayMs: 100_000,
+    })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+
+    const cause =
+      'capture session: create encoder target: browser: timed out after 20s waiting for the browser to attach the tab (target may be unresponsive)'
+    machine.applyState({ available: false, reason: 'error', reason_detail: cause })
+
+    expect(onFallback).toHaveBeenCalledWith('error', cause)
+  })
+
+  it('still calls onFallback with the reason ALONE when the gateway sent no cause — the local fallbacks have none to give', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({
+      pcFactory: () => asRTCPeerConnection(pc),
+      firstAnswerTimeoutMs: 100_000,
+      retryDelayMs: 100_000,
+    })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+
+    machine.applyState({ available: false, reason: 'disabled' })
+
+    expect(onFallback).toHaveBeenCalledWith('disabled')
   })
 
   it('also reacts promptly to a reported reason once already connected (unchanged/still-covered case)', async () => {

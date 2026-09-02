@@ -139,6 +139,9 @@ type webrtcStateFrameDecoder struct { // not-wire-format: decode-only test asser
 	HasAudio  *bool  `json:"has_audio,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// ReasonDetail is the free-text cause that accompanies the closed
+	// `reason` enum (UAT case 16) — see browser_webrtc_reason_detail_test.go.
+	ReasonDetail string `json:"reason_detail,omitempty"`
 }
 
 // newTestBrowserWSConn builds a bare browserWSConn with no real
