@@ -155,7 +155,16 @@ export class Turn {
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         try { ws.close(); } catch { /* already closing */ }
-        reject(new Error(`turn timed out after ${timeoutMs}ms (frames: ${frames.length})`));
+        // The frame TYPES are dumped on timeout, not just the count. A count
+        // cannot distinguish "one tool call is hanging" from "the agent is
+        // looping over dozens of calls", and those have opposite causes.
+        const tally = {};
+        for (const f of frames) tally[f.type] = (tally[f.type] ?? 0) + 1;
+        const calls = frames.filter((f) => f.type === 'tool_call_start').map((f) => f.tool);
+        reject(new Error(
+          `turn timed out after ${timeoutMs}ms\n  frames: ${JSON.stringify(tally)}\n` +
+          `  tool calls in order: ${calls.join(' -> ') || '(none)'}\n` +
+          `  last frame: ${JSON.stringify(frames[frames.length - 1] ?? null).slice(0, 300)}`));
       }, timeoutMs);
 
       const finish = (fn) => { clearTimeout(timer); try { ws.close(); } catch { /* noop */ } fn(); };

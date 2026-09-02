@@ -174,6 +174,22 @@ var ErrKnowledgeMountUnreachable = errors.New("gateway: knowledge mount target i
 // KnowledgeProgressEmitter delivers one progress frame to connected clients.
 type KnowledgeProgressEmitter func(gen.KnowledgeIndexProgressFrame)
 
+// knowledgeWatcher is the subset of *knowledge.Watcher this file depends on:
+// start it, stop it, and observe whether it is still working. Depending on
+// this narrow interface rather than the concrete type — even though
+// production only ever constructs the real thing — is what lets
+// TestKnowledgeLifecycle_* assert "exactly one watcher per root", "stopped on
+// last release" and "a watcher that cannot start does not fail the attach"
+// without needing real OS filesystem-watch support (inotify/FSEvents), which
+// the CI sandbox that runs these tests may not have. *knowledge.Watcher
+// satisfies this exactly as written, with no adapter.
+type knowledgeWatcher interface {
+	Start(ctx context.Context) error
+	Stop()
+	Unavailable() <-chan struct{}
+	Err() error
+}
+
 // knowledgeMountKey identifies one mount: a workspace and the mount's name
 // within it. Two keys may resolve to the same collection root; that is exactly
 // the case FR-031's reference counting exists for.
@@ -206,6 +222,18 @@ type knowledgeCollection struct {
 	// triggers inherits that bound: without this flag a collection that stays
 	// unhealthy would stack one re-index per tick forever.
 	resyncing bool
+	// watcher is this collection's filesystem watcher — the "instant" layer
+	// of docs/internal/design/knowledge-index-freshness.md §3/§4: a file a
+	// human adds through the UI, or a file changed outside Omnipus while it
+	// runs, is indexed without waiting for the next drift-triggered sweep.
+	// Started exactly once per collection root by startServices, gated by the
+	// SAME `fresh` flag in acquire that already guarantees "index once, watch
+	// once" — see startServices' own comment for why that is sufficient.
+	// Guarded by KnowledgeLifecycle.mu (written under the lock in
+	// startServices; read under the lock in RevokeMount/Stop) rather than
+	// left to happen-before reasoning, because RevokeMount can race a
+	// still-running AttachMount for the same collection.
+	watcher knowledgeWatcher
 	// lastReconcile is when this collection's most recent index run FINISHED.
 	// It is what makes a drift-triggered repair safe: a report whose check
 	// started before that instant was produced from a state the index has
@@ -271,6 +299,11 @@ type KnowledgeLifecycleOptions struct {
 	// PropsSync overrides vaultprops.Sync — the properties-index build/update
 	// pass ADR-068 D16.2/D16.5 needs, run alongside the text-index reconcile.
 	PropsSync func(ctx context.Context, home, collectionRoot string) (vaultprops.SyncStats, error)
+	// NewWatcher overrides knowledge.NewWatcher. Test seam: lets a test
+	// substitute a fake knowledgeWatcher to assert one-watcher-per-root,
+	// stop-on-release and "a failed Start does not fail the attach" without
+	// depending on real OS filesystem-watch support.
+	NewWatcher func(ix *knowledge.Index) knowledgeWatcher
 	// DriftCheck overrides knowledge.CheckDrift.
 	DriftCheck func(context.Context, *knowledge.Index) (knowledge.DriftReport, error)
 	// NewTicker overrides the drift schedule's clock, so FR-038a's cadence is
@@ -290,6 +323,7 @@ type KnowledgeLifecycle struct {
 	scan        func(root string) (*knowledge.ScanResult, error)
 	syncWith    func(context.Context, *knowledge.Index, knowledge.SyncOptions) (knowledge.SyncStats, error)
 	propsSync   func(ctx context.Context, home, collectionRoot string) (vaultprops.SyncStats, error)
+	newWatcher  func(ix *knowledge.Index) knowledgeWatcher
 	health      *knowledge.HealthChecker
 	driftPeriod time.Duration
 
@@ -331,6 +365,7 @@ func NewKnowledgeLifecycle(opts KnowledgeLifecycleOptions) (*KnowledgeLifecycle,
 		scan:        opts.Scan,
 		syncWith:    opts.SyncWith,
 		propsSync:   opts.PropsSync,
+		newWatcher:  opts.NewWatcher,
 		driftPeriod: opts.DriftInterval,
 		byRoot:      make(map[string]*knowledgeCollection),
 		byKey:       make(map[knowledgeMountKey]string),
@@ -355,6 +390,11 @@ func NewKnowledgeLifecycle(opts KnowledgeLifecycleOptions) (*KnowledgeLifecycle,
 	if kl.propsSync == nil {
 		kl.propsSync = func(ctx context.Context, home, collectionRoot string) (vaultprops.SyncStats, error) {
 			return vaultprops.Sync(ctx, home, collectionRoot, vaultprops.SyncOptions{})
+		}
+	}
+	if kl.newWatcher == nil {
+		kl.newWatcher = func(ix *knowledge.Index) knowledgeWatcher {
+			return knowledge.NewWatcher(ix, knowledge.WatchOptions{})
 		}
 	}
 	if kl.driftPeriod <= 0 {
@@ -514,12 +554,11 @@ func (kl *KnowledgeLifecycle) AttachMount(ctx context.Context, workspaceID, moun
 	// FR-038a's "once on mount" still holds: the check runs once per attach,
 	// just after the thing it is checking exists. The Watch is started even
 	// when the reconcile failed — a collection that could not be indexed is
-	// exactly one an operator wants the schedule to keep reporting on.
+	// exactly one an operator wants the schedule to keep reporting on. The
+	// same is true of the filesystem watcher started by startServices, for
+	// the identical reason.
 	reconcileErr := kl.reconcile(ctx, collection)
-	if wErr := kl.health.Watch(kl.baseCtx, collection.index); wErr != nil {
-		slog.Warn("knowledge: drift schedule not started",
-			"collection", collection.root, "error", wErr)
-	}
+	kl.startServices(collection)
 	return reconcileErr
 }
 
@@ -585,12 +624,24 @@ func (kl *KnowledgeLifecycle) RevokeMount(workspaceID, mountName string) error {
 		delete(kl.byRoot, root)
 	}
 	index := collection.index
+	watcher := collection.watcher
 	kl.mu.Unlock()
 
 	if last {
 		// Unwatch waits for a check in flight, so the index is never closed
 		// underneath a running drift check.
 		kl.health.Unwatch(root)
+		// Stop blocks until the watcher's goroutines have actually exited
+		// (watch.go's Stop contract) — the guarantee requirement 2 of the
+		// watcher-wiring task asks for: no goroutine or descriptor leak past
+		// the last release, and no UpdatePath/RemovePath call reaching the
+		// index handle Close is about to invalidate below. Safe to call even
+		// when Start never succeeded, and safe on a nil watcher (a test
+		// harness whose NewWatcher seam returned nil; production's default
+		// never does).
+		if watcher != nil {
+			watcher.Stop()
+		}
 	}
 	// One Close per AttachMount that opened a handle. knowledge.OpenIndex is
 	// itself the reference count, so the underlying handle survives until the
@@ -643,13 +694,10 @@ func (kl *KnowledgeLifecycle) AttachCollection(ctx context.Context, workspaceID,
 	}
 
 	// Same ordering as AttachMount, for the same reason: index first, THEN
-	// start the drift schedule, so the on-attach check runs against a
-	// reconciled index rather than an empty one.
+	// start the drift schedule and the filesystem watcher, so the on-attach
+	// check runs against a reconciled index rather than an empty one.
 	reconcileErr := kl.reconcile(ctx, collection)
-	if wErr := kl.health.Watch(kl.baseCtx, collection.index); wErr != nil {
-		slog.Warn("knowledge: drift schedule not started",
-			"collection", collection.root, "error", wErr)
-	}
+	kl.startServices(collection)
 	return reconcileErr
 }
 
@@ -823,12 +871,24 @@ func (kl *KnowledgeLifecycle) Stop() {
 
 	kl.mu.Lock()
 	collections := make([]*knowledgeCollection, 0, len(kl.byRoot))
+	watchers := make([]knowledgeWatcher, 0, len(kl.byRoot))
 	for _, c := range kl.byRoot {
 		collections = append(collections, c)
+		watchers = append(watchers, c.watcher)
 	}
 	kl.byRoot = make(map[string]*knowledgeCollection)
 	kl.byKey = make(map[knowledgeMountKey]string)
 	kl.mu.Unlock()
+
+	// Every watcher stops BEFORE any index closes below, for the same reason
+	// RevokeMount orders them that way: a watcher's debounce/sweep goroutine
+	// calls UpdatePath/RemovePath on the index it watches, and Stop blocks
+	// until that goroutine has actually exited.
+	for _, w := range watchers {
+		if w != nil {
+			w.Stop()
+		}
+	}
 
 	for _, c := range collections {
 		// One Close per holder, matching one OpenIndex per attach.
@@ -838,6 +898,52 @@ func (kl *KnowledgeLifecycle) Stop() {
 			}
 		}
 	}
+}
+
+// startServices starts the two background services a freshly-opened
+// collection gets: the drift schedule (existing) and the filesystem watcher
+// (docs/internal/design/knowledge-index-freshness.md §3/§4, requirement 3 of
+// the backend-lead task that added it).
+//
+// It is called exactly once per collection root — AttachMount/AttachCollection
+// only reach this line when acquire's `fresh` return was true, and acquire
+// sets `c.reconciled = true` for exactly one caller per root under kl.mu — so
+// "one watcher per root, not one per holder" is enforced there, not by any
+// check in this method. A root reachable both as a mount and as a work-tree
+// collection is one *knowledgeCollection (kl.byRoot is keyed by the resolved
+// real path regardless of which attach path reached it), so it gets the same
+// single watcher either way.
+//
+// A watcher that fails to start does NOT fail the attach: indexing still
+// works via the sweep this file already runs (the startup AttachAllMounts
+// reopen, and the drift-triggered resyncAfterDrift below) — the watcher is
+// an optimisation, never the source of truth (design §2). The failure is
+// still OBSERVABLE (design §8): logged here by name, in addition to the
+// structured Error watch.go's own Start already logs internally before
+// returning. This is the path an unsupported platform (Windows,
+// watch_other.go) always takes — a *WatchUnavailableError, not a panic and
+// not a boot failure — so "watching unavailable" degrades exactly like any
+// other watcher failure, with no platform-specific branch needed here.
+func (kl *KnowledgeLifecycle) startServices(collection *knowledgeCollection) {
+	if wErr := kl.health.Watch(kl.baseCtx, collection.index); wErr != nil {
+		slog.Warn("knowledge: drift schedule not started",
+			"collection", collection.root, "error", wErr)
+	}
+
+	w := kl.newWatcher(collection.index)
+	if err := w.Start(kl.baseCtx); err != nil {
+		slog.Warn("knowledge: filesystem watching not started; a file added or changed "+
+			"outside Omnipus will be picked up by the next drift sweep instead of instantly",
+			"collection", collection.root, "error", err)
+	}
+
+	// Recorded under the lock even on a failed Start: RevokeMount/Stop must
+	// call Stop() on whatever Start returned (safe to call after a failed
+	// Start — watch.go's own contract), never skip it because this method
+	// logged a warning instead of returning an error.
+	kl.mu.Lock()
+	collection.watcher = w
+	kl.mu.Unlock()
 }
 
 // acquire registers one mount against a collection, opening the index on the

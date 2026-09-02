@@ -1540,6 +1540,44 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 	return stats, nil
 }
 
+// lockCtx acquires ix.mu while remaining answerable to ctx.
+//
+// WHY THIS EXISTS. SyncWith holds ix.mu for its ENTIRE walk, which on a large
+// collection is seconds to minutes. UpdatePath and RemovePath checked ctx.Err()
+// and then called a plain Lock(), which cannot be interrupted — so an agent's
+// knowledge_edit issued during a first reconcile blocked for the whole sync
+// with no timeout, no cancellation and no message. The ctx checks around it
+// looked like they bounded the wait; they bounded nothing.
+//
+// Polling TryLock is used rather than a channel-guarded mutex because the lock
+// is taken on hot paths all over this file and converting it would touch every
+// one of them. The poll interval is deliberately coarse: this only runs while
+// a sweep is genuinely in flight, where the alternative was waiting minutes.
+//
+// The caller is expected to surface the failure rather than swallow it — the
+// note is already on disk by the time indexing runs, so this is a stale-index
+// warning, never a lost write.
+func (ix *Index) lockCtx(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ix.mu.TryLock() {
+		return nil
+	}
+	t := time.NewTicker(5 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("indexing is already in progress for this collection: %w", ctx.Err())
+		case <-t.C:
+			if ix.mu.TryLock() {
+				return nil
+			}
+		}
+	}
+}
+
 // UpdatePath (re)indexes exactly ONE file, without walking the collection: it
 // updates the file's manifest entry and its index documents exactly as a
 // SyncWith run would have for that one file — the same segmentation
@@ -1595,7 +1633,9 @@ func (ix *Index) UpdatePath(ctx context.Context, relPath string) error {
 		return fmt.Errorf("knowledge: update path %q: empty path", relPath)
 	}
 
-	ix.mu.Lock()
+	if err := ix.lockCtx(ctx); err != nil {
+		return err
+	}
 	defer ix.mu.Unlock()
 
 	if err := ctx.Err(); err != nil {
@@ -1670,7 +1710,9 @@ func (ix *Index) RemovePath(ctx context.Context, relPath string) error {
 		return fmt.Errorf("knowledge: remove path %q: empty path", relPath)
 	}
 
-	ix.mu.Lock()
+	if err := ix.lockCtx(ctx); err != nil {
+		return err
+	}
 	defer ix.mu.Unlock()
 
 	if err := ctx.Err(); err != nil {

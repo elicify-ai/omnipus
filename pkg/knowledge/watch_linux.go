@@ -46,7 +46,11 @@ func startPlatformWatch(root string, out chan<- fsEvent, overflow chan<- struct{
 		wdToRel: make(map[int32]string),
 		relToWd: make(map[string]int32),
 	}
-	if err := lw.addTree(""); err != nil {
+	// out/stop are nil at startup: the caller's own startup sweep already
+	// covers whatever already exists under root, so there is no need to
+	// (redundantly) report every pre-existing file here too. See addTree's
+	// comment for why they are non-nil when a NEW directory appears later.
+	if err := lw.addTree("", nil, nil); err != nil {
 		closeFDQuietly(fd, "inotify instance (failed startup)")
 		return nil, &WatchUnavailableError{Reason: fmt.Sprintf("failed to watch collection root %s", root), Err: err}
 	}
@@ -93,7 +97,18 @@ func (lw *linuxWatcher) absPath(rel string) string {
 // instant coverage; that subtree simply falls back to the periodic sweep,
 // same as any other missed event (the governing principle this whole file
 // is built on).
-func (lw *linuxWatcher) addTree(startRel string) error {
+//
+// out and stop, when non-nil, additionally report every regular file already
+// found while walking startRel as an fsEvent (not removed) — finding 4: a
+// directory that appears with files already in it (a `mv` bulk import, a git
+// checkout materialising a folder) otherwise gets its watches registered but
+// no report of the files already inside, leaving them invisible until the
+// next periodic sweep, which is exactly the bulk-import case a user is most
+// likely to try immediately. Pass nil, nil from startPlatformWatch's initial
+// call — the caller's own startup sweep already covers whatever exists under
+// root at boot, so emitting events there would be pure duplicate work, not a
+// correctness gain.
+func (lw *linuxWatcher) addTree(startRel string, out chan<- fsEvent, stop <-chan struct{}) error {
 	startAbs := lw.absPath(startRel)
 	return filepath.WalkDir(startAbs, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -106,6 +121,21 @@ func (lw *linuxWatcher) addTree(startRel string) error {
 			return nil
 		}
 		if !d.IsDir() {
+			if out == nil {
+				return nil
+			}
+			if d.Type()&fs.ModeSymlink != 0 {
+				return nil
+			}
+			rel, relErr := filepath.Rel(lw.root, path)
+			if relErr != nil {
+				return nil //nolint:nilerr // deliberate skip-and-continue, see the directory branch's identical comment below
+			}
+			rel = filepath.ToSlash(rel)
+			if isWatchSyncArtifact(filepath.Base(rel)) {
+				return nil
+			}
+			sendEvent(out, fsEvent{relPath: rel, removed: false}, stop)
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
@@ -286,7 +316,7 @@ func (lw *linuxWatcher) handle(ev rawInotifyEvent, out chan<- fsEvent, overflow 
 	if ev.mask&unix.IN_ISDIR != 0 {
 		if ev.mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 {
 			if _, skip := scanSkippedDirNames[ev.name]; !skip {
-				if err := lw.addTree(rel); err != nil {
+				if err := lw.addTree(rel, out, stop); err != nil {
 					slog.Default().Warn("knowledge: watcher could not watch a newly created directory; the periodic sweep still covers it",
 						"path", rel, "error", err)
 				}

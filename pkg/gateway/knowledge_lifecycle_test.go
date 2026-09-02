@@ -672,6 +672,22 @@ func TestKnowledgeLifecycle_ReopenReconcilesWithoutRebuilding(t *testing.T) {
 				mu.Unlock()
 				return s, err
 			},
+			// This test is about the reconcile path (FR-033/FR-039), not
+			// drift. Without this seam, AttachMount's "once on mount" health
+			// check (started asynchronously by startServices, unrelated to
+			// this test's own SyncWith calls) genuinely finds the SAME
+			// same-size/same-mtime content swap this fixture deliberately
+			// makes undetectable to a reconcile — CheckDrift compares by
+			// content hash, not by the size/mtime shortcut SyncTracked uses
+			// — and its own automatic repair (resyncAfterDrift) races this
+			// test's post-AttachMount frame/scan-count assertions below,
+			// which are about the EXPLICIT attach this test drove, not about
+			// an unrelated background check racing to fire before they run.
+			// A real (not scan/frame-visible) drift-repair path is already
+			// covered by TestKnowledgeLifecycle_DriftRepairsTheIndexItFoundStale.
+			DriftCheck: func(_ context.Context, ix *knowledge.Index) (knowledge.DriftReport, error) {
+				return knowledge.DriftReport{Root: ix.Root()}, nil // always healthy
+			},
 		})
 	}
 

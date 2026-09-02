@@ -127,10 +127,27 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	//
 	// AcceptedParameters is the same exported list knowledgefind itself decodes
 	// against, so this cannot drift into a second, staler idea of what is legal.
+	//
+	// THE REFUSAL ITSELF IS knowledgefind's OWN STRUCTURED ONE, REUSED, NOT
+	// REPLACED (Finding 8). An earlier version of this check built its own
+	// flat string here — plain text with no generated.RecordProblem behind
+	// it — which fixed the 24-retry loop above but cost every unknown-argument
+	// call its Permitted list and, for a name knowledgefind recognises as a
+	// specific mistake (`order_by` -> "use sort", `where` -> "there is no
+	// query language here", etc.), its targeted remedy: knowledgefind/tool.go's
+	// unknownParameterRemedy is unexported and decodeRequest needs no Deps to
+	// run, but Call always runs decodeRequest and Find back to back with no
+	// seam to stop after the first, so this tool cannot invoke Call itself
+	// before a collection is resolved. findRefuseUnsupportedParameter below
+	// builds the identical generated.RecordProblem/RefusalError shape
+	// decodeRequest would have — same Reason text (down to ToolName and the
+	// quoted argument spelling), same Permitted list, same remedy mapping —
+	// and renders it through knowledgefind.Render, the one function that
+	// turns a response into what the model reads, so this refusal is
+	// byte-for-byte what Call() itself would have rendered for the same
+	// argument, had a collection already been open to call it with.
 	if unknown := unacceptedFindArgs(args); len(unknown) > 0 {
-		return tools.ErrorResult(fmt.Sprintf(
-			"knowledge_find: %s is not an argument of knowledge_find; accepted: %s",
-			strings.Join(unknown, ", "), strings.Join(knowledgefind.AcceptedParameters, ", ")))
+		return tools.ErrorResult(findRefuseUnsupportedParameter(unknown))
 	}
 
 	scope, _ := knowledge.ResolveTurnScope(ctx, t.home)
@@ -190,6 +207,86 @@ func unacceptedFindArgs(args map[string]any) []string {
 	sort.Strings(unknown)
 	return unknown
 }
+
+// findRefuseUnsupportedParameter renders the SAME structured refusal
+// knowledgefind's own decodeRequest (pkg/records/knowledgefind/tool.go)
+// would render for these unknown top-level argument names — reused in
+// content and shape, not reimplemented as a lesser, flat string (Finding 8).
+//
+// It cannot call decodeRequest directly: that function is unexported, and
+// Call — the exported entry point that runs it — always chains straight
+// into Find(ctx, d, req) once decoding succeeds, which would dereference
+// this Deps-free call's necessarily-absent Store/Text/Views against a real
+// query. There is no seam to stop after decoding alone without a collection
+// open, which is exactly the problem this whole unknown-argument-first
+// check exists to route around. So the RefusalError and the response
+// Render() turns it into are built here by hand, from knowledgefind's own
+// EXPORTED surface (RefusalError, Render, the generated wire types, ToolName
+// and AcceptedParameters) — every field is the one decodeRequest's
+// unsupported-parameter branch sets, so the rendered text matches Call()'s
+// own output for the same input, word for word.
+func findRefuseUnsupportedParameter(unknown []string) string {
+	quoted := make([]string, len(unknown))
+	for i, u := range unknown {
+		quoted[i] = `"` + u + `"`
+	}
+	fix := findUnknownParameterRemedy(unknown)
+	permitted := append([]string{}, knowledgefind.AcceptedParameters...)
+	problem := generated.RecordProblem{
+		Code: generated.UnsupportedParameter,
+		Reason: fmt.Sprintf("%s is not an argument of %s; accepted: %s",
+			strings.Join(quoted, ", "), knowledgefind.ToolName, strings.Join(knowledgefind.AcceptedParameters, ", ")),
+		Fix:       &fix,
+		Permitted: &permitted,
+		Records:   []string{},
+	}
+	resp := generated.VaultFindResponse{
+		Complete:       false,
+		CompleteReason: strPtr("the query was refused; no records were evaluated"),
+		Refused:        true,
+		QueryEcho:      "arguments as sent",
+		Counts:         generated.VaultFindCounts{},
+		Rows:           []generated.VaultFindRow{},
+		Totals:         []generated.VaultFindTotal{},
+		Problems:       []generated.RecordProblem{problem},
+		// decodeRequest's own refusalActions falls to its `default` case for
+		// UnsupportedParameter (every other named case is a different
+		// problem code), which is exactly this one action.
+		Next: []generated.VaultFindAction{{Label: "describe", Call: "knowledge_describe"}},
+	}
+	return knowledgefind.Render(resp)
+}
+
+// findUnknownParameterRemedy mirrors knowledgefind/tool.go's own
+// unknownParameterRemedy (unexported, so not callable from here) so the
+// SAME model-fluent-in-SQL mistakes get the SAME targeted remedy this tool
+// would have given had a collection already been open. Kept in the exact
+// same case order and wording deliberately — a caller comparing the two
+// refusals (with vs. without a resolved collection) must see one answer,
+// not two that happen to agree today.
+func findUnknownParameterRemedy(unknown []string) string {
+	for _, u := range unknown {
+		switch strings.ToLower(u) {
+		case "where", "sql", "query":
+			return "express the predicate as a structured filter tree; there is no query language here"
+		case "having":
+			return "use group_by, then filter on the grouped property"
+		case "order_by", "orderby":
+			return "use sort"
+		case "offset", "page", "skip":
+			return "page with cursor, which is returned in the previous reply's next block"
+		case "fields", "columns", "properties":
+			return "use select"
+		}
+	}
+	return "drop the argument, or call knowledge_describe to see what this vault supports"
+}
+
+// strPtr is the pointer-taking helper the generated optional fields need,
+// mirroring knowledgefind's own unexported `str` for the same reason: an
+// optional field left nil means "not set", so "" must go in as a real
+// pointer, never be left nil in its place.
+func strPtr(s string) *string { return &s }
 
 // buildDeps opens everything one call needs and returns a cleanup function
 // that is always safe to call (nil-checked internally), even on a partial
@@ -343,20 +440,63 @@ func (s *findTextSearcher) SourceHash(_ context.Context, path string) (string, b
 	return s.ix.SourceHashForPath(path)
 }
 
-// Populated answers knowledgefind.TextSearcher's build-state question from the
-// MANIFEST'S EXISTENCE, not from a document count.
+// Populated answers knowledgefind.TextSearcher's build-state question from
+// TWO facts, not one: the manifest's EXISTENCE, and whether it CURRENTLY
+// COVERS EVERY FILE a fresh Scan of the collection finds.
 //
-// The manifest is written when a build pass completes, so its presence means
-// "this collection has been walked at least once" regardless of what that walk
-// found. That is exactly the distinction the interface asks for and the reason
-// DocCount cannot answer it: a genuinely empty vault whose index finished
-// building reports 0 documents, and so does one that was never built at all.
-// Reading the count would collapse an honest zero and an unsearched vault back
-// into the single indistinguishable answer that produced F-9.
+// # Why existence alone stopped being enough (F-9, reopened)
 //
-// A stat error other than not-exists is returned rather than swallowed. Per the
-// interface's own note the caller folds an error into "not populated", which is
-// the right default here: a zero-hit answer this layer cannot confirm was
+// The manifest used to be written only by a full SyncWith — a whole-
+// collection reconcile — so its mere presence safely meant "this collection
+// has been walked at least once". pkg/knowledge/author.go's instant-indexing
+// path (docs/internal/design/knowledge-index-freshness.md) broke that
+// premise: Index.UpdatePath, called after a single knowledge_edit write,
+// saves the SAME manifest file after touching exactly ONE path. A single
+// create on a collection nobody has ever swept therefore leaves a manifest
+// that EXISTS but names one file out of however many actually live in the
+// collection — and existence-only Populated() reported that collection as
+// fully searched, so a words= query for a term in any of the other,
+// never-touched notes came back "complete: true, 0 rows" instead of
+// refusing. That is F-9
+// (docs/internal/uat/uat-findings-knowledge-tools-2026-09-01-run2.md) byte
+// for byte, reopened by a different write path.
+//
+// # Why the fix is a coverage check, not "skip the instant update"
+//
+// Preventing the instant-indexing write itself (skipping it on a
+// never-before-built collection) was the other candidate and is deliberately
+// not taken: pkg/knowledge's own TestIndexFreshness_* suite requires that a
+// note just created through knowledge_edit is immediately findable — through
+// knowledge_search — even on a collection with no prior index, and that
+// guarantee must not regress. The defect is not that the manifest gained an
+// entry; it is that Populated() treated ONE entry as proof the WHOLE
+// collection was searched. So this checks the claim directly: LoadManifest's
+// entry count against knowledge.Scan's count of what is actually on disk
+// right now, using the SAME inventory function Index.SyncWith itself scans
+// with (index.go), so "the manifest matches the collection" here means
+// exactly what it would mean to a real sync. A manifest seeded by one or two
+// instant writes on a large, unswept collection fails this comparison and is
+// correctly reported unpopulated; a manifest a real sweep produced — however
+// many notes it holds, including zero — passes it, because a genuinely empty,
+// fully-synced collection's count (0) equals its own Scan's count (0).
+//
+// This also means a collection that WAS fully synced and has since drifted
+// (a note added on disk after the last sync, with no re-sync since) now
+// correctly reports unpopulated too, rather than the stale "yes" it used to.
+// That is not a new failure mode — knowledge_describe's own drift branch
+// (indexFreshness in knowledge_describe.go) already treats that state as
+// untrustworthy for the same reason.
+//
+// # Cost
+//
+// knowledge.Scan is a stat-only filepath.WalkDir — no file content is read —
+// and this only runs on the already-narrow path checkTextIndexPopulated
+// takes: a words= query whose text search found ZERO hits. A query that
+// matches something never pays for it.
+//
+// A stat or scan error is returned rather than swallowed. Per the interface's
+// own note the caller folds an error into "not populated", which is the
+// right default here: a zero-hit answer this layer cannot confirm was
 // searched deserves no more trust than one it knows was not.
 func (s *findTextSearcher) Populated(_ context.Context) (bool, error) {
 	if s == nil || s.ix == nil {
@@ -364,12 +504,23 @@ func (s *findTextSearcher) Populated(_ context.Context) (bool, error) {
 	}
 	switch _, err := os.Stat(s.ix.ManifestPath()); {
 	case err == nil:
-		return true, nil
+		// Fall through to the coverage check below — existence alone is
+		// necessary but, since instant-indexing, no longer sufficient.
 	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
 	default:
 		return false, err
 	}
+
+	manifest, err := knowledge.LoadManifest(s.ix.ManifestPath(), s.ix.Root())
+	if err != nil {
+		return false, err
+	}
+	scan, err := knowledge.Scan(s.ix.Root())
+	if err != nil {
+		return false, err
+	}
+	return manifest.Len() == len(scan.Entries), nil
 }
 
 // openFindStore opens the properties index for one collection, best-effort.

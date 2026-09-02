@@ -97,7 +97,9 @@ func startPlatformWatch(root string, out chan<- fsEvent, overflow chan<- struct{
 		relToFd:   make(map[string]int),
 		listing:   make(map[string]map[string]dirChild),
 	}
-	if err := dw.addTree(""); err != nil {
+	// out/stop are nil at startup: the caller's own startup sweep already
+	// covers whatever exists under root at boot; see addTree's comment.
+	if err := dw.addTree("", nil, nil); err != nil {
 		dw.closeAll()
 		return nil, &WatchUnavailableError{Reason: fmt.Sprintf("failed to watch collection root %s", root), Err: err}
 	}
@@ -181,7 +183,17 @@ func (dw *darwinWatcher) hasWatch(rel string) bool {
 // reason: one unwatchable subdirectory must not cost the rest of the tree
 // its instant coverage. watchDir (called for each directory found) is what
 // additionally registers a watch on that directory's own files.
-func (dw *darwinWatcher) addTree(startRel string) error {
+//
+// out and stop, when non-nil, are threaded through to watchDir so every
+// regular file already found while walking startRel is also reported as an
+// fsEvent — finding 4: a directory that appears with files already in it (a
+// `mv` bulk import, a git checkout materialising a folder) otherwise gets
+// its watches registered but no report of the files already inside, leaving
+// them invisible until the next periodic sweep, which is exactly the
+// bulk-import case a user is most likely to try immediately. Pass nil, nil
+// from startPlatformWatch's initial call — the caller's own startup sweep
+// already covers whatever exists under root at boot.
+func (dw *darwinWatcher) addTree(startRel string, out chan<- fsEvent, stop <-chan struct{}) error {
 	startAbs := dw.absPath(startRel)
 	return filepath.WalkDir(startAbs, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -216,7 +228,7 @@ func (dw *darwinWatcher) addTree(startRel string) error {
 				return filepath.SkipDir
 			}
 		}
-		if wErr := dw.watchDir(rel, path); wErr != nil {
+		if wErr := dw.watchDir(rel, path, out, stop); wErr != nil {
 			if path == startAbs {
 				return wErr
 			}
@@ -232,8 +244,14 @@ func (dw *darwinWatcher) addTree(startRel string) error {
 // kqueue, snapshots its current listing as the baseline the first
 // NOTE_WRITE will diff against, and registers a per-file watch (watchFile)
 // on every regular file already in it — see the package comment for why a
-// directory-only watch is not enough on this platform.
-func (dw *darwinWatcher) watchDir(rel, abs string) error {
+// directory-only watch is not enough on this platform. When out is non-nil
+// (addTree was called for a directory discovered after startup, not the
+// initial tree), every such pre-existing file is also reported as an
+// fsEvent — finding 4 — regardless of whether its own watchFile registration
+// succeeded, since the file's existence right now is already known and
+// there is no reason to wait for the periodic sweep to report what this
+// call already saw.
+func (dw *darwinWatcher) watchDir(rel, abs string, out chan<- fsEvent, stop <-chan struct{}) error {
 	fd, err := unix.Open(abs, unix.O_EVTONLY, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", abs, err)
@@ -274,6 +292,9 @@ func (dw *darwinWatcher) watchDir(rel, abs string) error {
 			slog.Default().Warn("knowledge: watcher could not watch a file; the periodic sweep still covers it",
 				"path", childRel, "error", wErr)
 		}
+		if out != nil {
+			sendEvent(out, fsEvent{relPath: childRel, removed: false}, stop)
+		}
 	}
 	return nil
 }
@@ -282,6 +303,16 @@ func (dw *darwinWatcher) watchDir(rel, abs string) error {
 // content edit (no rename involved) is reported directly rather than relying
 // on its parent directory's listing diff, which cannot see it — see the
 // package comment.
+//
+// rel may already have a live watch registered (finding 7's documented
+// reachable case: watchDir's own listDir call failed, so no files got
+// registered from that pass, and a later directory-listing diff re-derives
+// and registers them itself). Replacing relToFd[rel] without closing
+// whatever fd it previously pointed at would leak one fd per re-registration
+// and leave a stale, unreachable entry in fdToEntry forever (never visited
+// by closeAll's own map, since it iterates fdToEntry keyed by fd — the stale
+// fd's entry there is real, just orphaned from relToFd) — so any previous
+// mapping for rel is closed and forgotten before the new one is installed.
 func (dw *darwinWatcher) watchFile(rel, abs string) error {
 	fd, err := unix.Open(abs, unix.O_EVTONLY, 0)
 	if err != nil {
@@ -297,10 +328,19 @@ func (dw *darwinWatcher) watchFile(rel, abs string) error {
 		closeFDQuietly(fd, "watch fd (failed kevent register, file)")
 		return fmt.Errorf("kevent register %s: %w", abs, kerr)
 	}
+
 	dw.mu.Lock()
+	oldFD, hadPrevious := dw.relToFd[rel]
 	dw.fdToEntry[fd] = watchedEntry{rel: rel, isDir: false}
 	dw.relToFd[rel] = fd
 	dw.mu.Unlock()
+
+	if hadPrevious && oldFD != fd {
+		dw.mu.Lock()
+		delete(dw.fdToEntry, oldFD)
+		dw.mu.Unlock()
+		closeFDQuietly(oldFD, "watch fd (superseded by re-registration)")
+	}
 	return nil
 }
 
@@ -447,7 +487,7 @@ func (dw *darwinWatcher) handleDirChanged(rel, abs string, out chan<- fsEvent, s
 		case !existed:
 			if child.isDir {
 				if _, skip := scanSkippedDirNames[name]; !skip {
-					if wErr := dw.addTree(childRel); wErr != nil {
+					if wErr := dw.addTree(childRel, out, stop); wErr != nil {
 						slog.Default().Warn("knowledge: watcher could not watch a newly created directory; the periodic sweep still covers it",
 							"path", childRel, "error", wErr)
 					}
@@ -495,12 +535,24 @@ func (dw *darwinWatcher) handleDirChanged(rel, abs string, out chan<- fsEvent, s
 // directories and files alike, since both share the fdToEntry/relToFd maps.
 // It does not itself emit any fsEvent — a subtree disappearing wholesale is
 // reconciled by the next sweep, not enumerated file-by-file here.
+//
+// rel == "" means the COLLECTION ROOT itself was deleted, renamed away, or
+// its volume unmounted (the caller at ~line 367) — every watch this backend
+// holds is beneath the root by definition, so this must forget everything,
+// not just an entry literally named "". Finding 6: rel+"/" degenerates to
+// "/" when rel is empty, and no collection-relative path (always
+// slash-joined without a leading slash — see joinRelPath) ever starts with
+// "/", so the naive prefix match matched nothing but the root's own literal
+// "" key — every child fd leaked for the process lifetime, AND (worse) kept
+// receiving events for paths that no longer resolve, which applyOne would
+// then treat as fs.ErrNotExist and delete from the index even though the
+// notes still exist under wherever the root went.
 func (dw *darwinWatcher) forgetSubtree(rel string) {
 	dw.mu.Lock()
 	defer dw.mu.Unlock()
 	prefix := rel + "/"
 	for r, fd := range dw.relToFd {
-		if r == rel || strings.HasPrefix(r, prefix) {
+		if rel == "" || r == rel || strings.HasPrefix(r, prefix) {
 			closeFDQuietly(fd, "watch fd (subtree forgotten)")
 			delete(dw.relToFd, r)
 			delete(dw.fdToEntry, fd)

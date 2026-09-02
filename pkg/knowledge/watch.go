@@ -206,6 +206,16 @@ type Watcher struct {
 	sweepCancel context.CancelFunc
 	sweepCtx    context.Context
 
+	// syncFn performs the escalation sweep's actual reconciliation. It
+	// defaults (in NewWatcher) to ix.SyncWith and is never reassigned by
+	// production code; a test in this package may override it on a
+	// specific *Watcher instance to control a sweep's timing
+	// deterministically — e.g. holding one open long enough to prove an
+	// event arriving mid-sweep is not dropped (design §2), or that Stop
+	// genuinely waits for an in-flight sweep to finish — without racing
+	// real disk I/O timing. See watch_test.go.
+	syncFn func(context.Context, SyncOptions) (SyncStats, error)
+
 	mu      sync.Mutex
 	started bool
 	lastErr error
@@ -269,6 +279,7 @@ func NewWatcher(ix *Index, opts WatchOptions) *Watcher {
 		stopCh:         make(chan struct{}),
 		doneCh:         make(chan struct{}),
 		unavailableCh:  make(chan struct{}),
+		syncFn:         ix.SyncWith,
 	}
 }
 
@@ -399,6 +410,23 @@ func (w *Watcher) run() {
 		}
 	}
 
+	// drainSweep blocks until an in-flight escalation sweep has genuinely
+	// finished (a no-op when none is running). Every return path below
+	// calls this before returning: Stop's contract is that it blocks until
+	// every goroutine this Watcher owns has exited (see Stop's doc comment,
+	// "no goroutine leak ... a genuine join point"), and sweepCancel alone
+	// only narrows the window before runSweep's SyncWith call notices
+	// cancellation — it does not close it. Without this, run() could return
+	// (closing doneCh, which is all Stop waits on) while runSweep was still
+	// live, so a caller that closes its Index right after Stop returns (as
+	// pkg/gateway/knowledge_lifecycle.go's shutdown ordering requires) could
+	// race a sweep still calling into a closing bleve index.
+	drainSweep := func() {
+		if sweepDoneCh != nil {
+			<-sweepDoneCh
+		}
+	}
+
 	startSweep := func() {
 		sweeping = true
 		if w.testOnSweepStart != nil {
@@ -431,6 +459,7 @@ func (w *Watcher) run() {
 		select {
 		case <-w.stopCh:
 			stopAllTimers()
+			drainSweep()
 			return
 
 		case err, ok := <-w.runErrCh:
@@ -438,6 +467,7 @@ func (w *Watcher) run() {
 				w.markUnavailable(err)
 			}
 			stopAllTimers()
+			drainSweep()
 			return
 
 		case <-w.overflow:
@@ -454,13 +484,23 @@ func (w *Watcher) run() {
 		case ev, ok := <-w.rawEvents:
 			if !ok {
 				stopAllTimers()
+				drainSweep()
 				return
 			}
 			crossed := countBurst()
 			if sweeping {
-				if crossed {
-					sweepAgain = true
-				}
+				// An event arriving while a sweep is already in flight may
+				// describe a path the sweep's own walk has already passed —
+				// there is no way to know from here. Design §2's governing
+				// principle ("a missed event costs latency, not
+				// correctness") only holds if this is unconditional: the
+				// overflow case above already treats ANY signal while
+				// sweeping as "escalate again"; a raw event must be treated
+				// the same way, not just one that separately crosses the
+				// burst threshold on its own. Dropping it here would be
+				// exactly the silent staleness the periodic/startup sweep
+				// exists to prevent, just six hours sooner (finding 3).
+				sweepAgain = true
 				continue
 			}
 			if crossed {
@@ -568,7 +608,7 @@ func (w *Watcher) applyOne(relPath string, removed bool) {
 // the caller has already stopped caring.
 func (w *Watcher) runSweep() {
 	start := time.Now()
-	stats, err := w.ix.SyncWith(w.sweepCtx, SyncOptions{})
+	stats, err := w.syncFn(w.sweepCtx, SyncOptions{})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
