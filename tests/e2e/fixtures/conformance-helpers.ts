@@ -239,13 +239,24 @@ export function checkCriterion(text: string, command: string, expectedExitCode =
  * the seeded default tool-policy set; the conformance member tasks only
  * need a textual LLM reply, so no special tools are required.
  *
- * `builtinPolicies`, when provided, is merged (server-side, sparse-over-
- * complete — see pkg/gateway/rest.go's createAgent) onto the fully-enumerated
- * deny-by-default seed via `tools_cfg.builtin.policies`. Used by tests that
- * need this agent to execute a `kind: check` criterion for real (e.g.
- * `{ bash: 'allow' }`) — verified empirically: a fresh custom agent with no
- * override gets `bash: "deny"`, which fails every check criterion closed
- * regardless of command (AgentToolsCfg.yaml's documented deny-by-default).
+ * `builtinPolicies`, when provided, is applied as an override on top of the
+ * agent's fully-enumerated deny-by-default seed via a read-modify-write
+ * against `PUT /api/v1/agents/{id}/tools`, AFTER creation — never sent as a
+ * sparse map on the `POST /agents` body itself. `POST /agents` (and `PUT
+ * .../tools`) now reject an incomplete `tools_cfg.builtin.policies` map with
+ * 400 (CLAUDE.md hard constraint 6 — a caller-supplied policy map must cover
+ * every known tool or be rejected, never silently backfilled from the deny
+ * seed): this helper used to send `{ bash: 'allow' }` alone and rely on the
+ * server merging it onto the seed, which was itself the exact defect that
+ * guarantee's tightening closed. The fix follows the same read-modify-write
+ * cycle the SPA and the fix's own doc comments describe (`GET
+ * /agents/{id}/tools` → `config.builtin.policies`, guaranteed to cover the
+ * full catalog → flip the requested keys → `PUT` the complete map back).
+ * Used by tests that need this agent to execute a `kind: check` criterion for
+ * real (e.g. `{ bash: 'allow' }`) — verified empirically: a fresh custom
+ * agent with no override gets `bash: "deny"`, which fails every check
+ * criterion closed regardless of command (AgentToolsCfg.yaml's documented
+ * deny-by-default).
  */
 export async function createMainAgent(
   page: Page,
@@ -256,9 +267,6 @@ export async function createMainAgent(
     type: 'Main',
     name,
     soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
-  }
-  if (builtinPolicies !== undefined) {
-    body.tools_cfg = { builtin: { policies: builtinPolicies } }
   }
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', body)
   if (!res.ok) {
@@ -278,7 +286,35 @@ export async function createMainAgent(
         `be registered in memory and is not safely usable: ${res.body.warning}`,
     )
   }
-  return res.body.id
+  const agentId = res.body.id
+
+  if (builtinPolicies !== undefined) {
+    const getRes = await apiFetch<{ config?: { builtin?: { policies?: Record<string, string> } } }>(
+      page,
+      'GET',
+      `/api/v1/agents/${agentId}/tools`,
+    )
+    if (!getRes.ok) {
+      throw new Error(`createMainAgent: GET /agents/${agentId}/tools failed ${getRes.status}: ${getRes.raw}`)
+    }
+    const fullPolicies = { ...(getRes.body.config?.builtin?.policies ?? {}), ...builtinPolicies }
+    const putRes = await apiFetch<{ warning?: string }>(page, 'PUT', `/api/v1/agents/${agentId}/tools`, {
+      builtin: { policies: fullPolicies },
+    })
+    if (!putRes.ok) {
+      throw new Error(
+        `createMainAgent: PUT /agents/${agentId}/tools failed ${putRes.status}: ${putRes.raw}`,
+      )
+    }
+    if (putRes.body.warning) {
+      throw new Error(
+        `createMainAgent: PUT /agents/${agentId}/tools returned with a reload warning, so the ` +
+          `policy override may not be live yet: ${putRes.body.warning}`,
+      )
+    }
+  }
+
+  return agentId
 }
 
 export async function createPlan(
