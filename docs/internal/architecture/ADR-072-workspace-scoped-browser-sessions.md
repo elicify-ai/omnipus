@@ -1812,6 +1812,48 @@ with their own scope. §6 carries it.
 
 ---
 
+## D1.13 — The measurement gates defer; they do not block (operator ruling, 2026-09-02)
+
+**Ruling, verbatim:** *"regarding the measurement it is not a blocker, for now we work with the
+data we have as assumption, after everything is proven working, you can run the measurement on a
+Fly Linux machine yourself, but first finish everything else according to the goal."*
+
+**Decision.** The five gates that are *measurements* — **G-1** (marginal cost of a second Chrome
+on Linux with capture running), **G-3** (does Chromium read a cgroup memory limit), **G-4** (does
+Linux memory-pressure signalling still fire), **G-5** (cold-start latency with a warm profile) and
+**G-6** (does memory or CPU bind first at N browsers) — are reclassified from **blocking** to
+**deferred-with-assumption**. D1.5's ordering constraint *"all four are required before the pool is
+built"* is **superseded** for those five. The pool ships against the figures already in hand.
+
+**G-2 is explicitly excluded and is unaffected.** It is not a measurement; it is a yes/no about
+whether the design works at all — can `chrome.tabCapture` capture a tab in a **second Chrome
+process's default context**, given that ADR-048 proved it cannot in a **CDP-created** context.
+It has since **PASSED** (`3996b73aa`): real Chrome 152, two distinct processes (pids 91839 /
+91998) with distinct `--user-data-dir` profiles, a live video track (`ReadyState: live`,
+`VideoTracks: 1`) captured from the second, and the second Chrome unable to see the first's tabs —
+so the isolation is real rather than nominal. Proven able to fail by two mutations: hiding every
+Chrome source (the gate FAILED rather than skipping, which is the whole reason
+`requireBrowserOrFail` exists), and moving the captured tab back into a CDP-created context.
+
+**Why this is safe to defer.** Every deferred gate sets a *constant*, not a *shape*. A wrong
+constant is a tuning error corrected by editing one value; a wrong answer to G-2 would have been a
+design error costing the whole stream. The one gate whose failure could not be absorbed is the one
+that was not deferred, and it has passed.
+
+**The obligation that replaces the gate — this is the part that must not be lost.** Deferring a
+measurement does not confer the number. Therefore:
+
+1. **Every constant a deferred gate would have set must be visibly marked as an assumption at its
+   definition site**, naming the figure it rests on and the host it came from. An assumed constant
+   that reads as a measured one is precisely the defect this ruling must not create.
+2. **`PER_BROWSER_COST` ≈ 182 MB is a LOWER bound.** It is macOS, one snapshot, **idle and not
+   capturing**; a capturing instance adds the injected extension plus encoding work, unmeasured.
+   All headroom arithmetic must be conservative in that direction.
+3. **The follow-up measurement pass is owed**, on a Fly Linux host, after the work is proven: G-1
+   in **PSS not RSS** (RSS over-counts by 2.6x on the measured box — 1118 MB vs 434 MB) plus the
+   gateway's own steady-state PSS, then G-3, G-4, G-5 and G-6. Constants are corrected then if the
+   assumptions were wrong.
+
 ## 3. Acceptance criteria
 
 ### 3.1 D1 — ownership
