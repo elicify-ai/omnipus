@@ -365,18 +365,66 @@ func TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent(t *testing.T) {
 	// must now satisfy it: the flat `browser_snapshot` AND the dotted
 	// `channel.pairing` that used to blank the whole screen.
 	//
-	// The authoritative guard is pkg/audit/event_name_contract_test.go, which
-	// checks EVERY declared event name against the pattern read out of the
-	// contract file itself. The regex is restated here only to keep this
-	// test's own two records self-contained; if it ever drifts from the
-	// contract, that sibling test — not this one — is the one that reds.
-	contractEventPattern := regexp.MustCompile(`^[a-z_.]+$`)
-	assert.True(t, contractEventPattern.MatchString("browser_snapshot"),
-		"browser_snapshot must satisfy AuditEntry's ^[a-z_.]+$")
-	assert.True(t, contractEventPattern.MatchString("channel.pairing"),
-		"channel.pairing must satisfy AuditEntry's widened ^[a-z_.]+$ — this is the #667 fix: "+
-			"a dotted event name no longer fails AuditLogResponse's z.array(AuditEntry) "+
-			"validation, so Settings → Security → Audit Log renders it instead of blanking")
+	// The pattern is READ OUT OF THE CONTRACT FILE, not restated here.
+	//
+	// It used to be restated — `regexp.MustCompile("^[a-z_.]+$")` written in
+	// this function, then matched against the two literals "browser_snapshot"
+	// and "channel.pairing", also written in this function. That could not
+	// fail for the thing it claimed to check. Narrowing AuditEntry.yaml back
+	// to `^[a-z_]+$` — reinstating #667 exactly, blanking the operator's whole
+	// Audit Log screen the moment any dotted event lands next to a snapshot —
+	// left it green, because nothing in the assertion had read the contract.
+	// The comment even said so, and pointed at a sibling test as the real
+	// guard, which is a fair description of a test that is not one.
+	//
+	// pkg/audit/event_name_contract_test.go remains the authoritative sweep:
+	// it checks EVERY declared event name against this same pattern. What is
+	// asserted here is narrower and local — that the two names co-resident in
+	// THIS test's fixture both satisfy the contract as it actually reads
+	// today, so a reader can trust the record above is one the SPA will
+	// render rather than one that blanks the screen.
+	pattern := auditEntryEventPatternFromContract(t)
+	for _, name := range []string{"browser_snapshot", "channel.pairing"} {
+		assert.Regexp(t, pattern, name,
+			"%q does not satisfy AuditEntry.yaml's event pattern %q. AuditLogResponse validates "+
+				"z.array(AuditEntry) at the SPA edge, so ONE non-matching event fails the WHOLE "+
+				"array and Settings → Security → Audit Log blanks — this is #667, and the fix was "+
+				"widening the pattern to admit the dotted names every newer event uses",
+			name, pattern)
+	}
+}
+
+// auditEntryEventPatternFromContract reads the `pattern:` constraint that
+// contracts/components/schemas/AuditEntry.yaml puts on `event`.
+//
+// Reading it rather than restating it is the whole point: the generated Zod
+// schema carries this regex verbatim, so the contract file is the only thing
+// that decides whether a stored event name survives the SPA's edge
+// validation. A copy in a test is one more thing that can drift from it, and
+// a test asserting its own copy cannot notice the drift.
+//
+// Deliberately mirrors pkg/audit/event_name_contract_test.go's reader,
+// including its "exactly one quoted pattern" check — the schema declares one
+// today, and failing loudly on a second is better than silently picking the
+// wrong one.
+func auditEntryEventPatternFromContract(t *testing.T) *regexp.Regexp {
+	t.Helper()
+
+	schemaPath := filepath.Join("..", "..",
+		"contracts", "components", "schemas", "AuditEntry.yaml")
+	raw, err := os.ReadFile(schemaPath)
+	require.NoError(t, err, "read AuditEntry.yaml (%s)", schemaPath)
+
+	patternLine := regexp.MustCompile(`(?m)^\s*pattern:\s*'([^']*)'\s*$`)
+	matches := patternLine.FindAllStringSubmatch(string(raw), -1)
+	require.Len(t, matches, 1,
+		"expected exactly 1 quoted `pattern:` in AuditEntry.yaml — scope this lookup to the "+
+			"`event` property")
+
+	re, err := regexp.Compile(matches[0][1])
+	require.NoError(t, err, "AuditEntry.yaml's event pattern %q does not compile as a Go regexp",
+		matches[0][1])
+	return re
 }
 
 // TestAuditLog_ReadSurfaceRedactsNothing states, as a fixed oracle, the one
