@@ -2131,7 +2131,7 @@ jobs:
           # key is registered with add-mask, so it stays masked in whatever the
           # server echoes back.
           body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
             | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
                 -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
