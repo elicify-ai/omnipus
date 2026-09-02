@@ -3787,9 +3787,42 @@ type BrowserToolConfig struct {
 	Headless       bool   `                                   json:"headless"        env:"OMNIPUS_TOOLS_BROWSER_HEADLESS"`
 	CDPURL         string `                                   json:"cdp_url"         env:"OMNIPUS_TOOLS_BROWSER_CDP_URL"`
 	PageTimeoutSec int    `                                   json:"page_timeout"    env:"OMNIPUS_TOOLS_BROWSER_PAGE_TIMEOUT"`
-	MaxTabs        int    `                                   json:"max_tabs"        env:"OMNIPUS_TOOLS_BROWSER_MAX_TABS"`
-	PersistSession bool   `                                   json:"persist_session" env:"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION"`
-	ProfileDir     string `                                   json:"profile_dir"     env:"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR"`
+	// LeaseWaitSec bounds how long a browser tool call waits for the
+	// single-driver lease before it declares contention and refuses.
+	//
+	// SECONDS as an int, matching PageTimeoutSec and IdleTTLSec directly above
+	// and below it, rather than a duration string. A single struct that mixes
+	// `30` and `"2s"` for two adjacent timeouts is a configuration file an
+	// operator gets wrong once and then distrusts.
+	//
+	// Zero (the unset default) leaves pkg/tools/browser's own default in
+	// force. It is CLAMPED at load and on every reload to at most half
+	// page_timeout — see ClampLeaseWait for why waiting longer than that is
+	// strictly worse than refusing.
+	LeaseWaitSec int `json:"lease_wait" env:"OMNIPUS_TOOLS_BROWSER_LEASE_WAIT"`
+	// ActionabilityGate selects how thoroughly a browser interaction waits for
+	// an element to be genuinely actionable before acting on it.
+	//
+	//   "full"         (default) — the complete check: attached, visible,
+	//                  stable, receiving pointer events, not obscured.
+	//   "visible_only" — the pre-existing, weaker check: attached and visible.
+	//
+	// This exists ONLY as a revert switch, so an operator whose site regresses
+	// under the stricter gate has something to turn while the regression is
+	// diagnosed, rather than having to downgrade. It is expected to be REMOVED
+	// once the full gate has soaked — see the removal issue named in the
+	// actionability spec; this comment must carry that issue number before the
+	// switch outlives its purpose and becomes a permanent second code path.
+	//
+	// The env tag is FULLY QUALIFIED on purpose. The embedded ToolConfig
+	// carries envPrefix:"OMNIPUS_TOOLS_BROWSER_", so a relative tag here would
+	// be double-prefixed into OMNIPUS_TOOLS_BROWSER_OMNIPUS_TOOLS_BROWSER_...
+	// — the TRUST_PATH_CHROME bug, which shipped and was invisible because
+	// nothing failed, the variable simply never took effect.
+	ActionabilityGate string `json:"actionability_gate" env:"OMNIPUS_TOOLS_BROWSER_ACTIONABILITY_GATE"`
+	MaxTabs           int    `                                   json:"max_tabs"        env:"OMNIPUS_TOOLS_BROWSER_MAX_TABS"`
+	PersistSession    bool   `                                   json:"persist_session" env:"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION"`
+	ProfileDir        string `                                   json:"profile_dir"     env:"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR"`
 	// IdleTTLSec is how long an individual TAB may sit untouched before it is
 	// reaped. Reaping is per tab, not per browsing context: each tab is judged
 	// on its own last-touched time, and a context is torn down only once every

@@ -135,6 +135,8 @@ func TestBrowserToolConfig_EnvKeys_NoDoublePrefix(t *testing.T) {
 		"OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED":      "",
 		"OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME":    "",
 		"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER":   "",
+		"OMNIPUS_TOOLS_BROWSER_LEASE_WAIT":           "",
+		"OMNIPUS_TOOLS_BROWSER_ACTIONABILITY_GATE":   "",
 	}
 
 	seen := map[string]bool{}
