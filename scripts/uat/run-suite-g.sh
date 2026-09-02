@@ -21,6 +21,27 @@ declare -a RESULTS
 ask() { node "$HARNESS" --home "$HOME_DIR" --token-file "$TOKF" --agent "$AGENT" \
           --workspace "$WS" --timeout "$1" ask "$2" 2>&1; }
 
+# countFor <term> -> the number of records matching <term>, or empty if the
+# reply could not be read.
+#
+# READS A SENTINEL, NOT PROSE. The first version of this script pulled the first
+# integer out of the agent's free text with a bare grep. That is unreliable in
+# both directions: a verbose reply can lead with a number that is not the count
+# (a timing, a limit, a step number), and the resulting verdict is then bogus in
+# whichever direction the stray number happens to point. It produced a FAIL for
+# G-4 that did not reproduce by hand — the product was correct and the harness
+# was wrong, which is the more dangerous of the two failures because it sends
+# you hunting a bug that is not there.
+#
+# The agent is now asked to emit a delimited sentinel and the sentinel alone is
+# parsed. A reply that does not carry one yields empty, and the caller treats
+# that as unreadable rather than as zero.
+countFor() {
+  local out
+  out=$(ask 240 "Call knowledge_find with words=\"$1\". Reply with EXACTLY one line in this format and nothing else: COUNT=<number>")
+  printf '%s' "$out" | grep -oE 'COUNT=[0-9]+' | head -1 | cut -d= -f2
+}
+
 # verdict <id> <ok:0|1> <detail>
 verdict() {
   if [ "$2" -eq 0 ]; then PASS=$((PASS+1)); RESULTS+=("PASS  $1  $3")
@@ -38,7 +59,7 @@ g1() {
   local out; out=$(ask 300 "Do BOTH steps in this one turn, in order, with no pause. STEP 1: use knowledge_edit op=create to create a note at path uat-g1-$term.md whose body contains exactly the word $term. STEP 2: immediately use knowledge_find with words=\"$term\". Report whether step 2 found the note you just created in step 1.")
   # Graded on the VAULT and on a second, independent search — not on the reply.
   local ondisk=0; [ -f "$COL/uat-g1-$term.md" ] && ondisk=1
-  local found; found=$(ask 200 "Use knowledge_find with words=\"$term\". Reply with ONLY the number of records matched." | grep -oE '\b[0-9]+\b' | head -1)
+  local found; found=$(countFor "$term")
   if [ "$ondisk" -eq 1 ] && [ "${found:-0}" -ge 1 ]; then verdict G-1 0 "written and immediately findable (matched=$found)"
   elif [ "$ondisk" -eq 0 ]; then verdict G-1 1 "the note was never written to disk — the write failed, not the index"
   else verdict G-1 1 "WRITTEN BUT NOT FINDABLE — the index was not updated before the tool returned"; fi
@@ -51,7 +72,7 @@ g345() {
   local term; term=$(uniq_term); local f="$COL/uat-g3-$term.md"
   printf -- '---\ntype: company\nname: "G3 %s"\n---\n\n%s\n' "$term" "$term" > "$f"
   sleep 6
-  local n; n=$(ask 200 "Use knowledge_find with words=\"$term\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+  local n; n=$(countFor "$term")
   [ "${n:-0}" -ge 1 ] && verdict G-3 0 "external add picked up without restart" \
                       || verdict G-3 1 "external add NOT picked up (watcher not running or not reaching the index)"
 
@@ -59,8 +80,8 @@ g345() {
   printf -- '---\ntype: company\nname: "G4 %s"\n---\n\n%s\n' "$t2" "$t2" > "$f"
   sleep 6
   local old new
-  old=$(ask 200 "Use knowledge_find with words=\"$term\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
-  new=$(ask 200 "Use knowledge_find with words=\"$t2\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+  old=$(countFor "$term")
+  new=$(countFor "$t2")
   if [ "${old:-1}" -eq 0 ] && [ "${new:-0}" -ge 1 ]; then verdict G-4 0 "edit reflected; old term gone"
   elif [ "${old:-1}" -ne 0 ]; then verdict G-4 1 "STALE DOCUMENT — the old term still matches after the edit"
   else verdict G-4 1 "the new content is not findable after an external edit"; fi
@@ -74,12 +95,12 @@ g345() {
   #
   # A test that cannot tell "correctly removed" from "never there" measures
   # nothing. The precondition below is the difference.
-  local before; before=$(ask 200 "Use knowledge_find with words=\"$t2\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+  local before; before=$(countFor "$t2")
   if [ "${before:-0}" -lt 1 ]; then
     skip G-5 "PRECONDITION FAILED: the file was not findable before deletion, so a post-deletion zero proves nothing"
   else
     rm -f "$f"; sleep 6
-    local gone; gone=$(ask 200 "Use knowledge_find with words=\"$t2\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+    local gone; gone=$(countFor "$t2")
     [ "${gone:-1}" -eq 0 ] && verdict G-5 0 "deletion reflected (was findable=$before, now 0)" \
                            || verdict G-5 1 "DELETED FILE STILL MATCHES — a search returns a note that no longer exists"
   fi
@@ -94,7 +115,7 @@ g6() {
     printf -- '---\ntype: company\nname: "B%s %s"\n---\n\n%s\n' "$i" "$term" "$term" > "$COL/uat-g6-$term-$i.md"
   done
   sleep 25
-  local got; got=$(ask 300 "Use knowledge_find with words=\"$term\" and limit=500. Reply with ONLY the total number of records matched." | grep -oE '\b[0-9]+\b' | head -1)
+  local got; got=$(countFor "$term")
   if [ "${got:-0}" -ge "$n" ]; then verdict G-6 0 "all $n files indexed after a burst (matched=$got)"
   else verdict G-6 1 "ONLY ${got:-0} of $n indexed — events were dropped, which is the silent-staleness failure the design forbids"; fi
   rm -f "$COL/uat-g6-$term-"*.md
@@ -108,8 +129,8 @@ g8() {
   printf '%%PDF-1.4\n%s\n' "$body" > "$COL/uat-g8-$term.pdf"
   sleep 6
   local byname bybody
-  byname=$(ask 200 "Use knowledge_find with words=\"$term\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
-  bybody=$(ask 200 "Use knowledge_find with words=\"$body\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+  byname=$(countFor "$term")
+  bybody=$(countFor "$body")
   if [ "${byname:-0}" -ge 1 ] && [ "${bybody:-1}" -eq 0 ]; then verdict G-8 0 "findable by name; body not searchable"
   elif [ "${bybody:-0}" -ne 0 ]; then verdict G-8 1 "PDF BODY IS SEARCHABLE — instant indexing has started extracting documents"
   else verdict G-8 1 "attachment not findable by name (matched=${byname:-0})"; fi
@@ -125,7 +146,7 @@ b06() {
   t0=$(python3 -c 'import time;print(int(time.time()*1000))')
   printf -- '---\ntype: company\nname: "P %s"\n---\n\n%s\n' "$term" "$term" > "$COL/uat-b06-$term.md"
   for _ in $(seq 1 40); do
-    n=$(ask 120 "Use knowledge_find with words=\"$term\". Reply with ONLY the number matched." | grep -oE '\b[0-9]+\b' | head -1)
+    n=$(countFor "$term")
     [ "${n:-0}" -ge 1 ] && break
     sleep 1
   done
