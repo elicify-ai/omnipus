@@ -394,7 +394,7 @@ func dialogAwareTimeout(mgr *BrowserManager, sessionID, toolName string, err err
 	}
 	return fmt.Errorf("%s: the tab stopped answering%s. It may have an open dialog that predates this session's "+
 		"listener — try browser_handle_dialog{accept:false}; if that reports no dialog, the tab has crashed or "+
-		"closed and only a re-navigate recovers it.",
+		"closed and only a re-navigate recovers it",
 		toolName, after), true
 }
 
