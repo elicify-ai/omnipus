@@ -302,11 +302,21 @@ func newBrowserInspectTestAPIWithMutate(t *testing.T, mutate func(cfg *config.Co
 // the gateway layer, mirroring pkg/tools/browser/inspect_test.go's
 // TestInspectPoint_SessionError trick (force ensureStarted() to fail) but
 // via a knob actually reachable through config.BrowserToolConfig, which has
-// no ExecPath field of its own (unlike browser.BrowserConfig): point
-// ProfileDir at a path that already exists as a REGULAR FILE, so
-// ensureStarted()'s os.MkdirAll(ProfileDir, 0o700) fails deterministically
-// and near-instantly, before ever touching exec discovery or CDP — no real
-// Chromium involved, no skip needed.
+// no ExecPath field of its own (unlike browser.BrowserConfig): put a REGULAR
+// FILE where a directory has to be, so the MkdirAll that precedes launch
+// fails deterministically and near-instantly with ENOTDIR, before ever
+// touching exec discovery or CDP — no real Chromium involved, no skip needed.
+//
+// WHICH path has to be the file changed under ADR-072, and getting it wrong
+// is silent: BrowserPool no longer launches into cfg.ProfileDir itself. It
+// treats that value's PARENT as the profile ROOT (pool.go's profileRoot() =
+// filepath.Dir(filepath.Clean(cfg.ProfileDir))) and launches each workspace
+// into its own <root>/ws-<id> beneath it. So pointing ProfileDir straight at
+// a regular file stopped blocking anything — the parent is a perfectly good
+// directory, MkdirAll succeeded, a REAL Chrome launched, and this test spent
+// ~44s doing the one thing its own comment promises it never does before
+// failing on ok=true. The blocker therefore has to sit one level UP, at the
+// profile root, which is what ProfileDir's parent now is.
 // BDD: Given the target agent's BrowserManager has a ProfileDir that is
 // actually a file (not a directory),
 // When POST /api/v1/browser/inspect is called for that agent,
@@ -319,7 +329,9 @@ func TestHandleBrowserInspect_InspectPointHardError_SoftErrorWithReason(t *testi
 	require.NoError(t, os.WriteFile(blockerPath, []byte("not a directory"), 0o600))
 
 	api := newBrowserInspectTestAPIWithMutate(t, func(cfg *config.Config) {
-		cfg.Tools.Browser.ProfileDir = blockerPath
+		// blockerPath becomes the profile ROOT (see the note above), so every
+		// per-workspace MkdirAll under it fails on a non-directory component.
+		cfg.Tools.Browser.ProfileDir = filepath.Join(blockerPath, "profiles")
 	})
 
 	defaultAgent := api.agentLoop.GetRegistry().GetDefaultAgent()
