@@ -148,6 +148,12 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 				"type":        "boolean",
 				"description": "Force reinstall if skill already exists (default false)",
 			},
+			"ownerHandle": map[string]any{
+				"type": "string",
+				"description": "Disambiguates slug when it is published by more than one owner on the " +
+					"registry (an ambiguous-match install error names the candidate owner handles to " +
+					"retry with). Not needed for an unambiguous slug.",
+			},
 		},
 		"required": []string{"slug", "registry"},
 	}
@@ -174,6 +180,15 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 
 	version, _ := args["version"].(string)
 	force, _ := args["force"].(bool)
+
+	// Validate ownerHandle, if supplied (disambiguates a slug published by
+	// more than one owner — see Parameters()).
+	ownerHandle, _ := args["ownerHandle"].(string)
+	if ownerHandle != "" {
+		if err := utils.ValidateSkillIdentifier(ownerHandle); err != nil {
+			return ErrorResult(fmt.Sprintf("invalid ownerHandle %q: error: %s", ownerHandle, err.Error()))
+		}
+	}
 
 	// Check if already installed. skillsDir is the fixed GLOBAL skills
 	// directory (ADR-046 FR-009) — NOT a per-agent workspace path — so an
@@ -237,8 +252,23 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	// exists and this is a harmless no-op.
 	defer os.RemoveAll(stageDir)
 
-	// Download and install (handles metadata, version resolution, extraction).
-	result, err := registry.DownloadAndInstall(ctx, slug, version, stageDir)
+	// Download and install (handles metadata, version resolution, extraction)
+	// into the staging directory. When ownerHandle is supplied, route through
+	// the registry's owner-scoped install path (if it supports one) so an
+	// ambiguous slug can actually be resolved — a bare DownloadAndInstall
+	// would hit the same ambiguity again.
+	var result *skills.InstallResult
+	if ownerHandle != "" {
+		scoped, ok := registry.(skills.OwnerScopedRegistry)
+		if !ok {
+			return ErrorResult(fmt.Sprintf(
+				"registry %q does not support ownerHandle-scoped installs", registryName,
+			))
+		}
+		result, err = scoped.DownloadAndInstallForOwner(ctx, slug, ownerHandle, version, stageDir)
+	} else {
+		result, err = registry.DownloadAndInstall(ctx, slug, version, stageDir)
+	}
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
 	}

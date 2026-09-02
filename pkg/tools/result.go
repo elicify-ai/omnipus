@@ -447,6 +447,25 @@ const (
 	ToolResultRecallMarkCode  = "tool_result_recall_mark"
 )
 
+// SkillNotFoundCode is the discriminator ADR-072 FR-054 mints so a skill-slug
+// resolution failure is distinguishable from a permission denial: "no such
+// slug exists on any shelf visible to the acting agent" versus "the slug
+// exists but this agent is not granted it" (PermissionDeniedCode). Used by
+// the `Skill` tool's load path (pkg/tools/skill.go) and, in a later phase, by
+// `delegate`'s `requested_skill` dispatch (D9) for the same distinction.
+//
+// Deliberately NOT a member of the ADR-060 structured-failure family and NOT
+// added to AllStructuredFailureCodes: ADR-072 §7 states plainly that `Skill`
+// (and `requested_skill`) results are LLM-facing Go tool schemas
+// (Tool.Parameters()), not gateway/SPA wire types, so Constraint #8's
+// contract-first process — and the family's own membership checklist, which
+// requires a contracts/ schema and a generated.*Failure struct neither of
+// which exists here — does not apply to it. Producers build a plain
+// map[string]any payload (see skillNotFoundResult) rather than routing
+// through marshalWithinBudget/generated, precisely because there is no
+// generated shape to route through.
+const SkillNotFoundCode = "skill_not_found"
+
 // AllStructuredFailureCodes returns every structured tool-failure
 // discriminator this package defines. This is the SINGLE authoritative
 // enumeration a new producer's Code constant must be added to — pkg/gateway

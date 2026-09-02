@@ -15,6 +15,7 @@ import {
   PencilSimple,
   CircleNotch,
   PlugsConnected,
+  Clock,
 } from '@phosphor-icons/react'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -40,6 +41,7 @@ import {
   testMcpServer,
   updateMcpServer,
   isApiError,
+  skillLastInvoked,
   type McpServer,
   type ToolRegistryEntry,
 } from '@/lib/api'
@@ -48,6 +50,7 @@ import { SkillBrowser } from '@/components/skills/SkillBrowser'
 import { McpServerModal } from '@/components/skills/McpServerModal'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { CATEGORY_LABELS } from '@/lib/toolCategories'
+import { formatDateTime } from '@/lib/dateFormat'
 
 export function SkillsScreen() {
   const { addToast } = useUiStore()
@@ -244,6 +247,26 @@ export function SkillsScreen() {
                     <div className="flex items-center gap-3 mt-1.5 text-[10px] text-[var(--color-muted)]">
                       {skill.author && <span>by {skill.author}</span>}
                       {skill.agent_assignment && <span>→ {skill.agent_assignment}</span>}
+                    </div>
+                    {/* ADR-072 D3.1: a granted skill's last-invocation
+                        timestamp — the cheapest observable signal for
+                        whether D2 (description-driven activation) is
+                        actually working. A skill that has never been called
+                        must render VISIBLY as unused, not look identical to
+                        an actively-used one — so this always renders a row,
+                        distinguishing "Never used" from a real timestamp
+                        rather than omitting the line entirely when there is
+                        no timestamp. */}
+                    <div
+                      className="flex items-center gap-1 mt-1.5 text-[10px] text-[var(--color-muted)]"
+                      data-testid={`skill-last-invoked-${skill.id}`}
+                    >
+                      <Clock size={11} />
+                      {skillLastInvoked(skill) ? (
+                        <span>Last used {formatDateTime(skillLastInvoked(skill))}</span>
+                      ) : (
+                        <span className="italic">Never used</span>
+                      )}
                     </div>
                   </div>
                   {skill.source !== 'builtin' && (

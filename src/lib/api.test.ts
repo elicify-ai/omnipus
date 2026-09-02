@@ -2419,6 +2419,44 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
       expect(result).toHaveLength(1)
       expect(result[0].version).toBe('1.0')
     })
+
+    // ADR-072 D3.1: `last_invoked` is not yet declared in
+    // contracts/components/schemas/Skill.yaml (additionalProperties:
+    // false), so SkillSchema.safeParse alone would silently strip it even
+    // once the backend starts sending it. fetchSkills merges it back from
+    // the RAW response body — this proves that merge actually happens
+    // against a real (mocked) HTTP response, not just against a hand-built
+    // object in a component test.
+    it('merges last_invoked from the raw response even though the Skill schema does not declare it', async () => {
+      const payload = [
+        {
+          id: 'release-notes',
+          name: 'Release Notes',
+          version: '1.0.0',
+          verified: true,
+          status: 'active',
+          source: 'global',
+          last_invoked: '2026-08-15T10:00:00Z',
+        },
+        {
+          id: 'never-called',
+          name: 'Never Called',
+          version: '1.0.0',
+          verified: true,
+          status: 'active',
+          source: 'global',
+          // no last_invoked at all — the granted-but-never-invoked case.
+        },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { fetchSkills, skillLastInvoked } = await import('./api')
+      const result = await fetchSkills()
+
+      expect(result).toHaveLength(2)
+      expect(skillLastInvoked(result[0])).toBe('2026-08-15T10:00:00Z')
+      expect(skillLastInvoked(result[1])).toBeNull()
+    })
   })
 
   describe('searchSkills', () => {

@@ -3947,8 +3947,21 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// uses the new window" — AgentInstance resolves and CACHES its window at
 	// construction (instance.go), so a bare config swap would leave the
 	// running instance on the old window until a restart.
+	//
+	// req.Skills != nil (ADR-072 Finding A): ContextBuilder.skillAllowed
+	// (pkg/agent/context.go) reads from a skillAllowlist snapshot installed
+	// ONCE at agent-instance construction (instance.go's
+	// contextBuilder.WithSkillAllowlist(agentCfg.Skills)). Like Soul, a
+	// Skills-only edit is persisted to config above but never reaches the
+	// running instance without a rebuild — grantPredicateFor (skill.go)
+	// re-reads config live per-call so list_skills reflects the change
+	// immediately, but the Skill tool and the /<skill> path (both gated via
+	// skillAllowed) would keep serving the stale allowlist durably until some
+	// unrelated field forced a reload. Folding Skills into needsReload keeps
+	// both paths in sync via the same fastAgentUpsert rebuild Soul already
+	// uses.
 	contextWindowOverrideChanged := req.ContextWindowOverride != nil || clearsContextWindowOverride
-	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged
+	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged || req.Skills != nil
 	var reloadWarning string
 	if needsReload {
 		reloadWarning = a.fastAgentUpsert(id)
@@ -4771,6 +4784,21 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			skill.ArgumentHint = &hint
 		}
 
+		// LastInvoked (optional, ADR-072 D3.1): the most recent time this skill
+		// was requested by name through the Skill tool's load path, sourced from
+		// the real audit trail (pkg/audit.Logger.LastInvokedForSkill — both
+		// "loaded" and "denied" load outcomes count, matching that function's
+		// own documented contract). a.auditor is nil only in unit-test fixtures
+		// that construct restAPI without an audit logger; found is false when
+		// the skill has never been invoked by name or no audit history exists,
+		// in which case the field is correctly left unset rather than guessed.
+		if a.auditor != nil {
+			if invokedAt, found := a.auditor.LastInvokedForSkill(id); found {
+				ts := invokedAt
+				skill.LastInvoked = &ts
+			}
+		}
+
 		result = append(result, skill)
 	}
 	jsonOK(w, result)
@@ -5111,6 +5139,17 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
 		return
 	}
+	// a.homePath (OMNIPUS_HOME) is the correct root here: ADR-046 FR-009 made
+	// install_skill target the fixed, install-wide GLOBAL skills directory
+	// ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir), not a per-agent
+	// workspace — so this installer's root must be a.homePath (which resolves
+	// to that same $OMNIPUS_HOME/skills once "skills" is joined on below),
+	// not any individual agent's Workspace. Routing this through a specific
+	// agent's workspace (as an earlier version of this handler did, before
+	// ADR-046) would point the installer at a directory install_skill no
+	// longer writes into, so every delete would 404 on a skill that
+	// demonstrably exists.
+	//
 	// Inject the SSRF checker (SEC-24) so that any outbound HTTP calls made by
 	// the installer (e.g. future hash verification against a registry) are
 	// protected. a.ssrfChecker is nil when SSRF is disabled; the constructor

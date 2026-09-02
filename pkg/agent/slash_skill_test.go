@@ -50,6 +50,12 @@ func TestResolveSlash_Matrix(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
+	// ADR-072 D5: absence of a grant list denies every skill now, so this
+	// test must explicitly grant what it installed — it used to resolve
+	// under the old "no allowlist = unrestricted" default.
+	if agent.ContextBuilder != nil {
+		agent.ContextBuilder.WithSkillAllowlist([]string{"web-research", "web", "summarize"})
+	}
 
 	type row struct {
 		id          string
@@ -178,6 +184,12 @@ func TestResolveSlash_Matrix_A2(t *testing.T) {
 	writeSkillFile(t, cfg.Agents.Defaults.Home, "web-research")
 
 	agent := al.GetRegistry().GetDefaultAgent()
+	// ADR-072 D5: absence of a grant list denies every skill now, so this
+	// test must explicitly grant "web-research" — it used to resolve under
+	// the old "no allowlist = unrestricted" default.
+	if agent != nil && agent.ContextBuilder != nil {
+		agent.ContextBuilder.WithSkillAllowlist([]string{"web-research"})
+	}
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

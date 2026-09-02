@@ -3163,6 +3163,19 @@ export function deleteAgentMailbox(agentId: string, workspaceId: string): Promis
 // McpServerCreate — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/McpServerCreate.yaml.
 
+/**
+ * Read a skill's last-invocation timestamp (ISO 8601), or `null` when the
+ * skill has never been invoked or the backend has no audit history for it.
+ * `last_invoked` is a real `Skill` wire field (ADR-072 D3.1,
+ * contracts/components/schemas/Skill.yaml) populated by
+ * `pkg/gateway/rest.go::listSkills` from `pkg/audit.Logger
+ * ::LastInvokedForSkill` — validated by `SkillSchema` like every other
+ * `Skill` field, no raw-body access involved.
+ */
+export function skillLastInvoked(skill: Skill): string | null {
+  return skill.last_invoked ?? null
+}
+
 export async function fetchSkills(): Promise<Skill[]> {
   // Tolerant per-item validation: a single skill whose payload fails the Skill
   // schema must NOT hide the entire installed-skills list. (A community/ClawHub
@@ -3174,11 +3187,12 @@ export async function fetchSkills(): Promise<Skill[]> {
   let dropped = 0
   for (const item of raw) {
     const parsed = SkillSchema.safeParse(item)
-    if (parsed.success) out.push(parsed.data as Skill)
-    else dropped++
+    if (parsed.success) {
+      out.push(parsed.data as Skill)
+    } else dropped++
   }
   if (dropped > 0 && import.meta.env?.DEV) {
-     
+
     console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
   }
   return out
@@ -4306,19 +4320,82 @@ export function fetchHostFolders(path?: string): Promise<HostFolderListing> {
 }
 
 /**
+ * ADR-072 D1.2/FR-074/FR-074a: what mount-creation time discloses about a
+ * mount's recognised skills directory. SPA-shaped (camelCase) transform of
+ * the real wire fields `WorkspaceMountCreateResponse.skills_count` /
+ * `.skills_grants_message` / `.skills_threshold_warning` — see
+ * contracts/components/schemas/WorkspaceMountCreateResponse.yaml, populated
+ * by `pkg/gateway/rest_workspace_mounts.go::mountToCreateResponse` from
+ * `pkg/skills/mount_threshold.go::EvaluateMountSkillsDisclosure`. Mirrors
+ * the transformation-type convention used elsewhere in this file (e.g.
+ * `Session`, `ToolCall`): the wire shape is the generated
+ * `WorkspaceMountCreateResponse` type; this is the SPA's normalised view.
+ */
+export interface MountSkillsDisclosure { // not-wire-format: SPA transformation type (camelCase view over the real wire fields WorkspaceMountCreateResponse.skills_count/skills_grants_message/skills_threshold_warning) — see doc comment above
+  /** How many project skills the mount's recognised skills directory carries. */
+  count: number
+  /**
+   * FR-074a: states, every time count > 0 (even for a handful of skills),
+   * that the mount's skills directory grants agents new auto-loadable
+   * instructions — not merely files. Independent of the threshold.
+   */
+  grantsMessage: string
+  /**
+   * FR-074: non-empty only when count exceeds the mount-add-time threshold
+   * (spec default 500) — states the count and its per-turn consequence. The
+   * mount is still created either way (FR-075); this is information, not a
+   * refusal.
+   */
+  thresholdWarning: string | null
+}
+
+/**
+ * Read the ADR-072 D1.2 skills disclosure off a real
+ * `WorkspaceMountCreateResponse` (already validated against the generated
+ * schema by `createWorkspaceMount`), or `null` when the mount carries no
+ * recognised skills directory (`skills_count` absent — see
+ * `EvaluateMountSkillsDisclosure`'s zero-count contract).
+ */
+export function mountSkillsDisclosure(
+  resp: WorkspaceMountCreateResponse,
+): MountSkillsDisclosure | null {
+  if (
+    typeof resp.skills_count !== 'number' ||
+    resp.skills_count <= 0 ||
+    typeof resp.skills_grants_message !== 'string'
+  ) {
+    return null
+  }
+  return {
+    count: resp.skills_count,
+    grantsMessage: resp.skills_grants_message,
+    thresholdWarning: resp.skills_threshold_warning ?? null,
+  }
+}
+
+/**
  * Mount a real local folder into a workspace, making it writable there.
  *
  * Resolves with a `warning` when the target was broad but allowed (the home
  * directory, the filesystem root, a top-level system directory) — the caller
  * MUST surface it. Rejects (400) when the target is or lies inside the Omnipus
  * data directory, the one hard boundary.
+ *
+ * Also carries an ADR-072 D1.2 skills disclosure when the mounted folder has
+ * a recognised skills directory — read it via `mountSkillsDisclosure(resp)`.
+ * Goes through the standard `request<T>()` schema-validated path like every
+ * other endpoint (drop + counter + dev-toast on a schema mismatch, per
+ * Constraint #8) — no manual raw-body reimplementation needed now that
+ * `skills_count`/`skills_grants_message`/`skills_threshold_warning` are real
+ * `WorkspaceMountCreateResponse` fields.
  */
 export function createWorkspaceMount(
   workspaceId: string,
   body: WorkspaceMountCreateRequest,
 ): Promise<WorkspaceMountCreateResponse> {
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/mounts`
   return request<WorkspaceMountCreateResponse>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/mounts`,
+    path,
     { method: 'POST', body: JSON.stringify(body) },
     WorkspaceMountCreateResponseSchema as ZodType<WorkspaceMountCreateResponse>,
   )

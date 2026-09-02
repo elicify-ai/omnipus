@@ -440,6 +440,31 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }
 
+// retiredToolCanonicalNames maps a tool name retired by a rename to its
+// current, callable replacement name. It exists SOLELY to give a caller
+// (an LLM using a stale/hallucinated name, or an operator's old
+// muscle-memory) an actionable "renamed to X" error instead of a bare
+// "not found" — it is never registered as a tool, never appears in
+// AllStaticToolNames/InfraManifestToolNames/any manifest or policy surface,
+// and a call using the retired name still does not execute anything.
+//
+// This is deliberately NOT a dispatch-time alias (i.e. Get/Execute do not
+// silently resolve the old name and run the new tool): ADR-071's
+// "Alternatives Considered" §8.D rejected keeping a retired tool name
+// permanently callable alongside its replacement ("the permanent-dual-key
+// pattern ADR-036 §3.6 explicitly refused... it would leave three tool
+// identities for one capability"), and ADR-036 §3.6 itself states "No
+// permanent dual-key backward compatibility" as an explicit operator
+// decision. Both apply equally to a single retired/replacement pair. The
+// SPA's own legacy-name handling (humanizeToolName.ts, toolVisibility.ts)
+// is intentionally display-only for the same reason: it makes an
+// ALREADY-PERSISTED pre-rename transcript render correctly, it does not
+// make a NEW call to the old name succeed.
+var retiredToolCanonicalNames = map[string]string{
+	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
+	"load_tool": "ToolSearch",
+}
+
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
 // If the tool implements AsyncExecutor and a non-nil callback is provided,
 // ExecuteAsync is called instead of Execute — the callback is a parameter,
@@ -464,6 +489,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 
 	tool, ok := r.Get(name)
 	if !ok {
+		if canonical, retired := retiredToolCanonicalNames[name]; retired {
+			logger.WarnCF("tool", "Tool call used a retired name",
+				map[string]any{
+					"tool":      name,
+					"canonical": canonical,
+				})
+			return ErrorResult(fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)).
+				WithError(fmt.Errorf("tool %q was renamed to %q", name, canonical))
+		}
 		logger.ErrorCF("tool", "Tool not found",
 			map[string]any{
 				"tool": name,

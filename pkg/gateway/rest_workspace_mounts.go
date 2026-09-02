@@ -23,6 +23,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -73,6 +74,16 @@ func (a *restAPI) HandleWorkspaceMounts(w http.ResponseWriter, r *http.Request) 
 // and the workspace record both exist, so the target resolves by
 // construction at this instant — mirrors WorkspaceMountCreateResponse.yaml's
 // "always ok immediately after a successful create" note.
+//
+// ADR-072 D1.2/FR-074/FR-074a: also evaluates and attaches the mount's
+// skills-directory disclosure via skills.EvaluateMountSkillsDisclosure,
+// using the mount's just-resolved host path as the recognised-skills-
+// directory root. This is a pure, side-effect-free read (no mount-creation
+// decision depends on it — FR-075: the mount above was already created
+// before this runs) and never blocks or fails the response; a directory
+// walk error inside DiscoverProjectSkills degrades to Count==0 (no
+// disclosure fields), never an HTTP error, matching that function's own
+// documented no-error contract.
 func mountToCreateResponse(m workspace.Mount, warning string) gen.WorkspaceMountCreateResponse {
 	resp := gen.WorkspaceMountCreateResponse{
 		Name:     m.Name,
@@ -82,6 +93,19 @@ func mountToCreateResponse(m workspace.Mount, warning string) gen.WorkspaceMount
 	if warning != "" {
 		resp.Warning = &warning
 	}
+
+	disclosure := skills.EvaluateMountSkillsDisclosure(m.Name, m.HostPath, skills.DefaultMountSkillsWarnThreshold)
+	if disclosure.Count > 0 {
+		count := disclosure.Count
+		resp.SkillsCount = &count
+		grantsMessage := disclosure.GrantsMessage
+		resp.SkillsGrantsMessage = &grantsMessage
+		if disclosure.ThresholdWarning != "" {
+			thresholdWarning := disclosure.ThresholdWarning
+			resp.SkillsThresholdWarning = &thresholdWarning
+		}
+	}
+
 	return resp
 }
 

@@ -104,8 +104,17 @@ type AgentInstance struct {
 	ContextBuilder *ContextBuilder
 	Tools          *tools.ToolRegistry
 	Subagents      *config.SubagentsConfig
-	SkillsFilter   []string
-	Candidates     []providers.FallbackCandidate
+	// SkillsFilter mirrors agentCfg.Skills (the agent's per-agent skill grant
+	// list) for callers that want to inspect the raw configured grant.
+	// ADR-072 D1/D3: this is NOT unioned into a turn's active skills any more
+	// — activeSkillNames (loop.go) only reflects opts.ForcedSkills, populated
+	// by the /<slug> command and delegate's requested_skill. The actual grant
+	// enforcement (which names ARE allowed) lives on
+	// ContextBuilder.skillAllowlist / skillAllowed, installed from this same
+	// source via WithSkillAllowlist — this field is a convenience mirror, not
+	// a second source of truth for the gate.
+	SkillsFilter []string
+	Candidates   []providers.FallbackCandidate
 
 	// TimeoutSeconds is the per-turn hard timeout. 0 = disabled.
 	// Populated from AgentDefaults.TimeoutSeconds; per-agent override if available.
@@ -242,10 +251,12 @@ func NewAgentInstance(
 
 	if agentCfg != nil {
 		contextBuilder.WithAgentInfo(agentID, agentName)
-		// FR-9.4: install the per-agent skill allowlist so it is enforced at
-		// skill-resolution time (default-DENY). agentCfg.Skills is nil when the
-		// agent declares no allowlist → unrestricted; a non-nil list restricts
-		// resolution and progressive disclosure to exactly those skills.
+		// FR-9.4, ADR-072 D5: install the per-agent skill allowlist so it is
+		// enforced at skill-resolution time (default-DENY). agentCfg.Skills
+		// nil (never configured) and an empty slice (deliberately emptied)
+		// are now IDENTICAL — both deny every registry/builtin skill. There
+		// is no "unrestricted" state any more: only names present in
+		// agentCfg.Skills resolve or appear in progressive disclosure.
 		contextBuilder.WithSkillAllowlist(agentCfg.Skills)
 		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
 		// verifier runs memoryless for impartial, reproducible verdicts —

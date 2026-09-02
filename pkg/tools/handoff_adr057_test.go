@@ -24,6 +24,7 @@ package tools
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -121,5 +122,85 @@ func TestSwitchAgentTool_Default_AuditWriteFailure_CountedNotFatal(t *testing.T)
 	after := HandoffTranscriptWriteFailures()
 	if after != before+1 {
 		t.Fatalf("HandoffTranscriptWriteFailures() = %d, want %d (exactly one failure counted)", after, before+1)
+	}
+}
+
+// TestSwitchAgentTool_NamedTarget_AuditWriteFailure_SurfacedInForLLM covers
+// the UAT-reported gap this fix closes: before this change, a failed
+// audit-trail write was ONLY visible as a background WARN log line plus the
+// HandoffTranscriptWriteFailures() counter (asserted above) — the tool's own
+// result carried zero signal, so the calling agent (and, by extension, the
+// user) had no way to know the switch's own audit record did not persist.
+// This mirrors the publish_warning/cascade_warnings pattern
+// create_agent/update_agent/delete_agent already use for their own
+// best-effort steps (pkg/sysagent/tools/agent.go): the operation still
+// succeeds, but the caller is told about the partial failure in the result
+// itself, not only in a log an operator might never read.
+func TestSwitchAgentTool_NamedTarget_AuditWriteFailure_SurfacedInForLLM(t *testing.T) {
+	wantErr := errors.New("session unminted: no meta.json")
+	store := &u22FailingAppendStore{appendErr: wantErr}
+	reg := &stubRegistry{agents: map[string]string{"ray": "Ray"}}
+	tool := newTestSwitchAgentTool(reg, store, nil, nil)
+	ctx := makeCtx("session_abc", "chat_1", "mia")
+	result := tool.Execute(ctx, map[string]any{
+		"target": "ray",
+		"note":   "user needs billing help",
+	})
+
+	if result.IsError {
+		t.Fatalf("a failed audit-trail write must not fail the switch (best-effort by design); got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "audit-trail") {
+		t.Fatalf("ForLLM = %q, want it to mention the audit-trail write failure", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, wantErr.Error()) {
+		t.Fatalf("ForLLM = %q, want it to include the underlying error %q", result.ForLLM, wantErr.Error())
+	}
+	// Still reports the switch itself as complete — the warning is additive,
+	// not a replacement for the success headline.
+	if !strings.Contains(result.ForLLM, "Handoff complete") {
+		t.Fatalf("ForLLM = %q, want it to still report the handoff as complete", result.ForLLM)
+	}
+}
+
+// TestSwitchAgentTool_Default_AuditWriteFailure_SurfacedInForLLM mirrors the
+// above for the target:"default" branch.
+func TestSwitchAgentTool_Default_AuditWriteFailure_SurfacedInForLLM(t *testing.T) {
+	wantErr := errors.New("session unminted: no meta.json")
+	store := &u22FailingAppendStore{appendErr: wantErr}
+	tool := newTestSwitchAgentTool(&stubRegistry{}, store, func() string { return "mia" }, nil)
+	ctx := makeCtx("session_abc", "chat_1", "ray")
+	result := tool.Execute(ctx, map[string]any{"target": "default"})
+
+	if result.IsError {
+		t.Fatalf("a failed audit-trail write must not fail target:\"default\" (best-effort by design); got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "audit-trail") {
+		t.Fatalf("ForLLM = %q, want it to mention the audit-trail write failure", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, wantErr.Error()) {
+		t.Fatalf("ForLLM = %q, want it to include the underlying error %q", result.ForLLM, wantErr.Error())
+	}
+}
+
+// TestSwitchAgentTool_NamedTarget_AuditWriteSuccess_NoWarningInForLLM is the
+// positive lower bound (binding rule 4) for the ForLLM assertions above: a
+// SUCCESSFUL audit write must leave ForLLM free of the warning text, so its
+// presence on failure (asserted above) is a meaningful signal rather than
+// boilerplate always included.
+func TestSwitchAgentTool_NamedTarget_AuditWriteSuccess_NoWarningInForLLM(t *testing.T) {
+	store := &stubSessionStore{}
+	reg := &stubRegistry{agents: map[string]string{"ray": "Ray"}}
+	tool := newTestSwitchAgentTool(reg, store, nil, nil)
+	ctx := makeCtx("session_abc", "chat_1", "mia")
+	result := tool.Execute(ctx, map[string]any{
+		"target": "ray",
+		"note":   "test",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "audit-trail") {
+		t.Fatalf("ForLLM = %q, want no audit-trail warning after a successful write", result.ForLLM)
 	}
 }

@@ -41,6 +41,41 @@ describe('shouldRenderToolCall — load_tool (legacy pre-rename name, same treat
   })
 })
 
+// ADR-072 D3: `Skill` mirrors `ToolSearch` exactly — hidden on success,
+// forced visible on error/denial/not-found. Spec rows 31/32
+// (TestToolVisibility_SkillHiddenOnSuccessShownOnError,
+// TestToolVisibility_VerboseChatRevealsSkill).
+describe('shouldRenderToolCall — Skill (ADR-072 D3)', () => {
+  it.each([
+    [undefined, false, false],
+    [{}, false, false],
+    [{ slug: 'release-notes' }, false, false],
+    [undefined, true, true],
+    [{}, true, true],
+  ])('params=%o verbose=%s → %s', (params, verbose, expected) => {
+    expect(shouldRenderToolCall('Skill', params as Record<string, unknown> | undefined, verbose)).toBe(
+      expected,
+    )
+  })
+
+  it('a refused/denied load (error outcome) is forced visible, same as ToolSearch', () => {
+    expect(shouldRenderToolCall('Skill', { slug: 'release-notes' }, false, true)).toBe(true)
+  })
+
+  it('a not-found load (error outcome) is forced visible', () => {
+    expect(shouldRenderToolCall('Skill', { slug: 'no-such-skill' }, false, true)).toBe(true)
+  })
+
+  it('a successful load stays hidden even with isError explicitly false', () => {
+    expect(shouldRenderToolCall('Skill', { slug: 'release-notes' }, false, false)).toBe(false)
+  })
+
+  it('verbose chat reveals a Skill call regardless of outcome', () => {
+    expect(shouldRenderToolCall('Skill', undefined, true, false)).toBe(true)
+    expect(shouldRenderToolCall('Skill', undefined, true, true)).toBe(true)
+  })
+})
+
 describe('shouldRenderToolCall — delegate', () => {
   // Fix 2 (user-approved 2026-07-16, revised same day): a 'run' delegation
   // is hidden regardless of async — this INVERTS the pre-fix behavior for
@@ -152,10 +187,13 @@ describe('shouldRenderToolCall — verbose override', () => {
 // (shouldRenderToolCallInPanel shows everything but ToolSearch). Only verbose
 // chat brings these specific rows back into the thread. ──────────────────
 
-describe('shouldRenderToolCall — isError override still forces ToolSearch visibility', () => {
+describe('shouldRenderToolCall — isError override still forces ToolSearch/Skill visibility', () => {
   it.each<[string, Record<string, unknown> | undefined]>([
     ['ToolSearch', undefined],
     ['ToolSearch', {}],
+    ['Skill', undefined],
+    ['Skill', {}],
+    ['Skill', { slug: 'release-notes' }],
   ])('tool=%s params=%o is visible when isError=true', (tool, params) => {
     expect(shouldRenderToolCall(tool, params, false, true)).toBe(true)
   })
@@ -214,6 +252,7 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
   // classifications as omitting the parameter entirely.
   it.each<[string, Record<string, unknown> | undefined, boolean]>([
     ['ToolSearch', undefined, false],
+    ['Skill', undefined, false],
     ['delegate', undefined, false],
     ['delegate', { async: false }, false], // no longer forced visible (see describe block above)
     ['bash', { run_in_background: true }, false],

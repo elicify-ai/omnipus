@@ -762,6 +762,13 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		}
 		wireDelegationInjectors(al, newRegistry)
 		wireWorkingDirInjectors(al, newRegistry)
+		// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
+		// was only ever called once, from NewAgentLoop at boot — unlike its
+		// siblings above, it was never re-applied here, so a mounted project's
+		// skills silently stopped resolving for every agent after the FIRST
+		// config reload of the process (onboarding itself triggers one, so this
+		// hit nearly every real install). Mirror the siblings' re-wiring.
+		wireProjectShelfResolvers(al, newRegistry)
 		// MediaStore is deliberately left nil by registerSharedTools' send_file
 		// wiring (see its own doc comment) because it may not exist yet on the
 		// very first wiring pass inside NewAgentLoop; every real reload

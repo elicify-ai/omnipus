@@ -5,9 +5,13 @@
 package systools_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
@@ -339,6 +343,158 @@ func TestConfigSet_PreviousValueReturned(t *testing.T) {
 	// previous_value should be the old port.
 	if m["previous_value"] != float64(1234) {
 		t.Errorf("previous_value = %v, want 1234", m["previous_value"])
+	}
+}
+
+// TestConfigSet_StringEncodedBoolCoerced pins the fix for a live-UAT defect:
+// a real LLM tool call asked to flip a boolean setting sent
+// {"key": "...", "value": "false"} — the "value" arg arrives as the Go
+// STRING "false", not the Go bool false, because set_config's "value"
+// parameter deliberately declares no JSON Schema type ("any
+// JSON-compatible type"), so nothing tells the model whether to emit a
+// bare or a quoted boolean. Before the fix, dotSet wrote the string into
+// the config's generic map form, and the final json.Unmarshal back into
+// the typed *config.Config struct failed outright with "cannot unmarshal
+// string into Go struct field ... of type bool" — set_config could not
+// set a boolean field via a stringly-typed argument at all.
+//
+// args is built by decoding raw JSON through the SAME
+// providercommon.DecodeToolCallArguments path every real tool call goes
+// through, so this reproduces the exact shape a live LLM tool call
+// produces rather than a hand-built Go map that could never carry the bug.
+//
+// agents.defaults.split_on_marker is used as a low-risk, non-security
+// boolean field (a chat message-formatting preference; default false).
+func TestConfigSet_StringEncodedBoolCoerced(t *testing.T) {
+	deps, cfgPath := newTestDepsWithRealSave(t)
+	tool := systools.NewConfigSetTool(deps)
+
+	rawArgs := json.RawMessage(`{"key": "agents.defaults.split_on_marker", "value": "true"}`)
+	args := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+	if _, ok := args["value"].(string); !ok {
+		t.Fatalf("test setup invariant broken: expected args[value] to decode as a Go string, got %T", args["value"])
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	m := parseSuccess(t, result.ForLLM)
+	if v, ok := m["value"].(bool); !ok || !v {
+		t.Errorf("response value = %#v (%T), want true (bool) — the response must report what was actually stored, not the raw string argument", m["value"], m["value"])
+	}
+	if m["previous_value"] != false {
+		t.Errorf("previous_value = %v, want false", m["previous_value"])
+	}
+
+	// Read config.json back from disk and confirm the FIELD ITSELF decodes
+	// as a Go bool — not just that the tool call reported success. A
+	// stringly-typed write that json.Unmarshal accepts into a permissive
+	// map would still corrupt the typed config; decoding into the real
+	// struct type is the only proof that matters.
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	var onDisk struct {
+		Agents struct {
+			Defaults struct {
+				SplitOnMarker bool `json:"split_on_marker"`
+			} `json:"defaults"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("config.json did not decode split_on_marker as a bool: %v\nraw: %s", err, raw)
+	}
+	if !onDisk.Agents.Defaults.SplitOnMarker {
+		t.Fatalf("expected split_on_marker=true on disk, got false")
+	}
+	// Belt and suspenders: the stored JSON must be the bare literal `true`,
+	// never the quoted string `"true"`.
+	if !bytes.Contains(raw, []byte(`"split_on_marker": true`)) {
+		t.Fatalf("config.json does not contain the unquoted boolean literal for split_on_marker:\n%s", raw)
+	}
+}
+
+// TestConfigSet_NativeBoolArgStillWorks is the regression control for the
+// fix above: when the caller sends a genuine JSON boolean (the happy path
+// most tool calls already use), the write must continue to work exactly as
+// before.
+func TestConfigSet_NativeBoolArgStillWorks(t *testing.T) {
+	deps, cfgPath := newTestDepsWithRealSave(t)
+	tool := systools.NewConfigSetTool(deps)
+
+	rawArgs := json.RawMessage(`{"key": "agents.defaults.split_on_marker", "value": true}`)
+	args := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+	if _, ok := args["value"].(bool); !ok {
+		t.Fatalf("test setup invariant broken: expected args[value] to decode as a Go bool, got %T", args["value"])
+	}
+
+	result := tool.Execute(context.Background(), args)
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"split_on_marker": true`)) {
+		t.Fatalf("config.json does not contain the unquoted boolean literal for split_on_marker:\n%s", raw)
+	}
+}
+
+// TestConfigSet_OtherTypesStillWorkAfterBoolFix guards against the bool
+// coercion fix regressing string, integer and floating-point writes through
+// the same dotSet/coerceValueToFieldKind code path.
+func TestConfigSet_OtherTypesStillWorkAfterBoolFix(t *testing.T) {
+	deps, cfgPath := newTestDepsWithRealSave(t)
+	tool := systools.NewConfigSetTool(deps)
+
+	cases := []struct {
+		name       string
+		key        string
+		rawValue   string // raw JSON literal for the "value" arg
+		wantOnDisk string // exact substring expected in config.json
+	}{
+		{
+			name:       "string field, string value",
+			key:        "agents.defaults.recap_model",
+			rawValue:   `"z-ai/glm-5-turbo"`,
+			wantOnDisk: `"recap_model": "z-ai/glm-5-turbo"`,
+		},
+		{
+			name:       "int field, number value",
+			key:        "agents.defaults.timeout_seconds",
+			rawValue:   `120`,
+			wantOnDisk: `"timeout_seconds": 120`,
+		},
+		{
+			name:       "float field (pointer), number value",
+			key:        "agents.defaults.temperature",
+			rawValue:   `0.7`,
+			wantOnDisk: `"temperature": 0.7`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rawArgs := json.RawMessage(`{"key": "` + tc.key + `", "value": ` + tc.rawValue + `}`)
+			args := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+
+			result := tool.Execute(context.Background(), args)
+			if result.IsError {
+				t.Fatalf("expected success, got error: %s", result.ForLLM)
+			}
+
+			raw, err := os.ReadFile(cfgPath)
+			if err != nil {
+				t.Fatalf("read config.json: %v", err)
+			}
+			if !bytes.Contains(raw, []byte(tc.wantOnDisk)) {
+				t.Fatalf("config.json does not contain %q:\n%s", tc.wantOnDisk, raw)
+			}
+		})
 	}
 }
 

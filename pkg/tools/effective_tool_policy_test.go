@@ -46,11 +46,18 @@ type effectiveToolPolicyMatrixCase struct {
 // "deny" — which is exactly what the matrix cases below exercise for unlisted
 // tools, so the "deny-by-default" name still describes the observed behavior
 // even though it is now the fail-closed no-coverage path, not a config field.
+//
+// ToolSearch carries its own explicit "allow" entry, mirroring the real
+// seeded data every agent now carries (pkg/coreagent/core.go) — it used to
+// resolve "allow" here via compositor.go's unconditional infra force-allow
+// (removed; a CLAUDE.md hard-constraint-6 violation), so the matrix case that
+// exercises it needs the same real data a live seed would provide.
 func denyDefaultCfg() *ToolPolicyCfg {
 	return &ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{
 			"search_web": "allow", // an explicitly allowed tool
 			"fetch_url":  "ask",   // an explicit ask tool
+			"ToolSearch": "allow", // structural floor every real seed grants
 		},
 	}
 }
@@ -59,11 +66,15 @@ func denyDefaultCfg() *ToolPolicyCfg {
 // explicit ask. There is no default-policy field: an unlisted tool now fails
 // closed to "deny" (see the matrix's "now-unlisted tool" case) — the old
 // "allow-by-default" config concept this cfg used to model is retired.
+//
+// ToolSearch carries its own explicit "allow" entry for the same reason
+// documented on denyDefaultCfg above.
 func allowDefaultCfg() *ToolPolicyCfg {
 	return &ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{
-			"exec":      "deny", // explicitly denied
-			"fetch_url": "ask",  // explicit ask
+			"exec":       "deny",  // explicitly denied
+			"fetch_url":  "ask",   // explicit ask
+			"ToolSearch": "allow", // structural floor every real seed grants
 		},
 	}
 }
@@ -74,7 +85,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 	return []effectiveToolPolicyMatrixCase{
 		// --- deny-default agent (custom) ---
 		{
-			name:      "deny-default/ToolSearch(infra)→allow",
+			name:      "deny-default/ToolSearch(seeded allow)→allow",
 			cfg:       denyDefaultCfg(),
 			agentType: "custom",
 			tool:      makeScopedTool("ToolSearch", ScopeGeneral), // real ToolSearch is ScopeGeneral
@@ -120,7 +131,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 
 		// --- allow-default agent (custom) ---
 		{
-			name:      "allow-default/ToolSearch(infra)→allow",
+			name:      "allow-default/ToolSearch(seeded allow)→allow",
 			cfg:       allowDefaultCfg(),
 			agentType: "custom",
 			tool:      makeScopedTool("ToolSearch", ScopeGeneral),
@@ -361,12 +372,18 @@ func TestEffectiveToolPolicy_GodModeFloorsAllow(t *testing.T) {
 }
 
 // TestEffectiveToolPolicy_NilCfg verifies nil-cfg handling matches
-// FilterToolsByPolicy: infra force-allows unconditionally (registration-gated,
-// not policy-gated), but a known-scope tool with no policy maps to resolve
-// from now fails closed to "deny" — CLAUDE.md hard constraint 6 forbids the
-// historical hardcoded "allow" fallback.
+// FilterToolsByPolicy: a nil cfg has zero seeded policy data of any kind, so
+// EVERY known-scope tool — ToolSearch included — fails closed to "deny",
+// exactly like any other tool. ToolSearch used to be special-cased here via
+// compositor.go's unconditional infra force-allow (a CLAUDE.md
+// hard-constraint-6 violation: a hardcoded allow with no real config data
+// behind it, even with a nil cfg). That bypass has been removed — ToolSearch's
+// real "allow" now comes from the seeded policy data every agent carries
+// (pkg/coreagent/core.go), which requires a real cfg to exist. This assertion
+// was previously testing the bug being removed; it is inverted here to prove
+// the fail-closed behavior instead.
 func TestEffectiveToolPolicy_NilCfg(t *testing.T) {
-	assert.Equal(t, "allow", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "ToolSearch"))
+	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "ToolSearch"))
 	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "search_web"))
 	// Unknown scope is still fail-closed even with a nil cfg.
 	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ToolScope("bogus"), "custom", "x"))

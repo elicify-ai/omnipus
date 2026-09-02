@@ -181,6 +181,55 @@ func TestToolRegistry_Execute_NotFound(t *testing.T) {
 	}
 }
 
+// TestToolRegistry_Execute_RetiredNameGetsActionableError reproduces the
+// live UAT finding that calling the pre-ADR-071-D1 name "load_tool" is
+// rejected outright: it must still fail (no dispatch-time alias — ADR-071
+// §8.D explicitly rejected keeping a retired name permanently callable
+// alongside its replacement, matching ADR-036 §3.6's "no permanent dual-key
+// backward compatibility"), but the error must name the rename and the
+// replacement rather than a bare "not found", since the SPA's own
+// load_tool back-compat (toolVisibility.ts/humanizeToolName.ts) is
+// display-only for already-persisted transcripts and never made a NEW
+// load_tool call succeed.
+func TestToolRegistry_Execute_RetiredNameGetsActionableError(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(&mockRegistryTool{
+		name:   "ToolSearch",
+		desc:   "search/load hidden tools",
+		params: map[string]any{},
+		result: SilentResult("should never run"),
+	})
+
+	result := r.Execute(context.Background(), "load_tool", nil)
+	if !result.IsError {
+		t.Fatal("expected load_tool call to still fail — it must not silently dispatch to ToolSearch")
+	}
+	if !strings.Contains(result.ForLLM, "renamed") || !strings.Contains(result.ForLLM, "ToolSearch") {
+		t.Errorf("expected an actionable rename message naming ToolSearch, got %q", result.ForLLM)
+	}
+	if result.Err == nil {
+		t.Error("expected Err to be set via WithError")
+	}
+}
+
+// TestToolRegistry_Execute_UnrelatedUnknownToolUnaffected pins that the
+// retired-name error map only changes behavior for names in
+// retiredToolCanonicalNames — every other unknown tool keeps the original
+// generic "not found" message.
+func TestToolRegistry_Execute_UnrelatedUnknownToolUnaffected(t *testing.T) {
+	r := NewToolRegistry()
+	result := r.Execute(context.Background(), "totally_unknown_tool", nil)
+	if !result.IsError {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(result.ForLLM, "not found") {
+		t.Errorf("expected generic 'not found' message, got %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "renamed") {
+		t.Errorf("unrelated unknown tool must not get the retired-name message, got %q", result.ForLLM)
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_InjectsToolContext(t *testing.T) {
 	r := NewToolRegistry()
 	ct := &mockContextAwareTool{

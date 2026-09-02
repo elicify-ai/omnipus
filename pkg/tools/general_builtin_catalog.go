@@ -108,8 +108,21 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewSendFileTool("", false, 0, nil))
 
 	// --- Skill tools (CategorySkills) ---
+	// remove_skill is NOT listed here: it is a ScopeCore management tool
+	// (systools.SkillRemoveTool, pkg/sysagent/tools/skill.go), registered via
+	// systools.AllTools in the central BuiltinRegistry — not a ScopeGeneral
+	// tool from this metadata catalog. A duplicate ScopeGeneral "remove_skill"
+	// registered here would be silently skipped as a name collision (harmless
+	// but dead weight) since systools.AllTools populates the registry first.
 	out = append(out, NewFindSkillsTool(nil, nil))
 	out = append(out, NewInstallSkillTool(nil, ""))
+	// Skill (ADR-072 D1): the on-demand load-by-slug / search-by-query tool
+	// that replaces force-loaded skill instructions — this codebase's second
+	// instance of the "index in context, content on demand" pattern ADR-071
+	// established for ToolSearch below, one layer up for skills. Metadata-only
+	// instance (no resolver wired; the loop wires SetResolver before any
+	// Execute call), mirroring ToolsTool's own metadata entry exactly.
+	out = append(out, NewSkillTool(0))
 
 	// --- delegate tool (CategoryDelegation) — ADR-036 merge of the former
 	// spawn / run_subagent / check_spawn_status trio into one tool. ---

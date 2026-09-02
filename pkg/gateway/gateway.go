@@ -2659,6 +2659,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 
 	runningServices, err := setupAndStartServices(
+		ctx,
 		cfg,
 		bundle,
 		agentLoop,
@@ -2756,15 +2757,34 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	sysRegistryManager := skills.NewRegistryManagerFromConfig(regCfg)
 
-	// SkillInstaller: downloads and installs skills into the operator workspace.
+	// SkillInstaller backs remove_skill (SkillRemoveTool, its only consumer —
+	// see pkg/sysagent/tools/skill.go). skills.SkillInstaller.Uninstall joins
+	// "skills" onto its own root internally (see pkg/skills/installer.go:
+	// NewSkillWriter(filepath.Join(si.workspace, "skills"))), so the value
+	// passed here must be the PARENT of the global skills directory — i.e.
+	// homePath ($OMNIPUS_HOME) — not skillsGlobalDir itself (that would
+	// double-join to $OMNIPUS_HOME/skills/skills) and not skillsWorkspace
+	// ($OMNIPUS_HOME/workspace, a different, effectively-empty directory in
+	// the common case).
+	//
+	// ADR-046 FR-009 made install_skill (the chat tool,
+	// pkg/tools/skills_install.go) target skillsGlobalDir unconditionally —
+	// the same directory sysSkillsLoader's "global" tier above and
+	// sysSkillWriter both already use — so a SkillInstaller resolving
+	// anywhere else can never find what install_skill actually wrote. Rooting
+	// it at skillsWorkspace was exactly this bug: list_skills correctly
+	// reported an installed skill (via the loader's global tier), but
+	// remove_skill always reported it NOT_FOUND, because Uninstall only ever
+	// looked under skillsWorkspace/skills.
+	//
 	// GitHub token/proxy from the first github marketplace entry (optional;
 	// empty → unauthenticated API calls).
 	githubToken, githubProxy := skills.FirstGitHubMarketplaceCreds(cfg, bundle.GetString)
 	sysSkillInstaller, err := skills.NewSkillInstallerWithSSRF(
-		skillsWorkspace, githubToken, githubProxy, ssrfChecker,
+		homePath, githubToken, githubProxy, ssrfChecker,
 	)
 	if err != nil {
-		slog.Warn("gateway: could not create skill installer; system.skill.install unavailable",
+		slog.Warn("gateway: could not create skill installer; remove_skill unavailable",
 			"error", err)
 		sysSkillInstaller = nil
 	}
@@ -2779,6 +2799,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		},
 		CredStore:  credStore,
 		ReloadFunc: reloadTrigger,
+		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
+		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
+		// list_agents ghost-listing race this closes). Built on the same
+		// TriggerReload + IsReloadPending polling primitive that backs
+		// restAPI.triggerReloadAndWait, so a delete_agent tool call blocks for
+		// exactly as long as REST's DELETE /api/v1/agents/{id} does before
+		// either call reports success.
+		WaitForReloadFunc: func() error { return waitForReload(agentLoop) },
 		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
@@ -4249,6 +4277,7 @@ func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
 }
 
 func setupAndStartServices(
+	ctx context.Context, // gateway's own shutdown-aware context (RunContextWithOptions' ctx) — threaded through so background loops started here (e.g. runCatalogRefreshLoop) can observe cancellation instead of running untethered for the life of the process.
 	cfg *config.Config,
 	bundle credentials.SecretBundle,
 	agentLoop *agent.AgentLoop,
@@ -5189,7 +5218,21 @@ func setupAndStartServices(
 	// outright when the persisted last-known-good is less than an hour old,
 	// so a gateway restarted in a loop cannot spend GitHub's unauthenticated
 	// rate limit on a document it already has (F-34).
+	//
+	// ctx is passed through so the loop observes gateway shutdown instead of
+	// running untethered for the life of the process — see
+	// runCatalogRefreshLoop's doc comment for why this is load-bearing, not
+	// cosmetic: an un-canceled startup pull performs REAL network I/O
+	// (api.github.com, falling back to raw.githubusercontent.com) and then
+	// writes providers_catalog.json into homePath via fileutil.WriteFileAtomic
+	// on success, entirely outside every shutdown drain in shutdown.go. A
+	// caller that boots and tears down many gateways in one process (every
+	// integration/security test using testutil.StartTestGateway) leaked one
+	// of these forever per boot, each capable of landing a straggler write in
+	// homePath — including a t.TempDir() root already mid-RemoveAll —
+	// well after RunContext had already returned.
 	go runCatalogRefreshLoop(
+		ctx,
 		providerCatalog,
 		catalog.NewFileStore(homePath),
 		catalogRefreshInterval,
@@ -5263,11 +5306,20 @@ func setupAndStartServices(
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
-		// staticcheck S1000: this select had exactly one case (ticker.C) and
-		// no cancellation/done channel, so it is equivalent to ranging over
-		// the ticker channel directly — ticker.C never closes, so this loops
-		// forever exactly as the select version did.
-		for range ticker.C {
+		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
+		// which never exits) — this goroutine outlives the process
+		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
+		// class of bug: any un-canceled background loop started here can
+		// still be mid-tick (Library.OrphanGC touches disk) when a caller
+		// that boots/tears down many gateways in one process — every test
+		// using testutil.StartTestGateway — has already moved on to
+		// t.TempDir() cleanup of homePath.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 			a := agentLoop
 			if a == nil {
 				continue
@@ -5322,6 +5374,10 @@ func setupAndStartServices(
 		const reapInterval = time.Minute
 		ticker := time.NewTicker(reapInterval)
 		defer ticker.Stop()
+		// ctx.Done() is observed below so this goroutine actually exits on
+		// gateway shutdown instead of outliving the process — see
+		// runCatalogRefreshLoop's doc comment for the shared class of bug.
+		//
 		// Each tick is recovered INDIVIDUALLY, matching the boot-time
 		// warm-up goroutine above: an unrecovered panic in any goroutine takes
 		// the WHOLE gateway process down — chat, every channel, every agent —
@@ -5349,8 +5405,13 @@ func setupAndStartServices(
 				}
 			}
 		}
-		for range ticker.C {
-			sweep()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
 		}
 	}()
 
@@ -5436,9 +5497,26 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 
 // runCatalogRefreshLoop performs the FR-008 startup pull (unless the
 // persisted document is younger than skipWindow), then one pull every
-// interval thereafter, forever. It never returns — the sole caller
+// interval thereafter, until ctx is canceled. The sole caller
 // (setupAndStartServices) invokes it in its own goroutine, AFTER the
-// listener is bound.
+// listener is bound, passing the gateway's own shutdown-aware context.
+//
+// ctx cancellation is load-bearing, not a nicety: this loop performs REAL
+// network I/O (api.github.com, falling back to raw.githubusercontent.com on
+// failure) and — on a successful pull — writes providers_catalog.json into
+// store's directory via fileutil.WriteFileAtomic, entirely independent of
+// every drain in shutdown.go (channel manager, cron, plan engine, active
+// turns, agent loop). Before ctx was threaded through here, this goroutine
+// had no way to observe shutdown at all and ran for the life of the
+// process; a gateway stopped (or, in any test/harness process that boots
+// many gateways via testutil.StartTestGateway, torn down) while a startup
+// pull was still resolving DNS/TLS or mid-download could land a straggler
+// write into homePath — including a t.TempDir() root already mid-RemoveAll
+// — well after RunContext had returned, surfacing as "directory not empty"
+// on the test's own cleanup. Deriving each attempt's timeout context FROM
+// ctx (not context.Background()) means a cancellation during an in-flight
+// HTTP request aborts it immediately via the http.Client's context
+// plumbing, rather than merely blocking the NEXT attempt from starting.
 //
 // The pull before the ticker loop is load-bearing, not cosmetic: Go's
 // time.Ticker does not fire on creation, so a bare ticker loop never
@@ -5452,6 +5530,7 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 // currently served document and logs its own reason-keyed WARN, so this
 // loop only records that the attempt failed and carries on ticking.
 func runCatalogRefreshLoop(
+	ctx context.Context,
 	cat *catalog.Catalog,
 	store persistedCatalogAger,
 	interval, refreshTimeout, skipWindow time.Duration,
@@ -5460,11 +5539,24 @@ func runCatalogRefreshLoop(
 		return
 	}
 	refresh := func(failureLogMsg string) {
-		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
 		defer cancel()
-		if err := cat.Refresh(ctx); err != nil {
+		if err := cat.Refresh(attemptCtx); err != nil {
+			// A cancellation reaching here mid-attempt (gateway shutting
+			// down) is expected, not a real refresh failure — log it at a
+			// lower level than a genuine pull/parse/apply error so shutdown
+			// under load does not spam WARN.
+			if ctx.Err() != nil {
+				logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
+					map[string]any{"error": err})
+				return
+			}
 			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
 		}
+	}
+
+	if ctx.Err() != nil {
+		return
 	}
 
 	if skipStartupPull(store, skipWindow) {
@@ -5476,8 +5568,13 @@ func runCatalogRefreshLoop(
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for range ticker.C {
-		refresh("gateway: catalog refresh failed; last-known-good retained")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh("gateway: catalog refresh failed; last-known-good retained")
+		}
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -1007,6 +1008,19 @@ func NewAgentLoop(
 			// run_retrospective tools would silently lose audit logging (SEC-15)
 			// the first time config reloads.
 			al.wireMemoryAuditLoggerOn(registry, auditLogger)
+
+			// ADR-072 D6.1.1/R4 fix: install the process-wide skills write-audit
+			// logger. tools.SetSkillsWriteAuditLogger's own doc comment names
+			// this exact call site ("a later integration phase wires this at
+			// gateway boot, alongside the other audit-logger wiring") — until
+			// this call existed nowhere in production, tools.ResolvePath's
+			// write hook (and pkg/sysagent/tools' project-shelf authoring path,
+			// via tools.EmitSkillWriteAudit) was a permanent silent no-op:
+			// write_file/edit_file/edit_skill/remove_skill writes into a
+			// recognised skills location produced zero audit entries regardless
+			// of sandbox.audit_log. Idempotent (last caller wins), mirrors
+			// audit.SetProcessChainKey's process-wide-var pattern exactly.
+			tools.SetSkillsWriteAuditLogger(auditLogger)
 		}
 	}
 
@@ -1955,6 +1969,16 @@ func registerSharedTools(
 			// agent.Home, so a skill installed by one agent is discoverable
 			// by every other agent.
 			agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
+			// remove_skill is NOT registered here: it is a ScopeCore
+			// management tool (systools.SkillRemoveTool, "remove_skill"),
+			// wired onto every agent's Tools registry by WireSysagentDeps
+			// (pkg/gateway/gateway.go), which shares its SkillInstaller/
+			// SkillsLoader with this same skill engine. A prior version of
+			// this block registered a second, competing ScopeGeneral
+			// implementation here, constructed against agent.Workspace — a
+			// root that predates ADR-046 FR-009's move to a single global
+			// skills directory and that install_skill above no longer
+			// targets. Do not reintroduce it.
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -2833,6 +2857,145 @@ func registerSharedTools(
 				agent.Tools.RegisterReplacing(toolsTool)
 			}
 		}
+
+		// Register the ADR-072 D1 `Skill` tool (load-by-slug + search-by-query
+		// paths) — this codebase's second instance of the "index in context,
+		// content on demand" pattern ADR-071 established for ToolSearch
+		// immediately above, one layer up for skills. ALWAYS registered
+		// unconditionally, mirroring ToolSearch's own registration exactly:
+		// Constraint #6 seeds "Skill": allow for every agent
+		// (pkg/coreagent/core.go, pkg/config/defaults.go), so the tool must
+		// exist to be governed by that policy regardless of whether this
+		// installation has any skills installed yet. Resolver closures read
+		// per-call state from ctx at call time, avoiding data races on the
+		// shared instance across concurrent turns on the same agent.
+		{
+			capturedAgentID := agentID
+
+			skillMaxResults := cfg.Tools.MCP.Discovery.MaxSearchResults
+			if skillMaxResults <= 0 {
+				// ADR-072 D1.2/MIN-003: Skill's search mode deliberately
+				// inherits ToolSearch's own result cap rather than
+				// introducing a second number to reason about.
+				skillMaxResults = 5
+			}
+
+			if _, already := agent.Tools.Get("Skill"); !already {
+				skillTool := tools.NewSkillTool(skillMaxResults)
+				skillTool.SetResolver(
+					// load resolves slug for the acting agent through the full
+					// per-shelf grant model (ADR-072 D4/D4.1, via
+					// ContextBuilder.ResolveSkillFullForWorkspace) and loads its
+					// body directly from the resolved shelf's own on-disk path
+					// for this turn only — every Skill call audited (D3.1).
+					func(ctx context.Context, slug string) tools.SkillLoadOutcome {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+						}
+
+						if resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug); resolvedOK {
+							if content, readOK := skills.LoadSkillFile(resolved.Path); readOK {
+								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, resolved.Slug,
+									audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(resolved.Shelf))
+								return tools.SkillLoadOutcome{
+									Status:        tools.SkillLoadLoaded,
+									Content:       content,
+									Shelf:         resolved.Shelf,
+									CanonicalSlug: resolved.Slug,
+								}
+							}
+							// Resolved but the file vanished or became unreadable
+							// between resolution and read (rare race) — report
+							// not-found rather than a silent empty load.
+							logger.WarnCF("agent", "skill resolved but its content could not be read",
+								map[string]any{"agent_id": callerID, "skill": slug, "path": resolved.Path})
+							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+						}
+
+						// Not resolved — distinguish "exists but this agent is
+						// not granted it" (registry/builtin shelf, unfiltered
+						// via ListSkillsDetailed) from "genuinely absent on any
+						// shelf" (ADR-072 D4/FR-054's SkillNotFoundCode).
+						for _, s := range callerAgent.ContextBuilder.ListSkillsDetailed() {
+							if strings.EqualFold(s.ID, slug) || strings.EqualFold(s.Name, slug) {
+								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+									audit.SkillCallModeLoad, audit.SkillCallOutcomeDenied, "")
+								return tools.SkillLoadOutcome{Status: tools.SkillLoadDenied}
+							}
+						}
+						audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+							audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+						return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+					},
+					// canUse reports whether the acting agent may load slug —
+					// the SAME per-shelf grant model `load` consults, exposed
+					// separately so the search path can filter the ranked
+					// match list without loading every candidate's full body.
+					func(ctx context.Context, slug string) bool {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return false
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						_, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug)
+						return resolvedOK
+					},
+					// corpus returns every installed skill's slug+description
+					// across every shelf visible to the acting agent's
+					// workspace — registry+builtin (UNFILTERED by any grant)
+					// plus that workspace's own project shelf — for BM25
+					// ranking (ADR-071 §3.2.2, applied to skills by ADR-072
+					// D1): the corpus must never be pre-filtered, only the
+					// ranked match list (via canUse above).
+					func(ctx context.Context) []tools.SkillSearchDoc {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return nil
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						all := callerAgent.ContextBuilder.ListSkillsDetailed()
+						projectShelf := callerAgent.ContextBuilder.ProjectShelfForWorkspace(workspaceID)
+
+						docs := make([]tools.SkillSearchDoc, 0, len(all)+len(projectShelf))
+						seen := make(map[string]struct{}, len(all)+len(projectShelf))
+						for _, s := range all {
+							docs = append(docs, tools.SkillSearchDoc{Slug: s.ID, Description: s.Description})
+							seen[strings.ToLower(s.ID)] = struct{}{}
+						}
+						for key, ps := range projectShelf {
+							if _, dup := seen[key]; dup {
+								// D4.2 carve-out: a granted registry/builtin
+								// slug already claims this name in the menu and
+								// on resolution — the search corpus must not
+								// offer it twice under two different shelves.
+								continue
+							}
+							docs = append(docs, tools.SkillSearchDoc{Slug: ps.ID, Description: ps.Description})
+						}
+						return docs
+					},
+				)
+				agent.Tools.RegisterReplacing(skillTool)
+			}
+		}
 	}
 
 	// W4 (agent-removal doesn't dispose context): a REMOVED agent is skipped by
@@ -2901,8 +3064,33 @@ func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
 		return nil
 	}
 	return func(id string) bool {
-		_, ok := registry.GetAgent(id)
-		return ok
+		if _, ok := registry.GetAgent(id); ok {
+			return true
+		}
+		// Fall back to the durable entity store before concluding the agent
+		// is genuinely nonexistent. The in-memory registry this probe
+		// consults is only refreshed by the reload pipeline (the async,
+		// fire-and-forget gateway.go reloadTrigger for a plain hot-reload;
+		// UpsertAgentFast for create/update's fast path, which itself
+		// defers to that same async reload when one is already in flight —
+		// see UpsertAgentFastFunc's own doc comment), so an agent whose
+		// entity record was JUST durably written (agentstore.Store.Create
+		// always runs synchronously before either publish path — see
+		// UpsertAgentFast's DEFECT 1 fix comment in registry.go, which
+		// establishes this exact "ask the durable entity store, not the
+		// possibly-stale in-memory view" precedent) can be real on disk
+		// before the registry catches up. Without this fallback, a
+		// delegate/switch_agent call landing in that window reports the
+		// misleading "agent %q does not exist" — masking the actual denial
+		// reason (e.g. a missing trust edge) a UAT run observed when the
+		// target agent, in fact, existed. Best-effort: a store read error
+		// here is treated the same as "not found" (the pre-existing
+		// behavior for a target that genuinely never existed) rather than
+		// failing the whole delegation check — this probe is message-only
+		// and never controls the allow/deny outcome (see this function's
+		// own callers' doc comments).
+		_, err := agentstore.New(omnipusHome()).Get(id)
+		return err == nil
 	}
 }
 
@@ -4732,6 +4920,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// al.auditLogger is only non-nil when audit logging was actually enabled.
 	if al.auditLogger != nil {
 		al.wireMemoryAuditLoggerOn(registry, al.auditLogger)
+		// ADR-072 D6.1.1/R4 fix: re-assert the process-wide skills write-audit
+		// logger on reload too, mirroring the memory-tool re-wire immediately
+		// above. SetSkillsWriteAuditLogger is a process-wide var (not
+		// registry-scoped), so this is idempotent, but a hot reload must not
+		// be the one path that silently leaves it unset if a future change
+		// ever makes al.auditLogger's identity or lifetime reload-sensitive.
+		tools.SetSkillsWriteAuditLogger(al.auditLogger)
 	}
 
 	// Re-wire the shared memory-write rate limiter (v0.2 #155 item 6) onto
@@ -4753,6 +4948,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire per-turn working-directory injectors on the new registry, same
 	// reasoning: a workspace's core_team can change via hot-reload too.
 	wireWorkingDirInjectors(al, registry)
+
+	// Re-wire per-workspace project-shelf resolvers (ADR-072 R1 fix regression,
+	// live UAT 2026-09-02): this was missing here, so a mounted project's
+	// skills silently stopped resolving for every agent after this reload path
+	// ran even once — which onboarding itself triggers, so it hit nearly every
+	// real install. Mirror the two siblings above.
+	wireProjectShelfResolvers(al, registry)
 
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
@@ -4901,9 +5103,13 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // authoritative primitive (tools.EffectiveToolPolicy) AND the SAME live policy
 // snapshot (the agent instance's LoadToolPolicy) that the agent loop's
 // FilterToolsByPolicy uses at defs-assembly time, so the two can never diverge.
-// It encapsulates, in order: (1) infra force-allow (ToolSearch → allow,
-// unconditional), (2) the scope gate (fail-closed for unknown scopes), and
-// (3) global×agent strictest-wins (deny > ask > allow, god-mode, wildcards).
+// It encapsulates, in order: (1) the scope gate (fail-closed for unknown
+// scopes), and (2) global×agent strictest-wins (deny > ask > allow, god-mode,
+// wildcards). ToolSearch resolves through this same merge as every other
+// static builtin tool — it is seeded "allow" as real, explicit data for every
+// agent (pkg/coreagent/core.go), not a code-level force-allow (there used to
+// be an unconditional infra fast-path here; it was a CLAUDE.md
+// hard-constraint-6 violation and has been removed).
 //
 // BEHAVIOR CHANGE (intentional): this ALIGNS the exec gate to the agent loop's
 // wildcard-aware verdict. The OLD gateway resolver matched policy keys by
@@ -4921,12 +5127,6 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // the exec gate was already surfaced to the model, so it is not an unknown-scope
 // tool — ScopeGeneral imposes no extra restriction beyond the policy merge).
 func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string {
-	// Infra fast-path: force-allow regardless of agent/config resolution so the
-	// gate behaves correctly even before the registry/config are wired.
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		return "allow"
-	}
-
 	// Preferred path: resolve through the agent instance's LIVE policy snapshot
 	// (LoadToolPolicy — the same *ToolPolicyCfg, including any GodMode flag, that
 	// FilterToolsByPolicy receives) and the tool's real scope, so this verdict
@@ -5263,6 +5463,40 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 				taskCreate.SetPlanStore(store)
 			}
 		}
+	}
+
+	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface
+	// (create_task_in_workspace, pkg/sysagent/tools) with the real plan store
+	// too. WireSysagentDeps runs at boot BEFORE this store exists — the
+	// gateway constructs sysAgentDeps and calls WireSysagentDeps well ahead
+	// of plan.New/SetPlanStore (see gateway.go's boot wiring region) — so
+	// every system.* tool instance registered by then was built with a nil
+	// deps.PlanStore. Without this, create_task_in_workspace(plan_id=...)
+	// fails closed with "plan store is not configured" FOREVER, for every
+	// agent, even against a plan that was just created in the very same
+	// workspace by the very same turn (the plain create_task tool above was
+	// already re-wired here; the system.* twin was not).
+	//
+	// al.sysagentDeps is read-modify-written under al.mu (mirrors the
+	// al.planStore guard a few lines up in this same function) because the
+	// gateway listener is already live by the time this runs (boot wires
+	// sysAgentDeps and starts serving well before constructing planStore),
+	// so a concurrent hot-reload's ReloadProviderAndConfig could in
+	// principle race the field. wireSysagentDepsLocked itself is called
+	// OUTSIDE the lock — it does not touch al.mu, and holding al.mu across
+	// it would only widen the critical section for no benefit (mirrors the
+	// wirePlanToolsForAgent loop above, which does the same).
+	al.mu.Lock()
+	var sysDeps *systools.Deps
+	if al.sysagentDeps != nil {
+		depsCopy := *al.sysagentDeps
+		depsCopy.PlanStore = store
+		al.sysagentDeps = &depsCopy
+		sysDeps = al.sysagentDeps
+	}
+	al.mu.Unlock()
+	if sysDeps != nil {
+		al.wireSysagentDepsLocked(reg, sysDeps)
 	}
 }
 
@@ -8761,14 +8995,16 @@ turnLoop:
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
 		} else {
 			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
-			// before surfacing defs to the model. The unified resolver
-			// (tools.EffectiveToolPolicy) force-allows infra UNCONDITIONALLY, so
-			// ToolSearch is now present in policyFilteredTools even when
-			// compression is off; but ToolSearch exists only to drive the
-			// compressed manifest mechanism and has no function when compression is
-			// off, so the model never sees it here regardless of what the agent's
-			// tool-policy map resolves for it (see stripInfraToolDefs for the
-			// mostly-deny vs. mostly-allow behavior note) (#438).
+			// before surfacing defs to the model. ToolSearch resolves through the
+			// same global×agent merge as every other static builtin tool and is
+			// seeded "allow" as real, explicit data for every agent
+			// (pkg/coreagent/core.go), so it is typically present in
+			// policyFilteredTools even when compression is off; but ToolSearch
+			// exists only to drive the compressed manifest mechanism and has no
+			// function when compression is off, so the model never sees it here
+			// regardless of what the agent's tool-policy map resolves for it (see
+			// stripInfraToolDefs for the mostly-deny vs. mostly-allow behavior
+			// note) (#438).
 			providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(policyFilteredTools))
 		}
 
@@ -10757,6 +10993,41 @@ turnLoop:
 				}
 			}
 
+			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): dispatch-side
+			// circuit breaker for a tool call that has already failed with
+			// this exact same name+arguments toolFailureCircuitBreakThreshold
+			// times in a row THIS turn (see tool_failure_circuit_breaker.go).
+			// Mirrors the SEC-26 rate-limit denial immediately above — fail
+			// closed (do not even call Execute), surface the denial as a
+			// normal tool-result error so the model can react, keep the
+			// turn running rather than aborting it. Skipping Execute here
+			// (rather than only warning post-hoc) is what actually bounds
+			// the token burn: a model that ignores the warning notice below
+			// still cannot force more than toolFailureCircuitBreakThreshold
+			// real dispatch attempts of the identical call in one turn.
+			toolCBSig := toolCallSignature(toolName, toolArgs)
+			if cbReason, tripped := ts.toolCircuitBreakerTripped(toolCBSig); tripped {
+				errMsg := toolCircuitBreakerDenialMessage(toolName, cbReason)
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, deniedMsg)
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: errMsg,
+					},
+				)
+				continue
+			}
+
 			// ADR-071 §4.3.1(a) "Clear": a tool about to be dispatched is, by
 			// definition, no longer an abandoned promotion — delete any
 			// pending search-follow-up entry for it under this agent's
@@ -10822,6 +11093,29 @@ turnLoop:
 
 			if toolResult == nil {
 				toolResult = tools.ErrorResult("hook returned nil tool result")
+			}
+
+			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
+			// exact call's consecutive-failure streak. A success (or a hook
+			// that turned a failure into one) clears the streak outright; a
+			// real failure bumps it and, once it crosses either threshold,
+			// augments the error content the model is about to see (warn),
+			// or trips the pre-dispatch breaker above for every later call
+			// with this identical signature this turn (hard stop). Keyed on
+			// toolCBSig computed before dispatch/hooks so a hook renaming the
+			// tool does not fragment the streak it is meant to track.
+			if toolResult.IsError {
+				streak := ts.recordToolFailure(toolCBSig)
+				switch {
+				case streak >= toolFailureCircuitBreakThreshold:
+					reason := toolFailureCircuitBreakerReason(toolName, streak)
+					ts.tripToolCircuitBreaker(toolCBSig, reason)
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
+				case streak >= toolFailureWarnThreshold:
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
+				}
+			} else {
+				ts.recordToolSuccess(toolCBSig)
 			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
@@ -12676,21 +12970,32 @@ func (al *AgentLoop) handleCommand(
 	}
 }
 
+// activeSkillNames returns the skills active for THIS turn only — never the
+// agent's full grant list (ADR-072 D1/D3: skills are loaded on demand via the
+// Skill tool, not force-injected into every turn's context).
+//
+// Before ADR-072, this unioned agent.SkillsFilter (the agent's ENTIRE
+// per-agent grant list, agentCfg.Skills) with opts.ForcedSkills every single
+// message — the exact force-load mechanism the on-demand Skill tool
+// (pkg/tools/skill.go) replaces. A turn's active skills are now only what was
+// explicitly loaded this turn: via opts.ForcedSkills, which the Skill tool's
+// "load" outcome and the pre-existing /<slug> slash-command
+// (applyExplicitSkillCommand) and delegate's requested_skill (D9,
+// spawnSubTurn's ForcedSkills append) all populate one-shot, per turn — never
+// via the agent's static grant list, which only gates WHICH skills may be
+// loaded (skillAllowed/D5), not which ones are.
 func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	if agent == nil {
 		return nil
 	}
 
-	combined := make([]string, 0, len(agent.SkillsFilter)+len(opts.ForcedSkills))
-	combined = append(combined, agent.SkillsFilter...)
-	combined = append(combined, opts.ForcedSkills...)
-	if len(combined) == 0 {
+	if len(opts.ForcedSkills) == 0 {
 		return nil
 	}
 
 	var resolved []string
-	seen := make(map[string]struct{}, len(combined))
-	for _, name := range combined {
+	seen := make(map[string]struct{}, len(opts.ForcedSkills))
+	for _, name := range opts.ForcedSkills {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
@@ -13252,22 +13557,18 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 }
 
 // resolveSingleToolPolicy loads the current policy pointer and resolves the
-// effective policy for toolName using FilterToolsByPolicy. Returns "" if the
-// tool is not found in the agent's registered tools.
+// effective policy for toolName using FilterToolsByPolicy. Returns "deny" if
+// the tool is not found in the agent's registered tools or has no policy
+// entry on either side.
+//
+// The unified `ToolSearch` infra tool used to get an unconditional
+// registration-gated force-allow here (bypassing FilterToolsByPolicy
+// entirely) because no seeded agent named it in its own tool-policy override
+// map — a CLAUDE.md hard-constraint-6 violation. ToolSearch is now seeded
+// "allow" as real, explicit data for every agent (pkg/coreagent/core.go), so
+// it resolves correctly through the same FilterToolsByPolicy call as every
+// other tool below; the force-allow shortcut has been removed.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
-	// The unified `ToolSearch` infra tool is registration-gated, not policy-gated:
-	// it only exists on the agent when compressed mode or MCP discovery is on,
-	// and when present it MUST always be executable — it drives the manifest
-	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a
-	// registered infra tool as "allow" regardless of what the agent's own
-	// tool-policy map resolves for it.
-	// (Without this, resolveToolPolicyAtExec re-derives livePolicy="deny" for a
-	// deny-by-default agent and overrides the filter-time allow — the live bug.)
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		if _, ok := ts.agent.Tools.Get(toolName); ok {
-			return "allow"
-		}
-	}
 	allTools := ts.agent.Tools.GetAll()
 	_, pmap := tools.FilterToolsByPolicy(allTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 	p, ok := pmap[toolName]

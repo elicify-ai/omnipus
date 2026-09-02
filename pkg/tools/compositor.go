@@ -205,10 +205,10 @@ func resolveEffectivePolicyWith(
 // ResolveEffectivePolicy returns the combined global+agent effective policy
 // ("allow", "ask", or "deny") for a single tool name. It applies the same
 // global×agent resolution order as FilterToolsByPolicy without iterating all
-// tools. It deliberately does NOT apply the infra force-allow or the scope
-// gate — it is the bare global×agent merge. Callers that need the FULL
-// per-tool verdict (infra + scope + merge) must use EffectiveToolPolicy.
-// Callers that need only the merge (e.g. repair.go H3) use this.
+// tools. It deliberately does NOT apply the scope gate — it is the bare
+// global×agent merge. Callers that need the FULL per-tool verdict (scope +
+// merge) must use EffectiveToolPolicy. Callers that need only the merge
+// (e.g. repair.go H3) use this.
 //
 // A nil cfg has no policy maps to resolve from at all, so it fails closed to
 // "deny" (logged at Error) rather than the historical hardcoded "allow" —
@@ -228,21 +228,7 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 // FULL per-tool verdict ("allow"/"ask"/"deny") for one (tool, scope, agentType)
 // in this exact order:
 //
-//  1. INFRA FORCE-ALLOW (unconditional): if ToolManifestTier(toolName) ==
-//     ManifestInfra (currently exactly {ToolSearch}), the verdict is "allow" no
-//     matter what the agent or global policy says. Infra tools are
-//     registration-gated, not policy-gated — a deny-by-default agent (Ava/Mia/
-//     Ray) never lists ToolSearch in its allow-set, so without this force-allow
-//     every lazy/load-on-demand tool becomes unreachable at EXECUTION time (the
-//     model is shown ToolSearch but the exec gate denies it). The force-allow is
-//     UNCONDITIONAL — it does NOT depend on cfg.Tools.Manifest.Compressed. This
-//     is safe: when Compressed is off, ToolSearch is never surfaced to the model
-//     (buildCompressedToolDefs is not invoked, and the manifest block that
-//     advertises ToolSearch is not injected), so its resolution is moot and
-//     force-allowing it changes no observable behavior. When Compressed is on,
-//     this is exactly the reachability fix.
-//
-//  2. SCOPE GATE (fail-closed): the structural guard that policy cannot bypass.
+//  1. SCOPE GATE (fail-closed): the structural guard that policy cannot bypass.
 //     A tool whose scope is neither ScopeCore nor ScopeGeneral (unknown/zero
 //     value) is denied outright. ScopeCore on a custom agent and ScopeGeneral on
 //     any agent both defer to the global×agent merge below — preserving the
@@ -250,9 +236,24 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 //     (where the ScopeCore-on-custom branch dropped the tool iff the merged
 //     policy was "deny", i.e. identically to the merge verdict).
 //
-//  3. GLOBAL×AGENT MERGE (strictest-wins, deny > ask > allow): the standard
+//  2. GLOBAL×AGENT MERGE (strictest-wins, deny > ask > allow): the standard
 //     resolveEffectivePolicyWith path, including god-mode override and wildcard
 //     resolution (most-specific-wins among wildcards, exact name beats wildcard).
+//
+// There used to be a step 0 here: an unconditional "infra force-allow" that
+// resolved ToolSearch to "allow" no matter what any seeded policy data said,
+// added because no seeded agent named ToolSearch in its own tool-policy
+// override map. That was a CLAUDE.md hard-constraint-6 violation (a
+// hardcoded allow fallback in the policy-resolution code path, invisible to
+// an operator reading their own config) and has been removed. ToolSearch is
+// now seeded "allow" as real, explicit, literal data for every agent —
+// every core/system agent case in pkg/coreagent/core.go's coreAgentSeed and
+// systemAgentSeed, and NewCustomAgentToolsCfg for freshly created agents —
+// so it resolves through this exact same merge as every other static
+// builtin tool, no special case. ToolManifestTier/ManifestInfra still
+// matters for MANIFEST-BUILDING (which tools get a full schema sent every
+// turn vs. lazy-loaded via ToolSearch) — that classification is untouched;
+// only this policy-resolution shortcut is gone.
 //
 // This is the SINGLE authority both the agent-loop tool filter
 // (FilterToolsByPolicy) and the gateway WS approval hook (resolveApprovalToolPolicy)
@@ -263,12 +264,7 @@ func effectiveToolPolicyWith(
 	agentType, toolName string,
 	agentWildcards, globalWildcards []wildcardEntry,
 ) config.ToolPolicy {
-	// 1. Infra force-allow (unconditional). See doc comment.
-	if ToolManifestTier(toolName) == ManifestInfra {
-		return config.ToolPolicyAllow
-	}
-
-	// 2. Scope gate (fail-closed for unknown scopes). The structural guard that
+	// 1. Scope gate (fail-closed for unknown scopes). The structural guard that
 	//    policy cannot bypass. We deny here ONLY for the cases the prior
 	//    FilterToolsByPolicy denied independently of the merge — i.e. a scope that
 	//    fails the gate AND is not ScopeCore. ScopeCore on a custom agent fails
@@ -280,7 +276,7 @@ func effectiveToolPolicyWith(
 		return config.ToolPolicyDeny
 	}
 
-	// 3. Global×agent strictest-wins merge (god-mode + wildcards inside; fails
+	// 2. Global×agent strictest-wins merge (god-mode + wildcards inside; fails
 	//    closed to "deny" if neither side has an entry — see
 	//    resolveEffectivePolicyWith's doc comment).
 	return resolveEffectivePolicyWith(cfg, toolName, agentWildcards, globalWildcards)
@@ -293,15 +289,15 @@ func effectiveToolPolicyWith(
 // view and the gateway's exec gate cannot diverge.
 //
 // Resolution order (see effectiveToolPolicyWith for the full rationale):
-//  1. infra force-allow (ToolSearch → "allow", unconditional)
-//  2. scope gate (unknown scope → "deny"; ScopeCore/ScopeGeneral defer to merge)
-//  3. global×agent strictest-wins merge (deny > ask > allow, god-mode, wildcards)
+//  1. scope gate (unknown scope → "deny"; ScopeCore/ScopeGeneral defer to merge)
+//  2. global×agent strictest-wins merge (deny > ask > allow, god-mode, wildcards)
 //
-// A nil cfg has no policy maps to resolve from, so (like ResolveEffectivePolicy)
-// it fails closed: infra tools still force-allow (they are registration-gated,
-// not policy-gated), but any other known-scope tool resolves to "deny" rather
-// than the historical hardcoded "allow" — CLAUDE.md hard constraint 6 forbids a
-// language-level allow fallback.
+// A nil cfg has no policy maps to resolve from at all, so (like
+// ResolveEffectivePolicy) it fails closed to "deny" for every tool, ToolSearch
+// included — CLAUDE.md hard constraint 6 forbids a language-level allow
+// fallback. ToolSearch's real "allow" comes from the seeded policy data every
+// agent carries (see effectiveToolPolicyWith's doc comment); a caller with no
+// cfg at all has no seeded data to resolve from, same as any other tool.
 func EffectiveToolPolicy(cfg *ToolPolicyCfg, scope ToolScope, agentType, toolName string) string {
 	if cfg == nil {
 		cfg = &ToolPolicyCfg{}
@@ -428,10 +424,10 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 
 	for _, t := range allTools {
 		// Resolve the FULL per-tool verdict through the single shared primitive
-		// (infra force-allow → scope gate → global×agent strictest-wins). Routing
-		// every per-tool decision through effectiveToolPolicyWith is what makes the
-		// loop's sent-defs view and the gateway's exec gate provably identical —
-		// they cannot diverge because they run the SAME function.
+		// (scope gate → global×agent strictest-wins). Routing every per-tool
+		// decision through effectiveToolPolicyWith is what makes the loop's
+		// sent-defs view and the gateway's exec gate provably identical — they
+		// cannot diverge because they run the SAME function.
 		verdict := effectiveToolPolicyWith(cfg, t.Scope(), agentType, t.Name(), agentWildcards, globalWildcards)
 		if verdict == config.ToolPolicyDeny {
 			activeToolMetricsRecorder.IncFilterTotal(agentType, "deny")

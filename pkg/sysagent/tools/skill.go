@@ -6,10 +6,12 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -43,7 +45,7 @@ func (t *SkillRemoveTool) Parameters() map[string]any {
 	}
 }
 
-func (t *SkillRemoveTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if name == "" {
@@ -64,6 +66,45 @@ func (t *SkillRemoveTool) Execute(_ context.Context, args map[string]any) *tools
 	if !confirm {
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to remove a skill", ""))
+	}
+
+	// ADR-072 D6.1 ("remove_skill follows the same rule — deleting a project
+	// skill deletes the project's file"): resolve against the current turn's
+	// workspace project shelf FIRST — independent of SkillInstaller, which
+	// only ever reaches the central registry. Only a slug absent from the
+	// project shelf falls through to the registry path below, unchanged.
+	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
+		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
+			if rmErr := projWriter.RemoveSkill(name); rmErr != nil {
+				if errors.Is(rmErr, skills.ErrNotFound) {
+					return tools.ErrorResult(errorJSON("NOT_FOUND",
+						fmt.Sprintf("skill %q is not installed", name), "use list_skills to see installed skills"))
+				}
+				slog.Warn("sysagent: remove_skill (project shelf) failed", "name", name, "error", rmErr)
+				return tools.ErrorResult(errorJSON("REMOVE_FAILED",
+					fmt.Sprintf("could not remove skill %q: %v", name, rmErr), ""))
+			}
+			tools.EmitSkillWriteAudit("project", t.Name(),
+				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), tools.ToolWorkspaceID(ctx), ps.Path)
+			slog.Info("sysagent: remove_skill removed project skill",
+				"name", name, "shelf", "project", "mount", ps.MountName, "path", ps.Path)
+			return tools.NewToolResult(successJSON(map[string]any{
+				"success": true,
+				"name":    name,
+				"shelf":   "project",
+				"mount":   ps.MountName,
+			}))
+		} else if !errors.Is(perr, skills.ErrNotFound) {
+			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
+			// not "no such project skill". Surface it rather than silently
+			// falling through to the registry installer, which would look in
+			// the wrong place entirely.
+			slog.Warn("sysagent: remove_skill (project shelf) rejected", "name", name, "error", perr)
+			return tools.ErrorResult(errorJSON("REMOVE_FAILED",
+				fmt.Sprintf("could not remove project skill %q: %v", name, perr), ""))
+		}
+		// ErrNotFound: name is not on this workspace's project shelf — fall
+		// through to the registry installer below, unchanged.
 	}
 
 	if t.deps == nil || t.deps.SkillInstaller == nil {
@@ -110,7 +151,7 @@ func (t *SkillListTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *SkillListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+func (t *SkillListTool) Execute(ctx context.Context, _ map[string]any) *tools.ToolResult {
 	if t.deps == nil || t.deps.SkillsLoader == nil {
 		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
 			"skill loader not configured", "ensure the gateway is started with a valid workspace"))
@@ -118,14 +159,29 @@ func (t *SkillListTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 
 	slog.Info("sysagent: list_skills")
 	infos := t.deps.SkillsLoader.ListSkills()
+	// ADR-072 D4/N1 (FR-025): the same grant predicate the menu uses gates
+	// this listing too — a slug the acting agent may not use must not appear
+	// here either. grantPredicateFor returns nil (no filtering) only when
+	// there is no resolvable agent context at all (agent id absent from ctx,
+	// or config/agent unavailable) — a wiring gap, not a real "ungranted"
+	// posture; see its own doc comment for why that fallback exists.
+	allow := grantPredicateFor(t.deps, ctx)
 	skillMaps := make([]map[string]any, 0, len(infos))
 	for _, info := range infos {
+		if allow != nil && !allow(info.ID) {
+			continue
+		}
 		skillMaps = append(skillMaps, map[string]any{
 			// id is the stable slug used to read/activate the skill; name is the
 			// human-readable display name (may differ, e.g. "Daily Briefing").
+			//
+			// "path" is intentionally OMITTED (ADR-072 D4/N1, FR-006/FR-025):
+			// a filesystem location is a load-bearing disclosure this listing
+			// must not carry now that skill content is reached exclusively
+			// through the Skill tool rather than by an agent reading the path
+			// itself.
 			"id":          info.ID,
 			"name":        info.Name,
-			"path":        info.Path,
 			"source":      info.Source,
 			"description": info.Description,
 		})
@@ -135,4 +191,52 @@ func (t *SkillListTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 		"skills": skillMaps,
 		"count":  len(skillMaps),
 	}))
+}
+
+// grantPredicateFor resolves the acting agent's per-agent skill grant list
+// (ADR-072 D4/D5: the registry/builtin shelves' grant instrument — a
+// project skill's grant is the mount itself, D4.1, and is out of this
+// sysagent tool's reach since it has no workspace/mount context to consult)
+// directly from the live config, with no per-tool wiring needed.
+//
+// Returns nil — meaning "do not filter" — only when there is no resolvable
+// agent context: deps/GetCfg unavailable, or no agent id was carried on ctx
+// via tools.WithAgentID at all. That is a caller-wiring gap, not a security
+// posture, and list_skills has always been reachable without a caller-
+// supplied agent id in this package's existing tests and call sites that
+// predate this ADR. Once an agent id IS resolvable, D5's real semantics
+// apply: an agent with an absent grant list, an empty one, or one not found
+// in the live roster is granted NOTHING (FR-025/FR-032/FR-033), matched
+// case-insensitively.
+func grantPredicateFor(deps *Deps, ctx context.Context) func(slug string) bool {
+	if deps == nil || deps.GetCfg == nil {
+		return nil
+	}
+	agentID := strings.TrimSpace(tools.ToolAgentID(ctx))
+	if agentID == "" {
+		return nil
+	}
+	cfg := deps.GetCfg()
+	if cfg == nil {
+		return nil
+	}
+	for _, a := range cfg.Agents.List {
+		if a.ID != agentID {
+			continue
+		}
+		granted := make(map[string]struct{}, len(a.Skills))
+		for _, s := range a.Skills {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if s != "" {
+				granted[s] = struct{}{}
+			}
+		}
+		return func(slug string) bool {
+			_, ok := granted[strings.ToLower(strings.TrimSpace(slug))]
+			return ok
+		}
+	}
+	// Agent id present but not found in the live roster — deny everything
+	// rather than fail open on an identity that does not resolve.
+	return func(string) bool { return false }
 }

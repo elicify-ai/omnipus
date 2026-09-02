@@ -271,6 +271,13 @@ func DefaultConfig() *Config {
 				"send_email":          "allow",
 				"reply":               "allow",
 				"ToolSearch":          "allow",
+				// Skill (ADR-072 D1): the on-demand skill load/search tool —
+				// the same structural-floor reasoning as ToolSearch above
+				// applies one layer up for skills. Raising the ceiling grants
+				// nobody by itself; the per-agent seeds in
+				// pkg/coreagent/core.go decide who has it (every seeded agent,
+				// mirroring ToolSearch's own seed).
+				"Skill": "allow",
 
 				// --- Browser automation tools ---
 				"browser_navigate":   "allow",

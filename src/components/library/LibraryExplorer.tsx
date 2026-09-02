@@ -63,8 +63,9 @@ import {
   libraryQueryKeys,
   createWorkspaceMount,
   deleteWorkspaceMount,
+  mountSkillsDisclosure,
 } from '@/lib/api'
-import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode } from '@/lib/api'
+import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode, MountSkillsDisclosure } from '@/lib/api'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
@@ -141,6 +142,17 @@ export function LibraryExplorer({
   const [addMountOpen, setAddMountOpen] = useState(false)
   const [mountsOpen, setMountsOpen] = useState(false)
   const [addMountError, setAddMountError] = useState<string>()
+  // ADR-072 D1.2/FR-074/FR-074a: what the just-created mount's recognised
+  // skills directory grants — shown as its own dialog (not a toast, which
+  // can be missed and auto-dismisses) so the operator explicitly
+  // acknowledges the auto-loadable-instructions grant before moving on, the
+  // same way LibraryAddMountDialog itself surfaces the write-grant decision.
+  // `null` = no skills directory found (nothing to disclose) or the backend
+  // does not send the disclosure yet (see mountSkillsDisclosure's doc
+  // comment in lib/api.ts).
+  const [skillsDisclosure, setSkillsDisclosure] = useState<
+    (MountSkillsDisclosure & { mountName: string }) | null
+  >(null)
   const [transferTarget, setTransferTarget] = useState<{ entry: LibraryEntry; mode: 'move' | 'copy' } | null>(null)
   const [transferError, setTransferError] = useState<string>()
   const [uploadError, setUploadError] = useState<string>()
@@ -230,6 +242,15 @@ export function LibraryExplorer({
         message: res.warning ?? `Mounted "${res.name}".`,
         variant: res.warning ? 'warning' : 'success',
       })
+      // ADR-072 D1.2/FR-074a: the mount's first recognised skills directory
+      // discloses what it grants, independent of the count threshold — a
+      // 3-skill mount gets the same disclosure as a 500-skill one, just
+      // without the extra ThresholdWarning line. See mountSkillsDisclosure's
+      // doc comment: this is `null` today until the backend sends it.
+      const disclosure = mountSkillsDisclosure(res)
+      if (disclosure) {
+        setSkillsDisclosure({ ...disclosure, mountName: res.name })
+      }
     },
     onError: (err) => {
       setAddMountError(
@@ -846,6 +867,43 @@ export function LibraryExplorer({
         isPending={addMountMutation.isPending}
         error={addMountError}
       />
+
+      {/* ADR-072 D1.2/FR-074/FR-074a: the just-created mount's recognised
+          skills directory disclosure — grants message always shown when the
+          mount carries any skills (even a handful), the threshold warning
+          only when it exceeds the configured count. A dedicated dialog
+          rather than folded into the mount-success toast because a toast
+          auto-dismisses and this is a standing grant of auto-loadable agent
+          instructions the operator needs to actually register. */}
+      <AlertDialog
+        open={skillsDisclosure !== null}
+        onOpenChange={(open) => !open && setSkillsDisclosure(null)}
+      >
+        <AlertDialogContent data-testid="library-mount-skills-disclosure-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              &ldquo;{skillsDisclosure?.mountName}&rdquo; grants {skillsDisclosure?.count}{' '}
+              skill{skillsDisclosure?.count === 1 ? '' : 's'}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">{skillsDisclosure?.grantsMessage}</span>
+              {skillsDisclosure?.thresholdWarning && (
+                <span
+                  className="block text-[var(--color-warning)]"
+                  data-testid="library-mount-skills-threshold-warning"
+                >
+                  {skillsDisclosure.thresholdWarning}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction size="sm" onClick={() => setSkillsDisclosure(null)}>
+              Got it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Unmount is deliberately NOT the delete dialog with different words.
           The whole risk is that the two read alike, so this one states what

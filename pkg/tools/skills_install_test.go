@@ -118,11 +118,97 @@ func TestInstallSkillToolParameters(t *testing.T) {
 	assert.Contains(t, props, "version")
 	assert.Contains(t, props, "registry")
 	assert.Contains(t, props, "force")
+	// Defect 2 fix: the ambiguous-slug error tells callers to retry with
+	// ownerHandle — the schema must actually expose that parameter or the
+	// error's own advice is unfollowable.
+	assert.Contains(t, props, "ownerHandle")
 
 	required, ok := params["required"].([]string)
 	assert.True(t, ok)
 	assert.Contains(t, required, "slug")
 	assert.Contains(t, required, "registry")
+}
+
+func TestInstallSkillToolUnsafeOwnerHandle(t *testing.T) {
+	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
+	result := tool.Execute(context.Background(), map[string]any{
+		"slug":        "docker-compose",
+		"registry":    "clawhub",
+		"ownerHandle": "../etc",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "invalid ownerHandle")
+}
+
+// fakeUnscopedRegistry implements skills.SkillRegistry but NOT
+// skills.OwnerScopedRegistry, to verify the tool surfaces a clear error
+// instead of silently ignoring ownerHandle for a registry that can't use it.
+type fakeUnscopedRegistry struct{}
+
+func (f *fakeUnscopedRegistry) Name() string { return "fake-unscoped" }
+func (f *fakeUnscopedRegistry) Search(context.Context, string, int) ([]skills.SearchResult, error) {
+	return nil, nil
+}
+
+func (f *fakeUnscopedRegistry) GetSkillMeta(context.Context, string) (*skills.SkillMeta, error) {
+	return &skills.SkillMeta{}, nil
+}
+
+func (f *fakeUnscopedRegistry) DownloadAndInstall(
+	context.Context, string, string, string,
+) (*skills.InstallResult, error) {
+	return &skills.InstallResult{Version: "1.0.0"}, nil
+}
+
+func TestInstallSkillToolOwnerHandleUnsupportedByRegistry(t *testing.T) {
+	mgr := skills.NewRegistryManager()
+	mgr.AddRegistry(&fakeUnscopedRegistry{})
+
+	tool := NewInstallSkillTool(mgr, t.TempDir())
+	result := tool.Execute(context.Background(), map[string]any{
+		"slug":        "docker-compose",
+		"registry":    "fake-unscoped",
+		"ownerHandle": "acme",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "does not support ownerHandle-scoped installs")
+}
+
+// fakeOwnerScopedRegistry implements both skills.SkillRegistry and
+// skills.OwnerScopedRegistry to verify the tool actually dispatches through
+// the owner-scoped path (rather than, say, silently calling the unscoped
+// method and dropping ownerHandle on the floor).
+type fakeOwnerScopedRegistry struct {
+	fakeUnscopedRegistry
+	gotSlug, gotOwnerHandle, gotVersion string
+}
+
+func (f *fakeOwnerScopedRegistry) Name() string { return "fake-owner-scoped" }
+
+func (f *fakeOwnerScopedRegistry) DownloadAndInstallForOwner(
+	_ context.Context, slug, ownerHandle, version, _ string,
+) (*skills.InstallResult, error) {
+	f.gotSlug = slug
+	f.gotOwnerHandle = ownerHandle
+	f.gotVersion = version
+	return &skills.InstallResult{Version: "2.0.0"}, nil
+}
+
+func TestInstallSkillToolOwnerHandleDispatchesToScopedInstall(t *testing.T) {
+	fake := &fakeOwnerScopedRegistry{}
+	mgr := skills.NewRegistryManager()
+	mgr.AddRegistry(fake)
+
+	tool := NewInstallSkillTool(mgr, t.TempDir())
+	result := tool.Execute(context.Background(), map[string]any{
+		"slug":        "docker-compose",
+		"registry":    "fake-owner-scoped",
+		"ownerHandle": "acme",
+	})
+	require.False(t, result.IsError, "unexpected error: %s", result.ForLLM)
+	assert.Equal(t, "docker-compose", fake.gotSlug)
+	assert.Equal(t, "acme", fake.gotOwnerHandle)
+	assert.Contains(t, result.ForLLM, "v2.0.0")
 }
 
 func TestInstallSkillToolMissingRegistry(t *testing.T) {

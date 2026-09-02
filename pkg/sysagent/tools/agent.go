@@ -28,6 +28,12 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
+// errAgentLocked is a sentinel wrapped by AgentUpdateTool's locked-core-agent
+// refusal so the caller can distinguish it (via errors.Is) from every other
+// agentstore.Update failure and report the dedicated AGENT_LOCKED error code
+// instead of the generic SAVE_FAILED — see that error branch's own comment.
+var errAgentLocked = errors.New("agent is a locked core agent")
+
 // slugRegexp matches characters that should be replaced in agent name → ID conversion.
 var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -575,7 +581,7 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 	var updated []string
 	_, updateErr := agentstore.New(omnipusHome).Update(id, func(a *config.AgentConfig) error {
 		if a.Locked {
-			return fmt.Errorf("agent %q is a locked core agent and cannot be modified", id)
+			return fmt.Errorf("agent %q is a locked core agent and cannot be modified: %w", id, errAgentLocked)
 		}
 		if v, ok := args["name"].(string); ok && v != "" {
 			a.Name = v
@@ -645,6 +651,14 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 				fmt.Sprintf("No agent with ID %q", id),
 				"Use list_agents to see available agents",
 			))
+		}
+		if errors.Is(updateErr, errAgentLocked) {
+			// AGENT_LOCKED, not the generic SAVE_FAILED — same fix and same
+			// rationale as AgentDeleteTool.Execute's identical locked-agent
+			// check above: this is a permanent policy refusal, not a
+			// transient I/O failure.
+			return tools.ErrorResult(errorJSON("AGENT_LOCKED", updateErr.Error(),
+				"Locked core agents (Mia, Jim, Ava, Ray) cannot be modified"))
 		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", updateErr.Error(), ""))
 	}
@@ -833,8 +847,17 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", getErr.Error(), ""))
 	}
 	if existing.Locked {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED",
-			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", id), ""))
+		// AGENT_LOCKED (not the generic SAVE_FAILED): this is a deliberate,
+		// permanent policy refusal, not a transient I/O failure — a caller
+		// that only checks for SAVE_FAILED-shaped retriable errors must not
+		// mistake "this delete will never succeed" for "try again". Mirrors
+		// REST's DELETE /api/v1/agents/{id} handler (pkg/gateway/rest.go's
+		// deleteAgent), which returns a dedicated "agent_locked" code (403)
+		// for this exact refusal — a UAT run observed the tool and REST
+		// paths disagreeing on the error code for the identical condition.
+		return tools.ErrorResult(errorJSON("AGENT_LOCKED",
+			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", id),
+			"Locked core agents (Mia, Jim, Ava, Ray) can never be deleted"))
 	}
 	// Guard (ADR-049 D4/FR-065), ported from the REST deleteAgent handler
 	// (pkg/gateway/rest.go, search "agent_owns_active_plans"): an agent
@@ -972,8 +995,23 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	// agent the agent is gone when it in fact keeps ROUTING (stale
 	// in-memory registry/RouteResolver, per this function's own doc comment
 	// above) until the next restart.
+	//
+	// WaitForReloadFunc (preferred) BLOCKS until the reload actually lands —
+	// see its doc comment on Deps for the ghost-listing race this closes: a
+	// caller that calls delete_agent and then immediately list_agents in the
+	// same turn must not still see the deleted agent because the reload was
+	// only queued, not yet applied. Falls back to the fire-and-forget
+	// ReloadFunc when WaitForReloadFunc is nil (tests/degraded wiring).
 	var publishWarning string
-	if t.deps.ReloadFunc != nil {
+	if t.deps.WaitForReloadFunc != nil {
+		if err := t.deps.WaitForReloadFunc(); err != nil {
+			slog.Warn("sysagent: hot-reload after agent delete failed — agent remains routable/listed until restart",
+				"id", id, "error", err)
+			publishWarning = fmt.Sprintf(
+				"agent %q was deleted from storage but hot-reload failed (%s); it may remain routable and "+
+					"listed until the next gateway restart", id, err.Error())
+		}
+	} else if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent delete failed — agent remains routable/listed until restart",
 				"id", id, "error", err)

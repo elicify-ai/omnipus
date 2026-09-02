@@ -233,9 +233,29 @@ run_gorace() {
   # (.github/workflows/pr.yml), which runs WITHOUT -race and with Chrome as a
   # declared dependency. This gate's job is the concurrency logic.
   #
+  # Contention control, same rationale and same fix as run_gotest above (this
+  # worker is performance-8x, 8 vCPUs): plain `go test -race` with no -p/
+  # GOMAXPROCS override runs one binary per package at DEFAULT GOMAXPROCS (=
+  # NumCPU, 8 here), so N concurrent race binaries oversubscribe 8 cores N:1 —
+  # -race's own instrumentation overhead (2-20x CPU) makes that oversubscription
+  # bite harder here than in the plain-test case run_gotest already fixed, and
+  # starves exactly the wall-clock-deadline tests run_gotest's comment
+  # describes (found empirically: TestValidateCLI_BareNameResolvedViaPATH's
+  # 15s CLI-handshake probe timeout blown at 16.18s under an untuned, fully
+  # concurrent race-packages.sh run — a real, confirmed CI-throttling gap, not
+  # an application bug). `-p 2` + GOMAXPROCS=4 mirrors run_gotest's own fix:
+  # 2 × 4 = 8 threads ≈ 8 cores (no oversubscription), 4 cores per binary.
+  # Deliberately NOT mirrored to pr.yml's "Run go test -race" step: that job
+  # runs on ubuntu-latest's smaller default runners, a different oversubscription
+  # regime, exactly like run_gotest's own -p2/GOMAXPROCS=4 is worker-only and
+  # already not mirrored there either — see this file's redeploy note on
+  # keeping detection semantics (timeout, CGO_ENABLED, DATA RACE carve-out) in
+  # lockstep with pr.yml, which concurrency-only scheduling knobs are not part
+  # of.
+  #
   # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
   # emits a space-separated package list that must expand to separate args.
-  out=$(CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
+  out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 900s \
     $(scripts/race-packages.sh) 2>&1)
   local code=$?
   echo "$out"

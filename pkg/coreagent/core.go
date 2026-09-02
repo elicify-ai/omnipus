@@ -308,14 +308,14 @@ func GetPrompt(id string) string {
 // allStaticToolNames is the complete, hardcoded enumeration of every static
 // builtin tool name known to the platform:
 //
-//   - 34 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
+//   - 35 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
 //     the dynamic MCP-adapter tool names, which are per-server and can't be
 //     statically enumerated — see the Constraint #6 MCP exception). The count
 //     was stated as 31 until plan-supervisor-spec FR-006 surface 1 required
 //     this comment corrected in the same edit: recall_conversation (the 4th
 //     memory tool) and message_parent (ADR-053 §5.1) were both added to the
 //     literal below without the prose being updated. ADR-056's list_jobs then
-//     took it from 33 to 34.
+//     took it from 33 to 34, and ADR-072's Skill tool took it from 34 to 35.
 //   - 11 browser-automation tools (pkg/tools/browser/tools.go +
 //     pkg/tools/browser/tabs.go).
 //   - 35 sysagent management tools (pkg/sysagent/tools/*.go).
@@ -368,6 +368,11 @@ var allStaticToolNames = []string{
 	"search_web", "fetch_url",
 	"send_message", "switch_agent", "send_file",
 	"find_skills", "install_skill",
+	// Skill (ADR-072 D1): the on-demand skill load/search tool, wired into
+	// this literal alongside ToolSearch below — see its "Structural floor"
+	// comment on the seed entries for why every agent carries an explicit
+	// entry for it.
+	"Skill",
 	"delegate", "message_parent",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
@@ -736,6 +741,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
 			overrides["recall_conversation"] = allow
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			overrides["ToolSearch"] = allow
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			overrides["Skill"] = allow
 		case IDExplorer:
 			// File + memory exploration (internal context): read-only
 			// filesystem, persistent memory, plus interactive/visual
@@ -761,6 +776,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			} {
 				overrides[b] = allow
 			}
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			overrides["ToolSearch"] = allow
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			overrides["Skill"] = allow
 		case IDResearcher:
 			// External-source research: web search/fetch, read-only file
 			// access (for fetched/local docs), persistent memory, plus
@@ -787,6 +812,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			} {
 				overrides[b] = allow
 			}
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			overrides["ToolSearch"] = allow
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			overrides["Skill"] = allow
 		}
 		return denyAllThenOverride(overrides)
 	}
@@ -844,6 +879,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// must be able to find the plan she owns in order to stop it. See
 			// coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			"Skill": allow,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -894,6 +939,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// once an operator approves the "ask" above — and would then need
 			// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			"Skill": allow,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -967,6 +1022,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// directly on his critical path. See coreAgentSeed's ROSTER
 			// VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			"Skill": allow,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -1097,6 +1162,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// necessarily mint this turn. He is also the heaviest delegator.
 			// See coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent needs
+			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+			// seeded here as real data rather than the retired compositor.go
+			// hardcoded force-allow.
+			"ToolSearch": allow,
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			"Skill": allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
@@ -1134,12 +1209,28 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"read_file":       allow,
 			"list_directory":  allow,
 			"inspect_session": allow,
+			// Structural floor (CLAUDE.md constraint 6): every agent, including
+			// System Agents, needs ToolSearch to reach ANY tiered (lazy/
+			// search-only) tool at all — seeded here as real data rather than
+			// the retired compositor.go hardcoded force-allow.
+			"ToolSearch": allow,
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			"Skill": allow,
 		})
 	case IDPlanSupervisor:
 		// ADR-055 / plan-supervisor-spec FR-008. PlanSupervisor's grant is
-		// EXACTLY ONE tool. Naming plan_correct here is not belt-and-braces:
-		// denyAllThenOverride stamps an explicit deny for every catalog name
-		// first, and a per-agent deny BEATS the global "allow" ceiling under
+		// EXACTLY THREE tools: plan_correct (its role-specific grant),
+		// ToolSearch (the structural floor every agent gets — see the
+		// "Structural floor" comment on the ToolSearch entry below) and
+		// Skill (ADR-072 D1's equivalent structural floor for skill content —
+		// without it PlanSupervisor could never load the "plan" skill
+		// systemAgentSkills grants it, since nothing force-loads a skill's
+		// body any more). Naming plan_correct here is not belt-and-braces: denyAllThenOverride
+		// stamps an explicit deny for every catalog name first, and a
+		// per-agent deny BEATS the global "allow" ceiling under
 		// strictest-wins — so an unnamed tool ships denied to PlanSupervisor
 		// itself and the correction loop would be dead on arrival on every
 		// fresh install.
@@ -1188,13 +1279,25 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     opposite of "one correction per wake".
 		//
 		// TestPlanSupervisorSeed_ExactlyPlanCorrect asserts this as a
-		// COMPLEMENT (allow for plan_correct, deny for every other name in
-		// allStaticToolNames) rather than as a list, so a tool added to the
-		// catalog later can never silently land in PlanSupervisor's allow set.
-		// A future change that genuinely wants a second grant must amend that
-		// test deliberately — the complement failing is the guard working.
+		// COMPLEMENT (allow for plan_correct, ToolSearch AND Skill, deny for
+		// every other name in allStaticToolNames) rather than as a list, so a
+		// tool added to the catalog later can never silently land in
+		// PlanSupervisor's allow set. ToolSearch and Skill are the two
+		// deliberate, uniform exceptions to "exactly one role-specific tool":
+		// every agent needs them to reach ANY tiered (lazy/search-only) tool
+		// or ANY skill's content at all — structural floors, not role-specific
+		// grants, and they apply even to the most locked-down agent in the
+		// system. A future change that genuinely wants a FOURTH grant must
+		// amend that test deliberately — the complement failing is the guard
+		// working.
 		return denyAllThenOverride(map[string]config.ToolPolicy{
 			"plan_correct": allow,
+			"ToolSearch":   allow,
+			// Structural floor (ADR-072 D1, mirroring the ToolSearch
+			// structural floor immediately above): every agent needs the
+			// Skill tool to load ANY skill's content at all — the "# Skills"
+			// menu advertises skills but nothing else can ever load one.
+			"Skill": allow,
 		})
 	default:
 		return denyAllThenOverride(nil)
@@ -1685,11 +1788,19 @@ func SeedConfig(cfg *config.Config) bool {
 			a.Icon = ca.Icon
 			modified = true
 		}
-		// Idempotent skill-allowlist migration (FR-9.4). Apply the seeded
-		// allowlist only when the existing entry declares none — an operator who
-		// has customized the agent's skills keeps their choice. Upgrades from a
-		// release that predated allowlists therefore gain the default matrix.
-		if len(a.Skills) == 0 {
+		// Fresh-install-only skill-allowlist seed (ADR-072 D5.1, FR-034).
+		// Under D5, an empty/absent Skills list means "the operator granted
+		// nothing" — a valid, deliberate state — not "never configured". This
+		// block used to run on every boot (guarded only by len(a.Skills)==0),
+		// framed as an idempotent migration for installs that predated
+		// allowlists (FR-9.4). D5.1 is greenfield with no such installs to
+		// migrate (§6.2), and re-running it on every boot would silently
+		// restore a grant list the operator later emptied on purpose — the
+		// exact ADR-054 D6.4 "reports success, doesn't stick" failure mode.
+		// Gating on isFreshInstall (same flag as the AutoRecap/DefaultAgentID
+		// seeds above) makes this fire once, on the very first boot, and
+		// never again. Do NOT restore this to an unconditional migration.
+		if isFreshInstall && len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
 				a.Skills = seedSkills
 				modified = true
@@ -2015,10 +2126,12 @@ func toolPolicyMapsEqual(a, b map[string]config.ToolPolicy) bool {
 // custom/subagent/subagent_3p agent (FR-008, FR-022). Every new agent starts
 // fully-enumerated and deny-by-default (via denyAllThenOverride) — there is
 // no DefaultPolicy field and no allow-by-default fallback. Only a narrow,
-// conservative read-only surface is allowed out of the box; the operator
-// opts in explicitly (via the tool picker or tools.builtin.policies) for
-// anything else, including bash and every system-management tool
-// (create_agent, set_config, add_mcp_server, …), which all stay denied.
+// conservative read-only surface is allowed out of the box (plus the
+// structural ToolSearch floor every agent gets — CLAUDE.md constraint 6, see
+// the "ToolSearch" entry below); the operator opts in explicitly (via the
+// tool picker or tools.builtin.policies) for anything else, including bash
+// and every system-management tool (create_agent, set_config,
+// add_mcp_server, …), which all stay denied.
 //
 // Callers should embed this into config.AgentConfig.Tools when constructing a
 // new agent via the REST API or create_agent tool.
@@ -2060,6 +2173,16 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"recall_memory":       allow,
 				"run_retrospective":   allow,
 				"recall_conversation": allow,
+				// Structural floor (CLAUDE.md constraint 6): every agent needs
+				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+				// seeded here as real data rather than the retired compositor.go
+				// hardcoded force-allow.
+				"ToolSearch": allow,
+				// Structural floor (ADR-072 D1, mirroring the ToolSearch
+				// structural floor immediately above): every agent needs the
+				// Skill tool to load ANY skill's content at all — the "# Skills"
+				// menu advertises skills but nothing else can ever load one.
+				"Skill": allow,
 			}),
 		},
 	}

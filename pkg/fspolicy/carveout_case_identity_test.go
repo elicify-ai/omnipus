@@ -320,12 +320,17 @@ func TestIsSecretName_FoldsCase(t *testing.T) {
 		"workspaces", "WorkSpaces",
 		"config.json.bak-123", "CONFIG.JSON.bak-123",
 		"master.key.old", "MASTER.KEY.OLD",
+		// skills — ADR-072 D10 Part A / D10.1 (SecretEntriesAlwaysPathOnly):
+		// path-denied like every entry above, but deliberately excluded from
+		// pkg/tools/shell.go's literal-text guard because "skills" is an
+		// ordinary English word — see TestSecretEntries_SkillsDeniedForPathsNotTextGuard.
+		"skills", "SKILLS", "Skills",
 	} {
 		if !IsSecretName(name) {
 			t.Errorf("IsSecretName(%q) = false, want true", name)
 		}
 	}
-	for _, name := range []string{"notes.md", "SOUL.md", "skills", "logs"} {
+	for _, name := range []string{"notes.md", "SOUL.md", "logs"} {
 		if IsSecretName(name) {
 			t.Errorf("IsSecretName(%q) = true, want false", name)
 		}

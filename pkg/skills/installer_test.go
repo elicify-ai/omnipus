@@ -423,6 +423,57 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 			t.Error("skill directory still exists after uninstall")
 		}
 	})
+
+	// Uninstall addresses a skill by its stable ID (the on-disk directory
+	// slug) — the SAME identifier SkillsLoader.ListSkills reports as
+	// SkillInfo.ID and list_skills (pkg/sysagent/tools/skill.go) reports as
+	// "id". A skill's separate, free-form display Name (SKILL.md frontmatter
+	// `name:`, e.g. "AWS Cost Analyzer Pro") is intentionally NOT accepted
+	// here — every listing surface documents ID as the addressable
+	// identifier for removal, so a caller supplying the display name instead
+	// gets a clear not-found rather than a silent, ambiguous fuzzy match.
+	t.Run("uninstall by ID succeeds even when a different display name is set", func(t *testing.T) {
+		slug := "aws-cost-analyzer" // the directory name install_skill created == ID
+		skillDir := filepath.Join(skillsDir, slug)
+		os.MkdirAll(skillDir, 0o755)
+		skillMD := "---\nname: AWS Cost Analyzer Pro\ndescription: Analyzes AWS billing data.\n---\n\n# AWS Cost Analyzer\n"
+		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644)
+
+		if err := installer.Uninstall(slug); err != nil {
+			t.Errorf("Uninstall(%q) error = %v, want the skill removed", slug, err)
+		}
+
+		if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+			t.Error("skill directory still exists after uninstall by ID")
+		}
+	})
+
+	// The display name must NOT be accepted as a substitute identifier — it
+	// is display-only, and the whole SkillInfo.ID/Name split exists so this
+	// case never becomes ambiguous. Uses a valid slug-shaped display name
+	// (distinct from the "invalid skill name" case below, which a
+	// space-containing display name would trigger instead via
+	// resolveSkillDir's namePattern check before ever reaching "not found").
+	t.Run("uninstall by display name (not ID) fails not found", func(t *testing.T) {
+		slug := "docker-compose"
+		skillDir := filepath.Join(skillsDir, slug)
+		os.MkdirAll(skillDir, 0o755)
+		skillMD := "---\nname: docker-compose-manager\ndescription: manage compose stacks\n---\n"
+		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644)
+		defer os.RemoveAll(skillDir)
+
+		err := installer.Uninstall("docker-compose-manager")
+		if err == nil {
+			t.Fatal("Uninstall() by display name expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Errorf("error message = %q, want 'not found'", err.Error())
+		}
+		// The skill installed under its real ID must be untouched.
+		if _, statErr := os.Stat(skillDir); statErr != nil {
+			t.Errorf("skill directory should be untouched, stat error = %v", statErr)
+		}
+	})
 }
 
 func TestSkillInstaller_InstallFromGitHub_SkillAlreadyExists(t *testing.T) {

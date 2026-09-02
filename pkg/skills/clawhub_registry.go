@@ -204,12 +204,37 @@ type clawhubModerationInfo struct {
 	IsSuspicious     bool `json:"isSuspicious"`
 }
 
+// GetSkillMeta retrieves metadata for slug. When the same slug is published
+// by more than one owner on the registry, the request is ambiguous; use
+// getSkillMeta with a non-empty ownerHandle (via DownloadAndInstallForOwner)
+// to disambiguate.
 func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*SkillMeta, error) {
+	return c.getSkillMeta(ctx, slug, "")
+}
+
+// getSkillMeta is the ownerHandle-aware implementation behind both
+// GetSkillMeta and the owner-scoped install path. ownerHandle == "" means
+// "unscoped", matching GetSkillMeta's public behavior exactly.
+func (c *ClawHubRegistry) getSkillMeta(ctx context.Context, slug, ownerHandle string) (*SkillMeta, error) {
 	if err := utils.ValidateSkillIdentifier(slug); err != nil {
 		return nil, fmt.Errorf("invalid slug %q: error: %s", slug, err.Error())
 	}
+	if ownerHandle != "" {
+		if err := utils.ValidateSkillIdentifier(ownerHandle); err != nil {
+			return nil, fmt.Errorf("invalid ownerHandle %q: error: %s", ownerHandle, err.Error())
+		}
+	}
 
-	u := c.baseURL + c.skillsPath + "/" + url.PathEscape(slug)
+	parsedURL, err := url.Parse(c.baseURL + c.skillsPath + "/" + url.PathEscape(slug))
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+	if ownerHandle != "" {
+		q := parsedURL.Query()
+		q.Set("ownerHandle", ownerHandle)
+		parsedURL.RawQuery = q.Encode()
+	}
+	u := parsedURL.String()
 
 	body, err := c.doGet(ctx, u)
 	if err != nil {
@@ -245,9 +270,34 @@ func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*Skill
 // DownloadAndInstall fetches metadata (with fallback), resolves version,
 // downloads the skill ZIP, and extracts it to targetDir.
 // Returns an InstallResult for the caller to use for moderation decisions.
+//
+// If the registry reports slug as ambiguous (published by more than one
+// owner), retry via DownloadAndInstallForOwner with the disambiguating
+// owner handle rather than retrying this method — a bare slug lookup will
+// hit the same ambiguity again.
 func (c *ClawHubRegistry) DownloadAndInstall(
 	ctx context.Context,
 	slug, version, targetDir string,
+) (*InstallResult, error) {
+	return c.downloadAndInstall(ctx, slug, "", version, targetDir)
+}
+
+// DownloadAndInstallForOwner implements OwnerScopedRegistry: it behaves like
+// DownloadAndInstall but scopes both the metadata lookup and the download to
+// skills published by ownerHandle, resolving an otherwise-ambiguous slug.
+func (c *ClawHubRegistry) DownloadAndInstallForOwner(
+	ctx context.Context,
+	slug, ownerHandle, version, targetDir string,
+) (*InstallResult, error) {
+	if err := utils.ValidateSkillIdentifier(ownerHandle); err != nil {
+		return nil, fmt.Errorf("invalid ownerHandle %q: error: %s", ownerHandle, err.Error())
+	}
+	return c.downloadAndInstall(ctx, slug, ownerHandle, version, targetDir)
+}
+
+func (c *ClawHubRegistry) downloadAndInstall(
+	ctx context.Context,
+	slug, ownerHandle, version, targetDir string,
 ) (*InstallResult, error) {
 	if err := utils.ValidateSkillIdentifier(slug); err != nil {
 		return nil, fmt.Errorf("invalid slug %q: error: %s", slug, err.Error())
@@ -259,7 +309,7 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 	// (wired via pkg/gateway/rest_skill_trust.go) to decide whether to block
 	// or warn on unverified installs (SEC-09).
 	result := &InstallResult{}
-	meta, err := c.GetSkillMeta(ctx, slug)
+	meta, err := c.getSkillMeta(ctx, slug, ownerHandle)
 	if err != nil {
 		slog.Warn("skill metadata fetch failed — hash verification will be skipped",
 			"slug", slug,
@@ -292,6 +342,9 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 
 	q := u.Query()
 	q.Set("slug", slug)
+	if ownerHandle != "" {
+		q.Set("ownerHandle", ownerHandle)
+	}
 	if installVersion != "latest" {
 		q.Set("version", installVersion)
 	}

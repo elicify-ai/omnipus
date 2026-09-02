@@ -38,13 +38,30 @@ interface BrowserResult {
   error?: string
 }
 
+// Mirrors stripUntrustedContentWrapper in src/lib/untrustedToolContent.ts —
+// see that file's header comment for why browser.navigate results can
+// arrive wrapped in [UNTRUSTED_CONTENT] markers.
+function stripUntrustedContentWrapper(raw: string): string | null {
+  const UNTRUSTED_OPEN = '[UNTRUSTED_CONTENT]'
+  const UNTRUSTED_CLOSE = '[/UNTRUSTED_CONTENT]'
+  const UNTRUSTED_REDACTED = '[UNTRUSTED_CONTENT_REDACTED_FOR_SUMMARIZATION]'
+  const trimmed = raw.trim()
+  if (trimmed === UNTRUSTED_REDACTED) return null
+  if (trimmed.startsWith(UNTRUSTED_OPEN) && trimmed.endsWith(UNTRUSTED_CLOSE)) {
+    return trimmed.slice(UNTRUSTED_OPEN.length, trimmed.length - UNTRUSTED_CLOSE.length).trim()
+  }
+  return raw
+}
+
 function parseResult(result: unknown): BrowserResult {
   if (!result) return {}
   if (typeof result === 'string') {
+    const unwrapped = stripUntrustedContentWrapper(result)
+    if (unwrapped === null) return { content: '(content withheld by security policy)' }
     try {
-      return JSON.parse(result) as BrowserResult
+      return JSON.parse(unwrapped) as BrowserResult
     } catch {
-      return { content: result }
+      return { content: unwrapped }
     }
   }
   if (typeof result === 'object') return result as BrowserResult
@@ -161,6 +178,32 @@ describe('parseResult — result parsing helper', () => {
     // Malformed JSON falls back to plain content wrapping.
     // Traces to: vivid-roaming-planet.md line 177
     expect(parseResult('{not valid json}')).toEqual({ content: '{not valid json}' })
+  })
+
+  // --- SEC-25 PromptGuard wrapper (defect: JSON.parse warning bug) ---
+  //
+  // browser.navigate is classified untrusted (pkg/agent/prompt_guard.go) so
+  // the gateway sends the PromptGuard-sanitized string — wrapped in
+  // [UNTRUSTED_CONTENT] markers — as the tool result, not raw JSON.
+
+  it('unwraps a [UNTRUSTED_CONTENT]-wrapped JSON result and parses the inner JSON', () => {
+    const inner = '{"url":"https://example.com","title":"Example"}'
+    const wrapped = `[UNTRUSTED_CONTENT]\n${inner}\n[/UNTRUSTED_CONTENT]`
+    expect(parseResult(wrapped)).toEqual({ url: 'https://example.com', title: 'Example' })
+  })
+
+  it('unwraps a [UNTRUSTED_CONTENT] wrapper containing Medium-strictness ZWNJ escaping', () => {
+    // escapeInjectionPhrases (pkg/security/promptguard.go) splices a U+200C
+    // inside matched phrases — it must not break JSON.parse after unwrap.
+    const inner = '{"title":"you‌ are now here"}'
+    const wrapped = `[UNTRUSTED_CONTENT]\n${inner}\n[/UNTRUSTED_CONTENT]`
+    expect(parseResult(wrapped)).toEqual({ title: 'you‌ are now here' })
+  })
+
+  it('returns a withheld-content notice for the High-strictness redaction placeholder', () => {
+    expect(parseResult('[UNTRUSTED_CONTENT_REDACTED_FOR_SUMMARIZATION]')).toEqual({
+      content: '(content withheld by security policy)',
+    })
   })
 })
 

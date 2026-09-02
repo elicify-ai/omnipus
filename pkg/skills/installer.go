@@ -369,6 +369,21 @@ func (si *SkillInstaller) Uninstall(skillName string) error {
 	}
 
 	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+		// NOTE: skillName here is always expected to be the skill's stable ID
+		// (the on-disk directory slug) — the SAME identifier SkillsLoader.ListSkills
+		// and list_skills report as "id" (SkillInfo.ID, pkg/skills/loader.go).
+		// SkillInfo also carries a separate, free-form Name (the SKILL.md
+		// frontmatter display name, e.g. "Daily Briefing") that intentionally is
+		// NOT accepted here: every "which skills are installed" surface
+		// (ListSkills, the <skills> context block, list_skills) already
+		// surfaces id as the primary, addressable identifier and documents
+		// that name is for display only (SkillRemoveTool's own Description()
+		// tells the caller to pass "the skill id as reported by list_skills").
+		// A prior version of this function tried to paper over a caller
+		// passing the display name instead by scanning for a frontmatter-name
+		// match — that was a workaround for an ambiguity the ID/Name split
+		// above already resolved at the source, so it was removed rather than
+		// carried forward as unused complexity.
 		return fmt.Errorf("skill '%s' not found (processed as '%s')", skillName, finalSkillName)
 	}
 

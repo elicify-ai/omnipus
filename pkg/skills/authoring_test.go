@@ -209,3 +209,262 @@ func TestValidateSkillMarkdown_Valid(t *testing.T) {
 		t.Fatalf("valid SKILL.md rejected: %v", err)
 	}
 }
+
+// TestSkillCreateEdit_RejectsEmptyFrontmatterDescription is the regression
+// test for UAT S59: create_skill (and edit_skill) accepted a skill whose YAML
+// frontmatter declared an empty/whitespace-only `description:` field, because
+// ValidateSkillMarkdown silently fell back to the body's first paragraph as
+// the "description" it validated — even though the author's actual
+// frontmatter said nothing. Each fixture below deliberately includes a real,
+// description-shaped paragraph in the BODY, so a false pass here can only be
+// caused by that silent fallback, not by an accidentally-empty body too.
+//
+// Covers, against BOTH CreateSkill and EditSkill:
+//   - an empty `description:` field is rejected with ValidateSkillDescription's
+//     own "description is required..." message (FR-010, via ValidateSkillMarkdown);
+//   - a whitespace-only `description:` field is rejected identically
+//     (regression matching ValidateSkillDescription's own existing behavior);
+//   - a valid, non-empty description is still accepted (no false-positive
+//     rejection introduced by the fix).
+func TestSkillCreateEdit_RejectsEmptyFrontmatterDescription(t *testing.T) {
+	const bodyWithRealParagraph = "\n\n# decoy\n\nThis is a real, sentence-shaped paragraph that a naive " +
+		"fallback would mistake for the skill's description.\n"
+
+	cases := []struct {
+		name           string
+		descriptionRaw string // raw YAML scalar for the frontmatter `description:` field, incl. quoting
+		wantErr        bool
+		wantErrSub     string
+	}{
+		{
+			name:           "empty description is rejected",
+			descriptionRaw: `""`,
+			wantErr:        true,
+			wantErrSub:     "description is required",
+		},
+		{
+			name:           "null description is rejected",
+			descriptionRaw: "null",
+			wantErr:        true,
+			wantErrSub:     "description is required",
+		},
+		{
+			name:           "whitespace-only description is rejected",
+			descriptionRaw: `"   "`,
+			wantErr:        true,
+			wantErrSub:     "description is required",
+		},
+		{
+			name:           "valid description is accepted",
+			descriptionRaw: `"Use when the user asks to decoy-test something long enough to pass validation."`,
+			wantErr:        false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run("CreateSkill/"+tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			w := NewSkillWriter(root)
+			slug := "decoy"
+			content := "---\nname: " + slug + "\ndescription: " + tc.descriptionRaw + "\n---" + bodyWithRealParagraph
+
+			_, err := w.CreateSkill(slug, content)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected CreateSkill to reject an empty/whitespace frontmatter description, but it succeeded")
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Fatalf("expected error to contain %q, got: %v", tc.wantErrSub, err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected a valid description to be accepted, got: %v", err)
+			}
+		})
+
+		t.Run("EditSkill/"+tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			w := NewSkillWriter(root)
+			slug := "decoy"
+			// Seed an existing, valid skill so EditSkill edits rather than creates.
+			if _, err := w.CreateSkill(slug, validFor(slug)); err != nil {
+				t.Fatalf("seed CreateSkill: %v", err)
+			}
+
+			content := "---\nname: " + slug + "\ndescription: " + tc.descriptionRaw + "\n---" + bodyWithRealParagraph
+			_, _, err := w.EditSkill(slug, content, false)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected EditSkill to reject an empty/whitespace frontmatter description, but it succeeded")
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Fatalf("expected error to contain %q, got: %v", tc.wantErrSub, err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected a valid description to be accepted, got: %v", err)
+			}
+		})
+	}
+}
+
+// newProjectSkillFixture seeds a "<mountRoot>/.omnipus/skills/<slug>/SKILL.md"
+// file and returns the mount root, the skill's absolute path, and a
+// ProjectShelf keyed on slug pointing at it — the shape DiscoverProjectSkills
+// / MergeProjectSkills would have produced for a real mount.
+func newProjectSkillFixture(t *testing.T, slug string) (mountRoot, skillPath string, shelf ProjectShelf) {
+	t.Helper()
+	mountRoot = t.TempDir()
+	skillDir := filepath.Join(mountRoot, ".omnipus", "skills", slug)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("seed mount fixture: mkdir: %v", err)
+	}
+	skillPath = filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(validFor(slug)), 0o644); err != nil {
+		t.Fatalf("seed mount fixture: write SKILL.md: %v", err)
+	}
+	shelf = ProjectShelf{
+		strings.ToLower(slug): ProjectSkill{
+			SkillInfo: SkillInfo{ID: slug, Name: slug, Path: skillPath, Source: string(ShelfProject)},
+			MountName: "alpha",
+			MountRoot: mountRoot,
+		},
+	}
+	return mountRoot, skillPath, shelf
+}
+
+// TestSkillWriter_ResolvesProjectSlugToItsOwnShelf covers ADR-072 D6.1 /
+// spec FR-065/066/067: editing a project skill through the writer
+// ResolveProjectSkillWriter hands back must write into the mount's own
+// SKILL.md, in place, and must never create any copy in a separate central
+// (global) skills root.
+//
+// Traces to: ADR-072 D6.1; spec FR-065/066/067; BDD "Editing a project skill
+// writes into the project".
+func TestSkillWriter_ResolvesProjectSlugToItsOwnShelf(t *testing.T) {
+	mountRoot, skillPath, shelf := newProjectSkillFixture(t, "deploy")
+
+	w, ps, err := ResolveProjectSkillWriter(shelf, "deploy")
+	if err != nil {
+		t.Fatalf("ResolveProjectSkillWriter: %v", err)
+	}
+	if ps.MountName != "alpha" {
+		t.Fatalf("resolved ProjectSkill.MountName = %q, want %q", ps.MountName, "alpha")
+	}
+	wantRoot := filepath.Join(mountRoot, ".omnipus", "skills")
+	if w.Root() != wantRoot {
+		t.Fatalf("writer resolved to root %q, want the skill's own shelf %q", w.Root(), wantRoot)
+	}
+
+	newContent := "---\nname: deploy\ndescription: An updated deploy description, long enough to be valid here.\n---\n\n# deploy\n\nUpdated body.\n"
+	path, _, err := w.EditSkill("deploy", newContent, false)
+	if err != nil {
+		t.Fatalf("EditSkill via resolved project writer: %v", err)
+	}
+	if path != skillPath {
+		t.Fatalf("edit wrote to %q, want the project's own file %q", path, skillPath)
+	}
+	got, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read back project file: %v", err)
+	}
+	if string(got) != newContent {
+		t.Fatalf("project's own SKILL.md was not updated with the new content")
+	}
+
+	// FR-067: no copy is created in a separate central library. A fresh,
+	// unrelated global root must remain untouched by the project-scoped edit.
+	central := t.TempDir()
+	if entries, readErr := os.ReadDir(central); readErr != nil || len(entries) != 0 {
+		t.Fatalf("expected the central library root to be untouched, readdir=%v err=%v", entries, readErr)
+	}
+}
+
+// TestSkillWriter_ProjectWriteConfinedToMount covers the FR-068 traversal
+// case: ResolveProjectSkillWriter must refuse — before constructing any
+// writer, and therefore before anything can be written — a ProjectShelf entry
+// whose resolved skill location does not actually lie within the mount root
+// it claims to belong to.
+//
+// Traces to: ADR-072 D6.1; spec FR-068; BDD "Editing a project skill writes
+// into the project" (traversal confinement leg).
+func TestSkillWriter_ProjectWriteConfinedToMount(t *testing.T) {
+	mountRoot := t.TempDir()
+
+	cases := map[string]string{
+		// Path lives under a completely unrelated directory tree.
+		"unrelated_directory": func() string {
+			outside := t.TempDir()
+			dir := filepath.Join(outside, ".omnipus", "skills", "deploy")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			p := filepath.Join(dir, "SKILL.md")
+			if err := os.WriteFile(p, []byte(validFor("deploy")), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			return p
+		}(),
+		// Path escapes mountRoot via ".." components.
+		"dot_dot_traversal": filepath.Join(mountRoot, "..", "evil", ".omnipus", "skills", "deploy", "SKILL.md"),
+		// The "recognised directory" collapses onto the mount root itself
+		// (no nested skills subdirectory at all) — not a shape any real
+		// discovery result produces, and must be refused rather than
+		// silently accepted.
+		"collapses_onto_mount_root": filepath.Join(mountRoot, "deploy", "SKILL.md"),
+	}
+
+	for name, badPath := range cases {
+		t.Run(name, func(t *testing.T) {
+			shelf := ProjectShelf{
+				"deploy": ProjectSkill{
+					SkillInfo: SkillInfo{ID: "deploy", Name: "deploy", Path: badPath, Source: string(ShelfProject)},
+					MountName: "alpha",
+					MountRoot: mountRoot,
+				},
+			}
+			w, _, err := ResolveProjectSkillWriter(shelf, "deploy")
+			if !errors.Is(err, ErrProjectWriteEscapesMount) {
+				t.Fatalf("case %s: err = %v, want ErrProjectWriteEscapesMount", name, err)
+			}
+			if w != nil {
+				t.Fatalf("case %s: expected no writer to be returned on confinement failure", name)
+			}
+		})
+	}
+}
+
+// TestRemoveSkill_ProjectSlugDeletesProjectFile covers ADR-072 D6.1 / spec
+// FR-068/069: removing a project skill deletes the project's own file
+// (its whole skill directory), confined to the mount that owns it, and
+// leaves the rest of the mount's recognised skills directory intact.
+//
+// Traces to: ADR-072 D6.1; spec FR-068/069; BDD "Removing a project skill
+// deletes the project's file".
+func TestRemoveSkill_ProjectSlugDeletesProjectFile(t *testing.T) {
+	mountRoot, _, shelf := newProjectSkillFixture(t, "deploy")
+	skillsDir := filepath.Join(mountRoot, ".omnipus", "skills")
+	skillDir := filepath.Join(skillsDir, "deploy")
+
+	w, ps, err := ResolveProjectSkillWriter(shelf, "deploy")
+	if err != nil {
+		t.Fatalf("ResolveProjectSkillWriter: %v", err)
+	}
+
+	if err := w.RemoveSkill(ps.ID); err != nil {
+		t.Fatalf("RemoveSkill: %v", err)
+	}
+
+	if _, statErr := os.Stat(skillDir); !os.IsNotExist(statErr) {
+		t.Fatalf("project skill's own directory still exists after removal (err=%v)", statErr)
+	}
+	// The removal is confined to the one skill's own subdirectory — the
+	// mount's recognised skills directory itself survives.
+	if _, statErr := os.Stat(skillsDir); statErr != nil {
+		t.Fatalf("removal escaped the skill's own directory and removed its parent: %v", statErr)
+	}
+
+	// Removing an already-removed project skill reports ErrNotFound rather
+	// than silently succeeding a second time.
+	if err := w.RemoveSkill(ps.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound removing an already-removed skill, got %v", err)
+	}
+}

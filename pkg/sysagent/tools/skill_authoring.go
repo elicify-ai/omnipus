@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // Skill authoring tools — create_skill and edit_skill (Spec-6 U2,
@@ -135,7 +137,7 @@ func (t *SkillEditTool) Parameters() map[string]any {
 	}
 }
 
-func (t *SkillEditTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	if name == "" {
@@ -154,6 +156,42 @@ func (t *SkillEditTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if t.deps.SkillsLoader == nil {
 		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
 			"skill loader not configured", "ensure the gateway is started with a valid workspace"))
+	}
+
+	// ADR-072 D6.1: a project skill — one discovered under a mounted
+	// repository's own .claude/skills or .omnipus/skills — is edited
+	// directly in its own mount, never forked into the central registry.
+	// Resolve against the CURRENT TURN's workspace project shelf FIRST; only
+	// a slug absent from that shelf falls through to the ordinary
+	// global-root path below, unchanged.
+	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
+		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
+			path, _, editErr := projWriter.EditSkill(name, content, true)
+			if editErr != nil {
+				return skillAuthoringError("edit", name, editErr)
+			}
+			tools.EmitSkillWriteAudit("project", t.Name(),
+				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), tools.ToolWorkspaceID(ctx), path)
+			slog.Info("sysagent: edit_skill wrote project skill",
+				"event", "skill_authored", "action", "edit", "name", name,
+				"path", path, "shelf", "project", "mount", ps.MountName)
+			return tools.NewToolResult(successJSON(map[string]any{
+				"success": true,
+				"name":    name,
+				"path":    path,
+				"action":  "edited",
+				"shelf":   "project",
+				"mount":   ps.MountName,
+			}))
+		} else if !errors.Is(perr, skills.ErrNotFound) {
+			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
+			// not "no such project skill". Surface it rather than silently
+			// falling through to the registry path, which would write
+			// somewhere the operator did not intend.
+			return skillAuthoringError("edit", name, perr)
+		}
+		// ErrNotFound: name is not on this workspace's project shelf — fall
+		// through to the registry/builtin path below, unchanged.
 	}
 
 	// Determine whether a source skill exists anywhere on the load path. If the
@@ -181,6 +219,53 @@ func (t *SkillEditTool) Execute(_ context.Context, args map[string]any) *tools.T
 		"action":           action,
 		"created_override": createdOverride,
 	}))
+}
+
+// resolveProjectShelf builds the ADR-072 D4.1 project shelf (skill.Skill
+// discovery merged over every live mount) for the current tool call's
+// effective workspace — the ctx-carried workspace id (tools.ToolWorkspaceID,
+// the same value the agent loop threads through every turn), falling back to
+// this installation's default workspace when the call carries none, mirroring
+// pkg/agent/loop_env.go's wireDelegationInjectors/wireProjectShelfResolvers
+// fallback exactly. Returns nil (no project shelf) when no workspace
+// resolves, its mount record is unreadable, or it simply has no mounts — the
+// authoring tools' existing global-root SkillWriter/SkillInstaller path is
+// then unaffected, exactly as before this fix (D6: "silent when there is
+// nothing to find").
+//
+// R3 fix (2026-09): shared by SkillEditTool.Execute and SkillRemoveTool.Execute
+// so create_skill/edit_skill/remove_skill can resolve a slug against the
+// current workspace's mounted project skills before falling back to the
+// central registry — the same resolution wireProjectShelfResolvers installs
+// for the agent's own ContextBuilder, computed independently here because
+// sysagent tools have no access to a live ContextBuilder from inside
+// Execute.
+func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
+	if deps == nil || strings.TrimSpace(deps.Home) == "" {
+		return nil
+	}
+	home := deps.Home
+
+	wsID := strings.TrimSpace(tools.ToolWorkspaceID(ctx))
+	if wsID == "" {
+		def, err := workspacepkg.ResolveDefaultID(home)
+		if err != nil || def == "" {
+			return nil
+		}
+		wsID = def
+	}
+
+	mounts, ok := workspacepkg.LoadMounts(home, wsID)
+	if !ok || len(mounts) == 0 {
+		return nil
+	}
+
+	pm := make([]skills.ProjectMount, 0, len(mounts))
+	for _, m := range mounts {
+		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
+	}
+	shelf, _ := skills.MergeProjectSkills(pm)
+	return shelf
 }
 
 // skillExistsOnLoadPath reports whether a skill of the given name is resolvable

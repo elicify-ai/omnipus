@@ -100,10 +100,14 @@ type infraToolGetter interface {
 // agents (Ava/Mia/Ray).
 //
 // Unification note (#438): the single authoritative resolver
-// tools.EffectiveToolPolicy (via FilterToolsByPolicy) now force-allows infra
-// tools UNCONDITIONALLY, so by the time this function runs the infra tool is
-// already in policyFiltered with policyMap[name]=="allow" in the common path.
-// This function therefore degrades to a safe idempotent backstop: it re-adds an
+// tools.EffectiveToolPolicy (via FilterToolsByPolicy) resolves ToolSearch
+// through the SAME global×agent merge as every other static builtin tool —
+// it is seeded "allow" as real, explicit data for every agent
+// (pkg/coreagent/core.go; the former unconditional infra force-allow inside
+// EffectiveToolPolicy was a CLAUDE.md hard-constraint-6 violation and has
+// been removed), so by the time this function runs the infra tool is already
+// in policyFiltered with policyMap[name]=="allow" in the common path. This
+// function therefore degrades to a safe idempotent backstop: it re-adds an
 // infra tool only if the resolver somehow omitted it (e.g. a test that builds a
 // policy map by hand and passes a registry whose Get returns the tool).
 // Reachability does not depend on the manifest being compressed (when
@@ -137,16 +141,20 @@ func ensureInfraToolsExecutable(
 // compression is off, so the model never sees it there — regardless of what
 // the agent's own tool-policy map resolves for it.
 //
-// Unification note (#438): the single resolver now force-allows infra
-// UNCONDITIONALLY, so FilterToolsByPolicy keeps ToolSearch in the filtered slice
-// for EVERY agent. This path strips it so it is not surfaced uncompressed. For
-// an agent whose tools mostly resolve to deny, this matches the old behavior
-// (the old filter dropped ToolSearch, so it was never sent uncompressed). For
-// an agent whose tools mostly resolve to allow it is a deliberate, narrow
-// change: the old path DID send ToolSearch uncompressed, the new path does not
-// — correct, because an uncompressed turn has no ToolSearch affordance (no
-// manifest block telling the model to use it). The strip touches ONLY infra
-// tools; every other tool's surfaced verdict is unchanged.
+// Unification note (#438): ToolSearch resolves through the SAME global×agent
+// merge as every other static builtin tool and is seeded "allow" as real,
+// explicit data for every agent (pkg/coreagent/core.go), so
+// FilterToolsByPolicy keeps it in the filtered slice for every agent whose
+// seeded policy allows it — which is every agent today, but this path strips
+// it unconditionally (independent of the resolved policy value) so it is
+// never surfaced uncompressed. For an agent whose tools mostly resolve to
+// deny, this matches the old behavior (the old filter dropped ToolSearch, so
+// it was never sent uncompressed). For an agent whose tools mostly resolve to
+// allow it is a deliberate, narrow change: the old path DID send ToolSearch
+// uncompressed, the new path does not — correct, because an uncompressed
+// turn has no ToolSearch affordance (no manifest block telling the model to
+// use it). The strip touches ONLY infra tools; every other tool's surfaced
+// verdict is unchanged.
 func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 	out := make([]tools.Tool, 0, len(in))
 	for _, t := range in {

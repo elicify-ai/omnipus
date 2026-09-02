@@ -170,6 +170,67 @@ func TestClawHubRegistryDownloadAndInstall(t *testing.T) {
 	assert.Contains(t, string(readmeContent), "# Test Skill")
 }
 
+// TestClawHubRegistryDownloadAndInstallForOwner verifies the ownerHandle
+// disambiguation path (defect 2 fix): both the metadata lookup and the
+// download request carry ownerHandle as a query parameter, so a slug that is
+// ambiguous when looked up bare can be resolved by scoping to a specific
+// owner.
+func TestClawHubRegistryDownloadAndInstallForOwner(t *testing.T) {
+	zipBuf := createTestZip(t, map[string]string{
+		"SKILL.md": "---\nname: docker-compose\ndescription: A test\n---\nHello skill",
+	})
+
+	var sawMetaOwnerHandle, sawDownloadOwnerHandle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/skills/docker-compose":
+			sawMetaOwnerHandle = r.URL.Query().Get("ownerHandle")
+			json.NewEncoder(w).Encode(clawhubSkillResponse{
+				Slug:          "docker-compose",
+				DisplayName:   "Docker Compose (acme)",
+				LatestVersion: &clawhubVersionInfo{Version: "1.0.0"},
+			})
+		case "/api/v1/download":
+			sawDownloadOwnerHandle = r.URL.Query().Get("ownerHandle")
+			assert.Equal(t, "docker-compose", r.URL.Query().Get("slug"))
+			w.Header().Set("Content-Type", "application/zip")
+			w.Write(zipBuf)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	targetDir := filepath.Join(tmpDir, "docker-compose")
+
+	reg := newTestRegistry(srv.URL, "")
+	result, err := reg.DownloadAndInstallForOwner(context.Background(), "docker-compose", "acme", "1.0.0", targetDir)
+
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0", result.Version)
+	assert.Equal(t, "acme", sawMetaOwnerHandle, "metadata lookup must carry ownerHandle")
+	assert.Equal(t, "acme", sawDownloadOwnerHandle, "download request must carry ownerHandle")
+
+	// GetSkillMeta / DownloadAndInstall (unscoped) must NOT send ownerHandle —
+	// the owner-scoped path is opt-in only.
+	sawMetaOwnerHandle, sawDownloadOwnerHandle = "", ""
+	_, err = reg.GetSkillMeta(context.Background(), "docker-compose")
+	require.NoError(t, err)
+	assert.Empty(t, sawMetaOwnerHandle, "unscoped GetSkillMeta must not send ownerHandle")
+}
+
+// TestClawHubRegistryDownloadAndInstallForOwnerInvalidHandle verifies that an
+// ownerHandle containing a path separator is rejected before any network
+// call, matching the existing slug validation (SEC hardening: no directory
+// traversal via a registry-supplied identifier).
+func TestClawHubRegistryDownloadAndInstallForOwnerInvalidHandle(t *testing.T) {
+	reg := newTestRegistry("https://example.com", "")
+	_, err := reg.DownloadAndInstallForOwner(context.Background(), "docker-compose", "../etc", "1.0.0", t.TempDir())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid ownerHandle")
+}
+
 func TestClawHubRegistryDownloadAndInstallRetries429(t *testing.T) {
 	zipBuf := createTestZip(t, map[string]string{
 		"SKILL.md": "---\nname: retry-skill\ndescription: A test\n---\nHello skill",

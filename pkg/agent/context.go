@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -41,13 +42,48 @@ type ContextBuilder struct {
 	manifestDiscoveryActive bool
 
 	// skillAllowlist enforces the per-agent skill allowlist at skill resolution
-	// time (FR-9.4, default-DENY). When non-nil, only skills whose name appears
+	// time (FR-9.4, ADR-072 D5, default-DENY). Only skills whose name appears
 	// in this set can be resolved/invoked by this agent — a skill not on the
-	// allowlist cannot be loaded into context or armed via /use, even though it
-	// exists on disk. When nil, no allowlist is enforced (unrestricted): this is
-	// the back-compatible default for agents that do not declare an allowlist.
-	// Keys are lower-cased skill names.
+	// allowlist cannot be loaded into context or activated via /<slug>, even
+	// though it exists on disk. A nil map (WithSkillAllowlist never called)
+	// and an empty, non-nil map (WithSkillAllowlist called with nil or an
+	// empty slice) are semantically IDENTICAL: both deny every name. There is
+	// no "unrestricted" state — see skillAllowed's own doc comment. Keys are
+	// lower-cased, trimmed skill names.
 	skillAllowlist map[string]struct{}
+
+	// projectShelf is the acting agent's WORKSPACE'S already-merged project
+	// shelf (ADR-072 D4.1 shelf 1 — pkg/skills.ProjectShelf, built by
+	// skills.MergeProjectSkills over that workspace's mounts). nil when no
+	// workspace/mount context applies — every project-shelf-aware code path
+	// below then behaves exactly as it did before this field existed. Set via
+	// WithProjectShelf. Wiring a real workspace's mounts through to this
+	// field on every turn is a later integration phase's responsibility (it
+	// needs the D8 (agent × workspace) prompt-cache work this ADR names as a
+	// hard prerequisite); this field only needs to exist and be consulted
+	// correctly once it IS set.
+	projectShelf skills.ProjectShelf
+
+	// projectShelfResolver optionally resolves the effective project shelf
+	// for a given workspace id, per turn (ADR-072 D8). Set via
+	// WithProjectShelfResolver. When nil, every workspace falls back to the
+	// single cb.projectShelf value (WithProjectShelf) — the pre-D8
+	// behaviour, where the same shelf applies no matter which workspace is
+	// asking. This is what makes the "# Skills" menu actually vary by
+	// workspace (different mounts -> different project skills) once wired
+	// to a real workspace/mount registry, mirroring the
+	// WithDelegationInjector/WithWorkingDirInjector pattern already used for
+	// other per-workspace, per-turn context.
+	projectShelfResolver func(workspaceID string) skills.ProjectShelf
+
+	// workspacePromptCache is the (agent x workspace) static-prompt cache
+	// (ADR-072 D8/D8.1). It is entirely separate from the legacy
+	// workspace-blind cache below (cachedSystemPrompt et al, which backs
+	// BuildSystemPromptWithCache()/InvalidateCache() and stays exactly as it
+	// was) — production callers that know their turn's workspace id use
+	// BuildSystemPromptWithCacheForWorkspace instead. See workspacePromptCache's
+	// own doc comment for the bound and eviction rules.
+	workspacePromptCache workspacePromptCache
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -190,20 +226,21 @@ func (cb *ContextBuilder) WithAgentInfo(id, name string) *ContextBuilder {
 }
 
 // WithSkillAllowlist installs a per-agent skill allowlist that is enforced at
-// skill-resolution time (FR-9.4, default-DENY). When allowlist is non-nil, only
-// the named skills can be resolved or invoked by this agent; any other skill —
-// even one present on disk — is denied. When allowlist is nil, no allowlist is
-// enforced (unrestricted), preserving the behavior of agents that declare no
-// allowlist. Names are matched case-insensitively.
+// skill-resolution time (FR-9.4, ADR-072 D5). Only the named skills can be
+// resolved or invoked by this agent; any other skill — even one present on
+// disk — is denied. Names are matched case-insensitively.
 //
-// Passing a non-nil but empty slice installs a deny-all allowlist (the agent
-// can resolve no skills), which is the correct default-DENY behavior for an
-// agent that explicitly opts into allowlisting with an empty set.
+// ADR-072 D5: "absence of a grant list means *no* skills, matching the
+// shipped contract" (contracts/components/schemas/Agent.yaml already says
+// "opt-in, default none" — absence of the field and an empty array are
+// semantically identical). So a nil allowlist is NOT treated specially any
+// more — it is not "unrestricted", it is the same deny-all state an empty
+// slice already produced. Both a nil and an empty allowlist install an empty,
+// non-nil map, and skillAllowed denies every name against it. A ContextBuilder
+// on which this method is never called at all is denied identically (its
+// skillAllowlist field's zero value is nil, and skillAllowed treats a nil map
+// the same as an empty one — see skillAllowed's own doc comment).
 func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder {
-	if allowlist == nil {
-		cb.skillAllowlist = nil
-		return cb
-	}
 	set := make(map[string]struct{}, len(allowlist))
 	for _, name := range allowlist {
 		trimmed := strings.TrimSpace(name)
@@ -216,13 +253,56 @@ func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder
 	return cb
 }
 
-// skillAllowed reports whether the named skill may be resolved/invoked by this
-// agent under its allowlist (FR-9.4). When no allowlist is configured (nil) all
-// skills are allowed. Otherwise only names present in the allowlist are allowed.
-func (cb *ContextBuilder) skillAllowed(name string) bool {
-	if cb.skillAllowlist == nil {
-		return true
+// WithProjectShelf sets the acting agent's workspace project shelf (ADR-072
+// D4.1 shelf 1). shelf may be nil (or omitted entirely — the field's zero
+// value is already nil) to mean "no workspace/mount context applies", which
+// is this builder's default and leaves ResolveSkillName's behaviour
+// unchanged from before this shelf existed.
+func (cb *ContextBuilder) WithProjectShelf(shelf skills.ProjectShelf) *ContextBuilder {
+	cb.projectShelf = shelf
+	return cb
+}
+
+// WithProjectShelfResolver installs a per-workspace project-shelf resolver
+// (ADR-072 D8). fn is called with the turn's effective workspace id and
+// must return that workspace's already-merged project shelf (nil/empty for
+// "no mounts apply"). When set, it takes priority over the single
+// WithProjectShelf value for every call that names a workspace id
+// (BuildSystemPromptForWorkspace / BuildSystemPromptWithCacheForWorkspace);
+// WithProjectShelf continues to govern the workspace-blind
+// BuildSystemPrompt()/BuildSystemPromptWithCache() path and the resolver's
+// own "" key. Passing nil uninstalls the resolver, reverting every
+// workspace to the single-shelf behaviour.
+func (cb *ContextBuilder) WithProjectShelfResolver(fn func(workspaceID string) skills.ProjectShelf) *ContextBuilder {
+	cb.projectShelfResolver = fn
+	return cb
+}
+
+// effectiveProjectShelf resolves the project shelf that governs skill
+// listing/menu rendering for workspaceID (ADR-072 D8): the resolver's
+// answer when one is installed, otherwise the single shelf WithProjectShelf
+// set (or nil, its zero value, when neither was ever called).
+func (cb *ContextBuilder) effectiveProjectShelf(workspaceID string) skills.ProjectShelf {
+	if cb.projectShelfResolver != nil {
+		return cb.projectShelfResolver(workspaceID)
 	}
+	return cb.projectShelf
+}
+
+// skillAllowed reports whether the named skill may be resolved/invoked by this
+// agent under its allowlist (FR-9.4, ADR-072 D5/FR-032/FR-033). A nil OR
+// empty allowlist denies EVERY name — opt-in, default none, matching
+// contracts/components/schemas/Agent.yaml's "absence of the field and an
+// empty array are semantically identical" contract text. There is no
+// "unrestricted" state any more: only a name explicitly present in the
+// allowlist (case-insensitive, trimmed) is allowed.
+//
+// This governs the REGISTRY shelf only (D4.1 shelf 2/3 — the per-agent grant
+// list). The PROJECT shelf (a workspace mount's own skills, D4.1 shelf 1) is
+// gated separately, by the mount itself — see ResolveSkillName and the
+// project-shelf callers, which consult cb.projectShelf independently of this
+// method.
+func (cb *ContextBuilder) skillAllowed(name string) bool {
 	_, ok := cb.skillAllowlist[strings.ToLower(strings.TrimSpace(name))]
 	return ok
 }
@@ -423,6 +503,26 @@ Only a subset of your allowed tools are sent as callable definitions every turn 
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
+	return cb.buildSystemPromptForShelf(cb.projectShelf)
+}
+
+// BuildSystemPromptForWorkspace is BuildSystemPrompt with the "# Skills"
+// menu resolved against the project shelf for a specific workspace (ADR-072
+// D8) via effectiveProjectShelf, rather than the single shelf
+// WithProjectShelf sets. It is a strict superset of BuildSystemPrompt: with
+// no resolver installed (WithProjectShelfResolver never called),
+// effectiveProjectShelf falls back to cb.projectShelf for every
+// workspaceID, so output is identical to BuildSystemPrompt() regardless of
+// which workspaceID is passed.
+func (cb *ContextBuilder) BuildSystemPromptForWorkspace(workspaceID string) string {
+	return cb.buildSystemPromptForShelf(cb.effectiveProjectShelf(workspaceID))
+}
+
+// buildSystemPromptForShelf is the shared assembly body for
+// BuildSystemPrompt/BuildSystemPromptForWorkspace: every section is
+// identical between the two; only which project shelf feeds the "# Skills"
+// menu differs; shelf may be nil.
+func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf) string {
 	parts := []string{}
 
 	// FR-053: prepend env preamble at parts[0] when a provider is wired.
@@ -459,14 +559,17 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 		parts = append(parts, bootstrapContent)
 	}
 
-	// Skills - show summary, AI can read full content with read_file tool.
-	// Filtered by the per-agent allowlist for progressive disclosure (FR-9.4):
-	// the prompt advertises only the skills this agent is permitted to use.
-	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFunc(cb.skillAllowed)
+	// Skills - show summary, full content loaded on demand via the Skill tool
+	// (ADR-072 D1: on-demand activation, not a read_file back door). Filtered
+	// by the per-agent allowlist / project shelf for progressive disclosure
+	// (FR-9.4): the prompt advertises only the skills this agent is permitted
+	// to use. The menu is uncapped (D1.1) and lists every currently-available
+	// skill, so there is no "search find_skills for the rest" caveat to make.
+	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.skillAllowed, shelf)
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool. This list is capped — call find_skills to search the full installed catalog, including any not shown below.
+The following skills extend your capabilities. When a task matches one, call the Skill tool with its name to load its full instructions before proceeding.
 
 %s`, skillsSummary))
 	}
@@ -549,6 +652,265 @@ func (cb *ContextBuilder) InvalidateCache() {
 	cb.skillFilesAtCache = nil
 
 	logger.DebugCF("agent", "System prompt cache invalidated", nil)
+}
+
+// maxCachedWorkspacePromptVariants is the default hard per-agent cap on the
+// number of cached (agent x workspace) prompt variants this ContextBuilder
+// retains at once, LRU-evicted on overflow (ADR-072 D8; spec FR-046 —
+// "shipping with a default of 8"). A cache miss costs one prompt rebuild —
+// the same work the mtime path already does — so a small cap is cheap to be
+// wrong about in the safe direction.
+const maxCachedWorkspacePromptVariants = 8
+
+// maxCachedWorkspacePromptBytes is the default aggregate byte budget, per
+// agent, across every cached (agent x workspace) prompt variant this
+// ContextBuilder retains at once (ADR-072 D8.1; spec FR-046a — "defaulting
+// to 4 MB"). The cache evicts least-recently-used on whichever of
+// maxCachedWorkspacePromptVariants or this byte bound is reached first: a
+// count-only bound cannot protect memory when variants differ by three
+// orders of magnitude (D8.1's own arithmetic — an uncapped D1.1 menu over a
+// 5000-skill mount is ~1.44 MB typical/5.75 MB worst per variant, so 8
+// variants alone can reach double digits of MB for one agent).
+const maxCachedWorkspacePromptBytes = 4 * 1024 * 1024 // 4 MB
+
+// workspacePromptVariant is one cached (agent x workspace) assembled static
+// prompt, plus the staleness snapshot needed to detect a tracked source
+// file or skill-tree change (the same mtime-based check
+// sourceFilesChangedLocked uses for the legacy per-agent cache — see
+// fileChangedSinceBaseline/skillFilesChangedSince — just scoped to one
+// workspace's snapshot instead of the whole agent's).
+type workspacePromptVariant struct {
+	prompt            string
+	bytes             int
+	cachedAt          time.Time
+	existedAtCache    map[string]bool
+	skillFilesAtCache map[string]time.Time
+	// elem is this variant's node in workspacePromptCache.lru (Value is the
+	// workspace id string), kept for O(1) move-to-back/removal.
+	elem *list.Element
+}
+
+// workspacePromptCache implements ADR-072 D8/D8.1's bounded, byte-aware
+// (agent x workspace) prompt cache. Zero value is ready to use. Guarded by
+// its own mutex, entirely separate from ContextBuilder.systemPromptMutex
+// (which guards only the legacy, workspace-blind cachedSystemPrompt/et al
+// fields above) — a rebuild for one workspace never blocks a cache read for
+// a different workspace of the same agent, or the legacy no-workspace path.
+//
+// maxVariants/maxBytes are 0 (use the package defaults above) unless a test
+// overrides them directly — this type has no exported constructor because
+// every field's zero value is already the correct "unconfigured" state.
+type workspacePromptCache struct {
+	mu         sync.Mutex
+	variants   map[string]*workspacePromptVariant
+	lru        *list.List // front = least-recently-used, back = most-recently-used
+	totalBytes int
+
+	// maxVariants/maxBytes override the package defaults when > 0. Left at
+	// their zero value in production; tests set these directly (white-box,
+	// same package) to exercise eviction without allocating megabytes of
+	// filler content.
+	maxVariants int
+	maxBytes    int
+}
+
+func (wc *workspacePromptCache) effectiveMaxVariants() int {
+	if wc.maxVariants > 0 {
+		return wc.maxVariants
+	}
+	return maxCachedWorkspacePromptVariants
+}
+
+func (wc *workspacePromptCache) effectiveMaxBytes() int {
+	if wc.maxBytes > 0 {
+		return wc.maxBytes
+	}
+	return maxCachedWorkspacePromptBytes
+}
+
+// fileChangedSinceBaseline is fileChangedSince's logic, parametrized over an
+// arbitrary existedAtCache/cachedAt snapshot instead of always reading
+// cb's own fields, so the same four-case staleness check (created / deleted
+// / modified / unchanged) can be run against one workspace variant's own
+// snapshot (see workspaceVariantStaleLocked) as well as the legacy
+// per-agent one. cb.fileChangedSince below is now a thin wrapper over this.
+func fileChangedSinceBaseline(existedAtCache map[string]bool, cachedAt time.Time, path string) bool {
+	if existedAtCache == nil {
+		return true
+	}
+	existedBefore := existedAtCache[path]
+	info, err := os.Stat(path)
+	existsNow := err == nil
+
+	if existedBefore != existsNow {
+		return true // file was created or deleted
+	}
+	if !existsNow {
+		return false // didn't exist before, doesn't exist now
+	}
+	return info.ModTime().After(cachedAt)
+}
+
+// workspaceVariantStaleLocked mirrors sourceFilesChangedLocked's mtime-based
+// staleness check (tracked source files, then skill roots, then the
+// recursive skill-file snapshot) but evaluates it against one workspace
+// variant's own snapshot instead of the legacy per-agent fields. It does
+// NOT check workspace-membership or mount-deletion staleness — those are
+// invisible to any mtime sweep by design (ADR-072 D8 items 2/3) and are
+// handled by the separate, explicit EvictWorkspacePrompt call.
+//
+// Caller MUST hold cb.workspacePromptCache.mu.
+func (cb *ContextBuilder) workspaceVariantStaleLocked(v *workspacePromptVariant) bool {
+	if v.cachedAt.IsZero() {
+		return true
+	}
+	if slices.ContainsFunc(cb.sourcePaths(), func(p string) bool {
+		return fileChangedSinceBaseline(v.existedAtCache, v.cachedAt, p)
+	}) {
+		return true
+	}
+	for _, root := range cb.skillRoots() {
+		if fileChangedSinceBaseline(v.existedAtCache, v.cachedAt, root) {
+			return true
+		}
+	}
+	return skillFilesChangedSince(cb.skillRoots(), v.skillFilesAtCache)
+}
+
+// evictWorkspaceVariantLocked removes workspaceID's cached variant, if any,
+// updating the LRU list and the aggregate byte total. No-op when there is
+// nothing cached for workspaceID. Caller MUST hold
+// cb.workspacePromptCache.mu.
+func (cb *ContextBuilder) evictWorkspaceVariantLocked(workspaceID string) {
+	wc := &cb.workspacePromptCache
+	v, ok := wc.variants[workspaceID]
+	if !ok {
+		return
+	}
+	if v.elem != nil && wc.lru != nil {
+		wc.lru.Remove(v.elem)
+	}
+	wc.totalBytes -= v.bytes
+	delete(wc.variants, workspaceID)
+}
+
+// storeWorkspaceVariantLocked inserts (or replaces) the cached variant for
+// workspaceID, then evicts least-recently-used entries until both the count
+// bound and the aggregate byte bound are satisfied (ADR-072 D8.1: whichever
+// binds first). Caller MUST hold cb.workspacePromptCache.mu, and MUST have
+// already confirmed len(prompt) does not itself exceed the byte budget —
+// BuildSystemPromptWithCacheForWorkspace enforces that before calling this,
+// per D8.1's "a variant larger than the whole byte budget is never cached"
+// rule.
+func (cb *ContextBuilder) storeWorkspaceVariantLocked(workspaceID string, v *workspacePromptVariant) {
+	wc := &cb.workspacePromptCache
+	if wc.variants == nil {
+		wc.variants = make(map[string]*workspacePromptVariant)
+		wc.lru = list.New()
+	}
+
+	// Drop any existing entry for this key first so a replace doesn't
+	// double-count its bytes against the budget below.
+	cb.evictWorkspaceVariantLocked(workspaceID)
+
+	v.elem = wc.lru.PushBack(workspaceID)
+	wc.variants[workspaceID] = v
+	wc.totalBytes += v.bytes
+
+	maxVariants := wc.effectiveMaxVariants()
+	maxBytes := wc.effectiveMaxBytes()
+	for (len(wc.variants) > maxVariants || wc.totalBytes > maxBytes) && wc.lru.Len() > 0 {
+		front := wc.lru.Front()
+		lruKey, _ := front.Value.(string)
+		cb.evictWorkspaceVariantLocked(lruKey)
+	}
+}
+
+// BuildSystemPromptWithCacheForWorkspace returns this agent's cached static
+// system prompt for a specific workspace (ADR-072 D8): the assembled
+// prompt — including the "# Skills" menu, which can now differ per
+// workspace via WithProjectShelfResolver's mounts — is cached per (agent x
+// workspace), not per agent, and the cache is bounded by count OR aggregate
+// bytes, whichever binds first (D8.1). workspaceID == "" is a legitimate
+// cache key like any other (the no-workspace case) and participates in the
+// same bound.
+//
+// A single variant whose assembled size exceeds the whole byte budget is
+// never cached (D8.1's oversized-variant rule) — it is rebuilt on every
+// call instead, so one pathological workspace cannot evict every other
+// entry on each insertion.
+func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID string) string {
+	wc := &cb.workspacePromptCache
+
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+
+	if v, ok := wc.variants[workspaceID]; ok && !cb.workspaceVariantStaleLocked(v) {
+		wc.lru.MoveToBack(v.elem)
+		return v.prompt
+	}
+
+	// Snapshot the baseline BEFORE building, for the same reason
+	// BuildSystemPromptWithCache does: a file modified mid-build gets a
+	// mtime after this baseline, so the next staleness check still catches
+	// it rather than caching it as if it were already reflected.
+	baseline := cb.buildCacheBaseline()
+	prompt := cb.BuildSystemPromptForWorkspace(workspaceID)
+
+	if len(prompt) > wc.effectiveMaxBytes() {
+		// D8.1: never cache a variant bigger than the whole budget — caching
+		// it would just evict every other entry on the very next insertion.
+		// Drop any stale prior entry for this key so a shrunk-then-oversized
+		// history doesn't leave a stale hit behind.
+		cb.evictWorkspaceVariantLocked(workspaceID)
+		logger.DebugCF("agent", "workspace prompt variant exceeds byte budget, rebuilding uncached",
+			map[string]any{
+				"workspace_id": workspaceID,
+				"bytes":        len(prompt),
+				"budget":       wc.effectiveMaxBytes(),
+			})
+		return prompt
+	}
+
+	cb.storeWorkspaceVariantLocked(workspaceID, &workspacePromptVariant{
+		prompt:            prompt,
+		bytes:             len(prompt),
+		cachedAt:          baseline.maxMtime,
+		existedAtCache:    baseline.existed,
+		skillFilesAtCache: baseline.skillFiles,
+	})
+
+	logger.DebugCF("agent", "workspace prompt variant cached",
+		map[string]any{
+			"workspace_id": workspaceID,
+			"bytes":        len(prompt),
+			"variants":     len(wc.variants),
+			"total_bytes":  wc.totalBytes,
+		})
+
+	return prompt
+}
+
+// EvictWorkspacePrompt drops this agent's cached prompt variant for
+// workspaceID, if any (ADR-072 D8's two invalidation triggers beyond mtime
+// staleness). Call this when:
+//
+//  1. The agent is removed from workspaceID's membership — a workspace it
+//     can no longer act in must not go on serving a cached menu for it.
+//  2. A mount belonging to workspaceID is deleted — mount records live in
+//     the entity store, not under any tracked skill root, so their removal
+//     is invisible to workspaceVariantStaleLocked's mtime sweep.
+//
+// Both triggers are correctness requirements of D4.1's workspace scoping,
+// not a performance nicety: getting either wrong serves the agent a stale
+// menu offering skills it should no longer see. A miss just costs one
+// rebuild on the next call — the same cost buildCacheBaseline already pays
+// on every cache miss.
+func (cb *ContextBuilder) EvictWorkspacePrompt(workspaceID string) {
+	wc := &cb.workspacePromptCache
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	cb.evictWorkspaceVariantLocked(workspaceID)
 }
 
 // sourcePaths returns non-skill workspace source files tracked for cache
@@ -689,24 +1051,13 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 //   - existed at cache time, gone now   -> changed (deleted)
 //   - absent at cache time,  exists now -> changed (created)
 //   - absent at cache time,  gone now   -> no change
+//
+// Thin wrapper over fileChangedSinceBaseline against this ContextBuilder's
+// own legacy (workspace-blind) snapshot fields — see that function for the
+// shared logic, also used by workspaceVariantStaleLocked against a
+// per-workspace snapshot.
 func (cb *ContextBuilder) fileChangedSince(path string) bool {
-	// Defensive: if existedAtCache was never initialized, treat as changed
-	// so the cache rebuilds rather than silently serving stale data.
-	if cb.existedAtCache == nil {
-		return true
-	}
-
-	existedBefore := cb.existedAtCache[path]
-	info, err := os.Stat(path)
-	existsNow := err == nil
-
-	if existedBefore != existsNow {
-		return true // file was created or deleted
-	}
-	if !existsNow {
-		return false // didn't exist before, doesn't exist now
-	}
-	return info.ModTime().After(cb.cachedAt)
+	return fileChangedSinceBaseline(cb.existedAtCache, cb.cachedAt, path)
 }
 
 // errWalkStop is a sentinel error used to stop filepath.WalkDir early.
@@ -882,6 +1233,12 @@ func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, send
 		}
 	}
 
+	// ADR-072 D3: the "consider your skills" reminder lands here, in the
+	// UN-CACHED dynamic context, deliberately outside the cache breakpoint
+	// that the "# Skills" menu (BuildSystemPrompt, the static/cached half)
+	// sits inside. See skill_reminder.go for the byte-budget rationale.
+	fmt.Fprintf(&sb, "\n\n%s", skillReminderNote)
+
 	return sb.String()
 }
 
@@ -929,7 +1286,13 @@ func (cb *ContextBuilder) BuildMessages(
 	//   contiguous system block makes this extraction straightforward.
 	// - Codex maps only the first system message to its instructions field.
 	// - OpenAI-compat passes messages through as-is.
-	staticPrompt := cb.BuildSystemPromptWithCache()
+	//
+	// ADR-072 D8: cached per (agent x workspace), not per agent, because the
+	// "# Skills" menu can now differ by workspace (different mounts ->
+	// different project skills) — see BuildSystemPromptWithCacheForWorkspace.
+	// workspaceID is the same value already threaded to buildDynamicContext
+	// below for the delegation block, so both read the same turn's workspace.
+	staticPrompt := cb.BuildSystemPromptWithCacheForWorkspace(workspaceID)
 
 	// Build short dynamic context (time, runtime, session, delegation) — changes per request.
 	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
@@ -967,11 +1330,13 @@ func (cb *ContextBuilder) BuildMessages(
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
 
 	// Log system prompt summary for debugging (debug mode only).
-	// Read cachedSystemPrompt under lock to avoid a data race with
-	// concurrent InvalidateCache / BuildSystemPromptWithCache writes.
-	cb.systemPromptMutex.RLock()
-	isCached := cb.cachedSystemPrompt != ""
-	cb.systemPromptMutex.RUnlock()
+	// staticPrompt above now comes from the (agent x workspace) cache
+	// (ADR-072 D8), so report whether THAT cache holds an entry for this
+	// turn's workspace — read under its own lock to avoid a data race with
+	// a concurrent build/eviction.
+	cb.workspacePromptCache.mu.Lock()
+	_, isCached := cb.workspacePromptCache.variants[workspaceID]
+	cb.workspacePromptCache.mu.Unlock()
 
 	logger.DebugCF("agent", "System prompt built",
 		map[string]any{
@@ -1270,35 +1635,127 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 	return names
 }
 
+// ProjectShelfForWorkspace exposes effectiveProjectShelf (ADR-072 D8) to
+// callers outside this file — the Skill tool's search-mode corpus builder
+// (pkg/agent/loop.go, ADR-072 D1) needs the SAME per-workspace project shelf
+// the menu and ResolveSkillFullForWorkspace consult, without duplicating the
+// resolver-vs-single-shelf fallback logic effectiveProjectShelf already
+// implements.
+func (cb *ContextBuilder) ProjectShelfForWorkspace(workspaceID string) skills.ProjectShelf {
+	return cb.effectiveProjectShelf(workspaceID)
+}
+
+// ResolveSkillFullForWorkspace resolves name to its full ResolvedSkill
+// (canonical slug, shelf, on-disk path) under the same per-shelf grant model
+// as ResolveSkillName, but against workspaceID's OWN project shelf (ADR-072
+// D8) rather than the single workspace-blind cb.projectShelf ResolveSkillName
+// still uses for the pre-existing "/<skill>" command and delegate's
+// requested_skill path (D9). This is the workspace-aware counterpart the
+// Skill tool's load/search paths use (pkg/tools/skill.go via
+// pkg/agent/loop.go's resolver) so a project skill resolves against exactly
+// the mounts BuildSystemPromptForWorkspace advertised in that workspace's
+// menu.
+//
+// Callers that need only the canonical slug should keep using
+// ResolveSkillName; callers that need to know WHICH shelf a skill came from
+// and where to actually read its body from (the audit trail ADR-072 D3.1
+// requires, and loading a project-shelf skill's content — which lives
+// outside SkillsLoader's static roots and therefore cannot be found by
+// SkillsLoader.LoadSkill) need this method's full ResolvedSkill instead.
+func (cb *ContextBuilder) ResolveSkillFullForWorkspace(workspaceID, name string) (skills.ResolvedSkill, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || cb.skillsLoader == nil {
+		return skills.ResolvedSkill{}, false
+	}
+
+	resolved, ok, collision := skills.ResolveSkillName(cb.skillsLoader.ListSkills(), cb.skillAllowed, cb.effectiveProjectShelf(workspaceID), name)
+	if !ok {
+		logger.WarnCF("agent", "skill resolution denied or not found",
+			map[string]any{
+				"agent_id":     cb.agentID,
+				"skill":        name,
+				"workspace_id": workspaceID,
+			})
+		return skills.ResolvedSkill{}, false
+	}
+	if collision != nil {
+		logger.WarnCF("agent", "skill slug collision on resolution; higher-precedence shelf won",
+			map[string]any{
+				"agent_id":     cb.agentID,
+				"slug":         collision.Slug,
+				"winner":       collision.WinnerDescription,
+				"workspace_id": workspaceID,
+			})
+	}
+	return resolved, true
+}
+
+// ResolveSkillName resolves name (a slug or display name, matched
+// case-insensitively against either) to its canonical slug, gated by the
+// full per-shelf grant model (ADR-072 D4/D4.1/D4.2). This is the single
+// choke point the ADR names as the human "/<skill>" shortcut's door (D4 item
+// 4) — the slash-command path itself (pkg/agent/loop.go's
+// applyExplicitSkillCommand) calls this and this alone, so making IT
+// shelf-aware is sufficient; the slash-command handler needs no changes of
+// its own.
+//
+// Delegates to the shared shelf-resolution model (pkg/skills.ResolveSkillName)
+// so a human typing "/<slug>" and the Skill tool's load path apply the
+// IDENTICAL rule — including D4.1's project shelf: a slug discovered only in
+// this workspace's mounted skills (cb.projectShelf, set via
+// WithProjectShelf) resolves with no registry/builtin grant at all, exactly
+// as an agent may already load it (spec #30, gap G3/A3: "a human having
+// LESS access than the agent would be incoherent, and D4.1 makes the mount
+// the grant for both"). When cb.projectShelf is nil (no workspace/mount
+// context wired — this builder's default), behaviour is byte-for-byte
+// identical to the pre-D4.1 registry/builtin-only resolution this replaced.
 func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" || cb.skillsLoader == nil {
 		return "", false
 	}
 
-	for _, skill := range cb.skillsLoader.ListSkills() {
-		// Accept either the stable slug (ID) or the human-readable display name
-		// as the input, but always resolve to the slug — that is the directory
-		// name LoadSkill() uses and the key the allowlist is built from.
-		if strings.EqualFold(skill.ID, name) || strings.EqualFold(skill.Name, name) {
-			// FR-9.4: tool-resolution default-DENY enforcement. A skill that
-			// exists on disk but is not in this agent's allowlist cannot be
-			// resolved — so it cannot be activated via /<skill> nor loaded into
-			// context. This is the invocation gate, distinct from the prompt-time
-			// context filter (activeSkillNames).
-			if !cb.skillAllowed(skill.ID) {
-				logger.WarnCF("agent", "skill resolution denied by per-agent allowlist",
-					map[string]any{
-						"agent_id": cb.agentID,
-						"skill":    skill.ID,
-					})
-				return "", false
-			}
-			return skill.ID, true
-		}
+	resolved, ok := cb.resolveSkillNameWithList(cb.skillsLoader.ListSkills(), name)
+	if !ok {
+		return "", false
 	}
+	return resolved.Slug, true
+}
 
-	return "", false
+// resolveSkillNameWithList is ResolveSkillName's core, parameterized on an
+// already-fetched ListSkills() result instead of calling cb.skillsLoader.
+// ListSkills() itself. SkillsLoader.ListSkills() is an uncached, full
+// directory scan (ADR-072 Finding D), so a caller that must ALSO inspect the
+// installed-skill list for a reason ResolveSkillName's single ok bool cannot
+// express — e.g. pkg/agent/subturn.go's resolveRequestedSkillForChild, which
+// needs to distinguish "denied" from "not found" on a failed resolution —
+// can fetch the list once and pass it to both this method and its own
+// fallback check, rather than triggering two full scans back-to-back on
+// every failed delegate.run requested_skill.
+func (cb *ContextBuilder) resolveSkillNameWithList(allSkills []skills.SkillInfo, name string) (skills.ResolvedSkill, bool) {
+	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.skillAllowed, cb.projectShelf, name)
+	if !ok {
+		// FR-9.4/ADR-072 D4: an installed-but-ungranted registry/builtin slug
+		// (or one that exists on no shelf at all) cannot be resolved — so it
+		// cannot be activated via /<skill> nor loaded into context. This is
+		// the invocation gate, distinct from the prompt-time context filter
+		// (activeSkillNames).
+		logger.WarnCF("agent", "skill resolution denied or not found",
+			map[string]any{
+				"agent_id": cb.agentID,
+				"skill":    name,
+			})
+		return skills.ResolvedSkill{}, false
+	}
+	if collision != nil {
+		logger.WarnCF("agent", "skill slug collision on resolution; higher-precedence shelf won",
+			map[string]any{
+				"agent_id": cb.agentID,
+				"slug":     collision.Slug,
+				"winner":   collision.WinnerDescription,
+			})
+	}
+	return resolved, true
 }
 
 // GetSkillsInfo returns information about loaded skills.

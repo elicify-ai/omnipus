@@ -86,6 +86,7 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 	mcpReg := tools.NewMCPRegistry()
 
 	rs, err := setupAndStartServices(
+		context.Background(),
 		cfg,
 		credentials.SecretBundle{},
 		al,
