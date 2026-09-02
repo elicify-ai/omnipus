@@ -102,12 +102,11 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 	for _, tool := range lockRegistry.GetAll() {
 		names[tool.Name()] = true
 	}
-	// 11 shipped + ADR-072 D2's four registered tools (select_option,
-	// press_key, hover, snapshot). browser_upload_file is implemented and
-	// seeded but NOT registered while FR-029 holds it, and
-	// browser_handle_dialog belongs to the dialog stream — both raise this
-	// number when they land.
-	require.Len(t, names, 15, "the browser tool surface is fifteen registered tools")
+	// 11 shipped + ADR-072 D2's five registered tools (select_option,
+	// press_key, hover, snapshot, handle_dialog). browser_upload_file is
+	// implemented and seeded but NOT registered while FR-029 holds it, so it
+	// raises this number when #659 closes.
+	require.Len(t, names, 16, "the browser tool surface is sixteen registered tools")
 
 	var leasedCount, exemptCount int
 	for name := range names {
@@ -143,15 +142,17 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 
 	// Ten leased: the seven shipped (navigate, click, type, evaluate,
 	// switch_tab, close_tab, open_tab) plus D2's three interaction verbs
-	// (select_option, press_key, hover). Five exempt: the four shipped
+	// (select_option, press_key, hover). Six exempt: the four shipped
 	// read-only tools (screenshot, get_text, wait, list_tabs) plus
-	// browser_snapshot, which is read-only by requirement (D2 FR-038) and
-	// must answer while a human drives the tab.
+	// browser_snapshot, read-only by requirement (D2 FR-038), plus
+	// browser_handle_dialog, exempt for a DIFFERENT reason (D2 FR-035): it is
+	// the recovery verb, and gating it behind the mechanisms the wedge
+	// disables is a deadlock, not a safety property.
 	//
 	// They are asserted so that a build in which BOTH gates stopped working
 	// cannot pass the biconditional above by agreeing on "never defers".
 	require.Equal(t, 10, leasedCount, "ten registered tools are control-gated and therefore leased")
-	require.Equal(t, 5, exemptCount, "five registered tools are read-only and therefore exempt from both gates")
+	require.Equal(t, 6, exemptCount, "six registered tools are exempt from both gates")
 }
 
 // TestRegister_NoTakeControlTool is FR-070's structural half: acquisition of the
@@ -175,5 +176,5 @@ func TestRegister_NoTakeControlTool(t *testing.T) {
 					"need the D1.9b ruling reopened.", tool.Name())
 		}
 	}
-	require.Len(t, registry.GetAll(), 15, "the tool surface stays at fifteen registered tools")
+	require.Len(t, registry.GetAll(), 16, "the tool surface stays at sixteen registered tools")
 }

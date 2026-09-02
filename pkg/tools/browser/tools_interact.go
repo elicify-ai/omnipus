@@ -294,7 +294,7 @@ func (t *SelectOptionTool) Execute(ctx context.Context, args map[string]any) *to
 		// "context deadline exceeded". translatePostGateErr names `visible`
 		// when that is what was lost, and passes anything else through.
 		return tools.ErrorResult(fmt.Sprintf("%s: element %q could not be read: %s", t.Name(), display,
-			translatePostGateErr(scrubMarkerFromError(err, target, display), t.Name(), display)))
+			postGateMessage(err, t.Name(), target, display)))
 	}
 
 	switch out.Code {
@@ -521,7 +521,7 @@ func (t *PressKeyTool) Execute(ctx context.Context, args map[string]any) *tools.
 		}
 		if err := chromedp.Run(tabCtx, chromedp.KeyEventNode(nodes[0], keys, opts...)); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("%s: sending %s to %q failed: %s", t.Name(), spec, display,
-				translatePostGateErr(scrubMarkerFromError(err, target, display), t.Name(), display)))
+				postGateMessage(err, t.Name(), target, display)))
 		}
 	} else if err := chromedp.Run(tabCtx, chromedp.KeyEvent(keys, opts...)); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("%s: sending %s failed: %s", t.Name(), spec, err))
@@ -648,7 +648,7 @@ func (t *HoverTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("%s: could not hover %q: %s", t.Name(), display,
-			translatePostGateErr(scrubMarkerFromError(err, target, display), t.Name(), display)))
+			postGateMessage(err, t.Name(), target, display)))
 	}
 
 	return jsonResult(map[string]any{
@@ -812,7 +812,7 @@ func (t *UploadFileTool) Execute(ctx context.Context, args map[string]any) *tool
 			t.recordUploadDecision(ctx, key, owner, p, pageOrigin, audit.DecisionDeny, "attach_failed", err.Error())
 		}
 		return tools.ErrorResult(fmt.Sprintf("%s: could not attach to %q: %s", t.Name(), display,
-			translatePostGateErr(scrubMarkerFromError(err, target, display), t.Name(), display)))
+			postGateMessage(err, t.Name(), target, display)))
 	}
 	for _, p := range realPaths {
 		t.recordUploadDecision(ctx, key, owner, p, pageOrigin, audit.DecisionAllow, "", "")
@@ -880,6 +880,25 @@ func (t *UploadFileTool) recordUploadDecision(
 // ---------------------------------------------------------------------------
 // small shared helpers
 // ---------------------------------------------------------------------------
+
+// postGateMessage renders a failure that happened AFTER the actionability gate
+// returned, for the four interaction verbs.
+//
+// FR-037: such a failure must never surface as a bare "context deadline
+// exceeded". The gate's guarantee holds across its two probes, not at the
+// moment of dispatch, so an element can pass and then stop being visible a
+// frame later — and the agent needs to be told `visible`, not handed a
+// timeout it cannot act on.
+//
+// translatePostGateErr returns (translated, ok); when ok is false the error
+// is not a lost-visibility one and is passed through, scrubbed of the internal
+// data-omnipus-tsel marker so the agent sees the locator it actually wrote.
+func postGateMessage(err error, toolName, target, display string) string {
+	if translated, ok := translatePostGateErr(err, toolName, display); ok {
+		return translated.Error()
+	}
+	return scrubMarkerFromError(err, target, display).Error()
+}
 
 // jsString renders a Go string as a JavaScript literal safe to embed in an
 // evaluated script. Never fmt.Sprintf("%q") — Go's quoting is not JavaScript's
