@@ -1666,9 +1666,14 @@ Seven streams (A, P, C, D, E, F, G). **Stream A is the critical path and must la
 //
 // A BrowsingKey names a BROWSER, not a tab set. Under D1.9c (2026-09-02) the
 // tab sets live one level down, inside the manager this key resolves to: one
-// per agent, plus one owned by the workspace for the operator's own tabs.
+// per SESSION that has browsed, plus one owned by the workspace for the
+// operator's own tabs.
 // See TabOwner and FR-080 — a key alone does not tell you whose tabs you are
-// looking at, and code that assumes it does merges every agent's tabs.
+// looking at, and code that assumes it does merges every session's tabs.
+//
+// The key is the SESSION's, not the agent's: switching a chat from Mia to Jim
+// does not move, hide or duplicate a tab, and two sessions on one workspace
+// never see each other's. Anything reading "per agent" here is pre-D1.9c.
 //
 // The "ws:" prefix is RETAINED DELIBERATELY, and not as future-proofing for a
 // second shape — §5 forbids adding one (round-2 MIN-103). It is a namespace
@@ -1699,27 +1704,54 @@ var ErrNoBrowsingContext = errors.New(
 
 // TabOwner names WHOSE tab set a browser operation addresses, inside the one
 // browser a BrowsingKey names (ADR-072 D1.9c, operator ruling 2026-09-02).
-// This type is the explicit carrier of the agent dimension that today lives
+// This type is the explicit carrier of the SESSION dimension that today lives
 // only in the accident of one BrowserManager per agent — FR-080.
 //
 // Two shapes, and deliberately no third:
 //
-//   TabOwnerAgent(agentID)  the tabs that agent opened.  Visible and drivable
-//                           by that agent only.
+//   TabOwnerSession(transcriptSessionID)
+//                           the tabs opened in that chat.  Visible and
+//                           drivable by whichever agent the chat is currently
+//                           on — switching Mia to Jim moves nothing.  Never
+//                           visible to another session.
 //   TabOwnerWorkspace       the tabs the OPERATOR opened through the live
 //                           panel.  Visible to every agent on the workspace;
-//                           drivable by the operator, and by an agent on
-//                           request (the acquisition verb is a D2 decision —
-//                           §0.5 E-1).
+//                           drivable by the operator, and by an agent that
+//                           simply ACTS on it — acquisition is IMPLICIT and
+//                           has no surface (FR-070, §0.7; §0.5 E-1 is RULED,
+//                           not open).
 //
 // It resolves to the manager's sessions-map key, so the map holds one entry
-// per agent that has browsed plus at most one workspace entry. There is no
+// per SESSION that has browsed plus at most one workspace entry. There is no
 // "all tabs" owner: a tool that wants both sets asks for both and says which
 // is which, because "whose tab is this" is exactly the question ADR-072 §1.1
 // records an agent getting wrong.
+//
+// There is deliberately NO TabOwnerAgent. Keying on the agent is the
+// SUPERSEDED D1.9a shape (~~FR-048~~ → FR-080); reintroducing it splits one
+// chat's tabs across the agents that took turns in it.
+//
+// The id is transcriptSessionID and NEVER routingSessionID (§5, FR-080):
+// routingSessionID is inherited verbatim through a delegation subtree
+// (pkg/agent/subturn.go:1339), so it would merge every descendant's tabs into
+// the root's.
+//
+// TabOwnerSession("") IS NOT AN OWNER — it is a named failure. An empty
+// transcript session id is an ordinary, reachable state on several turn types
+// (§5's non-behaviour, FR-080), and minting an owner from it gives every
+// transcript-less turn on the workspace one shared tab set, which is the
+// silent merge this type exists to prevent. Constructing it returns
+// ErrNoTabOwner rather than a usable value; the browser tool reports it and
+// opens nothing.
 type TabOwner struct{ s string }
 
-func TabOwnerAgent(agentID string) TabOwner
+// ErrNoTabOwner is returned when the turn carries no transcriptSessionID and
+// therefore has no tab set of its own. Like ErrNoBrowsingContext it must be
+// RETURNED, never swallowed into a shared or workspace-owned set.
+var ErrNoTabOwner = errors.New(
+    "browser: this turn has no transcript session, so it has no tabs of its own")
+
+func TabOwnerSession(transcriptSessionID string) (TabOwner, error)
 func TabOwnerWorkspace() TabOwner
 func (o TabOwner) IsWorkspace() bool
 
@@ -1792,9 +1824,13 @@ type ManagerResolver interface {
     // memory-refusal error, or a launch error. It NEVER returns "pool full" —
     // there is no pool cap at all (D1.5a, §0.6).
     //
-    // It also returns the TabOwner this turn addresses: TabOwnerAgent(agentID)
-    // for every ordinary tool call. A tool that must reach the operator's
-    // shared tab asks for TabOwnerWorkspace() explicitly (FR-080).
+    // It also returns the TabOwner this turn addresses:
+    // TabOwnerSession(tools.ToolTranscriptSessionID(ctx)) for every ordinary
+    // tool call. A tool that must reach the operator's shared tab asks for
+    // TabOwnerWorkspace() explicitly (FR-080). When the turn carries no
+    // transcript session id this returns ErrNoTabOwner — it does NOT fall
+    // back to the workspace-owned set, which would let a transcript-less turn
+    // drive the operator's tabs.
     ManagerFor(ctx context.Context) (*BrowserManager, BrowsingKey, TabOwner, error)
 }
 
