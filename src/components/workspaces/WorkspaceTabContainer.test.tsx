@@ -369,3 +369,46 @@ describe('WorkspaceTabContainer — query error state (D9)', () => {
     expect(screen.queryByTestId('workspace-container-error')).toBeNull()
   })
 })
+
+// U2. The route is where the workspace is named, and this container is the ONLY
+// thing that turns it into store state. Everything downstream depends on that
+// one effect: ChatControls' "Open browser" launcher reads activeWorkspaceId and
+// sends it with POST /sessions, the gateway stamps it on the new session's
+// meta, and the live browser panel resolves which workspace's browser — and
+// whose live logins — to show by reading that meta server-side (ADR-072
+// FR-016/FR-017). Break this binding and the launcher silently goes back to
+// creating workspace-less sessions, and a multi-workspace agent is refused as
+// ambiguous while being told to open the panel from a workspace chat — which is
+// where the click came from. That whole chain was tested end to end EXCEPT
+// here, so this is the link that closes it.
+describe('WorkspaceTabContainer — the route binds the active workspace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPathname = '/workspaces/ws-alpha/chat'
+    mockWorkspaceId = 'ws-alpha'
+    mockWorkspaceName = 'Alpha'
+    mockWorkspacesError = false
+  })
+
+  it('puts the route\'s workspace id into the store', async () => {
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-alpha" />)
+    })
+
+    expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith('ws-alpha')
+  })
+
+  it('never binds the "inbox" alias as if it were a real workspace id', async () => {
+    // 'inbox' is a route alias resolved to the default workspace by a redirect;
+    // binding it verbatim would make the launcher send "inbox" as a
+    // workspace_id, which the gateway rejects as a workspace that does not
+    // exist — a 400 where the operator expects a browser.
+    mockPathname = '/workspaces/inbox/chat'
+    mockWorkspaceId = 'inbox'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="inbox" />)
+    })
+
+    expect(mockSetActiveWorkspaceId).not.toHaveBeenCalledWith('inbox')
+  })
+})
