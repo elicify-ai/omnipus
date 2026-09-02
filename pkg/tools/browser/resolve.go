@@ -16,38 +16,70 @@ import (
 
 // ResolveBrowsingKey decides which browser this turn's tools address. It is the
 // ONLY function permitted to construct a BrowsingKey. Deterministic, pure apart
-// from the workspace-file read FindAllForAgent performs.
+// from the workspace-file reads FindForAgentPreferring / FindAllForAgent
+// perform.
 //
 // Ladder (ADR-072 D1.11), evaluated in order — three rungs, no fourth:
-//  1. tools.ToolWorkspaceID(ctx) != ""   -> ws:<that id>
+//  1. tools.ToolWorkspaceID(ctx), WHEN THE AGENT IS ON THAT WORKSPACE'S TEAM
+//     -> ws:<that id>
 //  2. the agent's workspace membership resolves UNAMBIGUOUSLY -> ws:<that id>
-//  3. otherwise                          -> zero key + ErrNoBrowsingContext
+//  3. otherwise -> zero key + ErrNoBrowsingContext
+//
+// RUNG 1 IS A PREFERENCE, NOT AN INSTRUCTION, and the difference is a security
+// boundary rather than a nicety. tools.ToolWorkspaceID(ctx) is the workspace the
+// CHAT was bound to when it started (pkg/agent/loop.go stamps it from
+// ts.opts.WorkspaceID), and a chat outlives the team it was opened under: remove
+// an agent from that workspace's team mid-conversation and the label on disk
+// does not change. Every agent on a workspace shares the operator's live logins
+// for every site that workspace has visited, so honouring the stale label would
+// hand a browser — cookies, sessions, the lot — to an agent that is no longer on
+// the team. Membership is therefore re-checked on EVERY resolution, never
+// stamped once and trusted.
+//
+// It is also what keeps the two sides of the live browser panel honest. The
+// panel resolves through ResolveBrowsingKeyForAgent with the attaching chat
+// session's workspace as its preference (pkg/gateway/browser_ws.go's
+// sessionWorkspaceID -> AgentLoop.BrowserManagerForAgent); the agent's own
+// tools resolve through here. Both now enter the SAME function,
+// resolveBrowsingKeyForAgent, with the same preference and the same rules —
+// deliberately ONE check rather than two that can drift, because when they did
+// drift the operator watched one browser while the agent drove another and
+// neither side reported anything wrong.
 //
 // "Unambiguously" is load-bearing and is FR-033: when the agent is on the
-// CoreTeam of two or more workspaces and no preferred id was supplied, the
-// sorted-first tie-break that FindForAgent applies for FILESYSTEM re-rooting is
-// NOT applied here, because here it would silently choose which set of live
+// CoreTeam of two or more workspaces and no usable preferred id was supplied,
+// the sorted-first tie-break that FindForAgent applies for FILESYSTEM re-rooting
+// is NOT applied here, because here it would silently choose which set of live
 // logins the turn acts with. Rung 2 refuses instead, with ErrNoBrowsingContext,
 // and logs a WARN naming the candidates.
 //
 // Rung 1+2 mirror pkg/tools/resolvepath.go's precedent so the browser and the
 // work dir never disagree about which workspace a scheduled/heartbeat turn is
-// rooted in. There is NO rung 4: a fallback constant re-creates the exact
-// isolation regression ADR D1.11 rejects.
+// rooted in — pkg/agent/loop.go's filesystem re-rooting already treats the
+// turn-carried workspace id as a tie-break over identity-based membership
+// (FindForAgentPreferring) for exactly this reason, and this is the browser
+// catching up to it. There is NO rung 4: a fallback constant re-creates the
+// exact isolation regression ADR D1.11 rejects.
 func ResolveBrowsingKey(ctx context.Context, home string) (BrowsingKey, error) {
-	if wsID := tools.ToolWorkspaceID(ctx); wsID != "" {
-		return newBrowsingKey(wsID)
-	}
-	agentID := tools.ToolAgentID(ctx)
-	return resolveBrowsingKeyForAgent(home, agentID, "")
+	return resolveBrowsingKeyForAgent(home, tools.ToolAgentID(ctx), tools.ToolWorkspaceID(ctx))
 }
 
-// resolveBrowsingKeyForAgent is rung 2, factored out so the gateway's
-// agent-addressed path (AgentLoop.BrowserManagerForAgent, FR-017) reaches the
-// SAME refusal rules with a caller-supplied preferred workspace id — the
-// attaching chat session's own workspace. A preferred id that the agent really
-// belongs to is not an ambiguity: the caller has already said which one it
-// means.
+// resolveBrowsingKeyForAgent is the WHOLE ladder — rung 1's preference, rung 2's
+// membership, rung 3's refusal — and it is the single place workspace membership
+// is checked for the browser. Both entry points funnel through it:
+// ResolveBrowsingKey (an agent's own tools, preference = the turn's workspace)
+// and ResolveBrowsingKeyForAgent (the gateway's live panel, preference = the
+// attaching chat session's workspace). Adding a second membership check at
+// either call site would give this project two answers to "whose logins does
+// this act with", which is the drift the one-function shape exists to prevent.
+//
+// A preferred id that the agent really belongs to is not an ambiguity: the
+// caller has already said which one it means, and FindForAgentPreferring
+// confirms the agent is on that specific workspace's CoreTeam (or is an
+// implicit member of every workspace) before it is honoured. A preferred id the
+// agent is NOT on is treated exactly as if none had been supplied — it falls
+// through to the membership ladder, which is strictly more conservative than
+// honouring it and never resolves to a workspace the agent has no claim on.
 func resolveBrowsingKeyForAgent(home, agentID, preferredWorkspaceID string) (BrowsingKey, error) {
 	if agentID == "" {
 		return BrowsingKey{}, ErrNoBrowsingContext
@@ -57,6 +89,22 @@ func resolveBrowsingKeyForAgent(home, agentID, preferredWorkspaceID string) (Bro
 			id == preferredWorkspaceID {
 			return newBrowsingKey(id)
 		}
+		// Not a silent downgrade. The named workspace is where the chat (or the
+		// panel) believes it is; the agent is not on its team, so the request is
+		// resolved from the agent's own membership instead. An operator who
+		// removed the agent from that team mid-conversation is the ordinary
+		// cause, and they will not connect a chat that quietly changed browsers
+		// to a team edit they made an hour ago unless it is said out loud.
+		logger.WarnCF(
+			"browser",
+			"the workspace this request names does not have this agent on its team — "+
+				"resolving from the agent's own membership instead of handing over that "+
+				"workspace's browser and its live logins",
+			map[string]any{
+				"agent_id":           agentID,
+				"named_workspace_id": preferredWorkspaceID,
+			},
+		)
 	}
 	candidates, implicit := workspace.FindAllForAgent(home, agentID)
 	switch {

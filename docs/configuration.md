@@ -890,7 +890,22 @@ All three keys below are **whole seconds, written as a number** — `900`, not
 
 Both of the last two take effect when you save settings; the gateway does not
 need a restart. Changing `idle_close_ttl` does not disturb a browser that is
-already open — it changes how long the next idle one is given.
+already open — it changes how long the next idle one is given. A change to
+`cache_trim_interval` is picked up by the running sweep within about fifteen
+seconds, including when you shorten it below the time already elapsed since the
+last sweep — in that case the next sweep runs almost immediately rather than
+waiting out the old, longer interval.
+
+**Who gets a workspace's browser.** Every agent on a workspace's team shares
+that workspace's browser, and therefore the logins and cookies it holds. Team
+membership is re-checked every time a browser is resolved, not recorded once
+when a chat starts: remove an agent from a workspace's team and it loses that
+workspace's browser immediately, in conversations that were already open. If it
+is on exactly one other workspace's team, its browser tools and the live browser
+panel both move to that one; if it is on none, both refuse with a message saying
+so. A chat that was opened in a workspace is a preference, never a grant — it
+picks between the workspaces an agent is on and can never reach one it is not
+on.
 
 **How many browsers can run at once.** There is no setting for this, and there
 is deliberately none to raise. A browser starts only if the machine has room

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,11 +24,25 @@ import (
 // writeWorkspace writes one workspace file naming coreTeam.
 func writeWorkspace(t *testing.T, home, id string, coreTeam ...string) {
 	t.Helper()
+	writeWorkspaceAs(t, home, id+".json", id, coreTeam...)
+}
+
+// writeWorkspaceAs writes a workspace file whose FILENAME and whose "id" field
+// are chosen independently.
+//
+// findAllForAgent returns the id out of the JSON, not the filename, so an id
+// that could never be a filename ("../escape") is still a value the resolver
+// can be handed — which is the only route by which a non-segment id reaches
+// newBrowsingKey now that rung 1 is a preference rather than an instruction.
+// Naming the file after such an id would write outside the workspaces dir and
+// test nothing.
+func writeWorkspaceAs(t *testing.T, home, filename, id string, coreTeam ...string) {
+	t.Helper()
 	dir := filepath.Join(home, "workspaces")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	body, err := json.Marshal(map[string]any{"id": id, "core_team": coreTeam})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), body, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, filename), body, 0o600))
 }
 
 // turnCtx builds a tool-call context carrying the agent id and, optionally, the
@@ -48,9 +63,19 @@ func turnCtx(agentID, workspaceID string) context.Context {
 // one-browser-for-everyone identity ADR-072 exists to remove, and it would do so
 // silently, because a shared browser looks exactly like a working browser until
 // two workspaces' logins are in one cookie jar.
+//
+// RUNG 1 IS A PREFERENCE. Two of these cases used to assert the opposite — that
+// the turn's own workspace id "wins outright" and is "not overridden by
+// membership" — and that was the defect, not the contract. The turn's workspace
+// id is the label the CHAT was stamped with when it started; remove the agent
+// from that workspace's team afterwards and the label does not change. Honouring
+// it unchecked handed a workspace's browser, and therefore the operator's live
+// logins for every site that workspace has visited, to an agent that is not on
+// its team. Membership is re-checked on every resolution.
 func TestResolveBrowsingKey_Ladder(t *testing.T) {
 	home := t.TempDir()
 	writeWorkspace(t, home, "ws-of-solo", "solo")
+	writeWorkspace(t, home, "ws-also-of-solo", "solo", "second")
 
 	cases := []struct {
 		name    string
@@ -59,19 +84,26 @@ func TestResolveBrowsingKey_Ladder(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name:    "rung 1 — the turn's own workspace id wins outright",
-			ctx:     turnCtx("solo", "turn-bound-workspace"),
-			wantKey: "ws:turn-bound-workspace",
+			// The legitimate use of rung 1: "solo" really is on both, and the
+			// turn names which one. That is not an ambiguity — the caller has
+			// already said which workspace it means.
+			name:    "rung 1 — the turn's own workspace id picks among the agent's memberships",
+			ctx:     turnCtx("solo", "ws-also-of-solo"),
+			wantKey: "ws:ws-also-of-solo",
 		},
 		{
-			name:    "rung 1 beats rung 2 — the turn's workspace is not overridden by membership",
-			ctx:     turnCtx("solo", "turn-bound-workspace"),
-			wantKey: "ws:turn-bound-workspace",
+			// The defect, inverted. "solo" is on no such workspace, so the
+			// label is not honoured and the resolution falls back to the
+			// membership ladder. It must NOT come back as
+			// ws:a-workspace-solo-was-removed-from.
+			name:    "rung 1 is refused when the agent is not on the workspace the turn names",
+			ctx:     turnCtx("second", "ws-of-solo"),
+			wantKey: "ws:ws-also-of-solo",
 		},
 		{
 			name:    "rung 2 — no turn workspace, one unambiguous membership",
-			ctx:     turnCtx("solo", ""),
-			wantKey: "ws:ws-of-solo",
+			ctx:     turnCtx("second", ""),
+			wantKey: "ws:ws-also-of-solo",
 		},
 		{
 			name:    "rung 3 — an agent on no workspace has no browser of its own",
@@ -79,8 +111,25 @@ func TestResolveBrowsingKey_Ladder(t *testing.T) {
 			wantErr: ErrNoBrowsingContext,
 		},
 		{
+			// The security case in its starkest form: an agent on NO team at
+			// all, in a chat labelled with a workspace that really exists.
+			// Before the fix this returned ws:ws-of-solo and the stranger drove
+			// that workspace's logged-in Chrome.
+			name:    "rung 3 — a workspace label cannot give a browser to an agent on no team",
+			ctx:     turnCtx("stranger", "ws-of-solo"),
+			wantErr: ErrNoBrowsingContext,
+		},
+		{
 			name:    "rung 3 — no agent id at all",
 			ctx:     turnCtx("", ""),
+			wantErr: ErrNoBrowsingContext,
+		},
+		{
+			// A workspace id with no agent id is not a browser either. It used
+			// to be: rung 1 read only the workspace off the context, so a call
+			// with no identity at all still minted a key.
+			name:    "rung 3 — a workspace id with no agent id mints nothing",
+			ctx:     turnCtx("", "ws-of-solo"),
 			wantErr: ErrNoBrowsingContext,
 		},
 	}
@@ -167,8 +216,6 @@ func TestResolveBrowsingKey_AmbiguousRefuses(t *testing.T) {
 // A workspace id that escapes its own directory would put one workspace's
 // profile — cookies, logins, the lot — somewhere another one can reach.
 func TestResolveBrowsingKey_RejectsNonSegmentWorkspaceID(t *testing.T) {
-	home := t.TempDir()
-
 	bad := []string{
 		"../escape",
 		"nested/child",
@@ -177,8 +224,18 @@ func TestResolveBrowsingKey_RejectsNonSegmentWorkspaceID(t *testing.T) {
 		"/absolute",
 		"has\x00nul",
 	}
-	for _, id := range bad {
+	for i, id := range bad {
 		t.Run("rejects "+id, func(t *testing.T) {
+			// Reached through a workspace FILE carrying this id, not through
+			// the turn context. Since rung 1 became a preference, a
+			// context-supplied id the agent is not a member of never reaches
+			// newBrowsingKey at all — it falls through to the membership
+			// ladder. The remaining route to a non-segment id is a workspace
+			// whose stored id is one, and the agent really is on its team, so
+			// this exercises the guard where it can still fire.
+			home := t.TempDir()
+			writeWorkspaceAs(t, home, fmt.Sprintf("badid%d.json", i), id, "anyone")
+
 			key, err := ResolveBrowsingKey(turnCtx("anyone", id), home)
 			require.ErrorIs(t, err, ErrNoBrowsingContext,
 				"a workspace id that is not one path segment must be refused, as ErrNoBrowsingContext")
@@ -193,8 +250,11 @@ func TestResolveBrowsingKey_RejectsNonSegmentWorkspaceID(t *testing.T) {
 	// workspace whose id happens to be ".." is harmless but wrong-headed, and
 	// more importantly it would be a guard that had never been tested against
 	// the string a filesystem actually sees.
-	for _, id := range []string{"..", "."} {
+	for i, id := range []string{"..", "."} {
 		t.Run("the prefix neutralises a bare "+id, func(t *testing.T) {
+			home := t.TempDir()
+			writeWorkspaceAs(t, home, fmt.Sprintf("dotid%d.json", i), id, "anyone")
+
 			key, err := ResolveBrowsingKey(turnCtx("anyone", id), home)
 			require.NoError(t, err)
 			require.Equal(t, "ws-"+id, key.ProfileSegment())
@@ -207,6 +267,8 @@ func TestResolveBrowsingKey_RejectsNonSegmentWorkspaceID(t *testing.T) {
 
 	// The control: an ordinary ULID-shaped id is accepted, so the guard above
 	// is rejecting these ids specifically and not everything.
+	home := t.TempDir()
+	writeWorkspace(t, home, "01J8ZQ4T7N9K3M2P5R6S7T8V9W", "anyone")
 	key, err := ResolveBrowsingKey(turnCtx("anyone", "01J8ZQ4T7N9K3M2P5R6S7T8V9W"), home)
 	require.NoError(t, err)
 	require.Equal(t, "ws:01J8ZQ4T7N9K3M2P5R6S7T8V9W", key.String())

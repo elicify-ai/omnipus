@@ -2303,38 +2303,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// reaper does a map scan, this walks directories. It is not the
 		// primary trigger either; pool.Close(k) returning is, and that fires
 		// within milliseconds with no interval to wait for.
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
-				}
-			}()
-			if results := pool.TrimAllEligible(); len(results) > 0 {
-				slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
-					"profiles", len(results))
-			}
-			ticker := time.NewTicker(pool.CacheTrimInterval())
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					func() {
-						defer func() {
-							if r := recover(); r != nil {
-								slog.Error("browser-trim: scheduled trim panicked; paused until the next tick",
-									"panic", fmt.Sprintf("%v", r))
-							}
-						}()
-						if results := pool.TrimAllEligible(); len(results) > 0 {
-							slog.Info("browser-trim: trimmed closed workspace browser caches",
-								"profiles", len(results))
-						}
-					}()
-				}
-			}
-		}()
+		go runBrowserCacheTrimSchedule(ctx, pool)
 		go func() {
 			path, ppErr := pool.Preprovision(ctx)
 			if ppErr != nil {
@@ -6269,4 +6238,104 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 		"remote_channels", channels,
 		"flagged_agents", flagged,
 	)
+}
+
+// browserCacheTrimReconcileEvery bounds how long a LIVE change to
+// tools.browser.cache_trim_interval waits before the sweep schedule follows it.
+//
+// The schedule used to be a time.Ticker built once, at boot, from
+// pool.CacheTrimInterval(). A Settings save reached the POOL (loop.go's reload
+// pass calls BrowserPool.ApplyRuntimeConfig, which updates the interval) and
+// stopped there: the ticker had already been armed and never re-read it. An
+// operator lowering the interval because their disk was filling saw the setting
+// accepted, saw the new value read back, and got the old hourly sweep — the
+// ADR-037 "reports success and changes nothing" anti-pattern this project bans,
+// and one that docs/configuration.md contradicted in writing.
+//
+// It is a RECONCILE BOUND, not the sweep period: the loop below wakes at most
+// this often purely to re-read the configured interval, and sweeps only when the
+// interval has genuinely elapsed since the last sweep. Fifteen seconds is chosen
+// to be far below any plausible trim interval (the default is an hour) while
+// costing one timer wakeup and two clock reads per quarter-minute. A var, not a
+// const, so a test can drive the reconcile without sleeping for real time.
+var browserCacheTrimReconcileEvery = 15 * time.Second
+
+// minBrowserCacheTrimInterval floors the effective sweep period. The pool
+// already substitutes its own default for a zero or negative interval, so this
+// only guards against a future pool that stops doing so turning the loop below
+// into a spin. A one-second floor is not a policy about how often to trim; it is
+// the smallest gap at which "wake, compare, sweep" is still a schedule.
+const minBrowserCacheTrimInterval = time.Second
+
+// browserCacheTrimScheduler is the narrow slice of *browser.BrowserPool the
+// scheduled cache trim needs. Declared so the schedule can be tested against a
+// fake whose interval an operator's config.json really drives, without a Chrome,
+// a pool, or a profile directory anywhere in the test.
+type browserCacheTrimScheduler interface {
+	TrimAllEligible() []browser.TrimResult
+	CacheTrimInterval() time.Duration
+}
+
+// runBrowserCacheTrimSchedule is ADR-072 FR-072 triggers 2 and 3: the boot sweep
+// of every profile with no live Chrome, then the recurring sweep.
+//
+// The interval is re-read from the pool on EVERY round rather than captured
+// once, which is what makes tools.browser.cache_trim_interval a live setting.
+// Lowering it takes effect within browserCacheTrimReconcileEvery, including when
+// the new interval has ALREADY elapsed since the last sweep — the next
+// reconcile finds the sweep overdue and runs it immediately, rather than serving
+// out the remainder of the old, longer wait.
+//
+// Returns when ctx is done (the gateway's own shutdown-aware context).
+func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimScheduler) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
+		}
+	}()
+	if results := pool.TrimAllEligible(); len(results) > 0 {
+		slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
+			"profiles", len(results))
+	}
+
+	last := time.Now()
+	for {
+		interval := pool.CacheTrimInterval()
+		if interval < minBrowserCacheTrimInterval {
+			interval = minBrowserCacheTrimInterval
+		}
+		due := last.Add(interval)
+		wait := time.Until(due)
+		if wait > browserCacheTrimReconcileEvery {
+			wait = browserCacheTrimReconcileEvery
+		}
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if time.Now().Before(due) {
+			// Woke to reconcile, not to sweep. Round again and re-read the
+			// interval — this is the branch a lowered setting arrives through.
+			continue
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("browser-trim: scheduled trim panicked; paused until the next tick",
+						"panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			if results := pool.TrimAllEligible(); len(results) > 0 {
+				slog.Info("browser-trim: trimmed closed workspace browser caches",
+					"profiles", len(results))
+			}
+		}()
+		last = time.Now()
+	}
 }

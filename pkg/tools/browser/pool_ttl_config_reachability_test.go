@@ -127,9 +127,18 @@ func TestBrowserIdleCloseTTL_ConfigKeyIsActuallyRead(t *testing.T) {
 }
 
 // TestBrowserCacheTrimInterval_ConfigKeyIsActuallyRead does the same for the
-// trim schedule. The observable end of the chain is BrowserPool.CacheTrimInterval,
-// because that is the single value the gateway's trim goroutine ticks on —
-// asserting it is asserting the sweep's actual period, not a struct field.
+// trim schedule, as far as this package's boundary allows: the observable end
+// of the chain from here is BrowserPool.CacheTrimInterval, because that is the
+// single value the gateway's sweep reads.
+//
+// It is only HALF the reachability question, and the source assertion below is
+// what says so honestly. This value being right was ALREADY true while the
+// sweep ignored it: the gateway armed a time.Ticker once, at boot, from
+// pool.CacheTrimInterval(), so a Settings save updated the pool and changed
+// nothing an operator could observe until a restart. The behavioural half —
+// lower the interval on a running schedule and watch the sweep follow — needs
+// the gateway package and lives in
+// pkg/gateway/browser_cache_trim_schedule_test.go.
 func TestBrowserCacheTrimInterval_ConfigKeyIsActuallyRead(t *testing.T) {
 	f := newPoolFromOperatorConfig(t, `{"cache_trim_interval": 90}`)
 
@@ -137,12 +146,17 @@ func TestBrowserCacheTrimInterval_ConfigKeyIsActuallyRead(t *testing.T) {
 		"the operator set tools.browser.cache_trim_interval to 90 seconds; the pool is still "+
 			"handing the scheduler the 1-hour built-in, so the key changes nothing")
 
-	// And the scheduler really does take its period from there — otherwise the
-	// value above would be a number nobody ticks on.
+	// And the scheduler really does read its period from there, on EVERY round
+	// rather than once — otherwise the value above would be a number nobody
+	// ticks on, or one that only the next gateway restart would notice.
 	gw := readSourceForTest(t, "../../gateway/gateway.go")
-	assert.Contains(t, gw, "time.NewTicker(pool.CacheTrimInterval())",
-		"the scheduled trim must tick on the pool's configured interval; if this call moved, "+
-			"the assertion above stopped describing the sweep's real period")
+	assert.Contains(t, gw, "interval := pool.CacheTrimInterval()",
+		"the scheduled trim must read the pool's configured interval inside its loop; if this "+
+			"moved back out of the loop, the assertion above stopped describing anything an "+
+			"operator can observe without restarting")
+	assert.NotContains(t, gw, "time.NewTicker(pool.CacheTrimInterval())",
+		"a ticker armed once from the interval is the restart-gated schedule this key was "+
+			"documented not to have")
 }
 
 // TestBrowserIdleCloseTTL_ZeroOrNegativeMeansDefaultNotDisabled is FR-061 seen
