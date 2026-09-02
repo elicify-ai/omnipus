@@ -113,9 +113,13 @@ func (l Locator) kind() (locatorKind, []string) {
 // or when a tool is handed a locator kind it does not accept. It names the
 // offending fields and the tool; it NEVER picks a winner.
 //
-// shared interface contract other streams code against.
+// It keeps the Err prefix for the same reason ErrNotActionable does: the name
+// is fixed by the shared D2 interface contract the other browser streams code
+// against. Keep the suppression below to ONE line — gofmt moves a //nolint
+// directive to the end of its comment block, so a multi-line rationale ends up
+// severed from its own first clause.
 //
-//nolint:errname // Same reason as ErrNotActionable: the name is fixed by the
+//nolint:errname // Name fixed by the shared D2 interface contract; see above.
 type ErrLocatorConflict struct {
 	// Fields are the populated locator argument names, agent-facing (the
 	// JSON parameter names, not the Go field names).

@@ -63,11 +63,16 @@ const hitTestIndeterminate = "indeterminate"
 
 // ErrNotActionable is the ONLY error type the gate returns on timeout.
 //
-// interface contract every other browser stream codes against; renaming it to
-// NotActionableError would break those call sites to satisfy a naming
-// convention, and the Err-prefix form is what the package's readers look for.
+// It keeps the Err prefix rather than the XxxError form the errname linter
+// wants. The name is fixed verbatim by the shared D2 interface contract every
+// other browser stream codes against, so renaming it would break those call
+// sites to satisfy a naming convention.
 //
-//nolint:errname // The spec fixes this name verbatim as part of the shared
+// The suppression below is ONE line on purpose: gofmt treats //nolint as a
+// directive and moves it to the end of the comment block, which tears a
+// multi-line rationale off its own opening clause and leaves it scrambled.
+//
+//nolint:errname // Name fixed by the shared D2 interface contract; see above.
 type ErrNotActionable struct {
 	// Failed is the FIRST condition, in actionConditionOrder, that never
 	// became true within the budget.
