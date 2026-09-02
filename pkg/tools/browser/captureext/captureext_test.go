@@ -456,6 +456,16 @@ var versionContentHashes = map[string]string{
 	// 1.0.15 — clamp the sender bitrate to the ceiling the gateway derives
 	// from the VIEWER leg's RTCP receiver reports (ADR-069 Finding 2).
 	"1.0.15": "b6bfa6fb6eb5ad0391c38e1d4f9d03d02e1fd1af202ffbfc4c162eb26da69b21",
+	// 1.0.16 — CAPTURE_PIXEL_BUDGET: clamp the requested capture to ~0.92 MPx
+	// (1280x720) so a Retina panel's ~3.3 MPx request stops consuming both
+	// cores of a 2-core host and starving the round-trip input path
+	// (measured on omnipus-uat-swimlane 2026-08-31, commit 08d213937).
+	//
+	// The encoder.js change landed in 08d213937 WITHOUT this bump — which is
+	// precisely the omission this map exists to catch, and it caught it. The
+	// version bump is what carries the fix onto an install whose data dir
+	// persists across upgrades.
+	"1.0.16": "ce6a743ad20576fa9c49f20f2a661715a725547f20621ad4d133d647eac72575",
 }
 
 func embeddedContentHash(t *testing.T) string {
