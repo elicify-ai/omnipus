@@ -94,6 +94,48 @@ func (e *ErrNotActionable) Error() string {
 	return fmt.Sprintf("%s: element %q is not actionable: %s (%s)", e.Tool, e.Display, e.Failed, e.Detail)
 }
 
+// TabNotAnsweringError is what the gate returns when the PAGE never answered
+// a single probe, so the gate has no observation of the element at all.
+//
+// It is deliberately NOT an ErrNotActionable. ErrNotActionable is a statement
+// about an element — "it is there and disabled", "it is covered by this
+// banner" — and every one of those requires having looked. When a JavaScript
+// dialog is open the renderer's main thread is blocked, Runtime.evaluate never
+// returns, and every probe dies on the deadline; the gate then reported
+// `visible` (firstUnmet's answer for "no condition was ever true"), which
+// reads as "your locator matched nothing" and sends the agent back to fix a
+// locator that was never the problem. A wrong answer that sounds precise is
+// worse than no answer.
+//
+// The message commits to the ACTION and hedges the CAUSE, the same discipline
+// dialogAwareTimeout settled on: browser_handle_dialog first because a dialog
+// is both the most common cause and the only one with a one-call fix, then the
+// re-navigate that recovers a genuinely wedged tab. A slow-but-healthy page
+// that simply outran a short budget lands here too, and the closing clause
+// covers it rather than pretending it cannot happen.
+//
+// Named XxxError rather than ErrXxx because nothing external pins this name
+// (unlike ErrNotActionable, whose name is fixed by the shared D2 interface
+// contract and carries a lint suppression for it).
+type TabNotAnsweringError struct {
+	// Display is the user-facing locator the gate was asked about — named
+	// only so the agent knows which call this was, never as a claim about it.
+	Display string
+	// Tool is the calling tool, e.g. "browser_click".
+	Tool string
+}
+
+func (e *TabNotAnsweringError) Error() string {
+	return fmt.Sprintf(
+		"%s: the tab never answered while checking %q, so nothing at all was observed about that element — "+
+			"this is not a statement about the locator. A JavaScript dialog blocks the page and produces "+
+			"exactly this: try browser_handle_dialog{accept:false} first. If that reports no dialog, the tab "+
+			"is wedged (crashed, closed, or holding stale CDP state) and a re-navigate recovers it; a page "+
+			"that is merely slow needs a longer timeout",
+		e.Tool, e.Display,
+	)
+}
+
 // ---------------------------------------------------------------------------
 // FR-034 — the revert switch
 // ---------------------------------------------------------------------------
@@ -378,12 +420,18 @@ func waitActionableOutcome(
 		ctx, cancel := context.WithTimeout(tabCtx, timeout)
 		defer cancel()
 		if err := chromedp.Run(ctx, chromedp.WaitVisible(target, chromedp.ByQuery)); err != nil {
-			if translated, ok := translatePostGateErr(err, toolName, display); ok {
-				return gateOutcome{}, translated
+			if gateVisibilityLoss(err) {
+				return gateOutcome{}, visibleOnlyErr(toolName, display)
 			}
 			return gateOutcome{}, err
 		}
-		return gateOutcome{HitTest: "self"}, nil
+		// NOT "self". The hit test is not merely unperformed in this mode, it
+		// does not exist in this mode — chromedp.WaitVisible is the whole
+		// check. hitTestIndeterminate is what the field was defined to carry
+		// for "could not be performed" (see gateOutcome.HitTest), and it is
+		// what a caller must see rather than a claim that the element's own
+		// centre point resolved to the element.
+		return gateOutcome{HitTest: hitTestIndeterminate}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
@@ -392,9 +440,18 @@ func waitActionableOutcome(
 	everTrue := map[ActionCondition]bool{}
 	var lastDetail = map[ActionCondition]string{}
 
+	// answered latches the first time the PAGE came back with a probe result,
+	// whatever that result said. It is the difference between "we looked and
+	// the element was not visible" and "we never got to look at all" — see the
+	// ctx.Done() branch below.
+	answered := false
+
 	for {
 		// RT1 — one Runtime.evaluate: box, visible, enabled, hit, occluder.
 		first, err := runGateProbe(ctx, target, false)
+		if err == nil {
+			answered = true
+		}
 		if err == nil && first.Found && first.Visible {
 			everTrue[CondVisible] = true
 
@@ -439,6 +496,21 @@ func waitActionableOutcome(
 
 		select {
 		case <-ctx.Done():
+			// FR-035 adjacency: the page never answered a single probe, so
+			// the gate observed NO property of the element. Saying "visible"
+			// here — which is what firstUnmet returns for an empty everTrue —
+			// is a confident, specific, wrong diagnosis, and the agent acts on
+			// it by retrying a locator that will never work. A JavaScript
+			// dialog blocks the renderer's main thread and produces exactly
+			// this shape: Runtime.evaluate never returns, so every probe dies
+			// on the deadline. Report the tab, and name the verb that clears
+			// it, instead of reporting the element.
+			//
+			// No noteGateFailure here on purpose: the FR-032 counters count
+			// CONDITIONS that were checked and failed. Nothing was checked.
+			if !answered {
+				return gateOutcome{}, &TabNotAnsweringError{Tool: toolName, Display: display}
+			}
 			failed, detail := firstUnmet(everTrue, lastDetail)
 			noteGateFailure(failed)
 			return gateOutcome{}, &ErrNotActionable{
@@ -493,8 +565,7 @@ func postGateErr(err error, toolName, display string) (error, bool) {
 	if err == nil {
 		return nil, false
 	}
-	if errors.Is(err, chromedp.ErrNotVisible) || errors.Is(err, context.DeadlineExceeded) ||
-		strings.Contains(err.Error(), "context deadline exceeded") {
+	if gateVisibilityLoss(err) {
 		noteGateFailure(CondVisible)
 		return &ErrNotActionable{
 			Failed:  CondVisible,
@@ -504,6 +575,57 @@ func postGateErr(err error, toolName, display string) (error, bool) {
 		}, true
 	}
 	return nil, false
+}
+
+// gateVisibilityLoss is the shared predicate for "chromedp's own visibility
+// wait gave up": its ErrNotVisible, or a deadline it polled out against. Both
+// the post-gate translator and the visible_only fallback need exactly this
+// test, and having it once is what keeps them from drifting into two slightly
+// different ideas of the same failure.
+//
+// It deliberately does NOT match every error. A specific, named CDP failure
+// (an unparseable selector, a detached target) is information, and rewriting
+// it into "not visible" would replace a true statement with a plausible one.
+func gateVisibilityLoss(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, chromedp.ErrNotVisible) || errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(err.Error(), "context deadline exceeded")
+}
+
+// visibleOnlyErr reports a visible_only failure in terms of what visible_only
+// ACTUALLY did.
+//
+// This function exists because the branch used to route its failure through
+// postGateErr, whose detail reads "the element passed the actionability gate
+// and then stopped being visible before the action was dispatched". Under
+// visible_only there IS no four-condition gate to pass: chromedp.WaitVisible
+// is the entire check and it is the thing that just failed. The sentence named
+// a mechanism that had not run — and it named it in the one mode an operator
+// turns on specifically to diagnose a regression, where a wrong cause is
+// costliest and hardest to doubt. A wrong cause recorded in code outlives the
+// incident as fact.
+//
+// What replaces it says only what this mode can support, and the second half
+// carries as much weight as the first: under the full gate `visible` means
+// "and stability, enabledness and hit-testability were checked too"; here it
+// means "nothing else was looked at". An agent that cannot tell those apart
+// reads a coarse answer as a precise one.
+//
+// The Failed condition stays CondVisible — that part was always true — so the
+// closed set stays at four and the FR-032 counter keeps counting the same
+// thing.
+func visibleOnlyErr(toolName, display string) error {
+	noteGateFailure(CondVisible)
+	return &ErrNotActionable{
+		Failed:  CondVisible,
+		Display: display,
+		Detail: "tools.browser.actionability_gate is set to visible_only, so the only check that ran was " +
+			"chromedp's visibility wait and the element never became visible within the budget — " +
+			"stability, enabledness and hit-testability were not evaluated at all",
+		Tool: toolName,
+	}
 }
 
 // translatePostGateErr is postGateErr under the name the other D2 stream

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestActionCondition_SetIsExactlyFour enumerates the constants so a fifth
@@ -243,5 +244,167 @@ func TestActionabilityGate_ConfigKeyIsActuallyRead(t *testing.T) {
 	loopSrc := readSourceForTest(t, "../../agent/loop.go")
 	if !strings.Contains(loopSrc, "browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)") {
 		t.Error("tools.browser.actionability_gate has no writer — the operator would set it and nothing would change, which is the failure mode this project has shipped before")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R5 finding 4 — a page that never answers must not be reported as an element
+// that is not visible.
+// ---------------------------------------------------------------------------
+
+// TestWaitActionable_PageNeverAnswers_ReportsTheTabNotTheElement is the
+// regression for the confident-wrong diagnosis.
+//
+// The oracle is the requirement, not the code: when NO probe ever came back
+// from the page, the gate has observed nothing about the element, so any
+// sentence about the element is unfounded. The one it used to emit —
+// firstUnmet's answer for an empty everTrue — was `visible`, which an agent
+// reads as "your locator matched nothing" and answers by retrying a locator
+// that will never work while a dialog is up.
+//
+// The probe is driven against a context that is not a chromedp context, so
+// every chromedp.Run returns an error immediately and the page answers
+// nothing. That is the same observable the blocked-renderer case produces (a
+// dialog holds the main thread, Runtime.evaluate never returns, the deadline
+// takes every probe), which is why this needs no browser to be a real test of
+// the branch.
+func TestWaitActionable_PageNeverAnswers_ReportsTheTabNotTheElement(t *testing.T) {
+	SetActionabilityGate(ActionabilityGateFull)
+	t.Cleanup(func() { SetActionabilityGate(ActionabilityGateFull) })
+
+	_, err := waitActionableOutcome(context.Background(), "browser_click", "#go", "#go", 60*time.Millisecond)
+	if err == nil {
+		t.Fatal("a gate that never got an answer must still fail")
+	}
+
+	var na *ErrNotActionable
+	if errors.As(err, &na) {
+		t.Fatalf("a page that never answered must NOT produce a claim about the element; got %q (condition %q)",
+			err.Error(), na.Failed)
+	}
+
+	var tna *TabNotAnsweringError
+	if !errors.As(err, &tna) {
+		t.Fatalf("want *TabNotAnsweringError, got %T: %v", err, err)
+	}
+	if tna.Tool != "browser_click" || tna.Display != "#go" {
+		t.Errorf("the error must carry the calling tool and the user-facing locator; got tool=%q display=%q",
+			tna.Tool, tna.Display)
+	}
+
+	msg := err.Error()
+	// The verb that actually clears the most common cause has to be IN the
+	// message — an agent cannot act on a diagnosis it is not given.
+	if !strings.Contains(msg, "browser_handle_dialog") {
+		t.Errorf("the message must name browser_handle_dialog, the one-call fix for the usual cause; got %q", msg)
+	}
+	// ...and the second outcome, so an agent whose handle_dialog answers "no
+	// dialog" is not left with no next move.
+	if !strings.Contains(msg, "re-navigate") {
+		t.Errorf("the message must name the recovery for a wedged tab too; got %q", msg)
+	}
+	if strings.Contains(msg, "not actionable") {
+		t.Errorf("the message must not read as an actionability verdict on the element; got %q", msg)
+	}
+}
+
+// TestWaitActionable_PageAnswers_StillNamesTheCondition is the other half, and
+// the reason the fix above is narrow rather than a blanket change: when the
+// page DOES answer, the four-condition verdict is exactly what the agent
+// needs and must be unaffected.
+func TestWaitActionable_PageAnswers_StillNamesTheCondition(t *testing.T) {
+	// firstUnmet is the decision the answered path makes; driving it directly
+	// keeps this assertion free of a browser while still asserting that the
+	// answered path's oracle is untouched.
+	failed, _ := firstUnmet(map[ActionCondition]bool{CondVisible: true, CondStable: true}, map[ActionCondition]string{})
+	if failed != CondEnabled {
+		t.Errorf("an answered page still names the first unmet condition; got %q, want %q", failed, CondEnabled)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R5 finding 5 — the diagnostic fallback must not name a mechanism that did
+// not run.
+// ---------------------------------------------------------------------------
+
+// TestVisibleOnlyErr_DoesNotClaimAGateWasPassed is the regression for the
+// false cause.
+//
+// visible_only exists so an operator whose site regresses under the strict
+// gate has something to turn WHILE DIAGNOSING. Its failure used to be routed
+// through postGateErr, whose detail says the element "passed the actionability
+// gate and then stopped being visible before the action was dispatched". In
+// this mode there is no four-condition gate at all — chromedp's visibility
+// wait is the whole check and it is the thing that failed. Nothing passed
+// anything, and a wrong cause is costliest in exactly the mode an operator
+// turns on to find a cause.
+func TestVisibleOnlyErr_DoesNotClaimAGateWasPassed(t *testing.T) {
+	err := visibleOnlyErr("browser_click", "#go")
+	msg := err.Error()
+
+	if strings.Contains(msg, "passed the actionability gate") {
+		t.Errorf("visible_only ran no gate to pass — that cause is false; got %q", msg)
+	}
+	if !strings.Contains(msg, "visible_only") {
+		t.Errorf("the message must name the mode that produced this coarse answer; got %q", msg)
+	}
+	// The scope of the answer matters as much as the answer: under the full
+	// gate `visible` means the other three were checked too, and here it means
+	// they were not looked at.
+	for _, unchecked := range []string{"stability", "enabledness", "hit-testability"} {
+		if !strings.Contains(msg, unchecked) {
+			t.Errorf("the message must say %s was not evaluated, or a coarse answer reads as a precise one; got %q",
+				unchecked, msg)
+		}
+	}
+
+	var na *ErrNotActionable
+	if !errors.As(err, &na) {
+		t.Fatalf("want *ErrNotActionable, got %T", err)
+	}
+	if na.Failed != CondVisible {
+		t.Errorf("the condition was always true and stays CondVisible; got %q", na.Failed)
+	}
+
+	// The two must not converge again: a later "these are the same, collapse
+	// them" simplification is precisely how the false cause came back once.
+	post, ok := postGateErr(context.DeadlineExceeded, "browser_click", "#go")
+	if !ok {
+		t.Fatal("postGateErr must still translate a deadline")
+	}
+	if post.Error() == msg {
+		t.Error("the visible_only failure and the post-gate failure describe DIFFERENT mechanisms and must not share one sentence")
+	}
+}
+
+// TestGateVisibilityLoss_PredicateIsShared_AndNarrow pins the one predicate
+// both translators use. A specific, named CDP failure must survive: rewriting
+// it into "not visible" replaces a true statement with a plausible one.
+func TestGateVisibilityLoss_PredicateIsShared_AndNarrow(t *testing.T) {
+	for _, in := range []error{context.DeadlineExceeded, errors.New("context deadline exceeded")} {
+		if !gateVisibilityLoss(in) {
+			t.Errorf("%v is a visibility-wait loss", in)
+		}
+	}
+	for _, in := range []error{nil, errors.New("could not find node with given selector"), errors.New("invalid context")} {
+		if gateVisibilityLoss(in) {
+			t.Errorf("%v is a specific failure and must be passed through untouched", in)
+		}
+	}
+}
+
+// TestTabNotAnswering_CountsNoConditionFailure — the FR-032 counters count
+// CONDITIONS that were checked and failed. A tab that never answered had no
+// condition checked, so counting one would inflate `visible` with cases that
+// say nothing about visibility, and that counter is the evidence a later
+// change is meant to act on.
+func TestTabNotAnswering_CountsNoConditionFailure(t *testing.T) {
+	t.Cleanup(func() { SetActionabilityGate(ActionabilityGateFull) })
+	SetActionabilityGate(ActionabilityGateFull)
+
+	before := gateFailureTotal(CondVisible)
+	_, _ = waitActionableOutcome(context.Background(), "browser_click", "#go", "#go", 40*time.Millisecond)
+	if after := gateFailureTotal(CondVisible); after != before {
+		t.Errorf("the visible counter moved from %d to %d for a tab that answered nothing", before, after)
 	}
 }
