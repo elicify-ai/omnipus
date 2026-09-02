@@ -320,6 +320,13 @@ func DefaultConfig() *Config {
 				"browser_press_key":     "allow",
 				"browser_hover":         "allow",
 				"browser_snapshot":      "allow",
+				// ADR-072 D2 FR-035 — the dialog recovery verb. Ceiling, not
+				// a grant, exactly like the four above it: it closes coverage
+				// for every agent while the per-agent seeds decide who holds
+				// it. Allow rather than ask, because a tool that un-wedges a
+				// blocked tab is useless if reaching it needs an approval the
+				// wedged turn may have nobody to ask for.
+				"browser_handle_dialog": "allow",
 				// FR-021 — ask, and it is the only browser verb that is.
 				// Attaching a host file to a page on the operator's signed-in
 				// session is the one browser action that moves their data

@@ -656,8 +656,8 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // re-derived from a count.
 
 // tier3SearchOnlyToolNames is ADR-071 §4.1's literal Tier 3 list, transcribed
-// verbatim, now 67 names: 62 after write_agent_metadata's retirement, plus
-// ADR-072 D2's five new browser tools (a
+// verbatim, now 68 names: 62 after write_agent_metadata's retirement, plus
+// ADR-072 D2's five new browser tools and Stream C's browser_handle_dialog (a
 // redundant, unguarded second door onto
 // the same files update_agent already writes through a properly-guarded
 // path — see pkg/sysagent/tools/metadata.go). It exists ONLY as the third leg
@@ -676,6 +676,9 @@ var tier3SearchOnlyToolNames = []string{
 	// manifest VISIBILITY of a catalog name, not about registration.
 	"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
 	"browser_upload_file",
+	// ADR-072 D2 Stream C — the dialog recovery verb, Tier 3 like the rest of
+	// the browser surface.
+	"browser_handle_dialog",
 	"create_workspace", "update_workspace", "delete_workspace",
 	"list_workspaces", "read_agent_metadata", "configure_provider",
 	"list_providers", "test_provider", "list_models", "run_doctor", "get_usage", "add_mcp_server",
@@ -688,12 +691,13 @@ var tier3SearchOnlyToolNames = []string{
 	"delete_task",
 }
 
-// TestVisibility_TierArithmetic pins the full 17+7+67+1=92 partition (FR-032:
+// TestVisibility_TierArithmetic pins the full 17+7+68+1=93 partition (FR-032:
 // navigate's retirement dropped the previewed set from 8 to 7, and
 // write_agent_metadata's retirement dropped the search-only set from 63 to
-// 62, and ADR-072 D2's five new browser tools raised it from 62 to 67 — "The
+// 62, and ADR-072 D2 raised it from 62 to 68 (five interaction/snapshot
+// verbs plus browser_handle_dialog) — "The
 // always-listed set MUST contain exactly 17 names, the previewed set exactly
-// 7, the search-only set exactly 67, and the infrastructure set exactly 1"). Counts
+// 7, the search-only set exactly 68, and the infrastructure set exactly 1"). Counts
 // alone are NOT verification (two different 6-out/5-in vs 3-out/2-in diffs
 // both land on 17) — this test additionally proves the four sets are
 // pairwise disjoint and that every Tier 3 name resolves to ManifestLazy +
@@ -713,12 +717,12 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	if len(infra) != 1 {
 		t.Errorf("len(InfraManifestToolNames()) = %d, want 1; got %v", len(infra), infra)
 	}
-	if len(tier3SearchOnlyToolNames) != 67 {
-		t.Fatalf("tier3SearchOnlyToolNames has %d entries, want 67 — fixture defect, fix the test data",
+	if len(tier3SearchOnlyToolNames) != 68 {
+		t.Fatalf("tier3SearchOnlyToolNames has %d entries, want 68 — fixture defect, fix the test data",
 			len(tier3SearchOnlyToolNames))
 	}
 
-	seen := make(map[string]string, 92) // name -> which set it was first seen in
+	seen := make(map[string]string, 93) // name -> which set it was first seen in
 	record := func(setName string, names []string) {
 		for _, n := range names {
 			if prior, ok := seen[n]; ok {
@@ -733,8 +737,8 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	record("infra", infra)
 	record("search-only", tier3SearchOnlyToolNames)
 
-	if len(seen) != 92 {
-		t.Errorf("union of all four sets has %d unique names, want 92", len(seen))
+	if len(seen) != 93 {
+		t.Errorf("union of all four sets has %d unique names, want 93", len(seen))
 	}
 
 	// Every Tier 3 name must resolve to ManifestLazy + ManifestSearchOnly.

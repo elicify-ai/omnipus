@@ -169,6 +169,15 @@ func RegisterTools(
 	// Read-only (FR-038): browser_snapshot takes neither the human-control
 	// gate nor the write lease, so it answers while a human is driving the tab.
 	registry.RegisterReplacing(&SnapshotTool{res: res})
+	// Recovery verb (FR-035): browser_handle_dialog takes neither the
+	// human-control gate nor the write lease either, but for a different
+	// reason than the snapshot's. The snapshot is exempt because it only
+	// reads; this one is exempt because the fault it repairs is what holds
+	// both gates. The turn that raised the dialog is still blocked on CDP and
+	// still owns the lease, and a human staring at a wedged tab has no button
+	// — so gating this behind either one is a deadlock, not a safety
+	// property.
+	registry.RegisterReplacing(&HandleDialogTool{res: res})
 	// browser_upload_file is DELIBERATELY NOT REGISTERED HERE (FR-029).
 	//
 	// It is fully implemented (tools_interact.go), fully seeded (allStaticToolNames,

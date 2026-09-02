@@ -11,6 +11,8 @@ package browser
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -643,4 +645,100 @@ func swapDialogSeam(t *testing.T, fn func(context.Context, bool, string, bool) e
 	restore := func() { handleJavaScriptDialogFn = prev }
 	t.Cleanup(restore)
 	return restore
+}
+
+// --- The dependency pin --------------------------------------------------
+
+// TestChromedpEnablesPageDomainPerTarget pins a behaviour of chromedp that
+// this whole feature rests on and that we do not control.
+//
+// Page.javascriptDialogOpening only fires if the Page domain is enabled on
+// that target. We never call page.Enable() anywhere — chromedp does it for us,
+// in the action list it runs when it attaches to any non-worker target. If a
+// chromedp bump changed that list, every dialog would silently stop being
+// recorded: no error, no failing test anywhere obvious, and the wedge back in
+// full. So it is asserted rather than trusted.
+//
+// The test also incidentally confirms the other half: chromedp lists
+// EventJavascriptDialogOpening among the events it explicitly IGNORES, so it
+// does not answer dialogs itself and the page really does stall.
+func TestChromedpEnablesPageDomainPerTarget(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body>
+		  <button id="go" onclick="alert('wedge me')">Go</button>
+		</body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry, mgr := newPermissiveRegistry(t, testBrowserCfg(t))
+	nav := mustGetTool(t, registry, "browser_navigate")
+	if res := nav.Execute(context.Background(), map[string]any{"url": srv.URL}); res.IsError {
+		t.Fatalf("navigate: %s", res.ForLLM)
+	}
+
+	tabCtx, err := mgr.Session(testSessionID)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+
+	seen := make(chan *page.EventJavascriptDialogOpening, 1)
+	chromedp.ListenTarget(tabCtx, func(ev any) {
+		if e, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			select {
+			case seen <- e:
+			default:
+			}
+		}
+	})
+
+	// Fire the alert WITHOUT waiting for the click to return: an open dialog
+	// blocks the tab, so the click never completes. That blocking IS the
+	// wedge; observing the event is the point.
+	go func() {
+		_ = chromedp.Run(tabCtx, chromedp.Click("#go", chromedp.ByQuery))
+	}()
+
+	select {
+	case e := <-seen:
+		if e.Message != "wedge me" {
+			t.Errorf("dialog message = %q, want %q", e.Message, "wedge me")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no Page.javascriptDialogOpening observed. chromedp enables the Page domain per target " +
+			"in its own attach action list and we rely on that; if a bump removed it, every dialog would " +
+			"silently stop being recorded and the wedge would come back with nothing failing.")
+	}
+
+	// Unwedge, so the deferred cleanups are not fighting a blocked renderer.
+	_ = chromedp.Run(tabCtx, page.HandleJavaScriptDialog(false))
+}
+
+// TestDialog_IsActuallyRegistered — green tests on an unreachable tool are
+// the failure mode this project has shipped before. browser_handle_dialog
+// exists, it is in the catalog, and RegisterTools puts it in the registry
+// under its own name; a tool an agent cannot invoke is not done.
+func TestDialog_IsActuallyRegistered(t *testing.T) {
+	registry, _ := newPermissiveRegistry(t, controlTestCfg(t))
+
+	tool, ok := registry.Get("browser_handle_dialog")
+	if !ok || tool == nil {
+		t.Fatal("browser_handle_dialog is not in the tool registry — implemented, seeded, and unreachable")
+	}
+
+	// And in the metadata catalog, which is what the tool-policy coverage
+	// validator and the manifest tier partition are both fed from. A name in
+	// the registry but not the catalog resolves a silent deny.
+	var inCatalog bool
+	for _, m := range BrowserBuiltinMetadata() {
+		if m.Name() == "browser_handle_dialog" {
+			inCatalog = true
+			break
+		}
+	}
+	if !inCatalog {
+		t.Error("browser_handle_dialog is missing from BrowserBuiltinMetadata()")
+	}
 }

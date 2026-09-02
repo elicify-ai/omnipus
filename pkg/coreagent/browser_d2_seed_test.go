@@ -32,7 +32,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
-// d2BrowserVerbs are the five D2 tools that resolve `allow` for a
+// d2BrowserVerbs are the D2 tools that resolve `allow` for a
 // browser-capable agent. browser_upload_file is deliberately not among them —
 // it is `ask`, and mixing it in would make an "everything allows" assertion
 // that could never see the ask/allow distinction FR-021 turns on.
@@ -41,6 +41,11 @@ var d2BrowserVerbs = []string{
 	"browser_press_key",
 	"browser_hover",
 	"browser_snapshot",
+	// Stream C's recovery verb. Allow for every browser-capable agent
+	// (FR-035/A-12): a dialog wedges the tab for whoever hits it, so the verb
+	// that clears it has to be held by everyone who can open one. The
+	// consequential half is guarded at the argument, not the policy.
+	"browser_handle_dialog",
 }
 
 // browsingAgents are the seeded agents that hold the browser surface.

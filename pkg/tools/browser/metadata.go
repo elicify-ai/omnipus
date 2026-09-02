@@ -59,6 +59,11 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&PressKeyTool{},
 		&HoverTool{},
 		&SnapshotTool{},
+		// ADR-072 D2 Stream C — the dialog recovery verb. Its Name,
+		// Description and Category are static strings with no mgr
+		// dereference, per this file's binding invariant: these instances
+		// carry a nil *BrowserManager and are never Execute()d.
+		&HandleDialogTool{},
 		// browser_upload_file appears HERE while it is deliberately absent
 		// from RegisterTools (FR-029, issue #659). That asymmetry is the
 		// point: "held" means unregistered, not unseeded. The name must be in

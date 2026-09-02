@@ -411,6 +411,15 @@ var allStaticToolNames = []string{
 	// seeded name with no registration is inert.
 	"browser_select_option", "browser_press_key", "browser_hover",
 	"browser_snapshot", "browser_upload_file",
+	// ADR-072 D2 Stream C — the dialog recovery verb. Same one-commit rule as
+	// the block above, and the same reason: this name landing alone would make
+	// denyAllThenOverride stamp an explicit deny on every seeded agent, which
+	// COMPLETES coverage and suppresses the single WARN the repair pass would
+	// otherwise log. The result would be a registered recovery verb that
+	// refuses on every agent, on a green build, with no diagnostic anywhere —
+	// and the tool whose entire job is to un-wedge a tab is the worst possible
+	// one to ship silently inert.
+	"browser_handle_dialog",
 
 	// Sysagent management tools.
 	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
@@ -799,6 +808,14 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				// browser_evaluate stays denied here for the same reason it
 				// always was.
 				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+				// ADR-072 D2 FR-035/A-12 — allow for every browser-capable
+				// agent. A dialog wedges the tab for whoever hits it, so the
+				// verb that clears it has to be held by everyone who can open
+				// one. The dangerous half is guarded at the ARGUMENT, not
+				// here: `accept` defaults to false, and accepting is refused
+				// on a run with nobody to approve it. A tool policy cannot see
+				// an argument, so it cannot make that distinction.
+				"browser_handle_dialog",
 			} {
 				overrides[b] = allow
 			}
@@ -856,6 +873,14 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				// browser_evaluate stays denied here for the same reason it
 				// always was.
 				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+				// ADR-072 D2 FR-035/A-12 — allow for every browser-capable
+				// agent. A dialog wedges the tab for whoever hits it, so the
+				// verb that clears it has to be held by everyone who can open
+				// one. The dangerous half is guarded at the ARGUMENT, not
+				// here: `accept` defaults to false, and accepting is refused
+				// on a run with nobody to approve it. A tool policy cannot see
+				// an argument, so it cannot make that distinction.
+				"browser_handle_dialog",
 			} {
 				overrides[b] = allow
 			}
@@ -1043,6 +1068,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_press_key":     allow,
 			"browser_hover":         allow,
 			"browser_snapshot":      allow,
+			// ADR-072 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+			// the note on the delegation-tier seeds above: the consequential
+			// half (`accept:true`) is an argument-level guard, not a policy
+			// value, because policy cannot see arguments.
+			"browser_handle_dialog": allow,
 			// FR-021 — ask, not deny. Attaching a file to a page on the
 			// operator's signed-in session is the one browser verb that hands
 			// their data outward, so it is consent-gated on every agent that
@@ -1211,6 +1241,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_press_key":     allow,
 			"browser_hover":         allow,
 			"browser_snapshot":      allow,
+			// ADR-072 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+			// the note on the delegation-tier seeds above: the consequential
+			// half (`accept:true`) is an argument-level guard, not a policy
+			// value, because policy cannot see arguments.
+			"browser_handle_dialog": allow,
 			// FR-021 — ask even for Jim, who holds every other browser grant
 			// including browser_evaluate. Attaching a file is the one verb
 			// that hands the operator's data OUT of the machine, and the
