@@ -807,6 +807,71 @@ Omnipus supports cron-style scheduled tasks via the `cron` tool. The agent can s
 
 Scheduled tasks persist across restarts and are stored in `~/.omnipus/workspace/cron/`.
 
+### Agent Concurrency and Memory
+
+```json
+{
+  "performance": {
+    "max_parallel_agents": 0
+  }
+}
+```
+
+**There is no longer a computed default for `performance.max_parallel_agents`.**
+Earlier versions divided the machine's available memory by an assumed per-agent
+cost (~3.5 MB) to pick a number once, at startup. That number was one of two
+memory mechanisms in the process — the browser tooling sized itself from the
+same host's *live* headroom, so the two disagreed about the same machine, each
+defensibly.
+
+Concurrency is now bounded by **live available memory at the moment each agent
+turn is admitted**. `0` (the default) means *not configured*, not *auto-detect*:
+nothing computes a cap for you, and the memory gate refuses to grow when the
+host is short. Set a positive value to impose an explicit cap of your own; an
+explicit value is always honoured exactly as configured and is never silently
+lowered.
+
+Settings → Performance shows **"automatic — bounded by available memory"** when
+nothing is configured, rather than an integer. The integer the API reports
+alongside it in that state is a physical OS-thread safety backstop, not a
+recommendation, and the UI deliberately does not show it.
+
+#### When memory cannot be measured
+
+Some hosts cannot report their available memory at all. Concurrency then holds
+at a floor of **two** concurrent agent turns and the third is refused, naming
+memory. The system refuses to *grow*, never to *run* — a host that cannot
+measure itself can still do work.
+
+Two different situations produce this, and they are not the same:
+
+| Situation | Status |
+| --- | --- |
+| **Linux with an unreadable `/proc/meminfo`** — gVisor, a distroless image with no procfs mount, a hardened seccomp profile | **Supported deployment.** It works, at the floor. This is a consequence of a deployment choice, documented here so it is expected rather than surprising. |
+| **Windows** | **Degraded — unsupported.** No memory reader exists for Windows in this codebase. It is not a deployment choice you can undo, and no amount of physical RAM on the machine will raise the floor. Browser support on Windows is degraded-unsupported for the same reason. |
+
+On either, set `performance.max_parallel_agents` explicitly to get the
+concurrency you want — an explicit value is never overridden by any memory
+reading.
+
+#### Running in a container
+
+If Omnipus is running inside a container with **no memory limit set**, it logs
+one warning at startup: it is sizing against the *node's* memory, not the
+container's share. On a large Kubernetes node this means it sees far more
+headroom than it actually has and can be OOM-killed. Set
+`resources.limits.memory` (Kubernetes) or `--memory` (Docker) and the limit is
+picked up automatically, with no configuration change here. Startup is never
+refused over this.
+
+Container detection uses `KUBERNETES_SERVICE_HOST`, `/.dockerenv`, and the
+container runtime named in `/proc/self/cgroup`. **One case escapes all three:** a
+cgroup-v2 pod in its own cgroup namespace, with service links disabled and no
+`/.dockerenv`, looks identical to a bare-metal host from the inside. Set
+`OMNIPUS_CONTAINERIZED=1` to declare it — that is the only coverage for that
+shape, and without it the warning above will not fire even though the condition
+applies.
+
 ### Advanced Topics
 
 | Topic | Description |

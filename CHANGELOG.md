@@ -4,9 +4,28 @@ All notable changes to Omnipus will be documented in this file. The format is ba
 
 Pre-1.0 versions are tracked by the active release branch rather than by tagged release, and are subject to change without notice.
 
-## [Unreleased] — `feature/iframe-preview-tier13`
+## [Unreleased] — `feat/browser-streaming-performance`
+
+### Changed
+
+- **There is no longer a computed default for `performance.max_parallel_agents`.** The old default divided available memory by an assumed per-agent cost (~3.5 MB) to pick a number once at startup. Concurrency is now bounded by live available memory at the moment each agent turn is admitted. `0` means *not configured*, not *auto-detect*. An explicitly configured value is unaffected and is still honoured exactly as set. Settings → Performance shows "automatic — bounded by available memory" instead of an integer when nothing is configured.
+- **`browser_evaluate` is enabled by default.** `sandbox.browser_evaluate_enabled` is seeded `true` on a fresh install; which agents may call it is decided by tool policy, and Jim holds the only agent-level grant. Note what the JavaScript runs against: a browser holding your live logins. The duplicate, dead `tools.browser.evaluate_enabled` key (and its `OMNIPUS_TOOLS_BROWSER_EVALUATE_ENABLED` environment variable) is **deleted** — it had no effect on anything. An explicitly set `sandbox.browser_evaluate_enabled: false` now survives a config save; previously it was silently dropped and reverted.
 
 ### Added
+
+- `tools.browser.lease_wait` (default 2s) — how long a browser tool call waits for the single-driver lease before declaring contention. Clamped to at most half of `tools.browser.page_timeout`, with a warning naming both keys and both values whenever your configured value is lowered.
+- `tools.browser.actionability_gate` (`full` | `visible_only`, default `full`) — a temporary revert switch for the stricter element-actionability check, to be removed once it has soaked.
+- A startup warning when running in a container with no memory limit set: available-memory readings then reflect the node rather than the container, and the kernel may OOM-kill the process. Naming the remedy (`resources.limits.memory`). Never a refusal.
+- Real memory readers for macOS (`sysctl`), so the memory mechanism is measurable on the primary development platform for the first time.
+
+### Fixed
+
+- **An unreadable `/proc/meminfo` no longer reports a fabricated 4 GB.** On a Linux host without a readable procfs (gVisor, distroless, a hardened seccomp profile) the process previously reported 2 GiB of available memory that nothing had measured, and every consumer treated it as a real reading. It now reports "cannot determine", and each consumer takes a documented conservative branch. A related defect is fixed with it: the fabricated figure could win a `min()` against a *real* cgroup reading and discard it, on exactly the containers where the cgroup reading was the only true one.
+
+### Known limitations
+
+- **On a host whose available memory cannot be measured, concurrency holds at a floor of two agent turns and one browser.** The system refuses to *grow*, never to *run*. Two different situations produce this and they are not the same class: a **Linux host with an unreadable `/proc/meminfo`** (gVisor, distroless, hardened seccomp) is a **supported deployment** that happens to be unmeasurable, while **Windows** is **degraded — unsupported**, because no memory reader exists for it in this codebase. On Windows no amount of physical RAM will raise the floor; browser support there is degraded-unsupported for the same reason. On either, set `performance.max_parallel_agents` explicitly.
+- **Container detection has one blind spot.** A cgroup-v2 pod in its own cgroup namespace, with service links disabled and no `/.dockerenv`, is indistinguishable from bare metal from the inside, so the no-memory-limit warning above will not fire for it. Set `OMNIPUS_CONTAINERIZED=1` to declare it; that is the only coverage for that shape.
 
 - Iframe preview (tier-13) — second gateway listener on `:5001` with isolated origin and bind-port allow-list
 - Unified `web_serve` tool across preview and Tier-1/3 workspace tools
