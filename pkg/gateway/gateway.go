@@ -2292,6 +2292,49 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (InstallRootForProfileDir is key-independent by construction, FR-037a),
 	// so this resolves it once with zero live keys.
 	if pool := agentLoop.BrowserPool(); pool != nil {
+		// FR-072 triggers 2 and 3, both off the boot path so neither delays it.
+		//
+		// Trigger 2 (boot): sweep every profile on disk that has no live
+		// Chrome. This is what reaches profiles closed by a run that crashed,
+		// or by a gateway that never got to run its post-close trim.
+		//
+		// Trigger 3 (schedule): a SEPARATE, much slower ticker than the
+		// one-minute reaper sweep, and deliberately not folded into it — the
+		// reaper does a map scan, this walks directories. It is not the
+		// primary trigger either; pool.Close(k) returning is, and that fires
+		// within milliseconds with no interval to wait for.
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			if results := pool.TrimAllEligible(); len(results) > 0 {
+				slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
+					"profiles", len(results))
+			}
+			ticker := time.NewTicker(pool.CacheTrimInterval())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								slog.Error("browser-trim: scheduled trim panicked; paused until the next tick",
+									"panic", fmt.Sprintf("%v", r))
+							}
+						}()
+						if results := pool.TrimAllEligible(); len(results) > 0 {
+							slog.Info("browser-trim: trimmed closed workspace browser caches",
+								"profiles", len(results))
+						}
+					}()
+				}
+			}
+		}()
 		go func() {
 			path, ppErr := pool.Preprovision(ctx)
 			if ppErr != nil {

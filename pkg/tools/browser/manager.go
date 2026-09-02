@@ -118,6 +118,17 @@ type BrowserConfig struct {
 	// is one of the two things bounding this pool's memory, and FR-061
 	// forbids either of them shipping behind an off switch.
 	IdleCloseTTL time.Duration `json:"idle_close_ttl,omitempty"`
+	// CacheTrimInterval is how often the pool sweeps CLOSED workspace profiles
+	// for disposable browser cache (ADR-072 FR-072). Reload-applied.
+	//
+	// ⚠ It does NOT bound a profile's size, and the config documentation must
+	// not imply that it does (FR-074). Nothing is trimmed while a Chrome is
+	// live — trimming a running browser's cache would mean closing a browser
+	// somebody is using — so a workspace driven with no idle gap keeps growing
+	// its cache for as long as it is driven, whatever this is set to.
+	//
+	// Zero means "use the default" (1h).
+	CacheTrimInterval time.Duration `json:"cache_trim_interval,omitempty"`
 	// StartPageURL is what a fresh tab opens instead of about:blank. Empty
 	// falls back to about:blank (the pre-existing behavior). The gateway sets
 	// this to its own served start page so a reopened panel lands somewhere

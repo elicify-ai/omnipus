@@ -219,6 +219,14 @@ type BrowserPool struct {
 	// idleCloseTTL is tools.browser.idle_close_ttl, reload-applied.
 	idleCloseTTL time.Duration
 
+	// cacheTrimInterval is tools.browser.cache_trim_interval, reload-applied:
+	// how often CLOSED profiles are swept (FR-072 trigger 3). It does not
+	// bound an open profile — see logUnboundedContinuousDriveOnce.
+	cacheTrimInterval time.Duration
+
+	// trimResidualLogged latches FR-074's operator-visible line.
+	trimResidualLogged bool
+
 	// --- FR-054 thrash bookkeeping ---
 	reopens      map[string][]time.Time
 	thrashWarned map[string]bool
@@ -233,16 +241,20 @@ type BrowserPool struct {
 // template whose ProfileDir names the profile root.
 func NewBrowserPool(homeDir string, cfg BrowserConfig) *BrowserPool {
 	p := &BrowserPool{
-		homeDir:      homeDir,
-		cfg:          cfg,
-		instances:    make(map[string]*chromeInstance),
-		launching:    make(map[string]chan struct{}),
-		reopens:      make(map[string][]time.Time),
-		thrashWarned: make(map[string]bool),
-		idleCloseTTL: cfg.IdleCloseTTL,
+		homeDir:           homeDir,
+		cfg:               cfg,
+		instances:         make(map[string]*chromeInstance),
+		launching:         make(map[string]chan struct{}),
+		reopens:           make(map[string][]time.Time),
+		thrashWarned:      make(map[string]bool),
+		idleCloseTTL:      cfg.IdleCloseTTL,
+		cacheTrimInterval: cfg.CacheTrimInterval,
 	}
 	if p.idleCloseTTL <= 0 {
 		p.idleCloseTTL = defaultIdleCloseTTL
+	}
+	if p.cacheTrimInterval <= 0 {
+		p.cacheTrimInterval = defaultCacheTrimInterval
 	}
 	logger.InfoCF("browser", "browser pool ready — one Chrome per workspace, bounded by live memory", map[string]any{
 		"profile_root":   p.profileRoot(),
@@ -261,9 +273,14 @@ func (p *BrowserPool) ApplyRuntimeConfig(newCfg BrowserConfig) {
 	if ttl <= 0 {
 		ttl = defaultIdleCloseTTL
 	}
+	trimEvery := newCfg.CacheTrimInterval
+	if trimEvery <= 0 {
+		trimEvery = defaultCacheTrimInterval
+	}
 	p.mu.Lock()
 	p.cfg = newCfg
 	p.idleCloseTTL = ttl
+	p.cacheTrimInterval = trimEvery
 	coords := make([]*BrowserCoordinator, 0, len(p.instances))
 	for _, inst := range p.instances {
 		coords = append(coords, inst.coord)
@@ -788,6 +805,13 @@ func (p *BrowserPool) closeInstance(inst *chromeInstance, why string) {
 		"why":         why,
 		"profile_dir": inst.profileDir,
 	})
+	// FR-072 trigger 1, and the primary one: the browser this key owned has
+	// just gone away, so its disposable cache is trimmable RIGHT NOW —
+	// milliseconds after the close, with no interval to wait for. The
+	// scheduled pass exists for profiles closed by something this process did
+	// not see (a previous run, another gateway).
+	p.logUnboundedContinuousDriveOnce()
+	p.TrimProfile(inst.key)
 }
 
 // CloseIdle closes every instance that has had nothing to do for longer than
@@ -889,6 +913,17 @@ func (p *BrowserPool) Preprovision(ctx context.Context) (string, error) {
 		"install_root": InstallRootForProfileDir(cfg.ProfileDir),
 	})
 	return path, nil
+}
+
+// CacheTrimInterval is tools.browser.cache_trim_interval's effective value —
+// how often the gateway sweeps CLOSED profiles (FR-072 trigger 3).
+//
+// It is NOT a bound on profile size and the caller must not present it as one
+// (FR-074). Nothing is trimmed while a Chrome is live.
+func (p *BrowserPool) CacheTrimInterval() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cacheTrimInterval
 }
 
 // Shutdown closes every live Chrome. Profiles survive — a gateway restart is

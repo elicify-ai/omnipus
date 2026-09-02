@@ -872,6 +872,50 @@ cgroup-v2 pod in its own cgroup namespace, with service links disabled and no
 shape, and without it the warning above will not fire even though the condition
 applies.
 
+### The Browser
+
+Each workspace has its own browser: a separate Chrome process with its own
+profile directory on disk, holding its own cookies and its own logins. A
+workspace cannot see or use another workspace's. Agents on one workspace share
+that workspace's browser, which is what lets them hand work to each other.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `tools.browser.idle_ttl` | `5m` | How long one TAB may sit with nobody watching it and no tool touching it before it is closed. |
+| `tools.browser.idle_close_ttl` | `15m` | How long a whole BROWSER may sit with no tabs, nobody watching and nothing running before the Chrome process itself is closed. The profile stays on disk, so the workspace is still signed in next time. There is no way to switch this off. |
+| `tools.browser.cache_trim_interval` | `1h` | How often closed profiles are swept for disposable browser cache. See the warning below — this is a sweep frequency, not a size limit. |
+
+**How many browsers can run at once.** There is no setting for this, and there
+is deliberately none to raise. A browser starts only if the machine has room
+for it, measured at the moment it starts. When it does not, the least recently
+used workspace's browser is closed to make room — that workspace stays signed
+in and its browser comes back the next time an agent uses it. If nothing can be
+freed, the request is refused with a message naming memory. Any message that
+told you to raise a limit would be sending you after a setting that does not
+exist.
+
+**`cache_trim_interval` does not bound how large a profile gets.** Nothing is
+ever trimmed while a browser is running — trimming a running browser's cache
+would mean closing a browser somebody is using — so a workspace that is driven
+continuously, with no idle gap, keeps growing its cache for as long as it is
+driven, whatever this interval is set to. The gateway logs this once at
+startup. If disk is your binding constraint, the thing that actually reclaims
+space is a workspace's browser going idle, not this interval.
+
+**What the trim removes, and what it never touches.** It removes only what
+Chrome wrote as a performance cache and can fetch or rebuild: the HTTP cache,
+compiled JavaScript, shader and WebGPU caches, downloaded hint models. It never
+touches cookies, saved passwords, Local Storage, Session Storage, IndexedDB, a
+site's own Cache Storage, or your profile settings. It works from a fixed list
+of what may go, not a list of what must stay, so a future Chrome version that
+adds a directory nobody here has classified is left alone.
+
+**Windows is degraded and unsupported for the browser.** This codebase has no
+way to read available memory on Windows, and the browser will not start a
+second instance without one. The floor is one browser, whatever the machine's
+physical RAM. This is a gap that is declared rather than worked around; see the
+`Known limitations` section of the changelog.
+
 ### Advanced Topics
 
 | Topic | Description |
