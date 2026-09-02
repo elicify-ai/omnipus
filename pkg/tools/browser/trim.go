@@ -334,10 +334,23 @@ func (p *BrowserPool) TrimAllEligible() []TrimResult {
 //
 // So it is DECLARED rather than defaulted through. An operator who fills a
 // disk should find this line, not silence.
+//
+// p.cacheTrimInterval is read INSIDE the critical section, with the latch, and
+// must stay there. ApplyRuntimeConfig writes that field under p.mu on every
+// config reload, and every other reader — CacheTrimInterval() — takes the lock
+// too; this one function used to read it afterwards, unsynchronised. It is a
+// data race in the plain sense (`go test -race` will say so), and it is a race
+// on the value that decides how often the sweep which DELETES directories
+// runs, which is why it is worth a sentence rather than a silent one-line
+// diff. It happens to be a word-sized read, and that is not a defence: the Go
+// memory model gives an unsynchronised read no guarantee at all, and "it is
+// only a log line" stops being true the moment somebody reuses the pattern for
+// a decision.
 func (p *BrowserPool) logUnboundedContinuousDriveOnce() {
 	p.mu.Lock()
 	already := p.trimResidualLogged
 	p.trimResidualLogged = true
+	trimEvery := p.cacheTrimInterval
 	p.mu.Unlock()
 	if already {
 		return
@@ -348,6 +361,6 @@ func (p *BrowserPool) logUnboundedContinuousDriveOnce() {
 			"continuously, with no idle gap, keeps growing its cache for as long as it is driven. "+
 			"tools.browser.cache_trim_interval sets how often closed profiles are swept; it does not bound "+
 			"an open one",
-		map[string]any{"cache_trim_interval": p.cacheTrimInterval.String()},
+		map[string]any{"cache_trim_interval": trimEvery.String()},
 	)
 }
