@@ -155,8 +155,41 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		// FR-013: an onbeforeunload confirm raised DURING the load wedges
 		// before navigate has a tab handle to hand anyone, so this is where
 		// that case surfaces.
-		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_navigate", err); ok {
-			return tools.ErrorResult(routed.Error())
+		//
+		// The gate is PendingDialogOn, not dialogAwareTimeout's own wider
+		// predicate, and the difference is a security one.
+		//
+		// dialogAwareTimeout fires on ANY CDP timeout with no recorded dialog
+		// -- deliberately wide, and correct for the tools it was written for
+		// (click, type, get_text ... act on a page that is already loaded).
+		// A page-load timeout on browser_navigate is that shape too, so
+		// calling it here swallowed EVERY failed load: it returned the hedged
+		// "may have an open dialog" message and never reached the abandon
+		// below, leaving the tab parked on the target. That is precisely the
+		// SSRF-by-timing window abandonTabAfterFailedLoad was written to
+		// close, reopened by a message-quality change. Red and unreported on
+		// the wave-4 baseline 569685265; regression coverage is
+		// TestNavigate_FailedLoad_DoesNotStrandTheTabOnTheTarget and
+		// TestExecute_Navigate_PostRedirectSSRF. browser_open_tab's own
+		// page-load path never had this -- it calls dialogAwareTimeout only
+		// on tab CREATION failure (tabs.go) -- which is why its twin test
+		// passed throughout.
+		//
+		// A RECORDED dialog is the one case that still returns early, because
+		// it is the one case the abandon cannot help with: the dialog blocks
+		// the renderer, so about:blank would sit there until its own budget
+		// expired, and naming the dialog is a better answer than a warning
+		// that the tab could not be steered away.
+		//
+		// The suspected (unrecorded) case now falls through, and loses
+		// nothing: if the about:blank lands there was no blocking dialog and
+		// the suspicion was a false positive; if it does NOT land, the
+		// message says the tab could not be steered away, which is both the
+		// stronger warning and the same conclusion.
+		if mgr.PendingDialogOn(sid) != nil {
+			if routed, ok := dialogAwareTimeout(mgr, sid, "browser_navigate", err); ok {
+				return tools.ErrorResult(routed.Error())
+			}
 		}
 		// SECURITY (2026-08-13): a failed load must not leave the tab
 		// PARKED on the target -- see abandonTabAfterFailedLoad.
