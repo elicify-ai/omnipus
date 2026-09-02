@@ -226,6 +226,14 @@ func TestHandleSandboxAuditLog_EmitsAuditEntry(t *testing.T) {
 // actually rests on today, and it pins it as it really behaves — not as the
 // spec's prose hopes.
 //
+// UPDATE — #667 IS FIXED. The analysis below is retained because it is the
+// accurate record of what the bug was and how it was diagnosed, but read it
+// in the PAST tense: AuditEntry.yaml's event pattern is now `^[a-z_.]+$`, so
+// dotted names no longer fail the SPA's edge validation and the Audit Log
+// screen no longer blanks. Assertion block (4) at the end of this test was
+// flipped accordingly, and pkg/audit/event_name_contract_test.go is the
+// standing guard that keeps the contract and the Go event names in sync.
+//
 // FR-028 says a metadata-only `browser_snapshot` audit event is "readable via
 // GET /api/v1/audit-log and $OMNIPUS_HOME/system/audit.jsonl today, and via
 // Settings → Security → Audit Log once #667 lands". This test covers the
@@ -334,14 +342,23 @@ func TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent(t *testing.T) {
 			"the browser_snapshot audit record must carry metadata only, never captured node text")
 	}
 
-	// (4) The #667 boundary, stated at the contract's own regex
-	// (contracts/components/schemas/AuditEntry.yaml:17). browser_snapshot's
-	// underscore name is NOT what blanks the viewer; the co-resident dotted
-	// legacy name is. This test's green is evidence about the ENDPOINT only.
-	contractEventPattern := regexp.MustCompile(`^[a-z_]+$`)
+	// (4) #667 IS NOW FIXED, and this block pins the fix rather than the bug.
+	// AuditEntry.yaml's event pattern was widened from `^[a-z_]+$` to
+	// `^[a-z_.]+$` so the dot-separated names that every newer audit event
+	// uses stop failing the SPA's edge validation. Both co-resident names
+	// must now satisfy it: the flat `browser_snapshot` AND the dotted
+	// `channel.pairing` that used to blank the whole screen.
+	//
+	// The authoritative guard is pkg/audit/event_name_contract_test.go, which
+	// checks EVERY declared event name against the pattern read out of the
+	// contract file itself. The regex is restated here only to keep this
+	// test's own two records self-contained; if it ever drifts from the
+	// contract, that sibling test — not this one — is the one that reds.
+	contractEventPattern := regexp.MustCompile(`^[a-z_.]+$`)
 	assert.True(t, contractEventPattern.MatchString("browser_snapshot"),
-		"browser_snapshot must satisfy AuditEntry's ^[a-z_]+$ so it is never the cause of #667")
-	assert.False(t, contractEventPattern.MatchString("channel.pairing"),
-		"channel.pairing violates AuditEntry's ^[a-z_]+$ — this is #667, and it is why "+
-			"Settings → Security → Audit Log is blank on a real install regardless of this spec")
+		"browser_snapshot must satisfy AuditEntry's ^[a-z_.]+$")
+	assert.True(t, contractEventPattern.MatchString("channel.pairing"),
+		"channel.pairing must satisfy AuditEntry's widened ^[a-z_.]+$ — this is the #667 fix: "+
+			"a dotted event name no longer fails AuditLogResponse's z.array(AuditEntry) "+
+			"validation, so Settings → Security → Audit Log renders it instead of blanking")
 }

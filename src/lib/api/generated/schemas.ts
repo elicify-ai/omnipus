@@ -2486,7 +2486,7 @@ export const SandboxStatus = z
 export const AuditEntry: z.ZodType<AuditEntry> = z
   .object({
     timestamp: z.string().datetime({ offset: true }),
-    event: z.string().regex(/^[a-z_]+$/),
+    event: z.string().regex(/^[a-z_.]+$/),
     decision: z.enum(["allow", "deny", "error"]).optional(),
     agent_id: z.string().optional(),
     session_id: z.string().optional(),
