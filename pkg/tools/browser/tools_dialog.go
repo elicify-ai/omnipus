@@ -364,6 +364,15 @@ func (m *BrowserManager) lastActivationOn(sessionID string) string {
 // one hedged sentence in an error the agent was already getting; a false
 // negative costs the entire requirement.
 //
+// OBSERVED 2026-09-02, and the reason the suspected-case wording names two
+// outcomes instead of one: under heavy parallel load a renderer died mid-test
+// and three tools took this branch on a static page that had no dialog at all.
+// The hedge held — but "may have an open dialog" as the ONLY named cause sends
+// an agent to browser_handle_dialog, which answers "no dialog", leaving it with
+// a dead tab and no next move. Naming the crash outcome too costs nothing when
+// the guess is right and is the whole recovery when it is wrong. Keep BOTH
+// outcomes in this message; do not trim it back to the dialog alone.
+//
 // Returns (rewritten, true) when err was a CDP timeout it could say something
 // better about, and (nil, false) otherwise. The bool is what callers branch on
 // rather than comparing the result against the input: an identity comparison
@@ -383,7 +392,9 @@ func dialogAwareTimeout(mgr *BrowserManager, sessionID, toolName string, err err
 	if act := mgr.lastActivationOn(sessionID); act != "" {
 		after = " after " + act
 	}
-	return fmt.Errorf("%s: the tab stopped answering%s and may have an open dialog that predates this session's listener — try browser_handle_dialog{accept:false}",
+	return fmt.Errorf("%s: the tab stopped answering%s. It may have an open dialog that predates this session's "+
+		"listener — try browser_handle_dialog{accept:false}; if that reports no dialog, the tab has crashed or "+
+		"closed and only a re-navigate recovers it.",
 		toolName, after), true
 }
 

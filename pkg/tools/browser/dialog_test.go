@@ -575,6 +575,15 @@ func TestDialog_PreListenerDialogIsSuspected(t *testing.T) {
 	if !strings.Contains(msg, "may have an open dialog") {
 		t.Errorf("the suspected wording must be hedged — it is a guess; got %q", msg)
 	}
+	// A guess that names ONE cause is a wrong turn when the guess is wrong.
+	// This branch fires on any unanswered tab, and the observed real case was
+	// a renderer that had DIED on a page with no dialog: browser_handle_dialog
+	// then answers "no dialog" and the agent is out of moves. The message must
+	// carry the other outcome and its recovery.
+	if !strings.Contains(msg, "crashed") || !strings.Contains(msg, "re-navigate") {
+		t.Errorf("a suspected dialog is only ONE explanation for an unanswered tab — the message must "+
+			"also name the crashed/closed tab and its recovery, or a wrong guess strands the agent; got %q", msg)
+	}
 	if strings.Contains(msg, "context deadline exceeded") {
 		t.Errorf("the bare timeout is exactly what this replaces; got %q", msg)
 	}
