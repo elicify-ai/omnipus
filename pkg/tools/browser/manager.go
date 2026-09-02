@@ -3090,8 +3090,8 @@ func (m *BrowserManager) installTargetListenerLocked(sessionID string, se *sessi
 
 // handleTargetEvent is the chromedp.ListenTarget callback for a browsing
 // context's currently-listener-holding tab (ADR-041 D2/D4). Per chromedp's
-// contract (mirrors live.go's handleScreencastEvent exactly) this runs
-// SYNCHRONOUSLY on the CDP event-dispatch goroutine and must never block or
+// contract this runs SYNCHRONOUSLY on the CDP event-dispatch goroutine and
+// must never block or
 // call chromedp.Run inline, directly OR transitively: for an already-tracked
 // tab, the title/url bookkeeping itself is cheap and lock-protected (no CDP
 // call), but ADR-041 fix F5 additionally dispatches its notifyTabsChanged
