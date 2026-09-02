@@ -135,6 +135,37 @@ func fastReconcile(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { browserCacheTrimReconcileEvery = prev })
 }
 
+// startTrimSchedule runs the schedule and, on teardown, cancels it AND WAITS
+// for it to actually exit.
+//
+// The wait is the point. cancel() only signals; the loop can still be mid-read
+// of browserCacheTrimReconcileEvery when fastReconcile's own cleanup writes the
+// old value back. CI's race detector caught exactly that:
+//
+//	WARNING: DATA RACE
+//	Write at 0x... by goroutine 248: fastReconcile.func1() ...schedule_test.go:135
+//	Previous read at 0x... by goroutine 249: runBrowserCacheTrimSchedule() gateway.go:6309
+//
+// t.Cleanup is LIFO, so registering this AFTER fastReconcile makes the join run
+// BEFORE the restore — which is the whole ordering the fix depends on. Moving
+// the fastReconcile call below this one reintroduces the race.
+func startTrimSchedule(t *testing.T, ctx context.Context, cancel context.CancelFunc, pool *countingTrimPool) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runBrowserCacheTrimSchedule(ctx, pool)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("runBrowserCacheTrimSchedule did not exit within 5s of cancel")
+		}
+	})
+}
+
 // TestBrowserCacheTrimSchedule_LoweringTheIntervalTakesEffectWithoutARestart is
 // the defect, start to finish.
 //
@@ -155,8 +186,7 @@ func TestBrowserCacheTrimSchedule_LoweringTheIntervalTakesEffectWithoutARestart(
 			"documents, or this test is not starting from the state an operator starts from")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go runBrowserCacheTrimSchedule(ctx, pool)
+	startTrimSchedule(t, ctx, cancel, pool)
 
 	// The boot sweep (FR-072 trigger 2) is unconditional and immediate.
 	require.Eventually(t, func() bool { return pool.sweepCount() >= 1 }, 2*time.Second, 5*time.Millisecond,
@@ -194,8 +224,7 @@ func TestBrowserCacheTrimSchedule_HonoursTheConfiguredPeriod(t *testing.T) {
 		"the operator's 2 must arrive as two seconds, not as the built-in hour")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go runBrowserCacheTrimSchedule(ctx, pool)
+	startTrimSchedule(t, ctx, cancel, pool)
 
 	require.Eventually(t, func() bool { return pool.sweepCount() >= 1 }, 2*time.Second, 5*time.Millisecond,
 		"the boot sweep must run")
