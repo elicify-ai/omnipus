@@ -5249,6 +5249,16 @@ func (r *agentLoopBrowserResolver) ManagerFor(
 	// would merge every descendant's tabs into the root's). An empty transcript
 	// session is a NAMED FAILURE, never a fall-through to the operator's
 	// workspace-owned set.
+	//
+	// This is the turn's HOME tab set, which is not always the set the call
+	// ACTS on. An agent reaches the operator's workspace-owned tabs by acting
+	// on one browser_list_tabs showed it (FR-070 — implicit acquisition, no
+	// tool, no policy entry, no wire field), and pkg/tools/browser's
+	// resolveTurn resolves that: it is a property of the call, not of the turn,
+	// so there is nothing for this resolver to decide. Do NOT "fix" this to
+	// return TabOwnerWorkspace() under any condition — a transcript-less or
+	// misrouted turn silently landing on the operator's tabs is the implicit
+	// merge ErrNoTabOwner exists to prevent.
 	owner, err := browser.TabOwnerSession(tools.ToolTranscriptSessionID(ctx))
 	if err != nil {
 		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
