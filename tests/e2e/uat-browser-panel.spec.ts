@@ -908,7 +908,11 @@ test.describe('UAT Group C — the live browser panel', () => {
     await expect(addressBar(page)).toHaveValue(/\/login$/, { timeout: 45_000 });
     await page.waitForTimeout(3_000);
 
-    // Release the wheel and confirm the panel says so.
+    // Release the wheel and confirm the panel says so. The picture must be
+    // focused first — Esc is handled on the capture surface, so with focus
+    // still in the address bar it does nothing (recorded as a finding in the
+    // human half of this case).
+    await browserLiveFrame(page).focus();
     await page.keyboard.press('Escape');
     await expect(chip).not.toHaveText(/You're driving/, { timeout: 20_000 });
 
@@ -928,21 +932,58 @@ test.describe('UAT Group C — the live browser panel', () => {
     );
     await input.press('Enter');
 
+    // Watch the PANEL, not the chat (the plan is explicit about this), but also
+    // record whether the turn ran at all — "the page did not change" means
+    // something very different if the agent never got a turn.
+    const stop = page.locator('[data-testid="stop-btn"]');
+    const turnStarted = await stop.isVisible({ timeout: 30_000 }).catch(() => false);
     let agentTyped = false;
-    const deadline = Date.now() + 240_000;
+    let turnRunning = turnStarted;
+    const deadline = Date.now() + 300_000;
     while (Date.now() < deadline) {
       await page.waitForTimeout(1_000);
       if (Math.abs((await sampleRegion(video, field)) - emptyField) > 2) {
         agentTyped = true;
         break;
       }
+      turnRunning = await stop.isVisible().catch(() => false);
+      if (turnStarted && !turnRunning) {
+        // The turn finished. Give the capture a moment to catch up before
+        // concluding the page never moved.
+        await page.waitForTimeout(4_000);
+        agentTyped = Math.abs((await sampleRegion(video, field)) - emptyField) > 2;
+        break;
+      }
     }
-    const transcript = (await assistantMessages(page).last().innerText().catch(() => '')).slice(0, 600);
+    const all = await assistantMessages(page).allInnerTexts().catch(() => [] as string[]);
+    const transcript = all.slice(-2).join(' /// ').slice(0, 1200);
+    await saveFrame(testInfo, 'frame-after-agent-turn.png', await sampleFrame(video));
     await note(
       testInfo,
       'agent-half',
-      `page changed under the agent: ${agentTyped}; last assistant message: ${JSON.stringify(transcript)}`,
+      `turn started: ${turnStarted}; still running at exit: ${turnRunning}; page changed under ` +
+        `the agent: ${agentTyped}; last assistant messages: ${JSON.stringify(transcript)}`,
     );
+    expect(
+      turnStarted,
+      'the agent never took a turn at all, so this case did not run — BLOCKED, not failed',
+    ).toBe(true);
+
+    // The case is "act on THE CURRENT PAGE — the one the operator is looking at".
+    // So the agent finding a different page, or having to navigate to the page
+    // the panel is already showing, is a failure of the case even if pixels
+    // eventually move: the pixels then moved because the agent went somewhere
+    // else, not because it did what was asked. This check exists because the
+    // first passing run of this test was exactly that false green.
+    const agentSawSomethingElse =
+      /isn.t on the login|not on the login|start page|blank page|selector didn.t match/i.test(transcript);
+    expect(
+      agentSawSomethingElse,
+      'the panel was showing the login form, and the agent reported the browser was somewhere ' +
+        'else and navigated to reach it. The operator and the agent are not looking at the same ' +
+        'tab, so "ask the agent to act on the page in front of you" does not hold. Transcript: ' +
+        JSON.stringify(transcript),
+    ).toBe(false);
 
     expect(
       agentTyped,
