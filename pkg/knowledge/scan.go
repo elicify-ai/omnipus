@@ -191,6 +191,51 @@ func ScanKindFor(relPath string) ScanKind {
 	return ScanKindAttachment
 }
 
+// StatEntry builds the ScanEntry for exactly ONE collection-relative path,
+// applying the same classification Scan's walk applies to every file it
+// finds: kind by extension (ScanKindFor), size/mtime/birth-time read straight
+// off Lstat, a symlink refused rather than followed. It exists for a caller
+// (Index.UpdatePath) that already knows which single file changed and must
+// not pay for — or wait on — a full collection walk to describe it.
+//
+// Unlike Scan, it returns an ERROR for anything the walk would instead have
+// recorded as a ScanProblem and continued past: a missing path, a symlink, a
+// directory, a non-regular file. A single-path caller has no problems list to
+// append to and no walk left to continue after this one entry — the specific
+// reason must reach it directly rather than silently producing nothing.
+//
+// It never opens the file (FR-039a): Lstat and, on Linux, the statx(2) inside
+// fileutil.BirthTime are both path lookups, not content reads.
+func StatEntry(root, relPath string) (ScanEntry, error) {
+	absPath := filepath.Join(root, filepath.FromSlash(relPath))
+	fi, err := os.Lstat(absPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ScanEntry{}, fmt.Errorf("knowledge: %s: %w", relPath, fs.ErrNotExist)
+		}
+		return ScanEntry{}, fmt.Errorf("knowledge: stat %s: %w", relPath, err)
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return ScanEntry{}, fmt.Errorf("knowledge: %s: is a symlink, never indexed directly", relPath)
+	}
+	if fi.IsDir() {
+		return ScanEntry{}, fmt.Errorf("knowledge: %s: is a directory, not a file", relPath)
+	}
+	if !fi.Mode().IsRegular() {
+		return ScanEntry{}, fmt.Errorf("knowledge: %s: not a regular file", relPath)
+	}
+	entry := ScanEntry{
+		RelPath:      relPath,
+		Kind:         ScanKindFor(relPath),
+		Size:         fi.Size(),
+		ModTimeNanos: fi.ModTime().UnixNano(),
+	}
+	if bt, ok := fileutil.BirthTime(absPath, fi); ok {
+		entry.CtimeNanos, entry.HasCtime = bt.UnixNano(), true
+	}
+	return entry, nil
+}
+
 // Scan walks the collection at root and returns its inventory.
 //
 // root is resolved to its real path first; every entry is therefore recorded

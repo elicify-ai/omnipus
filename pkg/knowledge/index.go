@@ -73,6 +73,7 @@ import (
 	bleveIndexAPI "github.com/blevesearch/bleve_index_api"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
@@ -1301,6 +1302,60 @@ func (ix *Index) Sync(ctx context.Context) (SyncStats, error) {
 	return ix.SyncWith(ctx, SyncOptions{})
 }
 
+// deleteFileSegments deletes the n segment documents a file previously
+// produced, through batch. n is a manifest-recorded ManifestEntry.Segments
+// count, never a re-derivation of it — only the manifest remembers how many
+// documents a file produced.
+//
+// It is the single implementation of that delete, shared by indexOneFile (a
+// file that changed under a live manifest record), SyncWith's own "files the
+// manifest knows and the walk did not find" pass, and RemovePath.
+func deleteFileSegments(batch *batchState, relPath string, n int) error {
+	for ord := 0; ord < n; ord++ {
+		if err := batch.delete(segmentDocID(relPath, ord)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// indexOneFile is THE implementation of "how a file becomes a document":
+// delete whatever segments its previous manifest record produced, index it
+// fresh via indexEntry, and leave manifest holding exactly the right record
+// for what just happened — Put on success, Remove on failure.
+//
+// It is called from two places and must never be called from a third without
+// updating this comment: SyncWith's per-entry loop (a file the collection
+// walk found changed or new) and UpdatePath (a file a caller names directly,
+// without a walk). Both need the identical sequence — old segments gone,
+// new segments written, manifest consistent with the index — and a second,
+// separately-maintained version of that sequence is exactly the drift this
+// function exists to make impossible.
+//
+// On failure, manifest.Remove(entry.RelPath) has already run before this
+// returns: a file that could not be indexed must not be left in the manifest
+// as if it still were, which is what would make the "unchanged" shortcut
+// (Manifest.StatUnchanged) skip ever retrying it.
+func (ix *Index) indexOneFile(batch *batchState, manifest *Manifest, entry ScanEntry) (ManifestEntry, error) {
+	if rec, hadRec := manifest.Get(entry.RelPath); hadRec {
+		// The file changed (or is new). Remove whatever documents it produced
+		// last time before writing the new ones: a note that shrank from five
+		// segments to two would otherwise leave three orphans behind, findable
+		// forever.
+		if err := deleteFileSegments(batch, entry.RelPath, rec.Segments); err != nil {
+			return ManifestEntry{}, err
+		}
+	}
+
+	newRec, err := ix.indexEntry(batch, entry)
+	if err != nil {
+		manifest.Remove(entry.RelPath)
+		return ManifestEntry{}, err
+	}
+	manifest.Put(newRec)
+	return newRec, nil
+}
+
 // SyncWith reconciles the index with the collection on disk.
 //
 // It re-parses ONLY files whose recorded size, modification time or content hash
@@ -1433,32 +1488,23 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 			}
 		}
 
-		// The file changed (or is new). Remove whatever documents it produced
-		// last time before writing the new ones: a note that shrank from five
-		// segments to two would otherwise leave three orphans behind, findable
-		// forever.
-		if hadRec {
-			for ord := 0; ord < rec.Segments; ord++ {
-				if delErr := batch.delete(segmentDocID(entry.RelPath, ord)); delErr != nil {
-					return stats, delErr
-				}
-			}
-		}
-
-		newRec, segErr := ix.indexEntry(batch, entry)
+		// The file changed (or is new). indexOneFile removes whatever
+		// documents it produced last time before writing the new ones: a
+		// note that shrank from five segments to two would otherwise leave
+		// three orphans behind, findable forever.
+		newRec, segErr := ix.indexOneFile(batch, manifest, entry)
 		if segErr != nil {
 			// One unreadable file must not abort the collection. It is reported
 			// and left OUT of the index — never indexed as empty, which would
-			// be a confidently wrong answer.
+			// be a confidently wrong answer. indexOneFile has already removed
+			// any manifest record for it.
 			slog.Error("knowledge: indexing file failed",
 				"collection", ix.root, "path", entry.RelPath, "error", segErr)
 			stats.Problems = append(stats.Problems, ScanProblem{
 				RelPath: entry.RelPath, Reason: ScanProblemUnreadable, Detail: segErr.Error(),
 			})
-			manifest.Remove(entry.RelPath)
 			continue
 		}
-		manifest.Put(newRec)
 		stats.Indexed++
 		stats.Segments += newRec.Segments
 	}
@@ -1473,10 +1519,8 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 		if _, ok := seen[relPath]; ok {
 			continue
 		}
-		for ord := 0; ord < rec.Segments; ord++ {
-			if delErr := batch.delete(segmentDocID(relPath, ord)); delErr != nil {
-				return stats, delErr
-			}
+		if delErr := deleteFileSegments(batch, relPath, rec.Segments); delErr != nil {
+			return stats, delErr
 		}
 		manifest.Remove(relPath)
 		stats.Removed++
@@ -1494,6 +1538,173 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 		return stats, err
 	}
 	return stats, nil
+}
+
+// UpdatePath (re)indexes exactly ONE file, without walking the collection: it
+// updates the file's manifest entry and its index documents exactly as a
+// SyncWith run would have for that one file — the same segmentation
+// (FR-034a), the same zero-content-read rule for an attachment (FR-039a), the
+// same manifest-consistency guarantee. It exists so a write Omnipus itself
+// performs (a vault tool creating or editing a note, an operator adding a
+// file through the UI) can make that change searchable immediately, instead
+// of waiting for the next full Sync.
+//
+// It shares indexOneFile with SyncWith rather than re-implementing "how a
+// file becomes a document" a second time — see indexOneFile's doc comment for
+// why a second, independently-maintained version of that sequence is exactly
+// the drift this is built to prevent. The manifest is written back in the
+// same way SyncWith writes it, so a SUBSEQUENT SyncWith or CheckDrift sees
+// this file as already accounted for rather than re-indexing it or flagging
+// it as inconsistent.
+//
+// Unlike SyncWith's own reconcile, this does NOT consult
+// Manifest.StatUnchanged first: a caller of UpdatePath already knows the
+// file's content changed — that is why it is calling this instead of waiting
+// for the next Sync — so re-indexing unconditionally is both correct and, for
+// one file, cheap.
+//
+// relPath must name a file that already exists in the collection: a symlink,
+// a directory, a missing path, or a path that fails addressing-safety
+// validation (traversal, an absolute path, a control character —
+// library.CleanRelPath, the same guard the REST layer applies to every
+// mutating path) is refused with a specific error rather than silently
+// accepted as a no-op or misreported as an attachment. To record a file's
+// removal, call RemovePath, not this.
+//
+// # Concurrency
+//
+// UpdatePath takes ix.mu, the SAME lock SyncWith already takes to serialize
+// writes against each other (see the field doc on Index.mu). A SyncWith in
+// flight when this is called simply blocks this call until SyncWith
+// finishes, and a SyncWith started while this call holds the lock blocks
+// until this call finishes — there is no window where SyncWith's
+// whole-collection manifest read and this call's single-file manifest
+// read-modify-write could interleave and disagree about what either one
+// wrote. A concurrent Search is unaffected either way: Search never takes
+// ix.mu (scorch itself provides read/write concurrency safety), so a caller
+// serving searches is never blocked by, or blocking, an UpdatePath.
+func (ix *Index) UpdatePath(ctx context.Context, relPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cleanRel, err := library.CleanRelPath(relPath)
+	if err != nil {
+		return fmt.Errorf("knowledge: update path %q: %w", relPath, err)
+	}
+	if cleanRel == "" {
+		return fmt.Errorf("knowledge: update path %q: empty path", relPath)
+	}
+
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	entry, err := StatEntry(ix.root, cleanRel)
+	if err != nil {
+		return fmt.Errorf("knowledge: update path: %w", err)
+	}
+
+	manifest, loadErr := LoadManifest(ix.manifestPath, ix.root)
+	if loadErr != nil {
+		// Unlike SyncWith, this does NOT purge and rebuild the whole index on
+		// an unusable manifest — that recovery costs a full re-read of the
+		// collection, which is exactly what a single-path update exists to
+		// avoid paying for one file. An untrustworthy manifest is rare (it
+		// requires the manifest file itself to be corrupt, version-mismatched,
+		// or recorded against a different root) and the safe response to "I
+		// cannot trust what the index already contains" is to refuse this
+		// write rather than guess at a read-modify-write over it — the
+		// on-disk manifest is left exactly as untrustworthy as it already
+		// was, never made worse. The caller's remedy is the same one
+		// SyncWith's own manifest-unusable path takes internally: a full
+		// Sync, which purges and rebuilds from the collection.
+		return fmt.Errorf(
+			"knowledge: update path %s: manifest unusable, run a full Sync to rebuild it: %w", cleanRel, loadErr)
+	}
+
+	batch := newBatchState(ix)
+	if _, err := ix.indexOneFile(batch, manifest, entry); err != nil {
+		return fmt.Errorf("knowledge: update path %s: %w", cleanRel, err)
+	}
+	if err := batch.commit(); err != nil {
+		return fmt.Errorf("knowledge: update path %s: %w", cleanRel, err)
+	}
+	if err := manifest.Save(ix.manifestPath); err != nil {
+		return err
+	}
+	return enforceIndexPermissions(ix.dir)
+}
+
+// RemovePath drops one file's index documents and its manifest entry, without
+// walking the collection. It exists so a deletion Omnipus itself performs (a
+// vault tool deleting a note, an operator removing a file through the UI)
+// takes effect immediately, rather than waiting for the next full Sync to
+// notice the file is gone.
+//
+// It is a no-op — correctly, not an error — when the manifest holds no record
+// for relPath: nothing to remove is not a failure, and a caller need not
+// first check whether the file was ever indexed (an attachment that was
+// never a note, a path that was already removed by an earlier call).
+//
+// It does NOT stat the path on disk at all, by design: whether the file still
+// exists is irrelevant to removing its OLD index documents, and requiring it
+// to be gone first would make RemovePath unusable for the one case it exists
+// for — removing the index's record of a file the caller has just deleted.
+//
+// # Concurrency
+//
+// See UpdatePath's doc comment; the same ix.mu contract applies here
+// verbatim.
+func (ix *Index) RemovePath(ctx context.Context, relPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cleanRel, err := library.CleanRelPath(relPath)
+	if err != nil {
+		return fmt.Errorf("knowledge: remove path %q: %w", relPath, err)
+	}
+	if cleanRel == "" {
+		return fmt.Errorf("knowledge: remove path %q: empty path", relPath)
+	}
+
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	manifest, loadErr := LoadManifest(ix.manifestPath, ix.root)
+	if loadErr != nil {
+		// Same reasoning as UpdatePath's identical branch: refuse rather than
+		// read-modify-write over a manifest that cannot be trusted. The
+		// on-disk manifest is left exactly as untrustworthy as it already
+		// was; the remedy is a full Sync.
+		return fmt.Errorf(
+			"knowledge: remove path %s: manifest unusable, run a full Sync to rebuild it: %w", cleanRel, loadErr)
+	}
+
+	rec, hadRec := manifest.Get(cleanRel)
+	if !hadRec {
+		return nil
+	}
+
+	batch := newBatchState(ix)
+	if err := deleteFileSegments(batch, cleanRel, rec.Segments); err != nil {
+		return fmt.Errorf("knowledge: remove path %s: %w", cleanRel, err)
+	}
+	manifest.Remove(cleanRel)
+
+	if err := batch.commit(); err != nil {
+		return fmt.Errorf("knowledge: remove path %s: %w", cleanRel, err)
+	}
+	if err := manifest.Save(ix.manifestPath); err != nil {
+		return err
+	}
+	return enforceIndexPermissions(ix.dir)
 }
 
 // indexEntry writes the index documents for one file and returns its manifest
