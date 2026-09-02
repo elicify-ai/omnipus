@@ -180,10 +180,16 @@ Build this once. Every case refers back to it by name.
 | Workspace 1 | **Alpha** | Workspaces → New |
 | Workspace 2 | **Bravo** | Workspaces → New |
 | Agents on Alpha's team | **Jim** and **Ray** (both seeded; both have browser tools) | Alpha → Team |
-| Agents on Bravo's team | **Jim** and **Ray** | Bravo → Team |
+| Agents on Bravo's team | **Jim** only — **not Ray** | Bravo → Team |
 | Chat A1 | a chat in workspace **Alpha** | Alpha → Chat → New |
 | Chat A2 | a **second, separate** chat in workspace **Alpha** | Alpha → Chat → New |
 | Chat B1 | a chat in workspace **Bravo** | Bravo → Chat → New |
+
+> **Why Ray is on Alpha only and Jim is on both.** Two cases need this exact shape and would be
+> impossible otherwise. A background run needs an agent that belongs to **exactly one** workspace, so
+> the system can work out which browser it means (UAT-05). And a background run for an agent on
+> **two** workspaces must be *refused as ambiguous* rather than quietly given one of them (UAT-07,
+> D1 FR-033). Jim gives you the second case; Ray gives you the first. Do not "tidy up" the rosters.
 
 > **Why Jim and Ray specifically.** On a fresh install, Jim and Ray resolve `allow` for the browser
 > tools; **Mia and Ava resolve `deny` for all six** (D2 US-12/AC2, AC3). That is deliberate and is
@@ -314,5 +320,964 @@ echo "out of bounds decoy, no real content" > /tmp/uat-out-of-bounds.txt
 ```
 
 This file must also contain nothing real. The point of the case is the refusal, not the file.
+
+---
+
+## 4. Test cases
+
+### 4.0 How to read a case
+
+Every case has the same seven parts. Two of them are the point of the whole plan:
+
+- **Expected observable result** — what you should see if the build is correct.
+- **What a silent failure looks like** — the specific wrong outcome that *resembles* success. You
+  must actively check for this. If you cannot tell it apart from the expected result from where you
+  are sitting, write that down: an unobservable difference is itself a defect (§5, N-4).
+
+Priorities: **P0** must pass to ship. **P1** must pass or carry an agreed, owned defect. **P2** is
+information — a failure is recorded, not blocking.
+
+"Traces to" cites the source document: **D1** = ownership spec, **D2** = capability spec, **ADR** =
+ADR-072, **H-n** = that document's numbered holdout scenario in its §13.
+
+### 4.1 Case index
+
+| Group | Cases | Theme |
+|---|---|---|
+| **A** | UAT-01 … UAT-08 | Ownership and handover |
+| **B** | UAT-09 … UAT-12 | Workspace isolation |
+| **C** | UAT-13 … UAT-18 | The live browser panel |
+| **D** | UAT-19 … UAT-27 | The six new actions and element targeting |
+| **E** | UAT-28 … UAT-30 | Two turns writing at once |
+| **F** | UAT-31 … UAT-32 | Human control of the wheel |
+| **G** | UAT-33 … UAT-37 | Memory pressure |
+| **H** | UAT-38 … UAT-42 | Crash, restart and deletion |
+| **I** | UAT-43 … UAT-45 | Idle behaviour |
+| **J** | UAT-46 … UAT-48 | Audit trail and disclosure |
+
+---
+
+### Group A — Ownership and handover
+
+#### UAT-01 — The reported bug: a human browses, then a second agent takes over
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-2, US-22/AC7; ADR §1.1; D1 H-1 |
+| **Preconditions** | Gateway running; workspace **Alpha**; chat **A1** open |
+
+**Steps**
+
+1. In chat **A1**, open the **live browser panel**.
+2. In the panel, drive the browser yourself to `https://the-internet.herokuapp.com/login` and sign in
+   with the published dummy account from §3.3.
+3. Confirm you can see "You logged into a secure area!" in the panel.
+4. **Release control** of the panel (hand the wheel back).
+5. In chat **A1**, address **Jim** and ask: *"What browser tabs can you see right now?"*
+6. Then ask Jim: *"On that page, click Logout."*
+
+**Expected observable result**
+
+At step 5 Jim names the secure-area page you opened, and identifies it as the workspace's tab (a tab
+*you* opened, not one of his). At step 6 the panel visibly navigates — the page changes under Jim's
+action, without you having to hand anything over, run a command, or re-navigate.
+
+**What a silent failure looks like**
+
+- Jim answers *"I don't see any tabs"* or *"there is nothing open"* and sounds perfectly confident.
+  **This is the original defect.** It reads as an honest answer and is not.
+- Jim *describes* the page correctly but the panel does not change at step 6 — he narrated an action
+  he did not perform. Watch the panel, not the chat.
+- Jim says he clicked Logout and reports success, but the page still shows the secure area. Refresh
+  the panel before believing either of them.
+
+---
+
+#### UAT-02 — A tab follows the chat when you switch agents
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-1/AC1–AC3, US-22/AC6; D1 H-19 |
+| **Preconditions** | Chat **A1**, fresh; no tabs open |
+
+**Steps**
+
+1. In chat **A1**, ask **Jim**: *"Open `https://the-internet.herokuapp.com/dropdown` in the browser."*
+2. Confirm in the live panel that the page is open.
+3. **Switch the chat to Ray** — same chat A1, different agent. Do not open a new chat.
+4. Ask **Ray**: *"What tabs can you see?"*
+5. Ask **Ray**: *"On that page, select the option 'Option 2'."*
+
+**Expected observable result**
+
+Ray lists the dropdown page at step 4 and changes it at step 5. He can list it, switch to it, drive
+it and close it. No handover step exists and none is needed.
+
+**What a silent failure looks like**
+
+- Ray reports no tabs. Under the earlier, superseded design this was the *correct* answer, so a
+  tester working from an older document — or an implementation that stopped halfway — will read this
+  as a pass. **It is a failure.**
+- Ray "sees" the tab because he opened his own copy of the same URL. Check the tab count in the
+  panel: there must be **one** tab, not two, and it must still be showing whatever state the page was
+  left in (the dropdown selection, the scroll position) rather than a fresh load.
+
+---
+
+#### UAT-03 — Two chats in one workspace do not see each other's tabs
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-22/AC8; D1 H-19 (second half) |
+| **Preconditions** | Chats **A1** and **A2**, both in workspace Alpha |
+
+**Steps**
+
+1. In chat **A1**, ask Jim to open `https://the-internet.herokuapp.com/hovers`.
+2. Switch to chat **A2** (same workspace, different conversation).
+3. Ask Jim in **A2**: *"What tabs can you see?"*
+4. Ask Jim in **A2**: *"Close the hovers tab."*
+5. Return to chat **A1** and ask Jim: *"What tabs can you see?"*
+
+**Expected observable result**
+
+At step 3 chat A2 does **not** list the hovers page. At step 4 Jim cannot close it — he has nothing
+to close and should say so. At step 5 chat A1 still has its hovers tab, untouched.
+
+**What a silent failure looks like**
+
+- A2 lists A1's tab. That is a **privacy failure**, not a convenience win: it means every
+  conversation in a workspace can read what every other one is browsing. It looks like the feature
+  working.
+- A2 cannot *list* the tab but *can* close or drive it when named directly. Step 4 exists for that;
+  do not skip it because step 3 passed.
+- A1's tab is gone at step 5 with no explanation from either chat.
+
+---
+
+#### UAT-04 — The tab *you* open is the whole team's
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-22/AC7; D1 §4 contract 2 |
+| **Preconditions** | Chats **A1** and **A2** both exist and are otherwise empty of tabs |
+
+**Steps**
+
+1. In chat **A1**, open the live panel and navigate **yourself** to
+   `https://the-internet.herokuapp.com/key_presses`. Release control.
+2. In chat **A1**, ask Jim what tabs he can see.
+3. Switch to chat **A2** and ask Jim there what tabs he can see.
+4. In chat **A2**, ask Jim to read the text on that page.
+
+**Expected observable result**
+
+Both chats list the page you opened, and both label it as the **workspace's** tab rather than
+something that chat opened. Jim can read it from A2.
+
+**What a silent failure looks like**
+
+- Only A1 sees it. The tab got filed under the chat instead of the workspace, which quietly removes
+  the "ask any agent to take over what I'm looking at" behaviour while UAT-02 and UAT-03 still pass.
+- Both see it but neither says whose it is — the answer is right and the label is missing, which
+  matters because UAT-03 depends on a person being able to tell the two kinds apart.
+
+---
+
+#### UAT-05 — A background run gets its own tabs
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-22/AC8, US-6/AC1; D1 §4 contract 6 |
+| **Preconditions** | The scheduled entry from §2.5, assigned to **Ray** (Alpha only). Ray is not on Bravo. |
+
+**Steps**
+
+1. In chat **A1**, ask Jim to open `https://the-internet.herokuapp.com/dropdown`. Leave it open.
+2. Separately, in the live panel, sign in to the dummy account (§3.3) so the workspace has a login.
+3. Wait for the scheduled run to fire (§2.5 told you the time). Do not touch anything while it runs.
+4. Read the run's output — Workspaces → Alpha → Calendar → the entry's last run, and/or
+   `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/logs/gateway.log`.
+5. Return to chat **A1** and confirm the dropdown tab is still there and still on the same page.
+
+**Expected observable result**
+
+The scheduled run reports a tab list that does **not** contain chat A1's dropdown tab. It opens its
+own tab for `https://example.com/scheduled-marker` and reports that page's title. Chat A1 is
+undisturbed. The run resolves to workspace Alpha's browser rather than failing.
+
+**What a silent failure looks like**
+
+- The scheduled run lists chat A1's tab. Tabs leaked from an attended conversation into an
+  unattended one; the run looks successful and it read something it should not have.
+- The run reports the marker page title without ever opening it — check the panel tab count during
+  the run, or the log, for evidence a tab was actually created.
+- The run silently does nothing and is recorded as successful. An empty tab list plus no marker page
+  is a failure, not a quiet pass.
+
+> **Open question, flagged not answered.** Whether the background run should be **signed out** of the
+> workspace's sites is not settled between the brief for this plan and the specs. The specs say a
+> background run **shares the workspace browser and therefore its logins** (D1 US-5, D1 §4 contract 5,
+> D1 H-6). This case therefore does **not** assert a logged-out state. See §8, Q-1 — and **record what
+> you actually observed** either way, because that observation is the input the question needs.
+
+---
+
+#### UAT-06 — A background run reaches the same workspace as its files
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-6/AC0, AC1 |
+| **Preconditions** | The §2.5 schedule; the workspace Alpha browser has a live login (§3.3) |
+
+**Steps**
+
+1. Ensure workspace Alpha is signed in to the dummy site via the live panel, then release control.
+2. Edit the §2.5 schedule's instruction to: *"Open `https://the-internet.herokuapp.com/secure` and
+   report exactly what the page says."*
+3. Wait for it to run. Read the output.
+
+**Expected observable result**
+
+The run reports the secure-area content — it reached workspace Alpha's Chrome, and inherited Alpha's
+login, because it is the same browser and the same profile.
+
+**What a silent failure looks like**
+
+- The run reports the login page instead and calls that a success ("the page says: Login"). Reaching
+  a *different* browser and reporting whatever it found there is indistinguishable from working
+  unless you read the actual text.
+- The run reports the secure area because it silently re-authenticated by typing credentials from
+  somewhere. There should be **no** login step in the trace. If there is one, ask where it got the
+  password — that is an S1 defect.
+
+---
+
+#### UAT-07 — An agent on two workspaces, with no workspace named, is refused
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-6/AC3 (FR-033), US-11/AC2; D1 H-11 |
+| **Preconditions** | **Jim** is on both Alpha and Bravo (per §2.4) |
+
+**Steps**
+
+1. Create a second scheduled entry in **Alpha → Calendar**, assigned to **Jim**, instructing him to
+   list browser tabs.
+2. Let it run. Read the output and the gateway log around that timestamp.
+
+**Expected observable result**
+
+The run is **refused**, and the refusal *names the ambiguity* — Jim is on more than one workspace and
+this run does not say which. Both candidate workspaces appear in the log at WARN level. No browser
+launches for this run.
+
+**What a silent failure looks like**
+
+- The run succeeds and lists Alpha's tabs. The system picked a workspace by sorting or by luck. It
+  looks entirely correct until the day it picks the other client's browser. **Check the log for a
+  WARN naming both workspaces** — its absence, combined with a success, is the failure.
+- The run fails with a generic error ("browser unavailable") that does not mention the ambiguity. The
+  behaviour is right and unactionable; file it as S3.
+
+---
+
+#### UAT-08 — A denied agent cannot reach the browser, and does not lie about why
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-8/AC1; D1 H-4 (**required UAT**) |
+| **Preconditions** | Workspace Alpha has a browser with at least one tab open. **Mia** is on the Alpha team. |
+
+**Steps**
+
+1. Ensure a page is open in Alpha's browser (any of the §3.4 pages).
+2. In chat **A1**, address **Mia** and ask: *"What browser tabs are open?"*
+3. **Capture the full transcript of her answer** and attach it to the run log.
+4. Read her answer closely for one specific claim.
+
+**Steps 2–4 are mandatory even though this case is expected to reveal an unsatisfying answer.**
+
+**Expected observable result**
+
+Mia has no browser tools — she was never shown any — so she answers **from absence**: she reports
+nothing is open, or that she cannot check. **This is the recorded, accepted outcome**, not a pass
+condition being fudged. The spec is explicit that she cannot tell "I may not" from "there is
+nothing", and the transcript is the evidence the gap is still there.
+
+**What a silent failure looks like — this is the actual check**
+
+Mia must **not** claim that *the browser is shared across the workspace*, or otherwise describe a
+browser she cannot see. That specific sentence is one she can still emit, and it would be a
+confident description of something she has no access to. If she says anything of that shape, **file
+it as a defect and quote it verbatim.**
+
+---
+
+### Group B — Workspace isolation
+
+#### UAT-09 — A login in one workspace does not exist in another
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-3/AC1; D1 §4 contract 3; D1 H-3 |
+| **Preconditions** | Workspaces Alpha and Bravo both exist; neither has browsed yet |
+
+**Steps**
+
+1. In chat **A1** (Alpha), open the live panel and sign in to the dummy site (§3.3). Confirm the
+   secure area. Release control.
+2. In chat **B1** (Bravo), ask Jim to open `https://the-internet.herokuapp.com/secure`.
+3. Read what Jim reports.
+4. In a terminal, run:
+   `ps ax | grep "user-data-dir" | grep -v grep`
+5. In a terminal, run:
+   `ls -la /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/browser/profiles/`
+
+**Expected observable result**
+
+At step 3 Bravo is **logged out** — it lands on the login page. At step 4 you see **two separate
+Chrome processes with two different process IDs and two different `--user-data-dir` paths**. At step
+5 there are **two directories**, one per workspace.
+
+**What a silent failure looks like**
+
+- Bravo shows the secure area. Two clients are sharing one login.
+- Bravo is logged out but step 4 shows **one** Chrome. The isolation was done some other way, inside
+  a single browser — which is the mechanism this rework deliberately replaced, and which does not
+  survive a crash (UAT-38) or a restart (UAT-40). **The process count is the real assertion here**,
+  not the logged-out page.
+- Only one profile directory exists at step 5, or both workspaces point at the same one.
+
+---
+
+#### UAT-10 — A second agent on the same workspace *is* signed in
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D1 US-3, US-4; D1 §4 contract 4 |
+| **Preconditions** | Continue directly from UAT-09 — Alpha is signed in |
+
+**Steps**
+
+1. In chat **A1**, switch the agent to **Ray**.
+2. Ask Ray to open `https://the-internet.herokuapp.com/secure` and report what it says.
+3. Now open a **brand-new chat** in Alpha (call it A3) and ask Jim there to do the same.
+
+**Expected observable result**
+
+Both Ray (step 2) and the new chat (step 3) see the **secure area** — they share Alpha's browser and
+therefore Alpha's login. Isolation is between workspaces, never between agents or chats on one
+workspace.
+
+**What a silent failure looks like**
+
+- Ray or the new chat is logged out. The isolation went one level too deep. This will read to a
+  tester as "isolation working" — it is the opposite of what the design says, and it means every new
+  conversation costs the operator a re-login.
+- Both see the secure area but a `ps ax | grep user-data-dir` now shows a **third** Chrome. Something
+  is launching a browser per chat and copying the profile; that is a memory and disk problem waiting
+  to happen even though the page looks right.
+
+---
+
+#### UAT-11 — An agent on no workspace is told the truth
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-14/AC1, AC2 |
+| **Preconditions** | Create a **custom agent** (Agents → New). Grant it the browser tools in its Tools tab. **Do not add it to any workspace team.** |
+
+**Steps**
+
+1. Start a chat with that custom agent.
+2. Ask it to open `https://example.com`.
+3. Read the error it reports.
+4. Open the live browser panel for that agent and read what the panel says.
+
+**Expected observable result**
+
+The tool fails with a message that says this agent is **not on a workspace**, and names the remedy —
+add it to a workspace's team. The panel shows a reason that distinguishes *"this agent is not on a
+workspace"* from *"browser tools are not registered for this agent"*.
+
+**What a silent failure looks like**
+
+- The agent reaches **some** workspace's browser. That is a boundary breach dressed as convenience.
+  Check `ps ax | grep user-data-dir` — a browser being driven by an agent on no team is the failure.
+- The tool returns an empty success — no tabs, no error, nothing happened. An agent given nothing and
+  told nothing will simply report that the page was empty.
+- The panel and the tool disagree, or the panel gives the generic "not registered" reason for an
+  agent whose problem is actually the missing team. Both render the same today; the change is
+  supposed to separate them.
+
+---
+
+#### UAT-12 — Upgrading does not hand anyone someone else's session
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-23/AC1–AC3; D1 H-21 |
+| **Preconditions** | An `$OMNIPUS_HOME` from a **pre-rework** build that has a populated `browser/profiles/default/` directory and a live login. If you do not have one, mark this case **Blocked** — do not fabricate the directory. |
+
+**Steps**
+
+1. Point the new binary at that older home directory and start it.
+2. In every workspace, ask an agent to open the site the old install was signed in to.
+3. Run `ls -la <that home>/browser/profiles/`.
+4. Read the release note for this version.
+
+**Expected observable result**
+
+Every workspace is **logged out** — nobody inherited the old session. The old `default/` directory is
+**still on disk and untouched**. The release note states plainly that agents need to sign in again,
+per workspace, after the upgrade.
+
+**What a silent failure looks like**
+
+- One workspace is mysteriously already signed in. Some workspace adopted the shared profile, and
+  which one is arbitrary. It looks like a smooth upgrade.
+- The `default/` directory is **gone**. Logins the operator may still want were destroyed to make the
+  upgrade look clean.
+- Everything is logged out and the release note does not mention it — correct behaviour, no warning,
+  and every operator files a bug on day one.
+
+---
+
+### Group C — The live browser panel
+
+> **Read this before running Group C.** The old slow video path was **deleted on purpose**. There is
+> now one video path (WebRTC) and no fallback. That means: a panel that *works but feels slow* is
+> not "fine, just a bit laggy" — it is a defect, and it is exactly the defect the deletion was meant
+> to expose. Report sluggishness with the same seriousness as a blank panel.
+
+#### UAT-13 — Video is smooth
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | ADR-061 (no JPEG fallback); D1 US-2/AC2 |
+| **Preconditions** | Chat A1, live panel open |
+
+**Steps**
+
+1. Open the live panel and navigate to a page with motion — a video, or
+   `https://the-internet.herokuapp.com/dynamic_content` reloaded repeatedly.
+2. Watch for 30 seconds.
+3. Scroll the page up and down in the panel, continuously, for 10 seconds.
+
+**Expected observable result**
+
+Motion is continuous and smooth. Scrolling tracks your input without visible stepping. It should feel
+like watching a screen share, not like a slideshow.
+
+**What a silent failure looks like**
+
+- The panel updates in visible steps — recognisably a sequence of stills rather than video — while
+  showing **no error at all**. This is the deleted fallback having come back, or the video path having
+  failed into something that still paints pixels. It looks completely normal to anyone not watching
+  for it. **This is a P0 defect, and it is the single most likely thing this group will catch.**
+- Motion is smooth but lags your scroll by a second or more. Same class of problem, same severity.
+
+---
+
+#### UAT-14 — Clicking in the panel responds without lag
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | ADR-061; ADR-038 D6 (human control) |
+| **Preconditions** | Live panel open, you hold control |
+
+**Steps**
+
+1. Take control of the panel.
+2. Navigate to `https://the-internet.herokuapp.com/dropdown`.
+3. Click the dropdown, pick an option, click elsewhere. Repeat five times.
+4. Type into a text field on `https://the-internet.herokuapp.com/login` and watch the characters
+   appear.
+
+**Expected observable result**
+
+Clicks land where you clicked and the page responds immediately. Typed characters appear as you type
+them, not in a burst afterwards.
+
+**What a silent failure looks like**
+
+- Clicks land in the **wrong place** — the picture you are clicking on is behind the real page, so
+  your click hits whatever is now under that coordinate. This shows up as "the page did something
+  unexpected" and gets blamed on the site.
+- Typing appears in bursts. The input is queued somewhere. Nothing errors.
+
+---
+
+#### UAT-15 — Taking the wheel and handing it back
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | ADR-038 D6; D1 US-22/AC5, H-27 |
+| **Preconditions** | Chat A1, live panel open, a page loaded |
+
+**Steps**
+
+1. **Take control** in the panel. Confirm the UI shows that you hold it.
+2. Navigate somewhere and interact.
+3. **Release control.** Confirm the UI shows you no longer hold it.
+4. Ask Jim in chat A1 to fill a field on the current page.
+5. Take control again.
+6. Confirm you can still drive the page.
+
+**Expected observable result**
+
+The control state is visible at every step and matches reality. After step 3, Jim acts on the page at
+step 4 **with no "take control" step and no permission prompt** — asking him to do it *is* the
+handover. After step 5, you are driving again.
+
+**What a silent failure looks like**
+
+- The UI shows you have released control but Jim's action at step 4 does nothing, or defers. The
+  displayed state and the real state disagree; the displayed one is the lie.
+- Jim's action succeeds at step 4 and the result *announces a transfer of ownership* ("I have taken
+  control of the tab"). There is no such thing to report in this design; a message describing one
+  means something else is going on.
+- After step 5 you cannot type, and nothing says why.
+
+---
+
+#### UAT-16 — A video failure is visible, with a retry
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | ADR-061 (visible failure, no silent degrade) |
+| **Preconditions** | Live panel open and working. You will deliberately break it. |
+
+**Steps**
+
+1. With the panel streaming, **disconnect the machine's network** for about 20 seconds (turn Wi-Fi
+   off), then turn it back on. If the panel recovers on its own, note that and move to step 2
+   anyway.
+2. Reload the browser page showing the Omnipus UI while the panel is open.
+3. If neither step produces a failure, ask the developer running this build for a supported way to
+   force the video path to fail, and record which method you used.
+
+**Expected observable result**
+
+When the video path fails, the panel shows a **persistent, readable error naming the actual reason**,
+with a **Retry** control. Retry either restores video or fails again with a reason. At no point does
+the panel show a picture that is not live.
+
+**What a silent failure looks like**
+
+- **The panel goes blank with no message.** The operator has no idea whether the browser died, the
+  page is white, or the video stopped.
+- The panel keeps showing the **last frame** it received, indefinitely. It looks like a page that is
+  simply not doing anything. An operator will sit and wait, or worse, ask an agent to act on what
+  they think they are seeing.
+- An error appears but says something generic ("connection issue"). The whole point of removing the
+  fallback was that the real reason reaches the operator; a generic string re-hides it.
+
+---
+
+#### UAT-17 — The panel shows the right workspace's browser
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D1 US-11/AC1 |
+| **Preconditions** | **Jim** is on both Alpha and Bravo. Alpha and Bravo each have a distinct page open. |
+
+**Steps**
+
+1. In chat **A1** (Alpha), open the panel with Jim selected. Note what page it shows.
+2. In chat **B1** (Bravo), open the panel with Jim selected. Note what page it shows.
+3. In each chat, ask Jim what tabs he sees.
+
+**Expected observable result**
+
+The panel in A1 shows Alpha's page; the panel in B1 shows Bravo's. In each chat, Jim's tab list
+matches what the panel is showing. The panel and the agent never disagree.
+
+**What a silent failure looks like**
+
+- Both panels show the same workspace's browser. Everything else in Group B still passes; only this
+  case catches it, and an operator who trusts the panel will believe they are looking at the wrong
+  client's screen.
+- The panel shows Alpha while Jim in that chat lists Bravo's tabs. Both surfaces are individually
+  plausible; only comparing them exposes it.
+
+---
+
+#### UAT-18 — A dialog on a tab you are not watching
+
+| | |
+|---|---|
+| **Priority** | P2 |
+| **Traces to** | D2 H-8 (a **measurement**, not a pass/fail) |
+| **Preconditions** | Two tabs open in Alpha; the panel is watching the first |
+
+**Steps**
+
+1. In chat A1, ask Jim to open `https://the-internet.herokuapp.com/javascript_alerts` in a **second**
+   tab, while the panel stays on the first.
+2. Ask Jim to click "Click for JS Alert" on that second tab and then handle the dialog.
+3. **Write down what you, the human, could see of any of this in the panel.**
+
+**Expected observable result**
+
+Jim recovers the second tab. **This case is scored on what you observed, not on pass/fail** — the
+specs record this as a known gap and want a human's account of how bad it is.
+
+**What a silent failure looks like**
+
+Not applicable — record the observation. If you saw **nothing at all** while an agent answered a
+dialog on a signed-in site, say so plainly; that sentence is the deliverable.
+
+---
+
+### Group D — The six new actions
+
+> Each of the six is exercised through a real page, not a fixture, because the point is whether an
+> agent can drive the web as it actually is. Where a case says "ask Jim to…", phrase it naturally —
+> do not name the tool. If Jim cannot work out which action to use, **that is a finding** and belongs
+> in the notes even when the case otherwise passes.
+
+#### UAT-19 — Choose from a dropdown
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D2 US-5/AC1–AC3 |
+| **Preconditions** | Chat A1, Jim |
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/dropdown`.
+2. Ask Jim: *"Set that dropdown to Option 2."*
+3. Look at the panel.
+4. Ask Jim to set it to an option that does not exist, e.g. *"Set it to Option 9."*
+
+**Expected observable result**
+
+Step 2: the dropdown visibly shows Option 2 in the panel, and the page reacts as it would to a human
+selection. Step 4: Jim reports a clear failure naming the option he could not find, and the dropdown
+is **unchanged**.
+
+**What a silent failure looks like**
+
+- The dropdown's displayed value changes but the page behaves as if nothing was selected. Some pages
+  only react to a real selection event; a value written directly looks identical and does nothing.
+  Where the page has a visible reaction to selection, watch for it.
+- Step 4 leaves the dropdown on a *different* wrong option, or clears it. A failed selection must
+  change nothing at all.
+- Jim reports success at step 4.
+
+---
+
+#### UAT-20 — A keyboard-only flow
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D2 US-6/AC1–AC3 |
+| **Preconditions** | Chat A1, Jim |
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/key_presses`.
+2. Ask Jim to press **Enter**, then **Tab**, then **Escape**, one at a time. The page reports each
+   key it receives.
+3. Ask Jim to open `https://the-internet.herokuapp.com/login`, put the cursor in the username field,
+   type the dummy username, press **Tab**, type the dummy password, and press **Enter** — using keys
+   only, never clicking the Login button.
+4. Ask Jim to press a key that does not exist: *"Press Ctrl+Banana."*
+
+**Expected observable result**
+
+Step 2: the page displays "You entered: ENTER", then TAB, then ESCAPE. Step 3: the form submits and
+the secure area appears. Step 4: Jim reports an error that **lists the key names that are accepted**.
+
+**What a silent failure looks like**
+
+- At step 4, the literal text `Ctrl+Banana` is **typed into the page** as characters. The tool
+  treated an unknown key as text. On a login form that means a malformed password attempt and a page
+  that just says "invalid" — completely opaque.
+- At step 2 the page shows nothing but Jim reports the keys were pressed. Read the page, not the
+  chat.
+- Step 3 succeeds because Jim clicked the button anyway. Ask him to describe what he did, and check
+  the trace for a click.
+
+---
+
+#### UAT-21 — A menu that only appears on hover
+
+| | |
+|---|---|
+| **Priority** | P1 |
+| **Traces to** | D2 US-7/AC1 |
+| **Preconditions** | Chat A1, Jim |
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/hovers`.
+2. Ask Jim: *"Hover over the first image and tell me the name that appears."*
+3. Watch the panel while he does it.
+
+**Expected observable result**
+
+The hidden caption appears under the first image, and Jim reads out the name. **No click occurs** —
+the page does not navigate.
+
+**What a silent failure looks like**
+
+- Jim **clicks** the image instead of hovering. The caption's link fires and the page navigates. He
+  will still be able to report a name (from the new page), so the answer looks right. Watch for
+  navigation.
+- Jim reports the name without the caption ever appearing in the panel — he read it out of the page
+  source rather than revealing it. The distinction matters on real sites where the hover *loads* the
+  menu rather than just showing it.
+
+---
+
+#### UAT-22 — Take a structured snapshot of a page
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D2 US-10/AC1–AC3; D2 H-1 |
+| **Preconditions** | Chat A1, Jim, on the login page |
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/login`.
+2. Ask Jim: *"Take a structured snapshot of this page and tell me every field and button on it."*
+3. **Record whether Jim reached for a snapshot on his own, or reached for a screenshot instead.**
+4. If he did not use a snapshot, ask explicitly: *"Search your tools for a page-snapshot action and
+   use it."* Run steps 2–3 again with that prompt.
+5. From the snapshot output, ask Jim to act on one of the elements it named — *"type into the field
+   the snapshot called Username."*
+
+**Expected observable result**
+
+The snapshot names the username field, the password field and the Login button, each with what kind
+of thing it is and what it is called. At step 5, a handle from the snapshot works immediately in the
+next action.
+
+**Step 3 is a required measurement, not a formality.** This action is deliberately *not* offered to
+the agent up front — it has to search for it. Whether an agent finds it unaided is a recorded number,
+and "he screenshotted instead" is a legitimate, expected result to write down rather than a bug in
+the snapshot itself.
+
+**What a silent failure looks like**
+
+- The snapshot returns something that *looks* structured but names nothing you can act on, and step 5
+  fails with "element not found". The output was decorative.
+- The output is silently cut short — Jim summarises three fields on a page with thirty. On a big page
+  the output is capped, and the cap is supposed to be **announced** in the output with a count of what
+  was left out. A truncation with no marker reads as a complete page.
+
+---
+
+#### UAT-23 — A snapshot of a signed-in page shows field values
+
+| | |
+|---|---|
+| **Priority** | P1 — **security-relevant, read the note** |
+| **Traces to** | D2 US-10/AC3, AC4; D2 H-11 |
+| **Preconditions** | Signed in on Alpha with the dummy account (§3.3) |
+
+**Steps**
+
+1. In the live panel, go to `https://the-internet.herokuapp.com/login` and type the dummy username
+   and the dummy password into the fields — **but do not submit**.
+2. Release control.
+3. Ask Jim to take a structured snapshot of the page.
+4. Read the snapshot output in the chat.
+5. Open **Settings → Security → Audit Log** and find the snapshot record.
+
+**Expected observable result**
+
+The snapshot **does** contain the typed values, including what is in the password field. **That is
+the ruling, not a bug** — the design decided the agent needs to see what is on the form. The audit
+record, by contrast, records only *that* a snapshot happened, its page and its size — **never the
+values**.
+
+**What a silent failure looks like**
+
+- The **audit record contains the captured values.** The values are meant to live only in the
+  conversation, not in a permanent log. Read the audit entry, not just the chat.
+- The Audit Log screen is **completely blank**. That is a known separate defect (a legacy log entry
+  with a dot in its name blanks the whole viewer). Confirm by also fetching the log another way —
+  `curl` against `/api/v1/audit-log`, or read
+  `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/system/audit.jsonl` — and **record
+  which install you were on**. A blank viewer here is not this rework's defect, but an unexamined
+  blank viewer hides everything else in this case.
+- A value you registered as secret elsewhere in the product appears in plaintext instead of being
+  replaced by a `[FILTERED]` marker.
+
+---
+
+#### UAT-24 — Upload a file, and refuse one from out of bounds
+
+| | |
+|---|---|
+| **Priority** | P1 — **may be Blocked; see the note** |
+| **Traces to** | D2 US-8/AC1–AC5; D2 H-2 |
+| **Preconditions** | The two files from §3.4 and §3.5 exist |
+
+> **This case may legitimately be blocked.** The upload action is deliberately **not registered**
+> until a separate issue lands, because on an unattended turn its approval prompt has nobody to answer
+> it. If Jim reports the tool does not exist, record the case as **Blocked**, not as passing and not
+> as failing. Then still run step 4.
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/upload`.
+2. Ask Jim to attach
+   `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/uat-files/uat-upload.txt`
+   and submit it.
+3. When an approval prompt appears, approve it — **exactly one prompt**, and read what it says before
+   approving.
+4. Ask Jim to attach `/tmp/uat-out-of-bounds.txt` instead.
+5. Check **Settings → Security → Audit Log** for both attempts.
+
+**Expected observable result**
+
+Step 2–3: one approval prompt naming the file and the site; on approval, the page reports the file
+was received. Step 4: **refused**, naming the path, without the file ever reaching the browser. Step
+5: an audit record for **both** the allowed and the denied attempt.
+
+**What a silent failure looks like**
+
+- **No approval prompt at all**, and the upload just happens. An agent quietly sending a file from
+  your disk to a website is the single worst outcome in this plan.
+- Step 4 is refused with a message that does not name the path — the operator cannot tell which file
+  was blocked or why.
+- Step 4 is refused *by the website* rather than by the product (the file arrived and was rejected
+  there). Check the audit record: if it shows the file was handed to the browser, the boundary did
+  not hold.
+- Only the successful upload is audited. A denied attempt that leaves no trace is the one you most
+  want a record of.
+
+---
+
+#### UAT-25 — A page that raises a browser popup
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D2 US-9/AC1–AC5, AC9; D2 H-3 |
+| **Preconditions** | Chat A1, Jim |
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/javascript_alerts`.
+2. Ask Jim to click **"Click for JS Alert"**.
+3. Ask Jim to **dismiss the popup**.
+4. Ask Jim to read the page's result message.
+5. Repeat with **"Click for JS Confirm"**, dismissing it (choosing Cancel).
+6. Repeat with **"Click for JS Prompt"**, answering it with the text `uat`.
+7. Now do it once more but **do not** ask him to dismiss it: click "Click for JS Alert", then
+   immediately ask him to read some text on the page.
+
+**Expected observable result**
+
+Steps 2–6: each popup is answered and the page's own result line confirms which answer it got
+(`You successfully clicked an alert`, `You clicked: Cancel`, `You entered: uat`). Step 7: the next
+action **times out with an error that says a dialog is pending and names the action that clears it** —
+and Jim can then recover unaided.
+
+**What a silent failure looks like**
+
+- **The tab wedges permanently.** Every later action on it times out with a bare "timeout" or
+  "context deadline exceeded" that mentions no dialog. The agent has no idea what happened, retries,
+  and burns the rest of the turn. **This is the worst case the design names for itself.**
+- Jim reports he dismissed the popup and the page's result line says something else — or says
+  nothing, meaning no popup was ever answered.
+- Jim answers a `confirm()` with **OK** on an unattended run. On a turn where nobody can be asked, he
+  is allowed to **dismiss** a popup but not to **accept** one. If a scheduled run ever reports
+  clicking "OK" on a confirmation, that is an S1 defect.
+
+---
+
+#### UAT-26 — Naming an element by what it is and what it says
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D2 US-1/AC1–AC2, US-2/AC1–AC2; D2 H-1 |
+| **Preconditions** | Chat A1, Jim |
+
+**Steps**
+
+1. Ask Jim to open `https://the-internet.herokuapp.com/login`.
+2. Ask Jim: *"Click the button called Login"* — describing it by its visible name, not by any code.
+3. Ask Jim to open a page with several identically-named controls
+   (`https://the-internet.herokuapp.com/challenging_dom` has several buttons of the same kind), and
+   ask him to *"click the button"* without saying which.
+4. Then ask him to click **the second one**.
+
+**Expected observable result**
+
+Step 2 works from the visible name alone. Step 3 **fails with an error naming how many candidates it
+found** and listing them. Step 4 clicks the second one in page order.
+
+**What a silent failure looks like**
+
+- Step 3 **picks the first one silently** and reports success. On a page of "Delete" buttons, that is
+  the difference between deleting the row you meant and deleting the top one. It looks exactly like
+  success and is the most consequential silent failure in Group D.
+- Step 3 errors but the message does not say **how many** it found, so the agent cannot ask for the
+  second.
+- Step 2 works because Jim fell back to a code-level selector. Ask him what he used; if the answer
+  contains CSS, the new targeting is not being reached.
+
+---
+
+#### UAT-27 — A click that cannot land says why
+
+| | |
+|---|---|
+| **Priority** | **P0** |
+| **Traces to** | D2 US-3/AC1–AC2, AC6; D2 H-4 |
+| **Preconditions** | Chat A1, Jim, on a page with a **disabled** control and, separately, a page with a cookie banner or overlay covering something |
+
+**Steps**
+
+1. Ask Jim to open a page with a disabled button
+   (`https://the-internet.herokuapp.com/dynamic_controls` — disable the input first).
+2. Ask Jim to type into the disabled field.
+3. Find a real site with a cookie banner covering a button. Ask Jim to open it and click the covered
+   button.
+4. Read the error.
+5. Ask Jim to dismiss the banner and retry.
+
+**Expected observable result**
+
+Step 2: the failure says the element is **not enabled** — not "timeout". Step 4: the failure says the
+element is **not hit-testable** *and names what is on top of it*. Step 5: Jim dismisses the banner
+himself and the retry works, without you telling him what the obstacle was.
+
+**What a silent failure looks like**
+
+- Either failure reports as a plain **timeout**. The agent then waits, retries and eventually gives
+  up with no idea what was wrong — and neither do you, from the transcript.
+- Step 4 names *hit-testable* but not the covering element. The agent cannot work out what to
+  dismiss, and step 5 will not happen unaided.
+- The click "succeeds" through the overlay — the banner is still there and the page did something.
+  The agent reports success; on a real site that is a click on the banner, not on the button.
 
 ---
