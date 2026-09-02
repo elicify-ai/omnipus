@@ -200,6 +200,11 @@ func TestWriteLease_HumanControlTakesPrecedence(t *testing.T) {
 	// A human holds the wheel AND another turn holds the write lease. The
 	// answer must be the human-control one.
 	owner := TabOwnerWorkspace()
+	// The operator's set must hold a tab for browser_switch_tab to resolve
+	// index 0 onto it and reach the gates at all — see
+	// seedOperatorTabForGateTest for the merged-index-space reason and for why
+	// this fixture asserted nothing about gate ordering without it.
+	seedOperatorTabForGateTest(t, m, owner)
 	require.True(t, m.Live().TakeControl(sessionKey(testKey, owner), "human-viewer"))
 	release, ok, _ := m.acquireWrite(context.Background(), testKey, owner, "jim")
 	require.True(t, ok)

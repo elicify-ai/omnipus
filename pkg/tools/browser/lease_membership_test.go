@@ -76,6 +76,51 @@ const (
 // that is where BOTH gates are live. Running it against a chat's own tabs would
 // exercise the lease but never the control lock's human-held branch, and would
 // pass with the classification half-checked.
+// seedOperatorTabForGateTest puts ONE tab in `owner`'s tab set so that the two
+// index-taking tools can resolve ownership and actually REACH the gates these
+// tests are about.
+//
+// Why it is needed at all. ADR-072 D1.9b gave a turn's own tabs and the
+// operator's tabs ONE merged index space, so browser_switch_tab and
+// browser_close_tab must now resolve the index onto a tab set BEFORE either
+// gate can be consulted — "is a human driving the set this call addresses" is
+// unanswerable until you know which set that is (§14.2 rule 1 step 1; see
+// resolveTabIndex). Against an EMPTY set, index 0 fails ownership resolution
+// and comes back "tab index 0 is out of range", so both tools read as
+// "defers under neither gate" and the ordering they are here to prove is never
+// exercised. These fixtures were written against the pre-merge SINGLE-SET
+// model, in which the control gate ran first and an empty set still reached
+// it.
+//
+// The count oracle below is what caught this. Every subtest still PASSED,
+// because the biconditional "leased iff control-gated" holds trivially when
+// BOTH sides are absent; only leasedCount dropping from 10 to 8 said that the
+// gated set had quietly shrunk.
+//
+// The seeded tab carries a live PLAIN context — deliberately not a
+// chromedp one. That keeps the six exempt tools cheap and honest: chromedp.Run
+// rejects a context it did not create, so browser_screenshot/get_text/wait/
+// snapshot fail instantly with "invalid context" instead of allocating and
+// LAUNCHING a real Chrome each. An already-cancelled context does not work
+// either — Session() treats a dead active tab as a browser crash and deletes
+// the whole browsing context, so the first ungated tool to run would wipe the
+// seed before the index tools were reached.
+//
+// Nothing here touches the FR-060 host-memory gate: createFirstTab is the
+// function that consults it, and this deliberately does not call it. That is
+// why there is no memoryPressureFn pin — no host-load-dependent step is left
+// to pin, so this fixture cannot go red because the machine is busy.
+func seedOperatorTabForGateTest(t *testing.T, m *BrowserManager, owner TabOwner) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[sessionKey(testKey, owner)] = &sessionEntry{
+		tabs: []*tabEntry{{ctx: ctx, cancel: cancel, targetID: "seeded-for-gate-test"}},
+	}
+}
+
 func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 	owner := TabOwnerWorkspace()
 
@@ -85,6 +130,7 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 		security.NewSSRFChecker([]string{"127.0.0.1"}),
 		func(m *BrowserManager) ManagerResolver { return newOperatorResolver(m) })
 	t.Cleanup(lockMgr.Shutdown)
+	seedOperatorTabForGateTest(t, lockMgr, owner)
 	require.True(t, lockMgr.Live().TakeControl(sessionKey(testKey, owner), "human-viewer"))
 
 	// Pass 2 — another turn holds the write lease.
@@ -93,6 +139,7 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 		security.NewSSRFChecker([]string{"127.0.0.1"}),
 		func(m *BrowserManager) ManagerResolver { return newOperatorResolver(m) })
 	t.Cleanup(leaseMgr.Shutdown)
+	seedOperatorTabForGateTest(t, leaseMgr, owner)
 	leaseMgr.cfg.LeaseWait = 20 * time.Millisecond
 	release, ok, _ := leaseMgr.acquireWrite(context.Background(), testKey, owner, "another-turn")
 	require.True(t, ok)
