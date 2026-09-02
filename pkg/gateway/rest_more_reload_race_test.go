@@ -79,14 +79,14 @@ func TestGodMode_POST_ReloadCompletesBeforeResponse(t *testing.T) {
 // TestPutToolPolicies_ReloadCompletesBeforeResponse proves site 2:
 // putToolPolicies must not respond 200 until the registry rebuild that
 // actually swaps every agent instance's ToolPolicyCfg.GlobalPolicies has
-// completed — otherwise a global tightening edit (e.g. exec: allow -> deny)
+// completed — otherwise a global tightening edit (e.g. bash: allow -> deny)
 // would be persisted and shown enforced by a subsequent GET while a tool call
 // racing the response could still execute under the previous, looser policy.
 func TestPutToolPolicies_ReloadCompletesBeforeResponse(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wireAsyncReload(t, api, 30*time.Millisecond)
 
-	body := `{"policies":{"exec":"deny","search_web":"allow"}}`
+	body := `{"policies":{"bash":"deny","search_web":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)

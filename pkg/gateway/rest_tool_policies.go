@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -95,6 +96,29 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 				"policies["+toolName+"]: value must be 'allow', 'ask', or 'deny'")
 			return
 		}
+	}
+
+	// Reject any submitted KEY that isn't a real, known static builtin tool
+	// name (or the MCP-namespace carve-out). CLAUDE.md hard constraint 6:
+	// wildcard/garbage keys must never be silently accepted anywhere in the
+	// tool-policy write surface. This endpoint's per-value loop above only
+	// checked that each VALUE was allow/ask/deny — a key like "*" or a
+	// typo'd tool name has a perfectly valid value and slipped through
+	// unvalidated, getting persisted verbatim into sandbox.tool_policies
+	// (confirmed live: PUT {"*":"allow","not_a_real_tool_xyz":"ask"}
+	// returned 200 and echoed both back). Unlike the agent-level tools-write
+	// endpoints, this one deliberately does NOT require the submitted map to
+	// be COMPLETE (ValidateSubmittedToolPolicyMap's Missing list is ignored
+	// on purpose) — a sparse global ceiling is the intended shape; the
+	// seeded "worker" agent, for one, is deliberately built to rely on it
+	// for most tools (coreAgentSeed's tightenGlobalCeiling). Completeness of
+	// the resulting (agent OR global) coverage is what
+	// withToolPolicyCoverageGuard below already enforces; this check only
+	// closes the separate "was every key real" gap.
+	if defects := config.ValidateSubmittedToolPolicyMap(body.Policies, buildKnownBuiltinToolNames()); len(defects.Invalid) > 0 {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("policies: unrecognized tool name(s): %s", strings.Join(defects.Invalid, ", ")))
+		return
 	}
 
 	// Convert map[string]GlobalToolPoliciesPolicies → map[string]string for config persistence.

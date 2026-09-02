@@ -62,7 +62,11 @@ func TestHandleToolPolicies_GET_EmptyState(t *testing.T) {
 func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"policies":{"exec":"deny","search_web":"allow"}}`
+	// "exec" was retired and unified into "bash" (ADR-036) -- use the current
+	// tool name so this test is not itself asserting a stale-name gap the
+	// key-validity check (TestHandleToolPolicies_PUT_UnknownKeyRejected) now
+	// closes.
+	body := `{"policies":{"bash":"deny","search_web":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	// withReAuthAdmin supplies the admin user/role AND the FR-3.3 re-auth token.
@@ -78,7 +82,7 @@ func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
 	policies, ok := resp["policies"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "deny", policies["exec"])
+	assert.Equal(t, "deny", policies["bash"])
 	assert.Equal(t, "allow", policies["search_web"])
 }
 
@@ -176,6 +180,62 @@ func TestHandleToolPolicies_PUT_InvalidPerToolPolicy(t *testing.T) {
 	api.HandleToolPolicies(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestHandleToolPolicies_PUT_UnknownKeyRejected is the regression test for the
+// "PUT accepted a wildcard/garbage tool-policy key" gap found alongside the
+// full-catalog UAT round: this endpoint validated every submitted VALUE
+// (allow/ask/deny) but never validated that submitted KEYS were real,
+// known static builtin tool names. A caller could submit a literal "*" or a
+// typo'd tool name with a valid-looking value and have it silently accepted
+// and persisted into sandbox.tool_policies (confirmed live before the fix:
+// 200, both keys echoed back unchanged). The agent-level tools-write
+// endpoints already rejected this shape via
+// config.ValidateSubmittedToolPolicyMap's Invalid list; this endpoint now
+// does too — but, unlike the agent-level endpoints, it does NOT require
+// full catalog coverage from the submitted map alone (a sparse global
+// ceiling is the intended shape; withToolPolicyCoverageGuard, tested
+// separately above, still enforces that overall coverage stays complete).
+func TestHandleToolPolicies_PUT_UnknownKeyRejected(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	body := `{"policies":{"*":"allow","bash":"deny","not_a_real_tool_xyz":"ask"}}`
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandleToolPolicies(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "*")
+	assert.Contains(t, w.Body.String(), "not_a_real_tool_xyz")
+
+	// Nothing from the rejected request must have been persisted.
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/security/tool-policies", nil)
+	getR = withAdminRole(getR)
+	getW := httptest.NewRecorder()
+	api.HandleToolPolicies(getW, getR)
+	assert.NotContains(t, getW.Body.String(), "not_a_real_tool_xyz",
+		"a rejected PUT must not leave any of its keys persisted")
+}
+
+// TestHandleToolPolicies_PUT_SparseMapAccepted proves the fix above is scoped
+// to key VALIDITY only, not completeness: a sparse but entirely-valid-keyed
+// global map (naming real tools, just not all of them) must still be
+// accepted — a global ceiling deliberately need not cover every tool on its
+// own (e.g. the seeded "worker" agent's own map is built to rely on it for
+// most tools, by design). newTestRestAPIWithHome seeds an empty agent list,
+// so the separate coverage guard (tested above) trivially passes here too;
+// this test is specifically about the key-validity check, not coverage.
+func TestHandleToolPolicies_PUT_SparseMapAccepted(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	body := `{"policies":{"bash":"deny"}}`
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandleToolPolicies(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleToolPolicies_PUT_BadJSON verifies that malformed JSON is rejected with 400.
