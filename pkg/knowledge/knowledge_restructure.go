@@ -208,13 +208,13 @@ func (t *RestructureTool) Execute(ctx context.Context, args map[string]any) *too
 	}
 	switch op {
 	case restructureOpRename:
-		return t.execRenameMove(target, args, false)
+		return t.execRenameMove(ctx, target, args, false)
 	case restructureOpMove:
-		return t.execRenameMove(target, args, true)
+		return t.execRenameMove(ctx, target, args, true)
 	case restructureOpTrash:
-		return t.execTrash(target, args)
+		return t.execTrash(ctx, target, args)
 	case restructureOpRestore:
-		return t.execRestore(target, args)
+		return t.execRestore(ctx, target, args)
 	default:
 		return t.refuseOp(target, op)
 	}
@@ -261,7 +261,9 @@ func (t *RestructureTool) refuseOp(target mutationTarget, op string) *tools.Tool
 // rename / move — delegates to rename.go's Renamer
 // ---------------------------------------------------------------------------
 
-func (t *RestructureTool) execRenameMove(target mutationTarget, args map[string]any, isMove bool) *tools.ToolResult {
+func (t *RestructureTool) execRenameMove(
+	ctx context.Context, target mutationTarget, args map[string]any, isMove bool,
+) *tools.ToolResult {
 	op := restructureRenameOp
 	from, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
@@ -317,10 +319,21 @@ func (t *RestructureTool) execRenameMove(target mutationTarget, args map[string]
 		}
 		return tools.ErrorResult(msg)
 	}
+	// A no-op rename (From == To) touched no bytes, so there is nothing to
+	// re-index. Otherwise the old path leaves both indexes and every path
+	// rename.go's Touched names — the new location plus every note whose
+	// inbound links were rewritten — is re-derived in one pass. See author.go's
+	// "Index freshness" section for why a refresh failure is a warning here,
+	// not a refusal: the rename itself has already fully applied.
+	var indexWarning string
+	if !res.NoOp {
+		indexWarning = refreshIndexesForRename(ctx, t.deps.Home, target.col.Root, res.From, res.Touched)
+	}
 	return tools.NewToolResult(RenderRestructureRename(RestructureRenameData{
 		Op: restructureOpFor(isMove), From: res.From, To: res.To, NoOp: res.NoOp,
 		FilesRewritten: res.FilesRewritten, LinksRewritten: res.LinksRewritten,
 		Ambiguity: res.Ambiguity, Skipped: res.Skipped, Incomplete: res.Incomplete,
+		IndexWarning: indexWarning,
 	}))
 }
 
@@ -407,7 +420,7 @@ func restructureTrashAuditFunc(d AuthoringDeps, t mutationTarget) TrashAuditFunc
 	}
 }
 
-func (t *RestructureTool) execTrash(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *RestructureTool) execTrash(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	tr, err := t.newTrasher(target)
 	if err != nil {
 		return t.deps.refuse(restructureTrashOp, target, nil, err.Error())
@@ -421,10 +434,15 @@ func (t *RestructureTool) execTrash(target mutationTarget, args map[string]any) 
 	// A note LEAVING the index (epoch.go's second bump site) — never on
 	// execRestore, which re-enters a note rather than removing one.
 	bumpIndexEpochOrWarn("trash", t.deps.Home, target.col.Root)
-	return tools.NewToolResult(RenderRestructureTrash(*res))
+	// The note is now under .omnipus-vault/trash/, which scan.go already
+	// skips, so its OLD path leaves both indexes. See author.go's "Index
+	// freshness" section for why a refresh failure is a warning, not a
+	// refusal: the trash has already applied.
+	indexWarning := removeFromIndexesForNote(ctx, t.deps.Home, target.col.Root, res.OriginalPath)
+	return tools.NewToolResult(RenderRestructureTrash(*res, indexWarning))
 }
 
-func (t *RestructureTool) execRestore(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *RestructureTool) execRestore(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	tr, err := t.newTrasher(target)
 	if err != nil {
 		return t.deps.refuse(restructureRestoreOp, target, nil, err.Error())
@@ -436,7 +454,10 @@ func (t *RestructureTool) execRestore(target mutationTarget, args map[string]any
 	if err != nil {
 		return restructureFailure(restructureRestoreOp, err)
 	}
-	return tools.NewToolResult(RenderRestructureRestore(*res))
+	// The note is back at its original path with real content, so it is
+	// re-derived into both indexes exactly as a create would be.
+	indexWarning := refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.OriginalPath)
+	return tools.NewToolResult(RenderRestructureRestore(*res, indexWarning))
 }
 
 // restructureFailure renders an error from the Trasher as compact text
@@ -463,6 +484,10 @@ type RestructureRenameData struct {
 	Ambiguity                      *AmbiguityReport
 	Skipped                        []SkippedEntry
 	Incomplete                     bool
+	// IndexWarning is refreshIndexesForRename's return value — empty when
+	// both indexes were fully refreshed, a sentence otherwise. See author.go's
+	// "Index freshness" section.
+	IndexWarning string
 }
 
 // RenderRestructureRename renders one rename/move response, matching
@@ -487,6 +512,9 @@ func RenderRestructureRename(d RestructureRenameData) string {
 			fmt.Fprintf(&b, "  %s (%s)\n", s.RelPath, s.Reason)
 		}
 	}
+	if d.IndexWarning != "" {
+		fmt.Fprintf(&b, "INDEX: %s\n", d.IndexWarning)
+	}
 	return b.String()
 }
 
@@ -497,8 +525,10 @@ func restructureMoveVerb(op string) string {
 	return "renamed"
 }
 
-// RenderRestructureTrash renders one trash response.
-func RenderRestructureTrash(r TrashResult) string {
+// RenderRestructureTrash renders one trash response. indexWarning is
+// removeFromIndexesForNote's return value (author.go's "Index freshness"
+// section) — empty when both indexes were refreshed successfully.
+func RenderRestructureTrash(r TrashResult, indexWarning string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s -> trashed at %s (%s)\n", r.OriginalPath, r.TrashID, r.TrashPath)
 	if r.RecordType != "" {
@@ -525,11 +555,16 @@ func RenderRestructureTrash(r TrashResult) string {
 		fmt.Fprintf(&b, "%s was already trashed at %s; this copy is at %s\n",
 			r.OriginalPath, strings.Join(r.PriorTrashings, ", "), r.TrashID)
 	}
+	if indexWarning != "" {
+		fmt.Fprintf(&b, "INDEX: %s\n", indexWarning)
+	}
 	return b.String()
 }
 
-// RenderRestructureRestore renders one restore response.
-func RenderRestructureRestore(r RestoreResult) string {
+// RenderRestructureRestore renders one restore response. indexWarning is
+// refreshIndexesForNote's return value (author.go's "Index freshness"
+// section) — empty when both indexes were refreshed successfully.
+func RenderRestructureRestore(r RestoreResult, indexWarning string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s <- restored from trash (%s)\n", r.OriginalPath, r.RestoredFrom)
 	if r.RecordType != "" {
@@ -542,6 +577,9 @@ func RenderRestructureRestore(r RestoreResult) string {
 	fmt.Fprintf(&b, "CASCADE: %d inbound link(s) resolve again\n", r.ResolvedLinksCount)
 	if len(r.OtherAvailable) > 0 {
 		fmt.Fprintf(&b, "OTHER TRASHED COPIES: %s\n", strings.Join(r.OtherAvailable, ", "))
+	}
+	if indexWarning != "" {
+		fmt.Fprintf(&b, "INDEX: %s\n", indexWarning)
 	}
 	return b.String()
 }

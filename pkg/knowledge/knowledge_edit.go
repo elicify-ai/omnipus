@@ -302,15 +302,15 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	}
 	switch op {
 	case opCreate:
-		return t.execCreate(target, args)
+		return t.execCreate(ctx, target, args)
 	case opSetProperty:
-		return t.execSetProperty(target, args)
+		return t.execSetProperty(ctx, target, args)
 	case opAppendSection:
-		return t.execAppendSection(target, args)
+		return t.execAppendSection(ctx, target, args)
 	case opLink:
-		return t.execLink(target, args)
+		return t.execLink(ctx, target, args)
 	case opReplaceBody:
-		return t.execReplaceBody(target, args)
+		return t.execReplaceBody(ctx, target, args)
 	default:
 		return t.refuseOp(target, op)
 	}
@@ -350,7 +350,7 @@ func (t *EditTool) loadSchemas(target mutationTarget) (*records.SchemaSet, *reco
 // create
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) execCreate(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *EditTool) execCreate(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	rel, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
 		return t.deps.refuse(AuthorOpCreate, target, nil, err.Error())
@@ -421,10 +421,15 @@ func (t *EditTool) execCreate(target mutationTarget, args map[string]any) *tools
 	if err != nil {
 		return knowledgeEditFailure(AuthorOpCreate, err)
 	}
+	// A create always changes bytes on disk (it never no-ops — ErrNoteExists
+	// refuses instead), so the freshness index is refreshed unconditionally.
+	// See author.go's "Index freshness" section for what a refresh failure
+	// means and why it is a warning here, not a refusal.
+	indexWarning := refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opCreate, Path: res.RelPath, Version: res.Version,
 		Changed: true, Bytes: res.Bytes, Template: template,
-		SchemaNote: gov.Note(),
+		SchemaNote: gov.Note(), IndexWarning: indexWarning,
 	}))
 }
 
@@ -472,7 +477,7 @@ func frontmatterArgToPairs(raw any) ([]frontmatterPair, error) {
 // set_property
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	rel, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
 		return t.deps.refuse(AuthorOpEdit, target, nil, err.Error())
@@ -533,10 +538,17 @@ func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *
 	if err != nil {
 		return knowledgeEditFailure(AuthorOpEdit, err)
 	}
+	// A no-op edit (res.Changed == false) changed no byte on disk, so there is
+	// nothing for either index to re-derive — refreshing would cost a file
+	// read for a file the write path never touched.
+	var indexWarning string
+	if res.Changed {
+		indexWarning = refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
+	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opSetProperty, Path: res.RelPath, Version: res.Version,
 		Property: property, ListOp: listOp, Changed: res.Changed,
-		SchemaNote: gov.Note(),
+		SchemaNote: gov.Note(), IndexWarning: indexWarning,
 	}))
 }
 
@@ -544,7 +556,7 @@ func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *
 // append_section
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) execAppendSection(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *EditTool) execAppendSection(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	rel, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
 		return t.deps.refuse(AuthorOpEdit, target, nil, err.Error())
@@ -585,9 +597,15 @@ func (t *EditTool) execAppendSection(target mutationTarget, args map[string]any)
 	if err != nil {
 		return knowledgeEditFailure(AuthorOpEdit, err)
 	}
+	// See execSetProperty's identical comment: a no-op leaves the file
+	// untouched, so nothing is re-indexed for it.
+	var indexWarning string
+	if res.Changed {
+		indexWarning = refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
+	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opAppendSection, Path: res.RelPath, Version: res.Version,
-		Heading: heading, Changed: res.Changed,
+		Heading: heading, Changed: res.Changed, IndexWarning: indexWarning,
 	}))
 }
 
@@ -595,7 +613,7 @@ func (t *EditTool) execAppendSection(target mutationTarget, args map[string]any)
 // link
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) execLink(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *EditTool) execLink(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	rel, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
 		return t.deps.refuse(AuthorOpEdit, target, nil, err.Error())
@@ -644,10 +662,16 @@ func (t *EditTool) execLink(target mutationTarget, args map[string]any) *tools.T
 	if err != nil {
 		return knowledgeEditFailure(AuthorOpEdit, err)
 	}
+	// See execSetProperty's identical comment: a no-op ("already linked")
+	// leaves the file untouched, so nothing is re-indexed for it.
+	var indexWarning string
+	if res.Changed {
+		indexWarning = refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
+	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opLink, Path: res.RelPath, Version: res.Version,
 		Target: linkTarget, Relation: relation, Changed: res.Changed,
-		SchemaNote: gov.Note(),
+		SchemaNote: gov.Note(), IndexWarning: indexWarning,
 	}))
 }
 
@@ -655,7 +679,7 @@ func (t *EditTool) execLink(target mutationTarget, args map[string]any) *tools.T
 // replace_body — composes replace_body.go's primitive, landed separately
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) execReplaceBody(target mutationTarget, args map[string]any) *tools.ToolResult {
+func (t *EditTool) execReplaceBody(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
 	rel, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
 		return t.deps.refuse(AuthorOpEdit, target, nil, err.Error())
@@ -708,8 +732,15 @@ func (t *EditTool) execReplaceBody(target mutationTarget, args map[string]any) *
 	if err != nil {
 		return knowledgeEditFailure(AuthorOpEdit, err)
 	}
+	// See execSetProperty's identical comment: a no-op leaves the file
+	// untouched, so nothing is re-indexed for it.
+	var indexWarning string
+	if res.Changed {
+		indexWarning = refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
+	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opReplaceBody, Path: res.RelPath, Version: res.Version, Changed: res.Changed,
+		IndexWarning: indexWarning,
 	}))
 }
 
@@ -737,6 +768,14 @@ type EditData struct {
 	// caller can tell "validated and fine" from "nothing was checked" as
 	// required by the design's acceptance scenario D-08.
 	SchemaNote string
+	// IndexWarning is refreshIndexesForNote's return value (author.go's
+	// "Index freshness" section) — empty when the text index and the
+	// properties index were both refreshed successfully, a sentence
+	// otherwise naming what could not be kept current. The write itself has
+	// already succeeded by the time this is set; see that section's header
+	// for why a refresh failure is reported here rather than turned into a
+	// tool refusal.
+	IndexWarning string
 }
 
 // RenderEdit renders a successful knowledge_edit response as compact text
@@ -777,6 +816,9 @@ func RenderEdit(d EditData) string {
 	}
 	if d.SchemaNote != "" {
 		fmt.Fprintf(&b, "%s\n", d.SchemaNote)
+	}
+	if d.IndexWarning != "" {
+		fmt.Fprintf(&b, "INDEX: %s\n", d.IndexWarning)
 	}
 	return b.String()
 }

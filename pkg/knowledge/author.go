@@ -58,9 +58,11 @@ package knowledge
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -70,6 +72,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/pathsafe"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
 // Errors the authoring path returns. Every one of them is a sentinel so a
@@ -1240,4 +1244,334 @@ func (a authorAuditor) applied(paths []string) {
 	rec.Outcome = AuthorOutcomeApplied
 	rec.Paths = append([]string(nil), paths...)
 	a.sink.RecordKnowledgeWrite(rec)
+}
+
+// ---------------------------------------------------------------------------
+// Index freshness — instant updates after Omnipus's own writes
+// (docs/internal/design/knowledge-index-freshness.md §2-4, §8, §10)
+//
+// # Why this lives here, duplicated rather than shared with pkg/vaultprops
+//
+// pkg/vaultprops/sync.go already builds a properties-index row from a note's
+// bytes (records.ParseRecord -> propindex.BuildNoteRows), but it does so for a
+// WHOLE COLLECTION at a time, and it cannot be called from here: it imports
+// pkg/knowledge (Scan, ReadNoteContent, CollectionRoot), so pkg/knowledge
+// importing it back would be a cycle. propindex itself depends only on
+// pkg/records, which pkg/knowledge already imports, so the per-PATH slice of
+// that same derivation is reimplemented below rather than factored out. A
+// future change that wants one implementation would need to MOVE this section
+// (or vaultprops/sync.go's per-file body) into a package both sides can import
+// — not attempted here, to keep this change to the two tools it is scoped to.
+//
+// # What is called, from where
+//
+// knowledge_edit.go calls refreshIndexesForNote once per successful
+// create/set_property/append_section/link/replace_body that actually changed
+// bytes (a no-op edit changes nothing on disk, so there is nothing to index).
+// knowledge_restructure.go calls refreshIndexesForRename after a completed
+// rename/move (the old path plus every path rename.go's RenameResult.Touched
+// names — the destination and every note whose inbound links were rewritten),
+// removeFromIndexesForNote after a trash, and refreshIndexesForNote after a
+// restore. That is every write path in this package's two owning tools; see
+// each call site's own comment for why it is the right event to fire on.
+//
+// # The decision this section embodies: a failed refresh warns, it never
+// undoes or refuses the write
+//
+// The note is already correct on disk by the time any of these run — that is
+// what "AFTER the write" means. Refusing the tool call at this point would
+// tell the caller their write failed when it did not, which is a worse lie
+// than a stale index entry: an agent told "refused" retries, and a retried
+// create collides with ErrNoteExists or a retried edit either no-ops on an
+// unchanged version token or silently repeats a list-add. A refusal here would
+// also leave NO record of the write that, in fact, landed — the opposite of
+// FR-090/US-15's whole purpose. So every path below is exactly the same shape
+// as epoch.go's bumpIndexEpochOrWarn: the mutation has already applied
+// regardless of whether this secondary bookkeeping can be updated afterwards,
+// so a failure here is reported LOUDLY (logged at Error, AND folded into the
+// tool's own rendered response so the caller — human or agent — sees it
+// without reading a log) and the write stands.
+//
+// This is not "degrading silently" in the sense design doc §8 forbids — §8 is
+// about the WATCHER going quiet with no record anywhere that it stopped. Here
+// every failure is both logged and surfaced in the same response the caller
+// already reads, and layers 2-4 (design doc §3: watcher, periodic sweep,
+// startup sweep) still reach the file on their own schedule, so what is lost
+// is timeliness for THIS one path, never the fact that something needs
+// re-indexing, and never the write itself.
+//
+// # The properties index may not exist yet, or may not exist on this platform
+//
+// A collection that has never been synced has no properties.db yet;
+// openPropertiesIndexStore creates it exactly as vaultprops.Sync's own
+// preamble does (FR-030's directory, FR-032's permissions), so "no index yet"
+// is not a distinct failure — the first write simply becomes the first row.
+// A platform without SQLite (mipsle, netbsd, freebsd/arm) is different: it
+// can never succeed, records.RequirePropertyIndex already logged that once by
+// name at boot, and repeating the same fact on every single write would be
+// noise about something this call cannot change. indexRefreshOutcome.propsProblem
+// filters exactly that one sentinel (records.ErrPropertyIndexUnavailable) and
+// nothing else — any other properties-index error (a corrupt file that could
+// not self-heal, a permissions failure, a full disk) is reported the same way
+// the text index's failures are.
+// ---------------------------------------------------------------------------
+
+// indexRefreshOutcome accumulates what one call below actually managed, across
+// the text index, the properties index, and — for a rename — across every path
+// touched, so a caller reports ONE line naming every index that could not be
+// kept current rather than a wall of per-path errors or, worse, silence.
+type indexRefreshOutcome struct {
+	problems []string
+}
+
+// textProblem records a text-index failure for one path. A nil err is a no-op
+// so every call site can write `out.textProblem(path, err)` unconditionally.
+func (o *indexRefreshOutcome) textProblem(path string, err error) {
+	if err == nil {
+		return
+	}
+	slog.Error("knowledge: could not refresh the text search index after a write; "+
+		"the note is saved to disk, but a knowledge_search issued right now may not find it "+
+		"until the next scheduled reconcile",
+		"path", path, "error", err)
+	o.problems = append(o.problems, fmt.Sprintf("text index (%s): %v", path, err))
+}
+
+// propsProblem records a properties-index failure for one path, except the
+// one failure that is not new information — see this section's header.
+func (o *indexRefreshOutcome) propsProblem(path string, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, records.ErrPropertyIndexUnavailable) {
+		return
+	}
+	slog.Error("knowledge: could not refresh the properties index after a write; "+
+		"the note is saved to disk, but a knowledge_find issued right now may not see it "+
+		"until the next scheduled reconcile",
+		"path", path, "error", err)
+	o.problems = append(o.problems, fmt.Sprintf("properties index (%s): %v", path, err))
+}
+
+// summary renders every problem collected so far as one sentence, or "" when
+// nothing went wrong — the value knowledge_edit.go and knowledge_restructure.go
+// fold into their own rendered response.
+func (o *indexRefreshOutcome) summary() string {
+	if len(o.problems) == 0 {
+		return ""
+	}
+	return "the write is saved, but could not be made instantly searchable (" +
+		strings.Join(o.problems, "; ") + "); a scheduled reconcile will pick it up"
+}
+
+// refreshIndexesForNote re-derives one note's (or attachment's) entry in both
+// indexes after its bytes changed on disk — the read-your-own-write guarantee
+// design doc §4 requires. Returns "" when both indexes are current, or a
+// sentence naming what could not be refreshed (see this section's header for
+// why that is a warning and not a refusal).
+func refreshIndexesForNote(ctx context.Context, home, collectionRoot, relPath string) string {
+	var out indexRefreshOutcome
+
+	ix, err := OpenIndex(home, collectionRoot)
+	if err != nil {
+		out.textProblem(relPath, err)
+	} else {
+		out.textProblem(relPath, ix.UpdatePath(ctx, relPath))
+		if cerr := ix.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the text index after a direct update",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	store, serr := openPropertiesIndexStore(ctx, home, collectionRoot)
+	if serr != nil {
+		out.propsProblem(relPath, serr)
+	} else {
+		out.propsProblem(relPath, upsertPropertiesNote(ctx, store, collectionRoot, relPath))
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the properties index after a direct update",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	return out.summary()
+}
+
+// removeFromIndexesForNote drops one path's entry from both indexes after it
+// left the collection (a trash, or a rename's old path) — the mirror of
+// refreshIndexesForNote. It is a no-op, not an error, when a given index holds
+// no record for relPath (Index.RemovePath and Store.DeleteNote are both
+// documented to behave that way already).
+func removeFromIndexesForNote(ctx context.Context, home, collectionRoot, relPath string) string {
+	var out indexRefreshOutcome
+
+	ix, err := OpenIndex(home, collectionRoot)
+	if err != nil {
+		out.textProblem(relPath, err)
+	} else {
+		out.textProblem(relPath, ix.RemovePath(ctx, relPath))
+		if cerr := ix.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the text index after a direct removal",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	store, serr := openPropertiesIndexStore(ctx, home, collectionRoot)
+	if serr != nil {
+		out.propsProblem(relPath, serr)
+	} else {
+		out.propsProblem(relPath, store.DeleteNote(ctx, relPath))
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the properties index after a direct removal",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	return out.summary()
+}
+
+// refreshIndexesForRename handles a completed rename/move's wider blast
+// radius in one pass: `from` (the old path, which no longer exists) leaves
+// both indexes, and every path in touched — the new location plus every note
+// whose inbound links rename.go rewrote — is re-derived. Both indexes are
+// opened once and reused across the whole set, rather than once per path,
+// because a rename's blast radius is not bounded to one file the way a
+// knowledge_edit write is.
+//
+// `from` is never re-derived even if it appears in touched (it should not:
+// RenameResult.Touched is "written or moved", and the old path is neither
+// after a real move — but a defensive dedupe costs nothing and a stray
+// UpdatePath against a path that no longer exists would only produce a
+// confusing warning about a file the caller was never told still existed).
+func refreshIndexesForRename(ctx context.Context, home, collectionRoot, from string, touched []string) string {
+	var out indexRefreshOutcome
+
+	ix, ixErr := OpenIndex(home, collectionRoot)
+	if ixErr != nil {
+		out.textProblem(from, ixErr)
+	} else {
+		out.textProblem(from, ix.RemovePath(ctx, from))
+	}
+
+	store, stErr := openPropertiesIndexStore(ctx, home, collectionRoot)
+	if stErr != nil {
+		out.propsProblem(from, stErr)
+	} else {
+		out.propsProblem(from, store.DeleteNote(ctx, from))
+	}
+
+	seen := map[string]struct{}{from: {}}
+	for _, p := range touched {
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		if ix != nil {
+			out.textProblem(p, ix.UpdatePath(ctx, p))
+		}
+		if store != nil {
+			out.propsProblem(p, upsertPropertiesNote(ctx, store, collectionRoot, p))
+		}
+	}
+
+	if ix != nil {
+		if cerr := ix.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the text index after a rename's index refresh",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+	if store != nil {
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the properties index after a rename's index refresh",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	return out.summary()
+}
+
+// openPropertiesIndexStore opens the properties index for one collection,
+// creating its directory and database file on first use — the same preamble
+// vaultprops.Sync performs (FR-030's directory, FR-032's permissions),
+// reimplemented here for the reason this section's header states.
+//
+// On a platform without SQLite this returns records.ErrPropertyIndexUnavailable
+// (wrapped), via propindex.Open's own platform gate, without creating anything
+// on disk — the gate is checked before the MkdirAll rather than left to
+// propindex.Open alone, so a build that cannot open the store never creates a
+// directory for one it can never write.
+func openPropertiesIndexStore(ctx context.Context, home, collectionRoot string) (propindex.Store, error) {
+	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
+		return nil, err
+	}
+	idxPath, err := PropertiesIndexPath(home, collectionRoot)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(idxPath)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return nil, fmt.Errorf("knowledge: create properties index directory %s: %w", dir, mkErr)
+	}
+	if chErr := os.Chmod(dir, 0o700); chErr != nil {
+		return nil, fmt.Errorf("knowledge: set permissions on properties index directory %s: %w", dir, chErr)
+	}
+	return propindex.Open(ctx, idxPath, propindex.Options{})
+}
+
+// upsertPropertiesNote re-derives and writes one path's row (and its
+// property/tag/link/task children) into an already-open properties index —
+// the same derivation vaultprops.Sync performs for a whole-collection
+// reconcile (records.ParseRecord -> propindex.BuildNoteRows), applied to one
+// path so a single write does not pay for a walk of the collection.
+//
+// It never reads an attachment's bytes (FR-039a). ScanKindFor (via StatEntry)
+// decides the kind from the file's NAME alone, before anything is opened, and
+// an attachment's row carries only its stat — the same shape
+// vaultprops.Sync's own attachment branch writes.
+func upsertPropertiesNote(ctx context.Context, store propindex.Store, collectionRoot, relPath string) error {
+	entry, err := StatEntry(collectionRoot, relPath)
+	if err != nil {
+		return err
+	}
+	if entry.Kind == ScanKindAttachment {
+		return store.UpsertNote(ctx, propindex.NoteRows{
+			Path: relPath, Kind: propindex.KindAttachment,
+			Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
+			CtimeNanos: entry.CtimeNanos, HasCtime: entry.HasCtime,
+		})
+	}
+
+	fsys := OSLinkFS()
+	root, err := NewCollectionRoot(fsys, collectionRoot)
+	if err != nil {
+		return err
+	}
+	abs, err := root.ResolveContainedNoSymlink(fsys, relPath)
+	if err != nil {
+		return err
+	}
+	src, err := ReadNoteContent(fsys, abs)
+	if err != nil {
+		return err
+	}
+
+	hash := propindex.SourceHash(src)
+	rec := records.ParseRecord(relPath, src)
+	var schema *records.Schema
+	if t := rec.TypeName(); t != "" {
+		schemas, _, serr := records.LoadSchemas(root.Path())
+		if serr != nil {
+			return fmt.Errorf("loading record schemas: %w", serr)
+		}
+		if sc, ok := schemas.Get(t); ok {
+			schema = sc
+		}
+		// t != "" and no matching schema: FR-005, an ordinary note — schema
+		// stays nil, matching vaultprops.Sync's identical branch.
+	}
+
+	rows := propindex.BuildNoteRows(rec, schema, src, hash)
+	rows.Size, rows.MtimeNanos = entry.Size, entry.ModTimeNanos
+	rows.CtimeNanos, rows.HasCtime = entry.CtimeNanos, entry.HasCtime
+	return store.UpsertNote(ctx, rows)
 }
