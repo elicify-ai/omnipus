@@ -49,7 +49,7 @@ func TestCoreAgentSeed_BrowsingAgentsCanCallServeWeb(t *testing.T) {
 
 	var computed []coreagent.CoreAgentID
 	for _, agent := range coreagent.All() {
-		id := coreagent.CoreAgentID(agent.ID)
+		id := agent.ID
 		for _, tool := range browserTools {
 			if d2Resolve(t, id, tool) == "allow" {
 				computed = append(computed, id)
