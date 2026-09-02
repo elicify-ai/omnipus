@@ -74,7 +74,7 @@ Registered by `pkg/tools/browser/register.go:39-49`. All seven are namespaced un
 | `browser.screenshot` | Capture a PNG screenshot. | `pkg/tools/browser/tools.go:209`. |
 | `browser.get_text` | Extract text content from the current page. | `pkg/tools/browser/tools.go:285`. |
 | `browser.wait` | Wait for a selector / timeout. | `pkg/tools/browser/tools.go:338`. |
-| `browser.evaluate` | Execute arbitrary JavaScript in the page context. | `pkg/tools/browser/tools.go:397`. Gated by `sandbox.browser_evaluate_enabled` (default `false`); registration is skipped when the flag is off. |
+| `browser.evaluate` | Execute arbitrary JavaScript in the page context. | `pkg/tools/browser/tools.go::EvaluateTool`. Gated by `sandbox.browser_evaluate_enabled`, **seeded `true`**. **Registration is NOT skipped when the flag is off** — the tool is always registered and always visible to the model; the gate is at `EvaluateTool.Execute`, which returns an error naming the setting. (This row previously claimed registration was skipped. That was never true, independently of the default changing.) |
 
 ### Skills
 

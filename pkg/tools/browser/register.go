@@ -9,11 +9,15 @@ import (
 // The BrowserManager is shared across all tools and manages the Chromium lifecycle.
 // Returns an error if ssrf is nil (SSRF protection is mandatory per SEC-24).
 //
-// evaluateEnabled is accepted for call-site compatibility but no longer controls
-// registration — browser_evaluate is ALWAYS registered. Its live safety floor is
-// the per-tool executeEnabled gate inside EvaluateTool.Execute (deny-by-default
-// unless cfg.Sandbox.BrowserEvaluateEnabled=true), SEC-04/SEC-06. Operators who
-// want the tool to actually execute must set BrowserEvaluateEnabled=true.
+// evaluateEnabled does not control registration — browser_evaluate is ALWAYS
+// registered, and always was. What it controls is EXECUTION, via the per-tool
+// executeEnabled gate inside EvaluateTool.Execute.
+//
+// It is sourced from cfg.Sandbox.BrowserEvaluateEnabled, which is now SEEDED
+// TRUE (ADR D1.9b ruling 2), so on a standard installation the tool executes
+// and WHICH AGENTS may call it is decided by tool policy — Jim holds the only
+// agent-level grant. The flag is the operator's installation-wide kill switch,
+// not the per-agent control it used to read as.
 //
 // The executeEnabled gate below is the one and only thing stopping
 // browser_evaluate at runtime (#438; the pkg/policy declarative mirror of this

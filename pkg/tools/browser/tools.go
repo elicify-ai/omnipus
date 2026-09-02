@@ -818,14 +818,20 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 }
 
 // --- browser_evaluate (US-5) ---
-// Denied by default in deny-by-default policy mode (SEC-04/SEC-06).
+// Which agents may call it is decided by TOOL POLICY (Jim holds the only
+// agent-level grant; Mia and Ava resolve deny). Whether it runs AT ALL on this
+// installation is decided by sandbox.browser_evaluate_enabled, which is now
+// SEEDED TRUE (ADR D1.9b ruling 2).
 
 // EvaluateTool executes arbitrary JavaScript in the browser page context.
-// It is always registered in the tool catalog so the LLM always sees the tool.
+// It is always registered in the tool catalog so the LLM always sees the tool —
+// registration has never been conditional on any flag.
 //
 // The LIVE enforcement gate is executeEnabled (set at construction from
-// cfg.Sandbox.BrowserEvaluateEnabled): Execute returns a deny error unless the
-// operator explicitly opted in. This single gate enforces SEC-04 / SEC-06.
+// cfg.Sandbox.BrowserEvaluateEnabled, which resolves nil -> false). It is the
+// operator's runtime kill switch, distinct from the per-agent tool policy: a
+// policy denial removes the tool from an agent's manifest entirely, while this
+// gate refuses at execution with a message naming the setting.
 //
 // (#438, #70): a pkg/policy declarative mirror of this deny-by-default intent
 // used to exist but was dead code (no live tool-dispatch caller) and was
@@ -842,9 +848,11 @@ func (t *EvaluateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *EvaluateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *EvaluateTool) Description() string {
 	return "Execute JavaScript in the active tab's page context (run scripts, read/manipulate the DOM). " +
-		"Off by default at RUNTIME regardless of your tool policy — the operator must set " +
-		"sandbox.browser_evaluate_enabled=true in config for this to work even when your policy allows it. " +
-		"A policy of allow does not mean this tool is usable; check the tool result for the runtime-disabled error. " +
+		"Enabled by default on a standard installation. An operator can still turn it off for the whole " +
+		"installation by setting sandbox.browser_evaluate_enabled=false; if they have, this tool returns a " +
+		"result whose error names that setting explicitly, which is how you tell an installation-wide " +
+		"disable apart from your own tool policy denying you (a policy denial removes the tool from your " +
+		"list entirely, so you would not be reading this). " +
 		"The result's `result` field holds your expression's JSON-serialized value; a genuine JavaScript " +
 		"null and a non-serializable value (a DOM node, function, or circular reference) BOTH come back as " +
 		"result: null — the only way to tell them apart is a `note` field present ONLY on the " +

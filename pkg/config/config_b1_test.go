@@ -380,7 +380,14 @@ func TestBootConfigRoundTrip_NewFields(t *testing.T) {
 
 	cfg := DefaultConfig()
 	// Set new fields explicitly.
-	cfg.Sandbox.BrowserEvaluateEnabled = true
+	// FALSE, not true, deliberately. This field is now *bool with omitempty, and
+	// the value that exercises the persistence regression is the explicit
+	// false: as a plain bool it was indistinguishable from "not set" and was
+	// silently DROPPED on save, reverting the operator's kill switch to the
+	// seeded true. A true here round-trips whether or not the bug exists, so it
+	// covered nothing this field is about.
+	evaluateOff := false
+	cfg.Sandbox.BrowserEvaluateEnabled = &evaluateOff
 	failClosed := false
 	cfg.Sandbox.PathGuardAuditFailClosed = &failClosed
 	cfg.Sandbox.MaxConcurrentDevServers = 5
@@ -410,8 +417,10 @@ func TestBootConfigRoundTrip_NewFields(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if !loaded.Sandbox.BrowserEvaluateEnabled {
-		t.Error("BrowserEvaluateEnabled did not survive round-trip")
+	if loaded.Sandbox.BrowserEvaluateEnabled == nil {
+		t.Error("an explicitly-set BrowserEvaluateEnabled=false was DROPPED by the save/load round trip — omitempty cannot distinguish false from unset on a plain bool, which silently reverted the operator's kill switch to the seeded true")
+	} else if *loaded.Sandbox.BrowserEvaluateEnabled {
+		t.Error("BrowserEvaluateEnabled came back true after an explicit false was saved")
 	}
 	if loaded.Sandbox.PathGuardAuditFailClosed == nil || *loaded.Sandbox.PathGuardAuditFailClosed != false {
 		t.Error("PathGuardAuditFailClosed=false did not survive round-trip")

@@ -38,7 +38,8 @@ import (
 // ---------------------------------------------------------------------------
 
 // TestBrowserEvaluate_FlagFalse_StillRegistered verifies that even when
-// cfg.Sandbox.BrowserEvaluateEnabled=false (the default), EvaluateTool is
+// cfg.Sandbox.BrowserEvaluateEnabled=false (an operator opt-OUT; the seeded
+// default is now true), EvaluateTool is
 // present in the registry. The execution gate is enforced at Execute() time
 // inside the tool itself, not at registration time (post-refactor contract).
 //

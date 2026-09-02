@@ -3833,10 +3833,6 @@ type BrowserToolConfig struct {
 	// this is <=0 (browser_open_tab is only ever denied on this axis when a
 	// positive value is configured and reached).
 	MaxTotalTabs int `json:"max_total_tabs" env:"OMNIPUS_TOOLS_BROWSER_MAX_TOTAL_TABS"`
-	// EvaluateEnabled gates browser.evaluate (arbitrary JS execution).
-	// Defaults to false (deny-by-default per SEC-04/SEC-06). Must be explicitly
-	// opted in by the operator since evaluate runs arbitrary JavaScript.
-	EvaluateEnabled bool `json:"evaluate_enabled" env:"OMNIPUS_TOOLS_BROWSER_EVALUATE_ENABLED"`
 	// LiveViewEnabled gates the ADR-038 live interactive browser panel: the
 	// /api/v1/browser/ws screencast relay. Defaults to true.
 	//

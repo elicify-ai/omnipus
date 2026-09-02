@@ -164,6 +164,18 @@ func DefaultConfig() *Config {
 			LogLevel:  "warn",
 		},
 		Sandbox: OmnipusSandboxConfig{
+			// browser_evaluate is ON by default (ADR D1.9b ruling 2). It is a
+			// standard browser capability, and gating it behind a config flag
+			// an operator had to discover meant the tool was registered,
+			// advertised to the model, allowed by policy — and then refused at
+			// execution with a message about a setting nobody had heard of.
+			//
+			// This is a SEED, i.e. install-time DATA an operator can edit in
+			// their own config.json, not a fallback branch in the binary. Which
+			// agents may call the tool is answered separately by tool policy;
+			// this is the runtime kill switch.
+			BrowserEvaluateEnabled: boolPtr(true),
+
 			// Read+execute-only toolchain directories. Seeded as install-time
 			// DATA (an operator can edit or empty it in config.json), not a
 			// fallback branch in the binary. loadConfig unmarshals the
@@ -632,8 +644,10 @@ func DefaultConfig() *Config {
 				},
 			},
 			// Browser automation is a standard built-in tool — enabled by default
-			// like exec/web/cron. Headless on by default for server use;
-			// browser_evaluate stays opt-in (EvaluateEnabled=false) per SEC-04/SEC-06.
+			// like exec/web/cron. Headless on by default for server use.
+			// browser_evaluate is seeded ON via sandbox.browser_evaluate_enabled
+			// (the single switch; the former tools.browser.evaluate_enabled twin
+			// is deleted) and gated per agent by tool policy.
 			Browser: BrowserToolConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,

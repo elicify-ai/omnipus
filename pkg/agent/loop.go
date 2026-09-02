@@ -2447,14 +2447,23 @@ func registerSharedTools(
 					browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
 				}
 
-				// browser.evaluate registration: always register the tool so the
-				// LLM sees it in its tool list. The live safety floor (deny by
-				// default, SEC-04/SEC-06) is the tool's own executeEnabled gate —
-				// BrowserEvaluateEnabled=true is the required explicit operator
-				// opt-in for the tool to actually execute. (#438: the
+				// browser_evaluate registration: the tool is ALWAYS registered,
+				// on every agent, regardless of this flag — registration has
+				// never been conditional. What the flag gates is EXECUTION, at
+				// EvaluateTool.Execute.
+				//
+				// sandbox.browser_evaluate_enabled is now SEEDED TRUE
+				// (ADR D1.9b ruling 2), so on a fresh install the tool works and
+				// which agents may call it is decided by tool policy. This
+				// remains the operator's runtime kill switch.
+				//
+				// nil resolves to FALSE, not true: a construction that skips
+				// DefaultConfig() must not silently turn arbitrary in-page
+				// JavaScript on. The default lives in the seed, which is data,
+				// never in this resolution. (#438: the
 				// pkg/policy.builtinToolPolicies entry is advisory; that path is
 				// test-only, not a live dispatch gate.)
-				evaluateEnabled := cfg.Sandbox.BrowserEvaluateEnabled
+				evaluateEnabled := config.ResolveBool(cfg.Sandbox.BrowserEvaluateEnabled, false)
 				// ADR-043: ensure the gateway-scoped shared-Chrome coordinator
 				// exists (constructed once; reused across hot-reload so the
 				// per-agent browser contexts it owns — and thus agents' login
