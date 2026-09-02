@@ -331,16 +331,32 @@ func TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent(t *testing.T) {
 	assert.Equal(t, false, details["truncated"])
 	assert.Equal(t, "ray", snap["agent_id"])
 
-	// (3) FIXED oracle, not a conditional one: the record is metadata-only.
-	// The whole serialized entry must contain no accessible-name or field-value
-	// text from the page. Asserted over the raw bytes so a value smuggled into
-	// any field, at any nesting depth, reds.
-	rawSnap, err := json.Marshal(snap)
-	require.NoError(t, err)
-	for _, forbidden := range []string{"role=", "textbox", "password", "4111"} {
-		assert.NotContains(t, string(rawSnap), forbidden,
-			"the browser_snapshot audit record must carry metadata only, never captured node text")
-	}
+	// (3) WAS the "page values never reach the audit log" assertion. REMOVED,
+	// because it could not fail, and a test that cannot fail is worse than no
+	// test: it occupies the space where the real one would go.
+	//
+	// What it did: marshal `snap` — the round-trip of the two-line JSONL
+	// literal this test writes twenty lines above — and assert the bytes do
+	// not contain "role=", "textbox", "password" or "4111". None of those
+	// strings was ever in that literal. Nothing between the literal and the
+	// assertion contributes any bytes either: HandleAuditLog reads lines and
+	// passes them through as opaque json.RawMessage, so the only production
+	// code in the path cannot add or remove a character.
+	//
+	// So it was a statement about a string constant in its own function, and
+	// it would have stayed green with the entire redaction property deleted —
+	// SnapshotTool.recordSnapshot is not called here, not imported here, and
+	// not reachable from here (it is unexported in pkg/tools/browser).
+	//
+	// The real property lives with the code that has to hold it, which is the
+	// EMITTER: recordSnapshot receives the whole snapshotRender — rendered
+	// page text included, values and all — and must copy only counts and an
+	// origin into Details. That is a structural omission, the kind a one-line
+	// "add the text, it helps debugging" change removes silently. It is
+	// asserted against a render genuinely carrying secrets in
+	// pkg/tools/browser/snapshot_audit_redaction_test.go.
+	//
+	// What this file CAN say about it truthfully is the next test's job.
 
 	// (4) #667 IS NOW FIXED, and this block pins the fix rather than the bug.
 	// AuditEntry.yaml's event pattern was widened from `^[a-z_]+$` to
@@ -361,4 +377,93 @@ func TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent(t *testing.T) {
 		"channel.pairing must satisfy AuditEntry's widened ^[a-z_.]+$ — this is the #667 fix: "+
 			"a dotted event name no longer fails AuditLogResponse's z.array(AuditEntry) "+
 			"validation, so Settings → Security → Audit Log renders it instead of blanking")
+}
+
+// TestAuditLog_ReadSurfaceRedactsNothing states, as a fixed oracle, the one
+// thing the READ surface can honestly say about page secrets: it does not
+// remove them.
+//
+// This matters because of what it rules out. A reader who saw the emitter's
+// metadata-only design might assume the endpoint sanitises too, and conclude
+// that a leak on the write side would be caught on the way out. It would not.
+// GET /api/v1/audit-log is a faithful reader — HandleAuditLog copies each
+// stored line through as an opaque json.RawMessage — so whatever
+// SnapshotTool.recordSnapshot puts in the file is what an audit-log reader
+// gets, character for character.
+//
+// Under ADR-072 that is a real disclosure surface rather than a hygiene
+// point: every agent on a workspace drives the OPERATOR'S browser with the
+// operator's live logins in it, and browser_snapshot renders field values
+// unconditionally by operator ruling (FR-018). So the rendered text routinely
+// holds their password, card number or session token. There is exactly ONE
+// thing standing between that text and a file retained by design, and it is
+// the emitter's structural omission — asserted in
+// pkg/tools/browser/snapshot_audit_redaction_test.go, which drives the real
+// recordSnapshot with a render that genuinely carries secrets.
+//
+// The fixture below is therefore a DELIBERATELY BAD record: a browser_snapshot
+// entry that leaked the page text, i.e. what the file would contain if that
+// one omission were ever undone. Asserting it comes back verbatim is what
+// proves nothing downstream compensates. If this test ever goes red because
+// the handler started filtering, that is a genuine behaviour change and the
+// comment above needs rewriting — which is the point of pinning it.
+func TestAuditLog_ReadSurfaceRedactsNothing(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	systemDir := filepath.Join(api.homePath, "system")
+	require.NoError(t, os.MkdirAll(systemDir, 0o700))
+
+	// Secret-shaped, so a leak is recognisable in failure output as the thing
+	// it would be in a customer's audit file.
+	const leakedPassword = "hunter2-Tr0ub4dor&3"
+	const leakedPAN = "4111111111111111"
+
+	leaked := map[string]any{
+		"timestamp": "2026-09-02T10:00:02Z",
+		"event":     "browser_snapshot",
+		"decision":  "allow",
+		"agent_id":  "ray",
+		"details": map[string]any{
+			"page_origin": "https://shop.example.com",
+			"node_count":  4,
+			// The regression this stands in for: the rendered outline, values
+			// and all, copied into the record "for debugging".
+			"text": `textbox "Password" value="` + leakedPassword + `"` + "\n" +
+				`textbox "Card number" value="` + leakedPAN + `"`,
+		},
+	}
+	line, err := json.Marshal(leaked)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(systemDir, "audit.jsonl"), append(line, '\n'), 0o600))
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/audit-log", nil)
+	w := httptest.NewRecorder()
+	api.HandleAuditLog(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// DECODED, not raw. encoding/json HTML-escapes "&" to & on the way
+	// out, so a raw-substring check would have reported the password as
+	// "removed" when it was merely escaped — which is the opposite of the
+	// truth and would have sent the next reader looking for redaction that
+	// does not exist. The question is what a CLIENT receives after parsing,
+	// so parse it.
+	var resp struct {
+		Entries []struct {
+			Event   string         `json:"event"`
+			Details map[string]any `json:"details"`
+		} `json:"entries"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Entries, 1, "the record must be returned at all")
+	require.Equal(t, "browser_snapshot", resp.Entries[0].Event)
+
+	got, _ := resp.Entries[0].Details["text"].(string)
+	assert.Contains(t, got, leakedPassword,
+		"the audit-log endpoint removed a stored password. That is a behaviour change, not a "+
+			"pass: this endpoint is a faithful reader, and the ONLY defence against a page value "+
+			"reaching the trail is SnapshotTool.recordSnapshot never writing one. If read-side "+
+			"redaction has genuinely been added, say so here — and do not let it become the reason "+
+			"the emitter's own guarantee stops being tested.")
+	assert.Contains(t, got, leakedPAN,
+		"same: the read surface neither redacts nor truncates stored details")
 }
