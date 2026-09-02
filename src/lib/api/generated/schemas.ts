@@ -1831,7 +1831,11 @@ export const SessionPage: z.ZodType<SessionPage> = z.object({
   partial_errors: z.array(z.string()).optional(),
 });
 export const SessionCreateRequest = z
-  .object({ agent_id: z.string(), type: z.enum(["chat", "task", "channel"]) })
+  .object({
+    agent_id: z.string(),
+    type: z.enum(["chat", "task", "channel"]),
+    workspace_id: z.string().max(128),
+  })
   .partial();
 export const Attachment: z.ZodType<Attachment> = z.object({
   type: z.enum(["image", "audio", "video", "file"]),
