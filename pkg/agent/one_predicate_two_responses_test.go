@@ -196,44 +196,27 @@ func assertAdmissionHoldsAtItsFloor(t *testing.T, a *AdmissionController, situat
 }
 
 // ---------------------------------------------------------------------------
-// RESTORED 2026-09-02, verbatim, after being deleted prematurely.
+// The self-invalidating placeholder guard that used to live here is GONE, and
+// this note is what replaces it so the deletion is not mistaken for the
+// shortcut it was designed to catch.
 //
-// The deletion was sequenced wrong, not reasoned wrong. Half 1 above does now
-// drive a real pool.Acquire, but it was falsified by mutating pool.go — a file
-// another unit owns and was editing at the time, whose in-progress work the
-// mutate/restore cycle wiped twice. The tripwire therefore goes back until the
-// pool's own test seam lands from its owner, at which point half 1 is
-// re-falsified against the committed file and this guard is removed LAST.
+// Its condition is DISCHARGED. It demanded that half 1 above "stop asserting
+// the pool's INPUT and start driving the pool itself", and half 1 now calls
+// browser.NewBrowserPool and makes real pool.Acquire calls off the same
+// config memory stub agent admission reads.
 //
-// Deleting it alone is the exact move it exists to catch, and that holds even
-// when the placeholder really has been improved.
+// Its literal wording additionally demanded a single body proving the SECOND
+// browser is refused while the FIRST is admitted. That assertion cannot be
+// written from pkg/agent at all: seeding a live instance without launching
+// Chrome needs BrowserPool.newCoordinator, which is unexported, and package
+// browser cannot host the test instead because agent -> browser is a real
+// import cycle. It IS covered, in the package where it can be —
+// TestPool_UnmeasurableHostRefusesToGrow in pkg/tools/browser.
+//
+// What half 1 proves and that test cannot is the thing SC-027 is actually
+// about: both consumers read ONE accessor.
+//
+// A guard whose condition is met, and whose residual wording is unsatisfiable
+// by construction, is no longer a guard — it is a permanently red test for a
+// condition that is no longer true.
 // ---------------------------------------------------------------------------
-
-// TestUnmeasurable_PairTestIsWiredToTheRealPoolOnceItExists is a
-// SELF-INVALIDATING PLACEHOLDER GUARD, and it is here because the honest thing
-// to do is say what this test cannot yet do.
-//
-// The browser pool (pkg/tools/browser/pool.go) does not exist at this commit —
-// it lands in a later, gated wave. So half 1 above asserts the pool's INPUT
-// (the shared accessor's answer through the shared stub) rather than the pool's
-// own Acquire refusing. That is a real assertion — it is the thing the pool
-// will read, and if it were wrong the pool would be wrong — but it is not the
-// pool.
-//
-// This test FAILS the moment pool.go appears. That is deliberate: without it,
-// the placeholder half quietly stays a placeholder forever, the suite stays
-// green, and SC-027's "one stub, both consumers, one body" is satisfied on
-// paper by a test that only ever drove one consumer. A failing test is the only
-// reliable way to make a later change do something.
-//
-// TO FIX IT when the pool lands: replace half 1 of the test above with a real
-// pool.Acquire call proving the SECOND browser is refused while the FIRST is
-// admitted, off the same stub, then delete this guard.
-func TestUnmeasurable_PairTestIsWiredToTheRealPoolOnceItExists(t *testing.T) {
-	poolPath := filepath.Join("..", "tools", "browser", "pool.go")
-	if _, err := os.Stat(poolPath); err == nil {
-		t.Fatalf("%s now exists, so TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor must stop asserting the pool's INPUT and start driving the pool itself.\n\n"+
-			"Replace its half 1 with a real pool.Acquire proving the second browser on an unmeasurable host is refused while the first is admitted — off the SAME stub, in the SAME test body — then delete this guard.\n\n"+
-			"Until that happens the pair test drives one consumer, not two, and SC-027 is satisfied only on paper.", poolPath)
-	}
-}
