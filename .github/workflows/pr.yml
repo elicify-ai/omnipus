@@ -445,6 +445,58 @@ jobs:
           echo "PATH candidates present: $(command -v chrome || true)" >&2
           exit 1
 
+      - name: "G-2 gate: chrome.tabCapture against a SECOND Chrome process"
+        # ADR-072 / browser-workspace-ownership-spec FR-045, SC-012a.
+        #
+        # This is a MEASUREMENT GATE, not coverage. It answers one yes/no
+        # question the per-workspace browser pool's whole design rests on:
+        # ADR-048 proved chrome.tabCapture cannot capture a tab in a
+        # CDP-CREATED browser context; the pool claims a tab in a SEPARATE
+        # Chrome PROCESS's own default context does not inherit that
+        # restriction. If this step goes red, the pool design is wrong and
+        # must be revisited — it is not a flake to retry.
+        #
+        # Its OWN step with its OWN -run filter, deliberately NOT folded into
+        # the whole-package step below: that step asserts `passes >= 180`, a
+        # floor a single-test invocation trips by construction. (The spike
+        # also runs inside that whole-package step, as any package test does;
+        # this step is what makes its verdict individually visible and
+        # individually blocking.)
+        #
+        # The test itself uses requireBrowserOrFail
+        # (pkg/tools/browser/browser_e2e_test.go), which t.Fatal's exactly
+        # where skipIfNoBrowser would t.Skip — a missing browser reads RED
+        # here, not green. The assertions below are the second half of the
+        # same rule: `go test` exits 0 when everything skips, and a `-run`
+        # regex that matches nothing also exits 0. A gate that did not run
+        # has answered nothing, so "exited 0" is never accepted as the
+        # verdict on its own.
+        run: |
+          set -euo pipefail
+          go test -v -tags goolm,stdjson -count=1 -timeout 600s \
+            -run '^TestSpike_CaptureAgainstSecondChrome$' \
+            ./pkg/tools/browser 2>&1 | tee /tmp/g2-second-chrome.log
+
+          if grep -q 'no tests to run' /tmp/g2-second-chrome.log; then
+            echo "::error::G-2: the -run filter matched no test — TestSpike_CaptureAgainstSecondChrome was renamed or removed. The gate did not run." >&2
+            exit 1
+          fi
+
+          skips=$(grep -c -- '--- SKIP' /tmp/g2-second-chrome.log || true)
+          if [ "$skips" -ne 0 ]; then
+            echo "::error::G-2: the gate SKIPPED ($skips skip(s)). A skipped gate is a FAILED gate — it proves nothing about chrome.tabCapture against a second Chrome." >&2
+            grep -- '--- SKIP' /tmp/g2-second-chrome.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -c -- '--- PASS' /tmp/g2-second-chrome.log || true)
+          if [ "$passes" -ne 1 ]; then
+            echo "::error::G-2: expected exactly one '--- PASS' line, got $passes. The gate's result is not what this step asserts on." >&2
+            exit 1
+          fi
+
+          echo "G-2 PASS: chrome.tabCapture reached a tab in a SECOND Chrome process's default browser context."
+
       - name: Run pkg/tools/browser real-Chrome tests
         # Assert the tests RAN — do not just assert the process exited 0.
         # `go test` exits 0 when every test skips, which is exactly how #615's

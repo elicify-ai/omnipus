@@ -7,17 +7,20 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 )
 
 const testHTML = `<!DOCTYPE html>
@@ -109,6 +112,100 @@ func skipIfNoBrowser(t *testing.T) {
 	// the test here with a clear skip reason — there is no path back into
 	// this function afterward.
 	resolveTestBinary(t)
+}
+
+// requireBrowserOrFail is skipIfNoBrowser's counterpart for MEASUREMENT
+// GATES: it resolves a real Chrome the same three ways skipIfNoBrowser does,
+// but when none can be obtained it calls t.Fatalf — it NEVER calls t.Skip.
+// It returns the resolved executable path so the caller can pin
+// BrowserConfig.ExecPath to the exact binary that was proven to run.
+//
+// Why a second helper rather than a flag on the first: skipIfNoBrowser is
+// right for ordinary coverage (an absent browser is an environment fact, not
+// a code defect, and skipping keeps a laptop without Chrome usable). It is
+// exactly wrong for a gate. A gate exists to answer a yes/no question about
+// reality before a design is allowed to proceed; a gate that reports green
+// because it never ran has answered nothing while looking identical to an
+// answer. skipIfNoBrowser has TWO independent skip paths — the
+// CI-without-OMNIPUS_BROWSER_E2E branch, and resolveTestBinary's own
+// t.Skipf when even the managed install/download comes up empty — and both
+// of them exit 0. Any gate wired through it can therefore report success
+// having launched no browser at all.
+//
+// Deliberate differences from skipIfNoBrowser:
+//   - No CI / OMNIPUS_BROWSER_E2E branch. A gate's verdict must not depend
+//     on an opt-in env var: unset, the answer would be "skipped", not "no".
+//   - resolveTestBinary is NOT called, even though this duplicates its two
+//     resolution steps. That helper's failure path is t.Skipf, and calling
+//     it would reintroduce the exact skip this helper exists to remove.
+//   - It resolves through the same STABLE shared install dirs
+//     resolveTestBinary uses (~/.omnipus/browser/chromium first, then
+//     os.TempDir()/omnipus-shared-test-chromium), so a run that has already
+//     paid for a managed Chrome download reuses it and costs nothing extra.
+//
+// Note for scripts/check-browser-tests-gated.sh: that guard requires every
+// test calling newCoordinatorTestConfig / resolveTestBinary /
+// resolveTestBinaryHeadlessShell to also call skipIfNoBrowser. Gate tests
+// using this helper must call NONE of those three (build the BrowserConfig
+// literal inline instead) — not to evade the guard, but because a gate must
+// not be gated by a skip. The guard's purpose (no undeclared ~100 MB
+// download from an ordinary test) is preserved here: this helper prefers an
+// already-installed browser and only downloads as its last resort, in a
+// test whose whole job is to launch real Chrome.
+func requireBrowserOrFail(t *testing.T) string {
+	t.Helper()
+
+	// Source 1: $PATH, probed with --version (an Ubuntu snap stub resolves
+	// but exits 1 — see skipIfNoBrowser's note).
+	for _, name := range []string{"chromium-browser", "chromium", "google-chrome", "google-chrome-stable"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		if exec.Command(path, "--version").Run() == nil {
+			return path
+		}
+	}
+
+	// Source 2: macOS .app bundles, which LookPath never finds.
+	if runtime.GOOS == "darwin" {
+		for _, path := range macOSChromeAppPaths {
+			if exec.Command(path, "--version").Run() == nil {
+				return path
+			}
+		}
+	}
+
+	// Source 3a: this codebase's managed install root.
+	if home, err := os.UserHomeDir(); err == nil {
+		if platform, perr := cftPlatform(); perr == nil {
+			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+			if bin := findInstalledBinary(installRoot, platform); bin != "" {
+				return bin
+			}
+		}
+	}
+
+	// Source 3b: download Chrome for Testing into the same stable shared dir
+	// resolveTestBinary uses, so repeat runs reuse the install.
+	bin, err := EnsureChromium(
+		context.Background(), filepath.Join(os.TempDir(), "omnipus-shared-test-chromium"),
+	)
+	if err != nil {
+		t.Fatalf(
+			"requireBrowserOrFail: no real Chrome could be obtained from $PATH, the macOS .app "+
+				"locations, the managed install root, or a Chrome-for-Testing download: %v\n"+
+				"This is a measurement gate: it must FAIL rather than skip, because a gate that "+
+				"did not run has answered nothing.", err,
+		)
+	}
+	if bin == "" {
+		t.Fatal(
+			"requireBrowserOrFail: Chrome-for-Testing resolution returned an empty path with no error " +
+				"— refusing to report a gate as passed against a browser that does not exist",
+		)
+	}
+	return bin
 }
 
 func startTestServer(t *testing.T) *httptest.Server {
@@ -357,4 +454,291 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 		strings.Contains(msg, "blocked") ||
 		strings.Contains(msg, "private")
 	assert.True(t, ssrfBlocked, "error should mention SSRF/blocked/private, got: %s", msg)
+}
+
+// ---------------------------------------------------------------------------
+// G-2 — the mechanical gate for the per-workspace browser pool (ADR-072 /
+// browser-workspace-ownership-spec FR-045).
+// ---------------------------------------------------------------------------
+
+// spikeCaptureResult is what TestSpike_CaptureAgainstSecondChrome's in-page
+// probe hands back. Every field is reported in the failure message, because
+// the only thing worse than this gate failing is this gate failing without
+// saying which step failed.
+type spikeCaptureResult struct {
+	OK          bool     `json:"ok"`
+	Error       string   `json:"error"`
+	StreamID    string   `json:"streamId"`
+	VideoTracks int      `json:"videoTracks"`
+	ReadyState  string   `json:"readyState"`
+	TrackLabel  string   `json:"trackLabel"`
+	TargetURL   string   `json:"targetUrl"`
+	TabURLs     []string `json:"tabUrls"`
+}
+
+// spikeLaunchChrome launches ONE real Chrome process with its OWN
+// --user-data-dir and the real capture extension configured, and returns the
+// coordinator plus the profile directory that became that process's
+// --user-data-dir (coordinator.go's launchChrome passes cfg.ProfileDir
+// straight through to pipeLaunchConfig.userDataDir).
+//
+// It deliberately builds the BrowserConfig literal inline rather than calling
+// newCoordinatorTestConfig: that helper is one of the three markers
+// scripts/check-browser-tests-gated.sh keys on, and a gate must not be gated
+// by skipIfNoBrowser. ExecPath is pinned to the binary requireBrowserOrFail
+// already proved runs, so no resolution happens here at all.
+//
+// The profile dir uses os.MkdirTemp + an explicit RemoveAll rather than
+// t.TempDir(), matching TestBrowserTools_E2E_DirectChromedp: a Chrome profile
+// can outlive the test with files t.TempDir()'s cleanup then fails on.
+func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCoordinator, string) {
+	t.Helper()
+
+	home, err := os.MkdirTemp("", "omnipus-spike-"+label+"-*")
+	require.NoError(t, err, "temp home for %s Chrome", label)
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+
+	profileDir := filepath.Join(home, "browser", "profiles", "default")
+	cfg := BrowserConfig{
+		Enabled:     true,
+		Headless:    true,
+		PageTimeout: 30 * time.Second,
+		MaxTabs:     5,
+		ProfileDir:  profileDir,
+		ExecPath:    execPath,
+		// The REAL capture extension, not a minimal stand-in: the gate's
+		// question is about chrome.tabCapture as this product actually calls
+		// it, from the page this product actually loads.
+		ExtensionDir:    extDir,
+		ExtensionID:     captureext.ExtensionID,
+		TrustPathChrome: true, // requireBrowserOrFail already probed this binary
+	}
+
+	coord := NewBrowserCoordinator(home, cfg, 30)
+	t.Cleanup(coord.Shutdown)
+
+	launchCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	require.NoError(t, coord.ensureLaunched(launchCtx), "launch the %s Chrome process", label)
+
+	return coord, profileDir
+}
+
+// TestSpike_CaptureAgainstSecondChrome is gate G-2 (FR-045, SC-012a). It
+// blocks the entire per-workspace browser pool: if it fails, the pool's
+// central design premise is false and the design must change, not the test.
+//
+// The premise under test. ADR-048 established, against real Chrome, that
+// chrome.tabCapture CANNOT capture a tab living in a CDP-CREATED browser
+// context (Target.createBrowserContext): getMediaStreamId fails with
+// "Invalid tab specified." regardless of enableInIncognito. That is why the
+// current single-Chrome design has to put both the encoder page and the
+// agent's own tab in the ONE default browser context, and it is the reason
+// per-agent CDP contexts cannot be the isolation mechanism. ADR-072's pool
+// replaces CDP contexts with one Chrome PROCESS per workspace, each with its
+// own --user-data-dir profile — and rests entirely on the claim that a tab in
+// a SEPARATE PROCESS's own default context does NOT inherit that restriction.
+// Nothing had ever tested that claim. This test does.
+//
+// What it proves, in order:
+//  1. Two Chrome PROCESSES are alive at once (distinct, non-zero pids), each
+//     having written into its OWN --user-data-dir.
+//  2. The second Chrome loaded the real capture extension.
+//  3. The extension in Chrome #2 sees ONLY Chrome #2's tabs — Chrome #1's tab
+//     (marked in=chrome-one) is not in chrome.tabs.query's result. Process
+//     separation is real, not nominal.
+//  4. chrome.tabCapture.getMediaStreamId SUCCEEDS for a tab in Chrome #2's
+//     DEFAULT browser context (coord2.contextCount() == 0 proves no CDP
+//     browser context was ever created here), and the returned id yields a
+//     getUserMedia MediaStream carrying a LIVE video track.
+//
+// (4) is the load-bearing assertion. The stream id alone is not enough: the
+// id is what the historical failure mode rejected, but a live track is what
+// proves the capture pipeline actually attached to the tab's compositor.
+//
+// Audio is deliberately out of scope. Chrome's --headless audio capture on
+// darwin is unverified (capability.go's darwinAudioVerified is still false),
+// so requesting audio here would make the gate fail for a reason unrelated to
+// the question being asked. The pool's premise is about tabCapture reaching a
+// second process's tab at all.
+//
+// This test uses requireBrowserOrFail, NEVER skipIfNoBrowser: a skipped
+// result is a FAILED gate, not a pass. It runs as its own step in the
+// browser-e2e job (.github/workflows/pr.yml) with its own -run filter, so it
+// cannot be swallowed by the whole-package step's >=180 pass floor.
+func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
+	execPath := requireBrowserOrFail(t)
+	t.Logf("G-2 spike: resolved Chrome at %s", execPath)
+
+	srv := startTestServer(t)
+	t.Cleanup(srv.Close)
+
+	extDir, err := captureext.Seed(t.TempDir())
+	require.NoError(t, err, "seed the real capture extension")
+
+	// --- 1. two Chrome processes, two --user-data-dirs ----------------------
+	coord1, profile1 := spikeLaunchChrome(t, "one", execPath, extDir)
+	coord2, profile2 := spikeLaunchChrome(t, "two", execPath, extDir)
+
+	pid1, pid2 := coord1.PID(), coord2.PID()
+	require.NotZero(t, pid1, "first Chrome must report a live pid")
+	require.NotZero(t, pid2, "second Chrome must report a live pid")
+	require.NotEqual(t, pid1, pid2, "the two Chromes must be SEPARATE processes")
+	require.NotEqual(t, profile1, profile2, "the two Chromes must have distinct --user-data-dir values")
+	t.Logf("G-2 spike: chrome#1 pid=%d profile=%s", pid1, profile1)
+	t.Logf("G-2 spike: chrome#2 pid=%d profile=%s", pid2, profile2)
+
+	for label, dir := range map[string]string{"one": profile1, "two": profile2} {
+		entries, rerr := os.ReadDir(dir)
+		require.NoError(t, rerr, "chrome#%s must have created its own user-data-dir at %s", label, dir)
+		require.NotEmpty(
+			t, entries,
+			"chrome#%s's user-data-dir %s is empty — that process did not actually use its own profile",
+			label, dir,
+		)
+	}
+
+	// --- 2. the second Chrome has the real capture extension ---------------
+	if coord2.LoadedExtensionID() != captureext.ExtensionID {
+		loadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		id, lerr := coord2.LoadExtension(loadCtx)
+		cancel()
+		require.NoError(t, lerr, "load the capture extension into the SECOND Chrome")
+		require.Equal(t, captureext.ExtensionID, id, "extension id must be the pinned, manifest-key-derived id")
+	}
+	require.Equal(
+		t, captureext.ExtensionID, coord2.LoadedExtensionID(),
+		"the second Chrome must report the capture extension as loaded",
+	)
+
+	// --- 3. one tab per Chrome, both in each process's DEFAULT context ------
+	//
+	// chromedp.NewContext off the coordinator's rootCtx creates a plain
+	// Target.createTarget with NO browserContextId — i.e. the default browser
+	// context. Register (which is what creates per-agent CDP contexts) is
+	// never called here, and contextCount() is asserted to be 0 below, so
+	// there is no CDP-created context anywhere in this test.
+	oneURL := srv.URL + "/?in=chrome-one"
+	twoURL := srv.URL + "/?in=chrome-two"
+
+	root1, ok := coord1.RootContext()
+	require.True(t, ok, "first Chrome must expose a live root context")
+	tab1, cancelTab1 := chromedp.NewContext(root1)
+	t.Cleanup(cancelTab1)
+	nav1Ctx, cancelNav1 := context.WithTimeout(tab1, 60*time.Second)
+	defer cancelNav1()
+	require.NoError(
+		t,
+		chromedp.Run(nav1Ctx, chromedp.Navigate(oneURL), chromedp.WaitReady("#heading", chromedp.ByQuery)),
+		"navigate the FIRST Chrome's tab",
+	)
+
+	root2, ok := coord2.RootContext()
+	require.True(t, ok, "second Chrome must expose a live root context")
+	tab2, cancelTab2 := chromedp.NewContext(root2)
+	t.Cleanup(cancelTab2)
+	nav2Ctx, cancelNav2 := context.WithTimeout(tab2, 60*time.Second)
+	defer cancelNav2()
+	require.NoError(
+		t,
+		chromedp.Run(nav2Ctx, chromedp.Navigate(twoURL), chromedp.WaitReady("#heading", chromedp.ByQuery)),
+		"navigate the SECOND Chrome's tab",
+	)
+
+	require.Zero(
+		t, coord2.contextCount(),
+		"the captured tab must live in the second Chrome's DEFAULT browser context — "+
+			"no CDP browser context may exist in this test, or the gate would be re-proving ADR-048",
+	)
+
+	// --- 4. capture, from the extension page inside the SECOND Chrome ------
+	encCtx, cancelEnc := chromedp.NewContext(root2)
+	t.Cleanup(cancelEnc)
+	encURL := "chrome-extension://" + captureext.ExtensionID + "/encoder.html"
+	loadEncCtx, cancelLoadEnc := context.WithTimeout(encCtx, 60*time.Second)
+	defer cancelLoadEnc()
+	require.NoError(
+		t, chromedp.Run(loadEncCtx, chromedp.Navigate(encURL)),
+		"open the capture extension's own page in the SECOND Chrome (%s)", encURL,
+	)
+
+	// encoder.js only starts its capture/WebRTC flow when
+	// window.__omnipusCapture has been injected; it is not, so the page is
+	// inert and this probe drives chrome.tabCapture itself — the same two
+	// calls encoder.js's captureActiveTabStream makes, in the same order.
+	probe := fmt.Sprintf(`(async () => {
+  const out = {ok:false, error:"", streamId:"", videoTracks:0, readyState:"", trackLabel:"", targetUrl:"", tabUrls:[]};
+  try {
+    const tabs = await chrome.tabs.query({});
+    out.tabUrls = tabs.map(t => t.url || "");
+    const target = tabs.find(t => (t.url || "").indexOf(%q) !== -1);
+    if (!target) { out.error = "target tab not visible to this Chrome's extension"; return out; }
+    out.targetUrl = target.url;
+    const streamId = await chrome.tabCapture.getMediaStreamId({targetTabId: target.id});
+    out.streamId = streamId || "";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {mandatory: {chromeMediaSource: "tab", chromeMediaSourceId: streamId, maxFrameRate: 30}}
+    });
+    const tracks = stream.getVideoTracks();
+    out.videoTracks = tracks.length;
+    if (tracks.length) { out.readyState = tracks[0].readyState; out.trackLabel = tracks[0].label; }
+    tracks.forEach(t => t.stop());
+    out.ok = out.videoTracks > 0 && out.readyState === "live";
+  } catch (e) {
+    out.error = String((e && e.message) ? e.message : e);
+  }
+  return out;
+})()`, "in=chrome-two")
+
+	var res spikeCaptureResult
+	evalCtx, cancelEval := context.WithTimeout(encCtx, 90*time.Second)
+	defer cancelEval()
+	require.NoError(
+		t,
+		chromedp.Run(evalCtx, chromedp.Evaluate(probe, &res, func(p *cdpruntime.EvaluateParams) *cdpruntime.EvaluateParams {
+			return p.WithAwaitPromise(true)
+		})),
+		"the in-page tabCapture probe must complete (a transport/eval failure is not an answer to the gate's question)",
+	)
+	t.Logf("G-2 spike: probe result %+v", res)
+
+	// Process isolation: Chrome #2's extension must not see Chrome #1's tab.
+	for _, u := range res.TabURLs {
+		require.NotContains(
+			t, u, "in=chrome-one",
+			"the second Chrome's extension saw the FIRST Chrome's tab (%s) — the two processes are not isolated", u,
+		)
+	}
+
+	require.Empty(
+		t, res.Error,
+		"chrome.tabCapture failed against the SECOND Chrome's default-context tab. "+
+			"If this is \"Invalid tab specified.\", the per-workspace browser POOL DESIGN IS WRONG: "+
+			"a separate Chrome process does not lift the ADR-048 capture restriction and ADR-072 must be "+
+			"revisited before any pool code is written. Full probe result: %+v", res,
+	)
+	require.NotEmpty(t, res.StreamID, "getMediaStreamId must return a non-empty stream id; probe result: %+v", res)
+	require.Contains(t, res.TargetURL, "in=chrome-two", "the captured tab must be the SECOND Chrome's tab")
+	require.GreaterOrEqual(
+		t, res.VideoTracks, 1,
+		"getUserMedia must yield at least one video track — a stream id with no track is not proof of capture; probe result: %+v", res,
+	)
+	require.Equal(
+		t, "live", res.ReadyState,
+		"the captured video track must be LIVE, not ended; probe result: %+v", res,
+	)
+	require.True(t, res.OK, "probe reported failure; result: %+v", res)
+
+	// The first Chrome must still be alive: the gate's claim is about a
+	// SECOND concurrent process, not about a replacement for the first.
+	require.True(
+		t, pidAlive(pid1),
+		"the first Chrome (pid %d) must still be running — the gate is about two CONCURRENT processes", pid1,
+	)
+
+	t.Logf(
+		"G-2 PASS: chrome.tabCapture reached a tab in the SECOND Chrome's default context "+
+			"(pid %d, profile %s); streamId=%q video tracks=%d readyState=%q label=%q",
+		pid2, profile2, res.StreamID, res.VideoTracks, res.ReadyState, res.TrackLabel,
+	)
 }
