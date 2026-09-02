@@ -45,6 +45,13 @@ import (
 func operatorTakeoverFixture(t *testing.T) *BrowserManager {
 	t.Helper()
 	m := newTestManagerWithFakeTabs(t)
+	// Pin the FR-060 memory gate open. Not an oracle relaxation: this suite is
+	// about WHOSE tab set an action lands on, and admission-by-live-memory is
+	// a different requirement with its own tests (refuseTabsAtOrAbove /
+	// unmeasurableHost). Left unpinned it reads the REAL host, so these tests
+	// went red on a busy machine with "this machine is low on memory" — a
+	// green that depends on machine load is not a green.
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 
 	// The operator browses first, through the live panel.
 	operatorSet := m.OperatorSessionID()
