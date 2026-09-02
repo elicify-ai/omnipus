@@ -1931,11 +1931,26 @@ const (
 //                (the existing launched/launching/launchDone triple, per entry).
 // INVARIANT P-2: there is NO bound on len(live) expressed as a count. Under
 //                D1.5a the only bound is live memory, so the invariant is
-//                stated on the gate rather than on the number: NO instance is
-//                launched, and NO tab is opened, while the memory gate refuses
-//                (FR-057, FR-060) OR cannot measure the host (FR-065 -- an
-//                unmeasurable host is FULL, not empty). Revision 3 asserted
-//                len(live) <= cap and
+//                stated on the gate rather than on the number: no instance is
+//                launched, and no tab is opened, while the memory gate refuses
+//                (FR-057, FR-060) OR cannot measure the host (FR-065 -- past
+//                the floor, an unmeasurable host is FULL, not empty).
+//
+//                THE FLOOR IS PART OF THE INVARIANT, not an exception to it
+//                (FR-082, round-4 C-401). "Refuses to GROW" is meaningless
+//                until "grow from what" is fixed, and it is fixed at ONE
+//                browser and ONE tab in it, per HOST. On an unmeasurable host
+//                the FIRST launch and the FIRST tab SUCCEED; the SECOND of
+//                each is refused, naming memory. An earlier wording of this
+//                invariant said NO instance and NO tab while unmeasurable,
+//                full stop -- a pool built from it removes browsing entirely
+//                from gVisor and GKE Sandbox, which §0.9 establishes as
+//                SUPPORTED Linux deployments (they reach ok=false through
+//                meminfo_linux.go's fallback, not through the non-Linux
+//                stub), and test 83 fails if either the first browser or the
+//                first tab is refused.
+//
+//                Revision 3 asserted len(live) <= cap and
 //                revision 4 asserted len(live) <= target+1; both named a
 //                quantity that no longer exists, and a test asserting either
 //                would now pass vacuously against a pool with no gate at all.
@@ -1993,9 +2008,20 @@ type BrowserPool struct{ /* ... */ }
 // page is a refusal disguised as a success.
 //
 // If the gate cannot MEASURE the host at all -- Headroom's measurable == false
-// -- Acquire refuses immediately and does NOT evict first: there is nothing to
-// re-ask, and evicting a live browser to make room a blind gate would not see
-// costs a workspace its Chrome for no gain (FR-065). The refusal names memory,
+// -- Acquire admits the FIRST instance on the host (FR-082's floor:
+// len(p.LiveKeys()) == 0) and refuses every launch past it. Read that as a
+// floor and not as an exception: a floor of ZERO removes browsing from gVisor
+// and GKE Sandbox, /proc-less Linux deployments §0.9 establishes as SUPPORTED,
+// on the strength of a reading the host declines to give; a floor of TWO is
+// unpriced, because the second Chrome's ~182 MB PER_BROWSER_COST is exactly
+// the figure an unmeasurable host cannot check itself against. The same floor
+// applies one level down at the tab gate: the first tab in that instance
+// opens, the second is refused (FR-060, FR-082). Test 83 asserts BOTH halves
+// and fails if either the first browser or the first tab is refused.
+//
+// Past the floor Acquire refuses immediately and does NOT evict first: there
+// is nothing to re-ask, and evicting a live browser to make room a blind gate
+// would not see costs a workspace its Chrome for no gain (FR-065). The refusal names memory,
 // carries the memory_pressure reason code, and its log line says availability
 // could not be determined rather than that the host is short -- they are
 // different problems with different remedies. This is the ONE case where an
