@@ -1,14 +1,18 @@
 title: BrowserAttachFrame
 description: >
   Client → server. Binds this browser-live WebSocket connection to a
-  session's browser and starts watching it for control-lock and tab-strip
+  workspace's browser and starts watching it for control-lock and tab-strip
   bookkeeping (video is carried exclusively by WebRTC — see
-  BrowserWebRTCStateFrame, ADR-061). Per ADR-043 agents browse
-  concurrently in isolated per-agent browser contexts within one shared
-  Chrome; agent_id is the binding key (selects which agent's
-  BrowserManager + browser context the live view attaches to), and
-  session_id is correlation-only (the server binds to the active tab in
-  that agent's context). See ADR-038 and ADR-043.
+  BrowserWebRTCStateFrame, ADR-061). Per ADR-072 a browser belongs to a
+  WORKSPACE, not to an agent: one workspace, one Chrome, one profile
+  directory, one cookie jar, shared by every agent on that workspace's team.
+  session_id RESOLVES the browsing context — the gateway reads the named chat
+  session's own workspace_id from the session meta, server-side, and attaches
+  to that workspace's browser. agent_id names who is asking and is checked for
+  membership of that workspace; it is NO LONGER the binding key. When the
+  session names no workspace the gateway falls back to the agent's own
+  workspace membership, and REFUSES rather than tie-breaking when that is
+  ambiguous (ADR-072 FR-033). See ADR-072, ADR-038 and ADR-043.
 type: object
 required:
   - type
@@ -24,17 +28,23 @@ properties:
     minLength: 1
     maxLength: 128
     description: >-
-      The client's chat session id, carried for context/correlation and
-      logging only — echoed back on outgoing browser_status / browser_tabs /
-      browser_webrtc_* frames so the client can match them to this attach
-      request. It does NOT select which browser tab the live view attaches
-      to: the server binds to the active tab in the attaching agent's OWN
-      browser context (per ADR-043, agents browse concurrently in isolated
-      per-agent contexts within one shared Chrome — cookie/login state is
-      not shared across agents), regardless of the value sent here.
-      agent_id is the binding key.
+      The client's chat session id. Under ADR-072 FR-017 it RESOLVES the
+      browsing context: the gateway reads THIS session's own workspace_id
+      from the session meta, server-side, and attaches to that workspace's
+      browser. No workspace identity is taken from the client — the client
+      sends only a session id, and a session naming a workspace the agent is
+      not on is ignored rather than honoured. It is still echoed back on
+      outgoing browser_status / browser_tabs / browser_webrtc_* frames so the
+      client can match them to this attach request. A session that names no
+      workspace degrades to the agent's own unambiguous membership, and to
+      FR-033's refusal when the agent is on more than one workspace.
+      agent_id is no longer the binding key.
   agent_id:
     type: string
     minLength: 1
     maxLength: 128
-    description: Agent whose BrowserManager owns the live tab.
+    description: >-
+      The agent this panel is open on. It names WHO is asking and must be a
+      member of the workspace session_id resolves to; it does not by itself
+      select a browser, because a browser belongs to the workspace and every
+      agent on that team shares it (ADR-072 FR-001).

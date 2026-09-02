@@ -1251,7 +1251,11 @@ func (h *BrowserWSHandler) handleAttach(
 		h.detach(prev, prevSession, viewerID, userID)
 	}
 
-	mgr, outcome := h.agentLoop.BrowserManagerForAgent(context.Background(), frame.AgentId, "")
+	// FR-017: the workspace is resolved on the SERVER from the attaching chat
+	// session's own meta — the client sends a session id and nothing else, and
+	// never gets to name a workspace. See sessionWorkspaceID.
+	mgr, outcome := h.agentLoop.BrowserManagerForAgent(
+		context.Background(), frame.AgentId, h.sessionWorkspaceID(frame.SessionId))
 	if outcome != agent.BrowserResolveOK {
 		wc.sendCriticalGen(
 			sessionErrorStatus(frame.SessionId, browserResolveReason(outcome, frame.AgentId)),
@@ -1948,6 +1952,61 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	}
 }
 
+// sessionWorkspaceID reads the workspace a chat session is bound to, from that
+// session's OWN meta on disk. It is ADR-072 FR-017's whole mechanism, and the
+// reason no wire field was added for the workspace (FR-016): the client tells
+// the gateway which chat it is looking at, and the gateway — not the client —
+// decides which workspace that is.
+//
+// The distinction matters more than it looks. A workspace's browser holds that
+// workspace's live logins, so a client-supplied workspace_id would be a request
+// to act as whoever that workspace is signed in as, honoured on the client's
+// say-so. Reading it server-side means the only thing a caller can influence is
+// WHICH OF ITS OWN chat sessions it names, and even that is not taken on trust:
+// the id returned here is a PREFERENCE, and
+// browser.ResolveBrowsingKeyForAgent accepts it only when the agent really is
+// on that workspace's team (FindForAgentPreferring must return the same id).
+// A session naming a workspace the agent is not on falls through to the plain
+// membership ladder, exactly as if it had named none.
+//
+// Returns "" — never an error — for every "no answer" case: no session id, no
+// store that owns it, unreadable meta, or a session that simply predates
+// workspace tagging. "" is not a failure here; it is the honest input to the
+// ladder, which then resolves from the agent's own membership and refuses
+// under FR-033 if that is ambiguous. Degrading to "" can only ever make the
+// resolution MORE conservative, never less.
+func (h *BrowserWSHandler) sessionWorkspaceID(chatSessionID string) string {
+	if h == nil || h.agentLoop == nil || chatSessionID == "" {
+		return ""
+	}
+	store := h.agentLoop.ResolveSessionStore(chatSessionID)
+	if store == nil {
+		return ""
+	}
+	meta, err := store.GetMeta(chatSessionID)
+	if err != nil || meta == nil {
+		return ""
+	}
+	return strings.TrimSpace(meta.WorkspaceID)
+}
+
+// browserNoWorkspaceRemedy is the ONE sentence-ending clause every surface that
+// reports "this agent has no browser of its own" must end with, word for word
+// (ADR-072 FR-008a, round-2 MIN-107). It is quoted verbatim out of
+// browser.ErrNoBrowsingContext, which is the authority: the panel, the tool
+// error an agent reads back, and the boot log must not each invent their own
+// phrasing of the same fix, because an operator who tries the panel's wording
+// and then reads the log has no way to tell whether they are being told to do
+// one thing or two.
+//
+// Keep this in sync with browser.ErrNoBrowsingContext by COPYING its text, and
+// never by paraphrase; TestGateway_ResolveOutcomes_AreDistinct asserts the
+// panel's no-workspace reason contains this exact substring AND that the
+// substring is really part of ErrNoBrowsingContext's own message, so a
+// re-wording on either side fails rather than silently diverging.
+const browserNoWorkspaceRemedy = "add this agent to a workspace's team, " +
+	"or run the request in a workspace chat"
+
 // browserResolveReason renders an agent.BrowserResolveOutcome as the sentence a
 // panel shows. The three failure reasons are DIFFERENT operator problems and
 // were indistinguishable before ADR-072 FR-008a — every one of them reported
@@ -1957,12 +2016,14 @@ func browserResolveReason(outcome agent.BrowserResolveOutcome, agentID string) s
 	switch outcome {
 	case agent.BrowserResolveNoWorkspace:
 		return fmt.Sprintf(
-			"agent %q is not on any workspace's team, so it has no browser of its own — "+
-				"add it to a workspace's team, or open this panel from a workspace chat", agentID)
+			"agent %q is not on any workspace's team, so it has no browser of its own — %s",
+			agentID, browserNoWorkspaceRemedy)
 	case agent.BrowserResolveAmbiguous:
 		return fmt.Sprintf(
-			"agent %q is on more than one workspace's team, so which browser this panel should "+
-				"show is ambiguous — open the panel from a workspace chat", agentID)
+			"agent %q is on more than one workspace's team, so which workspace's browser — and "+
+				"whose live logins — this panel would show is ambiguous; it is refused rather "+
+				"than guessed. Open this panel from a chat that belongs to the workspace you "+
+				"mean", agentID)
 	case agent.BrowserResolveLaunchFailed:
 		return fmt.Sprintf(
 			"the browser for agent %q could not be started — ensure Chromium/Chrome is installed "+

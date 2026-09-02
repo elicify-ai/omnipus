@@ -72,6 +72,20 @@ func (a *restAPI) HandleBrowserInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The empty preferred-workspace argument is DELIBERATE and is US-10/AC3.
+	// BrowserInspectRequest.session_id is a BROWSER session id, not a chat
+	// session id — it is the one place in this file family where the field of
+	// that name means something else — so there is no chat-session meta to
+	// read a workspace_id off, and passing it as a preference would ask the
+	// resolver to match a browser session id against workspace ids and
+	// silently get "" back anyway.
+	//
+	// The consequence is intended and is not a gap: an agent that belongs to
+	// more than one workspace is REFUSED here (FR-033, rendered as
+	// BrowserResolveAmbiguous below) rather than borrowing whichever workspace
+	// the live panel most recently resolved. Borrowing would mean an inspect
+	// silently reads the DOM of a different workspace's browser — one holding
+	// a different set of live logins — from the one the caller is looking at.
 	mgr, outcome := a.agentLoop.BrowserManagerForAgent(r.Context(), req.AgentId, "")
 	if outcome != agent.BrowserResolveOK {
 		reason := browserResolveReason(outcome, req.AgentId)

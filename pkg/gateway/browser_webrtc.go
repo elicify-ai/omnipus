@@ -276,7 +276,13 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	}
 	sessID := frame.SessionId
 
-	mgr, outcome := h.agentLoop.BrowserManagerForAgent(context.Background(), frame.AgentId, "")
+	// FR-017, identical to handleAttach's: the workspace comes off the
+	// attaching chat session's own meta, server-side. The panel and the video
+	// it carries MUST resolve to the same browser — an offer that resolved
+	// differently from the attach would stream one workspace's screen into
+	// another workspace's panel.
+	mgr, outcome := h.agentLoop.BrowserManagerForAgent(
+		context.Background(), frame.AgentId, h.sessionWorkspaceID(sessID))
 	if outcome != agent.BrowserResolveOK {
 		wc.sendCriticalGen(
 			sessionErrorStatus(sessID, browserResolveReason(outcome, frame.AgentId)),

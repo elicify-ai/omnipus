@@ -7819,10 +7819,10 @@ type BearerToken = string
 
 // BrowserInspectRequest Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
 type BrowserInspectRequest struct {
-	// AgentId Agent whose BrowserManager owns the live tab.
+	// AgentId The agent to resolve the browsing context from. This is the ONLY input that selects a browser on this endpoint, and the browser it selects belongs to the agent's workspace, not to the agent (ADR-072 FR-001).
 	AgentId string `json:"agent_id"`
 
-	// SessionId Browser session id (context/correlation; the live tab is the agent's default).
+	// SessionId A BROWSER session id, carried for context/correlation and logging only. Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id this is NOT a chat session id and it gains no workspace semantics under ADR-072: browser_inspect resolves the browsing context from agent_id ALONE, so an agent that belongs to more than one workspace is REFUSED here (ADR-072 FR-033) rather than borrowing whichever workspace the live panel happened to resolve.
 	SessionId string `json:"session_id"`
 
 	// X Device (CSS) x of the point to inspect.
