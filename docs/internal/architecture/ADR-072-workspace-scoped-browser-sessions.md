@@ -1590,6 +1590,57 @@ literals in `manifest_test.go`.
 | `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_upload_file`, `browser_handle_dialog` | 3 — search-only | Same posture as the eleven existing browser tools |
 | `browser_snapshot` | **3 — search-only** | Ruled 2026-09-02 (D1.9b ruling 3). ADR-071's previewed set is left intact. The consequence is accepted: agents reach for `browser_screenshot` instead, because that is what is in front of them | D2.4 calls it "the default way an agent reads a page". A tool reached only through search is a poor default. Either it earns Tier 2 (and `previewedLazyToolNames` grows from 7 to 8) or D2.4's wording overclaims. |
 
+### D2.9a A missing seed does NOT abort boot — it silently denies
+
+**Correction, 2026-09-02, found by the round-5 grill.** D2.9 and both specs
+repeatedly state that registering a tool without a seeded policy **aborts
+boot**, and the entire merge-ordering discipline rests on that as a safety net.
+**It is false.**
+
+`repairAndValidateToolPolicyCoverage` (`pkg/gateway/gateway.go:1335,1346`) runs
+`config.RepairIncompleteToolPolicyCoverage` **before**
+`config.ValidateToolPolicyCoverage`. The repair walks every gap, writes an
+explicit **`deny`** into that agent's own policy map, logs one WARN, and
+returns. Validation then finds zero gaps. Hot reload uses the same helper.
+
+**So both plausible mis-orderings boot green with all six tools denied on every
+agent:**
+
+| Mis-ordering | Result |
+|---|---|
+| Registration lands before the seeds | Repair backfills `deny` for all six on every agent. Green, one WARN. |
+| `allStaticToolNames` lands before the per-agent seeds | `denyAllThenOverride` stamps explicit `deny` for the six on every seeded agent. Coverage is **complete**, so no repair and no WARN at all — and per-agent `deny` beats the global `allow` under most-restrictive-wins. |
+
+**The second is worse and is exactly what the spec's own edit-site ordering
+prescribes.**
+
+**This failure class is already documented in the code**, at
+`gateway.go:1319-1328`: ADR-071's `ToolSearch`/`switch_agent` migration is
+sequenced before the repair *specifically* because otherwise *"the first
+post-upgrade boot would silently deny both on every agent — boot succeeds with
+no gap and no abort, and every agent silently loses hand-off."* That is
+verbatim what the six browser tools face.
+
+**Three consequences for the build:**
+
+1. **The seeds and the registration are ONE atomic commit**, not an ordered
+   sequence. An ordering whose failure mode is silent cannot be enforced by
+   review.
+2. **The gate moves from coverage to resolution.** A coverage check passes in
+   both failure directions; only resolving the effective policy through the
+   real compositor, per agent, detects it.
+3. **Every "aborts boot" claim in both specs is deleted**, replaced with the
+   real behaviour: a silent per-agent `deny` plus a WARN — and
+   `resolveEffectivePolicyWith` also fails closed to `deny` when neither side
+   has an entry (`pkg/tools/compositor.go:284-285`), so nothing downstream
+   turns it into an error an operator sees.
+
+**Hard Constraint #6 is unaffected as a rule** — every agent × tool must still
+resolve from an explicit entry. What is corrected is the *enforcement story*:
+the constraint is upheld by seeded data plus a repair that fails closed, not by
+a boot abort. A design that relies on the abort is relying on something the
+codebase removed.
+
 ### D2.9 Tool policy seeding (Hard Constraint #6)
 
 **Boot aborts on any `agent × tool` policy gap.** Six new static builtin tools
