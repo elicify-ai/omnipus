@@ -103,6 +103,21 @@ type BrowserConfig struct {
 	// all — exactly the steady-state resident-tab count this reaper exists
 	// to bound.
 	IdleTTL time.Duration `json:"idle_ttl,omitempty"`
+	// IdleCloseTTL is the WHOLE-CHROME idle window (ADR-072 FR-040): how long
+	// a workspace's browser may sit with zero tabs, zero live viewers and no
+	// call in flight before the process itself is closed. The profile
+	// directory survives, so the workspace is still logged in next time.
+	//
+	// It is a strictly coarser thing than IdleTTL, which reaps one TAB. The
+	// per-tab reaper is what brings a browser to zero tabs in the first
+	// place, so this window is deliberately a multiple of that one — see
+	// pool.go's defaultIdleCloseTTL for the value and for the fact that it is
+	// a reasoned default, not a measured one.
+	//
+	// Zero means "use the default". There is no way to disable it: idle close
+	// is one of the two things bounding this pool's memory, and FR-061
+	// forbids either of them shipping behind an off switch.
+	IdleCloseTTL time.Duration `json:"idle_close_ttl,omitempty"`
 	// StartPageURL is what a fresh tab opens instead of about:blank. Empty
 	// falls back to about:blank (the pre-existing behavior). The gateway sets
 	// this to its own served start page so a reopened panel lands somewhere
@@ -400,6 +415,10 @@ type BrowserManager struct {
 	// Chrome. nil-checked at the call site and defaults to launchManagedPipe.
 	pipeLauncherFn func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
 	sessions       map[string]*sessionEntry
+	// inFlight counts browser tool calls currently executing against this
+	// manager. Guarded by m.mu — see InFlight()'s doc comment for why it is
+	// deliberately not an atomic.
+	inFlight int
 	// memoryPressureFn is the FR-060 gate's test seam — a field, not a direct
 	// config.MemoryPressureHigh call, for exactly the reason createTabFn /
 	// listTargets / evalCDP are fields: a test must be able to drive the gate
@@ -455,6 +474,16 @@ type BrowserManager struct {
 	// create one whose disposal would destroy cookies on a reload. Cookies
 	// live in the workspace's profile directory on disk.
 	coordinator *BrowserCoordinator
+	// pool is the ADR-072 per-workspace browser pool. When set it SUPERSEDES
+	// the coordinator field: ensureStarted asks the pool for this key's
+	// Chrome, and the pool hands back the coordinator that owns it. The
+	// coordinator field is then a cached result, refreshed on every
+	// re-register — which matters because an idle close or an eviction
+	// replaces a key's coordinator, and a manager holding the old pointer
+	// would drive a dead pipe forever.
+	//
+	// A nil pool with a non-nil coordinator is the direct/test path.
+	pool *BrowserPool
 	// agentID identifies this per-agent manager to the coordinator (Register/
 	// Release/RemoveAgent are keyed by it). Set via AttachSharedChrome.
 	agentID string
@@ -622,6 +651,20 @@ func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, key
 	m.agentID = key.String()
 }
 
+// AttachPool wires this manager to the per-workspace browser pool (ADR-072
+// FR-037) instead of to one coordinator directly. This is production's path.
+//
+// The difference that matters: with a pool, WHICH Chrome this manager drives
+// is resolved on every ensureStarted rather than fixed at attach time. That is
+// what lets the pool close an idle browser, or evict one under memory
+// pressure, and have the next tool call quietly bring a fresh one up from the
+// same profile directory — the agent sees a slower call, not an error.
+func (m *BrowserManager) AttachPool(pool *BrowserPool, key BrowsingKey) {
+	m.pool = pool
+	m.key = key
+	m.agentID = key.String()
+}
+
 // OperatorSessionID is the manager-level session id naming the WORKSPACE-OWNED
 // tab set — the tabs the operator opened through the live panel, visible to
 // every agent on this workspace (ADR-072 §0.2a).
@@ -731,6 +774,77 @@ func (m *BrowserManager) Coordinator() *BrowserCoordinator {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.coordinator
+}
+
+// Viewers reports how many live-panel viewers are attached across every
+// browsing context this manager owns (ADR-072 FR-010).
+//
+// It exists because BOTH lifetime controls need it and neither may guess: the
+// pool refuses to evict a browser somebody is watching (FR-050) and refuses to
+// idle-close one (FR-040). "Somebody is watching" is not something either can
+// infer from tab activity — a person reading a page touches nothing for
+// minutes at a time, and treating that as idle closes the window they are
+// looking at.
+func (m *BrowserManager) Viewers() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, se := range m.sessions {
+		if se != nil {
+			n += se.viewers
+		}
+	}
+	return n
+}
+
+// InFlight reports how many browser_* tool calls are executing against this
+// manager right now (ADR-072 FR-051).
+//
+// EVERY browser tool increments it — leased and lease-exempt alike — because
+// the question eviction asks is "would killing this Chrome break a call that
+// is currently running", and a read-only call breaks exactly as visibly as a
+// write one. A screenshot that returns "connection lost" mid-turn is not less
+// confusing for having been read-only.
+//
+// It is an int64 read under m.mu rather than an atomic, so that the pool's
+// eviction selection and a call's own increment serialise: see
+// BrowserPool.evictableLocked for why a call starting DURING selection must
+// be either seen or landed on a relaunched instance, never lost between them.
+func (m *BrowserManager) InFlight() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inFlight
+}
+
+// EnterCall marks the start of a browser tool call and returns the function
+// that marks its end. The caller defers the returned function, so a panicking
+// or cancelled call still releases — an in-flight counter that leaks is a
+// browser that can never be evicted or idle-closed, which is a deadlock
+// rather than a leak.
+func (m *BrowserManager) EnterCall() func() {
+	m.mu.Lock()
+	m.inFlight++
+	m.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if m.inFlight > 0 {
+				m.inFlight--
+			}
+			m.mu.Unlock()
+		})
+	}
+}
+
+// TotalOpenTabs reports how many tabs are open across every browsing context
+// this manager owns. It is NOT a budget and nothing compares it to a cap —
+// every tab counter was deleted by ADR-072 D1.5a. It answers one question:
+// has this browser got anything left in it (FR-040's idle close).
+func (m *BrowserManager) TotalOpenTabs() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.totalTabCountLocked()
 }
 
 // CaptureSession returns this manager's active WebRTC CaptureSession, or nil
@@ -897,10 +1011,21 @@ func (m *BrowserManager) ensureStarted() error {
 	// around it — same ADR-038 no-lock-across-blocking-call discipline as the
 	// resolveExecPath unlock/relock below. A concurrent ensureStarted that won
 	// while m.mu was released is handled by the post-relock m.started check.
-	if m.coordinator != nil {
+	if m.pool != nil || m.coordinator != nil {
 		agentID := m.agentID
+		pool := m.pool
+		coord := m.coordinator
+		key := m.key
 		m.mu.Unlock()
-		rootCtx, regErr := m.coordinator.Register(context.Background(), agentID, m)
+		var (
+			rootCtx context.Context
+			regErr  error
+		)
+		if pool != nil {
+			coord, rootCtx, regErr = pool.Register(context.Background(), key, m)
+		} else {
+			rootCtx, regErr = coord.Register(context.Background(), agentID, m)
+		}
 		m.mu.Lock()
 		if regErr != nil {
 			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
@@ -917,8 +1042,12 @@ func (m *BrowserManager) ensureStarted() error {
 		// paths (Shutdown/dropConnection/invalidateConnection) call
 		// unconditionally, so it must be non-nil, not omitted.
 		m.allocCancel = func() {}
+		// Refresh the cached coordinator: under a pool this may be a DIFFERENT
+		// coordinator than last time (idle close, eviction, crash recovery),
+		// and capture_session.go reaches Chrome through m.Coordinator().
+		m.coordinator = coord
 		m.started = true
-		logger.InfoCF("browser", "Browser connected to shared Chrome (coordinator mode)", map[string]any{
+		logger.InfoCF("browser", "Browser connected to this workspace's Chrome", map[string]any{
 			"agent_id": agentID,
 		})
 		return nil

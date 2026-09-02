@@ -97,8 +97,8 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	// A NEW manager for the same agent re-registers (mirrors loop.go's reload).
 	mgrA2 := newTestManager(t, cfg)
 	mgrA2.AttachSharedChrome(coord, browserTestKey("agent-a"))
-	if _, err := coord.Register(context.Background(), "agent-a", mgrA2); err != nil {
-		t.Fatalf("Register 2: %v", err)
+	if _, rerr := coord.Register(context.Background(), "agent-a", mgrA2); rerr != nil {
+		t.Fatalf("Register 2: %v", rerr)
 	}
 
 	// CRIT-002 assertions: same pid, no kill.

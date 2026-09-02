@@ -260,24 +260,34 @@ func TestListTabs_PayloadLabelsSessionAndWorkspaceSets(t *testing.T) {
 
 // --- test 9 (FR-015 + FR-034) ----------------------------------------------
 
-// interimSharedBrowserLiteral is §3.3's INTERIM replacement, verbatim. It
-// claims only that every agent on this workspace addresses one tab set — which
-// is what wave 2's ManagerResolver made true.
+// interimSharedBrowserLiteral is §3.3's INTERIM literal. It survives at
+// EXACTLY ONE site — tools.go's `clear` parameter description — which FR-034a
+// says stays interim at both stages.
 const interimSharedBrowserLiteral = "the browser this workspace's agents share"
 
-// finalIsolationLiteral is §3.3's FINAL (stage-P) sentence. It claims
-// CROSS-WORKSPACE ISOLATION, which does not exist yet: one Chrome process is
-// still shared across every workspace until the browser pool lands. Shipping
-// it now would state a false ownership claim to the model and to the operator
-// — the exact defect ADR-072 exists to fix (MAJ-107).
+// finalWorkspaceBrowserLiteral is §3.3's FINAL (stage-P) phrasing for the four
+// model-visible tab-tool descriptions.
+const finalWorkspaceBrowserLiteral = "this workspace's browser"
+
+// finalIsolationLiteral is §3.3's FINAL isolation SENTENCE, added to
+// browser_list_tabs and browser_open_tab only.
+//
+// It makes a CROSS-WORKSPACE claim, and it may only ship in the same commit as
+// FR-037 — the change that gives each workspace its own Chrome process and its
+// own --user-data-dir profile directory. Before that commit one Chrome served
+// every workspace and this sentence was false; a product asserting an
+// isolation guarantee it does not have is the exact defect ADR-072 §1.1
+// records (MAJ-107).
 const finalIsolationLiteral = "Each workspace has its own browser, with its own logins; " +
 	"you cannot see or use another workspace's."
 
-// TestToolDescriptions_NoFalseSharedClaim — stage C form.
+// TestToolDescriptions_NoFalseSharedClaim — stage P form.
 //
-// Three assertions, and the third is the one a reviewer should look for: it
-// asserts an ABSENCE, so that landing the isolation claim early turns this red
-// instead of shipping quietly.
+// The assertion that matters is the LAST one, and it is what stops this test
+// from becoming decoration: the isolation sentence is only permitted because
+// pool.go exists. If the pool were deleted or reverted while the sentence
+// stayed, the model would keep being told a guarantee the build no longer
+// provides, and every other assertion here would still pass.
 func TestToolDescriptions_NoFalseSharedClaim(t *testing.T) {
 	sources := packageGoSources(t)
 
@@ -287,22 +297,40 @@ func TestToolDescriptions_NoFalseSharedClaim(t *testing.T) {
 				"agent in the install, and the phrase says nothing about who shares what", name)
 	}
 
-	// The interim literal is present verbatim, in the model-visible strings.
 	joined := strings.Join([]string{sources["tabs.go"], sources["tools.go"]}, "\n")
-	assert.Contains(t, joined, interimSharedBrowserLiteral,
-		"the interim replacement literal from §3.3 must be present verbatim")
-	assert.GreaterOrEqual(t, strings.Count(joined, interimSharedBrowserLiteral), 7,
-		"every one of §3.3's seven occurrences must carry the interim literal: the four model-visible "+
-			"Description() strings in tabs.go, its two Go comments, and tools.go's `clear` parameter "+
-			"description")
 
-	// And the FINAL literal must NOT be here yet.
-	for name, src := range sources {
-		assert.NotContains(t, src, finalIsolationLiteral,
-			"%s ships the stage-P isolation claim before the browser pool exists. One Chrome is still "+
-				"shared across every workspace, so this sentence would be false — it lands with FR-037, "+
-				"not before (§3.3, MAJ-107)", name)
-	}
+	// The four model-visible tab-tool descriptions carry the final phrasing.
+	assert.GreaterOrEqual(t, strings.Count(sources["tabs.go"], finalWorkspaceBrowserLiteral), 4,
+		"all four tab-tool Description() strings must name \"%s\"", finalWorkspaceBrowserLiteral)
+
+	// The isolation sentence lands on exactly the two tools §3.3 names —
+	// browser_list_tabs and browser_open_tab — and nowhere else.
+	assert.Equal(t, 2, strings.Count(joined, finalIsolationLiteral),
+		"the isolation sentence belongs on browser_list_tabs and browser_open_tab, and on no other tool")
+
+	// FR-034a: tools.go's `clear` parameter description keeps the interim
+	// form, deliberately. It describes what the parameter does to a tab set,
+	// not who owns the browser, so the isolation claim would be noise there.
+	assert.Equal(t, 1, strings.Count(sources["tools.go"], interimSharedBrowserLiteral),
+		"tools.go's parameter description keeps the interim literal at both stages (FR-034a)")
+	assert.NotContains(t, sources["tabs.go"], interimSharedBrowserLiteral,
+		"tabs.go moved to the final literal — the interim one must be gone from it")
+
+	// THE CLAIM MUST NOT OUTLIVE THE BEHAVIOUR.
+	//
+	// The sentence above promises a per-workspace browser. What makes that
+	// true is the pool: one Chrome process and one --user-data-dir per
+	// BrowsingKey. Assert the mechanism is present, so that removing it
+	// without removing the claim turns this red instead of shipping a
+	// guarantee the build does not honour.
+	pool, ok := sources["pool.go"]
+	require.True(t, ok,
+		"pool.go is gone, but the tool descriptions still promise each workspace its own browser — "+
+			"that claim is only true while the pool exists (FR-037 + FR-034a are one commit)")
+	assert.Contains(t, pool, "func (p *BrowserPool) ProfileDirFor(",
+		"the per-workspace profile directory is what gives a workspace its own logins")
+	assert.Contains(t, pool, "func (p *BrowserPool) Acquire(",
+		"the per-key Chrome launch is what gives a workspace its own browser")
 }
 
 // packageGoSources reads every non-test .go file in this package.

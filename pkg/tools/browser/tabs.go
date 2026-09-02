@@ -16,7 +16,7 @@ import (
 
 // --- browser_list_tabs (ADR-041 D3) ---
 
-// ListTabsTool reports the current tab set of the browser this workspace's agents share.
+// ListTabsTool reports the current tab set of this workspace's browser.
 // Read-only — NOT gated by controlledResult (see tools.go's doc comment on
 // that function: read-only tools never conflict with a human driving the
 // live view).
@@ -33,7 +33,7 @@ func (t *ListTabsTool) Name() string                 { return "browser_list_tabs
 func (t *ListTabsTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ListTabsTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ListTabsTool) Description() string {
-	return "List every open tab in the browser this workspace's agents share: each tab's index, title, URL, " +
+	return "List every open tab in this workspace's browser: each tab's index, title, URL, " +
 		"and whether it is the currently-active (screencasted) tab. Call this after a click " +
 		"that might have opened a new tab (a target=\"_blank\" link or window.open — see " +
 		"browser_click's result) or whenever you need to see what's currently open. " +
@@ -43,7 +43,8 @@ func (t *ListTabsTool) Description() string {
 		"\"open\" means a running browser with the listed tabs; \"empty\" means a running browser " +
 		"that momentarily has no tabs. (browser_started=false is the same thing as state=\"no_context\".) " +
 		"\"tabs\" are THIS chat's own tabs and \"operator_tabs\" are the tabs the operator opened on " +
-		"this workspace — see \"tab_ownership\" in the result."
+		"this workspace — see \"tab_ownership\" in the result. " +
+		"Each workspace has its own browser, with its own logins; you cannot see or use another workspace's."
 }
 
 func (t *ListTabsTool) Parameters() map[string]any {
@@ -77,6 +78,15 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	state, tabs, activeIdx, err := mgr.ListTabsState(sid)
 	if err != nil {
 		// FR-013: "every other browser tool" is not scoped to tools.go — a
@@ -139,7 +149,7 @@ func (t *SwitchTabTool) Name() string                 { return "browser_switch_t
 func (t *SwitchTabTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *SwitchTabTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *SwitchTabTool) Description() string {
-	return "Switch the active tab in the browser this workspace's agents share. Subsequent browser_* tool " +
+	return "Switch the active tab in this workspace's browser. Subsequent browser_* tool " +
 		"calls and the live screencast follow the newly-active tab. Call browser_list_tabs " +
 		"first to see valid indices — indices are 0-based (the first tab is index 0). On success, " +
 		"returns {\"success\": true, \"active_index\": ..., \"title\": ..., \"url\": ...} describing the " +
@@ -170,6 +180,15 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
@@ -222,7 +241,7 @@ func (t *CloseTabTool) Name() string                 { return "browser_close_tab
 func (t *CloseTabTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *CloseTabTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *CloseTabTool) Description() string {
-	return "Close a tab in the browser this workspace's agents share. If it was the active tab, a " +
+	return "Close a tab in this workspace's browser. If it was the active tab, a " +
 		"neighboring tab becomes active. The last remaining tab is never left closed — a " +
 		"fresh blank tab opens in its place instead. Call browser_list_tabs first to see " +
 		"valid indices — indices are 0-based (the first tab is index 0). On success, returns " +
@@ -254,6 +273,15 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
@@ -285,7 +313,7 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 // --- browser_open_tab ---
 
-// OpenTabTool opens a brand-new tab in the browser this workspace's agents share (via the
+// OpenTabTool opens a brand-new tab in this workspace's browser (via the
 // existing BrowserManager.OpenTab — the same primitive the human "+" button
 // drives over the WS, pkg/gateway/browser_ws.go), optionally navigates it to
 // a URL, and makes it the active tab. Before this tool existed, the agent's
@@ -309,7 +337,7 @@ func (t *OpenTabTool) Name() string                 { return "browser_open_tab" 
 func (t *OpenTabTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *OpenTabTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *OpenTabTool) Description() string {
-	return "Open a NEW tab in the browser this workspace's agents share and make it active — unlike " +
+	return "Open a NEW tab in this workspace's browser and make it active — unlike " +
 		"browser_navigate, which reuses the CURRENT tab, this always creates an additional one. " +
 		"Optionally navigate the new tab to a URL right away. Use this when you need a second tab " +
 		"alongside the current one, e.g. to check another source without losing your place on the " +
@@ -318,7 +346,8 @@ func (t *OpenTabTool) Description() string {
 		"A provided url is SSRF-checked the same " +
 		"as browser_navigate. If a human is currently controlling the browser via the live view, this " +
 		"call defers instead of opening a tab — the result is {\"deferred\": true, \"reason\": ...} " +
-		"instead; wait for them to release control and retry."
+		"instead; wait for them to release control and retry. " +
+		"Each workspace has its own browser, with its own logins; you cannot see or use another workspace's."
 }
 
 func (t *OpenTabTool) Parameters() map[string]any {
@@ -340,6 +369,15 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	if rawURL != "" {
 		if err := mgr.ValidateURL(ctx, rawURL); err != nil {
 			return tools.ErrorResult(err.Error())

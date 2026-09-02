@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -1488,6 +1489,30 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
 	removeMailboxesForWorkspace(a, id)
 
+	// FR-026 + FR-043a + SC-017: the deleted workspace's BROWSER.
+	//
+	// This is the one and only place a browser profile directory is removed.
+	// A workspace's profile holds its live logins — session cookies for
+	// whatever its agents signed into — so a departed client's data must
+	// actually depart, and equally must NOT depart on any of the four events
+	// that merely pause a workspace (idle close, eviction, roster change,
+	// reload). Those keep the profile precisely so the workspace is still
+	// logged in when it comes back.
+	//
+	// ORDER IS THE WHOLE THING (SC-017): Close(key) must RETURN before
+	// DeleteProfile(key) runs. Chrome writes its cookie jar and Local Storage
+	// on the way down; deleting the directory out from under a live process
+	// races those writes, and DeleteProfile refuses outright while the key is
+	// still live rather than trusting the caller to have got it right.
+	if pool := browserPoolFor(a); pool != nil {
+		if key, kerr := browser.ParseBrowsingKeyString("ws:" + id); kerr == nil {
+			pool.Close(key)
+			if derr := pool.DeleteProfile(key); derr != nil {
+				slog.Warn("rest: delete workspace: cascade browser profile", "id", id, "error", derr)
+			}
+		}
+	}
+
 	// Remove the workspace's mount record. Mounts live in
 	// entities/mounts/<id>.json (out of a sandboxed child's reach — see
 	// pkg/workspace/mountstore.go), NOT under the workspace directory, so the
@@ -1984,4 +2009,15 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		}
 	}
+}
+
+// browserPoolFor reaches the per-workspace browser pool through the agent loop,
+// tolerating both a nil loop and a pool that has not been built yet (a gateway
+// booted with browser tools disabled never builds one). Extracted so the
+// delete handler reads as one intention rather than three nil checks.
+func browserPoolFor(a *restAPI) *browser.BrowserPool {
+	if a == nil || a.agentLoop == nil {
+		return nil
+	}
+	return a.agentLoop.BrowserPool()
 }

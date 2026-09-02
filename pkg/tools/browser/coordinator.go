@@ -57,7 +57,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -87,6 +86,17 @@ const ownershipMarkerOwner = "omnipus"
 type BrowserCoordinator struct {
 	homeDir string // $OMNIPUS_HOME; ownership marker + profile dir root
 	cfg     BrowserConfig
+
+	// key is the BrowsingKey this coordinator's Chrome belongs to (ADR-072
+	// FR-037). It is what makes the ownership marker per-key —
+	// <homeDir>/browser/ws-<id>.pid — instead of one shared-chrome.pid that,
+	// with N Chromes running, could only ever name one of them and would
+	// therefore be a marker pointing at the wrong process most of the time.
+	//
+	// The zero key is legitimate: direct/test construction via
+	// NewBrowserCoordinator, which keeps the historical single-Chrome marker
+	// name. Production always goes through newKeyedCoordinator.
+	key BrowsingKey
 
 	// execPath holds the exec-path resolution caches, reused from the manager
 	// (resolveBrowserExecPath). Resolved once per process; a successful
@@ -145,14 +155,21 @@ type BrowserCoordinator struct {
 // ownership marker lands at <homeDir>/browser/shared-chrome.pid; the profile
 // dir comes from cfg.ProfileDir). There is no tab budget parameter: ADR-072
 // D1.5a deleted every tab counter, and live memory is the only limit.
-// startPageURL mirrors BrowserManager.StartPageURL for the coordinator's own
-// target-creation path, which builds targets from c.cfg rather than through a
-// manager. Same fallback: about:blank when nothing is configured.
-func (c *BrowserCoordinator) startPageURL() string {
-	if u := strings.TrimSpace(c.cfg.StartPageURL); u != "" {
-		return u
-	}
-	return BlankPageURL
+// (startPageURL is gone with ADR-072 FR-031. It existed for the coordinator's
+// OWN target-creation path — the per-agent window Register used to open in a
+// CDP browser context. The coordinator creates no targets any more; every tab
+// is created by a manager, which has its own StartPageURL.)
+
+// newKeyedCoordinator is production's constructor: a coordinator that knows
+// which workspace's browser it owns, so its ownership marker names that
+// workspace. cfg.ProfileDir must ALREADY be the key's own profile directory —
+// pool.configFor does that substitution, and it is the single change that
+// gives the workspace its own --user-data-dir, launch lock, Chrome HOME/XDG
+// dirs and cookie jar.
+func newKeyedCoordinator(homeDir string, cfg BrowserConfig, key BrowsingKey) *BrowserCoordinator {
+	c := NewBrowserCoordinator(homeDir, cfg)
+	c.key = key
+	return c
 }
 
 func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinator {
@@ -942,10 +959,17 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	}
 }
 
+// launchLockFileName is the single-launch lockfile's name inside a profile
+// directory. Because each key has its OWN profile directory (FR-037), one
+// filename yields one lock per key with no per-key naming logic — which is
+// also why the reconciliation path in pool.go can compute a key's lock path
+// from its profile directory alone.
+const launchLockFileName = "chrome.lock"
+
 // lockPath is the single-launch lockfile (CRIT-001). It lives in the profile
-// dir so it shares the shared Chrome's directory lifecycle.
+// dir, so it is per-KEY for exactly as long as the profile dir is.
 func (c *BrowserCoordinator) lockPath() string {
-	return filepath.Join(c.cfg.ProfileDir, "shared-chrome.lock")
+	return filepath.Join(c.cfg.ProfileDir, launchLockFileName)
 }
 
 // takeLaunchLock acquires the exclusive shared-Chrome single-launch lock
@@ -1047,8 +1071,15 @@ type ownershipMarker struct {
 	Created int64  `json:"created_unix"`
 }
 
+// markerPath is where this coordinator records its Chrome's pid. Per key when
+// it has one (ADR-072 FR-042), and the historical shared name when it does not
+// — the latter reachable only from direct/test construction.
 func (c *BrowserCoordinator) markerPath() string {
-	return filepath.Join(c.homeDir, "browser", "shared-chrome.pid")
+	name := "shared-chrome.pid"
+	if !c.key.IsZero() {
+		name = c.key.ProfileSegment() + ".pid"
+	}
+	return filepath.Join(c.homeDir, "browser", name)
 }
 
 func (c *BrowserCoordinator) writeOwnershipMarker(pid int, product string) error {
@@ -1073,7 +1104,15 @@ func (c *BrowserCoordinator) writeOwnershipMarker(pid int, product string) error
 }
 
 func (c *BrowserCoordinator) readOwnershipMarker() (pid int, owner string, err error) {
-	data, rerr := os.ReadFile(c.markerPath())
+	return readOwnershipMarkerAt(c.markerPath())
+}
+
+// readOwnershipMarkerAt reads a marker by PATH rather than by coordinator, so
+// boot reconciliation (pool.go's ReconcileMarkers) can inspect markers left by
+// a PREVIOUS run — for keys that have no coordinator in this process yet, and
+// may never get one.
+func readOwnershipMarkerAt(path string) (pid int, owner string, err error) {
+	data, rerr := os.ReadFile(path)
 	if rerr != nil {
 		return 0, "", rerr
 	}

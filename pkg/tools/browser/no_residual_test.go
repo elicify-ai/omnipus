@@ -146,6 +146,12 @@ func TestNoResidualTabCap(t *testing.T) {
 		// violation — a false positive that says a counter is back when what is
 		// actually there is the test proving it is gone.
 		filepath.Join("pkg", "gateway", "browser_resolve_test.go"): true,
+		// Same exemption, same reason again: pool_gate_test.go asserts that
+		// the memory refusal message contains NONE of the cap words, which
+		// requires writing them down to check for them. Without this entry
+		// the scan reports the test proving no cap exists as evidence that
+		// one is back.
+		filepath.Join("pkg", "tools", "browser", "pool_gate_test.go"): true,
 	}
 
 	var offenders []string

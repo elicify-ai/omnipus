@@ -4,7 +4,10 @@
 
 package browser
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // BrowsingKey is the identity of ONE browser: one Chrome process, one profile
 // directory, one BrowserManager, one tab set. It replaces the deleted shared
@@ -181,4 +184,23 @@ func (o TabOwner) String() string { return o.s }
 // it belonged to.
 func sessionKey(k BrowsingKey, o TabOwner) string {
 	return k.s + "/" + o.s
+}
+
+// ParseBrowsingKeyString rebuilds a BrowsingKey from its rendered form
+// ("ws:<workspaceID>"). It exists for the ONE class of caller that legitimately
+// holds a rendered key and no way to re-resolve it: bookkeeping maps outside
+// this package are keyed by the STRING (pkg/agent's browserMgrs, the pool's own
+// instances map), so a prune pass that finds a dead entry has a string and
+// needs the key back to close its browser.
+//
+// It is NOT a back door around ResolveBrowsingKey and must never be used to
+// mint a key from a workspace id an agent supplied. It re-runs the SAME
+// validation newBrowsingKey does — the rendered profile segment must be a
+// single, traversal-free path segment — so a malformed string is refused with
+// ErrNoBrowsingContext rather than becoming a directory name.
+func ParseBrowsingKeyString(s string) (BrowsingKey, error) {
+	if !strings.HasPrefix(s, browsingKeyPrefix) {
+		return BrowsingKey{}, ErrNoBrowsingContext
+	}
+	return newBrowsingKey(strings.TrimPrefix(s, browsingKeyPrefix))
 }

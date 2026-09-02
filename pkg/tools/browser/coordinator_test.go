@@ -68,62 +68,12 @@ func resolveTestBinary(t *testing.T) string {
 	return sharedTestBin
 }
 
-// sharedTestBinaryHeadlessShell resolves chrome-headless-shell SPECIFICALLY,
-// once, for tests that need old-headless CDP semantics rather than whichever
-// build resolveTestBinary's "detect either, prefer full chrome" resolution
-// (findInstalledBinary) happens to find. See resolveTestBinaryHeadlessShell's
-// doc comment for why that distinction is load-bearing, not cosmetic.
-var (
-	sharedTestBinHeadlessShellOnce sync.Once
-	sharedTestBinHeadlessShell     string
-	errSharedTestBinHeadlessShell  error
-)
-
-// resolveTestBinaryHeadlessShell resolves chrome-headless-shell specifically
-// — never the full "chrome" build resolveTestBinary/findInstalledBinary
-// prefer by default on Linux (installer.go's dual-download: WebRTC
-// tabCapture needs full Chrome, so the shared install root prefers it once
-// present). D2Spike needs the OTHER build: it drives chromedp's classic
-// TCP-debug-port ExecAllocator (chromedp.NewExecAllocator, not this
-// package's own cdppipe launch path) to prove pure CDP
-// Target.createBrowserContext isolation — a property "old headless" mode
-// (chrome-headless-shell, a dedicated binary precisely because Chrome split
-// old-headless out of the main "chrome" build) supports, but empirically
-// (verified against Chrome 151 here — a full chromeHardeningBaseFlags()
-// pass-through plus a settle delay before the second context reproduces the
-// SAME failure, ruling out both a missing-flag and a timing-race
-// explanation) full "chrome"'s New Headless mode does not: creating a SECOND
-// isolated browser context and navigating in it reliably errors CDP -32000
-// "no browser is open". Reuses installer.go's per-build resolver
-// (EnsureChromiumBuild) so an already-cached chrome-headless-shell install
-// (this codebase's managed root, or resolveTestBinary's own temp-dir
-// fallback from an earlier pre-dual-download install) is found without a
-// network hit; only downloads if genuinely absent.
-func resolveTestBinaryHeadlessShell(t *testing.T) string {
-	t.Helper()
-	sharedTestBinHeadlessShellOnce.Do(func() {
-		// See resolveTestBinary's matching comment: platform comes from
-		// cftPlatform(), not a hardcoded "linux64" (F1, #615/#617/#618
-		// hardening review) — otherwise this resolver never finds a real
-		// managed install on macOS.
-		if home, err := os.UserHomeDir(); err == nil {
-			if platform, perr := cftPlatform(); perr == nil {
-				installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
-				if bin := findInstalledBuild(installRoot, platform, headlessShellBuild()); bin != "" {
-					sharedTestBinHeadlessShell = bin
-					return
-				}
-			}
-		}
-		sharedTestBinHeadlessShell, errSharedTestBinHeadlessShell = EnsureChromiumBuild(
-			context.Background(), filepath.Join(t.TempDir(), "chromium-headless-shell"), headlessShellBuild(),
-		)
-	})
-	if errSharedTestBinHeadlessShell != nil {
-		t.Skipf("no managed chrome-headless-shell for D2 spike: %v", errSharedTestBinHeadlessShell)
-	}
-	return sharedTestBinHeadlessShell
-}
+// The chrome-headless-shell resolver that used to live here is DELETED with
+// d2_spike_test.go, its only caller. It existed to obtain the old-headless
+// binary the D2 spike needed to prove CDP browser-context isolation — a
+// mechanism ADR-072 FR-031 retired outright. Nothing in this package needs a
+// specific Chrome BUILD any more; resolveTestBinary's "whichever is installed"
+// answer is the right one for every remaining test.
 
 func newCoordinatorTestConfig(t *testing.T) (BrowserConfig, string) {
 	t.Helper()

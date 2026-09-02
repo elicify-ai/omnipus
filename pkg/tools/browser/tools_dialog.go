@@ -111,6 +111,15 @@ func (t *HandleDialogTool) Execute(ctx context.Context, args map[string]any) *to
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 
 	// FR-035: NO controlledResult and NO leaseWrite here, deliberately. See
 	// this file's header. Execution goes straight from turn resolution to the

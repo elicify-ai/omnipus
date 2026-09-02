@@ -307,6 +307,13 @@ type AgentLoop struct {
 	// so the coordinator — and the per-agent contexts it owns — survive a
 	// Settings save). nil only in tests that construct managers directly.
 	browserCoordinator *browser.BrowserCoordinator
+	// browserPool (ADR-072 FR-037) owns ONE Chrome per workspace, each with
+	// its own profile directory. It supersedes browserCoordinator as the
+	// thing managers attach to; the coordinator field survives only for the
+	// direct/test path and for shutdown symmetry. Constructed once and reused
+	// across hot-reload, for the same reason the coordinator was: a Settings
+	// save must not log every workspace out.
+	browserPool *browser.BrowserPool
 	// homePath is $OMNIPUS_HOME (the parent of the workspace path), handed to
 	// NewBrowserCoordinator, which builds the ownership-marker path
 	// (<homePath>/browser/shared-chrome.pid) from it.
@@ -2515,10 +2522,21 @@ func registerSharedTools(
 				// silently misled. CRIT-002 stays intact: the coordinator is
 				// never rebuilt on reload.
 				al.mu.Lock()
-				if al.browserCoordinator == nil {
-					al.browserCoordinator = browser.NewBrowserCoordinator(al.homePath, browserCfg)
+				if al.browserPool == nil {
+					al.browserPool = browser.NewBrowserPool(al.homePath, browserCfg)
+					// FR-042a: before this gateway launches anything, settle
+					// what a PREVIOUS run left behind — stale markers cleared,
+					// orphaned Chromes terminated, keys another live gateway
+					// still owns refused. Discriminated by the launch lock, not
+					// by the marker's pid; see ReconcileMarkers for why that
+					// distinction is what stops one gateway killing another's
+					// browser.
+					if refused := al.browserPool.ReconcileMarkers(); len(refused) > 0 {
+						logger.WarnCF("agent", "another gateway owns some workspaces' browsers — this one will not start them",
+							map[string]any{"workspaces": refused})
+					}
 				} else {
-					al.browserCoordinator.ApplyRuntimeConfig(browserCfg)
+					al.browserPool.ApplyRuntimeConfig(browserCfg)
 				}
 				// FR-034: push tools.browser.actionability_gate into the
 				// actionability gate's single chokepoint. It runs on the
@@ -2536,7 +2554,7 @@ func registerSharedTools(
 				// tool safe — it substitutes registered credential plaintexts
 				// and does nothing for arbitrary form values.
 				browser.SetSensitiveDataReplacer(cfg.SensitiveDataReplacer())
-				coordinator := al.browserCoordinator
+				pool := al.browserPool
 				al.mu.Unlock()
 				// fs-workspace: browser tools (browser_screenshot) get agent.Home +
 				// RestrictToWorkspace so screenshot paths resolve through the same
@@ -2565,7 +2583,7 @@ func registerSharedTools(
 						if err != nil {
 							return nil, err
 						}
-						m.AttachSharedChrome(coordinator, key)
+						m.AttachPool(pool, key)
 						return m, nil
 					}
 					factory := al.browserFactory
@@ -3001,7 +3019,7 @@ func registerSharedTools(
 	// first Settings save — logins gone, silently, with a cheerful INFO line
 	// per workspace saying it removed a manager for a "deleted agent".
 	al.mu.Lock()
-	coord := al.browserCoordinator
+	pool := al.browserPool
 	var removedKeys []string
 	for k := range al.browserMgrs {
 		if !liveBrowserKeys[k] {
@@ -3021,10 +3039,19 @@ func registerSharedTools(
 	}
 	al.mu.Unlock()
 	for _, k := range removedKeys {
-		if coord != nil {
-			coord.RemoveAgent(k)
+		// FR-026's roster-change half: a workspace that no longer has a single
+		// browser-policy-allowed agent on its CoreTeam gets its Chrome CLOSED.
+		//
+		// Closed, not deleted. The workspace still exists and its user still
+		// expects to be logged in when an agent is added back, so the profile
+		// directory stays on disk (FR-043a: workspace DELETION is the only
+		// trigger that removes it, and that path lives in the REST handler).
+		if pool != nil {
+			if key, kerr := browser.ParseBrowsingKeyString(k); kerr == nil {
+				pool.Close(key)
+			}
 		}
-		logger.InfoCF("agent", "removed the browser for a workspace no live agent is rooted in",
+		logger.InfoCF("agent", "closed the browser for a workspace no live agent is rooted in (its profile is kept)",
 			map[string]any{"browsing_key": k})
 	}
 }
@@ -4148,6 +4175,10 @@ func (al *AgentLoop) Close() {
 	// longer cancels an ExecAllocator in coordinator mode). This is the SOLE
 	// process-kill path — disposes every agent's browser context + kills Chrome
 	// (MIN-008 / FR-008: Close() is the only kill).
+	if al.browserPool != nil {
+		al.browserPool.Shutdown()
+		al.browserPool = nil
+	}
 	if al.browserCoordinator != nil {
 		al.browserCoordinator.Shutdown()
 		al.browserCoordinator = nil
@@ -5149,16 +5180,29 @@ func (al *AgentLoop) rewireBrowserManagerForKey(
 	}
 	al.mu.Lock()
 	prior := al.browserMgrs[key.String()]
-	coord := al.browserCoordinator
+	pool := al.browserPool
 	al.browserMgrs[key.String()] = mgr
 	al.mu.Unlock()
-	if coord != nil {
-		coord.Release(key.String())
+	if pool != nil {
+		// Reload: drop the OLD manager's registration only. The Chrome
+		// process and its profile directory survive, which is what makes a
+		// Settings save cost nobody their login (FR-043).
+		pool.Release(key, prior)
 	}
 	if prior != nil {
 		prior.Shutdown()
 		prior.InvalidateExecPathCache()
 	}
+}
+
+// BrowserPool returns the per-workspace browser pool (ADR-072 FR-037), or nil
+// before the first registration pass has built it. The gateway needs it for
+// boot preprovision (FR-016c), for the one-minute sweep's whole-Chrome idle
+// close (FR-040a) and for workspace-deletion disposal (FR-026).
+func (al *AgentLoop) BrowserPool() *browser.BrowserPool {
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	return al.browserPool
 }
 
 // browserResolver returns the browser.ManagerResolver every browser tool

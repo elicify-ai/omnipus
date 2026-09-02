@@ -275,6 +275,15 @@ func (t *SnapshotTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// NO controlledResult and NO leaseWrite here (FR-038). This is not an
 	// omission and the structural test in this package asserts their absence.
 

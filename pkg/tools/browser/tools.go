@@ -103,6 +103,15 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
@@ -253,6 +262,15 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
@@ -522,6 +540,15 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
@@ -651,6 +678,15 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 
 	tabCtx, err := mgr.Session(sid)
 	if err != nil {
@@ -807,6 +843,15 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 
 	tabCtx, err := mgr.Session(sid)
 	if err != nil {
@@ -945,6 +990,15 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 
 	tabCtx, err := mgr.Session(sid)
 	if err != nil {
@@ -1070,6 +1124,15 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if failure != nil {
 		return failure
 	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
