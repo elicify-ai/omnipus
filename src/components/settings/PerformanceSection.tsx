@@ -33,12 +33,27 @@ import { ReAuthDialog } from './ReAuthDialog'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
+// The skeleton MUST carry text. Its bars are decorative divs with no text
+// content, so a purely-visual skeleton makes the whole panel's innerText the
+// empty string — indistinguishable, to a reader or a screen reader, from
+// "there is nothing to configure here". That is exactly how this tab read
+// during the retry window of a failing load (GET /api/v1/performance is
+// retried three times with 1s/2s/4s backoff, so the panel sat textless for
+// ~7 seconds before any error surfaced).
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3 animate-pulse">
-      <div className="h-4 w-48 rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-full rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="performance-loading"
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3"
+    >
+      <p className="text-xs text-[var(--color-muted)]">Loading performance settings…</p>
+      <div className="space-y-3 animate-pulse" aria-hidden="true">
+        <div className="h-4 w-48 rounded bg-[var(--color-border)]" />
+        <div className="h-3 w-full rounded bg-[var(--color-border)]" />
+        <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
+      </div>
     </div>
   )
 }
@@ -89,7 +104,7 @@ export function PerformanceSection(): React.ReactElement {
   // Debounce timer for autosave.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['performance-settings'],
     queryFn: fetchPerformanceSettings,
     staleTime: 30_000,
@@ -222,9 +237,32 @@ export function PerformanceSection(): React.ReactElement {
 
   if (isLoading) return <Skeleton />
   if (error) {
+    // State the underlying cause, and give the reader a way out. This mirrors
+    // the sibling tabs on this same screen — Security's SkillTrustSection
+    // renders "Failed to load skill trust settings: <cause>", and Gateway
+    // banners the reason — rather than a bare sentence that tells an operator
+    // nothing about whether to wait, re-authenticate, or check the backend.
     return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 text-sm text-[var(--color-warning)]">
-        Could not load performance settings.
+      <div
+        role="alert"
+        data-testid="performance-load-error"
+        className="rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 p-4 space-y-2"
+      >
+        <div className="flex items-start gap-2 text-sm text-[var(--color-error)]">
+          <Warning size={16} className="mt-0.5 shrink-0" />
+          <span>
+            Failed to load performance settings: {getErrorMessage(error, 'Unknown error')}
+          </span>
+        </div>
+        <button
+          type="button"
+          data-testid="performance-retry-btn"
+          onClick={() => void refetch()}
+          disabled={isFetching}
+          className="text-xs font-medium underline text-[var(--color-secondary)] disabled:opacity-50"
+        >
+          {isFetching ? 'Retrying…' : 'Retry'}
+        </button>
       </div>
     )
   }

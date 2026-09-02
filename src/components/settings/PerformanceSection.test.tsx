@@ -612,3 +612,85 @@ describe('PerformanceSection — Tool loading toggle', () => {
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * A failed load must never render as an empty panel.
+ *
+ * Observed before the fix (Playwright, GET /api/v1/performance stubbed to
+ * 500): the tab's innerText was the empty string for the first ~7 seconds —
+ * the query's retry window (three retries at 1s/2s/4s backoff, per
+ * shouldRetryQuery/retryDelay in src/lib/queryClient.ts) — because the
+ * loading skeleton was three text-free divs. It then settled on the bare
+ * sentence "Could not load performance settings.", which named no cause and
+ * offered no way to try again.
+ *
+ * A blank panel reads as "there is nothing to configure here". These tests
+ * pin both halves: the loading state announces itself, and the error state
+ * names the underlying cause and can be retried — the pattern the sibling
+ * Security tab (SkillTrustSection) already uses on this same screen.
+ */
+describe('PerformanceSection — failed load is visible, not blank', () => {
+  // Holds the fetch open so the component stays in its loading state.
+  function pendingFetch() {
+    return new Promise<never>(() => {})
+  }
+
+  it('the loading state is not textless — it says it is loading', async () => {
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockImplementation(pendingFetch)
+    const { container } = renderSection()
+
+    // The whole point: innerText must never be the empty string. Assert on
+    // the container's own text so a purely-decorative skeleton fails here.
+    await waitFor(() => {
+      expect(screen.getByTestId('performance-loading')).toBeInTheDocument()
+    })
+    expect(container.textContent?.trim()).not.toBe('')
+    expect(screen.getByText(/loading performance settings/i)).toBeInTheDocument()
+  })
+
+  it('a failed load states the underlying cause, not a bare sentence', async () => {
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockRejectedValue(
+      new api.ApiError(503, 'The server is unavailable. Please try again in a moment.'),
+    )
+    renderSection()
+
+    const alert = await screen.findByTestId('performance-load-error')
+    // The cause itself must be on screen — this is what the old copy dropped.
+    expect(alert).toHaveTextContent('The server is unavailable. Please try again in a moment.')
+    expect(alert).toHaveTextContent(/failed to load performance settings/i)
+    expect(alert).toHaveAttribute('role', 'alert')
+  })
+
+  it('a different failure surfaces ITS own cause (the message is not hardcoded)', async () => {
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockRejectedValue(
+      new api.ApiError(500, 'probe-induced failure'),
+    )
+    renderSection()
+
+    const alert = await screen.findByTestId('performance-load-error')
+    expect(alert).toHaveTextContent('probe-induced failure')
+    expect(alert).not.toHaveTextContent('The server is unavailable')
+  })
+
+  it('Retry refetches and recovers the panel', async () => {
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings)
+      .mockRejectedValueOnce(new api.ApiError(503, 'The server is unavailable. Please try again in a moment.'))
+      .mockResolvedValue(SETTINGS as never)
+    renderSection()
+
+    await screen.findByTestId('performance-load-error')
+    expect(api.fetchPerformanceSettings).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId('performance-retry-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Max parallel agents')).toHaveValue(4)
+    })
+    expect(api.fetchPerformanceSettings).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('performance-load-error')).not.toBeInTheDocument()
+  })
+})
