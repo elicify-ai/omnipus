@@ -3830,6 +3830,35 @@ type BrowserToolConfig struct {
 	// the context forever — the panel close is a pure UI dismiss, so reopening
 	// days later resurfaced the exact page left behind.
 	IdleTTLSec int `json:"idle_ttl" env:"OMNIPUS_TOOLS_BROWSER_IDLE_TTL"`
+	// IdleCloseTTLSec is the WHOLE-BROWSER idle window (ADR-072 FR-040a): how
+	// long a workspace's Chrome may sit with zero tabs, zero live viewers and
+	// no call in flight before the process itself is closed. The profile
+	// directory survives, so the workspace is still signed in next time.
+	//
+	// SECONDS as an int, like IdleTTLSec / PageTimeoutSec / LeaseWaitSec above
+	// — see LeaseWaitSec's note on why one struct must not mix `900` and
+	// `"15m"` for adjacent timeouts. Zero (unset) leaves pkg/tools/browser's
+	// defaultIdleCloseTTL (15 minutes) in force.
+	//
+	// A NEGATIVE value also means "use the default", and deliberately does NOT
+	// mean "never close" — that is the one place this key's semantics differ
+	// from IdleTTLSec's. Idle close is one of only two things bounding the
+	// browser pool's memory (the live-memory launch gate is the other), and
+	// FR-061 forbids either of them shipping behind an off switch. There is no
+	// operator value that disables it.
+	IdleCloseTTLSec int `json:"idle_close_ttl" env:"OMNIPUS_TOOLS_BROWSER_IDLE_CLOSE_TTL"`
+	// CacheTrimIntervalSec is how often CLOSED workspace profiles are swept
+	// for disposable browser cache (ADR-072 FR-072 trigger 3). Seconds; zero
+	// leaves pkg/tools/browser's defaultCacheTrimInterval (1 hour) in force.
+	// Applied on reload, not only at boot.
+	//
+	// ⚠ It does NOT bound how large a profile gets, and no documentation of it
+	// may imply that it does (FR-074). Nothing is trimmed while a Chrome is
+	// live, so a workspace driven with no idle gap grows its cache for as long
+	// as it is driven, whatever this is set to. It is also not the primary
+	// trigger: pool.Close(k) returning is, and that fires within milliseconds
+	// with no interval to wait for.
+	CacheTrimIntervalSec int `json:"cache_trim_interval" env:"OMNIPUS_TOOLS_BROWSER_CACHE_TRIM_INTERVAL"`
 	// StartPageURL is what a freshly created tab opens instead of about:blank.
 	// Empty keeps about:blank.
 	StartPageURL string `json:"start_page_url" env:"OMNIPUS_TOOLS_BROWSER_START_PAGE_URL"`
@@ -4086,6 +4115,28 @@ type BrowserToolConfig struct {
 	// with CPU to spare — see WarmCaptureAtBoot's cost note. Ignored entirely
 	// when WarmCaptureAtBoot is false.
 	WarmCaptureIdleSec int `json:"warm_capture_idle_sec" env:"OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC"`
+}
+
+// EffectiveIdleCloseTTL resolves tools.browser.idle_close_ttl into the duration
+// pkg/tools/browser expects. Zero means "unset" — the browser package applies
+// its own default — and a negative value resolves the same way, because idle
+// close has no off switch (FR-061). It is the ONE place the seconds→duration
+// conversion happens, so the boot path and the reload path cannot drift.
+func (c BrowserToolConfig) EffectiveIdleCloseTTL() time.Duration {
+	if c.IdleCloseTTLSec <= 0 {
+		return 0
+	}
+	return time.Duration(c.IdleCloseTTLSec) * time.Second
+}
+
+// EffectiveCacheTrimInterval resolves tools.browser.cache_trim_interval the
+// same way: zero or negative means "unset", and the browser package's own
+// default (1 hour) stands.
+func (c BrowserToolConfig) EffectiveCacheTrimInterval() time.Duration {
+	if c.CacheTrimIntervalSec <= 0 {
+		return 0
+	}
+	return time.Duration(c.CacheTrimIntervalSec) * time.Second
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

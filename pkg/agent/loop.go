@@ -2397,6 +2397,21 @@ func registerSharedTools(
 				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
 					browserCfg.IdleTTL = 0
 				}
+				// ADR-072 FR-040a / FR-072: the whole-browser idle window and
+				// the closed-profile cache-trim schedule. Both are documented
+				// operator keys, and both were unreachable until this line —
+				// the value was parsed into nothing and the pool silently ran
+				// its built-in constants, so an operator who changed the number
+				// saw exactly what one who had not saw. Assigned
+				// UNCONDITIONALLY (0 means "unset", which is what the pool's
+				// own default fallback expects) and on the reload pass as well
+				// as the fresh-seed one, so a Settings save takes effect
+				// without a restart. Zero and negative both mean "use the
+				// default" — there is no value that switches idle close off
+				// (FR-061). Regression coverage:
+				// pkg/tools/browser/pool_ttl_config_reachability_test.go.
+				browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()
+				browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()
 				// Start page: an operator override wins; otherwise default to
 				// the gateway's own served start page so a fresh tab lands
 				// somewhere branded and legible instead of about:blank (a blank

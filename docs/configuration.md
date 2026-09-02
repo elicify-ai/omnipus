@@ -879,11 +879,18 @@ profile directory on disk, holding its own cookies and its own logins. A
 workspace cannot see or use another workspace's. Agents on one workspace share
 that workspace's browser, which is what lets them hand work to each other.
 
+All three keys below are **whole seconds, written as a number** — `900`, not
+`"15m"`. A duration string here is a config file that will not load at all.
+
 | Key | Default | What it does |
 | --- | --- | --- |
-| `tools.browser.idle_ttl` | `5m` | How long one TAB may sit with nobody watching it and no tool touching it before it is closed. |
-| `tools.browser.idle_close_ttl` | `15m` | How long a whole BROWSER may sit with no tabs, nobody watching and nothing running before the Chrome process itself is closed. The profile stays on disk, so the workspace is still signed in next time. There is no way to switch this off. |
-| `tools.browser.cache_trim_interval` | `1h` | How often closed profiles are swept for disposable browser cache. See the warning below — this is a sweep frequency, not a size limit. |
+| `tools.browser.idle_ttl` | `300` (5 minutes) | How long one TAB may sit with nobody watching it and no tool touching it before it is closed. A negative value turns per-tab reaping off. |
+| `tools.browser.idle_close_ttl` | `900` (15 minutes) | How long a whole BROWSER may sit with no tabs, nobody watching and nothing running before the Chrome process itself is closed. The profile stays on disk, so the workspace is still signed in next time. There is no way to switch this off: `0` and any negative value both mean "use the default", never "never close". |
+| `tools.browser.cache_trim_interval` | `3600` (1 hour) | How often closed profiles are swept for disposable browser cache. See the warning below — this is a sweep frequency, not a size limit. |
+
+Both of the last two take effect when you save settings; the gateway does not
+need a restart. Changing `idle_close_ttl` does not disturb a browser that is
+already open — it changes how long the next idle one is given.
 
 **How many browsers can run at once.** There is no setting for this, and there
 is deliberately none to raise. A browser starts only if the machine has room
