@@ -196,16 +196,16 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 // reports whether that real path lies at or under rootReal (which must
 // already be resolved and Clean-ed). A missing path, or one whose real path
 // escapes rootReal, reports ok=false.
-func realWithinRoot(rootReal, candidate string) (real string, ok bool) {
-	real, err := filepath.EvalSymlinks(candidate)
+func realWithinRoot(rootReal, candidate string) (realPath string, ok bool) {
+	realPath, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
 		return "", false
 	}
-	real = filepath.Clean(real)
-	if real == rootReal {
-		return real, true
+	realPath = filepath.Clean(realPath)
+	if realPath == rootReal {
+		return realPath, true
 	}
-	return real, strings.HasPrefix(real, rootReal+string(filepath.Separator))
+	return realPath, strings.HasPrefix(realPath, rootReal+string(filepath.Separator))
 }
 
 // lookupByName returns the project skill in the shelf whose display name
