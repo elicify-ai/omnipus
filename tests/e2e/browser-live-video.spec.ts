@@ -435,13 +435,52 @@ test(
       // frame is not black, not a white wash, and CHANGES between t0 and t1 —
       // is still asserted afterwards, and the poll has a hard budget so a
       // genuinely black stream still fails loudly rather than hanging.
+      //
+      // The poll must clear the assertion floor by a MARGIN, not equal it.
+      //
+      // This loop used to exit on the same number the assertion below uses
+      // (20), so by construction it stopped at the first sample that cleared
+      // the floor by a hair and then asserted that floor with zero headroom —
+      // a frame still ramping up exits at ~20.x and any later measurement sits
+      // on the boundary. That is how a run failed at 19.2 and passed on retry:
+      // not a broken stream, a readiness check calibrated to the exact point
+      // it was supposed to move past.
+      //
+      // 40 is safe as a readiness bar, COMPUTED rather than guessed. The
+      // motion layer animates background-color between six HSL(h, 90%, 45%)
+      // keyframe stops; CSS interpolates that in RGB, and luminance is a
+      // linear function of RGB, so the animation's minimum luminance is the
+      // minimum over the STOPS — no interpolated frame can dip below them:
+      //
+      //   hue    0 → 73.2     hue  216 → 83.5
+      //   hue   72 → 182.1    hue  288 → 84.4
+      //   hue  144 → 142.1    hue  360 → 73.2
+      //
+      // So the darkest frame the fixture can produce is 73.2, and the sampled
+      // band also contains the white clock text, which only raises the mean.
+      // 40 therefore sits far below every real frame while sitting twice the
+      // near-black floor: it cannot let a genuinely black stream through, and
+      // it stops handing the assertions a frame balanced on their threshold.
+      const NEAR_BLACK_FLOOR = 20;
+      const FIRST_FRAME_READY_LUMINANCE = 40;
       const FIRST_FRAME_BUDGET_MS = 15_000;
       const firstFrameDeadline = Date.now() + FIRST_FRAME_BUDGET_MS;
       let firstFrame = await sampleFrame(video);
-      while (luminance(firstFrame.top) <= 20 && Date.now() < firstFrameDeadline) {
+      while (luminance(firstFrame.top) < FIRST_FRAME_READY_LUMINANCE && Date.now() < firstFrameDeadline) {
         await page.waitForTimeout(250);
         firstFrame = await sampleFrame(video);
       }
+
+      // Budget exhausted without a painted frame is its own finding, and it
+      // deserves to be reported as itself. Falling through to the generic
+      // "frame at t0 must not be near-black" below describes the symptom but
+      // hides that the stream had a full 15s and never got there.
+      expect(
+        luminance(firstFrame.top),
+        `the live stream produced no painted frame within ${FIRST_FRAME_BUDGET_MS}ms — ` +
+          `top-band luminance stayed at ${luminance(firstFrame.top).toFixed(1)}, below the ` +
+          `${FIRST_FRAME_READY_LUMINANCE} readiness bar (the fixture's darkest real frame is 73.2)`,
+      ).toBeGreaterThanOrEqual(FIRST_FRAME_READY_LUMINANCE);
 
       sampleA = firstFrame;
       await page.waitForTimeout(1_500);
@@ -452,8 +491,14 @@ test(
 
       // Not blank/black: HSL(_, 90%, 45%) is always a vivid, mid-lightness
       // color regardless of hue — luminance well above a near-black floor.
-      expect(luminance(sampleA.top), 'frame at t0 must not be near-black/blank').toBeGreaterThan(20);
-      expect(luminance(sampleB.top), 'frame at t1 must not be near-black/blank').toBeGreaterThan(20);
+      expect(
+        luminance(sampleA.top),
+        `frame at t0 must not be near-black/blank (measured ${luminance(sampleA.top).toFixed(1)})`,
+      ).toBeGreaterThan(NEAR_BLACK_FLOOR);
+      expect(
+        luminance(sampleB.top),
+        `frame at t1 must not be near-black/blank (measured ${luminance(sampleB.top).toFixed(1)})`,
+      ).toBeGreaterThan(NEAR_BLACK_FLOOR);
       // Not a uniform white wash either (defense-in-depth against a
       // different kind of degenerate "frame").
       expect(sampleA.top.r).toBeLessThan(250);
