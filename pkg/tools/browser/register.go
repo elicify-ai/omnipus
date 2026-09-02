@@ -38,7 +38,7 @@ type ManagerResolver interface {
 // operator's tab set (FR-008, FR-080) — that swallowing is the whole defect
 // ADR-072 exists to fix.
 func resolveTurn(
-	ctx context.Context, res ManagerResolver, toolName string,
+	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
 ) (mgr *BrowserManager, key BrowsingKey, owner TabOwner, sid string, failure *tools.ToolResult) {
 	if res == nil {
 		return nil, BrowsingKey{}, TabOwner{}, "",
@@ -52,6 +52,19 @@ func resolveTurn(
 	if mgr == nil {
 		return nil, BrowsingKey{}, TabOwner{}, "",
 			tools.ErrorResult(toolName + ": " + ErrNoBrowsingContext.Error())
+	}
+	// FR-027's instance-creation event. Emitted here, on the ONE path every
+	// browser tool starts with, so that a browser first touched by a read-only
+	// call is still recorded as having come into existence — the alternative
+	// records nothing at all for a workspace whose first browser tool was
+	// browser_screenshot. It latches once per manager (markInstanceAudited),
+	// so this is a single atomic CAS on the hot path after the first call.
+	//
+	// It does NOT substitute for the per-call event: D2.11 rejects first-use
+	// auditing as an account of what an agent DID, and the two events answer
+	// different questions.
+	if ba != nil {
+		ba.noteBrowserInstance(ctx, mgr, key)
 	}
 	return mgr, key, owner, sessionKey(key, owner), nil
 }

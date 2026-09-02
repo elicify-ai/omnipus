@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -324,6 +325,14 @@ type BrowserManager struct {
 	// mode (cfg.CDPURL set) this is a chromedp.NewRemoteAllocator context.
 	allocCtx    context.Context
 	allocCancel context.CancelFunc
+	// instanceAudited is FR-027's once-only latch for the
+	// browser_instance_created audit event: the first tool call to resolve
+	// this manager records that the workspace's browser came into existence,
+	// and no later call records it again. Atomic rather than guarded by m.mu
+	// because it is read on the resolve path of EVERY browser tool call, and
+	// m.mu is held across CDP work elsewhere in this type. See
+	// markInstanceAudited in audit.go.
+	instanceAudited atomic.Bool
 	// pipeLauncherFn launches Chrome over the CDP pipe for the no-coordinator
 	// managed-mode fallback (ensureStarted). A field — not a direct
 	// launchManagedPipe call — purely for testability, mirroring

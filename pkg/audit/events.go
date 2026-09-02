@@ -177,6 +177,38 @@ const (
 	// reaped orphan turn actually terminated.
 	EventTurnOrphanTimeout = "turn.orphan_timeout"
 
+	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
+	// into existence: the first turn to resolve a browser for a given
+	// BrowsingKey established it (ADR-072 FR-027). Fires exactly ONCE per
+	// browser instance, not once per agent and not once per turn. Fields:
+	// {workspace_id, browsing_key}; the establishing agent is Entry.AgentID
+	// and the turn's transcript session is Entry.SessionID.
+	//
+	// NAME SHAPE, deliberately: underscores only, no dots. FR-058 requires
+	// ^[a-z_]+$ of every name this change introduces. The AuditEntry contract
+	// itself was widened to ^[a-z_.]+$ by issue #667, so a dotted name would
+	// also be legal on the wire — but a name that satisfies BOTH the spec and
+	// the contract needs no adjudication between them. Do not "tidy" these two
+	// into the dotted browser.* family without reopening FR-058.
+	EventBrowserInstanceCreated = "browser_instance_created"
+
+	// EventBrowserAction — INFO. ONE event per WRITE-CLASS browser tool call:
+	// the seven controlledResult-gated tools (browser_navigate, browser_click,
+	// browser_type, browser_evaluate, browser_switch_tab, browser_close_tab,
+	// browser_open_tab). Read-only calls (browser_list_tabs,
+	// browser_screenshot, browser_get_text, browser_wait) are NOT recorded per
+	// call. Fields: {workspace_id, browsing_key, tab_owner, host}; the acting
+	// agent is Entry.AgentID and the tool is Entry.Tool.
+	//
+	// PER ACTION, NOT PER FIRST USE. ADR D2.11 rejects first-use-only auditing
+	// by name: an event on first use of a context an agent did not establish
+	// fires once per agent per workspace and says nothing about the tenth
+	// action, or about which agent made the purchase. That matters more now
+	// that every agent on a workspace drives the operator's live logins.
+	//
+	// Same name-shape rule as EventBrowserInstanceCreated above.
+	EventBrowserAction = "browser_action"
+
 	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
 	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive
 	// control of an agent's live browser (ADR-038 D6). Decision=allow means

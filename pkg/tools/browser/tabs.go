@@ -22,6 +22,10 @@ import (
 // live view).
 type ListTabsTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -69,7 +73,7 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// browser_switch_tab and browser_close_tab both tell the model to "call
 	// browser_list_tabs first", making this the model's likely FIRST call, so
 	// it is the one place both answers have to be unambiguous.
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -119,6 +123,10 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 // for the cursor (ADR-038 D6).
 type SwitchTabTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -153,7 +161,7 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 	if !ok {
 		return tools.ErrorResult("browser_switch_tab: 'index' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -168,6 +176,13 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfTabAt(mgr, sid, index))
 
 	tab, err := mgr.SwitchTab(sid, index)
 	if err != nil {
@@ -188,6 +203,10 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 // would fight for the cursor.
 type CloseTabTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -223,7 +242,7 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if !ok {
 		return tools.ErrorResult("browser_close_tab: 'index' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -238,6 +257,13 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfTabAt(mgr, sid, index))
 
 	tabs, activeIdx, err := mgr.CloseTab(sid, index)
 	if err != nil {
@@ -261,6 +287,10 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 // control lock rather than fighting for the cursor (ADR-038 D6).
 type OpenTabTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -295,7 +325,7 @@ func (t *OpenTabTool) Parameters() map[string]any {
 
 func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	rawURL, _ := args["url"].(string)
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -315,6 +345,13 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), targetHostForTool(rawURL))
 
 	// ADR-072 D1.5a/FR-059: there is no tab budget to reserve any more. Every
 	// counter is deleted; the only limit is live memory, and it is enforced one

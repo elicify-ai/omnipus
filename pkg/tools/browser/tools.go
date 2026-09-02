@@ -51,6 +51,10 @@ const getTextWaitTimeout = 8 * time.Second
 
 type NavigateTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -95,7 +99,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if rawURL == "" {
 		return tools.ErrorResult("browser_navigate: 'url' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -110,6 +114,13 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), targetHostForTool(rawURL))
 
 	if err := mgr.ValidateURL(ctx, rawURL); err != nil {
 		return tools.ErrorResult(err.Error())
@@ -175,6 +186,10 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 type ClickTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -220,7 +235,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if selector == "" && text == "" {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -235,6 +250,13 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfActiveTab(mgr, sid))
 
 	tabCtx, err := mgr.Session(sid)
 	if err != nil {
@@ -374,6 +396,10 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 
 type TypeTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -435,7 +461,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if selector == "" {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -450,6 +476,13 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfActiveTab(mgr, sid))
 
 	tabCtx, err := mgr.Session(sid)
 	if err != nil {
@@ -505,6 +538,10 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 type ScreenshotTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 
 	res ManagerResolver
 	// agentHome is the agent's fixed home directory (ADR-046's
@@ -535,7 +572,7 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 }
 
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -641,6 +678,10 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 
 type GetTextTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -682,7 +723,7 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
-	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -741,6 +782,10 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 
 type WaitTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res ManagerResolver
 }
 
@@ -804,7 +849,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		waitTimeout = time.Duration(ms) * time.Millisecond
 	}
 
-	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -875,6 +920,10 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 // at runtime, and always was.
 type EvaluateTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 	res            ManagerResolver
 	executeEnabled bool
 }
@@ -920,7 +969,7 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if js == "" {
 		return tools.ErrorResult("browser_evaluate: 'js' parameter is required")
 	}
-	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, t.Name())
+	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -935,6 +984,13 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		return deferred
 	}
 	defer release()
+
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfActiveTab(mgr, sid))
 
 	tabCtx, err := mgr.Session(sid)
 	if err != nil {

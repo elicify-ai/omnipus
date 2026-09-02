@@ -190,6 +190,8 @@ func IsValidEventName(e EventName) bool {
 		// the 2026-07 reap-via-RequestCancel redesign.
 		EventTurnOrphanTimeout,
 		// Live interactive browser panel events (ADR-038 D6).
+		EventBrowserInstanceCreated,
+		EventBrowserAction,
 		EventBrowserLiveControlTaken,
 		EventBrowserLiveControlReleased,
 		// WebRTC capture stream events (ADR-047, wave-plan W2-A).
