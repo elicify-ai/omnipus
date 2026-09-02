@@ -313,12 +313,11 @@ func resolveRoleNameTarget(
 			return "", func() {}, fmt.Errorf(
 				"%s: %s matched in a child frame; frame targeting is out of scope (ADR-072 D2.6) — use a CSS locator inside that frame",
 				toolName, displayRoleName(loc))
-		case ignoredCount > 0:
-			lastErr = fmt.Errorf(
-				"%s: no visible match for %s (%d candidate(s) matched but are ignored for accessibility) — try a CSS `selector` instead",
-				toolName, displayRoleName(loc), ignoredCount)
 		default:
-			lastErr = fmt.Errorf("%s: no element matching %s", toolName, displayRoleName(loc))
+			// Nothing survived. Before reporting a plain "not found", find
+			// out WHY — see countIgnoredCandidates for what Chrome will and
+			// will not tell us here.
+			lastErr = noMatchErr(deadlineCtx, toolName, loc, ignoredCount)
 		}
 
 		select {
@@ -330,6 +329,85 @@ func resolveRoleNameTarget(
 		case <-time.After(textResolvePollInterval):
 		}
 	}
+}
+
+// noMatchErr builds the "nothing matched" error, distinguishing the two cases
+// an agent has to act on differently: the element is genuinely absent, versus
+// the element is there but hidden from assistive technology.
+//
+// The second case has to be a SEPARATE sentence or the agent retries the same
+// locator forever. It cannot tell the two apart from "not found".
+func noMatchErr(ctx context.Context, toolName string, loc Locator, ignoredFromPrimary int) error {
+	ignored := ignoredFromPrimary
+	if ignored == 0 {
+		ignored = countIgnoredCandidates(ctx, loc)
+	}
+	// The iframe sentence rides on BOTH branches, not just the plain
+	// not-found one. A page can have a hidden candidate AND the element the
+	// agent wants inside a frame at the same time, and attributing the miss
+	// to the hidden one would send it down the wrong path. Both limitations
+	// are always true of this locator, so both are always stated.
+	const scopeNote = " role+name searches the TOP document only, so an element inside an iframe " +
+		"cannot be found this way; a CSS `selector` reaches both cases."
+
+	if ignored > 0 {
+		return fmt.Errorf(
+			"%s: no visible match for %s — %d element(s) on the page are hidden from assistive "+
+				"technology (aria-hidden, display:none, or a presentational container) and cannot be "+
+				"reached this way. Also,%s",
+			toolName, displayRoleName(loc), ignored, scopeNote)
+	}
+	return fmt.Errorf("%s: no element matching %s.%s", toolName, displayRoleName(loc), scopeNote)
+}
+
+// countIgnoredCandidates asks the SECOND question, on the failure path only:
+// "is something with this role, or this name, actually there but ignored?"
+//
+// It needs its own queries because of a Chrome behaviour that is not obvious
+// and was measured rather than assumed. queryAXTree does return nodes that are
+// ignored for accessibility — but it does NOT compute a name for them. An
+// `<button aria-hidden="true">Ghost</button>` comes back from a role-only
+// query as {ignored: true, role: "button", name: ""}, so a combined
+// role+name query filters it out before the Ignored flag is ever read, and
+// the primary query's ignored count is 0.
+//
+// (Its TEXT survives separately: a name-only query for "Ghost" returns an
+// ignored StaticText node. Both probes are run and the larger count wins,
+// because either one alone misses a real case.)
+func countIgnoredCandidates(ctx context.Context, loc Locator) int {
+	probe := func(q *accessibility.QueryAXTreeParams) int {
+		var n int
+		_ = chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
+			root, err := dom.GetDocument().WithDepth(0).Do(c)
+			if err != nil || root == nil || root.NodeID == 0 {
+				return nil
+			}
+			nodes, err := q.WithNodeID(root.NodeID).Do(c)
+			if err != nil {
+				return nil
+			}
+			for _, node := range nodes {
+				if node != nil && node.Ignored {
+					n++
+				}
+			}
+			return nil
+		}))
+		return n
+	}
+
+	best := 0
+	if loc.Role != "" {
+		if n := probe(accessibility.QueryAXTree().WithRole(loc.Role)); n > best {
+			best = n
+		}
+	}
+	if loc.Name != "" {
+		if n := probe(accessibility.QueryAXTree().WithAccessibleName(loc.Name)); n > best {
+			best = n
+		}
+	}
+	return best
 }
 
 // queryAXCandidates runs ONE Accessibility.queryAXTree round trip (plus the
@@ -374,8 +452,18 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 				continue
 			}
 			// The marker stamp and the downstream chromedp ByQuery are both
-			// document-scoped, so a match owned by a child frame resolves an
-			// attribute the query will never find.
+			// document-scoped, so a match owned by a child frame would
+			// resolve an attribute the query will never find.
+			//
+			// DEFENSIVE, and measured to be so: rooted at the top document's
+			// node, queryAXTree does not descend into a child frame's
+			// document at all, and GetDocument(depth 0) returns an empty
+			// FrameID — so on Chrome 152 a framed element simply does not
+			// come back and this branch never fires. It stays because the
+			// alternative, if that ever changes, is a marker stamped on a
+			// node the click can never find: a silent timeout with no
+			// explanation. The USER-VISIBLE handling of the frame case is
+			// the sentence in noMatchErr.
 			if n.FrameID != "" && topFrame != "" && n.FrameID != topFrame {
 				childFrame++
 				continue

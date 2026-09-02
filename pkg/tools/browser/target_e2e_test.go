@@ -151,9 +151,18 @@ func TestResolveTarget_AllIgnoredNamesTheCount(t *testing.T) {
 		t.Fatal("an aria-hidden element must not resolve")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "ignored for accessibility") {
-		t.Errorf("the error must say the match was IGNORED, not merely absent — the two need different "+
+	// The distinguishing signal: "hidden from assistive technology", with a
+	// count, and the CSS fallback. Without it the agent gets "not found" and
+	// retries the same locator forever.
+	if !strings.Contains(msg, "hidden from assistive technology") {
+		t.Errorf("the error must say the element is HIDDEN, not merely absent — the two need different "+
 			"next moves; got %q", msg)
+	}
+	if !strings.Contains(msg, "1 element") {
+		t.Errorf("the error must name HOW MANY hidden candidates were found; got %q", msg)
+	}
+	if !strings.Contains(msg, "selector") {
+		t.Errorf("the error must name the fallback that works; got %q", msg)
 	}
 }
 
@@ -169,10 +178,16 @@ func TestResolveTarget_ChildFrameMatchErrors(t *testing.T) {
 		Locator{Role: "button", Name: "Framed"}, 1500*time.Millisecond)
 	defer cleanup()
 	if err == nil {
-		t.Fatal("a match owned by a child frame must not resolve")
+		t.Fatal("an element inside a child frame must not resolve — the marker would be stamped on a " +
+			"node the downstream document-scoped query can never find")
 	}
-	if !strings.Contains(err.Error(), "frame") {
-		t.Errorf("the refusal must say it is a FRAME problem and point at the CSS fallback; got %q", err)
+	// MEASURED, not assumed: rooted at the top document, queryAXTree does not
+	// descend into a child frame at all, so this arrives as a plain no-match
+	// rather than through the FrameID guard. The requirement is that the agent
+	// is not misled, so the no-match error itself has to name the limitation.
+	if !strings.Contains(err.Error(), "iframe") {
+		t.Errorf("the refusal must tell the agent that role+name cannot reach inside an iframe, and "+
+			"point at the CSS fallback; got %q", err)
 	}
 }
 

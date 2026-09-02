@@ -29,11 +29,18 @@ const gateFixtureHTML = `<!doctype html><html><head><style>
   #cookie-banner { position: absolute; top: 90px; left: 0; width: 400px; height: 60px;
                    background: #333; color: #fff; z-index: 10; }
   #hidden { display: none; }
-  #zerobox { width: 0; height: 0; overflow: hidden; }
+  /* padding and border zeroed deliberately: a <button> with only width:0
+     and height:0 still has a NON-zero border box from its UA defaults, so
+     without these it is genuinely visible and the gate is right to pass it. */
+  #zerobox { width: 0; height: 0; padding: 0; border: 0; overflow: hidden; }
   #mover { position: absolute; top: 200px; left: 0; width: 100px; height: 30px;
            animation: slide 1s linear infinite; }
   @keyframes slide { from { left: 0px; } to { left: 300px; } }
-  #closed-host { position: absolute; top: 300px; left: 20px; width: 120px; height: 40px; }
+  #under-closed { position: absolute; top: 300px; left: 20px; width: 120px; height: 40px; }
+  #closed-host { position: absolute; top: 300px; left: 20px; width: 120px; height: 40px; z-index: 5; }
+  #under-frame { position: absolute; top: 400px; left: 20px; width: 120px; height: 40px; }
+  #frame-overlay { position: absolute; top: 400px; left: 20px; width: 120px; height: 40px;
+                   z-index: 5; border: 0; }
 </style></head><body>
   <button id="ok">Ready</button>
   <button id="covered">Underneath</button>
@@ -43,7 +50,17 @@ const gateFixtureHTML = `<!doctype html><html><head><style>
   <button id="mover">Moving</button>
   <button id="disabled-btn" disabled style="position:absolute;top:150px;left:20px;">Disabled</button>
   <button id="aria-off" aria-disabled="true" style="position:absolute;top:150px;left:160px;">Aria disabled</button>
+  <!-- The target sits UNDER a custom element whose shadow root is CLOSED.
+       elementFromPoint returns the host and cannot be descended past it, so
+       whether the click would reach #under-closed is genuinely unknowable —
+       which is what "indeterminate" means. (Targeting the host itself would
+       be a determinate "self", not this case.) -->
+  <button id="under-closed">Beneath a closed root</button>
   <closed-shadow id="closed-host"></closed-shadow>
+  <!-- Same shape for the cross-document case: the top document's
+       elementFromPoint resolves the iframe ELEMENT, never anything inside it. -->
+  <button id="under-frame">Beneath a frame</button>
+  <iframe id="frame-overlay" srcdoc="&lt;body style='margin:0;background:#fc8'&gt;&lt;/body&gt;"></iframe>
   <script>
     customElements.define('closed-shadow', class extends HTMLElement {
       constructor() {
@@ -145,17 +162,41 @@ func TestWaitActionable_IndeterminateHitTestPasses(t *testing.T) {
 	skipIfNoBrowser(t)
 	tabCtx, _ := gateFixtureTab(t)
 
-	before := gateIndeterminateTotal()
-	out, err := waitActionableOutcome(tabCtx, "browser_click", "#closed-host", "#closed-host", 2*time.Second)
-	if err != nil {
-		t.Fatalf("a closed shadow root must not FAIL the gate — it is not evidence the click is wrong; got %v", err)
+	for _, tc := range []struct {
+		name     string
+		selector string
+	}{
+		{"under a closed shadow root", "#under-closed"},
+		{"under a cross-document frame", "#under-frame"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := gateIndeterminateTotal()
+			out, err := waitActionableOutcome(tabCtx, "browser_click", tc.selector, tc.selector, 2*time.Second)
+			if err != nil {
+				t.Fatalf("%s must not FAIL the gate — an un-performable hit test is not evidence the "+
+					"click is wrong; got %v", tc.name, err)
+			}
+			if out.HitTest != hitTestIndeterminate {
+				t.Errorf("hit_test = %q, want %q — the pass must be visible, never silent", out.HitTest, hitTestIndeterminate)
+			}
+			if gateIndeterminateTotal() != before+1 {
+				t.Error("an indeterminate hit test must increment its counter, or nobody can tell how " +
+					"often the check is not being performed")
+			}
+		})
 	}
-	if out.HitTest != hitTestIndeterminate {
-		t.Errorf("hit_test = %q, want %q — the pass must be visible, never silent", out.HitTest, hitTestIndeterminate)
-	}
-	if gateIndeterminateTotal() != before+1 {
-		t.Error("an indeterminate hit test must increment its counter, or nobody can tell how often the check is not being performed")
-	}
+
+	// The control: an element the hit test CAN answer must not be reported as
+	// indeterminate, or the field means nothing.
+	t.Run("a plain element is determinate", func(t *testing.T) {
+		out, err := waitActionableOutcome(tabCtx, "browser_click", "#ok", "#ok", 3*time.Second)
+		if err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+		if out.HitTest == hitTestIndeterminate {
+			t.Error("a plainly hit-testable button must not read as indeterminate")
+		}
+	})
 }
 
 // TestWaitActionable_IncrementsFailureCounters — FR-032, per condition.
