@@ -1425,6 +1425,31 @@ func spawnSubTurn(
 		// re-rooting" comment) removed a genuine tie-breaking signal for a
 		// child agent that belongs to more than one workspace's CoreTeam.
 		WorkspaceID: parentTS.opts.WorkspaceID,
+		// ADR-072 FR-032 / issue #659: AutoDenyAsk is INHERITED from the
+		// parent turn. It was not, and that was the defect.
+		//
+		// AutoDenyAsk means "there is no operator on this run, so an
+		// `ask`-policy tool must be denied rather than queued for an approval
+		// nobody can answer". It is set true only for headless/scheduled runs
+		// (ProcessScheduled). A delegated child of such a run is just as
+		// unattended as its parent — there is no second operator who appeared
+		// because the work was delegated — but the child's processOptions were
+		// built without the flag, so its first `ask`-policy tool issued an
+		// approval request into a run with nobody watching and the turn
+		// blocked until its deadline.
+		//
+		// D1 is what makes this urgent rather than tidy: under ADR-072 a
+		// delegated sub-turn browses its workspace's SIGNED-IN browser, and
+		// D2.9 seeds browser_upload_file as `ask` for every agent. Without
+		// this line the first delegated sub-turn to reach it hangs.
+		//
+		// INHERITED, NOT FORCED ON. Setting it unconditionally for every
+		// delegated child would silently convert an INTERACTIVE user's
+		// delegation into blanket denials — an operator IS attached to that
+		// run, and the approval prompt is exactly what they expect. The
+		// property the requirement names is "no operator attached", and the
+		// parent's flag is what records that.
+		AutoDenyAsk: parentTS.opts.AutoDenyAsk,
 	}
 
 	// ADR-072 D9 / FR-052/FR-056: a granted requested_skill is appended to
