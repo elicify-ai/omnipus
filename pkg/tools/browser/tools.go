@@ -208,7 +208,11 @@ func (t *ClickTool) Description() string {
 		"target=\"_blank\" link or one that calls window.open may open a NEW tab and switch to it — " +
 		"subsequent browser_* calls then act on that new tab, not the page you clicked from; check this " +
 		"result's opened_new_tab/new_tab_index/note fields, or call browser_list_tabs, to confirm what's " +
-		"active. If a human is currently controlling the browser via the live view, this call defers " +
+		"active. " + roleNameLocatorHelp +
+		"If the click cannot be made the error names which of four conditions was unmet — visible, " +
+		"stable, enabled or hit-testable — and, when something is covering the element, what that " +
+		"something is. " +
+		"If a human is currently controlling the browser via the live view, this call defers " +
 		"instead of clicking — the result is {\"deferred\": true, \"reason\": ...} instead of a click " +
 		"outcome; wait for them to release control and retry."
 }
@@ -216,7 +220,7 @@ func (t *ClickTool) Description() string {
 func (t *ClickTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector of the element to click, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -225,14 +229,18 @@ func (t *ClickTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector",
 			},
-		},
+		}),
 	}
 }
 
 func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
-	if selector == "" && text == "" {
+	loc, lerr := parseLocatorArgs("browser_click", args, true)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
 	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
@@ -267,22 +275,36 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	defer timeoutCancel()
 
 	// The ORIGINAL user-facing locator — never the internal marker selector
-	// resolveActionSelector may produce — for error messages and the echoed
+	// resolveTarget may produce — for error messages and the echoed
 	// success payload (7-reviewer finding #6).
-	displayTarget := displayLocator(selector, text)
+	displayTarget := displayLocator(loc)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_click", selector, text, mgr.PageTimeout())
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_click", loc, mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	err = chromedp.Run(
-		tabCtx,
-		chromedp.WaitVisible(target, chromedp.ByQuery),
-		chromedp.Click(target, chromedp.ByQuery),
-	)
+	// The actionability gate REPLACES the bare chromedp.WaitVisible that used
+	// to sit here. When a click cannot land, the agent now learns which of
+	// four conditions was unmet — and, when something is covering the
+	// element, what that something is — instead of "context deadline
+	// exceeded", which is true of every possible cause at once.
+	gate, gerr := waitActionableOutcome(tabCtx, "browser_click", target, displayTarget, mgr.PageTimeout())
+	if gerr != nil {
+		return tools.ErrorResult(scrubMarkerFromError(gerr, target, displayTarget).Error())
+	}
+
+	err = chromedp.Run(tabCtx, chromedp.Click(target, chromedp.ByQuery))
 	if err != nil {
+		// FR-037: chromedp re-checks visibility itself after the gate, and
+		// when a single-page app re-renders in that window its own wait
+		// polls to the deadline and returns a BARE timeout. Translate it —
+		// the element passed the gate and then stopped being visible, which
+		// is a different and far more useful thing to be told.
+		if translated := translatePostGateErr(err, "browser_click", displayTarget); translated != err {
+			return tools.ErrorResult(translated.Error())
+		}
 		// Explicitly NAME displayTarget in the outer message — never rely
 		// solely on scrubMarkerFromError finding (and replacing) an
 		// occurrence of the marker inside err's own text, since some
@@ -306,7 +328,16 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if echoSelector == "" {
 		echoSelector = text
 	}
+	if echoSelector == "" {
+		echoSelector = displayTarget
+	}
 	result := map[string]any{"success": true, "selector": echoSelector}
+	// Never silent: a hit test that could not be PERFORMED (a closed shadow
+	// root, a cross-origin frame) passes the gate, and saying so is what
+	// stops it looking like a check that succeeded.
+	if gate.HitTest == hitTestIndeterminate {
+		result["hit_test"] = hitTestIndeterminate
+	}
 
 	// ADR-041 D2: a click on a target="_blank" link or an element that calls
 	// window.open may have spawned a new browser tab. Reconcile
@@ -425,7 +456,8 @@ func (t *TypeTool) Description() string {
 		"same browser session and you want to continue typing where they left off rather than erase it. " +
 		"This tool does NOT press Enter or submit the form — click the submit button separately. The " +
 		"result does not echo the field's resulting value; use browser_get_text to verify it when it " +
-		"matters. If a human is currently controlling the browser via the live view, this call defers " +
+		"matters. " + roleNameLocatorHelp +
+		"If a human is currently controlling the browser via the live view, this call defers " +
 		"instead of typing — the result is {\"deferred\": true, \"reason\": ...} instead of a type " +
 		"outcome; wait for them to release control and retry."
 }
@@ -433,7 +465,7 @@ func (t *TypeTool) Description() string {
 func (t *TypeTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector of the input element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -449,16 +481,25 @@ func (t *TypeTool) Parameters() map[string]any {
 					"preserves existing behavior and anything a human or another turn already typed into " +
 					"the browser this workspace's agents share. Default: false.",
 			},
-		},
-		"required": []string{"selector", "text"},
+		}),
+		// `selector` is no longer the only way to name the field — role+name
+		// works too — so only the value being typed is unconditionally
+		// required. A call with neither locator is still rejected, by name,
+		// in Execute.
+		"required": []string{"text"},
 	}
 }
 
 func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
 	clearField, _ := args["clear"].(bool)
-	if selector == "" {
+	// textIsLocator is FALSE here: browser_type's `text` is the value typed
+	// into the element, never a way to find it.
+	loc, lerr := parseLocatorArgs("browser_type", args, false)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
 	mgr, key, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
@@ -493,12 +534,21 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	defer timeoutCancel()
 
 	// browser_type has no separate "locate by visible text" PARAMETER (its
-	// `text` arg is already the value to type) — only the pseudo-selector
-	// route applies here. See resolvePseudoOnlySelector's doc comment.
-	target, cleanup, rerr := resolvePseudoOnlySelector(tabCtx, "browser_type", selector, mgr.PageTimeout())
+	// `text` arg is already the value to type) — the CSS/pseudo-selector
+	// route and role+name are what it accepts. See the per-tool locator
+	// matrix in target.go.
+	displayTarget := displayLocator(loc)
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_type", loc, mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
+	}
+
+	// The gate REPLACES the chromedp.WaitVisible that used to lead the
+	// action list below. The clear-then-SendKeys sequence runs strictly
+	// after it.
+	if gerr := waitActionable(tabCtx, "browser_type", target, displayTarget, mgr.PageTimeout()); gerr != nil {
+		return tools.ErrorResult(scrubMarkerFromError(gerr, target, displayTarget).Error())
 	}
 
 	// clearField (the "clear" arg) lets the caller choose between the
@@ -512,7 +562,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// for native input events (including React's synthetic-event system)
 	// observe the same incremental typing they would from a human clearing
 	// the field and retyping.
-	actions := []chromedp.Action{chromedp.WaitVisible(target, chromedp.ByQuery)}
+	var actions []chromedp.Action
 	if clearField {
 		actions = append(actions, chromedp.SetValue(target, "", chromedp.ByQuery))
 	}
@@ -520,14 +570,18 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 	err = chromedp.Run(tabCtx, actions...)
 	if err != nil {
-		// browser_type's only locator is `selector` (its `text` arg is the
-		// VALUE typed, never a locator). Explicitly NAME it in the outer
-		// message rather than relying solely on scrubMarkerFromError finding
-		// an occurrence inside err's own text — some chromedp failure modes
-		// (a bare context-deadline timeout) don't embed the selector at all
+		// FR-037, same window as browser_click's: an element that passed
+		// the gate and then vanished must not come back as a bare timeout.
+		if translated := translatePostGateErr(err, "browser_type", displayTarget); translated != err {
+			return tools.ErrorResult(translated.Error())
+		}
+		// Explicitly NAME the locator in the outer message rather than
+		// relying solely on scrubMarkerFromError finding an occurrence
+		// inside err's own text — some chromedp failure modes (a bare
+		// context-deadline timeout) don't embed the selector at all
 		// (7-reviewer finding #6).
 		return tools.ErrorResult(
-			fmt.Sprintf("browser_type: element %q: %s", selector, scrubMarkerFromError(err, target, selector)),
+			fmt.Sprintf("browser_type: element %q: %s", displayTarget, scrubMarkerFromError(err, target, displayTarget)),
 		)
 	}
 
@@ -696,14 +750,14 @@ func (t *GetTextTool) Description() string {
 		"match by visible text. Alternatively (or additionally), pass `text` to target an element by its " +
 		"visible label directly (case-insensitive substring match); when both are given, text is matched " +
 		"only among elements inside selector. Provide selector OR text (or both). To read the entire " +
-		"page's text, use a selector like \"body\" or \"html\". Output is capped at 64,000 characters " +
-		"(truncated with a marker beyond that)."
+		"page's text, use a selector like \"body\" or \"html\". " + roleNameLocatorHelp +
+		"Output is capped at 64,000 characters (truncated with a marker beyond that)."
 }
 
 func (t *GetTextTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector of the element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -712,14 +766,16 @@ func (t *GetTextTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector",
 			},
-		},
+		}),
 	}
 }
 
 func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	selector, _ := args["selector"].(string)
-	text, _ := args["text"].(string)
-	if selector == "" && text == "" {
+	loc, lerr := parseLocatorArgs("browser_get_text", args, true)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
@@ -737,11 +793,14 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	defer timeoutCancel()
 
 	// The ORIGINAL user-facing locator — never the internal marker selector
-	// resolveActionSelector may produce — for error messages (7-reviewer
-	// finding #6).
-	displayTarget := displayLocator(selector, text)
+	// resolveTarget may produce — for error messages (7-reviewer finding #6).
+	displayTarget := displayLocator(loc)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_get_text", selector, text, getTextWaitTimeout)
+	// READ-ONLY tool: it resolves through the same seam as every other, but
+	// it deliberately does NOT run the actionability gate. Reading the text
+	// of an element that is disabled, or behind a cookie banner, is a
+	// perfectly reasonable thing to want.
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_get_text", loc, getTextWaitTimeout)
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
@@ -802,13 +861,14 @@ func (t *WaitTool) Description() string {
 		"(exact) — to match by visible text. Alternatively (or additionally), pass `text` to wait for an " +
 		"element with the given visible text directly (case-insensitive substring match); when both are " +
 		"given, text is matched only among elements inside selector. Provide selector OR text (or both). " +
+		roleNameLocatorHelp +
 		"Waits up to 8 seconds by default; pass `timeout_ms` (100-60000) to use a different budget."
 }
 
 func (t *WaitTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector to wait for, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -821,14 +881,16 @@ func (t *WaitTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "How long to wait for the element to become visible, in milliseconds (100-60000). Default: 8000 (8 seconds).",
 			},
-		},
+		}),
 	}
 }
 
 func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	selector, _ := args["selector"].(string)
-	text, _ := args["text"].(string)
-	if selector == "" && text == "" {
+	loc, lerr := parseLocatorArgs("browser_wait", args, true)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_wait: 'selector' parameter is required")
 	}
 
@@ -868,9 +930,11 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// rather than an opaque internal marker selector (7-reviewer finding #6
 	// — now the shared displayLocator helper, mirrored consistently across
 	// click/type/get_text/wait, since this is where that pattern started).
-	displayTarget := displayLocator(selector, text)
+	displayTarget := displayLocator(loc)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_wait", selector, text, waitTimeout)
+	// browser_wait's contract IS visibility, so its own WaitVisible below
+	// stays: the actionability gate is for tools that ACT.
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_wait", loc, waitTimeout)
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())

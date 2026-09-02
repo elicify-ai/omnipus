@@ -220,3 +220,25 @@ func TestGateProbeJS_EmbedsSelectorSafely(t *testing.T) {
 		}
 	}
 }
+
+// TestActionabilityGate_ConfigKeyIsActuallyRead is the test the config key did
+// not have. tools.browser.actionability_gate shipped with a struct home, an
+// env tag and a documentation row, and NOTHING read it — a setting an operator
+// could turn with no effect, which is worse than no setting at all.
+//
+// It asserts the wiring at the source level because the write side lives in
+// pkg/agent (which imports pkg/tools/browser, not the other way round), so a
+// runtime assertion here cannot reach it.
+func TestActionabilityGate_ConfigKeyIsActuallyRead(t *testing.T) {
+	// The read side: the value is consulted INSIDE the gate.
+	src := readSourceForTest(t, "actionable.go")
+	if !strings.Contains(src, "currentActionabilityGate()") {
+		t.Error("nothing reads the actionability gate setting inside waitActionable")
+	}
+
+	// The write side: something pushes live config in, on reload.
+	loopSrc := readSourceForTest(t, "../../agent/loop.go")
+	if !strings.Contains(loopSrc, "browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)") {
+		t.Error("tools.browser.actionability_gate has no writer — the operator would set it and nothing would change, which is the failure mode this project has shipped before")
+	}
+}

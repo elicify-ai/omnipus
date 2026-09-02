@@ -511,3 +511,74 @@ func displayRoleName(loc Locator) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// ---------------------------------------------------------------------------
+// Argument parsing
+// ---------------------------------------------------------------------------
+
+// withRoleNameParams adds the agent-facing JSON schema fragment for the
+// role/name/index locator to a tool's existing property map, so the three
+// parameters are described identically everywhere. (Tools whose whole schema
+// is the locator build it with locatorParamSchema in tools_interact.go
+// instead; this variant is for the four shipped tools that already had their
+// own selector/text wording worth keeping.)
+func withRoleNameParams(into map[string]any) map[string]any {
+	into["role"] = map[string]any{
+		"type":        "string",
+		"description": "ARIA role of the element, e.g. \"button\", \"link\", \"combobox\". Use with `name`. Survives CSS class names that change on every deploy.",
+	}
+	into["name"] = map[string]any{
+		"type":        "string",
+		"description": "Accessible name of the element, e.g. \"Submit\" — the label a screen reader would read out. Use with `role`.",
+	}
+	into["index"] = map[string]any{
+		"type":        "integer",
+		"description": "0-based disambiguator when `role`+`name` match more than one element, in document order. Omit to require a unique match.",
+	}
+	return into
+}
+
+// parseLocatorArgs reads the locator fields off a tool's raw argument map.
+//
+// textIsLocator is false for browser_type and browser_press_key: their own
+// `text` / `key` argument is the VALUE they send, not a way to find an
+// element, so it must never be read as one.
+func parseLocatorArgs(toolName string, args map[string]any, textIsLocator bool) (Locator, error) {
+	loc := Locator{}
+	loc.Selector, _ = args["selector"].(string)
+	if textIsLocator {
+		loc.Text, _ = args["text"].(string)
+	}
+	loc.Role, _ = args["role"].(string)
+	loc.Name, _ = args["name"].(string)
+
+	if raw, ok := args["index"]; ok && raw != nil {
+		f, ok := raw.(float64)
+		if !ok {
+			if i, iok := raw.(int); iok {
+				f = float64(i)
+			} else {
+				return Locator{}, fmt.Errorf("%s: `index` must be a whole number", toolName)
+			}
+		}
+		if f != float64(int(f)) {
+			return Locator{}, fmt.Errorf("%s: `index` must be a whole number, got %v", toolName, f)
+		}
+		i := int(f)
+		loc.Index = &i
+	}
+	return loc, nil
+}
+
+// empty reports whether nothing at all was supplied to find an element by.
+func (l Locator) empty() bool {
+	return l.Selector == "" && l.Text == "" && l.Role == "" && l.Name == ""
+}
+
+// roleNameLocatorHelp is the one sentence every locator-accepting tool's
+// Description carries about the role+name locator, written once so the eight
+// tools cannot drift into describing it eight different ways.
+const roleNameLocatorHelp = "You can also name the element the way a person would — by its ARIA `role` " +
+	"and its accessible `name` (role=\"button\", name=\"Submit\"). Prefer that on a site whose CSS class " +
+	"names look generated: they change on every deploy, a role and a name do not. Add `index` (0-based, " +
+	"document order) when more than one element matches. Give exactly ONE of {selector/text} or {role+name}. "

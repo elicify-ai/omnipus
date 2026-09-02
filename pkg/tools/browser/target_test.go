@@ -8,6 +8,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -179,4 +180,16 @@ func TestDescribeFirstCandidates_NamesAtMostThree(t *testing.T) {
 	if strings.Contains(got, "Four") {
 		t.Errorf("only the first three candidates are named; got %q", got)
 	}
+}
+
+// readSourceForTest reads a source file relative to this package directory.
+// Used by the handful of assertions whose subject is a wiring fact that cannot
+// be observed at runtime from inside this package.
+func readSourceForTest(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(rel)
+	if err != nil {
+		t.Fatalf("reading %s: %v", rel, err)
+	}
+	return string(b)
 }

@@ -946,7 +946,7 @@ func TestTextSel_ResolveThenActRace_ErrorNamesOriginalLocator(t *testing.T) {
 	removeScript := fmt.Sprintf(`document.querySelector(%q).remove()`, target)
 	require.NoError(t, chromedp.Run(tabCtx, chromedp.Evaluate(removeScript, nil)))
 
-	displayTarget := displayLocator("", "Confirm")
+	displayTarget := displayLocator(Locator{Text: "Confirm"})
 	boundedCtx, cancel := context.WithTimeout(tabCtx, 5*time.Second)
 	defer cancel()
 	actionErr := chromedp.Run(boundedCtx, chromedp.WaitVisible(target, chromedp.ByQuery))
