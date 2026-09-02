@@ -34,6 +34,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
+// auditLoggerSettable is the pkg/tools auditLoggerAware contract, restated here
+// because that interface is unexported in pkg/tools.
+type auditLoggerSettable interface {
+	SetAuditLogger(logger *audit.Logger)
+}
+
 // --- harness ----------------------------------------------------------------
 
 // auditHarness is a real audit.Logger writing to a temp dir, plus the reader
@@ -115,7 +121,7 @@ func TestAudit_EveryWriteClassCallIsRecorded(t *testing.T) {
 	openTool := &OpenTabTool{res: res}
 	switchTool := &SwitchTabTool{res: res}
 	closeTool := &CloseTabTool{res: res}
-	for _, tool := range []interface{ SetAuditLogger(*audit.Logger) }{openTool, switchTool, closeTool} {
+	for _, tool := range []auditLoggerSettable{openTool, switchTool, closeTool} {
 		tool.SetAuditLogger(h.log)
 	}
 
@@ -152,8 +158,10 @@ func TestAudit_EveryWriteClassCallIsRecorded(t *testing.T) {
 	for i, e := range events {
 		assert.Equal(t, "jim", e["agent_id"], "event %d", i)
 		assert.NotEmpty(t, e["tool"], "event %d must name the tool", i)
-		assert.True(t, writeClassBrowserTools[e["tool"].(string)],
-			"event %d records %v, which is not a write-class tool", i, e["tool"])
+		toolName, ok := e["tool"].(string)
+		require.True(t, ok, "event %d has a non-string tool field: %v", i, e["tool"])
+		assert.True(t, writeClassBrowserTools[toolName],
+			"event %d records %q, which is not a write-class tool", i, toolName)
 		details, ok := e["details"].(map[string]any)
 		require.True(t, ok, "event %d has no details: %v", i, e)
 		assert.Equal(t, testWorkspaceID, details["workspace_id"],
