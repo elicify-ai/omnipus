@@ -64,11 +64,35 @@ func TestRegisterTools_NoBoundManagerField(t *testing.T) {
 // TestBrowserBuiltinMetadata_ConstructsAllEleven is the second construction
 // site nobody finds from register.go.
 //
-// BrowserBuiltinMetadata builds the same eleven tool structs a SECOND time, for
+// BrowserBuiltinMetadata builds every browser tool struct a SECOND time, for
 // the central /api/v1/tools catalog. A change to the struct shape breaks it, and
 // a tool added to RegisterTools but not here is simply absent from the catalog
 // with nothing failing — so the two lists are asserted to agree by NAME rather
 // than by count alone.
+//
+// "AllEleven" in the name is now historical and is kept deliberately: the test
+// is cited by that name in the §10.1 traceability table of
+// docs/internal/specs/browser-workspace-ownership-spec.md (row 4a), and
+// renaming it here would orphan that row. The catalog was eleven tools when
+// the row was written; ADR-072 D2 added six (select_option, press_key, hover,
+// snapshot, handle_dialog, upload_file — the capability spec's §2.1 row for
+// metadata.go calls for exactly those "six additions"), so it is SEVENTEEN.
+//
+// The count and the name were both stale from the moment those six landed, and
+// nothing noticed for two waves — this test was red on the wave-4 baseline
+// 569685265 and unreported. The literal below is kept rather than derived from
+// len(registered) precisely because a literal is what forces a human to look
+// when the surface changes; it is the derived half (the name-by-name equality)
+// that catches a one-sided edit.
+//
+// REGISTRY AND CATALOG ARE NOT THE SAME SET, and the difference is exactly one
+// name. FR-029 holds browser_upload_file OUT of the registry until issue #659
+// closes while keeping it IN the catalog ("held means unregistered, not
+// unseeded" — see register.go and TestUploadFile_NotRegistered). So the
+// assertion is catalog == registry ∪ {browser_upload_file}, which stays exact:
+// any other tool present in one list and not the other still fails, and when
+// #659 closes and the RegisterReplacing line lands, the union is unchanged and
+// this test keeps passing.
 func TestBrowserBuiltinMetadata_ConstructsAllEleven(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	mgr, err := NewBrowserManager(BrowserConfig{}, security.NewSSRFChecker(nil))
@@ -81,7 +105,10 @@ func TestBrowserBuiltinMetadata_ConstructsAllEleven(t *testing.T) {
 	}
 
 	metadata := BrowserBuiltinMetadata()
-	require.Len(t, metadata, 11, "the browser tool surface is eleven tools (FR-070: no take-control tool)")
+	require.Len(t, metadata, 17,
+		"the browser catalog is seventeen tools: the eleven that shipped before ADR-072 plus D2's "+
+			"six (select_option, press_key, hover, snapshot, handle_dialog, upload_file). Still no "+
+			"take-control tool (FR-070) — acquiring the operator's tab is implicit and has no surface")
 
 	catalog := map[string]bool{}
 	for _, tool := range metadata {
@@ -94,8 +121,21 @@ func TestBrowserBuiltinMetadata_ConstructsAllEleven(t *testing.T) {
 		catalog[name] = true
 	}
 
-	require.Equal(t, registered, catalog,
-		"the catalog and the per-agent registry must expose exactly the same browser tools; "+
-			"a tool present in one and not the other is either invisible in Settings or "+
-			"advertised and uncallable")
+	// The catalog is the registry plus FR-029's one held name, and nothing
+	// else. Built from `registered` rather than written out by hand so that
+	// adding a tool to both lists needs no edit here, while adding it to only
+	// one still fails.
+	wantCatalog := map[string]bool{"browser_upload_file": true}
+	for name := range registered {
+		wantCatalog[name] = true
+	}
+	require.Equal(t, wantCatalog, catalog,
+		"the catalog and the per-agent registry must expose the same browser tools, with exactly "+
+			"one documented exception: browser_upload_file is seeded and catalogued but NOT "+
+			"registered while FR-029 holds it for issue #659. Any other tool present in one and "+
+			"not the other is either invisible in Settings or advertised and uncallable")
+	require.True(t, catalog["browser_upload_file"],
+		"browser_upload_file must stay in the catalog while it is held out of the registry — "+
+			"held means unregistered, not unseeded, and its name has to reach "+
+			"buildKnownBuiltinToolNames or the policy seed describes a tool nothing knows about")
 }
