@@ -192,6 +192,9 @@ func IsValidEventName(e EventName) bool {
 		// Live interactive browser panel events (ADR-038 D6).
 		EventBrowserInstanceCreated,
 		EventBrowserAction,
+		// ADR-072 D2 — the two per-call browser events with their own shapes.
+		EventBrowserUploadFile,
+		EventBrowserSnapshot,
 		EventBrowserLiveControlTaken,
 		EventBrowserLiveControlReleased,
 		// WebRTC capture stream events (ADR-047, wave-plan W2-A).

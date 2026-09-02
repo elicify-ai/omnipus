@@ -65,6 +65,20 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		// would be wrong because it makes the tool inert and pushes the request
 		// back into prose the operator has to act on manually.
 		"request_mount": "ask",
+		// browser_upload_file (ADR-072 D2 FR-021) is the third member of this
+		// class and the only browser verb in it. Every other browser tool
+		// reads the page or drives it; this one hands a HOST FILE to a page on
+		// the operator's signed-in session, which is the one browser action
+		// that moves their data outward. "allow" would let any agent holding
+		// the browser surface attach anything inside its confinement to any
+		// site it can reach; "deny" was proposed for the unattended
+		// delegation tier and OVERRULED by the operator, and the concern it
+		// answered is met by FR-029 instead — the tool is not registered at
+		// all until issue #659 lands, so an unattended ask cannot occur.
+		//
+		// Listing it here rather than under `destructive` is deliberate: it
+		// destroys nothing. It is consent-gated on the direction of travel.
+		"browser_upload_file": "ask",
 	}
 
 	for name, want := range operatorOnly {

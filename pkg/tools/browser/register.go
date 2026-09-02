@@ -152,6 +152,38 @@ func RegisterTools(
 	// Opens a NEW tab (the agent-facing counterpart to the human "+" button)
 	// — distinct from browser_navigate, which reuses the current tab.
 	registry.RegisterReplacing(&OpenTabTool{res: res})
+	// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+	//
+	// EVERY ONE OF THESE LINES LANDS IN THE SAME COMMIT AS ITS POLICY SEED
+	// (pkg/coreagent/core.go's allStaticToolNames + per-agent maps and
+	// pkg/config/defaults.go's global ceiling). A registered tool with no
+	// seeded policy does NOT abort boot: RepairIncompleteToolPolicyCoverage
+	// backfills every gap to an explicit deny before validation runs, and
+	// compositor.go fails closed to deny anyway. The result is a tool that is
+	// registered, listed in the catalog, and refuses every call on every
+	// agent — with at most one WARN and, in the ordering where the catalog
+	// edit lands first, none at all.
+	registry.RegisterReplacing(&SelectOptionTool{res: res})
+	registry.RegisterReplacing(&PressKeyTool{res: res})
+	registry.RegisterReplacing(&HoverTool{res: res})
+	// Read-only (FR-038): browser_snapshot takes neither the human-control
+	// gate nor the write lease, so it answers while a human is driving the tab.
+	registry.RegisterReplacing(&SnapshotTool{res: res})
+	// browser_upload_file is DELIBERATELY NOT REGISTERED HERE (FR-029).
+	//
+	// It is fully implemented (tools_interact.go), fully seeded (allStaticToolNames,
+	// the global ceiling at "ask", and every browser-capable agent's override
+	// map), and present in BrowserBuiltinMetadata — and it stays out of the
+	// registry until issue #659 is closed. #659 is "AutoDenyAsk is not
+	// inherited by delegated sub-turns": the tool is seeded `ask`, so on an
+	// unattended delegated run it would raise an approval nobody can answer.
+	// The code half of #659 has landed (pkg/agent/subturn.go inherits the
+	// flag); the issue is still open.
+	//
+	// It must NOT copy browser_evaluate's shape — registered, then refused
+	// inside Execute. An operator reading the tool catalog would see a tool
+	// that is present and then discover by calling it that it is not. Absent
+	// is honest. TestUploadFile_NotRegistered pins the absence.
 
 	return nil
 }

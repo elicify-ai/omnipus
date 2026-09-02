@@ -60,6 +60,15 @@ var writeClassBrowserTools = map[string]bool{
 	"browser_switch_tab": true,
 	"browser_close_tab":  true,
 	"browser_open_tab":   true,
+	// ADR-072 D2 — the four new interaction verbs. All four call
+	// controlledResult (FR-040), so under §14 rule 3's biconditional all four
+	// are write-class and all four are leased. Adding a verb here without
+	// wiring controlledResult, or the reverse, is what audit_test.go's
+	// set-equality assertion exists to catch.
+	"browser_select_option": true,
+	"browser_press_key":     true,
+	"browser_hover":         true,
+	"browser_upload_file":   true,
 }
 
 // readOnlyBrowserTools is the complement: the four tools that observe without
@@ -71,6 +80,13 @@ var readOnlyBrowserTools = map[string]bool{
 	"browser_screenshot": true,
 	"browser_get_text":   true,
 	"browser_wait":       true,
+	// ADR-072 D2 FR-038 — browser_snapshot is read-only. It calls neither
+	// controlledResult nor the write lease, so it belongs here and NOT in the
+	// write-class set. It emits its OWN metadata-only browser_snapshot event
+	// (FR-028) rather than a browser_action row: the two answer different
+	// questions and recordBrowserAction refuses a non-write-class name by
+	// design.
+	"browser_snapshot": true,
 }
 
 // browserAudit is the audit sink every browser tool embeds. It is populated by

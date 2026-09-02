@@ -2533,6 +2533,16 @@ func registerSharedTools(
 				// switch takes effect without a restart, which is the whole
 				// reason it exists.
 				browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)
+				// ADR-072 D2 FR-027: browser_snapshot renders field VALUES by
+				// operator ruling, so its rendered outline is run through the
+				// credential replacer before it is returned. Wired at this
+				// call site, and for the same reason as the line above: it
+				// runs on the fresh-seed pass AND on every config reload, so a
+				// secret the operator registers after boot is covered without
+				// a restart. Defence in depth, not the control that makes the
+				// tool safe — it substitutes registered credential plaintexts
+				// and does nothing for arbitrary form values.
+				browser.SetSensitiveDataReplacer(cfg.SensitiveDataReplacer())
 				coordinator := al.browserCoordinator
 				al.mu.Unlock()
 				// fs-workspace: browser tools (browser_screenshot) get agent.Home +

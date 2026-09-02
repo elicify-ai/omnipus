@@ -656,7 +656,8 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // re-derived from a count.
 
 // tier3SearchOnlyToolNames is ADR-071 §4.1's literal Tier 3 list, transcribed
-// verbatim, now 62 names after write_agent_metadata's retirement (a
+// verbatim, now 67 names: 62 after write_agent_metadata's retirement, plus
+// ADR-072 D2's five new browser tools (a
 // redundant, unguarded second door onto
 // the same files update_agent already writes through a properly-guarded
 // path — see pkg/sysagent/tools/metadata.go). It exists ONLY as the third leg
@@ -668,7 +669,14 @@ var tier3SearchOnlyToolNames = []string{
 	"append_file", "library_list", "library_read", "request_mount", "find_skills",
 	"install_skill", "browser_navigate", "browser_click", "browser_type", "browser_screenshot",
 	"browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab",
-	"browser_close_tab", "browser_open_tab", "create_workspace", "update_workspace", "delete_workspace",
+	"browser_close_tab", "browser_open_tab",
+	// ADR-072 D2 (ADR D1.9b ruling 3) — all five new browser tools are Tier 3
+	// search-only, alongside the other eleven. browser_upload_file is here
+	// even though FR-029 holds its registration: the tier sets are about
+	// manifest VISIBILITY of a catalog name, not about registration.
+	"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+	"browser_upload_file",
+	"create_workspace", "update_workspace", "delete_workspace",
 	"list_workspaces", "read_agent_metadata", "configure_provider",
 	"list_providers", "test_provider", "list_models", "run_doctor", "get_usage", "add_mcp_server",
 	"remove_mcp_server", "list_mcp_servers", "create_skill", "edit_skill", "create_task_in_workspace",
@@ -680,12 +688,12 @@ var tier3SearchOnlyToolNames = []string{
 	"delete_task",
 }
 
-// TestVisibility_TierArithmetic pins the full 17+7+62+1=87 partition (FR-032:
+// TestVisibility_TierArithmetic pins the full 17+7+67+1=92 partition (FR-032:
 // navigate's retirement dropped the previewed set from 8 to 7, and
 // write_agent_metadata's retirement dropped the search-only set from 63 to
-// 62 — "The always-
-// listed set MUST contain exactly 17 names, the previewed set exactly 7, the
-// search-only set exactly 62, and the infrastructure set exactly 1"). Counts
+// 62, and ADR-072 D2's five new browser tools raised it from 62 to 67 — "The
+// always-listed set MUST contain exactly 17 names, the previewed set exactly
+// 7, the search-only set exactly 67, and the infrastructure set exactly 1"). Counts
 // alone are NOT verification (two different 6-out/5-in vs 3-out/2-in diffs
 // both land on 17) — this test additionally proves the four sets are
 // pairwise disjoint and that every Tier 3 name resolves to ManifestLazy +
@@ -705,12 +713,12 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	if len(infra) != 1 {
 		t.Errorf("len(InfraManifestToolNames()) = %d, want 1; got %v", len(infra), infra)
 	}
-	if len(tier3SearchOnlyToolNames) != 62 {
-		t.Fatalf("tier3SearchOnlyToolNames has %d entries, want 62 — fixture defect, fix the test data",
+	if len(tier3SearchOnlyToolNames) != 67 {
+		t.Fatalf("tier3SearchOnlyToolNames has %d entries, want 67 — fixture defect, fix the test data",
 			len(tier3SearchOnlyToolNames))
 	}
 
-	seen := make(map[string]string, 87) // name -> which set it was first seen in
+	seen := make(map[string]string, 92) // name -> which set it was first seen in
 	record := func(setName string, names []string) {
 		for _, n := range names {
 			if prior, ok := seen[n]; ok {
@@ -725,8 +733,8 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	record("infra", infra)
 	record("search-only", tier3SearchOnlyToolNames)
 
-	if len(seen) != 87 {
-		t.Errorf("union of all four sets has %d unique names, want 87", len(seen))
+	if len(seen) != 92 {
+		t.Errorf("union of all four sets has %d unique names, want 92", len(seen))
 	}
 
 	// Every Tier 3 name must resolve to ManifestLazy + ManifestSearchOnly.
@@ -899,7 +907,7 @@ func TestManifest_RenderedBlockIsNineteenLines(t *testing.T) {
 		t.Errorf("rendered manifest block has %d lines, want 19 (FR-033: 2 + 2*5 + 7):\n%s", len(lines), got)
 	}
 	// Non-vacuous: no search-only tool must sneak into this rendering.
-	for _, n := range tier3SearchOnlyToolNames[:5] { // sample, not the whole 62
+	for _, n := range tier3SearchOnlyToolNames[:5] { // sample, not the whole 67
 		if strings.Contains(got, "  - "+n) {
 			t.Errorf("19-line block must not contain search-only tool %q", n)
 		}

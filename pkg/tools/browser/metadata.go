@@ -47,5 +47,24 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&SwitchTabTool{},
 		&CloseTabTool{},
 		&OpenTabTool{},
+		// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+		//
+		// THESE ENTRIES ARE ATOMIC WITH THE POLICY SEED, not merely adjacent
+		// to it: TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// compares this catalog against coreagent's allStaticToolNames, and a
+		// registered tool whose policy is unseeded does NOT abort boot — it
+		// resolves a silent deny on every agent. See allStaticToolNames'
+		// comment in pkg/coreagent/core.go.
+		&SelectOptionTool{},
+		&PressKeyTool{},
+		&HoverTool{},
+		&SnapshotTool{},
+		// browser_upload_file appears HERE while it is deliberately absent
+		// from RegisterTools (FR-029, issue #659). That asymmetry is the
+		// point: "held" means unregistered, not unseeded. The name must be in
+		// this catalog and in allStaticToolNames or the drift test fails; it
+		// must NOT be in the registry or an agent can call a tool whose
+		// unattended-approval story is not finished.
+		&UploadFileTool{},
 	}
 }

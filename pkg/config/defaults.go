@@ -304,6 +304,30 @@ func DefaultConfig() *Config {
 				"browser_switch_tab": "allow",
 				"browser_close_tab":  "allow",
 				"browser_open_tab":   "allow",
+				// ADR-072 D2 — the interaction verbs and the accessibility
+				// snapshot. This is the CEILING, not a grant: it closes policy
+				// coverage for every agent (validation is OR-based across the
+				// global and per-agent maps) while the per-agent seeds in
+				// pkg/coreagent/core.go decide who actually holds them. Mia
+				// and Ava name no browser tool, so denyAllThenOverride leaves
+				// them at an explicit agent-level deny, which beats this allow
+				// under most-restrictive-wins.
+				//
+				// These entries and the per-agent maps are ONE COMMIT with
+				// allStaticToolNames — see that literal's comment for why
+				// "before" is not a safe order either.
+				"browser_select_option": "allow",
+				"browser_press_key":     "allow",
+				"browser_hover":         "allow",
+				"browser_snapshot":      "allow",
+				// FR-021 — ask, and it is the only browser verb that is.
+				// Attaching a host file to a page on the operator's signed-in
+				// session is the one browser action that moves their data
+				// outward, so it is consent-gated at the ceiling as well as
+				// per agent. IDWorker inherits this value through
+				// tightenGlobalCeiling's sparse map, which is intended and
+				// recorded rather than discovered.
+				"browser_upload_file": "ask",
 
 				// --- Sysagent management tools ---
 				"create_workspace":    "allow",

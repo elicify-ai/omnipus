@@ -209,6 +209,36 @@ const (
 	// Same name-shape rule as EventBrowserInstanceCreated above.
 	EventBrowserAction = "browser_action"
 
+	// EventBrowserUploadFile — INFO (Decision=allow) or WARN (Decision=deny).
+	// ONE event per browser_upload_file invocation, allowed OR denied (D2
+	// FR-031). The denied half is the load-bearing half: a trail that records
+	// only the successes cannot answer "did this agent try to hand a file it
+	// was not allowed to reach to a page on the operator's logged-in session?",
+	// which is the whole question the event exists for.
+	//
+	// Fields: {workspace_id, browsing_key, tab_owner, resolved_path,
+	// page_origin, fs_op: "write", fs_op_reason, reason?, detail?}; the acting
+	// agent is Entry.AgentID and Entry.Tool is "browser_upload_file".
+	// resolved_path is the path AFTER ResolvePath, because an unresolved
+	// relative path is not something an operator can act on.
+	//
+	// Same name-shape rule as EventBrowserInstanceCreated above: underscores,
+	// never dots.
+	EventBrowserUploadFile = "browser_upload_file"
+
+	// EventBrowserSnapshot — INFO. ONE metadata-only event per
+	// browser_snapshot capture (D2 FR-028). METADATA ONLY, and that is a
+	// requirement rather than an economy: browser_snapshot renders field
+	// VALUES by operator ruling, so an audit row carrying the captured text
+	// would copy every password and card number the page held into a file
+	// whose whole purpose is to be kept and read later.
+	//
+	// Fields: {workspace_id, browsing_key, tab_owner, page_origin, node_count,
+	// output_bytes, value_nodes_emitted, truncated}. Never the values.
+	//
+	// Same name-shape rule as EventBrowserInstanceCreated above.
+	EventBrowserSnapshot = "browser_snapshot"
+
 	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
 	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive
 	// control of an agent's live browser (ADR-038 D6). Decision=allow means
