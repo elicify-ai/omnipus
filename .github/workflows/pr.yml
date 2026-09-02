@@ -2121,12 +2121,30 @@ jobs:
         # divergent one.
         run: |
           set -euo pipefail
-          jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
+          # -sf DISCARDS the server's answer: on any non-2xx, curl exits 22
+          # having printed nothing, so the step fails with no reason anywhere in
+          # the log. Every E2E shard has been failing here on this branch and on
+          # release/v0.1.1 alike, and the log says only that a step failed.
+          # A silent failure in the diagnostic path is the worst kind.
+          #
+          # Capture status and body instead, and print the body on failure. The
+          # key is registered with add-mask, so it stays masked in whatever the
+          # server echoes back.
+          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
             '{provider:{id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
-            | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
+            | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
+                -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
-                -d @- \
-                > /dev/null
+                -d @-)
+          if [ "$body" != "200" ] && [ "$body" != "204" ]; then
+            echo "::error::onboarding/complete returned HTTP $body" >&2
+            echo "--- response body ---" >&2
+            head -c 2000 /tmp/onboard-body.txt >&2 || true
+            echo >&2
+            echo "--- gateway log tail ---" >&2
+            tail -40 "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log" 2>/dev/null >&2 || echo "(no gateway log at ${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log)" >&2
+            exit 1
+          fi
         # OPENROUTER_API_KEY_CI comes from "Resolve shard LLM key" (per-shard, via $GITHUB_ENV).
 
       # T0.4: Preflight — fail fast if OPENROUTER_API_KEY_CI is unset.
