@@ -1977,10 +1977,11 @@ func registerSharedTools(
 			// (pkg/gateway/gateway.go), which shares its SkillInstaller/
 			// SkillsLoader with this same skill engine. A prior version of
 			// this block registered a second, competing ScopeGeneral
-			// implementation here, constructed against agent.Workspace — a
-			// root that predates ADR-046 FR-009's move to a single global
-			// skills directory and that install_skill above no longer
-			// targets. Do not reintroduce it.
+			// implementation here, constructed against the agent's own
+			// per-agent workspace root (the field ADR-057 FR-001/FR-002
+			// renamed to .Home) — a root that predates ADR-046 FR-009's move
+			// to a single global skills directory and that install_skill
+			// above no longer targets. Do not reintroduce it.
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,

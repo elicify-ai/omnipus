@@ -66,8 +66,11 @@ func createDispatchableTask(t *testing.T, store *task.Store, agentID, title stri
 // comment for the full history). The removed gate counted StatusInProgress
 // tasks for the dispatching agent via te.store.List(...) BEFORE ClaimForRun,
 // and refused dispatch once that count reached 3 — regardless of how large
-// dispatchSema (the global cap, resolved from
-// config.PerformanceConfig.EffectiveMaxParallelAgents) was configured. A live
+// dispatchSema (the global capacity, resolved from
+// config.PerformanceConfig.EffectiveMaxParallelAgents — whose two-valued
+// answer's capped flag the executor deliberately discards, since a semaphore
+// capacity is not a figure shown to anyone and the live memory gate on the
+// admission path is what actually bounds work) was configured. A live
 // UAT measured exactly 6 concurrent tasks (2 bash-capable agents x 3) while
 // the configured/reported ceiling was ~1026: the per-agent gate silently
 // pinned real behavior far below the operator-configured value, so the UI

@@ -101,8 +101,8 @@ func TestConfig_ExplicitBrowserEvaluateFalseSurvivesSaveRoundTrip(t *testing.T) 
 		t.Fatalf("read saved config: %v", err)
 	}
 	var onDisk map[string]any
-	if err := json.Unmarshal(raw, &onDisk); err != nil {
-		t.Fatalf("unmarshal saved config: %v", err)
+	if unmarshalErr := json.Unmarshal(raw, &onDisk); unmarshalErr != nil {
+		t.Fatalf("unmarshal saved config: %v", unmarshalErr)
 	}
 	sandbox, _ := onDisk["sandbox"].(map[string]any)
 	if sandbox == nil {

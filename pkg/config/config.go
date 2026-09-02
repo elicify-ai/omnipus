@@ -542,8 +542,7 @@ func clampParallelExplicit(v int) int {
 // static for the life of the process. A bounded interval keeps the warning
 // loud enough to be diagnosable (CLAUDE.md/ADR-037: never silently swallow
 // it) without the volume, rather than moving it to a boot-time-only
-// diagnostic — EffectiveMaxParallelAgents is deliberately never cached
-// (config.go's own "known limitation" doc comment on availableRAMBytes), and
+// diagnostic — EffectiveMaxParallelAgents is deliberately never cached, and
 // a boot-time-only warn would miss a value changed later via PUT
 // /api/v1/performance while the gateway is running.
 const explicitCeilingWarnInterval = 5 * time.Minute
@@ -675,13 +674,13 @@ func availableRAMBytes() (uint64, bool) {
 	if len(signals) == 0 {
 		return 0, false
 	}
-	min := signals[0].available
+	tightest := signals[0].available
 	for _, sig := range signals[1:] {
-		if sig.available < min {
-			min = sig.available
+		if sig.available < tightest {
+			tightest = sig.available
 		}
 	}
-	return min, true
+	return tightest, true
 }
 
 // memoryPressureRatioThreshold is THE threshold. Singular, deliberately.
@@ -782,11 +781,9 @@ func liveMemoryPressureHigh() (bool, bool) {
 		if sig.total == 0 {
 			continue
 		}
-		used := float64(0)
+		var used float64
 		if sig.available < sig.total {
 			used = float64(sig.total-sig.available) / float64(sig.total)
-		} else {
-			used = 0
 		}
 		if used > worst {
 			worst = used

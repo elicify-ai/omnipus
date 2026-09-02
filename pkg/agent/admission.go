@@ -212,10 +212,10 @@ func (a *AdmissionController) TryAdmitWithReason(scope string) (bool, string, fu
 		return true, "", func() {}
 	}
 
-	cap, memoryBinding := a.admissionCapWithReason()
-	if len(a.activeScopes) >= cap {
+	limit, memoryBinding := a.admissionCapWithReason()
+	if len(a.activeScopes) >= limit {
 		if memoryBinding {
-			logMemoryAdmissionRefusalOnce(cap)
+			logMemoryAdmissionRefusalOnce(limit)
 			return false, config.ReasonMemoryPressure, nil
 		}
 		return false, "", nil
@@ -426,10 +426,10 @@ func (r *RootDelegationAdmission) TryAdmitWithReason() (bool, string, func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	cap, memoryBinding := r.admissionCapWithReason()
-	if r.active >= cap {
+	limit, memoryBinding := r.admissionCapWithReason()
+	if r.active >= limit {
 		if memoryBinding {
-			logMemoryAdmissionRefusalOnce(cap)
+			logMemoryAdmissionRefusalOnce(limit)
 			return false, config.ReasonMemoryPressure, nil
 		}
 		return false, "", nil
