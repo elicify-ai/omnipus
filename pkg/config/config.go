@@ -428,43 +428,73 @@ func (c *Config) FilterSensitiveData(content string) string {
 // at runtime via the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 type PerformanceConfig struct {
 	// MaxParallelAgents is the maximum number of concurrent task/subagent
-	// dispatches. 0 means "use the auto-detected default", sized from
-	// available memory (see autoDetectMaxParallel) — floored so a small box
-	// still functions, and bounded only by a PHYSICAL OS-thread-safety
-	// ceiling (physicalConcurrencySafetyCeiling), never an arbitrary policy
-	// number. An explicit non-zero value here (or via
-	// OMNIPUS_MAX_PARALLEL_AGENTS) is a DEFAULT OVERRIDE: it always wins
-	// outright over the auto-detected value and is honored as configured —
-	// see clampParallelExplicit.
+	// dispatches.
+	//
+	// 0 means "not configured". It does NOT mean "the system computed a
+	// number for you": there is no longer a computed default. The former
+	// availableRAM/3.5-MB-per-agent formula, and the auto-detect and
+	// auto-floor helpers that wrapped it, are deleted. It was one of two
+	// memory mechanisms in this process, sizing a cap ONCE from a per-agent
+	// byte constant while the browser pool sized itself LIVE from the same
+	// host's real headroom — two mechanisms disagreeing about the same
+	// machine.
+	//
+	// Concurrency is now bounded by LIVE memory at the moment of admission
+	// (see MemoryPressureHigh), not by a number precomputed from a constant.
+	// When this field is unset, EffectiveMaxParallelAgents returns the
+	// PHYSICAL OS-thread safety backstop (physicalConcurrencySafetyCeiling)
+	// — a "this many threads would abort the Go runtime" bound, not a claim
+	// that the machine can run that many agents. The live gate is what
+	// actually stops admission long before the backstop is approached.
+	//
+	// An explicit non-zero value here (or via OMNIPUS_MAX_PARALLEL_AGENTS) is
+	// a DEFAULT OVERRIDE: it always wins outright and is honored as
+	// configured — see clampParallelExplicit.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
 }
 
 // EffectiveMaxParallelAgents returns the environment-override-aware value for
-// MaxParallelAgents. It applies, in priority order:
-//  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid.
+// MaxParallelAgents, together with whether that value is a real CAP an
+// operator asked for.
+//
+// It applies, in priority order:
+//
+//  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid —
+//     returns (v, true).
 //  2. The configured value (p.MaxParallelAgents), if non-zero — an EXPLICIT
 //     operator choice, honored as given (clampParallelExplicit floors it at 1
-//     but never lowers a large explicit value).
-//  3. An auto-detect DEFAULT: availableMemory / bytesPerAgent (see
-//     autoDetectMaxParallel) — used only when neither of the above is set.
+//     but never lowers a large explicit value) — returns (v, true).
+//  3. Neither set — returns (physicalConcurrencySafetyCeiling, false).
+//
+// THE SECOND RETURN VALUE IS THE POINT (FR-067). capped=false means "nobody
+// capped this; the number you are holding is a physical backstop, not a
+// capacity estimate". Callers that display, log or reason about the value
+// MUST branch on it: rendering the unset case as a bare integer tells an
+// operator the system recommends 2000 concurrent agents, which is not a
+// claim anything in this process is making.
+//
+// The shape is deliberately (int, bool) and never a bare 0 sentinel. A 0
+// returned into newTaskExecutor's semaphore capacity would deadlock every
+// dispatch in the process, and pkg/gateway's PUT /api/v1/performance
+// regression tests exist precisely to catch a re-introduction of that.
 //
 // Steps 1 and 2 both take precedence over step 3 unconditionally: this
-// function must never let the auto-detected default override an operator's
-// explicit choice, by config, env, or (via PUT /api/v1/performance) the UI.
-func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
+// function must never let the backstop override an operator's explicit
+// choice, by config, env, or (via PUT /api/v1/performance) the UI.
+func (p PerformanceConfig) EffectiveMaxParallelAgents() (int, bool) {
 	// Env-var override has highest priority.
 	if s := os.Getenv("OMNIPUS_MAX_PARALLEL_AGENTS"); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v >= 1 {
-			return clampParallelExplicit(v)
+			return clampParallelExplicit(v), true
 		}
 	}
 	if p.MaxParallelAgents > 0 {
 		// Explicit user-set value: honored as configured (see
 		// clampParallelExplicit's own doc comment for why there is no
 		// ceiling here).
-		return clampParallelExplicit(p.MaxParallelAgents)
+		return clampParallelExplicit(p.MaxParallelAgents), true
 	}
-	return autoDetectMaxParallel()
+	return physicalConcurrencySafetyCeiling, false
 }
 
 // clampParallelExplicit enforces only a floor (1, so an operator who
@@ -543,121 +573,230 @@ func shouldLogExplicitCeilingWarn(now time.Time) bool {
 	}
 }
 
-// clampParallel floors the AUTO-DETECTED default at autoDetectFloorParallel
-// (so a severely memory-constrained box still gets minimal concurrency) and
-// caps it at physicalConcurrencySafetyCeiling.
+// physicalConcurrencySafetyCeiling is the PHYSICAL OS-thread safety
+// backstop. It is what EffectiveMaxParallelAgents returns when nothing is
+// configured — paired with capped=false, because it is a bound on what the
+// Go runtime survives, NOT an estimate of what this machine can run. It
+// never clamps an explicit operator value (clampParallelExplicit honors any
+// explicit value, warning loudly instead of silently capping it).
 //
-// Unlike clampParallelExplicit, this path DOES cap the ceiling: the
-// auto-detected value is a convenience default the system chose FOR the
-// operator, not something they explicitly asked for, so keeping it inside a
-// safe physical bound by construction is the appropriate default posture. An
-// operator who wants more than the physical ceiling can always set
-// max_parallel_agents explicitly (clampParallelExplicit path), which this
-// default never overrides (see EffectiveMaxParallelAgents).
-func clampParallel(v int) int {
-	const autoDetectFloorParallel = 2
-	if v < autoDetectFloorParallel {
-		return autoDetectFloorParallel
-	}
-	if v > physicalConcurrencySafetyCeiling {
-		return physicalConcurrencySafetyCeiling
-	}
-	return v
-}
-
-// physicalConcurrencySafetyCeiling bounds the AUTO-DETECTED default only
-// (clampParallel) — it never clamps an explicit operator value
-// (clampParallelExplicit honors any explicit value, warning loudly instead
-// of silently capping it).
+// Each concurrent agent turn/sub-turn can end up blocked on a synchronous
+// syscall (file fsync, cgo, blocking DNS resolution) that parks its
+// goroutine's OS thread rather than Go's netpoller: prior measurement found
+// ~1000 concurrent fsyncing goroutines consumed ~999 OS threads. Go's
+// runtime hard-aborts the entire process — not a graceful degradation —
+// once it exceeds 10,000 OS threads ("runtime: program exceeds 10000-thread
+// limit, fatal error: thread exhaustion"). This value leaves a 5x margin
+// below that fatal threshold for every OTHER thread-consuming subsystem
+// already running in the process (channels, browser tooling, the HTTP
+// server, GC, etc.).
 //
-// This is a PHYSICAL bound, not a policy number. Each concurrent agent
-// turn/sub-turn can end up blocked on a synchronous syscall (file fsync,
-// cgo, blocking DNS resolution) that parks its goroutine's OS thread rather
-// than Go's netpoller: prior measurement found ~1000 concurrent fsyncing
-// goroutines consumed ~999 OS threads. Go's runtime hard-aborts the entire
-// process — not a graceful degradation — once it exceeds 10,000 OS threads
-// ("runtime: program exceeds 10000-thread limit, fatal error: thread
-// exhaustion"). physicalConcurrencySafetyCeiling leaves a 5x margin below
-// that fatal threshold for every OTHER thread-consuming subsystem already
-// running in the process (channels, browser tooling, the HTTP server, GC,
-// etc.), so a default chosen automatically — without the operator's
-// explicit, informed sign-off — can never by itself push the process into
-// that fatal zone.
+// Reaching it in practice would require the live memory gate
+// (MemoryPressureHigh) to admit two thousand concurrent agents on one host,
+// which is the scenario it exists to make impossible. The backstop is the
+// answer to "what if the gate is wrong", not the operating point.
 const physicalConcurrencySafetyCeiling = 2000
 
-// bytesPerAgent is the assumed marginal memory cost of one concurrent agent
-// turn, used to size the auto-detected default from available memory.
-// Backed by live measurement, not a guess: gateway-RSS-only per-agent deltas
-// of 2.0-3.2 MB were measured across N=4/N=8/N=16 concurrency, for both a
-// browser-navigation workload and a bash-heavy workload (see
-// docs/internal/uat/parallelism-cost-browser-bash-2026-08-04.md and
-// docs/internal/uat/parallelism-cost-measurement-2026-08-04.md). 3.5 MB/agent
-// sits just above the observed range, leaving headroom without resurrecting
-// the old CPU/1.5GB-per-agent heuristic, which overestimated real per-agent
-// cost by roughly 500x.
-//
-// This deliberately does NOT budget for the separate, stochastic ~500 MB
-// Chromium/browser-tool event documented in the same measurement — that cost
-// is not proportional to agent count (it is one persistent, shared process
-// per agent identity, not N×), and sizing a per-agent constant around a
-// worst-case tail event would make the common case (no browser tool use)
-// wildly under-provisioned. A box that heavily uses browser tools at high
-// concurrency should set max_parallel_agents explicitly, lower than this
-// default — this is called out explicitly in this change's own report as an
-// operator-facing caveat, not silently absorbed into the constant.
-const bytesPerAgent = 3.5 * 1024 * 1024
+// memorySignal is one determinable (available, total) reading of this
+// host's memory. Two sources can produce one — the kernel's own host-wide
+// figures and the process's cgroup limit — and either, both, or neither may
+// be determinable at any moment.
+type memorySignal struct {
+	available uint64
+	total     uint64
+}
 
-// autoDetectMaxParallel returns the DEFAULT (only) concurrency cap, sized as
-// availableMemory / bytesPerAgent and clamped by clampParallel. Used only
-// when the operator has not set an explicit performance.max_parallel_agents
-// (config or env) — see EffectiveMaxParallelAgents.
-func autoDetectMaxParallel() int {
-	avail := availableRAMBytes()
-	val := int(float64(avail) / bytesPerAgent)
-	return clampParallel(val)
+// memorySignals returns every DETERMINABLE memory signal, in no particular
+// order. An empty slice means this host's memory cannot be measured at all:
+// a Windows host (no reader exists), a BSD host (no reader exists), or a
+// Linux host whose /proc/meminfo is unreadable (gVisor, distroless, a
+// hardened seccomp profile). That is a first-class answer, not an error, and
+// it is the ONLY thing that makes the two-valued accessors below report
+// ok=false.
+//
+// The two sources:
+//
+//  1. The host-wide reading — /proc/meminfo's MemAvailable and MemTotal on
+//     Linux, an assembled sysctl approximation on Darwin. Accounts for
+//     reclaimable page cache (unlike MemFree).
+//  2. The process's cgroup memory limit and the headroom under it
+//     (readCgroupMemoryBudgetBytes), when a finite limit is configured —
+//     common in containerized deployments (Docker, Fly Machines,
+//     Kubernetes), where the limit is frequently far tighter than the host's
+//     own total memory and is a STABLE, explicitly configured ceiling rather
+//     than a live kernel heuristic.
+//
+// Both are collected because they answer DIFFERENT questions and a caller
+// wants the tighter answer to each. Critically (FR-079), an undeterminable
+// signal is OMITTED rather than contributed as a zero: the previous code
+// compared a cgroup reading against a host-wide reading that had silently
+// fabricated 4 GB when /proc/meminfo was unreadable, so on a /proc-less
+// container the invented number could win the comparison and discard the one
+// signal that was real.
+func memorySignals() []memorySignal {
+	var out []memorySignal
+	if avail, ok := readMemAvailableBytes(); ok {
+		if total, ok := readMemTotalBytes(); ok && total > 0 {
+			out = append(out, memorySignal{available: avail, total: total})
+		}
+	}
+	if avail, limit, ok := readCgroupMemoryBudgetBytes(); ok && limit > 0 {
+		out = append(out, memorySignal{available: avail, total: limit})
+	}
+	return out
 }
 
 // availableRAMBytes returns the current best estimate of memory available
-// for starting new work, in bytes. It combines two signals:
+// for starting new work, in bytes, and whether that estimate could be made
+// at all.
 //
-//  1. /proc/meminfo's MemAvailable (readMemAvailableBytes) — the kernel's own
-//     estimate, accounting for reclaimable page cache/slab (unlike MemFree).
-//  2. The process's cgroup memory limit minus current usage
-//     (readCgroupMemoryAvailableBytes), when a finite cgroup memory limit is
-//     configured — common in containerized deployments (Docker, Fly
-//     Machines, Kubernetes), where the cgroup limit is frequently far
-//     tighter than the host's own total memory and is a STABLE, explicitly
-//     configured ceiling rather than a live kernel heuristic.
+// It is the MINIMUM over the DETERMINABLE signals only (FR-079), so a tight
+// container limit is never exceeded by trusting an unconstrained host-wide
+// reading, and an unreadable host-wide reading never discards a real cgroup
+// one. ok is false when NEITHER signal is determinable — never when one is
+// merely tighter than the other.
 //
-// The smaller of the two is returned, so a tight container limit is never
-// exceeded by trusting an unconstrained host-wide reading.
-//
-// Known limitation, accepted deliberately (this sizes a DEFAULT ONLY — an
-// explicit performance.max_parallel_agents always overrides it, see
-// EffectiveMaxParallelAgents): MemAvailable can under-report for a period
-// after a fresh boot/container start before the page-cache subsystem has
-// warmed up (observed live: 28 MB measured on a box that settled at ~370 MB
-// once warm — docs/internal/uat/max-parallel-concurrency-gap-2026-07-31.md
-// G4, cross-referenced against parallelism-cost-measurement-2026-08-04.md's
-// clean-idle baseline). This is NOT "solved" by re-sampling with a short
-// in-process delay at boot — the warm-up lag observed is tied to the box's
-// actual workload history, not milliseconds, so a boot-time retry loop
-// would not reliably help and would only delay every gateway boot for no
-// real benefit. Instead, this value is deliberately never frozen at boot for
-// any live caller: every production call site either (a) re-invokes
-// EffectiveMaxParallelAgents() fresh on each use (pkg/agent's
-// getSubTurnConfig on every sub-turn spawn, the GET /api/v1/performance
-// handler), or (b) re-syncs its cached capacity against the current value on
-// every admission check (pkg/agent's AdmissionController live resolver and
-// TaskExecutor.syncDispatchCapacity) — so a transient low boot-time reading
-// self-corrects as soon as the host's real availability changes, with no
-// operator action required.
-func availableRAMBytes() uint64 {
-	avail := readMemAvailableBytes()
-	if cgAvail, ok := readCgroupMemoryAvailableBytes(); ok && cgAvail < avail {
-		avail = cgAvail
+// Known limitation, accepted deliberately: MemAvailable can under-report for
+// a period after a fresh boot/container start before the page-cache
+// subsystem has warmed up (observed live: 28 MB measured on a box that
+// settled at ~370 MB once warm — docs/internal/uat/
+// max-parallel-concurrency-gap-2026-07-31.md G4, cross-referenced against
+// parallelism-cost-measurement-2026-08-04.md's clean-idle baseline). This is
+// NOT "solved" by re-sampling with a short in-process delay at boot — the
+// warm-up lag observed is tied to the box's actual workload history, not
+// milliseconds, so a boot-time retry loop would not reliably help and would
+// only delay every gateway boot for no real benefit. Instead, this value is
+// deliberately never frozen at boot for any live caller: every production
+// call site re-reads it at the moment of admission, so a transient low
+// boot-time reading self-corrects as soon as the host's real availability
+// changes, with no operator action required.
+func availableRAMBytes() (uint64, bool) {
+	signals := memorySignals()
+	if len(signals) == 0 {
+		return 0, false
 	}
-	return avail
+	min := signals[0].available
+	for _, sig := range signals[1:] {
+		if sig.available < min {
+			min = sig.available
+		}
+	}
+	return min, true
+}
+
+// memoryPressureRatioThreshold is THE threshold. Singular, deliberately.
+//
+// Every admission consumer in this process — the browser pool at launch and
+// at every tab open, agent admission on the delegation path — asks the same
+// question of the same numbers through MemoryPressureHigh, and this is the
+// number it compares against. A second threshold constant anywhere would
+// re-create the exact defect this work exists to remove: two mechanisms
+// disagreeing about one machine, each individually defensible, together
+// incoherent.
+//
+// 0.85 means "85% of the memory budget is in non-reclaimable use". Under a
+// cgroup limit that is memory.current-minus-reclaimable over memory.max —
+// i.e. the ratio the browser-pool spec names directly. Off a cgroup it is
+// the same shape against the host-wide figures. The value leaves roughly a
+// seventh of the budget as headroom, which on any host large enough to run
+// a browser at all is more than one Chrome's measured launch cost.
+const memoryPressureRatioThreshold = 0.85
+
+// MemoryPressureHigh reports whether this host is above
+// memoryPressureRatioThreshold, and whether that could be determined.
+//
+// THIS IS THE SHARED SEAM (FR-068). It is the one accessor and the one
+// threshold every consumer reads; sameness between the browser pool and
+// agent admission is a property of them calling this function, not of them
+// happening to compute equal answers. Test seams that stub memory do so by
+// replacing this function's provider (see SetMemoryProviderForTest), which
+// is what lets one stub drive both consumers in one test body.
+//
+// The two return values mean different things and must not be collapsed:
+//
+//   - (false, true) — measured, and there is headroom. Admit.
+//   - (true, true)  — measured, and the host is under pressure. Refuse to
+//     grow. This is a HARD stop, not a hint.
+//   - (_, false)    — this host's memory cannot be measured at all. Each
+//     consumer takes its own documented unmeasurable-host branch. Neither
+//     refuses to RUN; both refuse to GROW past a conservative floor.
+//
+// The ratio is computed per determinable signal and the WORST (highest) is
+// returned, matching availableRAMBytes taking the tightest available figure:
+// a container at 90% of its cgroup limit is under pressure even if the host
+// it sits on is idle.
+func MemoryPressureHigh() (high bool, ok bool) {
+	return memoryProvider()
+}
+
+// AvailableMemoryBytes is the exported two-valued live-memory accessor:
+// bytes of headroom, and whether that could be determined at all.
+//
+// Callers wanting a yes/no admission decision should use MemoryPressureHigh
+// instead — it carries the one shared threshold, so a caller that compares
+// this figure against a threshold of its own has quietly created the second
+// mechanism. This exists for callers that need an absolute figure, notably
+// the browser pool's per-launch headroom check (does this host have room for
+// one more Chrome), which is a bytes question and not a ratio question.
+func AvailableMemoryBytes() (uint64, bool) {
+	return availableMemoryProvider()
+}
+
+// memoryProvider and availableMemoryProvider are the injection seam. They
+// are package-level vars, following the same pattern as procMeminfoPath and
+// cgroupRoot in this package, purely so a test can drive every consumer of
+// the memory mechanism off ONE stub and assert they behave identically at
+// the seam rather than inferring sameness from equal outcomes. Production
+// code never reassigns them.
+var (
+	memoryProvider          = liveMemoryPressureHigh
+	availableMemoryProvider = availableRAMBytes
+)
+
+// liveMemoryPressureHigh is MemoryPressureHigh's real implementation.
+func liveMemoryPressureHigh() (bool, bool) {
+	signals := memorySignals()
+	if len(signals) == 0 {
+		return false, false
+	}
+	worst := 0.0
+	for _, sig := range signals {
+		if sig.total == 0 {
+			continue
+		}
+		used := float64(0)
+		if sig.available < sig.total {
+			used = float64(sig.total-sig.available) / float64(sig.total)
+		} else {
+			used = 0
+		}
+		if used > worst {
+			worst = used
+		}
+	}
+	return worst > memoryPressureRatioThreshold, true
+}
+
+// SetMemoryProviderForTest replaces BOTH memory accessors with stubs for the
+// duration of a test and returns a restore function. Exported because the
+// consumers under test live in other packages (pkg/agent, pkg/tools/browser)
+// and the whole point of the seam is that one stub drives all of them.
+//
+// It is a test helper in a production file for the same reason
+// procMeminfoPath is a var: the alternative is threading an interface
+// through every admission call site, which is a much larger change to make
+// one property assertable.
+func SetMemoryProviderForTest(pressure func() (bool, bool), available func() (uint64, bool)) func() {
+	prevPressure, prevAvailable := memoryProvider, availableMemoryProvider
+	if pressure != nil {
+		memoryProvider = pressure
+	}
+	if available != nil {
+		availableMemoryProvider = available
+	}
+	return func() {
+		memoryProvider, availableMemoryProvider = prevPressure, prevAvailable
+	}
 }
 
 type HooksConfig struct {
@@ -4727,3 +4866,21 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 // Sub-structs in ToolsConfig (e.g. Browser.MaxTabs) are retained — they
 // carry non-enable configuration like timeouts and limits that the tools
 // still read at runtime.
+
+// ReasonMemoryPressure is THE reason code every memory refusal in this
+// process carries — the browser pool refusing to launch a second Chrome, the
+// tab-open gate refusing an eleventh tab, agent admission refusing a third
+// concurrent turn on a host whose memory cannot be measured.
+//
+// It lives in pkg/config, which pkg/agent and pkg/tools/browser both already
+// import, for a specific reason: this is one mechanism and it must speak with
+// one voice. The alternative — a `tabAdoptReason` constant in the browser
+// package and a duplicated string literal on the agent side — is exactly the
+// "two mechanisms" shape this work exists to remove. A model branching on the
+// code, or an operator grepping a log for it, must find every memory refusal
+// in the process under one name.
+//
+// Its VALUE is stable API in a weak sense: it appears in tool results the
+// model reads and in structured log fields. Change it and both break
+// silently.
+const ReasonMemoryPressure = "memory_pressure"

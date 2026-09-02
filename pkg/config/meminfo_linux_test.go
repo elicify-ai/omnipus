@@ -31,7 +31,10 @@ func withFakeMeminfo(t *testing.T, content string) {
 // (kernel 3.14+) MemAvailable field is read and converted from kB to bytes.
 func TestReadMemAvailableBytes_ParsesMemAvailable(t *testing.T) {
 	withFakeMeminfo(t, "MemTotal:        4048208 kB\nMemFree:          123456 kB\nMemAvailable:     378880 kB\n")
-	got := readMemAvailableBytes()
+	got, ok := readMemAvailableBytes()
+	if !ok {
+		t.Fatal("readMemAvailableBytes() ok = false, want true (MemAvailable is present in the fixture)")
+	}
 	want := uint64(378880) * 1024
 	if got != want {
 		t.Fatalf("readMemAvailableBytes() = %d, want %d", got, want)
@@ -42,25 +45,64 @@ func TestReadMemAvailableBytes_ParsesMemAvailable(t *testing.T) {
 // kernel fallback: when MemAvailable is absent, half of MemTotal is used.
 func TestReadMemAvailableBytes_FallsBackToHalfTotal(t *testing.T) {
 	withFakeMeminfo(t, "MemTotal:        4048208 kB\nMemFree:          123456 kB\n")
-	got := readMemAvailableBytes()
+	got, ok := readMemAvailableBytes()
+	if !ok {
+		t.Fatal("readMemAvailableBytes() ok = false, want true — a REAL MemTotal halved is a determinable reading (FR-078 preserves this heuristic; it is derived from a number this host reported, unlike the deleted 4 GB constant)")
+	}
 	want := (uint64(4048208) * 1024) / 2
 	if got != want {
 		t.Fatalf("readMemAvailableBytes() fallback = %d, want %d (half of MemTotal)", got, want)
 	}
 }
 
-// TestReadMemAvailableBytes_MissingFile verifies a completely unreadable
-// meminfo file degrades to the fallbackTotalRAMBytes/2 constant rather than
-// panicking or returning zero.
-func TestReadMemAvailableBytes_MissingFile(t *testing.T) {
+// TestReadMemAvailableBytes_MissingFile is REWRITTEN, deliberately, because
+// its previous oracle WAS the defect it was supposed to guard.
+//
+// It used to assert `want := uint64(fallbackTotalRAMBytes) / 2` — that an
+// unreadable /proc/meminfo yields half of a hardcoded 4 GB constant. That
+// number had measured nothing. On a real /proc-less Linux host (gVisor, a
+// distroless image with no procfs mount, a hardened seccomp profile) the
+// process reported 2 GiB of available memory that did not exist, and every
+// consumer downstream treated it as a reading. A test asserting the
+// fabricated value is a test that pins the fabrication in place.
+//
+// The new oracle is the one FR-078 states: an unreadable /proc/meminfo
+// reports UNDETERMINABLE. Consumers then take their own unmeasurable-host
+// branch, which is a decision each of them makes explicitly and documents,
+// rather than one they make accidentally on invented data.
+func TestReadMemAvailable_UnreadableMeminfoIsUndeterminable(t *testing.T) {
 	old := procMeminfoPath
 	procMeminfoPath = filepath.Join(t.TempDir(), "does-not-exist")
 	t.Cleanup(func() { procMeminfoPath = old })
 
-	got := readMemAvailableBytes()
-	want := uint64(fallbackTotalRAMBytes) / 2
-	if got != want {
-		t.Fatalf("readMemAvailableBytes() with missing file = %d, want %d", got, want)
+	got, ok := readMemAvailableBytes()
+	if ok {
+		t.Fatalf("readMemAvailableBytes() with an unreadable /proc/meminfo = (%d, true), want ok=false — a fabricated figure is worse than an honest 'cannot determine'", got)
+	}
+	if got != 0 {
+		t.Fatalf("readMemAvailableBytes() with an unreadable /proc/meminfo = %d, want 0 alongside ok=false", got)
+	}
+
+	if total, totalOK := readMemTotalBytes(); totalOK {
+		t.Fatalf("readMemTotalBytes() with an unreadable /proc/meminfo = (%d, true), want ok=false — this is where the deleted 4 GB constant used to live", total)
+	}
+}
+
+// TestReadMemAvailable_PreMemAvailableKernelStillHalvesRealTotal is the other
+// half of FR-078, and the reason the requirement says PRESERVE rather than
+// delete. A pre-3.14 kernel publishes MemTotal but not MemAvailable. Half of
+// a REAL MemTotal is a coarse estimate of real memory — it is derived from a
+// number this host actually reported — so it stays DETERMINABLE. Only a
+// figure with no measurement behind it was removed.
+func TestReadMemAvailable_PreMemAvailableKernelStillHalvesRealTotal(t *testing.T) {
+	withFakeMeminfo(t, "MemTotal:        4048208 kB\nMemFree:          123456 kB\n")
+
+	got, ok := readMemAvailableBytes()
+	if !ok {
+		t.Fatal("readMemAvailableBytes() on a pre-3.14-style meminfo reported undeterminable — the MemTotal-halved heuristic must survive FR-078")
+	}
+	if want := (uint64(4048208) * 1024) / 2; got != want {
+		t.Fatalf("readMemAvailableBytes() = %d, want %d (half of the REAL MemTotal)", got, want)
 	}
 }
 
@@ -68,7 +110,10 @@ func TestReadMemAvailableBytes_MissingFile(t *testing.T) {
 // line (non-numeric value) degrades gracefully rather than panicking.
 func TestReadMemAvailableBytes_MalformedLine(t *testing.T) {
 	withFakeMeminfo(t, "MemTotal:        4048208 kB\nMemAvailable:     not-a-number kB\n")
-	got := readMemAvailableBytes()
+	got, ok := readMemAvailableBytes()
+	if !ok {
+		t.Fatal("readMemAvailableBytes() with a malformed MemAvailable line reported undeterminable — MemTotal still parses, so the halved-real-total reading is available")
+	}
 	want := (uint64(4048208) * 1024) / 2
 	if got != want {
 		t.Fatalf("readMemAvailableBytes() with malformed line = %d, want %d (fallback to half MemTotal)", got, want)
@@ -187,7 +232,10 @@ func TestAvailableRAMBytes_PrefersTighterCgroupLimit(t *testing.T) {
 	cgroupRoot = dir
 	t.Cleanup(func() { cgroupRoot = oldRoot })
 
-	got := availableRAMBytes()
+	got, ok := availableRAMBytes()
+	if !ok {
+		t.Fatal("availableRAMBytes() ok = false, want true (both signals are determinable in this fixture)")
+	}
 	want := uint64(104857600 - 10485760)
 	if got != want {
 		t.Fatalf("availableRAMBytes() = %d, want %d (tighter cgroup limit must win over host-wide meminfo)", got, want)
@@ -235,9 +283,9 @@ func TestReadCgroupMemoryAvailableBytesAt_V2ExcludesReclaimablePageCache(t *test
 	}
 
 	// The naive (buggy) limit-usage subtraction would floor this to ~1 MiB,
-	// which after autoDetectMaxParallel's /3.5MB division and clampParallel's
-	// floor collapses concurrency to 2. Assert the fix yields something far
-	// above that floor-collapse regime so a regression back to the naive
+	// which reads as a host with essentially no memory and makes the live
+	// admission gate refuse everything past its floor. Assert the fix yields
+	// something far above that regime so a regression back to the naive
 	// subtraction is caught even if the exact byte math above ever drifts.
 	naiveAvailable := limit - usage // what the old buggy code would have returned
 	if got <= naiveAvailable*10 {
@@ -278,38 +326,6 @@ func TestReadCgroupMemoryAvailableBytesAt_V1ExcludesReclaimablePageCache(t *test
 	}
 }
 
-// TestAutoDetectMaxParallel_WarmPageCacheContainerDoesNotCollapseToFloor is
-// the end-to-end reproduction of MAJOR-1's concrete failure: a
-// --memory=2g container with warm page cache must not silently collapse
-// agent concurrency to the auto-detect floor of 2 hours into uptime with no
-// restart and no log. The host-wide meminfo reading is deliberately generous
-// (plenty of free RAM on the host) so the tight cgroup limit is the binding
-// constraint, matching a real containerized deployment.
-func TestAutoDetectMaxParallel_WarmPageCacheContainerDoesNotCollapseToFloor(t *testing.T) {
-	withFakeMeminfo(t, "MemTotal:       32000000 kB\nMemAvailable:   24000000 kB\n") // generous host
-
-	const (
-		limit        = uint64(2) * 1024 * 1024 * 1024
-		usage        = limit - 1*1024*1024
-		rss          = uint64(314572800)
-		inactiveFile = usage - rss
-	)
-
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "memory.max"), strconv.FormatUint(limit, 10))
-	writeFile(t, filepath.Join(dir, "memory.current"), strconv.FormatUint(usage, 10))
-	writeFile(t, filepath.Join(dir, "memory.stat"), "inactive_file "+strconv.FormatUint(inactiveFile, 10)+"\nslab_reclaimable 0\n")
-
-	oldRoot := cgroupRoot
-	cgroupRoot = dir
-	t.Cleanup(func() { cgroupRoot = oldRoot })
-
-	got := autoDetectMaxParallel()
-	if got <= 2 {
-		t.Fatalf("autoDetectMaxParallel() = %d, want > 2 (must not collapse to the floor when the container has real headroom above its warm page cache)", got)
-	}
-}
-
 // TestAvailableRAMBytes_FallsBackToMeminfoWhenNoCgroup verifies that with no
 // cgroup memory-controller files present, availableRAMBytes() uses the
 // meminfo-derived value directly.
@@ -320,7 +336,10 @@ func TestAvailableRAMBytes_FallsBackToMeminfoWhenNoCgroup(t *testing.T) {
 	cgroupRoot = t.TempDir() // empty — no cgroup files
 	t.Cleanup(func() { cgroupRoot = oldRoot })
 
-	got := availableRAMBytes()
+	got, ok := availableRAMBytes()
+	if !ok {
+		t.Fatal("availableRAMBytes() ok = false, want true (the meminfo signal is determinable in this fixture)")
+	}
 	want := uint64(6000000) * 1024
 	if got != want {
 		t.Fatalf("availableRAMBytes() = %d, want %d (meminfo value, no cgroup signal)", got, want)

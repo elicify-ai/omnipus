@@ -11,10 +11,6 @@ import (
 	"strings"
 )
 
-// fallbackTotalRAMBytes is the conservative assumption used when
-// /proc/meminfo cannot be read or parsed at all.
-const fallbackTotalRAMBytes = 4 * 1024 * 1024 * 1024 // 4 GB
-
 // procMeminfoPath is the real /proc/meminfo location. A package-level var
 // (not a const) purely so tests can point the reader at a fixture file
 // instead of the real kernel-provided file — production code never mutates
@@ -22,26 +18,43 @@ const fallbackTotalRAMBytes = 4 * 1024 * 1024 * 1024 // 4 GB
 var procMeminfoPath = "/proc/meminfo"
 
 // readMemTotalBytes reads the total physical memory from /proc/meminfo.
-// Returns a conservative 4 GB fallback when the file cannot be read or parsed.
-func readMemTotalBytes() uint64 {
-	if v, ok := readMeminfoFieldBytesAt(procMeminfoPath, "MemTotal:"); ok {
-		return v
-	}
-	return fallbackTotalRAMBytes
+//
+// It is DETERMINABLE-OR-NOT, never fabricated (FR-078). This function used
+// to return a hardcoded 4 GB constant (fallbackTotalRAMBytes, deleted) when
+// /proc/meminfo could not be read or parsed. That constant was invented
+// data: on a /proc-less Linux host (gVisor, a distroless container with no
+// procfs mount, a hardened seccomp profile) it reported 4 GB of RAM that
+// nothing had measured, and every consumer downstream treated it as a real
+// reading. An unreadable /proc/meminfo now reports ok=false and the caller
+// decides what an unmeasurable host means for it — see AvailableMemoryBytes.
+func readMemTotalBytes() (uint64, bool) {
+	return readMeminfoFieldBytesAt(procMeminfoPath, "MemTotal:")
 }
 
 // readMemAvailableBytes reads MemAvailable from /proc/meminfo — the kernel's
 // own estimate of memory available for starting a new application without
 // swapping, which (unlike MemFree) accounts for reclaimable page cache and
-// slab. Falls back to half of MemTotal when the kernel predates the
-// MemAvailable field (pre-3.14, released 2014 — effectively unseen today,
-// handled only so a parse failure degrades gracefully rather than panicking
-// or returning zero).
-func readMemAvailableBytes() uint64 {
+// slab.
+//
+// Two determinable answers, in order:
+//
+//  1. MemAvailable itself, when the kernel publishes it (3.14+, 2014).
+//  2. Half of a REAL MemTotal reading, when MemAvailable is absent but
+//     MemTotal parses. This pre-3.14 heuristic is PRESERVED deliberately
+//     (FR-078): unlike the deleted 4 GB constant, it is derived from a
+//     number this host actually reported, so it is a coarse estimate of
+//     real memory rather than invented data.
+//
+// Anything else — the file is missing, unreadable, or neither field parses —
+// is undeterminable and reports ok=false rather than a fabricated figure.
+func readMemAvailableBytes() (uint64, bool) {
 	if v, ok := readMeminfoFieldBytesAt(procMeminfoPath, "MemAvailable:"); ok {
-		return v
+		return v, true
 	}
-	return readMemTotalBytes() / 2
+	if total, ok := readMemTotalBytes(); ok {
+		return total / 2, true
+	}
+	return 0, false
 }
 
 // readMeminfoFieldBytesAt reads a single "<key>  <N> kB" line from the
@@ -101,7 +114,24 @@ const cgroupUnlimitedThresholdBytes = 1 << 62
 // host-wide reading is used instead — always a safe, if less precise,
 // fallback (see availableRAMBytes).
 func readCgroupMemoryAvailableBytes() (uint64, bool) {
-	return readCgroupMemoryAvailableBytesAt(cgroupRoot)
+	avail, _, ok := readCgroupMemoryBudgetBytesAt(cgroupRoot)
+	return avail, ok
+}
+
+// readCgroupMemoryBudgetBytes returns BOTH halves of the cgroup memory
+// signal — the memory still available under the limit, and the limit itself
+// — so a caller can express the reading as a pressure RATIO
+// (1 - available/limit, i.e. the non-reclaimable share of memory.max) as
+// well as an absolute headroom figure. ok is false in exactly the cases
+// readCgroupMemoryAvailableBytes reports false.
+//
+// The ratio matters because it is the SINGLE shared threshold every
+// admission consumer reads (see MemoryPressureHigh): the browser pool and
+// agent admission must ask the same question of the same numbers, and a
+// bytes-only accessor cannot express "85% of the limit is in use" without
+// each consumer re-deriving the denominator for itself.
+func readCgroupMemoryBudgetBytes() (available, limit uint64, ok bool) {
+	return readCgroupMemoryBudgetBytesAt(cgroupRoot)
 }
 
 // cgroupRoot is the real cgroup mount root. A package-level var (not a
@@ -112,21 +142,28 @@ var cgroupRoot = "/sys/fs/cgroup"
 // readCgroupMemoryAvailableBytesAt is readCgroupMemoryAvailableBytes's body
 // parameterized on the cgroup root, split out for testability.
 func readCgroupMemoryAvailableBytesAt(root string) (uint64, bool) {
+	avail, _, ok := readCgroupMemoryBudgetBytesAt(root)
+	return avail, ok
+}
+
+// readCgroupMemoryBudgetBytesAt is readCgroupMemoryBudgetBytes's body
+// parameterized on the cgroup root, split out for testability.
+func readCgroupMemoryBudgetBytesAt(root string) (available, limit uint64, ok bool) {
 	// cgroup v2 unified hierarchy.
-	if limit, ok := readCgroupV2LimitBytes(root + "/memory.max"); ok {
+	if lim, ok := readCgroupV2LimitBytes(root + "/memory.max"); ok {
 		if usage, ok := readCgroupPlainUintBytes(root + "/memory.current"); ok {
 			reclaimable := readCgroupReclaimableBytesAt(root + "/memory.stat")
-			return cgroupAvailableBytes(limit, usage, reclaimable), true
+			return cgroupAvailableBytes(lim, usage, reclaimable), lim, true
 		}
 	}
 	// cgroup v1 fallback.
-	if limit, ok := readCgroupV1LimitBytes(root + "/memory/memory.limit_in_bytes"); ok {
+	if lim, ok := readCgroupV1LimitBytes(root + "/memory/memory.limit_in_bytes"); ok {
 		if usage, ok := readCgroupPlainUintBytes(root + "/memory/memory.usage_in_bytes"); ok {
 			reclaimable := readCgroupReclaimableBytesAt(root + "/memory/memory.stat")
-			return cgroupAvailableBytes(limit, usage, reclaimable), true
+			return cgroupAvailableBytes(lim, usage, reclaimable), lim, true
 		}
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // reclaimableMemoryStatKeys are the memory.stat fields summed to estimate

@@ -82,7 +82,7 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	if maxConcurrent <= 0 {
 		// Fall back to MaxParallelAgents so that the synchronous spawn/subagent
 		// fan-out is capped by the same knob as the async task dispatch path.
-		maxConcurrent = al.cfg.Performance.EffectiveMaxParallelAgents()
+		maxConcurrent, _ = al.cfg.Performance.EffectiveMaxParallelAgents()
 	}
 
 	concurrencyTimeout := time.Duration(cfg.ConcurrencyTimeoutSec) * time.Second

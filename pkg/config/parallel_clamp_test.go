@@ -5,35 +5,6 @@ import (
 	"testing"
 )
 
-// TestClampParallel_AutoFloorsAtTwo verifies the AUTO-detect clamp floors at 2
-// and has NO policy ceiling — only the physical OS-thread-safety ceiling
-// (physicalConcurrencySafetyCeiling) bounds it. Removing the old policy-16
-// ceiling is the whole point of this change: the auto-detected default must
-// be able to reflect a genuinely large-memory box.
-func TestClampParallel_AutoFloorsAtTwo(t *testing.T) {
-	cases := []struct {
-		in, want int
-	}{
-		{-5, 2},
-		{0, 2},
-		{1, 2}, // auto-detected 1 is still raised to 2 (floor).
-		{2, 2},
-		{8, 8},
-		{16, 16},
-		{17, 17},   // NO ceiling at 16 anymore.
-		{100, 100}, // NO ceiling at 16 anymore.
-		{1999, 1999},
-		{physicalConcurrencySafetyCeiling, physicalConcurrencySafetyCeiling},
-		{physicalConcurrencySafetyCeiling + 1, physicalConcurrencySafetyCeiling}, // physical ceiling still applies to AUTO path.
-		{1_000_000, physicalConcurrencySafetyCeiling},
-	}
-	for _, c := range cases {
-		if got := clampParallel(c.in); got != c.want {
-			t.Errorf("clampParallel(%d) = %d, want %d", c.in, got, c.want)
-		}
-	}
-}
-
 // TestClampParallelExplicit_HonoursOne verifies that an EXPLICIT user value of 1
 // is honored (single-flight) — only the floor of 1, and that large explicit
 // values are honored in full (no silent ceiling — ADR-037 bans silently
@@ -69,7 +40,7 @@ func TestClampParallelExplicit_HonoursOne(t *testing.T) {
 func TestEffectiveMaxParallelAgents_ExplicitOne(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "") // ensure env override is inert
 	p := PerformanceConfig{MaxParallelAgents: 1}
-	if got := p.EffectiveMaxParallelAgents(); got != 1 {
+	if got, _ := p.EffectiveMaxParallelAgents(); got != 1 {
 		t.Fatalf("EffectiveMaxParallelAgents() with explicit 1 = %d, want 1", got)
 	}
 }
@@ -85,38 +56,53 @@ func TestEffectiveMaxParallelAgents_ExplicitAboveOldCeiling_Survives(t *testing.
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 	for _, want := range []int{17, 24, 100, 1000} {
 		p := PerformanceConfig{MaxParallelAgents: want}
-		if got := p.EffectiveMaxParallelAgents(); got != want {
+		if got, _ := p.EffectiveMaxParallelAgents(); got != want {
 			t.Fatalf("EffectiveMaxParallelAgents() with explicit %d = %d, want %d (unchanged, no ceiling)", want, got, want)
 		}
 	}
 }
 
-// TestEffectiveMaxParallelAgents_Auto verifies that 0 (auto) returns a value
-// that is at least the floor (2) and does not exceed the PHYSICAL safety
-// ceiling — there is no policy ceiling of 16 anymore, but the auto-detected
-// default must still be a sane, bounded number on any real machine.
-func TestEffectiveMaxParallelAgents_Auto(t *testing.T) {
+// TestEffectiveMaxParallelAgents_UnsetIsBackstopNotCapacity is the FR-067
+// shape assertion, and it replaces a test that asserted the unset case lands
+// between a floor of 2 and the physical ceiling.
+//
+// It asserts the SECOND return value, which is the whole change. The old
+// assertion would still pass today — the backstop is inside that bracket —
+// while the field's MEANING changed underneath it from "a capacity the system
+// computed for you" to "a physical bound on what the Go runtime survives".
+// A test that cannot tell those two apart is not testing this.
+//
+// capped=false is the load-bearing half: it is what tells every caller
+// (notably the Settings panel) that the integer alongside it is not a
+// recommendation.
+func TestEffectiveMaxParallelAgents_UnsetIsBackstopNotCapacity(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 	p := PerformanceConfig{MaxParallelAgents: 0}
-	got := p.EffectiveMaxParallelAgents()
-	if got < 2 {
-		t.Fatalf("auto EffectiveMaxParallelAgents() = %d, want >= 2 (floor)", got)
+
+	got, capped := p.EffectiveMaxParallelAgents()
+	if capped {
+		t.Fatalf("EffectiveMaxParallelAgents() with nothing configured returned capped=true — capped must be false so callers know %d is a physical backstop, not a capacity claim", got)
 	}
-	if got > physicalConcurrencySafetyCeiling {
-		t.Fatalf("auto EffectiveMaxParallelAgents() = %d, want <= %d (physical ceiling)", got, physicalConcurrencySafetyCeiling)
+	if got != physicalConcurrencySafetyCeiling {
+		t.Fatalf("EffectiveMaxParallelAgents() with nothing configured = %d, want %d (the physical OS-thread backstop)", got, physicalConcurrencySafetyCeiling)
+	}
+	if got == 0 {
+		t.Fatal("EffectiveMaxParallelAgents() returned a bare 0 for the unset case — a 0 fed into newTaskExecutor's semaphore capacity deadlocks every dispatch in the process; the two-valued shape exists precisely so 0 is never the answer")
 	}
 }
 
-// TestEffectiveMaxParallelAgents_Auto_MatchesMemoryFormula verifies the auto
-// default is actually DERIVED from availableRAMBytes()/bytesPerAgent (clamped),
-// not some other leftover heuristic (e.g. the old NumCPU-based formula).
-func TestEffectiveMaxParallelAgents_Auto_MatchesMemoryFormula(t *testing.T) {
+// TestEffectiveMaxParallelAgents_ExplicitPathUnchanged pins the OTHER half of
+// FR-067: nothing about an explicitly configured value moved. Both the config
+// and env routes must report capped=true with the operator's own number.
+func TestEffectiveMaxParallelAgents_ExplicitPathUnchanged(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
-	p := PerformanceConfig{MaxParallelAgents: 0}
-	got := p.EffectiveMaxParallelAgents()
-	want := clampParallel(int(float64(availableRAMBytes()) / bytesPerAgent))
-	if got != want {
-		t.Fatalf("auto EffectiveMaxParallelAgents() = %d, want %d (availableRAMBytes()/bytesPerAgent, clamped)", got, want)
+	if got, capped := (PerformanceConfig{MaxParallelAgents: 40}).EffectiveMaxParallelAgents(); got != 40 || !capped {
+		t.Fatalf("config 40: EffectiveMaxParallelAgents() = (%d, %v), want (40, true)", got, capped)
+	}
+
+	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "50")
+	if got, capped := (PerformanceConfig{MaxParallelAgents: 8}).EffectiveMaxParallelAgents(); got != 50 || !capped {
+		t.Fatalf("env 50 over config 8: EffectiveMaxParallelAgents() = (%d, %v), want (50, true) — the env override wins and is still an operator's explicit choice", got, capped)
 	}
 }
 
@@ -126,36 +112,45 @@ func TestEffectiveMaxParallelAgents_Auto_MatchesMemoryFormula(t *testing.T) {
 func TestEffectiveMaxParallelAgents_EnvOverride(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "1")
 	p := PerformanceConfig{MaxParallelAgents: 8} // should be ignored
-	if got := p.EffectiveMaxParallelAgents(); got != 1 {
+	if got, _ := p.EffectiveMaxParallelAgents(); got != 1 {
 		t.Fatalf("env override 1 = %d, want 1", got)
 	}
 
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", strconv.Itoa(50))
-	if got := p.EffectiveMaxParallelAgents(); got != 50 {
+	if got, _ := p.EffectiveMaxParallelAgents(); got != 50 {
 		t.Fatalf("env override 50 = %d, want 50 (no ceiling)", got)
 	}
 }
 
 // TestEffectiveMaxParallelAgents_ExplicitOverridesAuto_BothDirections is the
-// REQUIRED "the default is computed from available memory, and an explicit
-// value overrides it -- both directions" test: an explicit value both BELOW
-// and ABOVE the auto-detected default must win outright, never falling back
-// to (or being blended with) the auto-detected number.
+// REQUIRED "an explicit value wins outright -- both directions" test: an
+// explicit value both BELOW and ABOVE the unset case's answer must win, never
+// falling back to (or being blended with) it.
+//
+// RE-DERIVED for FR-067. The bracket is now computed against the physical
+// OS-thread BACKSTOP rather than against a memory-derived default, because
+// there is no longer a computed default to bracket. The property under test
+// is unchanged and the assertions are not weakened: both directions are still
+// exercised, and both now additionally assert capped=true, which is what
+// distinguishes "the operator set this" from "this is the backstop".
 func TestEffectiveMaxParallelAgents_ExplicitOverridesAuto_BothDirections(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
-	autoDefault := PerformanceConfig{MaxParallelAgents: 0}.EffectiveMaxParallelAgents()
+	backstop, capped := PerformanceConfig{MaxParallelAgents: 0}.EffectiveMaxParallelAgents()
+	if capped {
+		t.Fatalf("test precondition broken: the unset case reported capped=true (%d)", backstop)
+	}
 
-	below := autoDefault - 1
+	below := backstop - 1
 	if below < 1 {
 		below = 1
 	}
-	if got := (PerformanceConfig{MaxParallelAgents: below}).EffectiveMaxParallelAgents(); got != below {
-		t.Fatalf("explicit value %d below auto-default %d was not honored outright: got %d", below, autoDefault, got)
+	if got, gotCapped := (PerformanceConfig{MaxParallelAgents: below}).EffectiveMaxParallelAgents(); got != below || !gotCapped {
+		t.Fatalf("explicit value %d below the backstop %d was not honored outright: got (%d, %v), want (%d, true)", below, backstop, got, gotCapped, below)
 	}
 
-	above := autoDefault + 1000
-	if got := (PerformanceConfig{MaxParallelAgents: above}).EffectiveMaxParallelAgents(); got != above {
-		t.Fatalf("explicit value %d above auto-default %d was not honored outright: got %d", above, autoDefault, got)
+	above := backstop + 1000
+	if got, gotCapped := (PerformanceConfig{MaxParallelAgents: above}).EffectiveMaxParallelAgents(); got != above || !gotCapped {
+		t.Fatalf("explicit value %d above the backstop %d was not honored outright: got (%d, %v), want (%d, true)", above, backstop, got, gotCapped, above)
 	}
 }
 

@@ -162,7 +162,7 @@ func TestDefaultConfig_SubTurnMaxConcurrentIsUnset(t *testing.T) {
 	// hidden second seed reintroducing the old behaviour).
 	for _, want := range []int{1, 5, 40} {
 		cfg.Performance.MaxParallelAgents = want
-		if eff := cfg.Performance.EffectiveMaxParallelAgents(); eff != want {
+		if eff, _ := cfg.Performance.EffectiveMaxParallelAgents(); eff != want {
 			t.Fatalf("EffectiveMaxParallelAgents() = %d, want %d — sanity precondition for this test", eff, want)
 		}
 		if cfg.Agents.Defaults.SubTurn.MaxConcurrent > 0 {
@@ -199,7 +199,7 @@ func TestSubTurnMaxConcurrent_UnsetCase_ResolvesLiveToCentralAuthority(t *testin
 	}
 
 	perf := PerformanceConfig{MaxParallelAgents: 40}
-	if eff := perf.EffectiveMaxParallelAgents(); eff != 40 {
+	if eff, _ := perf.EffectiveMaxParallelAgents(); eff != 40 {
 		t.Fatalf("EffectiveMaxParallelAgents() = %d, want 40 (explicit, unclamped)", eff)
 	}
 	t.Logf("unset MaxConcurrent=%d <= 0, so both consumers resolve to EffectiveMaxParallelAgents()=%d — this IS the design now, not a gap", unset.MaxConcurrent, 40)

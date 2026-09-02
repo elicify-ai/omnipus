@@ -901,7 +901,8 @@ func NewAgentLoop(
 	// this must be resolved fresh on every check rather than cached once
 	// here at construction time.
 	al.admission = newAdmissionControllerWithResolver(func() int {
-		return al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		return n
 	})
 	// ADR-057 W17, same live-resolution treatment: root-level delegate()
 	// fan-out must never drift from the central authority either. On
@@ -914,7 +915,8 @@ func NewAgentLoop(
 			return resolvedCap
 		}
 		if liveCfg != nil {
-			return liveCfg.Performance.EffectiveMaxParallelAgents()
+			n, _ := liveCfg.Performance.EffectiveMaxParallelAgents()
+			return n
 		}
 		return 1
 	})

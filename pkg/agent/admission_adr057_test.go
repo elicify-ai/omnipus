@@ -64,7 +64,7 @@ func TestRootDelegationCap_SourcedFromSubTurnMaxConcurrent(t *testing.T) {
 	if got != 24 {
 		t.Fatalf("ResolveRootDelegationCap = %d, want 24 (the unclamped subturn.max_concurrent value)", got)
 	}
-	if eff := cfg.Performance.EffectiveMaxParallelAgents(); got == eff {
+	if eff, _ := cfg.Performance.EffectiveMaxParallelAgents(); got == eff {
 		t.Fatalf("resolved cap (%d) equals EffectiveMaxParallelAgents() (%d) — "+
 			"this assertion is supposed to distinguish the two paths; the test fixture must set them differently", got, eff)
 	}
@@ -161,7 +161,7 @@ func TestRootDelegationCap_DefaultInstallInheritsCentralValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRootDelegationCap on a fresh-install config: unexpected error: %v", err)
 	}
-	if want := cfg.Performance.EffectiveMaxParallelAgents(); rootCap != want {
+	if want, _ := cfg.Performance.EffectiveMaxParallelAgents(); rootCap != want {
 		t.Fatalf("ResolveRootDelegationCap = %d, want %d (cfg.Performance.EffectiveMaxParallelAgents(), the central authority)", rootCap, want)
 	}
 	if rootCap != 40 {
