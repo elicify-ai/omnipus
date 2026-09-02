@@ -364,3 +364,140 @@ own facts is a plan nobody can audit:
 3. **Workspace scope added (§2.2).** It was absent from the first draft, and it
    is the one misconfiguration that makes every scenario pass while testing
    nothing.
+
+---
+
+## Suite G — Index freshness (added 2026-09-02)
+
+Grades `docs/internal/design/knowledge-index-freshness.md`. Every scenario
+states what a FAILING run looks like; a scenario without one is unfalsifiable
+however green it comes back.
+
+**Ground truth is read from the vault on disk and from the index, never from the
+agent's narration.** An agent saying "I can find it" is not evidence that the
+index contains it.
+
+### G-1 — read-your-own-write · **the load-bearing scenario**
+
+| | |
+|---|---|
+| do | agent writes a note through `knowledge_edit`, then searches for its content **in the same turn, with no delay** |
+| pass | the note is found |
+| fail | not found — the index was updated asynchronously, and an agent cannot trust its own writes |
+
+**This is the scenario the whole direct-update layer exists for.** If it fails,
+the design's §4 argument has not been implemented, whatever the unit tests say.
+
+### G-2 — writes through every op
+
+Each `knowledge_edit` op (`create`, `set_property`, `link`, `append_section`,
+`replace_body`) and each `knowledge_restructure` op (`rename`, `move`, `trash`,
+`restore`) leaves the index correct immediately.
+
+**FAIL:** any op whose change is not searchable straight afterwards. Rename is
+the sharp one — it must update BOTH the old path (gone) and the new (present).
+
+### G-3 — a file added outside Omnipus, while it is running
+
+| | |
+|---|---|
+| do | write a `.md` file into the collection directly on disk; wait a short bounded period |
+| pass | it becomes findable without a restart |
+| fail | still not findable → the watcher is not running, or is not reaching the index |
+
+### G-4 — a file EDITED outside Omnipus
+
+Old content must stop matching and new content start matching. **FAIL:** the old
+term still matches — a stale document was left behind, which is worse than a
+missing one because it answers confidently.
+
+### G-5 — a file DELETED outside Omnipus
+
+**FAIL:** it still matches. A search returning a note that no longer exists is
+the same confident-wrong-answer class as F-9.
+
+### G-6 — burst escalation, not event-dropping
+
+| | |
+|---|---|
+| do | create/modify a large number of files at once (hundreds), as an iCloud sync or a bulk copy would |
+| pass | ALL of them end up correctly indexed, and the run shows the burst was handled by a sweep rather than N individual updates |
+| fail | any file missing → events were dropped, which is the silent-staleness failure the design forbids |
+
+**Assert the escalation happened, not only the end state.** A correct end state
+reached by processing 500 events individually is a different system from the one
+designed, and would fail differently under load.
+
+### G-7 — restart is incremental, not a rebuild
+
+| | |
+|---|---|
+| do | restart the gateway over an already-indexed collection |
+| pass | the sweep reports the files as unchanged and re-indexes ~none |
+| fail | everything re-indexed → requirement 2 regressed |
+
+### G-8 — attachments stay body-free on EVERY path
+
+A `.pdf` written through a tool, and one added externally, must both be findable
+by **name** with their body text **not** searchable.
+
+**FAIL:** body text matches → "instant indexing" has quietly started extracting
+documents, reversing the operator's ruling through a side door. This is the
+negative assertion that keeps O1 enforced rather than merely documented.
+
+### G-9 — watching unavailable is STATED
+
+| | |
+|---|---|
+| do | run where watching cannot start (unsupported platform, or the OS refuses) |
+| pass | the condition is visible, and the periodic sweep still keeps the index correct |
+| fail | silence — which is Obsidian's actual failure mode and the one §8 exists to prevent |
+
+### G-10 — Omnipus's own writes do not cause double work
+
+Its own writes trigger its own watcher. The event must arrive, the hash match,
+and nothing happen.
+
+**FAIL:** a second re-index of the same unchanged file — harmless to
+correctness, but it shows the hash check is not doing its job, and under a burst
+that doubling is what turns a manageable load into a queue overflow.
+
+---
+
+## Suite B — Search efficiency (now runnable)
+
+Previously blocked: the corpus was unindexed and `knowledge_find` was uncallable.
+Both are fixed, so Suite B can finally run. Every number is p50/p95 over ≥20
+runs, taken from the harness rather than reported by the agent.
+
+| id | scenario | fail |
+|---|---|---|
+| B-01 | latency vs corpus size (200 vs 2,000 notes) | linear-or-worse growth, unexplained |
+| B-02 | latency by query shape — term, property filter, negation, aggregate | one shape an order of magnitude off its peers |
+| B-03 | result set at the limit | truncation happens **silently** |
+| B-04 | repeated identical query | high variance → contention or a cold path every call |
+| B-05 | **indexing** a 2,000-note collection from cold | no budget yet — this run establishes it |
+| B-06 | a single-file update's latency | must be far below a full sweep, or the direct-update layer buys nothing |
+
+Budgets are ESTABLISHED by the first run and recorded; the point of B is to fix
+them so a later regression is detectable.
+
+---
+
+## Suite C — Concurrency (extended)
+
+C-01…C-06 stand as written. One passed already: five agents writing the same
+note produced four version-conflict refusals, one success, zero lost updates.
+
+Added, because indexing is now a concurrent writer too:
+
+| id | scenario | fail |
+|---|---|---|
+| C-07 | N agents write DIFFERENT notes while a sweep runs | any write missing from the index afterwards |
+| C-08 | an agent writes while the watcher fires on the same file | double-index, or a lost update |
+| C-09 | sustained mixed read/write, several minutes | any unparseable file, or an index that disagrees with disk at the end |
+| C-10 | a burst arrives DURING a sweep | events lost, or the two writers corrupting each other's manifest |
+
+**C-10 is the sharp one.** The design says a sweep and a single-file update
+serialise on the same lock; this is the scenario that proves it under real load
+rather than in a unit test.
