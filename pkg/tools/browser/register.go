@@ -88,6 +88,23 @@ func resolveTurn(
 	return mgr, key, home, owner, sessionKey(key, owner), nil
 }
 
+// resolveTurnTabSet is resolveTurn for the read-only tools that need only the
+// manager and the tab set to read from — browser_screenshot, browser_get_text
+// and browser_wait, none of which is gated by controlledResult or the write
+// lease (§14.2 rule 3), so none of which has any use for the key or the owner.
+//
+// It exists so those three call sites do not have to spell three blanks in a
+// row, which is both unreadable and the shape a linter flags. The resolution
+// itself is identical, including the take-over: a read-only tool reads the set
+// the turn is currently acting on, which is the operator's after the turn has
+// switched to one of their tabs.
+func resolveTurnTabSet(
+	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
+) (mgr *BrowserManager, sid string, failure *tools.ToolResult) {
+	mgr, _, _, _, sid, failure = resolveTurn(ctx, res, ba, toolName)
+	return mgr, sid, failure
+}
+
 // evaluateEnabled does not control registration — browser_evaluate is ALWAYS
 // registered, and always was. What it controls is EXECUTION, via the per-tool
 // executeEnabled gate inside EvaluateTool.Execute.

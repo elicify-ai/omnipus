@@ -183,8 +183,11 @@ func TestOperatorTakeover_ListingOnlyNamesDrivableTabs(t *testing.T) {
 		arr, ok := out[group].([]any)
 		require.True(t, ok, "%s must be an array: %v", group, out)
 		for _, raw := range arr {
-			entry := raw.(map[string]any)
-			idx := int(entry["index"].(float64))
+			entry, ok := raw.(map[string]any)
+			require.True(t, ok, "every listed tab must be an object: %v", raw)
+			rawIdx, ok := entry["index"].(float64)
+			require.True(t, ok, "every listed tab must carry an index: %v", entry)
+			idx := int(rawIdx)
 			require.False(t, seen[idx],
 				"index %d is listed twice across `tabs` and `operator_tabs` — the agent cannot "+
 					"tell which tab it would land on", idx)

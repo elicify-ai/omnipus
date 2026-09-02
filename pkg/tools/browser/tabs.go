@@ -77,7 +77,7 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// browser_switch_tab and browser_close_tab both tell the model to "call
 	// browser_list_tabs first", making this the model's likely FIRST call, so
 	// it is the one place both answers have to be unambiguous.
-	mgr, key, home, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, home, owner, _, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -95,7 +95,7 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// taken the operator's tabs over must still be able to see — and switch
 	// back to — its own; reporting only the focused set would make its own
 	// tabs unreachable by index and hide them entirely.
-	sid = sessionKey(key, home)
+	sid := sessionKey(key, home)
 	state, tabs, activeIdx, err := mgr.ListTabsState(sid)
 	if err != nil {
 		// FR-013: "every other browser tool" is not scoped to tools.go — a

@@ -707,7 +707,7 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 }
 
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	mgr, _, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -872,7 +872,7 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
-	mgr, _, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
@@ -1019,7 +1019,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		waitTimeout = time.Duration(ms) * time.Millisecond
 	}
 
-	mgr, _, _, _, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
 	}
