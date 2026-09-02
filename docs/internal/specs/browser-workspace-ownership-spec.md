@@ -226,7 +226,9 @@ deleted** — §14 — and its supporting scenario is rewritten with it, because
 *asserts the premise* and therefore passes while the hole is open.
 
 **What the arbiter is.** Not a new mechanism: **§14's existing write lease, applied to the
-session's tab set as well as the workspace's** (FR-081). The lease is per-browser mutual exclusion
+session's tab set as well as the workspace's** (FR-081). The lease is mutual exclusion per
+**(`BrowsingKey`, `TabOwner`) pair** — never per browser, which would make two unrelated chats on
+one workspace block each other (§14.1's `acquireWrite`; test 99(b)) —
 held for the duration of one action-tool call; widening *when it is consulted* costs nothing at
 the call sites and no new primitive.
 
@@ -3695,10 +3697,22 @@ type leaseClock interface {
 // acquireWrite is the single lease primitive in pkg/tools/browser. There is
 // exactly one acquire symbol in the package; a structural test asserts it.
 //
-// It is a per-BROWSER (not per-manager-mutex) mutual exclusion held for the
-// duration of ONE action-tool call. It is NOT m.mu and must never be taken
-// while m.mu is held — an action tool blocks on CDP for seconds, and the
-// ADR-038 "no lock across a blocking call" discipline forbids it.
+// It is mutual exclusion per (BrowsingKey, TabOwner) PAIR — not per browser
+// and not per manager-mutex — held for the duration of ONE action-tool call.
+// It is NOT m.mu and must never be taken while m.mu is held: an action tool
+// blocks on CDP for seconds, and the ADR-038 "no lock across a blocking call"
+// discipline forbids it.
+//
+// THE PAIR IS THE WHOLE POINT, and a per-BROWSER lease is a DEFECT (D1.9c,
+// FR-081). A BrowsingKey is "ws:<workspaceID>" — ONE key for every session on
+// the workspace — so a lease scoped to the key alone makes two turns in two
+// unrelated chats block each other on a tab neither can see. That is what
+// test 99(b) TestLease_TwoSessionsNeverBlockEachOther fails on, and the
+// mistake is invisible under load: it looks like contention, not like a bug.
+// Revision 5 of this annex said "per-BROWSER" while requiring exactly that
+// test, which is why the owner is now in the signature rather than in prose.
+// SC-029 forbids a second acquire symbol, so this cannot be corrected later
+// by adding an owner-aware variant beside it.
 //
 // It is reached whenever the resolved TabOwner is TabOwnerWorkspace() — the
 // operator's shared tab — OR a TabOwnerSession() set, i.e. on every leased
@@ -3727,7 +3741,7 @@ type leaseClock interface {
 // The bound is a RETRY BUDGET, not a give-up timer — see leaseWaitTimeout's
 // comment on FR-023a above.
 func (m *BrowserManager) acquireWrite(
-    ctx context.Context, key BrowsingKey, holderAgentID string,
+    ctx context.Context, key BrowsingKey, owner TabOwner, holderAgentID string,
 ) (release func(), ok bool, holder string)
 
 // leaseWrite is the convenience wrapper every action tool actually calls. It
@@ -3737,14 +3751,20 @@ func (m *BrowserManager) acquireWrite(
 // do not hand-roll the deferral body, while keeping D1's stronger primitive
 // underneath (cancellable, bounded, names the holder).
 //
-//   deferred, release := leaseWrite(ctx, mgr, key, agentID, "browser_click")
+//   deferred, release := leaseWrite(ctx, mgr, key, owner, agentID, "browser_click")
 //   if deferred != nil { return deferred, nil }
 //   defer release()
+//
+// owner is the TabOwner the call already resolved (§14.2 rule 1 step 1) — the
+// session's own set or the workspace's. It is a PARAMETER and not re-derived
+// here: the lease must be taken on the same set the tool is about to write,
+// and a wrapper that resolved its own owner could disagree with its caller.
 //
 // deferred is nil iff the lease was acquired. When non-nil it is a NON-error
 // result whose body is {"deferred": true, "reason": <text naming the holder>}.
 func leaseWrite(
-    ctx context.Context, m *BrowserManager, key BrowsingKey, agentID, toolName string,
+    ctx context.Context, m *BrowserManager, key BrowsingKey, owner TabOwner,
+    agentID, toolName string,
 ) (deferred *tools.ToolResult, release func())
 ```
 
