@@ -110,6 +110,15 @@ type provenanceResolver struct {
 	// acquired under a key nobody resolved would look like.
 	forgeKey func(ctx context.Context, resolved BrowsingKey) BrowsingKey
 
+	// home is ONE $OMNIPUS_HOME for the whole workload, carrying a workspace
+	// file per id with "jim" on its core team. It must be stable across calls:
+	// this used to be a fresh t.TempDir() per resolution, which was invisible
+	// until 9bfe7e38b made ResolveBrowsingKey check team membership. An empty
+	// home means every workspace refuses, so all three tests here failed with
+	// "does not have this agent on its team" — the security fix working, and
+	// the fixture never having been a member of anything.
+	home string
+
 	mu   sync.Mutex
 	mgrs map[string]*BrowserManager
 }
@@ -117,7 +126,7 @@ type provenanceResolver struct {
 func (r *provenanceResolver) ManagerFor(
 	ctx context.Context,
 ) (*BrowserManager, BrowsingKey, TabOwner, error) {
-	key, err := ResolveBrowsingKey(ctx, r.t.TempDir())
+	key, err := ResolveBrowsingKey(ctx, r.home)
 	if err != nil {
 		return nil, BrowsingKey{}, TabOwner{}, err
 	}
@@ -149,13 +158,35 @@ func (r *provenanceResolver) ManagerFor(
 // runProvenanceWorkload drives a realistic run: three workspaces, two turns
 // each, several browser tool calls per turn, mixing read-only and write-class
 // tools. Returns the ledger of what happened.
+// provenanceHome writes one $OMNIPUS_HOME carrying the three workspaces the
+// workload drives, each with "jim" on its core team.
+//
+// Membership is not decoration here. Since 9bfe7e38b, ResolveBrowsingKey checks
+// that the agent is actually on the named workspace's team before handing over
+// that workspace's browser — and therefore its live logins. A fixture that
+// names a workspace it is not a member of is refused, which is the control
+// working, not a test problem.
+func provenanceHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	for _, ws := range provenanceWorkspaces {
+		writeWorkspace(t, home, ws, "jim")
+	}
+	return home
+}
+
+// provenanceWorkspaces is the closed set the workload drives. Declared once so
+// the fixture's membership and the workload's loop cannot drift apart — a
+// workspace present in one and absent from the other resolves to a refusal.
+var provenanceWorkspaces = []string{"01WSALPHA", "01WSBETA", "01WSGAMMA"}
+
 func runProvenanceWorkload(t *testing.T, res *provenanceResolver) {
 	t.Helper()
 	list := &ListTabsTool{res: res}
 	open := &OpenTabTool{res: res}
 	sw := &SwitchTabTool{res: res}
 
-	for _, ws := range []string{"01WSALPHA", "01WSBETA", "01WSGAMMA"} {
+	for _, ws := range provenanceWorkspaces {
 		for turn := 0; turn < 2; turn++ {
 			turnID := fmt.Sprintf("%s#%d", ws, turn)
 			ctx := withTurnID(context.Background(), turnID)
@@ -176,7 +207,7 @@ func runProvenanceWorkload(t *testing.T, res *provenanceResolver) {
 // key that did not come from a ResolveBrowsingKey return in the same turn.
 func TestAcquire_KeyProvenance(t *testing.T) {
 	ledger := newProvenanceLedger()
-	res := &provenanceResolver{t: t, ledger: ledger, mgrs: map[string]*BrowserManager{}}
+	res := &provenanceResolver{t: t, ledger: ledger, home: provenanceHome(t), mgrs: map[string]*BrowserManager{}}
 	runProvenanceWorkload(t, res)
 
 	// Non-vacuity first. An invariant over an empty set is not an invariant,
@@ -212,6 +243,7 @@ func TestAcquire_KeyProvenance_DetectsAForgedKey(t *testing.T) {
 	ledger := newProvenanceLedger()
 	res := &provenanceResolver{
 		t:      t,
+		home:   provenanceHome(t),
 		ledger: ledger,
 		mgrs:   map[string]*BrowserManager{},
 		// A structurally VALID key — same type, same package-private
@@ -239,6 +271,7 @@ func TestAcquire_KeyProvenance_DetectsCrossTurnReuse(t *testing.T) {
 	var once sync.Once
 	res := &provenanceResolver{
 		t:      t,
+		home:   provenanceHome(t),
 		ledger: ledger,
 		mgrs:   map[string]*BrowserManager{},
 		forgeKey: func(_ context.Context, resolved BrowsingKey) BrowsingKey {
