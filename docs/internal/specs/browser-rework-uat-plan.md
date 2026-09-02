@@ -2023,3 +2023,278 @@ question needs, and no automated test can produce it.
   build disagreeing is a defect in one of them and you cannot tell which from here.
 
 ---
+
+## 5. Negative and edge cases — things that must NOT happen
+
+These are not test cases with steps. They are **standing conditions**. If a tester sees any of them
+at any point during any case, they file it immediately, regardless of whether the case they were
+running otherwise passed.
+
+Each one is here because it **looks like success**. That is the only thing they have in common and it
+is the reason they need their own section.
+
+| ID | Must not happen | How a tester detects it | Severity if seen |
+|---|---|---|---|
+| **N-1** | An agent reports it changed a page, and the page did not change | Watch the **live panel**, not the chat. After any action an agent claims to have performed, look at the page. Where possible, use a page that visibly confirms the action (the alerts page prints which button you pressed; the key-presses page prints the key). | **S1** |
+| **N-2** | A tool returns `deferred` and the agent treats it as done | Read the agent's *next* message. A deferral means "not yet". If the agent moves on to the next step, or tells you the task is complete, the request was dropped. Expand the tool call in the thread and read the raw result. | **S1** |
+| **N-3** | A tab is silently shared between two chats | UAT-03. Test it in **both directions**: can chat 2 *list* chat 1's tab, and can chat 2 *act on* it when told exactly which tab? A build can fail the second while passing the first. | **S1** |
+| **N-4** | A description the model is shown claims isolation the build does not have | Ask an agent directly: *"Describe the browser you have access to. Is it yours alone, shared with other agents, or shared with the whole workspace?"* Its answer comes from the tool descriptions it was given. If it says the browser is private to it, or that each agent has its own, while UAT-10 shows a shared login, the model is being told something false — and it will reason and reassure the operator on that basis. | **S2** |
+| **N-5** | An action lands on the wrong one of several identical elements, silently | UAT-26 step 3. On a page with several identically-named controls, an ambiguous instruction must **error with a count**, never pick one. If it picks one, it will always pick one, and on a page of "Delete" buttons that is unrecoverable. | **S1** |
+| **N-6** | The live panel is visibly slow, or shows a stale picture, with no error | UAT-13, UAT-16. Scroll and watch for stepping. If the panel ever looks like a sequence of stills rather than video, **stop and file it** — the fallback that used to produce exactly this was deleted on purpose so it would be visible. A panel showing the last frame it received forever is the same defect wearing a different hat. | **S1** |
+| **N-7** | A capacity message names a setting that does not exist | UAT-34, UAT-36. Read refusal and warning text **word for word**. Any mention of a maximum, a limit, or a config key is a message telling the operator to do something impossible. | **S2** |
+| **N-8** | A background run inherits tabs from an attended conversation | UAT-05. Read the scheduled run's own tab list, not the chat's. | **S1** |
+| **N-9** | Deleting a workspace leaves its profile directory on disk | UAT-41 step 3. The UI showing the workspace gone is not evidence; `ls` the profiles directory. | **S1** |
+| **N-10** | The Audit Log screen is blank | UAT-46. Always cross-check against `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/system/audit.jsonl`. A blank viewer reads as "nothing to see" and hides everything. Record which install you were on — a legacy entry from before this work can cause it. | **S2** |
+| **N-11** | An unattended run presses **OK** on a confirmation dialog | UAT-25 step 7, and any scheduled run. On a turn with nobody to ask, dismissing a popup is allowed and accepting one is not. Search the scheduled run's transcript for any dialog it accepted. | **S1** |
+| **N-12** | A file is uploaded without an approval prompt | UAT-24. One prompt, read before approving. Zero prompts is the failure. | **S1** |
+| **N-13** | Raw cron text appears anywhere in the UI | Look at the Calendar recurrence editor and any scheduling screen. Cron expressions are forbidden product-wide in the interface; scheduling is set through the calendar. | **S3** |
+| **N-14** | A "Command Center" screen or a separate Schedules list reappears | Check the navigation. `/tasks` and `/automations` should redirect into the workspace board or calendar, not render a screen of their own. These were deleted deliberately and come back most often through a merge. | **S3** |
+| **N-15** | Two workspaces end up sharing one browser process | `ps ax \| grep "user-data-dir" \| grep -v grep` — one process per workspace with a distinct profile path. Logged-out pages are *not* sufficient evidence of separation; the process count is. | **S1** |
+| **N-16** | A pause is presented as a logout | UAT-33 step 6, UAT-43 step 6. When a browser is closed and reopened the operator should pay a wait and nothing else. Being asked to sign in again means the profile was discarded, and it will be blamed on the website. | **S1** |
+| **N-17** | The gateway drives the host into swap rather than refusing | UAT-33, UAT-34. Watch `top` / Activity Monitor. A machine that becomes unusable while the product reports everything is fine is a worse outcome than a refused browse. | **S1** |
+
+---
+
+## 6. Defect reporting
+
+### 6.1 What to capture
+
+Every defect report carries all nine of these. A report missing the *actual* or the *silent-failure*
+field will be sent back.
+
+| Field | What goes in it |
+|---|---|
+| **1. Case ID** | `UAT-nn`, or `N-nn` for a standing condition, or `ad hoc` |
+| **2. Title** | One line, describing what is wrong, not what you were doing |
+| **3. Steps to reproduce** | Numbered, from a **clean** `$OMNIPUS_HOME` where possible. If it needs an existing state, say exactly which cases produced it. |
+| **4. Expected** | Quote the case's expected result |
+| **5. Actual** | What really happened, in observable terms. *"Jim said he clicked Logout; the panel still showed the secure area 30 seconds later."* |
+| **6. Which silent-failure shape** | Name the one from the case, or write *"new — not listed"*. **This field is the point of the plan.** |
+| **7. Evidence** | A **screen recording** for anything about the panel, timing, smoothness or ordering — a screenshot cannot show any of those. A screenshot is enough for a static wrong result. Include the chat transcript as text, not as an image. |
+| **8. Gateway log** | The relevant excerpt from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/logs/gateway.log`, with timestamps that bracket the failure. If the gateway exited, also `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat-home/logs/gateway_panic.log`. |
+| **9. Browser panel state** | Streaming / frozen on a still / blank / showing an error (quote it) / not opened. **State this even when it seems irrelevant** — a frozen panel changes the meaning of everything else you saw. |
+
+Also record, once per test session rather than per defect:
+
+- Host OS and version; total RAM; how memory was constrained (§4 Group G box) if it was.
+- The exact binary: `git rev-parse HEAD` in
+  `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf`.
+- Which login site you used (§3.3), if not the default.
+- Whether this `$OMNIPUS_HOME` was clean or carried over from an earlier session.
+
+### 6.2 Severity ladder
+
+| | Name | Definition | Examples | Blocks release? |
+|---|---|---|---|---|
+| **S1** | **Silent wrong** | The system reports success and something else, or nothing, actually happened. Or: data belonging to one workspace, client or conversation is visible to another. | N-1, N-2, N-3, N-5, N-8, N-9, N-15 | **Yes** |
+| **S2** | **Loud broken, or a misleading message** | Something plainly fails when it should work, or a message actively misleads an operator into a wrong action. | Panel blank with no error; a refusal naming a setting that does not exist (N-7); the model being told the browser is private (N-4) | **Yes** |
+| **S3** | **Correct but unusable** | The right thing happens and the operator cannot tell, cannot find out, or cannot act on it. | An error that names no cause; a disclosure that appears after the decision; a retired screen coming back | No — must be filed with an owner |
+| **S4** | **Cosmetic or informational** | Wording, layout, a recorded measurement, a note for the spec owners. | Holdout measurements (UAT-18, UAT-22 step 3, UAT-48 step 4) | No |
+
+**Two rules that override the ladder:**
+
+1. **Anything where the product reports success and did nothing is S1**, however small the thing was.
+   That is the failure class this whole plan exists to catch, and it does not get graded down for
+   being minor in isolation.
+2. **"Could not reproduce" does not close a defect.** A second tester attempts it. If they also
+   cannot, the defect stays open with both attempts recorded — this project has had real failures
+   that reproduced one time in five, and it has also wasted days on reported failures that never
+   existed. Both outcomes are worth the second attempt.
+
+---
+
+## 7. Coverage map
+
+### 7.1 Ownership spec (D1) — user stories
+
+| User story | Covered by |
+|---|---|
+| US-1 Agent handover | UAT-01, UAT-02 |
+| US-2 Human browses first | UAT-01, UAT-04 |
+| US-3 Cross-workspace isolation | UAT-09, UAT-10 |
+| US-4 No surprise logout | UAT-10 |
+| US-5 Delegated work shares the browser | UAT-06, UAT-48 |
+| US-6 A workspace-less turn resolves | UAT-05, UAT-06, UAT-07, UAT-11 |
+| US-7 Distinguishable tab states | UAT-02, UAT-03, UAT-11 (partial — see §7.5) |
+| US-8 A denied agent cannot reach the tool | UAT-08 |
+| US-9 Two writers, one tab set | UAT-28, UAT-29, UAT-30, UAT-31, UAT-32 |
+| US-10 The wire contract holds | **Not observable** — §7.5 |
+| US-11 An agent on two workspaces is unambiguous in the panel | UAT-17, UAT-07 |
+| US-12 Memory stays bounded; browsers get closed | UAT-43, UAT-33 |
+| US-13 Repudiation, per action | UAT-46 |
+| US-14 An agent with no workspace is told the truth | UAT-11 |
+| US-15 Capacity manages itself, and says *memory* | UAT-33, UAT-34, UAT-35, UAT-36, UAT-37 |
+| US-16 One crash is one workspace | UAT-38 |
+| US-17 Reload preserves every login | UAT-42 |
+| US-19 A crashed gateway leaves nothing behind | UAT-39 |
+| US-20 A departed client's logins depart | UAT-41 |
+| US-21 Adding an agent says what it grants | UAT-47 |
+| US-22 Tabs stay with the chat | UAT-02, UAT-03, UAT-04, UAT-15 |
+| US-23 Upgrading does not pool logins | UAT-12 |
+| US-24 Boot warms one browser, not N | UAT-45 |
+| US-25 Profile disk stays bounded | UAT-44 |
+| ~~US-18~~ Operator closes a browser | **Withdrawn by the spec** — no case, correctly |
+
+### 7.2 Ownership spec (D1) — holdout scenarios (§13)
+
+| Holdout | Covered by | Note |
+|---|---|---|
+| H-1 Mia→Jim handover, the ADR §1.1 conversation | UAT-01 | |
+| H-2 New chat next day, still logged in | UAT-10 step 3 | |
+| H-3 Two clients, same SaaS, different accounts | UAT-09 | Partial: uses one dummy account in two workspaces, not two accounts. See §7.5. |
+| H-4 Mia answers from absence (**required**) | UAT-08 | Transcript must be attached |
+| H-5 Heartbeat for an agent on no workspace | UAT-11 | Partial — chat path, not heartbeat path |
+| H-6 Delegated research does not hit a login wall | UAT-06, UAT-48 | |
+| H-7 Delegation reaches an `ask` tool, refused promptly | UAT-24 | May be Blocked |
+| H-8 Two agents browse different sites at once | UAT-28, UAT-29 | |
+| H-9 Unrelated Setting saved mid-browse | UAT-42 | |
+| H-10 Workspace deleted with tabs open | UAT-41 | |
+| H-11 Agent added to a second workspace mid-session | UAT-07 | Partial — the ambiguity half only |
+| H-12 Pool eviction is silent; reopen is a pause | UAT-33 | |
+| H-12a Everything pinned; refusal names memory | UAT-34 | |
+| H-12b Thrash produces exactly one WARN | UAT-36 | |
+| H-13 No limit setting exists; freeing memory works | UAT-37 | |
+| H-14 One workspace's Chrome killed externally | UAT-38 | |
+| H-15 Idle overnight; count to zero; still logged in | UAT-43 | |
+| H-16 `kill -9` the gateway; clean restart | UAT-39 | |
+| H-17 Workspace deleted; profile gone | UAT-41 | |
+| H-18 Team-add disclosure | UAT-47 | |
+| H-19 Both tabs named; a different chat sees neither | UAT-02, UAT-03, UAT-04 | |
+| H-20 Five tabs then a sixth from another agent | **Not covered** — §7.5 | |
+| H-21 Upgrade leaves everyone logged out | UAT-12 | Needs a pre-rework home dir |
+| H-22 Ten delegated actions, ten audit entries | UAT-46 | |
+| H-23 macOS under real memory pressure | UAT-34 | Use method 2 in the Group G box |
+| H-24 Windows: declared gap, first browser opens | UAT-35 | Needs a Windows host |
+| H-25 Settings → Performance shows automatic, not 2000 | UAT-37 | |
+| H-26 Unmeasurable host answers a message, refuses a third agent | UAT-35 | Partial — browser half only; see §7.5 |
+| H-27 Implicit acquisition, both halves | UAT-15, UAT-31 | |
+| H-28 Profile disk shrinks; logins survive | UAT-44 | |
+
+### 7.3 Capability spec (D2) — user stories
+
+| User story | Covered by |
+|---|---|
+| US-1 Target by role and accessible name | UAT-26 |
+| US-2 Deterministic multi-match | UAT-26 steps 3–4 |
+| US-3 Actionability names the cause | UAT-27 |
+| US-4 The gate is not a tax | **Not observable** — §7.5 |
+| US-5 Forms with dropdowns | UAT-19 |
+| US-6 Discrete keys | UAT-20 |
+| US-7 Hover menus | UAT-21 |
+| US-8 Attachments | UAT-24 (may be Blocked) |
+| US-9 A dialog does not wedge the tab | UAT-25, UAT-32 |
+| US-10 Read a page as structure | UAT-22, UAT-23, UAT-48 |
+| US-11 The `file://` dead end names a real route | **Not covered** — §7.5 |
+| US-12 Boot survives the new tools | UAT-08 (indirect), otherwise **not observable** |
+| US-13 Tier membership is a decision | UAT-22 step 3 (partial — reachability only) |
+| US-17 The gate has a revert | **Not covered** — §7.5 |
+| US-18 An operator can see what the tools did | UAT-23, UAT-46, UAT-48 |
+| US-19 The four action tools honour the human | UAT-31, UAT-32 |
+
+### 7.4 Capability spec (D2) — holdout scenarios (§13)
+
+| Holdout | Covered by | Note |
+|---|---|---|
+| H-1 Whole form via snapshot + role/name, no CSS | UAT-22, UAT-26 | Includes the unprompted/prompted double run |
+| H-2 Real file upload, one prompt | UAT-24 | Expected **Blocked** |
+| H-3 `confirm()` on navigate-away, unaided recovery | UAT-25 step 7 | |
+| H-4 Cookie banner; `hit-testable` names the banner | UAT-27 | |
+| H-5 SPA re-renders; handle goes stale | **Not covered** — §7.5 | |
+| H-6 5,000-node page; capped snapshot | **Not covered** — §7.5 | |
+| H-8 Dialog on an unwatched tab | UAT-18 | A measurement |
+| H-9 `linux/arm64` with no Chromium | **Not covered** — needs that host |
+| H-10 Latency with the gate on vs off | **Not observable** — §7.5 |
+| H-11 Snapshot of a signed-in payment form | UAT-23 | Dummy site, not a payment form |
+| H-12 Exempt tools still return while others defer | UAT-32 | |
+| H-13 Delegated snapshot; where the operator can see it | UAT-48 | The reaction is the deliverable |
+| H-14 Human holds one tab; how much unrelated work defers | **Not covered** — §7.5, and see §8 Q-5 |
+
+### 7.5 What a human at the UI cannot observe
+
+This section is deliberately not empty. Each item below is required by one of the specs and **cannot
+be confirmed by a tester sitting at the interface**. Listing them is the honest alternative to
+claiming coverage.
+
+**Internal wiring — only a code reader or a unit test can see these**
+
+1. That two agents' calls resolve to the **same browser manager object**, obtained at call time
+   rather than captured when their tools were registered (D1 US-1/AC3). A tester sees the right
+   answer; they cannot see which object produced it.
+2. That the tab set is keyed on the **transcript** session rather than the routing session (D1
+   US-22/AC8). Both keys produce identical behaviour for a single chat; they diverge only under
+   delegation, where the difference is a whole subtree of merged tabs and is invisible from the UI.
+3. That **no CDP browser context** is created anywhere, and the old context-counting code is gone
+   (D1 US-3/AC2). The observable — two Chrome processes — is necessary but not sufficient.
+4. That a tool is leased **if and only if** it is control-gated (D1 US-9/AC5, D2 US-19/AC2–AC3). A
+   tester can see the effect on a handful of tools, never the biconditional over all of them.
+5. That deleted settings and helpers are **absent as symbols** rather than merely unset (D1
+   US-15/AC12, AC19). UAT-37 checks the UI shows no such setting; it cannot check the code.
+6. That the actionability gate costs exactly **two** round trips to the page (D2 US-4/AC1), or what
+   it costs in latency at all (D2 US-4/AC2, H-10). Both are measurements taken at a code seam.
+7. That `index: 1` selects the second element **in document order** rather than in some other order
+   that happens to agree on the test page (D2 US-2/AC2). A tester infers ordering from where the
+   click landed; the spec explicitly wants it asserted directly.
+8. That the dialog listener is installed **once** and not stacked on re-arm (D2 US-9/AC8).
+9. That each of the six new tools declares the right internal scope (D2 §5). A wrong value compiles
+   and produces a silent deny that looks like a policy decision.
+10. That policy coverage validates against the **unrepaired** default configuration (D2 US-12/AC1).
+    Booting successfully proves nothing here — a build with no policy seeding at all also boots.
+11. That the memory reader returns the machine's real total rather than a plausible constant (D1
+    US-15/AC16), and that a container is detected without reading its memory limit (AC24). Both are
+    fixture-driven.
+12. That the wire contract is unchanged and its regeneration check passes (D1 US-10). That is CI.
+
+**Needs a host, an account or a build a tester may not have**
+
+13. **Windows behaviour** (D1 US-15/AC18, H-24) — no Windows host, no case. UAT-35 covers the
+    unmeasurable-host shape only if such a host exists.
+14. **`linux/arm64` with no Chromium** (D2 H-9).
+15. **Two genuinely different accounts on one SaaS** (D1 H-3). §3.1 forbids real accounts, so
+    UAT-09 proves *separation of profiles*, not *separation of two identities*. If a second published
+    dummy account can be found on the same site, upgrade UAT-09 and record it.
+16. **An upgrade from a pre-rework install** (D1 US-23, H-21) — UAT-12 is Blocked without one.
+17. **The `file://` refusal naming the supported alternative** (D2 US-11), and **the gate's revert
+    switch** (D2 US-17). Both need configuration or prompts a tester has not been given a UI path
+    for; see §8 Q-8.
+
+**Observable in principle, but no expected value has been specified**
+
+18. **How long a relaunch pause may take** before it counts as broken (D1 H-12, UAT-33 step 6). The
+    specs say the measurement has not been taken yet. A tester currently has no threshold. §8 Q-6.
+19. **How much unrelated work defers while a human holds one tab** (D2 H-14). The mechanism is
+    known to be coarser than per-tab; the cost is explicitly unmeasured, and the specs ask for a
+    number rather than a verdict. §8 Q-5.
+20. **What the tab-ownership label should say** in the interface (D1 US-22/AC7, FR-080 requires the
+    payload to identify the owner; nothing specifies what the operator is shown). UAT-04 checks that
+    a distinction is drawn; it cannot check that the right words are used. §8 Q-3.
+21. **Whether a per-agent tab cap still exists anywhere** (D1 H-20). The cap was deleted, so the
+    holdout is now about a *refusal that should not happen*. There is nothing for a tester to trigger
+    on purpose; it can only be noticed if it happens during another case. Watch for it in UAT-02 and
+    UAT-03.
+
+---
+
+## 8. Questions for the spec owners
+
+Raised rather than guessed. Each one blocks or weakens a case above; none is answered in this plan.
+
+| ID | Question | Why it matters here | Affects |
+|---|---|---|---|
+| **Q-1** | **Is a scheduled or background run signed *out* of the workspace's sites, or does it share the workspace's logins?** The brief for this UAT says a background run "gets its own tabs and is signed out". The specs say the opposite about logins: a delegated or workspace-less run **shares the workspace browser and therefore its sessions** (D1 US-5, §4 contract 5, H-6), and the isolation-for-unattended-work design was explicitly inverted by a ruling. Only the **tabs** are separate. | The two answers have opposite security postures, and a tester will observe one of them and not know whether they are looking at a pass or a P0 defect. | UAT-05, UAT-06 |
+| **Q-2** | **After a browser is closed (idle or evicted) and relaunched, are the tabs restored, or only the login?** The specs are explicit that the profile and therefore the session survive. They do not say what happens to the open tabs. | UAT-33 and UAT-43 both end with "ask an agent to open the page again", which sidesteps the question. A tester who instead asks *"what tabs do you see?"* after a relaunch has no expected answer. | UAT-33, UAT-43 |
+| **Q-3** | **What is the operator actually shown to distinguish "this chat's tabs" from "the workspace's tabs"?** The requirement is that the payload identifies the owner. No wording, label or placement is specified for the interface. | UAT-04's silent-failure check is "the answer is right and the label is missing" — but with no specified label, a tester cannot say whether what they see is the intended one or a stand-in. | UAT-04, §7.5 item 20 |
+| **Q-4** | **Is there a supported UI path to give a custom agent the browser tools?** UAT-11 needs an agent that has browser tools *and* belongs to no workspace, which is precisely the combination the specs describe as the real-world gap. | Without a path, UAT-11 is Blocked and D1 US-14 has no human coverage at all. | UAT-11 |
+| **Q-5** | **A human holding the wheel on one tab stops agents on every other tab in that workspace. Is that acceptable as shipped, and what number would be too high?** The specs record this as an unmeasured availability cost and ask for a measurement, not a verdict — but a tester needs to know whether to file it. | Under the new tab ownership this is the ordinary case, not an edge one: a scheduled run, a delegated sub-turn and a live chat routinely hold different tabs in one browser. | UAT-31, UAT-32, §7.5 item 19 |
+| **Q-6** | **What relaunch pause is acceptable?** Eviction and idle close both trade a pause for memory, and the specs state plainly that the cold-start measurement has not been taken. | UAT-33 and UAT-43 pass or fail on "a visible pause" with no upper bound. A 40-second pause and a 3-second pause both satisfy the wording. | UAT-33, UAT-43, §7.5 item 18 |
+| **Q-7** | **What is the sanctioned way for a tester to force the live panel's video path to fail?** The old fallback was deleted so that a failure would be *visible*; there is no documented way to produce one on demand. | UAT-16 is a P0 case whose steps currently amount to "turn the Wi-Fi off and hope". A P0 case that cannot be reliably triggered is not a P0 case. | UAT-16 |
+| **Q-8** | **Are the file-upload action and the gate's revert switch in scope for this UAT at all?** The upload action is deliberately **not registered** pending a separate issue, and the revert switch is a configuration key with no described UI. | If upload is out of scope, UAT-24 should be removed rather than run and marked Blocked, and D2 US-8 should be recorded as unshipped rather than untested. The two readings produce very different release notes. | UAT-24, §7.5 item 17 |
+| **Q-9** | **Is Windows in scope for this UAT?** The specs declare the browser pool `degraded-unsupported` on Windows and require the release notes and configuration documentation to say so. | UAT-35 and D1 H-24 both need a Windows host. If the answer is no, both should say "out of scope" rather than "Blocked" — and someone still has to verify the release-note sentence exists. | UAT-35 |
+| **Q-10** | **UAT-08 records a known-unsatisfying outcome as its expected result.** A default agent asked what is open answers from absence, because it was never shown a browser tool. The specs name this as the original defect surviving in a narrower form and hold it open elsewhere. **Should this UAT pass on that outcome, or block on it?** | As written the case passes while the operator-visible symptom that started all of this is still present for the default agent. That is defensible and it should be a decision, not a side effect of how the case was worded. | UAT-08 |
+
+---
+
+## 9. Change log
+
+| Date | Change |
+|---|---|
+| 2026-09-02 | First draft. 48 cases: 25 P0, 22 P1, 1 P2. Ten questions raised in §8. |
