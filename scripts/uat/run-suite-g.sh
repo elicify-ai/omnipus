@@ -69,7 +69,17 @@ g1() {
 # G-3/4/5 — changes made OUTSIDE Omnipus while it runs (the watcher's job).
 # ---------------------------------------------------------------------------
 g345() {
-  local term; term=$(uniq_term); local f="$COL/uat-g3-$term.md"
+  # THE FILENAME MUST NOT CONTAIN THE SEARCH TERM. An earlier version named
+  # this file uat-g3-$term.md and then asserted that, after editing the file's
+  # CONTENT to a new term, the old term stopped matching. It never did — and
+  # correctly so: filenames are indexed, so the old term survived in the name no
+  # matter what happened to the body. That produced a confident FAIL for G-4 on
+  # two consecutive runs against a product that was behaving correctly, and I
+  # twice concluded the wrong thing about it before finding the fixture bug.
+  #
+  # A stable filename keeps the assertion about the CONTENT, which is what G-4
+  # is actually testing.
+  local term; term=$(uniq_term); local f="$COL/uat-g345-fixture.md"
   printf -- '---\ntype: company\nname: "G3 %s"\n---\n\n%s\n' "$term" "$term" > "$f"
   sleep 6
   local n; n=$(countFor "$term")
