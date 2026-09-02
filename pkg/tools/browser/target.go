@@ -378,11 +378,12 @@ func countIgnoredCandidates(ctx context.Context, loc Locator) int {
 	probe := func(q *accessibility.QueryAXTreeParams) int {
 		var n int
 		_ = chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
-			root, err := dom.GetDocument().WithDepth(0).Do(c)
-			if err != nil || root == nil || root.NodeID == 0 {
+			docID, release, err := documentObjectID(c)
+			if err != nil {
 				return nil
 			}
-			nodes, err := q.WithNodeID(root.NodeID).Do(c)
+			defer release()
+			nodes, err := q.WithObjectID(docID).Do(c)
 			if err != nil {
 				return nil
 			}
@@ -417,18 +418,17 @@ func countIgnoredCandidates(ctx context.Context, loc Locator) int {
 func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, ignored, childFrame int, err error) {
 	err = chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
 		// queryAXTree REQUIRES a root: "If no DOM node is specified, or the
-		// DOM node does not exist, the command returns an error." So the
-		// document root is fetched per resolution. It is deliberately NOT
-		// cached per tab: a cached NodeID goes stale on every navigation and
-		// a stale root fails as "element not found", which is the single
-		// most misleading failure this seam could produce.
-		root, derr := dom.GetDocument().WithDepth(0).Do(c)
-		if derr != nil || root == nil || root.NodeID == 0 {
+		// DOM node does not exist, the command returns an error." The root is
+		// obtained per resolution — never cached, since a cached id goes
+		// stale on every navigation and a stale root fails as "element not
+		// found", the most misleading failure this seam could produce.
+		docID, release, derr := documentObjectID(c)
+		if derr != nil {
 			return ErrEmptyAXTree
 		}
-		topFrame := root.FrameID
+		defer release()
 
-		q := accessibility.QueryAXTree().WithNodeID(root.NodeID)
+		q := accessibility.QueryAXTree().WithObjectID(docID)
 		if loc.Role != "" {
 			q = q.WithRole(loc.Role)
 		}
@@ -438,6 +438,17 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 		nodes, qerr := q.Do(c)
 		if qerr != nil {
 			return qerr
+		}
+
+		// The frame every surviving node must belong to. Sourced from the
+		// nodes themselves rather than from a DOM.getDocument call — see
+		// documentObjectID for why that call is not made here.
+		var topFrameID cdp.FrameID
+		for _, n := range nodes {
+			if n != nil && !n.Ignored && n.FrameID != "" {
+				topFrameID = n.FrameID
+				break
+			}
 		}
 
 		for _, n := range nodes {
@@ -453,18 +464,17 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 			}
 			// The marker stamp and the downstream chromedp ByQuery are both
 			// document-scoped, so a match owned by a child frame would
-			// resolve an attribute the query will never find.
+			// resolve an attribute the query can never find.
 			//
-			// DEFENSIVE, and measured to be so: rooted at the top document's
-			// node, queryAXTree does not descend into a child frame's
-			// document at all, and GetDocument(depth 0) returns an empty
-			// FrameID — so on Chrome 152 a framed element simply does not
-			// come back and this branch never fires. It stays because the
-			// alternative, if that ever changes, is a marker stamped on a
-			// node the click can never find: a silent timeout with no
-			// explanation. The USER-VISIBLE handling of the frame case is
-			// the sentence in noMatchErr.
-			if n.FrameID != "" && topFrame != "" && n.FrameID != topFrame {
+			// DEFENSIVE, and measured to be so: rooted at the top document,
+			// queryAXTree does not descend into a child frame at all on
+			// Chrome 152 — a framed element simply does not come back, so
+			// this branch never fires today. It stays because if that ever
+			// changes the alternative is a marker stamped on a node the
+			// click can never find: a silent timeout with no explanation.
+			// What actually reaches the agent for the frame case is the
+			// sentence in noMatchErr.
+			if n.FrameID != "" && topFrameID != "" && n.FrameID != topFrameID {
 				childFrame++
 				continue
 			}
@@ -489,6 +499,43 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 	// returned therefore preserves document order. Nothing re-sorts here on
 	// purpose: any sort key available to us (BackendNodeID) would be WRONG.
 	return cands, ignored, childFrame, nil
+}
+
+// documentObjectID returns a Runtime remote-object handle on the page's
+// `document`, plus a release func the caller MUST defer.
+//
+// It exists instead of the obvious `dom.GetDocument()` because of a defect
+// that was reproduced, not theorised. DOM.getDocument RESETS the DevTools DOM
+// agent's node-id map, and chromedp keeps its own cache of node ids populated
+// from that map. An out-of-band getDocument from our code therefore
+// invalidates every node id chromedp is holding for that tab — so the very
+// next `chromedp.Click(sel, ByQuery)` or `WaitVisible` polls a node id the
+// browser no longer recognises and times out.
+//
+// The symptom was ugly and would have been near-impossible to diagnose in the
+// field: resolving an element by role+name SUCCEEDED, the actionability gate
+// PASSED (it uses Runtime.evaluate, which is unaffected), and then the click
+// failed with "the element passed the actionability gate and then stopped
+// being visible" — an accurate-sounding message about a page that had not
+// changed at all. Caught by TestResolveTarget_AllActionToolsShareSeam, which
+// is the only test that drives three real tools over one tab in sequence.
+//
+// Runtime.evaluate touches no node-id state, so this costs the same one round
+// trip and poisons nothing.
+func documentObjectID(ctx context.Context) (runtime.RemoteObjectID, func(), error) {
+	noop := func() {}
+	obj, exc, err := runtime.Evaluate("document").Do(ctx)
+	if err != nil {
+		return "", noop, err
+	}
+	if exc != nil {
+		return "", noop, fmt.Errorf("%s", exc.Text)
+	}
+	if obj == nil || obj.ObjectID == "" {
+		return "", noop, ErrEmptyAXTree
+	}
+	id := obj.ObjectID
+	return id, func() { _ = runtime.ReleaseObject(id).Do(ctx) }, nil
 }
 
 // axValueString flattens an accessibility.Value's string payload, tolerating
