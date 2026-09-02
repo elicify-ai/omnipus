@@ -180,3 +180,57 @@ func TestUpdateAgentTools_RegistryReloadCompletesBeforeResponse(t *testing.T) {
 		"updateAgentTools returned 200 while a config reload was still pending — the tightened "+
 			"tool policy is not guaranteed to be enforced yet on the next tool call")
 }
+
+// TestUpdateAgentTools_ReloadTimeout_Returns503NotSilent200 is the UAT
+// batch3 S67 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+// finding #4) hardening test: before this fix, when the reload confirmation
+// poll window elapsed WITHOUT an error (triggerReloadAndWaitOutcome
+// returning confirmed=false, err=nil — see waitForReloadOutcome's own doc
+// comment), updateAgentTools logged only a server-side Warn and still
+// responded 200. A caller had no way to know a tool-policy TIGHTENING
+// (e.g. create_skill allow/deny -> ask) they just requested might not be
+// enforced yet — a tool call dispatched immediately after could still run
+// under the stale, more permissive snapshot. This mirrors putToolPolicies
+// (the global tool-policy PUT), which already treats an unconfirmed reload
+// as a hard failure via the stricter triggerReloadAndWait.
+//
+// The fix makes the unconfirmed branch return 503, matching the existing
+// err!=nil branch's status and response shape, rather than falling through
+// to the same 200 the confirmed path returns.
+func TestUpdateAgentTools_ReloadTimeout_Returns503NotSilent200(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
+
+	// Wire a reload func that marks the reload pending (mirroring production
+	// — TriggerReload itself deliberately does not, see its own doc comment)
+	// and deliberately never clear the pending flag, so
+	// triggerReloadAndWaitOutcome runs out the (shortened) poll window with
+	// confirmed=false, err=nil — the exact "timed out, not errored" case
+	// this fix closes.
+	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		return nil
+	})
+	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
+
+	policies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	reqBody := map[string]any{
+		"builtin": map[string]any{"policies": policies},
+	}
+	raw, err := json.Marshal(reqBody)
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent/tools", bytes.NewReader(raw))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+	api.updateAgentTools(w, r, "test-agent")
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"an unconfirmed reload must NOT be reported as a plain 200 success — the caller cannot tell "+
+			"whether the tightened tool policy is actually enforced yet: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "did not confirm",
+		"the response body must explain the reload did not confirm within the wait window")
+}

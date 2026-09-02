@@ -278,6 +278,41 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	for k, v := range respPolicies {
 		builtinPolicies[k] = gen.AgentToolsResponseConfigBuiltinPolicies(v)
 	}
+	// CLAUDE.md hard constraint 6 — complete the reported map over the FULL
+	// static builtin catalog, so this response is a valid request body for
+	// PUT /api/v1/agents/{id}/tools.
+	//
+	// That PUT (and PUT /agents/{id} with tools_cfg, and POST /agents) now
+	// rejects an incomplete builtin.policies map with 400, because the map it
+	// receives REPLACES the agent's own map wholesale and a hole in it silently
+	// drops that agent's tightening in favour of the global ceiling at
+	// resolution time (pkg/tools/compositor.go's "one side is enough" merge).
+	// The SPA builds its PUT body by editing exactly the map this handler
+	// returns (src/components/agents/ToolsAndPermissions.tsx's cfgToValue →
+	// valueToCfg round-trip, which spreads the hydrated map and overwrites one
+	// key). So if this response reported only the agent's own, possibly-sparse
+	// stored map, a single per-tool toggle on any agent whose stored map
+	// predates a catalog addition — or whose map was emptied by the malformed-
+	// body defect this change also fixes — would round-trip an incomplete map
+	// and be rejected. Reporting the resolved CONFIGURED policy for every known
+	// tool keeps the read/modify/write cycle closed without weakening the
+	// write-side check.
+	//
+	// The fill value is the same resolveConfiguredPolicy the per-tool entries
+	// above use (agent entry first, then the global ceiling), so nothing here
+	// invents a policy: it reports what the agent already resolves to today. A
+	// name with no entry on EITHER side resolves to "deny" — fail-closed,
+	// never "allow", matching the compositor's own no-match disposition.
+	for toolName := range buildKnownBuiltinToolNames() {
+		if _, ok := builtinPolicies[toolName]; ok {
+			continue
+		}
+		configured := resolveConfiguredPolicy(toolName, toolsCfg, cfg.Sandbox.ToolPolicies)
+		if configured == "" {
+			configured = string(config.ToolPolicyDeny)
+		}
+		builtinPolicies[toolName] = gen.AgentToolsResponseConfigBuiltinPolicies(configured)
+	}
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 
 	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct

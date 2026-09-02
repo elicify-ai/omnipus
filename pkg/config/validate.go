@@ -474,6 +474,220 @@ func ValidateToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) []C
 	return gaps
 }
 
+// MCPToolPolicyKeyPrefix is the namespace every MCP-server tool name and every
+// MCP per-server bulk (wildcard) policy key carries — pkg/tools/mcp_tool.go
+// composes tool names as "mcp_<server>_<tool>", and the SPA's per-server bulk
+// control derives its wildcard key from the longest common underscore prefix of
+// those names (src/components/shared/ToolPolicyEditor.tsx), i.e.
+// "mcp_<server>_*".
+//
+// This prefix is the ONE carve-out to the "keys must be known static builtin
+// tool names" rule in ValidateSubmittedToolPolicyMap. CLAUDE.md hard constraint
+// 6 states it explicitly: MCP-server tool names are not knowable until an
+// operator connects the server at runtime, so they cannot be statically
+// pre-enumerated and the per-server wildcard bulk policy remains valid there.
+// The no-wildcard rule applies to the static builtin catalog only.
+const MCPToolPolicyKeyPrefix = "mcp_"
+
+// SubmittedToolPolicyDefects is the verdict ValidateSubmittedToolPolicyMap
+// returns for one caller-supplied per-tool policy map. Both fields are sorted
+// so the resulting 400 body is deterministic (and therefore assertable in a
+// test) rather than dependent on Go map iteration order.
+type SubmittedToolPolicyDefects struct {
+	// Missing lists every static builtin tool name that the submitted map does
+	// NOT carry an explicit, literal key for.
+	Missing []string
+	// Invalid lists every submitted key that is neither a known static builtin
+	// tool name nor an MCP-namespaced key — wildcards ("*", "system.*",
+	// "browser_*") and typos both land here.
+	Invalid []string
+}
+
+// Empty reports whether the submitted map was fully complete and free of
+// unrecognized/wildcard keys — i.e. whether the write may proceed.
+func (d SubmittedToolPolicyDefects) Empty() bool {
+	return len(d.Missing) == 0 && len(d.Invalid) == 0
+}
+
+// String renders the defects as a single human-readable, operator-actionable
+// sentence naming the offending tool names, for use as an HTTP 400 body.
+// Long lists are truncated at maxNamedToolsInDefectMessage names plus a
+// "+N more" tail so a 88-tool gap does not produce an unreadable error, while
+// the exact counts stay exact.
+func (d SubmittedToolPolicyDefects) String() string {
+	var parts []string
+	if len(d.Missing) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"is incomplete — %d static builtin tool(s) have no explicit policy entry: %s",
+			len(d.Missing), truncateToolNameList(d.Missing),
+		))
+	}
+	if len(d.Invalid) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"contains %d key(s) that are neither a known static builtin tool name nor an %s-namespaced MCP key "+
+				"(wildcards are not valid for the static builtin catalog): %s",
+			len(d.Invalid), MCPToolPolicyKeyPrefix, truncateToolNameList(d.Invalid),
+		))
+	}
+	if len(parts) == 0 {
+		return "is complete"
+	}
+	return strings.Join(parts, "; and ")
+}
+
+// maxNamedToolsInDefectMessage caps how many tool names String() spells out
+// before summarizing the remainder as "+N more".
+const maxNamedToolsInDefectMessage = 12
+
+func truncateToolNameList(names []string) string {
+	if len(names) <= maxNamedToolsInDefectMessage {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s, +%d more",
+		strings.Join(names[:maxNamedToolsInDefectMessage], ", "),
+		len(names)-maxNamedToolsInDefectMessage,
+	)
+}
+
+// ValidateSubmittedToolPolicyMap checks ONE caller-supplied per-tool policy map
+// — exactly as the caller sent it, before any server-side seed/backfill/merge —
+// against the static builtin catalog in knownTools. It answers a deliberately
+// narrower question than ValidateToolPolicyCoverage:
+//
+//	ValidateToolPolicyCoverage: "can every tool resolve from SOME explicit
+//	entry, global OR per-agent, for every agent in the roster?"
+//
+//	ValidateSubmittedToolPolicyMap: "is THIS map, on its own, a complete and
+//	well-formed per-agent policy map?"
+//
+// The distinction is the whole point, and it is why the coverage check alone
+// was not enough. The seeded global ceiling (cfg.Sandbox.ToolPolicies,
+// pkg/config/defaults.go) carries an explicit entry for every static builtin
+// tool on a default install, so ValidateToolPolicyCoverage finds ZERO gaps for
+// ANY agent no matter what that agent's own map contains — including an empty
+// one. Runtime resolution, however, is a strictest-wins merge in which "one
+// side is enough" (pkg/tools/compositor.go's resolveEffectivePolicyWith): a
+// tool absent from the agent's own map resolves to the GLOBAL value alone. So a
+// write that silently leaves a hole in an agent's map does not fail closed —
+// it drops that agent's tightening and inherits the (typically permissive)
+// ceiling. Observed live: an agent explicitly denied `bash` had its map wiped
+// by a malformed tools write, passed the coverage check because the global map
+// covered everything, and then executed `bash` successfully.
+//
+// Rules, applied to the submitted map only:
+//   - Every name in knownTools MUST appear as an explicit, literal key →
+//     otherwise reported in Missing.
+//   - Every submitted key MUST be either a name in knownTools or an
+//     MCPToolPolicyKeyPrefix-namespaced key → otherwise reported in Invalid.
+//     This is what rejects a literal "*" (and any other wildcard) for the
+//     static builtin catalog, which the merge loops previously copied through
+//     verbatim as an inert key.
+//
+// Policy VALUES are not checked here — the wire schemas constrain them to
+// allow/ask/deny and each handler re-checks them; this function is purely about
+// key completeness and key legitimacy.
+//
+// A nil or empty knownTools returns no defects (nothing to check) — the caller
+// is responsible for supplying the real catalog, exactly as
+// ValidateToolPolicyCoverage does. A nil submitted map with a non-empty
+// knownTools is maximally defective (every known tool Missing), which is the
+// intended verdict: "the caller sent no policy map at all" must be a rejection,
+// never a silent replace-with-empty.
+//
+// V is constrained to ~string so the same function serves the plain
+// map[string]string the REST handlers normalize wire enums into, the generated
+// per-request enum types directly, and map[string]ToolPolicy alike.
+func ValidateSubmittedToolPolicyMap[V ~string](
+	submitted map[string]V,
+	knownTools map[string]struct{},
+) SubmittedToolPolicyDefects {
+	var defects SubmittedToolPolicyDefects
+	if len(knownTools) == 0 {
+		return defects
+	}
+	for toolName := range knownTools {
+		if _, ok := submitted[toolName]; !ok {
+			defects.Missing = append(defects.Missing, toolName)
+		}
+	}
+	for key := range submitted {
+		if _, ok := knownTools[key]; ok {
+			continue
+		}
+		if strings.HasPrefix(key, MCPToolPolicyKeyPrefix) {
+			continue // MCP carve-out (CLAUDE.md hard constraint 6, MCP exception)
+		}
+		defects.Invalid = append(defects.Invalid, key)
+	}
+	sort.Strings(defects.Missing)
+	sort.Strings(defects.Invalid)
+	return defects
+}
+
+// ValidateAgentOwnToolPolicyCoverage reports every (agent, tool) pair where an
+// agent that HAS its own builtin policy map is nonetheless missing an explicit
+// entry for a static builtin tool — i.e. the tool resolves for that agent from
+// the GLOBAL ceiling alone.
+//
+// This is deliberately a different question from ValidateToolPolicyCoverage,
+// which counts such a tool as fully covered (an entry on either side is enough,
+// exactly as CLAUDE.md hard constraint 6 words it: "global sandbox.tool_policies
+// and/or an agent's tools.builtin.policies"). Both readings are correct for
+// their own purpose, and the difference is why the boot-time coverage check
+// could not detect the failure UAT found live:
+//
+//   - Coverage (ValidateToolPolicyCoverage) asks "is this tool decidable at
+//     all?" — a genuine no-entry-anywhere hole would make the compositor fail
+//     closed to deny with an Error log, so it must abort boot.
+//   - Own-coverage (this function) asks "is this agent's own posture complete?"
+//     — a hole here is silently DECIDED BY THE CEILING, which on a default
+//     install is permissive ("allow" for most tools, pkg/config/defaults.go).
+//     An agent explicitly tightened to deny a tool, whose entry for that tool
+//     is then lost, silently becomes allowed. That is a real, observed
+//     regression (a `bash: deny` agent executing bash after a malformed
+//     tools-write emptied its map) and it is invisible to coverage validation.
+//
+// Agents with no Tools block at all are skipped: they never asserted a
+// per-agent posture, so riding the global ceiling for every tool is their
+// intended, documented configuration rather than a lost tightening. An agent
+// whose Tools block exists but whose Policies map is empty or partial IS
+// reported — an empty map is precisely the shape the malformed-body defect
+// produced.
+//
+// Pure and side-effect-free; returns every finding, sorted by (AgentID,
+// ToolName). Callers decide the disposition. The gateway boot/reload path logs
+// these at Error rather than aborting: the global ceiling is loaded from
+// config.json as-is with no merge against pkg/config/defaults.go, so every
+// future addition to the static tool catalog necessarily produces this state on
+// an already-installed system, and aborting on it would hard-brick every
+// upgrade. Making it loud and named is the enforceable half; making it fatal is
+// not, without a config migration marker that does not exist yet.
+func ValidateAgentOwnToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) []CoverageGap {
+	if cfg == nil || len(knownTools) == 0 {
+		return nil
+	}
+	var gaps []CoverageGap
+	for _, agentCfg := range cfg.Agents.List {
+		if agentCfg.Tools == nil {
+			continue // no per-agent posture asserted — global ceiling by design
+		}
+		agentPolicies := agentCfg.Tools.Builtin.Policies
+		for toolName := range knownTools {
+			if _, ok := agentPolicies[toolName]; ok {
+				continue
+			}
+			gaps = append(gaps, CoverageGap{AgentID: agentCfg.ID, ToolName: toolName})
+		}
+	}
+	sort.Slice(gaps, func(i, j int) bool {
+		if gaps[i].AgentID != gaps[j].AgentID {
+			return gaps[i].AgentID < gaps[j].AgentID
+		}
+		return gaps[i].ToolName < gaps[j].ToolName
+	})
+	return gaps
+}
+
 // RepairIncompleteToolPolicyCoverage backfills any missing tool-policy
 // coverage in cfg.Agents.List with explicit "deny" entries (the safe,
 // fail-closed direction) before ValidateToolPolicyCoverage is enforced.

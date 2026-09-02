@@ -8,6 +8,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
+// UAT batch2 S43 (docs/internal/qa/uat-report-full-tool-catalog-batch2-2026-09-02.md)
+// / UAT batch3 finding #4: set_todos is documented as core-agents-only, but
+// that restriction was never enforced in code, only by convention. The fix
+// (see Execute's IsCoreAgent/IsSubagentTierID gate in todos.go) refuses the
+// call for any agent ID that is neither the core roster nor the seeded
+// subagent tier. Every pre-existing test in this file used the fictitious
+// id "agent-a" as its acting agent — under the fix that id is correctly
+// refused, so every test below was updated to use "mia" (a real core-roster
+// id) instead, preserving what each test actually exercises (goal/todo
+// mechanics) rather than accidentally re-testing the new restriction by
+// omission. TestSetTodos_CoreAgentsOnly (below) is the restriction's own
+// dedicated test.
+
 // TestSetTodos_NewGoalCreatesTask proves that calling set_todos with a goal that
 // does not yet exist creates a board-visible task with that goal title, agentID,
 // and the supplied todos.
@@ -16,7 +29,7 @@ func TestSetTodos_NewGoalCreatesTask(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -31,7 +44,7 @@ func TestSetTodos_NewGoalCreatesTask(t *testing.T) {
 	}
 
 	// A board task must have been created.
-	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, err := store.List(task.Filter{AgentID: "mia"})
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
@@ -42,7 +55,7 @@ func TestSetTodos_NewGoalCreatesTask(t *testing.T) {
 	if tk.Title != "implement feature X" {
 		t.Errorf("expected title 'implement feature X', got %q", tk.Title)
 	}
-	if tk.AgentID != "agent-a" {
+	if tk.AgentID != "mia" {
 		t.Errorf("expected agent_id 'agent-a', got %q", tk.AgentID)
 	}
 	if len(tk.Todos) != 2 {
@@ -63,7 +76,7 @@ func TestSetTodos_SameGoalReplacesChecklist(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	// First call: 3 todos.
@@ -92,7 +105,7 @@ func TestSetTodos_SameGoalReplacesChecklist(t *testing.T) {
 	}
 
 	// Exactly one task must exist (no duplicate).
-	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, err := store.List(task.Filter{AgentID: "mia"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -112,7 +125,7 @@ func TestSetTodos_DifferentGoalCreatesSeparateTask(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	r1 := tool.Execute(ctx, map[string]any{
@@ -131,7 +144,7 @@ func TestSetTodos_DifferentGoalCreatesSeparateTask(t *testing.T) {
 		t.Fatalf("second set_todos: %s", r2.ForLLM)
 	}
 
-	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, err := store.List(task.Filter{AgentID: "mia"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -154,7 +167,7 @@ func TestSetTodos_InvalidStatusReturnsError(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -171,7 +184,7 @@ func TestSetTodos_InvalidStatusReturnsError(t *testing.T) {
 	}
 
 	// No task must have been persisted.
-	tasks, _ := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, _ := store.List(task.Filter{AgentID: "mia"})
 	if len(tasks) != 0 {
 		t.Errorf("expected no task created after validation error, got %d", len(tasks))
 	}
@@ -183,7 +196,7 @@ func TestSetTodos_EmptyTextReturnsError(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -207,7 +220,7 @@ func TestSetTodos_ReadOnWrite(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -249,7 +262,7 @@ func TestSetTodos_EmptyTodosClearsChecklist(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	// Seed a goal with one todo.
@@ -273,7 +286,7 @@ func TestSetTodos_EmptyTodosClearsChecklist(t *testing.T) {
 		t.Errorf("expected 'checklist cleared' in response, got: %s", r2.ForLLM)
 	}
 
-	tasks, _ := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, _ := store.List(task.Filter{AgentID: "mia"})
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task (goal still exists), got %d", len(tasks))
 	}
@@ -307,7 +320,7 @@ func TestSetTodos_DefaultStatusPending(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -320,7 +333,7 @@ func TestSetTodos_DefaultStatusPending(t *testing.T) {
 		t.Fatalf("set_todos with missing status: %s", result.ForLLM)
 	}
 
-	tasks, _ := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, _ := store.List(task.Filter{AgentID: "mia"})
 	if len(tasks) != 1 || len(tasks[0].Todos) != 1 {
 		t.Fatalf("expected 1 task with 1 todo, got %+v", tasks)
 	}
@@ -337,15 +350,15 @@ func TestSetTodos_DoesNotHijackRealTask(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	// Simulate a real create_task card: Scratchpad=false (default), same title.
 	realTask := &task.Task{
 		Title:       "implement feature X",
 		Action:      task.ActionLLM,
-		AgentID:     "agent-a",
-		CreatedBy:   "agent-a",
+		AgentID:     "mia",
+		CreatedBy:   "mia",
 		WorkspaceID: "ws-1",
 		Status:      task.StatusInProgress,
 		Priority:    3,
@@ -379,7 +392,7 @@ func TestSetTodos_DoesNotHijackRealTask(t *testing.T) {
 	}
 
 	// A SEPARATE scratchpad card must have been created.
-	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, err := store.List(task.Filter{AgentID: "mia"})
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
@@ -408,7 +421,7 @@ func TestSetTodos_NewGoalArchivesPriorScratchpad(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	// Create first scratchpad card.
@@ -421,7 +434,7 @@ func TestSetTodos_NewGoalArchivesPriorScratchpad(t *testing.T) {
 	}
 
 	// Capture the ID of the first card.
-	tasks1, _ := store.List(task.Filter{AgentID: "agent-a"})
+	tasks1, _ := store.List(task.Filter{AgentID: "mia"})
 	if len(tasks1) != 1 {
 		t.Fatalf("expected 1 task after first goal, got %d", len(tasks1))
 	}
@@ -446,7 +459,7 @@ func TestSetTodos_NewGoalArchivesPriorScratchpad(t *testing.T) {
 	}
 
 	// Only one ACTIVE scratchpad card must remain.
-	allTasks, _ := store.List(task.Filter{AgentID: "agent-a"})
+	allTasks, _ := store.List(task.Filter{AgentID: "mia"})
 	var activeScratchpad int
 	for _, tk := range allTasks {
 		if tk.Scratchpad && !task.IsTerminal(tk.Status) {
@@ -466,7 +479,7 @@ func TestSetTodos_AtomicCreate(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -480,7 +493,7 @@ func TestSetTodos_AtomicCreate(t *testing.T) {
 		t.Fatalf("set_todos failed: %s", result.ForLLM)
 	}
 
-	tasks, err := store.List(task.Filter{AgentID: "agent-a"})
+	tasks, err := store.List(task.Filter{AgentID: "mia"})
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
@@ -513,15 +526,15 @@ func TestSetTodos_ArchiveDoesNotTouchRealTasks(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewSetTodosTool(store)
 
-	ctx := WithAgentID(context.Background(), "agent-a")
+	ctx := WithAgentID(context.Background(), "mia")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	// Seed a real task (no Scratchpad flag).
 	realTask := &task.Task{
 		Title:       "real task alpha",
 		Action:      task.ActionLLM,
-		AgentID:     "agent-a",
-		CreatedBy:   "agent-a",
+		AgentID:     "mia",
+		CreatedBy:   "mia",
 		WorkspaceID: "ws-1",
 		Status:      task.StatusInProgress,
 		Priority:    3,
@@ -556,4 +569,79 @@ func TestSetTodos_ArchiveDoesNotTouchRealTasks(t *testing.T) {
 	if got.Status != task.StatusInProgress {
 		t.Errorf("real task status must remain in_progress, got %q", got.Status)
 	}
+}
+
+// TestSetTodos_CoreAgentsOnly is the dedicated regression test for UAT
+// batch2 S43 / batch3 finding #4: set_todos must refuse a non-core,
+// non-locked (i.e. genuinely custom/disposable) calling agent, and must
+// still work for both the core roster and the seeded subagent tier.
+func TestSetTodos_CoreAgentsOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("disposable custom agent is refused", func(t *testing.T) {
+		t.Parallel()
+		store := task.New(t.TempDir())
+		tool := NewSetTodosTool(store)
+
+		ctx := WithAgentID(context.Background(), "uat-s43-disposable-tester")
+		ctx = WithWorkspaceID(ctx, "ws-1")
+
+		result := tool.Execute(ctx, map[string]any{
+			"goal":  "should never be created",
+			"todos": []any{map[string]any{"text": "x", "status": "pending"}},
+		})
+		if !result.IsError {
+			t.Fatal("expected set_todos to be refused for a non-core, non-locked agent")
+		}
+		if !strings.Contains(result.ForLLM, "uat-s43-disposable-tester") {
+			t.Errorf("error should name the refused agent id, got: %s", result.ForLLM)
+		}
+		if !strings.Contains(strings.ToLower(result.ForLLM), "core") {
+			t.Errorf("error should explain the core-agents-only restriction, got: %s", result.ForLLM)
+		}
+
+		// No task must have been created — the refusal is a hard stop, not a
+		// silent partial write.
+		tasks, err := store.List(task.Filter{AgentID: "uat-s43-disposable-tester"})
+		if err != nil {
+			t.Fatalf("list tasks: %v", err)
+		}
+		if len(tasks) != 0 {
+			t.Errorf("expected no task created for a refused agent, got %d", len(tasks))
+		}
+	})
+
+	t.Run("core-roster agent is allowed", func(t *testing.T) {
+		t.Parallel()
+		store := task.New(t.TempDir())
+		tool := NewSetTodosTool(store)
+
+		ctx := WithAgentID(context.Background(), "ava")
+		ctx = WithWorkspaceID(ctx, "ws-1")
+
+		result := tool.Execute(ctx, map[string]any{
+			"goal":  "core roster goal",
+			"todos": []any{map[string]any{"text": "x", "status": "pending"}},
+		})
+		if result.IsError {
+			t.Fatalf("expected set_todos to succeed for core-roster agent 'ava': %s", result.ForLLM)
+		}
+	})
+
+	t.Run("seeded subagent-tier agent is allowed", func(t *testing.T) {
+		t.Parallel()
+		store := task.New(t.TempDir())
+		tool := NewSetTodosTool(store)
+
+		ctx := WithAgentID(context.Background(), "worker")
+		ctx = WithWorkspaceID(ctx, "ws-1")
+
+		result := tool.Execute(ctx, map[string]any{
+			"goal":  "subagent tier goal",
+			"todos": []any{map[string]any{"text": "x", "status": "pending"}},
+		})
+		if result.IsError {
+			t.Fatalf("expected set_todos to succeed for seeded subagent-tier agent 'worker': %s", result.ForLLM)
+		}
+	})
 }

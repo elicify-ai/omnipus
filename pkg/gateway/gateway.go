@@ -1343,6 +1343,49 @@ func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGa
 			"gaps", joinCoverageGapMessages(repaired),
 		)
 	}
+	// Report — loudly, by name — every agent that has its OWN policy map but is
+	// missing an explicit entry for a static builtin tool, so that tool resolves
+	// for it from the global ceiling alone.
+	//
+	// This is NOT what config.ValidateToolPolicyCoverage below measures, and the
+	// difference matters. Coverage counts a tool as covered when EITHER side has
+	// an entry, and pkg/config/defaults.go seeds the global ceiling with an
+	// explicit entry for the whole static catalog — so on a default install the
+	// coverage check reports zero gaps for every agent regardless of what that
+	// agent's own map contains, the repair above therefore has nothing to
+	// backfill, and the abort at the caller is unreachable. A UAT round
+	// (2026-09-02, batch 4 S84) read that as "boot-time validation does not
+	// abort on a real on-disk gap"; the validator does run and does abort, but
+	// only on a hole present on BOTH sides, which a seeded global ceiling makes
+	// practically impossible to reach.
+	//
+	// The state that IS dangerous — and was invisible until now — is the
+	// one-sided hole this scan names: the runtime merge is "one side is enough"
+	// (pkg/tools/compositor.go's resolveEffectivePolicyWith), so an agent
+	// deliberately tightened to deny a tool silently becomes ALLOWED the moment
+	// its own entry for that tool goes missing and the permissive ceiling
+	// decides alone.
+	//
+	// Logged at Error, not aborted: cfg.Sandbox.ToolPolicies is loaded from
+	// config.json verbatim (no merge against defaults.go), so any future
+	// addition to the static tool catalog necessarily puts every already-
+	// installed system into this state on first boot after upgrade. Aborting
+	// would hard-brick those upgrades. Making the state named and loud is the
+	// part that can be enforced today; a durable fix needs a config migration
+	// marker that does not exist yet.
+	if inherited := config.ValidateAgentOwnToolPolicyCoverage(cfg, knownTools); len(inherited) > 0 {
+		agentIDs := make(map[string]struct{}, len(inherited))
+		for _, gap := range inherited {
+			agentIDs[gap.AgentID] = struct{}{}
+		}
+		slog.Error("gateway: agent has no explicit tool-policy entry of its own for one or more static "+
+			"builtin tools; those tools resolve from the global sandbox.tool_policies ceiling alone, so any "+
+			"per-agent tightening for them is not in effect (CLAUDE.md hard constraint 6)",
+			"agent_count", len(agentIDs),
+			"inherited_count", len(inherited),
+			"details", joinCoverageGapMessages(inherited),
+		)
+	}
 	return config.ValidateToolPolicyCoverage(cfg, knownTools)
 }
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -42,6 +43,7 @@ func (t *SetTodosTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *SetTodosTool) Description() string {
 	return "Set your working scratchpad: a flat checklist of steps for the goal you're currently focused on. " +
+		"Core-agents-only (the base roster and the seeded, locked subagent tier) — refused for any other agent. " +
 		"Pass the FULL list every call (replace-semantics — no item IDs). " +
 		"Use this for the throwaway checklist of what you're doing this turn; " +
 		"use create_task + dependencies for a durable multi-wave plan. " +
@@ -96,6 +98,33 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	agentID := ToolAgentID(ctx)
 	if agentID == "" {
 		return ErrorResult("could not resolve acting agent")
+	}
+
+	// UAT batch2 S43 (docs/internal/qa/uat-report-full-tool-catalog-batch2-2026-09-02.md):
+	// set_todos is documented (CLAUDE.md, this tool's own Description) as a
+	// core-agents-only working scratchpad, but that restriction was never
+	// actually enforced in code — only by convention — so a non-core
+	// disposable agent could call it successfully. Refuse cleanly here
+	// rather than relying on tool policy alone: Scope()==ScopeCore already
+	// governs REACHABILITY (a custom agent needs an explicit non-deny
+	// policy entry to even have this tool registered/allowed), but does not
+	// itself guarantee "core agents only" the way this tool's own contract
+	// promises — an explicitly-granted custom agent would otherwise still
+	// get through. "Core or locked" covers every seed-only, non-custom
+	// agent id: coreagent.IsCoreAgent (the 4-base roster, Mia/Jim/Ava/Ray),
+	// IsSubagentTierID (the seeded, locked delegation-only tier — worker
+	// plus the specialists planner/explorer/researcher), and IsSystemAgentID
+	// (the Judge/PlanSupervisor System Agents — a THIRD category, disjoint
+	// from both of the above per core.go's own systemAgentIDs doc comment).
+	// None of the three covers a genuinely custom/disposable agent, which
+	// is exactly what this refuses.
+	agentCID := coreagent.CoreAgentID(agentID)
+	if !coreagent.IsCoreAgent(agentID) &&
+		!coreagent.IsSubagentTierID(agentCID) &&
+		!coreagent.IsSystemAgentID(agentCID) {
+		return ErrorResult(fmt.Sprintf(
+			"set_todos: %q is not a core or locked system agent — the working scratchpad is core-agents-only; "+
+				"use create_task instead", agentID))
 	}
 
 	// Parse the todos array from the raw args (arrives as []any of map[string]any).

@@ -1866,16 +1866,43 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// rolled-back reload.
 	oldFailed := append([]ChannelInitError(nil), m.failedChannels...)
 
-	// Scope the clear to only the channels being re-attempted (the added set).
-	// Entries for channels NOT in added are left intact so that an unchanged-but-
-	// still-failed channel continues to be reported as degraded. Entries in added
-	// are dropped here; initChannels will re-record a failure if they fail again.
+	// Scope the clear to (a) the channels being re-attempted (the added set)
+	// and (b) any channel that is no longer enabled in the NEW config at all.
+	// Entries for channels that are unchanged AND still enabled are left
+	// intact so that an unchanged-but-still-failed channel continues to be
+	// reported as degraded. Entries in added are dropped here; initChannels
+	// will re-record a failure if they fail again.
+	//
+	// (b) closes a real, reproduced defect: enable_channel("irc") with no
+	// credentials yet fails ITS PREREQUISITE CHECK before ever reaching
+	// initChannel — so it is NEVER hash-committed to m.channelHashes (the
+	// added-loop below deletes it from `list` on failure, same as a real
+	// construction failure). A channel that was never hash-committed can
+	// never appear in a later reload's `removed` diff either (compareChannels
+	// only emits `removed` for keys PRESENT in the old m.channelHashes) — so
+	// disable_channel("irc") afterward produces neither an `added` nor a
+	// `removed` entry for it, and the ORIGINAL added-only clear left its
+	// ChannelInitError orphaned in m.failedChannels forever. /health then
+	// reported "degraded" permanently, surviving every subsequent reload,
+	// because no future reload's added/removed diff could ever reach an
+	// instanceID that was never successfully committed in the first place —
+	// only a full gateway restart (which rebuilds m.failedChannels from
+	// scratch) cleared it. `list` here is toChannelHashes(cfg) — the set of
+	// instanceIDs enabled in the NEW config — computed above and not yet
+	// mutated by the added-loop's own `delete(list, n)` failure bookkeeping,
+	// so checking membership in it is exactly "is this channel enabled at
+	// all right now", independent of whether it was ever hash-committed.
+	// Disabling a channel is a clean state, never a degraded one, regardless
+	// of whether it was running, never-started, or already failed.
 	addedNames := make(map[string]struct{}, len(added))
 	for _, n := range added {
 		addedNames[n] = struct{}{}
 	}
 	kept := m.failedChannels[:0]
 	for _, f := range m.failedChannels {
+		if _, stillEnabled := list[f.Name]; !stillEnabled {
+			continue // no longer enabled in the new config — stale, drop it
+		}
 		if _, inAdded := addedNames[f.Name]; !inAdded {
 			kept = append(kept, f)
 		}
@@ -1902,9 +1929,35 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		// a degraded failure, drop the hash so the channel is re-attempted on the next
 		// reload, and continue — a single missing channel must NEVER take down the bus.
 		if channel == nil {
-			m.recordChannelFailure(n, n, fmt.Errorf(
+			// Give a specific, actionable reason when this is the ordinary,
+			// well-understood case of an enabled channel that simply hasn't
+			// been configured yet (initChannels's prerequisite-checker branch
+			// skips construction silently rather than erroring, so from here
+			// the only signal is that m.channels[n] never got populated).
+			// Falling back to the generic "config/registration name mismatch
+			// or skipped init" text for THIS case reads as an internal bug to
+			// whoever is troubleshooting it, when it is normal, expected
+			// behavior for "enable_channel called before configure_channel".
+			// Reserve the generic text for the case it actually describes: a
+			// genuinely unexpected nil registration with no missing
+			// prerequisite to explain it.
+			reason := fmt.Errorf(
 				"reload: channel %q was marked for start but is not registered "+
-					"(config/registration name mismatch or skipped init)", n))
+					"(config/registration name mismatch or skipped init)", n)
+			if inst, ok := cc[n]; ok {
+				instType := inst.Type
+				if instType == "" {
+					instType = n
+				}
+				if checker, hasChecker := getPrerequisite(instType); hasChecker {
+					if missing, prereqOK := checker(inst); !prereqOK {
+						reason = fmt.Errorf(
+							"channel %q is enabled but missing required configuration (%s) — "+
+								"configure it, then it will connect on the next reload", n, missing)
+					}
+				}
+			}
+			m.recordChannelFailure(n, n, reason)
 			delete(list, n)
 			continue
 		}

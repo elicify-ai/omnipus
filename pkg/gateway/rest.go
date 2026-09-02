@@ -2809,6 +2809,37 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// has no tools_cfg property at all (toolsCfgIn stays nil), so it always
 	// falls through to the seeded baseCfg — matching "the runner has its own
 	// tools" (field matrix).
+	//
+	// CLAUDE.md hard constraint 6 — validate the CALLER'S OWN map FIRST, before
+	// the deny-seeded baseline below is allowed to paper over it.
+	//
+	// This check has to happen here, and not (only) via the
+	// config.ValidateToolPolicyCoverage guard further down, because of the
+	// merge that follows: the handler starts from the fully-enumerated
+	// coreagent.NewCustomAgentToolsCfg() seed and copies the caller's entries
+	// ON TOP of it. A tool the caller omitted is therefore silently backfilled
+	// from the seed before the coverage check ever runs, so that check can
+	// structurally never observe a caller-side gap on this path — it was dead
+	// code for POST /agents. Reproduced live (UAT 2026-09-02, batch 3 S48 /
+	// batch 4 S83): a create omitting `bash` entirely returned 201, and a
+	// create carrying a literal "*" key returned 201 with the wildcard stored
+	// inertly alongside the real entries, because the merge loop copied every
+	// caller key verbatim with no check that it names a real tool.
+	//
+	// Only runs when the caller actually submitted a builtin policy map. A
+	// request with no tools_cfg at all (or a tools_cfg carrying only `mcp`)
+	// legitimately falls through to the server-generated, complete, deny-seeded
+	// baseline — that is not a caller gap, and subagent_3p has no tools_cfg on
+	// the wire at all.
+	if toolsCfgIn != nil && toolsCfgIn.BuiltinPolicies != nil {
+		if defects := config.ValidateSubmittedToolPolicyMap(
+			toolsCfgIn.BuiltinPolicies, buildKnownBuiltinToolNames(),
+		); !defects.Empty() {
+			jsonErr(w, http.StatusBadRequest,
+				"tools_cfg.builtin.policies "+defects.String())
+			return
+		}
+	}
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
 	if toolsCfgIn != nil {
 		builtin := config.AgentBuiltinToolsCfg{
@@ -3581,6 +3612,24 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// on) never reaches either, so without a rebuild the two ladders would
 	// keep disagreeing exactly as this bug fix set out to close.
 	var defaultAgentIDChanged bool
+	// CLAUDE.md hard constraint 6 — same caller-side completeness check
+	// createAgent performs, for the same reason: a tools_cfg.builtin sent here
+	// REPLACES the agent's builtin policy map wholesale, so an incomplete map
+	// silently drops the agent's own tightening for every omitted tool and
+	// leaves it inheriting the (typically permissive) global ceiling at
+	// resolution time. config.ValidateToolPolicyCoverage below cannot catch
+	// that: it counts a tool as covered when EITHER side has an entry, and the
+	// seeded global map covers the whole catalog. Reproduced live (UAT
+	// 2026-09-02, batch 4 S83): a PUT omitting `stop_plan` returned 200.
+	if req.ToolsCfg != nil && req.ToolsCfg.Builtin != nil {
+		if defects := config.ValidateSubmittedToolPolicyMap(
+			req.ToolsCfg.Builtin.Policies, buildKnownBuiltinToolNames(),
+		); !defects.Empty() {
+			jsonErr(w, http.StatusBadRequest,
+				"tools_cfg.builtin.policies "+defects.String())
+			return
+		}
+	}
 	if req.ToolsCfg != nil {
 		toolsCoverageMutate = func(c *config.Config) {
 			// Search by ID against the FRESHLY-fetched clone — never the
@@ -8065,6 +8114,37 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
+	// CLAUDE.md hard constraint 6 — a body carrying no `builtin` object at all
+	// is REJECTED, never treated as "replace the agent's policy map with
+	// nothing".
+	//
+	// This endpoint fully replaces the agent's builtin tools config on persist
+	// (see the updateConfigJSONLocked closure below). Before this guard, a body
+	// missing the required `builtin` wrapper — e.g. {"policies": {...}}, the
+	// shape a client that assumed a PATCH-style partial update would send —
+	// left builtinPolicies nil, and the persist closure then wrote
+	// `"tools": {"builtin": {}, "mcp": {}}`: a completely empty policy map,
+	// with a 200 OK and no indication anything was wrong.
+	//
+	// That empty state does NOT fail closed. Runtime resolution is a
+	// strictest-wins merge where one side is enough
+	// (pkg/tools/compositor.go's resolveEffectivePolicyWith), so every tool
+	// then resolved to the GLOBAL ceiling value alone — mostly "allow". The
+	// coverage guard further down could not catch it either, because
+	// config.ValidateToolPolicyCoverage counts a tool as covered when either
+	// the global map or the agent map has an entry, and the seeded global map
+	// covers the entire static catalog on a default install. Reproduced live
+	// (UAT 2026-09-02, batch 2): an agent explicitly policied `bash: deny` and
+	// `list_providers: deny` executed BOTH successfully after one such
+	// malformed request. This is the one defect of the three that failed in
+	// the ALLOW direction, so it is rejected here at the earliest possible
+	// point, before any normalization can make a partial body look valid.
+	if req.Builtin == nil {
+		jsonErr(w, http.StatusBadRequest,
+			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
+				"so a body with no \"builtin\" object is rejected rather than persisted as an empty policy")
+		return
+	}
 	// Extract builtin fields. There is no default_policy field on the wire
 	// any more (CLAUDE.md hard constraint 6).
 	var builtinPolicies map[string]string
@@ -8104,6 +8184,23 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
 			return
 		}
+	}
+
+	// CLAUDE.md hard constraint 6 — the resolved map (after the legacy
+	// mode/visible conversion above) IS this agent's prospective complete
+	// per-agent policy map, because the persist closure below replaces
+	// Tools.Builtin wholesale. Reject an incomplete map, or one carrying a
+	// wildcard/unrecognized key, right here — the coverage guard further down
+	// cannot see either defect (the seeded global ceiling covers the whole
+	// catalog, so it reports zero gaps for any agent-side map, empty included).
+	// This also gives the documented 400 for the legacy mode="explicit" +
+	// visible[] shape sent alone, exactly as
+	// contracts/components/schemas/AgentToolsUpdateRequest.yaml describes.
+	if defects := config.ValidateSubmittedToolPolicyMap(
+		builtinPolicies, buildKnownBuiltinToolNames(),
+	); !defects.Empty() {
+		jsonErr(w, http.StatusBadRequest, "builtin.policies "+defects.String())
+		return
 	}
 
 	// Validate MCP server IDs reference configured servers. Computed before
@@ -8248,9 +8345,23 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// pipeline wired) as a no-op, so a non-nil error here is always a genuine
 	// reload failure. This is a fail-open authorization path — returning 200
 	// while the rebuild is still queued means a tool freshly bumped to
-	// "deny"/"ask" keeps executing as "allow" for the duration — so the
-	// confirmed bool below also surfaces an unconfirmed (timed-out) reload as
-	// a warning rather than silently claiming success.
+	// "deny"/"ask" keeps executing as "allow" for the duration.
+	//
+	// UAT batch3 S67 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+	// finding #4): before this fix, an unconfirmed-but-error-free reload
+	// (confirmed=false, err=nil) fell through to a 200 with only a
+	// server-side Warn log — a caller had no way to know the tool-policy
+	// tightening they just requested (e.g. create_skill allow/deny -> ask)
+	// might not be enforced yet, and a tool call dispatched immediately
+	// after could still run under the STALE, more permissive snapshot. This
+	// mirrors waitForReload's OWN documented incident ("Persisted-but-not-
+	// live is a real, caller-visible state and it has to surface as one") —
+	// putToolPolicies (the global tool-policy PUT) already treats an
+	// unconfirmed reload as a hard failure via triggerReloadAndWait; this
+	// per-agent endpoint used the richer Outcome variant specifically to
+	// distinguish the two cases, then silently discarded the distinction.
+	// Now both variants agree: an unconfirmed reload is never reported as a
+	// plain, unqualified success.
 	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("agent tools update: reload failed — in-memory policy not updated",
 			"agent_id", agentID, "error", err)
@@ -8267,8 +8378,21 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
 	} else if !confirmed {
-		slog.Warn("rest: agent tools update: reload did not confirm within the poll window; "+
+		slog.Error("rest: agent tools update: reload did not confirm within the poll window; "+
 			"in-memory tool policy may not yet reflect the new config", "agent_id", agentID)
+		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			if auditErr := audit.EmitSecuritySettingChange(
+				r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": agentID, "saved": true},
+				map[string]any{"agent_id": agentID, "reload_error": "reload did not confirm within the poll window"},
+			); auditErr != nil {
+				slog.Error("rest: audit emit agent tools reload unconfirmed", "error", auditErr)
+			}
+		}
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but the in-memory reload did not confirm within the wait window; "+
+				"the new tool policy may not be enforced yet — retry or restart the gateway")
+		return
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match

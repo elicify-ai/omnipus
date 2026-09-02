@@ -143,6 +143,17 @@ func copyEmbeddedSkill(name, destSkillDir string) error {
 		return walkErr
 	}
 
+	// UAT batch3 S68 (see authoring.go's builtinMarkerFile doc comment): stamp
+	// the pristine-builtin provenance marker alongside SKILL.md, inside the
+	// same staging directory that gets atomically renamed into place below —
+	// so the marker and the seeded content always appear together, never one
+	// without the other, and EditSkill can tell "this is still the shipped
+	// built-in, never edited" from "this is a genuine prior user override"
+	// without relying on mere file existence.
+	if err := os.WriteFile(filepath.Join(tmpDir, builtinMarkerFile), []byte{}, 0o644); err != nil {
+		return fmt.Errorf("write builtin marker: %w", err)
+	}
+
 	if err := os.Rename(tmpDir, destSkillDir); err != nil {
 		return fmt.Errorf("commit staged skill: %w", err)
 	}

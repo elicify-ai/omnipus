@@ -96,13 +96,26 @@ func TestCreateAgent_Bash_CallerOverrideRespected(t *testing.T) {
 
 	// There is no default_policy field on the wire any more (CLAUDE.md hard
 	// constraint 6) — createAgent's strict decode (decodeAgentCreateVariant,
-	// DisallowUnknownFields, independent of ValidateInbound) now rejects a
-	// stray "default_policy" key inside tools_cfg.builtin with 400, so it must
-	// not appear here. The caller-supplied "policies" map is merged on top of
-	// the seeded deny-all baseline (coreagent.NewCustomAgentToolsCfg), which
-	// is what makes bash:allow reachable without listing every other tool.
+	// DisallowUnknownFields, independent of ValidateInbound) rejects a stray
+	// "default_policy" key inside tools_cfg.builtin with 400, so it must not
+	// appear here.
+	//
+	// CONTRACT CHANGE (2026-09-02): this body used to be the SPARSE
+	// `{"bash":"allow"}` map, relying on createAgent merging it on top of the
+	// deny-seeded baseline. That merge ran BEFORE validation, which is exactly
+	// how a caller-side gap became structurally undetectable — a live UAT round
+	// created an agent with `bash` omitted entirely and got 201, with the
+	// server silently filling a value nobody sent. A submitted policy map is
+	// now validated for completeness before any merge, so the caller must
+	// enumerate the whole static catalog explicitly.
+	//
+	// The claim this test makes is UNCHANGED and still exercised: the seed is a
+	// default, not a hard rail — a caller who explicitly says bash:allow gets
+	// allow, and every tool they left at deny stays denied.
+	policies := fullBuiltinPolicyMap("deny")
+	policies["bash"] = "allow"
 	body := `{"name":"Bash Enabled Bot","type":"Main","description":"Needs bash","soul":"s",` +
-		`"tools_cfg":{"builtin":{"policies":{"bash":"allow"}}}}`
+		`"tools_cfg":{"builtin":{"policies":` + mustPolicyJSON(t, policies) + `}}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -131,5 +144,5 @@ func TestCreateAgent_Bash_CallerOverrideRespected(t *testing.T) {
 	// equivalent "untouched" check is any other real tool name that stays at
 	// its seeded deny default.
 	require.Equal(t, config.ToolPolicyDeny, newAgent.Tools.Builtin.Policies["delete_agent"],
-		"unrelated seed entries must survive a partial caller override")
+		"a tool the caller left at deny must stay denied")
 }

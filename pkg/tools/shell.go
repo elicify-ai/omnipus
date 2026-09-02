@@ -2015,6 +2015,32 @@ func (t *ExecTool) runBackground(
 	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
 	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
 
+	// naturalCompletionCh is closed by the completion goroutine below the
+	// instant it has recorded a terminal status for the session (whatever
+	// that status turns out to be), so the timeout-guard goroutine can bail
+	// out instead of firing its stale timer against an already-finished
+	// session. Without this, S10 (UAT full-tool-catalog batch1, 2026-09-02,
+	// §2.2): the timeout timer below is scheduled once, at session start, for
+	// timeoutSeconds regardless of how quickly the command actually
+	// finishes — a command that completes in 2 seconds under a 300s default
+	// timeout leaves this goroutine asleep until t=300s and STILL fires then.
+	// KillAndRelabel's statusPriority "upgrade" rule (session.go) — meant for
+	// a genuine near-simultaneous race between two callers relabeling the
+	// SAME dying process — cannot tell that race apart from this stale-timer
+	// case, so it happily overwrites the correct, minutes-old StatusDone
+	// (priority 1) with StatusTimeout (priority 2): a poll issued before the
+	// timer fires correctly reports "done", and a read issued moments after
+	// it fires reports "timeout" with no output (the field is empty in the
+	// upgrade branch — only Status is rewritten, and by then the buffer may
+	// already have been drained) — self-contradictory to a caller and
+	// factually wrong, since the command was never killed for exceeding its
+	// budget. Closing this channel as soon as the process's real fate is
+	// known removes the false-positive path entirely while leaving the
+	// genuine boundary race (natural exit and timer firing within the same
+	// instant) exactly as before: KillAndRelabel's priority tie-breaking
+	// still decides that case correctly.
+	naturalCompletionCh := make(chan struct{})
+
 	// FR-B3: enforce timeout_seconds identically for background as for
 	// foreground. Fires session.KillAndRelabel(StatusTimeout) (the same kill
 	// primitive SessionManager.KillAllForSession uses, atomically relabeled
@@ -2025,7 +2051,13 @@ func (t *ExecTool) runBackground(
 		go func() {
 			timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
 			defer timer.Stop()
-			<-timer.C
+			select {
+			case <-naturalCompletionCh:
+				// The session already reached a terminal status (done, killed,
+				// or canceled) before the timer fired — nothing to enforce.
+				return
+			case <-timer.C:
+			}
 			if killErr := session.KillAndRelabel(StatusTimeout); killErr != nil {
 				if !errors.Is(killErr, ErrSessionDone) {
 					slog.Warn("bash: background timeout kill failed",
@@ -2074,6 +2106,12 @@ func (t *ExecTool) runBackground(
 		// drain this same buffered output (Reset is session.Read()'s job).
 		outputSoFar := session.outputBuffer.String()
 		session.mu.Unlock()
+
+		// Stop the timeout guard now that the session's real fate is settled
+		// — see naturalCompletionCh's doc comment above. Safe to close
+		// unconditionally even when no timeout goroutine was started
+		// (timeoutSeconds <= 0): nothing ever selects on it in that case.
+		close(naturalCompletionCh)
 
 		if cb != nil {
 			cb(context.Background(), backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar))

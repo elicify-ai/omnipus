@@ -131,7 +131,28 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 	// Resolved from the turn, never from a model-supplied parameter, so the
 	// model cannot aim a grant at another workspace.
+	//
+	// ToolWorkspaceID alone is NOT sufficient — see list_mounts.go's Execute
+	// doc comment (this tool's read-side counterpart) and
+	// ResolveTurnFSPolicy's identical fallback in resolvepath.go. A
+	// CLI/ProcessDirect turn, a scheduled/heartbeat turn, and (per the
+	// UAT-confirmed live repro) an ordinary chat turn whose channel binding
+	// never set ts.opts.WorkspaceID all leave ToolWorkspaceID(ctx) empty even
+	// though the agent's CoreTeam membership unambiguously determines its
+	// workspace — and that same turn's work dir is already re-rooted into
+	// that workspace, and list_mounts already reports mounts against it via
+	// this exact fallback ("workspace_resolved_from":"agent_membership").
+	// Without this fallback, request_mount refused every mount request on
+	// such a turn even though list_mounts, ResolveTurnFSPolicy, and every
+	// other write-path consumer agreed on the workspace — a discovery/enforce
+	// mismatch (a tool that can never succeed) rather than a genuine "no
+	// workspace" state. Resolve the SAME way, so the three never disagree.
 	workspaceID := ToolWorkspaceID(ctx)
+	if workspaceID == "" {
+		if wsID, found := workspace.FindForAgentPreferring(t.homePath, ToolAgentID(ctx), ""); found {
+			workspaceID = wsID
+		}
+	}
 	if workspaceID == "" {
 		return ErrorResult("request_mount: this turn has no workspace to mount into")
 	}

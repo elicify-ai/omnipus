@@ -9,14 +9,27 @@ package systools_test
 //
 // The old A4 guard ("status=active only via /start") has been REMOVED in Sprint
 // 2: the new store accepts any of the 6 valid statuses without a transition
-// machine. Invalid status values (not in the 6-state vocab) are silently ignored
-// by the update tool — the tool still returns success, but the status is left
-// unchanged. This file verifies that behavior.
+// machine.
+//
+// UAT batch3 S58 fix (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+// finding #2): an invalid status value (not in the 6-state vocab) used to be
+// SILENTLY IGNORED by the update tool — success with no error, status left
+// unchanged, no way for the caller to tell their request was dropped. That
+// is a HIGH-severity UAT-confirmed defect, not intended behavior: it
+// diverged from TaskCreateTool.Execute's own explicit rejection of the same
+// input. The tool now rejects an unrecognized status with INVALID_INPUT,
+// mirroring TaskCreateTool exactly (same message shape, same enumerated
+// list). TestSysagentTaskUpdate_InvalidStatusIgnored and
+// TestSysagentTaskUpdate_RemovedPlanningStatusIgnored below were rewritten
+// in place (not deleted) to pin the corrected, rejecting behavior — their
+// original "silently ignored" assertions were the pre-fix bug, not a
+// legitimate contract to preserve.
 //
 // Deleted: TestSysagentTaskUpdate_A4_StatusActiveRejected — the A4 guard that
 // rejected status="active" was removed when the 7-state vocabulary (since
 // reduced to 6-state, ADR-051 D5) replaced the old board vocab; "active" is
-// simply not in the enum, so it is ignored.
+// simply not in the enum, so it is now rejected as unrecognized (see above),
+// not silently accepted.
 // Deleted: TestSysagentTaskUpdate_A4_Differentiation — same reason.
 
 import (
@@ -55,24 +68,29 @@ func seedWorkspace(t *testing.T, home, id string) {
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, id+".json"), data, 0o600))
 }
 
-// TestSysagentTaskUpdate_InvalidStatusIgnored verifies that an invalid status
-// value (one not in the 6-state vocabulary, ADR-051 D5) is silently ignored:
-// the tool returns IsError=false and the task's on-disk status is unchanged.
+// TestSysagentTaskUpdate_InvalidStatusRejected verifies that an invalid
+// status value (one not in the 6-state vocabulary, ADR-051 D5) is REJECTED
+// with a clear INVALID_INPUT error: the tool returns IsError=true and the
+// task's on-disk status is left unchanged.
 //
 // BDD:
 //
 //	Given a task in status=inbox,
 //	When system.task.update is called with {"id":..., "status":"active"},
-//	Then the result has IsError=false (no guard error — invalid status is ignored),
+//	Then the result has IsError=true, naming the unrecognized status and the
+//	  6 valid values,
 //	And the task's on-disk status is still "inbox".
 //
-// Traces to: Sprint-2 unified task store — invalid status silently ignored
-// (isValidTaskStatus gate in task.go Execute).
-func TestSysagentTaskUpdate_InvalidStatusIgnored(t *testing.T) {
+// Traces to: UAT batch3 S58 (finding #2) — TaskUpdateTool.Execute's status
+// branch used to have no else clause for an unrecognized value, silently
+// no-opping instead of erroring like TaskCreateTool.Execute does for the
+// identical input. Renamed from *_InvalidStatusIgnored (the old, pre-fix
+// name pinned the bug itself).
+func TestSysagentTaskUpdate_InvalidStatusRejected(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
 	const taskID = "01JXSTATUSGUARD_INVAL0001"
-	// "active" is NOT in the 6-state vocab: it is silently ignored by the new tool.
+	// "active" is NOT in the 6-state vocab.
 	seedTask(t, home, taskID, "WriteTests", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
@@ -81,23 +99,28 @@ func TestSysagentTaskUpdate_InvalidStatusIgnored(t *testing.T) {
 		"status": "active",
 	})
 
-	// The tool no longer guards against "active" — it simply skips it.
-	assert.False(t, result.IsError,
-		"system.task.update with an unknown status must NOT return IsError (invalid status is silently ignored)")
+	require.True(t, result.IsError,
+		"system.task.update with an unknown status MUST return IsError — a silent no-op hides the failed request")
+	assert.Contains(t, result.ForLLM, "active",
+		"error message must name the rejected status value")
+	assert.Contains(t, result.ForLLM, "inbox, next, blocked, done, failed",
+		"error message must enumerate the valid status values, mirroring TaskCreateTool")
 
 	// On-disk status must remain "inbox" (the invalid status was not applied).
 	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, taskID),
-		"on-disk status must still be 'inbox' — the invalid status was silently ignored")
+		"on-disk status must still be 'inbox' — the rejected status must not be applied")
 }
 
-// TestSysagentTaskUpdate_RemovedPlanningStatusIgnored verifies that the
+// TestSysagentTaskUpdate_RemovedPlanningStatusRejected verifies that the
 // removed "planning" status (ADR-051 D5) is treated exactly like any other
-// unknown status value by the sysagent update tool: silently ignored, not
-// applied, no error. Canary catching a regression that re-introduces
-// "planning" as a live status.
+// unknown status value by the sysagent update tool: rejected with
+// IsError=true, not applied. Canary catching a regression that re-introduces
+// "planning" as a live status OR reverts to the pre-fix silent-ignore
+// behavior.
 //
-// Traces to: pkg/task/task.go validStatuses (ADR-051 D5 removed StatusPlanning).
-func TestSysagentTaskUpdate_RemovedPlanningStatusIgnored(t *testing.T) {
+// Traces to: pkg/task/task.go validStatuses (ADR-051 D5 removed StatusPlanning);
+// UAT batch3 S58 (finding #2).
+func TestSysagentTaskUpdate_RemovedPlanningStatusRejected(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
 	const taskID = "01JXSTATUSGUARD_PLAN0001"
@@ -109,10 +132,10 @@ func TestSysagentTaskUpdate_RemovedPlanningStatusIgnored(t *testing.T) {
 		"status": "planning",
 	})
 
-	assert.False(t, result.IsError,
-		"system.task.update with status=planning must NOT return IsError (invalid status is silently ignored)")
+	require.True(t, result.IsError,
+		"system.task.update with status=planning MUST return IsError — it is not a valid status")
 	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, taskID),
-		"on-disk status must still be 'inbox' — the removed 'planning' status was silently ignored, not applied")
+		"on-disk status must still be 'inbox' — the removed 'planning' status must not be applied")
 }
 
 // TestSysagentTaskUpdate_ValidStatusApplied verifies that a valid 6-state status
@@ -342,6 +365,76 @@ func TestSysagentTaskUpdate_InProgressForgeRejected(t *testing.T) {
 			"a same-status resend on an already in_progress task must not be rejected: %s", resendResult.ForLLM)
 		assert.Equal(t, task.StatusInProgress, diskTaskStatus(t, home, taskID))
 	})
+}
+
+// TestSysagentTaskUpdate_WorkspaceIDUpdatedFieldsAccurate verifies the
+// second half of UAT batch3 S58 (finding #2): `updated_fields` must list
+// "workspace_id" only when the value genuinely changed the task's
+// workspace, not merely because the caller resupplied the key (including an
+// unchanged value).
+//
+// BDD:
+//
+//	Given a task already in workspace A,
+//	When system.task.update resupplies workspace_id=A (the SAME value),
+//	Then `updated_fields` does NOT contain "workspace_id" (nothing changed),
+//	And the task's on-disk workspace_id is still A;
+//	When a later call supplies workspace_id=B (a DIFFERENT, real workspace),
+//	Then `updated_fields` DOES contain "workspace_id",
+//	And the task's on-disk workspace_id is now B.
+func TestSysagentTaskUpdate_WorkspaceIDUpdatedFieldsAccurate(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	const workspaceA = "01JXTESTWORKSPACEAAAA0001"
+	const workspaceB = "01JXTESTWORKSPACEBBBB0001"
+	seedWorkspace(t, home, workspaceA)
+	seedWorkspace(t, home, workspaceB)
+
+	const taskID = "01JXSTATUSGUARD_WSID0001"
+	writeTask(t, home, task.Task{
+		ID: taskID, Title: "move me maybe", Status: task.StatusInbox,
+		WorkspaceID: workspaceA,
+	})
+
+	tool := systools.NewTaskUpdateTool(deps)
+
+	// Resupplying the SAME workspace_id must be a no-op: not listed in
+	// updated_fields, and no write performed.
+	sameResult := tool.Execute(callerCtx("caller-agent"), map[string]any{
+		"id":           taskID,
+		"workspace_id": workspaceA,
+	})
+	require.False(t, sameResult.IsError, "resupplying the same workspace_id must succeed: %s", sameResult.ForLLM)
+
+	var sameResp struct {
+		UpdatedFields []string `json:"updated_fields"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(sameResult.ForLLM), &sameResp))
+	assert.NotContains(t, sameResp.UpdatedFields, "workspace_id",
+		"updated_fields must NOT list workspace_id when the resupplied value did not change anything")
+
+	store := task.New(filepath.Join(home, "tasks"))
+	afterSame, err := store.Get(taskID)
+	require.NoError(t, err)
+	assert.Equal(t, workspaceA, afterSame.WorkspaceID, "workspace_id must remain A after the no-op resend")
+
+	// Supplying a GENUINELY DIFFERENT workspace_id must be reported and applied.
+	moveResult := tool.Execute(callerCtx("caller-agent"), map[string]any{
+		"id":           taskID,
+		"workspace_id": workspaceB,
+	})
+	require.False(t, moveResult.IsError, "moving to a different workspace must succeed: %s", moveResult.ForLLM)
+
+	var moveResp struct {
+		UpdatedFields []string `json:"updated_fields"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(moveResult.ForLLM), &moveResp))
+	assert.Contains(t, moveResp.UpdatedFields, "workspace_id",
+		"updated_fields must list workspace_id when the task's workspace genuinely changed")
+
+	afterMove, err := store.Get(taskID)
+	require.NoError(t, err)
+	assert.Equal(t, workspaceB, afterMove.WorkspaceID, "workspace_id must be B after the genuine move")
 }
 
 // TestSysagentTaskUpdate_Differentiation verifies that two different valid

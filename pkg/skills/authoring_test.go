@@ -139,6 +139,110 @@ func TestSkillEdit_BuiltinOverride(t *testing.T) {
 	}
 }
 
+// TestSkillEdit_BuiltinMaterializedOntoWriterRoot_NeverMutatedInPlace
+// reproduces UAT batch3 S68 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+// finding #3): in this install, SeedDefaults (embed.go) materializes every
+// built-in skill onto the SAME directory the SkillWriter is rooted at
+// (pkg/gateway/gateway.go seeds skillsGlobalDir, and NewSkillWriter is
+// rooted at that same skillsGlobalDir) — unlike
+// TestSkillEdit_BuiltinOverride above, which stages the built-in in a
+// SEPARATE builtinRoot and therefore never exercises this collision.
+//
+// Before the fix, EditSkill inferred "this is a genuine prior user
+// override" from the mere existence of SKILL.md at the writer-root path —
+// which SeedDefaults's materialization satisfies for every built-in on a
+// fresh install, before any user has ever touched it. Editing the built-in
+// therefore silently overwrote it in place and reported
+// created_override:false, contradicting edit_skill's own documented
+// contract. This test asserts the fixed contract holds: editing a
+// still-pristine built-in reports created_override:true, its original
+// content survives unchanged in a .versions/ snapshot, the live file now
+// serves the edited content ("used instead"), and a SECOND edit of the same
+// (now genuinely local) skill correctly reports created_override:false.
+func TestSkillEdit_BuiltinMaterializedOntoWriterRoot_NeverMutatedInPlace(t *testing.T) {
+	globalRoot := t.TempDir()
+
+	// Materialize a built-in exactly as SeedDefaults/copyEmbeddedSkill does
+	// (embed.go): SKILL.md and the pristine-builtin marker land together,
+	// directly in the writer's own root — same-package access to
+	// builtinMarkerFile lets this test simulate that seeding step without
+	// depending on the actual go:embed fixture set (summarize/plan/…),
+	// keeping the fixture name and content deliberately distinct fixture
+	// values (Dataset rule: never reuse a real production skill name here).
+	builtinSkillDir := filepath.Join(globalRoot, "summarize-fixture")
+	if err := os.MkdirAll(builtinSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalContent := []byte(validFor("summarize-fixture"))
+	if err := os.WriteFile(filepath.Join(builtinSkillDir, "SKILL.md"), originalContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(builtinSkillDir, builtinMarkerFile), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewSkillWriter(globalRoot)
+
+	edited := "---\nname: summarize-fixture\ndescription: A user-edited summarize fixture, long enough to validate.\n---\n\n# summarize-fixture\n\nUser-edited body.\n"
+	path, createdOverride, editErr := w.EditSkill("summarize-fixture", edited, true /* allowCreateOverride */)
+	if editErr != nil {
+		t.Fatalf("EditSkill (first edit of pristine built-in): %v", editErr)
+	}
+	if !createdOverride {
+		t.Errorf("first edit of a still-pristine built-in must report created_override=true, got false")
+	}
+	if !strings.HasPrefix(path, globalRoot) {
+		t.Errorf("override written outside global root: %s", path)
+	}
+
+	// The ORIGINAL content must be preserved, unchanged, in a .versions/
+	// snapshot — recoverable even though the live file now holds the edit.
+	vers, verErr := w.ListVersions("summarize-fixture")
+	if verErr != nil {
+		t.Fatalf("ListVersions: %v", verErr)
+	}
+	if len(vers) != 1 {
+		t.Fatalf("expected exactly 1 snapshot after the first edit, got %d (%v)", len(vers), vers)
+	}
+	snap, snapErr := w.ReadVersion("summarize-fixture", vers[0])
+	if snapErr != nil {
+		t.Fatalf("ReadVersion: %v", snapErr)
+	}
+	if snap != string(originalContent) {
+		t.Errorf("preserved snapshot does not match the original built-in content byte-for-byte\nwant:\n%s\ngot:\n%s",
+			originalContent, snap)
+	}
+
+	// The live file now serves the edited content instead — "a new override
+	// is created and used instead".
+	live, liveErr := os.ReadFile(filepath.Join(globalRoot, "summarize-fixture", "SKILL.md"))
+	if liveErr != nil {
+		t.Fatal(liveErr)
+	}
+	if !strings.Contains(string(live), "User-edited body.") {
+		t.Errorf("live SKILL.md does not serve the edited content")
+	}
+	loader := NewSkillsLoader("", globalRoot, t.TempDir())
+	body, ok := loader.LoadSkill("summarize-fixture")
+	if !ok {
+		t.Fatal("loader could not load summarize-fixture after the edit")
+	}
+	if !strings.Contains(body, "User-edited body.") {
+		t.Errorf("loader returned stale content, not the edit")
+	}
+
+	// A SECOND edit of the same skill is now a genuine local-override edit —
+	// created_override must be false (the marker was consumed by the first edit).
+	secondEdit := "---\nname: summarize-fixture\ndescription: A second user edit, also long enough to validate cleanly.\n---\n\n# summarize-fixture\n\nSecond edit.\n"
+	_, createdOverride2, editErr2 := w.EditSkill("summarize-fixture", secondEdit, true)
+	if editErr2 != nil {
+		t.Fatalf("EditSkill (second edit): %v", editErr2)
+	}
+	if createdOverride2 {
+		t.Errorf("second edit of an already-local override must report created_override=false, got true")
+	}
+}
+
 // TestSkillWrite_Confinement_TraversalAndOversize_Rejected covers TDD #11 / M-6:
 // path traversal, oversize SKILL.md, and invalid frontmatter are all rejected.
 //

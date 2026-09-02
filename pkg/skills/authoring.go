@@ -24,6 +24,33 @@ const MaxSkillMarkdownBytes = 256 * 1024
 // versionsDir is the per-skill subdirectory that holds prior SKILL.md snapshots.
 const versionsDir = ".versions"
 
+// builtinMarkerFile is written into a skill's directory whenever
+// SeedDefaults (embed.go) materializes a built-in skill onto disk at boot.
+//
+// UAT batch3 S68 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+// finding #3): EditSkill used to infer "this is a genuine prior user
+// override, safe to edit in place" from mere file EXISTENCE at the writer's
+// root path. That inference is unsound in this install: SeedDefaults
+// materializes every built-in skill (summarize, skill-authoring, plan,
+// daily-briefing) onto the SAME writer-root path a real override would also
+// occupy — there is no separate, untouched "factory" location existence
+// alone can distinguish from a genuine override. The practical result was
+// editing a never-touched built-in silently mutated it in place and
+// reported created_override:false, directly contradicting edit_skill's own
+// documented contract ("the built-in is never mutated in place").
+//
+// This marker is the explicit provenance signal EditSkill needed: its
+// presence in a skill's directory means "the content at this path was
+// placed here by the boot-time seeder and has never been edited since" —
+// the FIRST edit of that skill must be treated as creating a NEW override
+// (created_override:true, matching create_skill's own semantics) even
+// though the on-disk file already existed. The marker is written alongside
+// SKILL.md when a built-in is seeded (copyEmbeddedSkill) and is REMOVED the
+// first time EditSkill writes real content over it, so a second edit of the
+// same skill correctly reports created_override:false (it is now a genuine,
+// already-local override, same as any other skill a user created directly).
+const builtinMarkerFile = ".omnipus-builtin"
+
 // ErrPathConfinement is returned when a requested skill name would escape the
 // skills root (path traversal). The authoring layer is path-confined to a
 // single skills directory (FR-9.2 / M-6).
@@ -297,18 +324,28 @@ func (w *SkillWriter) CreateSkill(name, content string) (string, error) {
 	return skillFile, nil
 }
 
-// EditSkill updates an existing skill named name with new SKILL.md content. The
-// prior version is snapshotted into .versions/ first so it can be rolled back.
+// EditSkill updates an existing skill named name with new SKILL.md content.
+// The prior content — a genuine local override OR a still-pristine built-in
+// materialized by SeedDefaults (see builtinMarkerFile) — is snapshotted into
+// .versions/ first, so it is always recoverable, before anything is
+// overwritten.
 //
-// If a skill named name does not yet exist in this writer's root but a source
-// (e.g. a built-in) is supplied via sourceContent, EditSkill creates a user
-// override seeded from the new content — it NEVER mutates the source in place.
-// When sourceContent is empty and the skill does not exist locally, EditSkill
-// returns ErrNotFound.
+// allowCreateOverride controls what happens when there is no genuine PRIOR
+// USER OVERRIDE at this writer's root yet: either nothing exists at this
+// path at all, or what IS there is a built-in skill that has never been
+// edited since the boot-time seeder placed it. When true, EditSkill treats
+// this exactly like authoring a brand-new skill — it writes the content and
+// reports createdOverride=true. When false and no genuine override exists,
+// EditSkill returns ErrNotFound.
 //
-// The write is path-confined and validated before anything is persisted. The
-// returned bool reports whether the write created a new override (true) versus
-// edited an already-local skill (false).
+// A built-in skill's first edit is NEVER silently treated as "already
+// local": it always reports createdOverride=true and its original,
+// unedited content is preserved in .versions/ before being replaced (UAT
+// batch3 S68 — see builtinMarkerFile's doc comment for the full defect this
+// closes). Only a SECOND edit of the same skill — now a genuine local
+// override — reports createdOverride=false.
+//
+// The write is path-confined and validated before anything is persisted.
 func (w *SkillWriter) EditSkill(
 	name, content string,
 	allowCreateOverride bool,
@@ -323,10 +360,28 @@ func (w *SkillWriter) EditSkill(
 
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 	_, statErr := os.Stat(skillFile)
-	localExists := statErr == nil
+	fileExists := statErr == nil
 	if statErr != nil && !os.IsNotExist(statErr) {
 		return "", false, fmt.Errorf("stat skill: %w", statErr)
 	}
+
+	// A file's mere presence at this writer-root path is NOT proof of a
+	// genuine prior user override — SeedDefaults materializes every
+	// built-in skill onto this SAME path at boot, so on a fresh install
+	// fileExists is already true for summarize/skill-authoring/plan/
+	// daily-briefing before any user has ever touched them.
+	// builtinMarkerFile's presence distinguishes "seeded, never edited
+	// since" from "a real override"; only the latter counts as localExists
+	// for the created_override contract below.
+	isPristineBuiltin := false
+	if fileExists {
+		if _, markerErr := os.Stat(filepath.Join(skillDir, builtinMarkerFile)); markerErr == nil {
+			isPristineBuiltin = true
+		} else if !os.IsNotExist(markerErr) {
+			return "", false, fmt.Errorf("stat builtin marker: %w", markerErr)
+		}
+	}
+	localExists := fileExists && !isPristineBuiltin
 
 	if !localExists && !allowCreateOverride {
 		return "", false, ErrNotFound
@@ -336,8 +391,11 @@ func (w *SkillWriter) EditSkill(
 		return "", false, fmt.Errorf("create skill dir: %w", err)
 	}
 
-	// Snapshot the current local SKILL.md (if any) before overwriting.
-	if localExists {
+	// Snapshot whatever is currently on disk — a genuine prior override OR
+	// a still-pristine built-in — before overwriting, so the exact prior
+	// bytes (including a built-in's original, un-edited content) are always
+	// recoverable via ListVersions/ReadVersion.
+	if fileExists {
 		if _, snapErr := snapshotExisting(skillDir); snapErr != nil {
 			return "", false, snapErr
 		}
@@ -346,6 +404,19 @@ func (w *SkillWriter) EditSkill(
 	if err := fileutil.WriteFileAtomic(skillFile, []byte(content), 0o644); err != nil {
 		return "", false, fmt.Errorf("write SKILL.md: %w", err)
 	}
+
+	// The pristine-builtin marker only ever protects the FIRST edit's
+	// created_override accounting. Once this call has written real content
+	// over it, the file at this path genuinely IS the local override going
+	// forward — clear the marker so a second edit correctly reports
+	// created_override:false instead of repeating "override created" for
+	// the same skill indefinitely.
+	if isPristineBuiltin {
+		if rmErr := os.Remove(filepath.Join(skillDir, builtinMarkerFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+			return "", false, fmt.Errorf("clear builtin marker: %w", rmErr)
+		}
+	}
+
 	createdOverride = !localExists
 	slog.Info("skills: edited skill", "name", name, "path", skillFile, "created_override", createdOverride)
 	return skillFile, createdOverride, nil

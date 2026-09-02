@@ -629,7 +629,18 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		updated = append(updated, "prompt")
 	}
 	pendingJudgeNote := ""
-	if v, ok := args["status"].(string); ok && isValidTaskStatus(v) {
+	if v, ok := args["status"].(string); ok {
+		if !isValidTaskStatus(v) {
+			// UAT batch3 S58 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+			// finding #2): an unrecognized status used to fall through this
+			// gate silently — no error, no patch, status left unchanged, and
+			// the caller had no way to tell their request was ignored. Mirror
+			// TaskCreateTool.Execute's own rejection (same error shape, same
+			// enumerated status list) rather than let a typo look like a
+			// successful, silent no-op.
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				fmt.Sprintf("unknown status %q: expected one of inbox, next, blocked, done, failed", v), "status"))
+		}
 		st := task.Status(v)
 		// Issue #593 (Option A): in_progress is a DISPATCH state, not a
 		// caller-settable status the way done/failed are — this privileged,
@@ -706,10 +717,23 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 			}
 		}
-		pendingWorkspaceID = v
-		workspaceIDPending = true
-		effectiveWorkspaceID = v
-		updated = append(updated, "workspace_id")
+		// UAT batch3 S58 (finding #2, second half): workspace_id used to be
+		// unconditionally appended to `updated` (and unconditionally
+		// re-written to disk) whenever the key was merely PRESENT in the
+		// caller's args, regardless of whether the value actually differed
+		// from the task's current workspace — including a resupplied,
+		// unchanged value on every call. That made `updated_fields` an
+		// unreliable diagnostic (it could list a field that never changed)
+		// and did a pointless write-lock+persist for a no-op move. Only
+		// treat this as a real change — and only then defer the actual
+		// write and report it in `updated` — when v differs from the task's
+		// current workspace.
+		if v != existing.WorkspaceID {
+			pendingWorkspaceID = v
+			workspaceIDPending = true
+			effectiveWorkspaceID = v
+			updated = append(updated, "workspace_id")
+		}
 	}
 	if v, ok := args["due"].(string); ok {
 		patch.Due = &v
