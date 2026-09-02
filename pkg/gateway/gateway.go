@@ -28,7 +28,6 @@ import (
 	"regexp"
 	"runtime"
 	runtimedebug "runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2685,7 +2684,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// WS. Step 0 (the Chrome PROCESS) still runs earlier, where it has nothing
 	// to wait for. Returns immediately; nothing joins it, and nothing it does
 	// can fail boot.
-	startBrowserWarmBoot(ctx, cfg, agentLoop, runningServices.browserWS)
+	startBrowserWarmBoot(ctx, cfg, homePath, agentLoop, runningServices.browserWS)
 
 	// Surface sandbox state on /health via the existing degraded/check
 	// infrastructure. Registering a RegisterCheck puts the {mode, backend,
@@ -3380,62 +3379,90 @@ func warmCaptureIdleTimeout(cfg *config.Config) time.Duration {
 	return time.Duration(cfg.Tools.Browser.WarmCaptureIdleSec) * time.Second
 }
 
-// pickWarmBrowserManager chooses the ONE agent whose tab (and, optionally,
-// capture) gets warmed at boot. Returns nil when no candidate exists.
+// pickWarmBrowserManager chooses the ONE browser whose tab (and, optionally,
+// capture) gets warmed at boot: the browser of the workspace the DEFAULT agent
+// resolves to (ADR-072 FR-016b). It returns (nil, reason) when there is
+// nothing to warm — reason is a short operator-facing sentence, and the caller
+// logs it exactly once at INFO.
 //
 // Why one and not all: each warmed tab is a renderer process (74-268MB RSS
 // measured on the UAT box, coordinator.go), and a warmed capture is a
-// continuously encoding video pipeline of which the shared Chrome can only
-// usefully serve ONE at a time anyway (ADR-048 condition 2 — handleWebRTCOffer
-// denies a second ACTIVELY-VIEWED capture). Warming every agent would multiply
-// the cost by the roster size to save time on exactly one panel.
+// continuously encoding video pipeline of which one host can only usefully
+// serve ONE at a time anyway (ADR-048 condition 2 — handleWebRTCOffer still
+// denies a second ACTIVELY-VIEWED capture, now across workspaces). Under
+// FR-001 a manager is a WORKSPACE's browser, so warming every manager would
+// multiply a whole Chrome process and profile by the workspace count to save
+// time on exactly one panel.
 //
-// Selection is DETERMINISTIC — the default agent
-// (agents.defaults.default_agent_id, the single source of truth per ADR-054
-// D6.4 and the agent a fresh install's user actually opens), else the
-// lexicographically-first agent id that has a browser manager. Sorting matters:
-// AgentLoop.BrowserManagers() ranges a map, so without it the warmed agent
-// would differ between two boots of the SAME install — and, worse, between a
-// macOS and a Linux host, which is precisely the platform-divergent behaviour
-// this project forbids.
-func pickWarmBrowserManager(cfg *config.Config, mgrs []*browser.BrowserManager) *browser.BrowserManager {
-	byID := make(map[string]*browser.BrowserManager, len(mgrs))
-	ids := make([]string, 0, len(mgrs))
+// Why the DEFAULT AGENT'S RESOLVED WORKSPACE, and no fallback:
+//
+//   - Selection used to compare agents.defaults.default_agent_id against
+//     mgr.AgentID(). After FR-001 that accessor returns the manager's BROWSING
+//     KEY ("ws:<id>"), so the comparison could never match again and every
+//     boot silently took the lexicographic branch instead. This is the fix for
+//     that, and it is why the four selection tests in browser_warmboot_test.go
+//     had to change with it.
+//   - The old lexicographic fallback is GONE. It was a tie-break over
+//     workspaces, and picking one would mean starting a Chrome against one
+//     workspace's profile — one particular set of live logins — because it
+//     sorted first, with nobody watching and nobody asked. That is the same
+//     implicit choice FR-033 refuses at every other resolution point, and a
+//     latency optimisation is the weakest possible reason to make it. When the
+//     default agent resolves to no workspace we warm NOTHING and say so; the
+//     lazy path is a complete fallback and costs one panel one cold open.
+//
+// Determinism is therefore trivial rather than sorted: there is only ever one
+// candidate key, so two boots of the same install — and a macOS and a Linux
+// host of it — warm the same browser or none.
+func pickWarmBrowserManager(
+	cfg *config.Config, home string, mgrs []*browser.BrowserManager,
+) (*browser.BrowserManager, string) {
+	byKey := make(map[string]*browser.BrowserManager, len(mgrs))
 	for _, mgr := range mgrs {
 		if mgr == nil {
 			continue
 		}
 		// Two hard requirements, both of which a candidate in the normal
 		// coordinator-mode gateway always satisfies:
-		//   - a real agent id, because the capture session is keyed by it
-		//     (ensureCaptureSession/the capture registry) and an empty key is
-		//     not an agent;
+		//   - a real browsing key, because that is what names the browser to
+		//     warm and the zero key is not a browser;
 		//   - an attached coordinator, so warming drives the ONE shared
 		//     Chrome. A manager with no coordinator falls back to the legacy
 		//     one-Chrome-per-manager managed mode (manager.go's ensureStarted),
 		//     which would have boot spawn a SECOND Chrome process — the exact
 		//     opposite of a cheap warm-up. WebRTC capture requires the
 		//     coordinator anyway (defaultEncoderStarter refuses without one).
-		id := strings.TrimSpace(mgr.AgentID())
-		if id == "" || mgr.Coordinator() == nil {
+		key := mgr.BrowsingKey()
+		if key.IsZero() || mgr.Coordinator() == nil {
 			continue
 		}
-		if _, dup := byID[id]; dup {
+		if _, dup := byKey[key.String()]; dup {
 			continue
 		}
-		byID[id] = mgr
-		ids = append(ids, id)
+		byKey[key.String()] = mgr
 	}
-	if len(ids) == 0 {
-		return nil
+	if len(byKey) == 0 {
+		return nil, "no workspace has a browser manager yet"
 	}
-	if def := strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID); def != "" {
-		if mgr, ok := byID[def]; ok {
-			return mgr
-		}
+
+	def := strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID)
+	if def == "" {
+		return nil, "no default agent is set (agents.defaults.default_agent_id), " +
+			"so there is no one workspace to warm"
 	}
-	sort.Strings(ids)
-	return byID[ids[0]]
+	key, err := browser.ResolveBrowsingKeyForAgent(home, def, "")
+	if err != nil {
+		return nil, fmt.Sprintf(
+			"the default agent %q is not on exactly one workspace's team, so it resolves to no "+
+				"single browser to warm", def)
+	}
+	mgr, ok := byKey[key.String()]
+	if !ok {
+		return nil, fmt.Sprintf(
+			"the default agent %q resolves to workspace %q, which has no browser manager yet",
+			def, key.WorkspaceID())
+	}
+	return mgr, ""
 }
 
 // waitForGatewayListener blocks until this gateway's own HTTP listener accepts
@@ -3576,6 +3603,7 @@ func watchWarmCaptureIdle(ctx context.Context, cs warmCaptureHandle, idle time.D
 func startBrowserWarmBoot(
 	ctx context.Context,
 	cfg *config.Config,
+	homePath string,
 	agentLoop *agent.AgentLoop,
 	h *BrowserWSHandler,
 ) {
@@ -3587,14 +3615,20 @@ func startBrowserWarmBoot(
 	if !wantTab && !wantCapture {
 		return
 	}
-	mgr := pickWarmBrowserManager(cfg, agentLoop.BrowserManagers())
+	mgr, skipReason := pickWarmBrowserManager(cfg, homePath, agentLoop.BrowserManagers())
 	if mgr == nil {
 		// Say so rather than falling through silently — "enabled but nothing
 		// to warm" is otherwise indistinguishable from "disabled" and from
 		// "still running", the same three-way ambiguity the process warm-up's
 		// own no-coordinator branch calls out.
+		//
+		// ONE line, at INFO (FR-016b). Nothing is wrong here: skipping the
+		// warm-up costs the first panel open a cold start and nothing else,
+		// and a WARN would tell an operator to fix a configuration that may be
+		// exactly what they intended.
 		logger.InfoCF("browser",
-			"boot-time browser tab/capture warm-up enabled but no agent has a browser manager — nothing to warm",
+			"boot-time browser tab/capture warm-up enabled but skipped — "+skipReason+
+				"; the first panel open will build the browser lazily",
 			nil)
 		return
 	}
