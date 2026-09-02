@@ -339,7 +339,20 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 		return nil
 	}, func() {})
 	handler.captures.set("other-agent-slow-stop", otherCS)
-	t.Cleanup(otherCS.Stop) // idempotent; harmless if Stop() already ran
+	// Release BEFORE stopping, in one cleanup, rather than relying on two.
+	//
+	// t.Cleanup is LIFO, and releaseStop was registered ABOVE this line — so a
+	// bare t.Cleanup(otherCS.Stop) runs FIRST, blocks on the <-blockStop its
+	// own BindIngest performs, and releaseStop never gets to run. That is a
+	// deadlock, and it presents as the whole package hanging: CI reported
+	// "panic: test timed out after 30m0s" with this test at 29m47s.
+	//
+	// Doing both here makes the order explicit instead of a consequence of
+	// which line came first, so moving either registration cannot resurrect it.
+	t.Cleanup(func() {
+		releaseStop()  // unblock the ingest write Stop() is about to make
+		otherCS.Stop() // idempotent; harmless if Stop() already ran
+	})
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
