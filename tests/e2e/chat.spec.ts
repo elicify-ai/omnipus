@@ -269,6 +269,19 @@ test(
   // coverage of the same fix lives in
   // src/components/chat/ChatScreen.outbound-queue.test.tsx.
   async ({ page, context }) => {
+    // This test takes the browser OFFLINE on purpose, so Chrome logs
+    // "WebSocket connection ... failed: net::ERR_INTERNET_DISCONNECTED".
+    // That is the scenario, not a defect: asserting zero console errors here
+    // would be asserting the test does not do its job.
+    //
+    // Opted out per test rather than by adding ERR_INTERNET_DISCONNECTED to
+    // the fixture's CONSOLE_ERROR_ALLOWLIST, which would blind EVERY other
+    // test in the suite to a real WebSocket failure -- the exact way that gate
+    // was blind in 30 of 33 specs before it was wired up.
+    test.info().annotations.push({
+      type: 'expects-console-errors',
+      description: 'goes offline on purpose to test outbound queueing',
+    })
     // Budget: this test drains TWO real LLM turns sequentially after
     // reconnect (maybeDrainNext sends the queue one message at a time, only
     // once each prior turn's `done` frame arrives — see store/chat.ts), on
