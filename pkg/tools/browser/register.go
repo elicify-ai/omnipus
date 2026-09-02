@@ -58,20 +58,44 @@ type ManagerResolver interface {
 func resolveTurn(
 	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
 ) (mgr *BrowserManager, key BrowsingKey, home, owner TabOwner, sid string, failure *tools.ToolResult) {
+	scope, failure := resolveTurnScope(ctx, res, ba, toolName)
+	return scope.mgr, scope.key, scope.home, scope.owner, scope.sid, failure
+}
+
+// turnScope is the whole answer to "what is this call addressing?", in one
+// value: the browser, which browser it is, the turn's own tab set, the set this
+// call acts on, and that pair rendered as the manager-level session key.
+//
+// It exists so that resolveTurn and resolveTurnTabSet can each hand back the
+// subset their callers use without either of them discarding fields
+// positionally — a row of blank identifiers is exactly as unreadable as the
+// linter says, and this resolution has five results precisely because
+// ownership is no longer a single question.
+type turnScope struct {
+	mgr   *BrowserManager
+	key   BrowsingKey
+	home  TabOwner
+	owner TabOwner
+	sid   string
+}
+
+// resolveTurnScope is the resolution itself; resolveTurn and resolveTurnTabSet
+// are views on it.
+func resolveTurnScope(
+	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
+) (turnScope, *tools.ToolResult) {
 	if res == nil {
-		return nil, BrowsingKey{}, TabOwner{}, TabOwner{}, "",
+		return turnScope{},
 			tools.ErrorResult(toolName + ": browser tools are not wired to a browser resolver")
 	}
 	mgr, key, home, err := res.ManagerFor(ctx)
 	if err != nil {
-		return nil, BrowsingKey{}, TabOwner{}, TabOwner{}, "",
-			tools.ErrorResult(toolName + ": " + err.Error())
+		return turnScope{}, tools.ErrorResult(toolName + ": " + err.Error())
 	}
 	if mgr == nil {
-		return nil, BrowsingKey{}, TabOwner{}, TabOwner{}, "",
-			tools.ErrorResult(toolName + ": " + ErrNoBrowsingContext.Error())
+		return turnScope{}, tools.ErrorResult(toolName + ": " + ErrNoBrowsingContext.Error())
 	}
-	owner = mgr.focusedTabSet(home)
+	owner := mgr.focusedTabSet(home)
 	// FR-027's instance-creation event. Emitted here, on the ONE path every
 	// browser tool starts with, so that a browser first touched by a read-only
 	// call is still recorded as having come into existence — the alternative
@@ -85,7 +109,7 @@ func resolveTurn(
 	if ba != nil {
 		ba.noteBrowserInstance(ctx, mgr, key)
 	}
-	return mgr, key, home, owner, sessionKey(key, owner), nil
+	return turnScope{mgr: mgr, key: key, home: home, owner: owner, sid: sessionKey(key, owner)}, nil
 }
 
 // resolveTurnTabSet is resolveTurn for the read-only tools that need only the
@@ -101,8 +125,8 @@ func resolveTurn(
 func resolveTurnTabSet(
 	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
 ) (mgr *BrowserManager, sid string, failure *tools.ToolResult) {
-	mgr, _, _, _, sid, failure = resolveTurn(ctx, res, ba, toolName)
-	return mgr, sid, failure
+	scope, failure := resolveTurnScope(ctx, res, ba, toolName)
+	return scope.mgr, scope.sid, failure
 }
 
 // evaluateEnabled does not control registration — browser_evaluate is ALWAYS

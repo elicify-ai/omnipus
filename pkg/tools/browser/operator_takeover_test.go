@@ -292,3 +292,54 @@ func TestOperatorTakeover_DefersWhileAHumanDrivesTheOperatorsTab(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, opActive)
 }
+
+// TestOperatorTakeover_FocusFallsBackWhenTheOperatorsSetIsGone is the failure
+// mode a take-over that outlives its target would produce.
+//
+// A session that took over the operator's tabs keeps pointing at that set. If
+// the set is later reaped, the pointer is dangling — and because every tab set
+// is created LAZILY on first use, the next call would not fail: it would
+// recreate a workspace-owned set with a fresh blank tab and browse there. An
+// agent quietly browsing in the operator's name, in a window nobody is looking
+// at, is worse than an error.
+//
+// So the pointer is checked against what actually exists, and a session whose
+// target is gone is back on its own tabs.
+func TestOperatorTakeover_FocusFallsBackWhenTheOperatorsSetIsGone(t *testing.T) {
+	m := operatorTakeoverFixture(t)
+	operatorSet := m.OperatorSessionID()
+	res := newFixedResolver(m)
+
+	// Take over.
+	idx := operatorTabIndexFromListing(t, m, 0)
+	switchTab := &SwitchTabTool{res: res}
+	result := switchTab.Execute(
+		tools.WithAgentID(context.Background(), "jim"),
+		map[string]any{"index": float64(idx)},
+	)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "%s", result.ForLLM)
+	require.Equal(t, TabOwnerWorkspace(), m.focusedTabSet(testOwner),
+		"the switch must have pointed this session at the operator's set")
+
+	// The operator's set goes away — an idle reap, a panel close, a crash.
+	m.CloseSession(operatorSet)
+	require.False(t, m.sessionExists(operatorSet))
+
+	require.Equal(t, testOwner, m.focusedTabSet(testOwner),
+		"with its target gone the session must be back on its OWN tabs, not pointing at a "+
+			"workspace-owned set that a lazy create would resurrect underneath it")
+
+	// And the next real call proves it: it opens in this chat's set, and does
+	// NOT bring the operator's set back from the dead.
+	openTab := &OpenTabTool{res: res}
+	openResult := openTab.Execute(tools.WithAgentID(context.Background(), "jim"), map[string]any{})
+	require.NotNil(t, openResult)
+	require.False(t, openResult.IsError, "%s", openResult.ForLLM)
+
+	_, ownTabs, _, err := m.ListTabsState(testSessionID)
+	require.NoError(t, err)
+	assert.Len(t, ownTabs, 3, "the new tab belongs to this chat's own set")
+	assert.False(t, m.sessionExists(operatorSet),
+		"nothing may silently recreate the operator's tab set on their behalf")
+}
