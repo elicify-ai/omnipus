@@ -243,20 +243,23 @@ func TestEventNamesSatisfyWireContract(t *testing.T) {
 		t.Fatal("no Event* const declarations found under pkg/audit/ — AST parse drifted; fix this test")
 	}
 
-	// names holds "<source> <value>" for every wire value under test.
+	// all holds every wire value under test, tagged with where it came from so
+	// a failure message points at the declaration to fix.
 	type namedEvent struct{ source, value string }
-	var all []namedEvent
 
 	constNames := make([]string, 0, len(consts))
 	for name := range consts {
 		constNames = append(constNames, name)
 	}
 	sort.Strings(constNames)
+
+	switchLiterals := collectIsValidEventNameLiterals(t)
+
+	all := make([]namedEvent, 0, len(constNames)+len(switchLiterals))
 	for _, name := range constNames {
 		all = append(all, namedEvent{source: "pkg/audit const " + name, value: consts[name]})
 	}
-
-	for _, lit := range collectIsValidEventNameLiterals(t) {
+	for _, lit := range switchLiterals {
 		all = append(all, namedEvent{source: "IsValidEventName literal", value: lit})
 	}
 

@@ -194,14 +194,6 @@ linters:
           - staticcheck
         path: ^pkg/tools/browser/.*_test\.go$
         text: 'SA1012'
-      # SA1019 — SetNAT1To1IPs is deprecated, but the replacement
-      # (SetICEAddressRewriteRules) has different default semantics for host vs
-      # server-reflexive candidates. Migrating ICE candidate rewriting needs its
-      # own reviewed change, not a lint sweep.
-      - linters:
-          - staticcheck
-        path: ^pkg/tools/browser/webrtc/session\.go$
-        text: 'SA1019'
       - linters:
           - staticcheck
         path: pkg/tools/browser/focus_emulation_test\.go

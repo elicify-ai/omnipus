@@ -281,7 +281,29 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// once the provider routes the fixed port, so "host" is honest and
 		// earns its higher priority; the loopback/private candidates remain
 		// in the list for same-host viewers.
-		viewerSE.SetNAT1To1IPs(cfg.PublicIPs, webrtc.ICECandidateTypeHost)
+		//
+		// SetICEAddressRewriteRules replaces the deprecated SetNAT1To1IPs
+		// (pion/webrtc v4.2.16). This is a like-for-like migration following
+		// that deprecation note exactly: External is the old `ips` argument,
+		// AsCandidateType the old `candidateType`, and Mode is deliberately
+		// left at its zero value, ICEAddressRewriteModeUnspecified, which pion
+		// documents as the LEGACY default — replace for host candidates,
+		// append for server reflexive. Naming a Mode here would CHANGE the
+		// behaviour the comment above describes rather than preserve it.
+		//
+		// The error is unreachable on this path: SetICEAddressRewriteRules
+		// fails only for an empty rule set (one rule is always passed) or when
+		// the legacy NAT1To1IPs field is also populated (nothing sets it now
+		// that this call is gone). It is logged rather than dropped so that a
+		// future pion release adding a validation case cannot turn the public
+		// address silently into a no-op — which would leave every hosted
+		// viewer advertising an unroutable private candidate.
+		if err := viewerSE.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+			External:        cfg.PublicIPs,
+			AsCandidateType: webrtc.ICECandidateTypeHost,
+		}); err != nil {
+			s.logf("webrtc: viewer leg could not advertise public addresses %v — pion rejected the ICE address rewrite rule: %v", cfg.PublicIPs, err)
+		}
 	}
 
 	s.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
