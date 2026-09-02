@@ -2669,3 +2669,146 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
   })
 })
 
+
+// ── fetchAuditLog: per-entry audit resilience (issue #667, second half) ────────
+//
+// Traces to: CLAUDE.md hard-constraint #8 — "SPA edge validates every incoming
+// payload via the matching zod schema (drop + counter + dev-mode toast on
+// failure; no prod crash)".
+//
+// The shipped defect was response-level, not row-level: validating the whole
+// AuditLogResponse in one safeParse means `entries: z.array(AuditEntry)` fails
+// as a unit, so ONE record the schema rejects threw ApiSchemaError for the
+// entire response and AuditLogViewer rendered "Failed to load audit log" —
+// zero rows, not one missing row. An audit file is append-only history nobody
+// can rewrite, so every future unrecognised event name has the same blast
+// radius.
+describe('fetchAuditLog: per-entry resilience', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  const goodEntry = {
+    timestamp: '2026-09-02T10:00:00Z',
+    event: 'tool_call',
+    decision: 'allow',
+    agent_id: 'jim',
+    tool: 'browser_click',
+  }
+  // `Browser.Live` fails AuditEntry.event's ^[a-z_.]+$ pattern (uppercase).
+  const unreadableEntry = {
+    timestamp: '2026-09-02T10:00:04Z',
+    event: 'Browser.Live',
+    decision: 'allow',
+    agent_id: 'ray',
+  }
+
+  function auditBody(entries: unknown[], chainStatus: unknown = 'valid') {
+    return new Response(JSON.stringify({ chain_status: chainStatus, entries }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    stubCookieLocal('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    restoreCookieLocal()
+  })
+
+  // The counter must be read from the SAME module instance the call under test
+  // came from. Several earlier describe blocks in this file call
+  // vi.resetModules() in their afterEach, so a dynamic `await import('./api')`
+  // here loads a FRESH module graph with its own counter — while the file-top
+  // static `getApiSchemaErrorCount` still reads the original instance and
+  // reports 0 forever. That is a false green (the assertion can never fail),
+  // and the full-suite run caught it. See the same note on the
+  // castString/castNumber block below.
+  async function loadApi() {
+    const mod = await import('./api')
+    mod.resetApiSchemaErrorCount()
+    return mod
+  }
+
+  it('keeps the valid entries when one entry fails the AuditEntry schema', async () => {
+    fetchSpy.mockResolvedValueOnce(auditBody([unreadableEntry, goodEntry]))
+
+    const { fetchAuditLog } = await loadApi()
+    const res = await fetchAuditLog()
+
+    expect(res.entries).toHaveLength(1)
+    expect(res.entries[0]?.event).toBe('tool_call')
+    expect(res.entries[0]?.tool).toBe('browser_click')
+    expect(res.chain_status).toBe('valid')
+  })
+
+  it('does not throw ApiSchemaError for an unrecognised event name', async () => {
+    fetchSpy.mockResolvedValueOnce(auditBody([unreadableEntry, goodEntry]))
+
+    const { fetchAuditLog } = await loadApi()
+    await expect(fetchAuditLog()).resolves.toBeDefined()
+  })
+
+  it('counts every dropped entry through the shared schema-error counter (drop is never silent)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      auditBody([unreadableEntry, goodEntry, { ...unreadableEntry, event: 'ALSO_BAD' }]),
+    )
+
+    const { fetchAuditLog, getApiSchemaErrorCount: countOnThisInstance } = await loadApi()
+    const res = await fetchAuditLog()
+
+    expect(res.entries).toHaveLength(1)
+    // One counter increment per dropped record — the shared _recordApiSchemaError
+    // path, which also carries the dev toast and the production telemetry event.
+    expect(countOnThisInstance()).toBe(2)
+  })
+
+  it('leaves a fully valid response untouched and bumps no counter', async () => {
+    const dotted = { timestamp: '2026-09-02T10:00:03Z', event: 'browser.live.control_taken', decision: 'allow', agent_id: 'ray' }
+    fetchSpy.mockResolvedValueOnce(auditBody([dotted, goodEntry]))
+
+    const { fetchAuditLog, getApiSchemaErrorCount: countOnThisInstance } = await loadApi()
+    const res = await fetchAuditLog()
+
+    expect(res.entries).toHaveLength(2)
+    expect(res.entries.map((e) => e.event)).toEqual(['browser.live.control_taken', 'tool_call'])
+    expect(countOnThisInstance()).toBe(0)
+  })
+
+  it('still throws ApiSchemaError when the ENVELOPE is malformed (chain_status outside the enum)', async () => {
+    // Scoping guard: per-entry recovery must not extend to the envelope's own
+    // fields. A chain_status the contract does not define is real drift and
+    // must stay loud — silently accepting it would hide a broken HMAC chain.
+    fetchSpy.mockResolvedValueOnce(auditBody([goodEntry], 'probably-fine'))
+
+    const { fetchAuditLog, ApiSchemaError: ApiSchemaErrorCtor } = await loadApi()
+    await expect(fetchAuditLog()).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
+  })
+
+  it('still throws ApiSchemaError when entries is not an array at all', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ chain_status: 'valid', entries: 'nope' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchAuditLog, ApiSchemaError: ApiSchemaErrorCtor } = await loadApi()
+    await expect(fetchAuditLog()).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
+  })
+})

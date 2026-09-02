@@ -160,4 +160,33 @@ describe('AuditLogViewer — security_setting_change rendering (D20)', () => {
     // selected-value label, and the surviving row's event badge.
     expect(screen.getAllByText('security_setting_change').length).toBeGreaterThanOrEqual(1)
   })
+
+  // The event-type filter used to be a hardcoded ten-name list that predates
+  // every dot-separated event name pkg/audit emits (over fifty of them). An
+  // operator could therefore SEE a browser record in the table and have no way
+  // to isolate it — a filter that silently omits most of the vocabulary is a
+  // control that lies about its own coverage. The option list is now derived
+  // from the records actually loaded, unioned with the original flat families.
+  it('offers a filter option for a dotted event name that is present in the log', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchAuditLog).mockResolvedValue({
+      entries: [
+        { timestamp: '2026-09-02T10:00:00Z', event: 'tool_call', decision: 'allow', tool: 'bash' },
+        { timestamp: '2026-09-02T10:00:03Z', event: 'browser.live.control_taken', decision: 'allow', agent_id: 'ray' },
+      ],
+      chain_status: 'unknown',
+    } as never)
+    renderViewer()
+    await waitFor(() => screen.getByText('tool_call'))
+
+    await user.click(screen.getByRole('button', { name: 'Event type filter' }))
+    const option = await screen.findByRole('option', { name: 'browser.live.control_taken' })
+    await user.click(option)
+
+    // Selecting it must actually isolate the record, not just exist.
+    await waitFor(() => {
+      expect(screen.queryByText('tool_call')).not.toBeInTheDocument()
+    })
+    expect(screen.getAllByText('browser.live.control_taken').length).toBeGreaterThanOrEqual(1)
+  })
 })

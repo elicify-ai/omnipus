@@ -219,18 +219,31 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const EVENT_TYPE_OPTIONS = [
-  { value: 'all', label: 'All events' },
-  { value: 'tool_call',              label: 'tool_call' },
-  { value: 'exec',                   label: 'exec' },
-  { value: 'file_op',                label: 'file_op' },
-  { value: 'llm_call',               label: 'llm_call' },
-  { value: 'policy_eval',            label: 'policy_eval' },
-  { value: 'rate_limit',             label: 'rate_limit' },
-  { value: 'ssrf',                   label: 'ssrf' },
-  { value: 'startup',                label: 'startup' },
-  { value: 'shutdown',               label: 'shutdown' },
-  { value: 'security_setting_change', label: 'security_setting_change' },
+// EVENT_TYPE_BASE_VALUES — the original flat event family. This list is a
+// FLOOR, not the whole vocabulary: pkg/audit declares over fifty dot-separated
+// names (skill.call, browser.live.control_taken, workspace.create, …) and more
+// arrive with every feature. Hardcoding the list on its own meant an operator
+// could SEE a record the filter could not isolate, which is exactly the
+// complaint that surfaced once browser activity became visible in the log.
+// The live option list is this floor UNIONed with every event name actually
+// present in the loaded entries (see eventTypeOptions below), so the filter
+// maintains itself instead of rotting one release after every new event name.
+//
+// Keeping the floor also keeps the control above SmartSelect's
+// SEARCHABLE_THRESHOLD (5), so it always renders the searchable cmdk variant
+// rather than flipping between two different widgets as the log's contents
+// change under the operator.
+const EVENT_TYPE_BASE_VALUES = [
+  'tool_call',
+  'exec',
+  'file_op',
+  'llm_call',
+  'policy_eval',
+  'rate_limit',
+  'ssrf',
+  'startup',
+  'shutdown',
+  'security_setting_change',
 ]
 
 const DECISION_OPTIONS = [
@@ -254,6 +267,22 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
   })
 
   const entries = useMemo(() => auditLog?.entries ?? [], [auditLog])
+
+  // Live filter vocabulary: the base families plus every event name the loaded
+  // records actually carry. The current selection is always retained so the
+  // trigger never renders blank if the matching records age out of the log
+  // between the 30s refreshes.
+  const eventTypeOptions = useMemo(() => {
+    const values = new Set<string>(EVENT_TYPE_BASE_VALUES)
+    for (const e of entries) {
+      if (e.event) values.add(e.event)
+    }
+    if (eventFilter !== 'all') values.add(eventFilter)
+    return [
+      { value: 'all', label: 'All events' },
+      ...[...values].sort().map((value) => ({ value, label: value })),
+    ]
+  }, [entries, eventFilter])
 
   const filtered = useMemo(() => {
     return entries.filter((e) => {
@@ -292,7 +321,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
             onValueChange={setEventFilter}
             triggerClassName="h-7 text-xs w-[150px]"
             ariaLabel="Event type filter"
-            items={EVENT_TYPE_OPTIONS}
+            items={eventTypeOptions}
           />
           <SmartSelect
             value={decisionFilter}
