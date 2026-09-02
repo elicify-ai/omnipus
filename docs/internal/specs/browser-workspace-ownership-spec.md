@@ -1788,7 +1788,8 @@ func (o TabOwner) IsWorkspace() bool
 
 // sessionKey is the manager-level lookup: one BrowsingKey plus one TabOwner.
 // It is what replaces DefaultSessionID at every call site (FR-002b) — NOT the
-// BrowsingKey on its own, which would merge the team's tabs (§0.2a).
+// BrowsingKey on its own, which would merge every SESSION on the workspace
+// into one tab set (§0.2a).
 func sessionKey(k BrowsingKey, o TabOwner) string
 
 // NOTE — there is deliberately NO errBrowserPoolFull and NO errPoolFull.
