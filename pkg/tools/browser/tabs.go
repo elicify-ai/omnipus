@@ -79,6 +79,11 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	}
 	state, tabs, activeIdx, err := mgr.ListTabsState(sid)
 	if err != nil {
+		// FR-013: "every other browser tool" is not scoped to tools.go — a
+		// wedged tab times these out too.
+		if routed := dialogAwareTimeout(mgr, sid, "browser_list_tabs", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_list_tabs: %s", err))
 	}
 	out := map[string]any{
@@ -186,6 +191,9 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 
 	tab, err := mgr.SwitchTab(sid, index)
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_switch_tab", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_switch_tab: %s", err))
 	}
 	return jsonResult(map[string]any{
@@ -267,6 +275,9 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 	tabs, activeIdx, err := mgr.CloseTab(sid, index)
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_close_tab", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_close_tab: %s", err))
 	}
 	return jsonResult(map[string]any{"tabs": tabsToWire(tabs), "active_index": activeIdx})
@@ -359,6 +370,9 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// a cap an operator would go looking for and not find.
 	tab, err := mgr.OpenTab(sid)
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_open_tab", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
 	}
 

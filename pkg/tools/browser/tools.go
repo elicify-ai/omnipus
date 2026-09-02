@@ -143,6 +143,12 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		chromedp.Title(&title),
 	)
 	if err != nil {
+		// FR-013: an onbeforeunload confirm raised DURING the load wedges
+		// before navigate has a tab handle to hand anyone, so this is where
+		// that case surfaces.
+		if routed := dialogAwareTimeout(mgr, sid, "browser_navigate", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		// SECURITY (2026-08-13): a failed load must not leave the tab
 		// PARKED on the target -- see abandonTabAfterFailedLoad.
 		return tools.ErrorResult(abandonTabAfterFailedLoad(
@@ -315,6 +321,11 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		// remains defense in depth for the failure modes that DO embed the
 		// marker (e.g. chromedp's "could not find node with given
 		// selector" DOM errors).
+		// FR-013: a wedged tab times out here. Say so, and name the verb
+		// that clears it, instead of returning a deadline.
+		if routed := dialogAwareTimeout(mgr, sid, "browser_click", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_click: element %q not found or not clickable: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -338,6 +349,11 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if gate.HitTest == hitTestIndeterminate {
 		result["hit_test"] = hitTestIndeterminate
 	}
+
+	// Advisory only (FR-013): a later timeout on this tab can then say
+	// "stopped answering after a click", which is strictly more useful than
+	// "stopped answering". Nothing branches on it.
+	mgr.NoteActivation(sid, "a click")
 
 	// ADR-041 D2: a click on a target="_blank" link or an element that calls
 	// window.open may have spawned a new browser tab. Reconcile
@@ -580,10 +596,15 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		// inside err's own text — some chromedp failure modes (a bare
 		// context-deadline timeout) don't embed the selector at all
 		// (7-reviewer finding #6).
+		if routed := dialogAwareTimeout(mgr, sid, "browser_type", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(
 			fmt.Sprintf("browser_type: element %q: %s", displayTarget, scrubMarkerFromError(err, target, displayTarget)),
 		)
 	}
+
+	mgr.NoteActivation(sid, "typing")
 
 	return jsonResult(map[string]any{"success": true, "cleared": clearField})
 }
@@ -679,6 +700,9 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 		}),
 	)
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_screenshot", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
@@ -821,6 +845,9 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		// (bare context-deadline timeouts) don't embed the selector in their
 		// own error text, so scrubMarkerFromError alone can't guarantee the
 		// locator appears in the message.
+		if routed := dialogAwareTimeout(mgr, sid, "browser_get_text", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element %q not found: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -828,6 +855,9 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	var resultText string
 	err = chromedp.Run(tabCtx, chromedp.Text(target, &resultText, chromedp.ByQuery))
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_get_text", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element %q not found: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -955,6 +985,9 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	err = chromedp.Run(waitCtx, chromedp.WaitVisible(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_wait", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -1067,6 +1100,9 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	var raw []byte
 	err = chromedp.Run(tabCtx, chromedp.Evaluate(js, &raw))
 	if err != nil {
+		if routed := dialogAwareTimeout(mgr, sid, "browser_evaluate", err); routed != err {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 

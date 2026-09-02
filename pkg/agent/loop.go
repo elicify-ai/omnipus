@@ -11213,6 +11213,14 @@ turnLoop:
 			// the correlation anchor a spawned child sub-turn's transcript
 			// entries will carry back as ParentSpawnCallID.
 			execCtx = tools.WithToolCallID(execCtx, tc.ID)
+			// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
+			// The loop already uses it to auto-deny `ask`-policy calls; a
+			// tool that must refuse one ARGUMENT rather than the whole call
+			// (browser_handle_dialog{accept:true}) has no other way to know
+			// whether anyone is there to approve. Deliberately the same
+			// field, not a second discriminator: two independently-computed
+			// answers to "is anyone there" would eventually disagree.
+			execCtx = tools.WithAutoDenyAsk(execCtx, ts.opts.AutoDenyAsk)
 			toolResult := ts.agent.Tools.ExecuteWithContext(
 				execCtx,
 				toolName,

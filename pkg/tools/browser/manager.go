@@ -262,6 +262,65 @@ type sessionEntry struct {
 	// See installTargetListenerLocked's doc comment for why this is
 	// installed on ONE tab at a time, not every tab.
 	listenerTarget target.ID
+
+	// dialogListeners records which tabs already have a
+	// Page.javascriptDialogOpening listener, keyed by target id.
+	//
+	// This is NOT the same shape as listenerTarget above, and the difference
+	// is the whole point. Target DISCOVERY is browser-global, so one listener
+	// on tab 0 sees every new target. A JavaScript dialog is not: it is
+	// per-target, so a dialog raised on tab 2 with a tab-0-only listener is
+	// invisible — the tab is wedged and nothing anywhere records that a
+	// dialog exists. EVERY tab needs its own.
+	//
+	// The map exists because chromedp.ListenTarget is an APPEND: installing
+	// twice on one ctx stacks two handlers and records every dialog twice.
+	// Checked-and-set under m.mu immediately before the append.
+	dialogListeners map[target.ID]struct{}
+
+	// pendingDialogs records the dialog currently blocking each tab.
+	//
+	// An open dialog blocks ALL further CDP on that target, so this map is
+	// the only evidence any other tool has for why it just timed out.
+	// Entries are removed BEFORE the Page.handleJavaScriptDialog call that
+	// clears them, never after — see BrowserManager.TakePendingDialog.
+	pendingDialogs map[target.ID]*PendingDialog
+
+	// lastActivation records the last action a tool completed on each tab
+	// ("a click", "a key press", …). It is advisory wording ONLY: nothing
+	// branches on it. When it is set, a timeout message can say "stopped
+	// answering after a click" instead of just "stopped answering", which is
+	// strictly more useful to the agent; when it is not, the message is
+	// simply less specific. Written by the TOOL under m.mu after its own CDP
+	// call returns — never by handleTargetEvent, whose doc forbids blocking.
+	// A second concurrent tool on the same tab overwrites it, which is fine
+	// for wording and would not be for a decision.
+	lastActivation map[target.ID]string
+}
+
+// PendingDialog is one JavaScript dialog blocking one tab.
+type PendingDialog struct {
+	// Type is the CDP dialog type: alert, confirm, prompt or beforeunload.
+	Type string
+	// Message is the text the page asked to display.
+	Message string
+	// URL is the frame that raised it.
+	URL string
+	// DefaultPrompt is the pre-filled value of a prompt() dialog.
+	DefaultPrompt string
+	// OpenedAt is when the listener observed it.
+	OpenedAt time.Time
+}
+
+// Summary renders a pending dialog for an error message an agent reads.
+func (d *PendingDialog) Summary() string {
+	if d == nil {
+		return ""
+	}
+	if d.Message == "" {
+		return fmt.Sprintf("a %s dialog", d.Type)
+	}
+	return fmt.Sprintf("a %s dialog saying %q", d.Type, d.Message)
 }
 
 // active returns the currently-active tab, or nil if activeIdx is somehow
@@ -1303,6 +1362,7 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 				se.tabs = []*tabEntry{tab}
 				se.activeIdx = 0
 				m.installTargetListenerLocked(sessionID, se)
+				m.syncDialogListenersLocked(sessionID, se)
 				tabs = snapshotTabsLocked(se)
 				newActiveCtx = tab.ctx
 			}
@@ -1342,6 +1402,7 @@ func (m *BrowserManager) registerFreshSessionLocked(
 ) []Tab {
 	se := &sessionEntry{tabs: []*tabEntry{tab}, activeIdx: 0, browserCtx: browserCtx, browserCancel: browserCancel}
 	m.installTargetListenerLocked(sessionID, se)
+	m.syncDialogListenersLocked(sessionID, se)
 	m.sessions[sessionID] = se
 	return snapshotTabsLocked(se)
 }
@@ -2099,6 +2160,7 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 	// given, so closing tab 0 silently ended the listener forever otherwise.
 	// A no-op (cheap targetID comparison) when index != 0.
 	m.installTargetListenerLocked(sessionID, se)
+	m.syncDialogListenersLocked(sessionID, se)
 	tabs = snapshotTabsLocked(se)
 	activeIdx = se.activeIdx
 	// Captured under the SAME lock that just settled activeIdx, for the same
@@ -2224,7 +2286,11 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1
-	m.installTargetListenerLocked(sessionID, se) // no-op: tab 0 is unchanged by an append
+	m.installTargetListenerLocked(sessionID, se)
+	// NOT a no-op, unlike the line above it: the target listener stays on
+	// tab 0, but a JavaScript dialog is per-target, so the tab just appended
+	// needs its OWN dialog listener or a dialog raised on it is invisible.
+	m.syncDialogListenersLocked(sessionID, se)
 	tabs := snapshotTabsLocked(se)
 	activeIdx := se.activeIdx
 	newCtx := newTab.ctx
@@ -2465,6 +2531,10 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1 // ADR-041 D2: adopted tabs become active by default
+	// The adopted tab is the one a click just opened, so it is the tab most
+	// likely to raise a dialog next. It gets its own dialog listener here;
+	// the target listener deliberately stays where it is.
+	m.syncDialogListenersLocked(sessionID, se)
 	tabs := snapshotTabsLocked(se)
 	activeIdx := se.activeIdx
 	active := tabs[activeIdx]
@@ -3252,6 +3322,7 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 		// ADR-041 fix F3 precedent: re-arm the passive target-created
 		// listener if tab 0 itself was replaced by this sweep.
 		m.installTargetListenerLocked(sessionID, se)
+		m.syncDialogListenersLocked(sessionID, se)
 	}
 	m.mu.Unlock()
 

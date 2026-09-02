@@ -120,7 +120,37 @@ var (
 	ctxKeyRunningTaskID        = &toolCtxKey{"runningTaskID"}
 	ctxKeyVerifierSessionScope = &toolCtxKey{"verifierSessionScope"}
 	ctxKeySearchPromotion      = &toolCtxKey{"searchPromotion"}
+	ctxKeyAutoDenyAsk          = &toolCtxKey{"autoDenyAsk"}
 )
+
+// WithAutoDenyAsk marks a tool context as belonging to a turn with NOBODY to
+// approve anything — a scheduled run, a heartbeat, an unattended delegated
+// sub-turn. It carries the turn loop's EXISTING AutoDenyAsk field, deliberately
+// and only that: a second, independently-computed notion of "is anyone there"
+// would drift from the first, and the two would eventually disagree about the
+// same turn.
+//
+// The agent loop already uses that field to auto-deny every `ask`-policy tool
+// call. This exposes the same fact to a tool that needs to refuse a specific
+// ARGUMENT rather than a whole call — something a tool policy cannot express,
+// because a policy cannot see arguments. browser_handle_dialog is the first:
+// dismissing a JavaScript dialog is always allowed, accepting one is agreeing
+// on the user's behalf to whatever the page asked.
+func WithAutoDenyAsk(ctx context.Context, v bool) context.Context {
+	return context.WithValue(ctx, ctxKeyAutoDenyAsk, v)
+}
+
+// ToolAutoDenyAsk reports whether this turn has nobody to approve anything.
+// FALSE when unset — an unstamped context is an ordinary attended turn, and
+// defaulting the other way would refuse arguments on every code path that has
+// not been taught to stamp it yet.
+func ToolAutoDenyAsk(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyAutoDenyAsk).(bool)
+	return v
+}
 
 // WithSearchPromotion returns a child context marking the enclosing
 // markLoaded call as originating from ToolSearch's query (by-description)
