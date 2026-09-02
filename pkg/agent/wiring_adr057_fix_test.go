@@ -266,6 +266,25 @@ func TestWiring_RootDelegationAdmission_RefusesPastCapThenAdmitsOnRelease(t *tes
 func TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "") // keep the env override inert
 
+	// Pin the memory reading. This test is about which VALUE seeds the
+	// root-delegation cap — the central Performance one, not a second
+	// hardcoded 16 — and it asserts that by admitting 16 delegations in a row.
+	// Left unpinned it reads the LIVE host, so on a loaded machine the memory
+	// gate clamps the effective cap to its floor of 2 and the precondition
+	// fails at admission 3 with "unexpectedly refused". That is the gate doing
+	// its job, not the regression this test guards, but it is indistinguishable
+	// from a real failure in a CI log.
+	//
+	// Observed before pinning: exit=1 with `reason=memory_pressure
+	// effective_concurrent_cap=2` logged beside the failure, passing on the
+	// next run at lower load. A green that depends on how busy the machine is
+	// is not a green.
+	restoreMem := config.SetMemoryProviderForTest(
+		func() (bool, bool) { return false, true },      // not under pressure, determinable
+		func() (uint64, bool) { return 64 << 30, true }, // 64 GiB available
+	)
+	t.Cleanup(restoreMem)
+
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
