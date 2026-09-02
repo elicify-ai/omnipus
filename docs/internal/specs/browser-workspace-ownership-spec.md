@@ -278,6 +278,40 @@ set is this* — is a correctness property and is untouched by that ruling; only
 
 ### 0.3 What still gates implementation — six measurements
 
+> **⚠️ OPERATOR RULING, 2026-09-02 — the measurement gates DO NOT BLOCK IMPLEMENTATION.**
+> Verbatim: *"regarding the measurement it is not a blocker, for now we work with the data we
+> have as assumption, after everything is proven working, you can run the measurement on a Fly
+> Linux machine yourself, but first finish everything else according to the goal."*
+>
+> **What this changes.** Every gate below that is a *measurement* — **G-1, G-3, G-4, G-5, G-6** —
+> is reclassified from *blocking* to **deferred-with-assumption**. Stream P ships against the
+> figures already in hand, and the ordering constraint *"all four are required before the pool is
+> built"* (D1.5) is **superseded** for those five. Implementation proceeds; the numbers are
+> confirmed afterwards on a Fly Linux host and the constants corrected if they were wrong.
+>
+> **What this does NOT change.** **G-2 is not a measurement — it is a yes/no about whether the
+> design works at all**, and it is unaffected by this ruling. It has since **PASSED** (commit
+> `3996b73aa`, real Chrome 152 on macOS: two distinct processes, distinct `--user-data-dir`,
+> a live `chrome.tabCapture` video track from the second, and the second Chrome unable to see the
+> first's tabs; proven able to fail by two mutations). Had it failed, the ruling above would not
+> have rescued the design.
+>
+> **The obligation that replaces the gate.** Every constant that would have been set by a deferred
+> gate must (a) be visibly named as an assumption at its definition site, with the figure it rests
+> on and the host it came from, and (b) be listed in the follow-up measurement pass. **An assumed
+> constant that reads as a measured one is the defect this ruling must not create** — the whole
+> point of the gate was that nobody had the number, and deferring the measurement does not confer
+> it. `PER_BROWSER_COST ≈ 182 MB` in particular is macOS, idle, and **not capturing**; a capturing
+> instance adds the injected extension plus encoding work, so the shipped figure is a **lower
+> bound**, and any headroom arithmetic must be conservative in that direction.
+>
+> **Follow-up, owed after the work is proven:** re-measure `PER_BROWSER_COST` on Linux with
+> capture running, in **PSS not RSS** (RSS over-counts by 2.6x on the measured box — 1118 MB vs
+> 434 MB), plus the gateway's own steady-state PSS (G-1); the cgroup-limit and pressure-signal
+> answers (G-3, G-4); cold-start latency with a warm profile (G-5); and whether memory or CPU
+> binds first at N browsers (G-6).
+
+
 None is a design question. All six are numbers nobody has, and each one either sizes the pool,
 validates it, or sets a constant this spec otherwise has to guess. Revision 3 listed two and
 sequenced the pool behind them; the consolidated ADR names four more, all under the heading
