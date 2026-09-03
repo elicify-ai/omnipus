@@ -1,0 +1,104 @@
+title: ViewResult
+description: >
+  The evaluated answer of one saved view — everything the SPA needs to draw
+  it (view-kinds-design-2026-09-03 §7). The server evaluates the view's
+  filter, grouping and aggregation through the SAME engine knowledge_find
+  uses (there is exactly one query engine) and precomputes every aggregate
+  under the gate rules, so the SPA only draws:
+
+  G2 — a number with a companion unit totals once per unit value, never
+  across units. Every total anywhere in this object is a LIST of per-unit
+  entries (ViewUnitTotal); no field can hold a combined figure.
+
+  G3 — a row whose unit is missing or unconfirmed is in `rows` (shown),
+  excluded from every total, and counted in the owning part's
+  excluded_count.
+
+  A view that cannot be answered arrives as a 200 with `refusal` set and
+  empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own
+  "NOT SERVABLE" line would state it — never as a transport error and never
+  as a silent empty table.
+type: object
+additionalProperties: false
+required:
+  - view
+  - label
+  - parts
+  - rows
+  - complete
+  - problems
+properties:
+  view:
+    type: string
+    minLength: 1
+    description: The view's name, exactly as addressed.
+    example: unpaid--by-client
+  label:
+    type: string
+    description: >
+      The display label — the view's own `label` when declared, else the
+      name, resolved server-side so no two renderers invent different
+      fallbacks.
+    example: "Unpaid, by client"
+  kind:
+    type: string
+    description: >
+      The view kind that authored this view (ViewDef.kind), echoed verbatim
+      when declared. Provenance — the renderer walks `parts`, never this.
+    example: summary
+  type:
+    type: string
+    description: The record type the view queries. Absent for an untyped view.
+    example: invoice
+  refusal:
+    description: >
+      Present exactly when the view could not be answered; `parts` and `rows`
+      are then empty and `complete` is false.
+    allOf:
+      - $ref: "./ViewResultRefusal.yaml"
+        x-go-type: ViewResultRefusal
+  parts:
+    type: array
+    description: >
+      The resolved part stack in render order — the view's own `parts`, or
+      the single part a legacy `layout`-only view maps to (a no-parts view
+      still serves as one table part). Always present — an empty array,
+      never null; empty exactly when `refusal` is set.
+    items:
+      $ref: "./ViewResultPart.yaml"
+      x-go-type: ViewResultPart
+  rows:
+    type: array
+    description: >
+      Every evaluated row, in the view's own order, shared by all parts —
+      one view answers one question about one row set (ViewDef.parts:
+      `filter` is shared and never per-part). Groups and crosstabs reference
+      these by path. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultFindRow.yaml"
+      x-go-type: VaultFindRow
+  rows_truncated:
+    type: boolean
+    description: >
+      True when the row set exceeded the server's render bound and `rows`
+      holds only the first page of it. Totals and subtotals are then NOT
+      computed (`complete` is false and complete_reason says why) — a total
+      over a truncated set would be a wrong number that looks right, which is
+      the one output this surface exists to make impossible.
+  complete:
+    type: boolean
+    description: >
+      True only when the evaluation covered everything the view asked to
+      cover — the same verdict, with the same workspace-scope exception, as
+      VaultFindResponse.complete, from which it is carried.
+  complete_reason:
+    type: string
+    description: Why the verdict is what it is. Empty when `complete` is true.
+  problems:
+    type: array
+    description: >
+      Everything the evaluation could not include, and why — carried through
+      from the engine unchanged. Always present — an empty array, never null.
+    items:
+      $ref: "./RecordProblem.yaml"
+      x-go-type: RecordProblem

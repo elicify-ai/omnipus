@@ -1,0 +1,109 @@
+title: ViewResultPart
+description: >
+  One rendered element of a view result's part stack
+  (view-kinds-design-2026-09-03 §7): the resolved part definition plus
+  whatever the server precomputed for it, so the SPA only draws.
+
+  WHICH DATA FIELDS ARE SET DEPENDS ON THE PART. `table`/`list`/`tiles`/
+  `columns`/`calendar` draw from the result's shared `rows` (plus `groups`
+  when the part or the view groups); `figures` carries `totals`; `chart`
+  carries `series`; `crosstab` carries `crosstab`. A per-part oneOf was
+  considered and rejected for the reason ViewPart.yaml gives — oapi-codegen
+  inlines it as eight anonymous structs — so absence of a data field means
+  "this part draws nothing of that kind", never "the server forgot".
+type: object
+additionalProperties: false
+required:
+  - part
+  - source
+properties:
+  part:
+    type: string
+    enum:
+      - table
+      - list
+      - tiles
+      - columns
+      - calendar
+      - figures
+      - chart
+      - crosstab
+    x-enum-varnames:
+      - ViewResultPartPartTable
+      - ViewResultPartPartList
+      - ViewResultPartPartTiles
+      - ViewResultPartPartColumns
+      - ViewResultPartPartCalendar
+      - ViewResultPartPartFigures
+      - ViewResultPartPartChart
+      - ViewResultPartPartCrosstab
+    description: >
+      Which element this draws — the same closed set as ViewPart.part, echoed
+      at the top level so a renderer can switch without descending into
+      `source`. Always equal to source.part by construction.
+    example: figures
+  source:
+    description: >
+      The RESOLVED part this element was drawn from — the entry of the view's
+      own `parts` stack, or the single part EffectiveParts synthesises from a
+      legacy `layout`-only view. Echoed so a reader can always tell what was
+      asked for, including the bindings (number/unit/date/choice/image) the
+      precomputed data was computed against.
+    allOf:
+      - $ref: "./ViewPart.yaml"
+        x-go-type: ViewPart
+  columns:
+    type: array
+    description: >
+      Resolved column property names for the table-ish parts, in render
+      order: the part's own `properties`, else the view's, else the record
+      type's declaration order. Absent on parts that draw no columns.
+    items:
+      type: string
+  groups:
+    type: array
+    description: >
+      Grouped rows with per-group, per-unit subtotals, present when this part
+      groups (its own `grouping`, else the view's). Group order is the
+      grouping's own order. Rows are referenced by path into the result's
+      shared `rows`.
+    items:
+      $ref: "./ViewResultGroup.yaml"
+      x-go-type: ViewResultGroup
+  totals:
+    type: array
+    description: >
+      Whole-result totals for this part, one entry per (property, op, unit
+      value) — the figures row, or a grouped table's footer. NEVER a combined
+      figure across units (G2): the list shape is the enforcement, and the
+      footer line explaining why is the renderer's to draw from it.
+    items:
+      $ref: "./ViewUnitTotal.yaml"
+      x-go-type: ViewUnitTotal
+  excluded_count:
+    type: integer
+    description: >
+      Rows excluded from every total of this part because their unit value is
+      missing or unconfirmed (G3). The rows themselves are still in `rows` —
+      shown, excluded, counted. Absent when the part's numbers declare no
+      companion unit, or when the part computes no totals.
+    example: 2
+  excluded_reason:
+    type: string
+    description: >
+      Why those rows were excluded, ready to render as the G3 footer line.
+      Present exactly when excluded_count is present and greater than zero.
+    example: "2 rows have no confirmed currency value and are excluded from every total"
+  series:
+    type: array
+    description: >
+      Chart parts only: the precomputed series, one per unit value (G2),
+      points aggregated per date bucket server-side.
+    items:
+      $ref: "./ViewResultSeries.yaml"
+      x-go-type: ViewResultSeries
+  crosstab:
+    description: "Crosstab parts only: the precomputed grid."
+    allOf:
+      - $ref: "./ViewResultCrosstab.yaml"
+        x-go-type: ViewResultCrosstab

@@ -6776,6 +6776,42 @@ func (e ViewPartAggregate) Valid() bool {
 	}
 }
 
+// Defines values for ViewResultPartPart.
+const (
+	ViewResultPartPartCalendar ViewResultPartPart = "calendar"
+	ViewResultPartPartChart    ViewResultPartPart = "chart"
+	ViewResultPartPartColumns  ViewResultPartPart = "columns"
+	ViewResultPartPartCrosstab ViewResultPartPart = "crosstab"
+	ViewResultPartPartFigures  ViewResultPartPart = "figures"
+	ViewResultPartPartList     ViewResultPartPart = "list"
+	ViewResultPartPartTable    ViewResultPartPart = "table"
+	ViewResultPartPartTiles    ViewResultPartPart = "tiles"
+)
+
+// Valid indicates whether the value is a known member of the ViewResultPartPart enum.
+func (e ViewResultPartPart) Valid() bool {
+	switch e {
+	case ViewResultPartPartCalendar:
+		return true
+	case ViewResultPartPartChart:
+		return true
+	case ViewResultPartPartColumns:
+		return true
+	case ViewResultPartPartCrosstab:
+		return true
+	case ViewResultPartPartFigures:
+		return true
+	case ViewResultPartPartList:
+		return true
+	case ViewResultPartPartTable:
+		return true
+	case ViewResultPartPartTiles:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceMountsStatus.
 const (
 	WorkspaceMountsStatusBroken WorkspaceMountsStatus = "broken"
@@ -16313,6 +16349,201 @@ type ViewPropertyConfig struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
+// ViewResult The evaluated answer of one saved view — everything the SPA needs to draw it (view-kinds-design-2026-09-03 §7). The server evaluates the view's filter, grouping and aggregation through the SAME engine knowledge_find uses (there is exactly one query engine) and precomputes every aggregate under the gate rules, so the SPA only draws:
+// G2 — a number with a companion unit totals once per unit value, never across units. Every total anywhere in this object is a LIST of per-unit entries (ViewUnitTotal); no field can hold a combined figure.
+// G3 — a row whose unit is missing or unconfirmed is in `rows` (shown), excluded from every total, and counted in the owning part's excluded_count.
+// A view that cannot be answered arrives as a 200 with `refusal` set and empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own "NOT SERVABLE" line would state it — never as a transport error and never as a silent empty table.
+type ViewResult struct {
+	// Complete True only when the evaluation covered everything the view asked to cover — the same verdict, with the same workspace-scope exception, as VaultFindResponse.complete, from which it is carried.
+	Complete bool `json:"complete"`
+
+	// CompleteReason Why the verdict is what it is. Empty when `complete` is true.
+	CompleteReason *string `json:"complete_reason,omitempty"`
+
+	// Kind The view kind that authored this view (ViewDef.kind), echoed verbatim when declared. Provenance — the renderer walks `parts`, never this.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label The display label — the view's own `label` when declared, else the name, resolved server-side so no two renderers invent different fallbacks.
+	Label string `json:"label"`
+
+	// Parts The resolved part stack in render order — the view's own `parts`, or the single part a legacy `layout`-only view maps to (a no-parts view still serves as one table part). Always present — an empty array, never null; empty exactly when `refusal` is set.
+	Parts []ViewResultPart `json:"parts"`
+
+	// Problems Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null.
+	Problems []RecordProblem `json:"problems"`
+
+	// Refusal Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false.
+	Refusal *ViewResultRefusal `json:"refusal,omitempty"`
+
+	// Rows Every evaluated row, in the view's own order, shared by all parts — one view answers one question about one row set (ViewDef.parts: `filter` is shared and never per-part). Groups and crosstabs reference these by path. Always present — an empty array, never null.
+	Rows []VaultFindRow `json:"rows"`
+
+	// RowsTruncated True when the row set exceeded the server's render bound and `rows` holds only the first page of it. Totals and subtotals are then NOT computed (`complete` is false and complete_reason says why) — a total over a truncated set would be a wrong number that looks right, which is the one output this surface exists to make impossible.
+	RowsTruncated *bool `json:"rows_truncated,omitempty"`
+
+	// Type The record type the view queries. Absent for an untyped view.
+	Type *string `json:"type,omitempty"`
+
+	// View The view's name, exactly as addressed.
+	View string `json:"view"`
+}
+
+// ViewResultCrosstab The precomputed grid of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7): two group properties and a number, reduced server-side into cells so the SPA only draws. Key order in `row_keys`/`column_keys` is the grid's render order (lexical over the case-folded key, ruling R-5/R-E — the same order grouping itself uses).
+type ViewResultCrosstab struct {
+	// Cells The aggregated cells. SPARSE — a (row, column) position with no values simply has no cell, and the SPA renders it empty rather than as a zero nobody computed. Always present — an empty array, never null.
+	Cells []ViewResultCrosstabCell `json:"cells"`
+
+	// ColumnKeys Every column key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null.
+	ColumnKeys []string `json:"column_keys"`
+
+	// ColumnProperty The property the grid's columns group by (the part's inner grouping key).
+	ColumnProperty string `json:"column_property"`
+
+	// ExcludedCount Rows excluded from every cell because their unit value is missing or unconfirmed (G3). Absent when the aggregated number declares no companion unit, or when nothing was excluded.
+	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedReason Why those rows were excluded, ready to render.
+	ExcludedReason *string `json:"excluded_reason,omitempty"`
+
+	// RowKeys Every row key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null.
+	RowKeys []string `json:"row_keys"`
+
+	// RowProperty The property the grid's rows group by (the part's outer grouping key).
+	RowProperty string `json:"row_property"`
+}
+
+// ViewResultCrosstabCell One aggregated cell of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7). Cells are precomputed server-side; the SPA lays them out on the row/column grid and draws. A cell over a number with a companion unit exists ONCE PER UNIT VALUE (G2) — two currencies at the same grid position are two cells, never one combined figure.
+type ViewResultCrosstabCell struct {
+	// Column The column group's rendered key. An empty string is the ABSENT group.
+	Column string `json:"column"`
+
+	// Count How many values were aggregated into this cell.
+	Count int `json:"count"`
+
+	// Row The row group's rendered key. An empty string is the ABSENT group, exactly as in ViewResultGroup.key.
+	Row string `json:"row"`
+
+	// Unit The unit value this cell covers. Absent when the aggregated number declares no companion unit property.
+	Unit *string `json:"unit,omitempty"`
+
+	// Value The aggregated value, as exact text (never a JSON number).
+	Value string `json:"value"`
+}
+
+// ViewResultGroup One group of a grouped view part (view-kinds-design-2026-09-03 §4, §7).
+// Groups REFERENCE rows by path rather than repeating them — the same shape VaultFindGroup takes, and for the same reason: a record holding several values of the grouped property appears in every group it belongs to (FR-028), and repeating it would render it three times.
+// The per-group subtotal row is PER UNIT under G2: `subtotals` is a list of ViewUnitTotal, one entry per (property, op, unit value), never one combined figure. Rows whose unit is missing or unconfirmed are counted in this group's own `excluded_count` (G3) — shown in the group, excluded from every subtotal.
+type ViewResultGroup struct {
+	// Absent True when this group holds the records where the grouped property is ABSENT, which `key` alone cannot express.
+	Absent *bool `json:"absent,omitempty"`
+
+	// Count Evaluated rows in this group.
+	Count int `json:"count"`
+
+	// ExcludedCount Rows in this group excluded from every subtotal because their unit value is missing or unconfirmed (G3). Absent when the subtotalled numbers declare no companion unit, or when nothing was excluded.
+	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedReason Why those rows were excluded, ready to render. Present exactly when excluded_count is present and greater than zero.
+	ExcludedReason *string `json:"excluded_reason,omitempty"`
+
+	// Key The group's value, rendered. An EMPTY key is the ABSENT group — read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+	Key string `json:"key"`
+
+	// Paths The member rows, by path into the result's own `rows` list. Always present — an empty array, never null.
+	Paths []string `json:"paths"`
+
+	// Subtotals Per-group totals, one entry per (property, op, unit value) under G2. Always present — an empty array, never null, so "this part declares no subtotals" is stated rather than inferred.
+	Subtotals []ViewUnitTotal `json:"subtotals"`
+}
+
+// ViewResultPart One rendered element of a view result's part stack (view-kinds-design-2026-09-03 §7): the resolved part definition plus whatever the server precomputed for it, so the SPA only draws.
+// WHICH DATA FIELDS ARE SET DEPENDS ON THE PART. `table`/`list`/`tiles`/ `columns`/`calendar` draw from the result's shared `rows` (plus `groups` when the part or the view groups); `figures` carries `totals`; `chart` carries `series`; `crosstab` carries `crosstab`. A per-part oneOf was considered and rejected for the reason ViewPart.yaml gives — oapi-codegen inlines it as eight anonymous structs — so absence of a data field means "this part draws nothing of that kind", never "the server forgot".
+type ViewResultPart struct {
+	// Columns Resolved column property names for the table-ish parts, in render order: the part's own `properties`, else the view's, else the record type's declaration order. Absent on parts that draw no columns.
+	Columns *[]string `json:"columns,omitempty"`
+
+	// Crosstab Crosstab parts only: the precomputed grid.
+	Crosstab *ViewResultCrosstab `json:"crosstab,omitempty"`
+
+	// ExcludedCount Rows excluded from every total of this part because their unit value is missing or unconfirmed (G3). The rows themselves are still in `rows` — shown, excluded, counted. Absent when the part's numbers declare no companion unit, or when the part computes no totals.
+	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedReason Why those rows were excluded, ready to render as the G3 footer line. Present exactly when excluded_count is present and greater than zero.
+	ExcludedReason *string `json:"excluded_reason,omitempty"`
+
+	// Groups Grouped rows with per-group, per-unit subtotals, present when this part groups (its own `grouping`, else the view's). Group order is the grouping's own order. Rows are referenced by path into the result's shared `rows`.
+	Groups *[]ViewResultGroup `json:"groups,omitempty"`
+
+	// Part Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
+	Part ViewResultPartPart `json:"part"`
+
+	// Series Chart parts only: the precomputed series, one per unit value (G2), points aggregated per date bucket server-side.
+	Series *[]ViewResultSeries `json:"series,omitempty"`
+
+	// Source The RESOLVED part this element was drawn from — the entry of the view's own `parts` stack, or the single part EffectiveParts synthesises from a legacy `layout`-only view. Echoed so a reader can always tell what was asked for, including the bindings (number/unit/date/choice/image) the precomputed data was computed against.
+	Source ViewPart `json:"source"`
+
+	// Totals Whole-result totals for this part, one entry per (property, op, unit value) — the figures row, or a grouped table's footer. NEVER a combined figure across units (G2): the list shape is the enforcement, and the footer line explaining why is the renderer's to draw from it.
+	Totals *[]ViewUnitTotal `json:"totals,omitempty"`
+}
+
+// ViewResultPartPart Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
+type ViewResultPartPart string
+
+// ViewResultPoint One aggregated point of a chart series (view-kinds-design-2026-09-03 §2.2, §7). The server aggregates; the SPA only draws — a chart part's data arrives as points, never as raw rows the client would have to reduce itself, because a client-side reduction is a second implementation of G2 waiting to disagree with the first.
+type ViewResultPoint struct {
+	// Count How many values were aggregated into this point.
+	Count int `json:"count"`
+
+	// Key The date bucket, rendered exactly as the date property renders (ISO 8601), so lexical order is chronological order.
+	Key string `json:"key"`
+
+	// Value The aggregated value at this point, as exact text (never a JSON number).
+	Value string `json:"value"`
+}
+
+// ViewResultRefusal WHY a saved view cannot be answered (view-kinds-design-2026-09-03 §7, FR-018b's "the reason is NAMED"). It is the wire form of the same refusal the backend already states in prose — records.ViewServeRefusal, the shape knowledge_describe's "NOT SERVABLE by knowledge_find" line reads — so the SPA can show the operator WHY a view cannot answer instead of a blank panel.
+// A refusal is a 200 with this object set and no data, never a transport error: the view is real, the request was well-formed, and the reason is the answer.
+type ViewResultRefusal struct {
+	// Code Machine-readable refusal code. NOT a closed enum, deliberately: the codes are owned by the backend's own refusal vocabularies and new ones must be able to arrive without a contract change silently dropping them at the SPA's validation edge. Current emitters: "unknown_view" (no view of that name is addressable here — which is also what an out-of-scope collection answers, indistinguishably, per FR-053), "view_disabled" (records.ServeRefusalDisabled: stored but never applied, FR-105), "no_drawable_parts" (a layout with no part equivalent, e.g. `map`, and no explicit parts), every records.ViewRejectionCode (a view file that exists but was refused at load, e.g. "view_unknown_property"), and every RecordProblem.code a refused evaluation names (e.g. "index_unavailable").
+	Code string `json:"code"`
+
+	// Reason What cannot be done, in the operator's own vocabulary.
+	Reason string `json:"reason"`
+
+	// Remedy What to do about it. May be empty when the underlying refusal named none, but the field is always present so a renderer never invents one.
+	Remedy string `json:"remedy"`
+}
+
+// ViewResultSeries One line of a chart part (view-kinds-design-2026-09-03 §7). A chart over a number with a companion unit draws ONE SERIES PER UNIT VALUE (G2) — the series are never merged into one line, because a line that sums euros and hours is a wrong picture that looks right. A number with no companion unit produces exactly one series with `unit` absent.
+type ViewResultSeries struct {
+	// Points The aggregated points in date order. Always present — an empty array, never null.
+	Points []ViewResultPoint `json:"points"`
+
+	// Unit The unit value this series covers. Absent when the plotted number declares no companion unit property.
+	Unit *string `json:"unit,omitempty"`
+}
+
+// ViewUnitTotal One computed reduction over one number property, FOR ONE UNIT VALUE (view-kinds-design-2026-09-03 §3 G2).
+// A number carrying a companion unit (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units, so a view result carries a LIST of these — one entry per distinct unit value — and no field anywhere in the result can hold a combined figure. That is the load-bearing decision of this type: a sum across currencies is a wrong number that looks right, and the shape makes it inexpressible rather than merely discouraged.
+// A number with NO companion unit produces exactly one entry with `unit` absent. The two cases are distinguished by the FIELD'S PRESENCE, never by a sentinel value, because an empty string is a legitimate enum value (R-3).
+type ViewUnitTotal struct {
+	// Count How many values were included in this total. Rows excluded under G3 (missing/unconfirmed unit) are NOT in this count — they are in the enclosing scope's excluded_count.
+	Count int `json:"count"`
+
+	// Op The reduction applied.
+	Op ViewPartAggregate `json:"op"`
+
+	// Property The number property this total reduces.
+	Property string `json:"property"`
+
+	// Unit The unit value this total covers (e.g. "SGD"). ABSENT when the number declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped.
+	Unit *string `json:"unit,omitempty"`
+
+	// Value The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
+	Value string `json:"value"`
+}
+
 // VoiceProvider Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over.
 type VoiceProvider struct {
 	// Provider Identifier of the currently active voice provider (e.g. "openai-tts", "elevenlabs", "google-tts", "azure-speech", "piper"). null when no voice provider is configured globally — the SPA renders the field as disabled.
@@ -16642,6 +16873,15 @@ type GetKnowledgeGraphParamsKind string
 type GetKnowledgeOutlineParams struct {
 	// Path Workspace-relative path of the markdown file.
 	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeViewResultParams defines parameters for GetKnowledgeViewResult.
+type GetKnowledgeViewResultParams struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id holding the view.
+	CollectionId string `form:"collection_id" json:"collection_id"`
+
+	// View The saved view's name, exactly as declared.
+	View string `form:"view" json:"view"`
 }
 
 // UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.

@@ -1,0 +1,28 @@
+title: ViewResultPoint
+description: >
+  One aggregated point of a chart series (view-kinds-design-2026-09-03 §2.2,
+  §7). The server aggregates; the SPA only draws — a chart part's data arrives
+  as points, never as raw rows the client would have to reduce itself, because
+  a client-side reduction is a second implementation of G2 waiting to disagree
+  with the first.
+type: object
+additionalProperties: false
+required:
+  - key
+  - value
+  - count
+properties:
+  key:
+    type: string
+    description: >
+      The date bucket, rendered exactly as the date property renders
+      (ISO 8601), so lexical order is chronological order.
+    example: "2026-05-01"
+  value:
+    type: string
+    description: The aggregated value at this point, as exact text (never a JSON number).
+    example: "3200.00"
+  count:
+    type: integer
+    description: How many values were aggregated into this point.
+    example: 3

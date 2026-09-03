@@ -308,6 +308,29 @@ components:
       $ref: ./components/schemas/ViewPart.yaml
     ViewPartAggregate:
       $ref: ./components/schemas/ViewPartAggregate.yaml
+    # ── View results (view-kinds-design-2026-09-03 §7) — what the SPA fetches
+    # to DRAW a saved view: resolved parts, grouped rows with per-group
+    # per-unit subtotals (G2), the G3 excluded counter, and precomputed
+    # figures/chart/crosstab data. A view that cannot answer arrives with a
+    # `refusal` naming why, matching the backend's own serve-refusal shape.
+    ViewResult:
+      $ref: ./components/schemas/ViewResult.yaml
+    ViewResultPart:
+      $ref: ./components/schemas/ViewResultPart.yaml
+    ViewResultGroup:
+      $ref: ./components/schemas/ViewResultGroup.yaml
+    ViewUnitTotal:
+      $ref: ./components/schemas/ViewUnitTotal.yaml
+    ViewResultSeries:
+      $ref: ./components/schemas/ViewResultSeries.yaml
+    ViewResultPoint:
+      $ref: ./components/schemas/ViewResultPoint.yaml
+    ViewResultCrosstab:
+      $ref: ./components/schemas/ViewResultCrosstab.yaml
+    ViewResultCrosstabCell:
+      $ref: ./components/schemas/ViewResultCrosstabCell.yaml
+    ViewResultRefusal:
+      $ref: ./components/schemas/ViewResultRefusal.yaml
     # ── ViewDef — ADR-068 D10 and D24.1, spec FR-018b/FR-018d, FR-105, FR-109 ───
     # HOSTED INLINE, NOT IN ITS OWN FILE, for the same mechanical reason
     # VaultFindRequest is (see its note below): a view's
@@ -8116,6 +8139,73 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/view:
+    get:
+      operationId: getKnowledgeViewResult
+      summary: Evaluate a saved view and return everything needed to draw it
+      description: >
+        Resolves a saved view by name within one in-scope knowledge base,
+        evaluates its filter/grouping/aggregation through the SAME engine
+        knowledge_find uses (there is exactly one query engine), and returns
+        the view's resolved part stack with every aggregate precomputed
+        server-side (view-kinds-design-2026-09-03 §7) — per-group subtotals
+        and totals ONCE PER UNIT VALUE, never across units (G2), with rows
+        whose unit is missing shown, excluded from every total and counted
+        (G3). A legacy view with no `parts` serves as its single
+        layout-derived part.
+
+
+        A view that cannot be answered — unknown, stored disabled (FR-105),
+        refused at load, a layout with no drawable part, or an engine
+        refusal — returns 200 with `refusal` set and empty parts/rows, so
+        the client can show WHY. A collection_id outside this workspace's
+        scope answers exactly like an unknown view (FR-052/FR-053): the
+        error channel must not confirm what exists elsewhere.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: collection_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The KnowledgeBaseInfo.collection_id holding the view.
+        example: "kb_3d1c9a7e5b2f4806"
+      - name: view
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The saved view's name, exactly as declared.
+        example: "unpaid--by-client"
+      responses:
+        '200':
+          description: The evaluated view, or the named reason it cannot answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ViewResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

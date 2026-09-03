@@ -521,6 +521,104 @@ type ViewGroupBy = {
   property: string;
   direction?: ("asc" | "desc") | undefined;
 };
+type ViewResult = {
+  view: string;
+  label: string;
+  kind?: string | undefined;
+  type?: string | undefined;
+  refusal?: ViewResultRefusal | undefined;
+  parts: Array<ViewResultPart>;
+  rows: Array<VaultFindRow>;
+  rows_truncated?: boolean | undefined;
+  complete: boolean;
+  complete_reason?: string | undefined;
+  problems: Array<RecordProblem>;
+};
+type ViewResultRefusal = {
+  code: string;
+  reason: string;
+  remedy: string;
+};
+type ViewResultPart = {
+  part:
+    | "table"
+    | "list"
+    | "tiles"
+    | "columns"
+    | "calendar"
+    | "figures"
+    | "chart"
+    | "crosstab";
+  source: ViewPart;
+  columns?: Array<string> | undefined;
+  groups?: Array<ViewResultGroup> | undefined;
+  totals?: Array<ViewUnitTotal> | undefined;
+  excluded_count?: number | undefined;
+  excluded_reason?: string | undefined;
+  series?: Array<ViewResultSeries> | undefined;
+  crosstab?: ViewResultCrosstab | undefined;
+};
+type ViewResultGroup = {
+  key: string;
+  absent?: boolean | undefined;
+  count: number;
+  paths: Array<string>;
+  subtotals: Array<ViewUnitTotal>;
+  excluded_count?: number | undefined;
+  excluded_reason?: string | undefined;
+};
+type ViewUnitTotal = {
+  property: string;
+  op: ViewPartAggregate;
+  unit?: string | undefined;
+  value: string;
+  count: number;
+};
+type ViewResultSeries = {
+  unit?: string | undefined;
+  points: Array<ViewResultPoint>;
+};
+type ViewResultPoint = {
+  key: string;
+  value: string;
+  count: number;
+};
+type ViewResultCrosstab = {
+  row_property: string;
+  column_property: string;
+  row_keys: Array<string>;
+  column_keys: Array<string>;
+  cells: Array<ViewResultCrosstabCell>;
+  excluded_count?: number | undefined;
+  excluded_reason?: string | undefined;
+};
+type ViewResultCrosstabCell = {
+  row: string;
+  column: string;
+  unit?: string | undefined;
+  value: string;
+  count: number;
+};
+type VaultFindRow = {
+  id?: string | undefined;
+  path: string;
+  title: string;
+  line?: number | undefined;
+  status?: ("open" | "done") | undefined;
+  text?: string | undefined;
+  cells: Array<VaultFindCell>;
+  joins: Array<VaultFindJoin>;
+  stale?: boolean | undefined;
+};
+type VaultFindCell = {
+  property: string;
+  value: string;
+};
+type VaultFindJoin = {
+  relation: string;
+  target: string;
+  cells: Array<VaultFindCell>;
+};
 type ViewDef = {
   name: string;
   type?: string | undefined;
@@ -650,26 +748,6 @@ type VaultIndexState = {
   returned: number;
   agreeing: number;
   epoch?: number | undefined;
-};
-type VaultFindRow = {
-  id?: string | undefined;
-  path: string;
-  title: string;
-  line?: number | undefined;
-  status?: ("open" | "done") | undefined;
-  text?: string | undefined;
-  cells: Array<VaultFindCell>;
-  joins: Array<VaultFindJoin>;
-  stale?: boolean | undefined;
-};
-type VaultFindCell = {
-  property: string;
-  value: string;
-};
-type VaultFindJoin = {
-  relation: string;
-  target: string;
-  cells: Array<VaultFindCell>;
 };
 type VaultFindGroup = {
   property: string;
@@ -3883,6 +3961,180 @@ export const KnowledgeOutline: z.ZodType<KnowledgeOutline> = z.object({
   headings: z.array(KnowledgeOutlineHeading),
   frontmatter_malformed: z.boolean().optional(),
 });
+export const ViewResultRefusal: z.ZodType<ViewResultRefusal> = z.object({
+  code: z.string().min(1),
+  reason: z.string().min(1),
+  remedy: z.string(),
+});
+export const ViewPartAggregate = z.enum(["sum", "avg", "min", "max", "count"]);
+export const ViewGroupBy: z.ZodType<ViewGroupBy> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
+});
+export const ViewPart: z.ZodType<ViewPart> = z.object({
+  part: z.enum([
+    "table",
+    "list",
+    "tiles",
+    "columns",
+    "calendar",
+    "figures",
+    "chart",
+    "crosstab",
+  ]),
+  number: z.string().min(1).optional(),
+  unit: z.string().min(1).optional(),
+  date: z.string().min(1).optional(),
+  image: z.string().min(1).optional(),
+  choice: z.string().min(1).optional(),
+  aggregate: ViewPartAggregate.optional(),
+  grouping: z.array(ViewGroupBy).max(2).optional(),
+  subtotals: z.record(ViewPartAggregate).optional(),
+  properties: z.array(z.string().min(1)).optional(),
+});
+export const ViewUnitTotal: z.ZodType<ViewUnitTotal> = z.object({
+  property: z.string().min(1),
+  op: ViewPartAggregate,
+  unit: z.string().optional(),
+  value: z.string(),
+  count: z.number().int(),
+});
+export const ViewResultGroup: z.ZodType<ViewResultGroup> = z.object({
+  key: z.string(),
+  absent: z.boolean().optional(),
+  count: z.number().int(),
+  paths: z.array(z.string()),
+  subtotals: z.array(ViewUnitTotal),
+  excluded_count: z.number().int().optional(),
+  excluded_reason: z.string().optional(),
+});
+export const ViewResultPoint: z.ZodType<ViewResultPoint> = z.object({
+  key: z.string(),
+  value: z.string(),
+  count: z.number().int(),
+});
+export const ViewResultSeries: z.ZodType<ViewResultSeries> = z.object({
+  unit: z.string().optional(),
+  points: z.array(ViewResultPoint),
+});
+export const ViewResultCrosstabCell: z.ZodType<ViewResultCrosstabCell> =
+  z.object({
+    row: z.string(),
+    column: z.string(),
+    unit: z.string().optional(),
+    value: z.string(),
+    count: z.number().int(),
+  });
+export const ViewResultCrosstab: z.ZodType<ViewResultCrosstab> = z.object({
+  row_property: z.string().min(1),
+  column_property: z.string().min(1),
+  row_keys: z.array(z.string()),
+  column_keys: z.array(z.string()),
+  cells: z.array(ViewResultCrosstabCell),
+  excluded_count: z.number().int().optional(),
+  excluded_reason: z.string().optional(),
+});
+export const ViewResultPart: z.ZodType<ViewResultPart> = z.object({
+  part: z.enum([
+    "table",
+    "list",
+    "tiles",
+    "columns",
+    "calendar",
+    "figures",
+    "chart",
+    "crosstab",
+  ]),
+  source: ViewPart,
+  columns: z.array(z.string()).optional(),
+  groups: z.array(ViewResultGroup).optional(),
+  totals: z.array(ViewUnitTotal).optional(),
+  excluded_count: z.number().int().optional(),
+  excluded_reason: z.string().optional(),
+  series: z.array(ViewResultSeries).optional(),
+  crosstab: ViewResultCrosstab.optional(),
+});
+export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
+  property: z.string().min(1),
+  value: z.string(),
+});
+export const VaultFindJoin: z.ZodType<VaultFindJoin> = z.object({
+  relation: z.string().min(1),
+  target: z.string().min(1),
+  cells: z.array(VaultFindCell),
+});
+export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
+  id: z.string().min(1).optional(),
+  path: z.string().min(1),
+  title: z.string(),
+  line: z.number().int().gte(1).optional(),
+  status: z.enum(["open", "done"]).optional(),
+  text: z.string().optional(),
+  cells: z.array(VaultFindCell),
+  joins: z.array(VaultFindJoin),
+  stale: z.boolean().optional(),
+});
+export const RecordProblem: z.ZodType<RecordProblem> = z.object({
+  code: z.enum([
+    "missing_schema_version",
+    "duplicate_type_declaration",
+    "unknown_property",
+    "unknown_enum_value",
+    "missing_required",
+    "arity_violation",
+    "enum_violation",
+    "type_mismatch",
+    "dangling_relation",
+    "relation_type_mismatch",
+    "cardinality_violation",
+    "duplicate_id",
+    "integer_not_whole",
+    "integer_out_of_range",
+    "candidate_cap_exceeded",
+    "hop_limit_exceeded",
+    "hop_traversal_bound_exceeded",
+    "page_size_clamped",
+    "scope_truncated",
+    "text_search_truncated",
+    "aggregate_refused",
+    "index_unavailable",
+    "evaluation_bound_exceeded",
+    "unsupported_operator",
+    "unsupported_parameter",
+    "empty_like_pattern",
+    "empty_in_list",
+    "literal_type_mismatch",
+    "ordering_on_many_property",
+    "comparison_undefined",
+    "date_format_ambiguous",
+    "decimal_scale_exceeded",
+    "stale_record",
+    "orphan_row",
+    "stale_cursor",
+    "unknown_view",
+    "unknown_record_type",
+  ]),
+  reason: z.string().min(1),
+  records: z.array(z.string().min(1)),
+  property: z.string().min(1).optional(),
+  expected: z.string().optional(),
+  fix: z.string().optional(),
+  permitted: z.array(z.string()).optional(),
+  paths: z.array(z.string().min(1)).optional(),
+});
+export const ViewResult: z.ZodType<ViewResult> = z.object({
+  view: z.string().min(1),
+  label: z.string(),
+  kind: z.string().optional(),
+  type: z.string().optional(),
+  refusal: ViewResultRefusal.optional(),
+  parts: z.array(ViewResultPart),
+  rows: z.array(VaultFindRow),
+  rows_truncated: z.boolean().optional(),
+  complete: z.boolean(),
+  complete_reason: z.string().optional(),
+  problems: z.array(RecordProblem),
+});
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -4142,54 +4394,6 @@ export const RecordType: z.ZodType<RecordType> = z.object({
   properties: z.array(PropertyDef),
   source_path: z.string().optional(),
 });
-export const RecordProblem: z.ZodType<RecordProblem> = z.object({
-  code: z.enum([
-    "missing_schema_version",
-    "duplicate_type_declaration",
-    "unknown_property",
-    "unknown_enum_value",
-    "missing_required",
-    "arity_violation",
-    "enum_violation",
-    "type_mismatch",
-    "dangling_relation",
-    "relation_type_mismatch",
-    "cardinality_violation",
-    "duplicate_id",
-    "integer_not_whole",
-    "integer_out_of_range",
-    "candidate_cap_exceeded",
-    "hop_limit_exceeded",
-    "hop_traversal_bound_exceeded",
-    "page_size_clamped",
-    "scope_truncated",
-    "text_search_truncated",
-    "aggregate_refused",
-    "index_unavailable",
-    "evaluation_bound_exceeded",
-    "unsupported_operator",
-    "unsupported_parameter",
-    "empty_like_pattern",
-    "empty_in_list",
-    "literal_type_mismatch",
-    "ordering_on_many_property",
-    "comparison_undefined",
-    "date_format_ambiguous",
-    "decimal_scale_exceeded",
-    "stale_record",
-    "orphan_row",
-    "stale_cursor",
-    "unknown_view",
-    "unknown_record_type",
-  ]),
-  reason: z.string().min(1),
-  records: z.array(z.string().min(1)),
-  property: z.string().min(1).optional(),
-  expected: z.string().optional(),
-  fix: z.string().optional(),
-  permitted: z.array(z.string()).optional(),
-  paths: z.array(z.string().min(1)).optional(),
-});
 export const RecordSchema: z.ZodType<RecordSchema> = z.object({
   types: z.array(RecordType),
   problems: z.array(RecordProblem),
@@ -4354,35 +4558,9 @@ export const RelationWriteRequest = z.object({
   op: z.enum(["add", "remove", "replace"]),
   targets: z.array(z.string().min(1)),
 });
-export const ViewGroupBy: z.ZodType<ViewGroupBy> = z.object({
-  property: z.string().min(1),
-  direction: z.enum(["asc", "desc"]).optional(),
-});
 export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
   .object({ display_name: z.string().min(1) })
   .partial();
-export const ViewPartAggregate = z.enum(["sum", "avg", "min", "max", "count"]);
-export const ViewPart: z.ZodType<ViewPart> = z.object({
-  part: z.enum([
-    "table",
-    "list",
-    "tiles",
-    "columns",
-    "calendar",
-    "figures",
-    "chart",
-    "crosstab",
-  ]),
-  number: z.string().min(1).optional(),
-  unit: z.string().min(1).optional(),
-  date: z.string().min(1).optional(),
-  image: z.string().min(1).optional(),
-  choice: z.string().min(1).optional(),
-  aggregate: ViewPartAggregate.optional(),
-  grouping: z.array(ViewGroupBy).max(2).optional(),
-  subtotals: z.record(ViewPartAggregate).optional(),
-  properties: z.array(z.string().min(1)).optional(),
-});
 export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
   z
     .object({
@@ -4496,26 +4674,6 @@ export const VaultIndexState: z.ZodType<VaultIndexState> = z.object({
   returned: z.number().int().gte(0),
   agreeing: z.number().int().gte(0),
   epoch: z.number().int().gte(0).optional(),
-});
-export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
-  property: z.string().min(1),
-  value: z.string(),
-});
-export const VaultFindJoin: z.ZodType<VaultFindJoin> = z.object({
-  relation: z.string().min(1),
-  target: z.string().min(1),
-  cells: z.array(VaultFindCell),
-});
-export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
-  id: z.string().min(1).optional(),
-  path: z.string().min(1),
-  title: z.string(),
-  line: z.number().int().gte(1).optional(),
-  status: z.enum(["open", "done"]).optional(),
-  text: z.string().optional(),
-  cells: z.array(VaultFindCell),
-  joins: z.array(VaultFindJoin),
-  stale: z.boolean().optional(),
 });
 export const VaultFindSubgroup: z.ZodType<VaultFindSubgroup> = z.object({
   property: z.string().min(1),
@@ -7219,6 +7377,66 @@ A limit above the server cap is clamped and the clamp is reported (FR-037). A co
       },
     ],
     response: KnowledgeSearchResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/view",
+    alias: "getKnowledgeViewResult",
+    description: `Resolves a saved view by name within one in-scope knowledge base, evaluates its filter/grouping/aggregation through the SAME engine knowledge_find uses (there is exactly one query engine), and returns the view&#x27;s resolved part stack with every aggregate precomputed server-side (view-kinds-design-2026-09-03 §7) — per-group subtotals and totals ONCE PER UNIT VALUE, never across units (G2), with rows whose unit is missing shown, excluded from every total and counted (G3). A legacy view with no &#x60;parts&#x60; serves as its single layout-derived part.
+
+A view that cannot be answered — unknown, stored disabled (FR-105), refused at load, a layout with no drawable part, or an engine refusal — returns 200 with &#x60;refusal&#x60; set and empty parts/rows, so the client can show WHY. A collection_id outside this workspace&#x27;s scope answers exactly like an unknown view (FR-052/FR-053): the error channel must not confirm what exists elsewhere.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "collection_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "view",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: ViewResult,
     errors: [
       {
         status: 400,

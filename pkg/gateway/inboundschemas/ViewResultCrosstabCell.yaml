@@ -1,0 +1,39 @@
+title: ViewResultCrosstabCell
+description: >
+  One aggregated cell of a crosstab part (view-kinds-design-2026-09-03 §2.2,
+  §7). Cells are precomputed server-side; the SPA lays them out on the
+  row/column grid and draws. A cell over a number with a companion unit exists
+  ONCE PER UNIT VALUE (G2) — two currencies at the same grid position are two
+  cells, never one combined figure.
+type: object
+additionalProperties: false
+required:
+  - row
+  - column
+  - value
+  - count
+properties:
+  row:
+    type: string
+    description: >
+      The row group's rendered key. An empty string is the ABSENT group,
+      exactly as in ViewResultGroup.key.
+    example: "Acme Pte Ltd"
+  column:
+    type: string
+    description: The column group's rendered key. An empty string is the ABSENT group.
+    example: "overdue"
+  unit:
+    type: string
+    description: >
+      The unit value this cell covers. Absent when the aggregated number
+      declares no companion unit property.
+    example: SGD
+  value:
+    type: string
+    description: The aggregated value, as exact text (never a JSON number).
+    example: "820.00"
+  count:
+    type: integer
+    description: How many values were aggregated into this cell.
+    example: 2

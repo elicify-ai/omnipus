@@ -2829,6 +2829,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/knowledge/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Evaluate a saved view and return everything needed to draw it
+         * @description Resolves a saved view by name within one in-scope knowledge base, evaluates its filter/grouping/aggregation through the SAME engine knowledge_find uses (there is exactly one query engine), and returns the view's resolved part stack with every aggregate precomputed server-side (view-kinds-design-2026-09-03 §7) — per-group subtotals and totals ONCE PER UNIT VALUE, never across units (G2), with rows whose unit is missing shown, excluded from every total and counted (G3). A legacy view with no `parts` serves as its single layout-derived part.
+         *
+         *     A view that cannot be answered — unknown, stored disabled (FR-105), refused at load, a layout with no drawable part, or an engine refusal — returns 200 with `refusal` set and empty parts/rows, so the client can show WHY. A collection_id outside this workspace's scope answers exactly like an unknown view (FR-052/FR-053): the error channel must not confirm what exists elsewhere.
+         */
+        get: operations["getKnowledgeViewResult"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -5474,6 +5496,255 @@ export interface components {
          * @enum {string}
          */
         ViewPartAggregate: "sum" | "avg" | "min" | "max" | "count";
+        /**
+         * ViewResult
+         * @description The evaluated answer of one saved view — everything the SPA needs to draw it (view-kinds-design-2026-09-03 §7). The server evaluates the view's filter, grouping and aggregation through the SAME engine knowledge_find uses (there is exactly one query engine) and precomputes every aggregate under the gate rules, so the SPA only draws:
+         *     G2 — a number with a companion unit totals once per unit value, never across units. Every total anywhere in this object is a LIST of per-unit entries (ViewUnitTotal); no field can hold a combined figure.
+         *     G3 — a row whose unit is missing or unconfirmed is in `rows` (shown), excluded from every total, and counted in the owning part's excluded_count.
+         *     A view that cannot be answered arrives as a 200 with `refusal` set and empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own "NOT SERVABLE" line would state it — never as a transport error and never as a silent empty table.
+         */
+        ViewResult: {
+            /**
+             * @description The view's name, exactly as addressed.
+             * @example unpaid--by-client
+             */
+            view: string;
+            /**
+             * @description The display label — the view's own `label` when declared, else the name, resolved server-side so no two renderers invent different fallbacks.
+             * @example Unpaid, by client
+             */
+            label: string;
+            /**
+             * @description The view kind that authored this view (ViewDef.kind), echoed verbatim when declared. Provenance — the renderer walks `parts`, never this.
+             * @example summary
+             */
+            kind?: string;
+            /**
+             * @description The record type the view queries. Absent for an untyped view.
+             * @example invoice
+             */
+            type?: string;
+            /** @description Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false. */
+            refusal?: components["schemas"]["ViewResultRefusal"];
+            /** @description The resolved part stack in render order — the view's own `parts`, or the single part a legacy `layout`-only view maps to (a no-parts view still serves as one table part). Always present — an empty array, never null; empty exactly when `refusal` is set. */
+            parts: components["schemas"]["ViewResultPart"][];
+            /** @description Every evaluated row, in the view's own order, shared by all parts — one view answers one question about one row set (ViewDef.parts: `filter` is shared and never per-part). Groups and crosstabs reference these by path. Always present — an empty array, never null. */
+            rows: components["schemas"]["VaultFindRow"][];
+            /** @description True when the row set exceeded the server's render bound and `rows` holds only the first page of it. Totals and subtotals are then NOT computed (`complete` is false and complete_reason says why) — a total over a truncated set would be a wrong number that looks right, which is the one output this surface exists to make impossible. */
+            rows_truncated?: boolean;
+            /** @description True only when the evaluation covered everything the view asked to cover — the same verdict, with the same workspace-scope exception, as VaultFindResponse.complete, from which it is carried. */
+            complete: boolean;
+            /** @description Why the verdict is what it is. Empty when `complete` is true. */
+            complete_reason?: string;
+            /** @description Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null. */
+            problems: components["schemas"]["RecordProblem"][];
+        };
+        /**
+         * ViewResultPart
+         * @description One rendered element of a view result's part stack (view-kinds-design-2026-09-03 §7): the resolved part definition plus whatever the server precomputed for it, so the SPA only draws.
+         *     WHICH DATA FIELDS ARE SET DEPENDS ON THE PART. `table`/`list`/`tiles`/ `columns`/`calendar` draw from the result's shared `rows` (plus `groups` when the part or the view groups); `figures` carries `totals`; `chart` carries `series`; `crosstab` carries `crosstab`. A per-part oneOf was considered and rejected for the reason ViewPart.yaml gives — oapi-codegen inlines it as eight anonymous structs — so absence of a data field means "this part draws nothing of that kind", never "the server forgot".
+         */
+        ViewResultPart: {
+            /**
+             * @description Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
+             * @example figures
+             * @enum {string}
+             */
+            part: "table" | "list" | "tiles" | "columns" | "calendar" | "figures" | "chart" | "crosstab";
+            /** @description The RESOLVED part this element was drawn from — the entry of the view's own `parts` stack, or the single part EffectiveParts synthesises from a legacy `layout`-only view. Echoed so a reader can always tell what was asked for, including the bindings (number/unit/date/choice/image) the precomputed data was computed against. */
+            source: components["schemas"]["ViewPart"];
+            /** @description Resolved column property names for the table-ish parts, in render order: the part's own `properties`, else the view's, else the record type's declaration order. Absent on parts that draw no columns. */
+            columns?: string[];
+            /** @description Grouped rows with per-group, per-unit subtotals, present when this part groups (its own `grouping`, else the view's). Group order is the grouping's own order. Rows are referenced by path into the result's shared `rows`. */
+            groups?: components["schemas"]["ViewResultGroup"][];
+            /** @description Whole-result totals for this part, one entry per (property, op, unit value) — the figures row, or a grouped table's footer. NEVER a combined figure across units (G2): the list shape is the enforcement, and the footer line explaining why is the renderer's to draw from it. */
+            totals?: components["schemas"]["ViewUnitTotal"][];
+            /**
+             * @description Rows excluded from every total of this part because their unit value is missing or unconfirmed (G3). The rows themselves are still in `rows` — shown, excluded, counted. Absent when the part's numbers declare no companion unit, or when the part computes no totals.
+             * @example 2
+             */
+            excluded_count?: number;
+            /**
+             * @description Why those rows were excluded, ready to render as the G3 footer line. Present exactly when excluded_count is present and greater than zero.
+             * @example 2 rows have no confirmed currency value and are excluded from every total
+             */
+            excluded_reason?: string;
+            /** @description Chart parts only: the precomputed series, one per unit value (G2), points aggregated per date bucket server-side. */
+            series?: components["schemas"]["ViewResultSeries"][];
+            /** @description Crosstab parts only: the precomputed grid. */
+            crosstab?: components["schemas"]["ViewResultCrosstab"];
+        };
+        /**
+         * ViewResultGroup
+         * @description One group of a grouped view part (view-kinds-design-2026-09-03 §4, §7).
+         *     Groups REFERENCE rows by path rather than repeating them — the same shape VaultFindGroup takes, and for the same reason: a record holding several values of the grouped property appears in every group it belongs to (FR-028), and repeating it would render it three times.
+         *     The per-group subtotal row is PER UNIT under G2: `subtotals` is a list of ViewUnitTotal, one entry per (property, op, unit value), never one combined figure. Rows whose unit is missing or unconfirmed are counted in this group's own `excluded_count` (G3) — shown in the group, excluded from every subtotal.
+         */
+        ViewResultGroup: {
+            /**
+             * @description The group's value, rendered. An EMPTY key is the ABSENT group — read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+             * @example Acme Pte Ltd
+             */
+            key: string;
+            /** @description True when this group holds the records where the grouped property is ABSENT, which `key` alone cannot express. */
+            absent?: boolean;
+            /**
+             * @description Evaluated rows in this group.
+             * @example 4
+             */
+            count: number;
+            /** @description The member rows, by path into the result's own `rows` list. Always present — an empty array, never null. */
+            paths: string[];
+            /** @description Per-group totals, one entry per (property, op, unit value) under G2. Always present — an empty array, never null, so "this part declares no subtotals" is stated rather than inferred. */
+            subtotals: components["schemas"]["ViewUnitTotal"][];
+            /**
+             * @description Rows in this group excluded from every subtotal because their unit value is missing or unconfirmed (G3). Absent when the subtotalled numbers declare no companion unit, or when nothing was excluded.
+             * @example 1
+             */
+            excluded_count?: number;
+            /**
+             * @description Why those rows were excluded, ready to render. Present exactly when excluded_count is present and greater than zero.
+             * @example 1 row has no confirmed currency value and is excluded from every subtotal
+             */
+            excluded_reason?: string;
+        };
+        /**
+         * ViewUnitTotal
+         * @description One computed reduction over one number property, FOR ONE UNIT VALUE (view-kinds-design-2026-09-03 §3 G2).
+         *     A number carrying a companion unit (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units, so a view result carries a LIST of these — one entry per distinct unit value — and no field anywhere in the result can hold a combined figure. That is the load-bearing decision of this type: a sum across currencies is a wrong number that looks right, and the shape makes it inexpressible rather than merely discouraged.
+         *     A number with NO companion unit produces exactly one entry with `unit` absent. The two cases are distinguished by the FIELD'S PRESENCE, never by a sentinel value, because an empty string is a legitimate enum value (R-3).
+         */
+        ViewUnitTotal: {
+            /**
+             * @description The number property this total reduces.
+             * @example amount
+             */
+            property: string;
+            /** @description The reduction applied. */
+            op: components["schemas"]["ViewPartAggregate"];
+            /**
+             * @description The unit value this total covers (e.g. "SGD"). ABSENT when the number declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped.
+             * @example SGD
+             */
+            unit?: string;
+            /**
+             * @description The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
+             * @example 12480.00
+             */
+            value: string;
+            /**
+             * @description How many values were included in this total. Rows excluded under G3 (missing/unconfirmed unit) are NOT in this count — they are in the enclosing scope's excluded_count.
+             * @example 7
+             */
+            count: number;
+        };
+        /**
+         * ViewResultSeries
+         * @description One line of a chart part (view-kinds-design-2026-09-03 §7). A chart over a number with a companion unit draws ONE SERIES PER UNIT VALUE (G2) — the series are never merged into one line, because a line that sums euros and hours is a wrong picture that looks right. A number with no companion unit produces exactly one series with `unit` absent.
+         */
+        ViewResultSeries: {
+            /**
+             * @description The unit value this series covers. Absent when the plotted number declares no companion unit property.
+             * @example SGD
+             */
+            unit?: string;
+            /** @description The aggregated points in date order. Always present — an empty array, never null. */
+            points: components["schemas"]["ViewResultPoint"][];
+        };
+        /**
+         * ViewResultPoint
+         * @description One aggregated point of a chart series (view-kinds-design-2026-09-03 §2.2, §7). The server aggregates; the SPA only draws — a chart part's data arrives as points, never as raw rows the client would have to reduce itself, because a client-side reduction is a second implementation of G2 waiting to disagree with the first.
+         */
+        ViewResultPoint: {
+            /**
+             * @description The date bucket, rendered exactly as the date property renders (ISO 8601), so lexical order is chronological order.
+             * @example 2026-05-01
+             */
+            key: string;
+            /**
+             * @description The aggregated value at this point, as exact text (never a JSON number).
+             * @example 3200.00
+             */
+            value: string;
+            /**
+             * @description How many values were aggregated into this point.
+             * @example 3
+             */
+            count: number;
+        };
+        /**
+         * ViewResultCrosstab
+         * @description The precomputed grid of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7): two group properties and a number, reduced server-side into cells so the SPA only draws. Key order in `row_keys`/`column_keys` is the grid's render order (lexical over the case-folded key, ruling R-5/R-E — the same order grouping itself uses).
+         */
+        ViewResultCrosstab: {
+            /**
+             * @description The property the grid's rows group by (the part's outer grouping key).
+             * @example client
+             */
+            row_property: string;
+            /**
+             * @description The property the grid's columns group by (the part's inner grouping key).
+             * @example status
+             */
+            column_property: string;
+            /** @description Every row key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null. */
+            row_keys: string[];
+            /** @description Every column key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null. */
+            column_keys: string[];
+            /** @description The aggregated cells. SPARSE — a (row, column) position with no values simply has no cell, and the SPA renders it empty rather than as a zero nobody computed. Always present — an empty array, never null. */
+            cells: components["schemas"]["ViewResultCrosstabCell"][];
+            /** @description Rows excluded from every cell because their unit value is missing or unconfirmed (G3). Absent when the aggregated number declares no companion unit, or when nothing was excluded. */
+            excluded_count?: number;
+            /** @description Why those rows were excluded, ready to render. */
+            excluded_reason?: string;
+        };
+        /**
+         * ViewResultCrosstabCell
+         * @description One aggregated cell of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7). Cells are precomputed server-side; the SPA lays them out on the row/column grid and draws. A cell over a number with a companion unit exists ONCE PER UNIT VALUE (G2) — two currencies at the same grid position are two cells, never one combined figure.
+         */
+        ViewResultCrosstabCell: {
+            /**
+             * @description The row group's rendered key. An empty string is the ABSENT group, exactly as in ViewResultGroup.key.
+             * @example Acme Pte Ltd
+             */
+            row: string;
+            /**
+             * @description The column group's rendered key. An empty string is the ABSENT group.
+             * @example overdue
+             */
+            column: string;
+            /**
+             * @description The unit value this cell covers. Absent when the aggregated number declares no companion unit property.
+             * @example SGD
+             */
+            unit?: string;
+            /**
+             * @description The aggregated value, as exact text (never a JSON number).
+             * @example 820.00
+             */
+            value: string;
+            /**
+             * @description How many values were aggregated into this cell.
+             * @example 2
+             */
+            count: number;
+        };
+        /**
+         * ViewResultRefusal
+         * @description WHY a saved view cannot be answered (view-kinds-design-2026-09-03 §7, FR-018b's "the reason is NAMED"). It is the wire form of the same refusal the backend already states in prose — records.ViewServeRefusal, the shape knowledge_describe's "NOT SERVABLE by knowledge_find" line reads — so the SPA can show the operator WHY a view cannot answer instead of a blank panel.
+         *     A refusal is a 200 with this object set and no data, never a transport error: the view is real, the request was well-formed, and the reason is the answer.
+         */
+        ViewResultRefusal: {
+            /**
+             * @description Machine-readable refusal code. NOT a closed enum, deliberately: the codes are owned by the backend's own refusal vocabularies and new ones must be able to arrive without a contract change silently dropping them at the SPA's validation edge. Current emitters: "unknown_view" (no view of that name is addressable here — which is also what an out-of-scope collection answers, indistinguishably, per FR-053), "view_disabled" (records.ServeRefusalDisabled: stored but never applied, FR-105), "no_drawable_parts" (a layout with no part equivalent, e.g. `map`, and no explicit parts), every records.ViewRejectionCode (a view file that exists but was refused at load, e.g. "view_unknown_property"), and every RecordProblem.code a refused evaluation names (e.g. "index_unavailable").
+             * @example view_disabled
+             */
+            code: string;
+            /** @description What cannot be done, in the operator's own vocabulary. */
+            reason: string;
+            /** @description What to do about it. May be empty when the underlying refusal named none, but the field is always present so a renderer never invents one. */
+            remedy: string;
+        };
         /**
          * ViewDef
          * @description A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
@@ -19292,6 +19563,46 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    getKnowledgeViewResult: {
+        parameters: {
+            query: {
+                /**
+                 * @description The KnowledgeBaseInfo.collection_id holding the view.
+                 * @example kb_3d1c9a7e5b2f4806
+                 */
+                collection_id: string;
+                /**
+                 * @description The saved view's name, exactly as declared.
+                 * @example unpaid--by-client
+                 */
+                view: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The evaluated view, or the named reason it cannot answer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewResult"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -19903,6 +20214,15 @@ export type ViewGroupBy = components["schemas"]["ViewGroupBy"];
 export type ViewPropertyConfig = components["schemas"]["ViewPropertyConfig"];
 export type ViewPart = components["schemas"]["ViewPart"];
 export type ViewPartAggregate = components["schemas"]["ViewPartAggregate"];
+export type ViewResult = components["schemas"]["ViewResult"];
+export type ViewResultPart = components["schemas"]["ViewResultPart"];
+export type ViewResultGroup = components["schemas"]["ViewResultGroup"];
+export type ViewUnitTotal = components["schemas"]["ViewUnitTotal"];
+export type ViewResultSeries = components["schemas"]["ViewResultSeries"];
+export type ViewResultPoint = components["schemas"]["ViewResultPoint"];
+export type ViewResultCrosstab = components["schemas"]["ViewResultCrosstab"];
+export type ViewResultCrosstabCell = components["schemas"]["ViewResultCrosstabCell"];
+export type ViewResultRefusal = components["schemas"]["ViewResultRefusal"];
 export type ViewDef = components["schemas"]["ViewDef"];
 export type VaultFindRequest = components["schemas"]["VaultFindRequest"];
 export type VaultFilterNode = components["schemas"]["VaultFilterNode"];
