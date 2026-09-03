@@ -100,13 +100,56 @@ async function probeSession(page: import('@playwright/test').Page): Promise<numb
 /**
  * Guard the session every assertion in this file depends on — and when it is
  * not usable, report WHAT WAS OBSERVED, never a mechanism this spec did not
- * measure. The previous version of this function named one specific cause (a
+ * measure.
+ *
+ * `landingUrl` exists so a caller can BOOT THE APP AT THE SCREEN IT WANTS
+ * instead of booting at `/#/` and then changing the hash. That second step is
+ * the one that made UAT-47 (a) and (b) intermittently red, and it is worth
+ * stating precisely because it presents as an ordinary "the element was slow"
+ * timeout and is not one.
+ *
+ * From the trace of CI run 33702392958 (both tests, 20.6s, `element(s) not
+ * found` for team-add-agent):
+ *
+ *   t+206ms  the "/" route's lazy chunk (DefaultWorkspaceRedirect) arrives
+ *   t+237ms  this spec's GET /api/v1/workspaces
+ *   t≈240ms  the hash is set to …/team
+ *   t+315ms  the app shell mounts and issues GET /workspaces?status=active
+ *   t+461ms  the workspace LAYOUT chunk loads
+ *   t+525ms  the workspace CHAT chunk loads
+ *
+ * `workspaces._workspaceId.team-*.js` is never requested at all, and the
+ * recorded page URL goes `#/` → `#/workspaces/<id>/chat` with no Team in
+ * between. So the router never started the Team navigation: the fragment
+ * change was lost while the router was still completing its first load, and
+ * the front door at "/" (DefaultWorkspaceRedirect resolves the default
+ * workspace and then `navigate(..., { replace: true })`s to its Chat tab) then
+ * rewrote the URL. The tests were not slow — they were on a different screen,
+ * and no assertion in them could say so.
+ *
+ * Passing the target here makes that screen the router's INITIAL location, so
+ * there is no in-flight boot navigation to lose and nothing for the front door
+ * to supersede. It also costs nothing: it is the same single document load the
+ * test already paid for, at a different URL. Loading `/#/` first and reloading
+ * or bouncing through `about:blank` would work too, but it doubles the SPA
+ * boots and each boot spends one request against `/api/v1/auth/validate`,
+ * whose per-IP limiter (30/min) this suite already runs close to — measured:
+ * adding one extra boot per test produced `429 /api/v1/auth/validate` on the
+ * screen-walk tests within two passes of this file.
+ *
+ * This is a workaround in the test for a defect in the app, and it is
+ * deliberately not disguised as anything else: a client-side navigation that
+ * lands while the router is still booting is dropped, and the user is silently
+ * moved to the default workspace's Chat tab instead of where they asked to go. The previous version of this function named one specific cause (a
  * concurrent login rotating the single-slot `session_token_hash`) that it had
  * no way to detect and that was not, in fact, what was happening; a confident
  * wrong diagnosis sends the next reader down the wrong path.
  */
-async function ensureSession(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto(`${BASE_URL}/#/`);
+async function ensureSession(
+  page: import('@playwright/test').Page,
+  landingUrl: string = `${BASE_URL}/#/`,
+): Promise<void> {
+  await page.goto(landingUrl);
   const before = await probeSession(page);
   if (before === 200) return;
 
@@ -148,22 +191,52 @@ async function ensureSession(page: import('@playwright/test').Page): Promise<voi
   );
 }
 
-/** Resolve a workspace id to drive against — the default one always exists. */
+/**
+ * Resolve a workspace id to drive against — the default one always exists.
+ *
+ * Out of band via `page.request` (which shares the context's cookie jar), NOT
+ * an in-page `fetch`, because the caller needs the id BEFORE it has a page to
+ * evaluate in: the id is what builds the URL the app boots at. See
+ * ensureSession's `landingUrl` note for why that ordering matters.
+ *
+ * The in-page/out-of-band distinction that bit `probeSession` does not apply
+ * here. There, `page.request` removed a readiness barrier the caller depended
+ * on; here nothing is waiting on the page, and the very next step is a full
+ * document load.
+ */
 async function defaultWorkspaceId(page: import('@playwright/test').Page): Promise<string> {
-  const rows = await page.evaluate(async () => {
-    const res = await fetch('/api/v1/workspaces', { credentials: 'include' });
-    if (!res.ok) throw new Error(`GET /api/v1/workspaces → ${res.status}`);
-    return (await res.json()) as Array<{ id: string; is_default?: boolean }>;
-  });
+  const res = await page.request.get(`${BASE_URL}/api/v1/workspaces`);
+  if (!res.ok()) throw new Error(`GET /api/v1/workspaces → ${res.status()}`);
+  const rows = (await res.json()) as Array<{ id: string; is_default?: boolean }>;
   const row = rows.find((w) => w.is_default) ?? rows[0];
   if (!row) throw new Error('no workspace exists to drive the Team tab against');
   return row.id;
 }
 
+/**
+ * Assert the app is on the screen the test asked for, before waiting on
+ * anything inside it — so a repeat of the dropped-navigation failure reads as
+ * "the app navigated somewhere else" rather than "an element did not appear".
+ */
+async function expectOnPath(
+  page: import('@playwright/test').Page,
+  hashPath: string,
+): Promise<void> {
+  await expect(
+    page,
+    `the app is not on ${hashPath} — see ensureSession's landingUrl note: a client-side ` +
+      'navigation that lands while the router is still booting is dropped, and the front-door ' +
+      'redirect sends the page to the default workspace Chat tab',
+  ).toHaveURL(new RegExp(`#${hashPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[?/]|$)`), {
+    timeout: 20_000,
+  });
+}
+
 /** Open Alpha/default → Team and click "Add agent"; returns the popover locator. */
 async function openAddAgentPicker(page: import('@playwright/test').Page) {
   const wsId = await defaultWorkspaceId(page);
-  await page.goto(`${BASE_URL}/#/workspaces/${wsId}/team`);
+  await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/team`);
+  await expectOnPath(page, `/workspaces/${wsId}/team`);
 
   const addAgent = page.getByTestId('team-add-agent');
   await expect(addAgent).toBeVisible({ timeout: 20_000 });
@@ -183,14 +256,14 @@ async function openAddAgentPicker(page: import('@playwright/test').Page) {
 test('UAT-47 (a) the add-agent control discloses the live-login grant before anything is confirmed', async ({
   page,
 }) => {
-  await ensureSession(page);
   const wsId = await defaultWorkspaceId(page);
 
   // Silent failure #1, first half: the Team tab must not be relying on a
   // disclosure that is only reachable after the roster has already changed.
   // Before the picker is even opened there is nothing to read — which is fine,
   // and is exactly why the text has to be IN the picker.
-  await page.goto(`${BASE_URL}/#/workspaces/${wsId}/team`);
+  await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/team`);
+  await expectOnPath(page, `/workspaces/${wsId}/team`);
   await expect(page.getByTestId('team-add-agent')).toBeVisible({ timeout: 20_000 });
 
   const popover = await openAddAgentPicker(page);
@@ -222,7 +295,6 @@ test('UAT-47 (a) the add-agent control discloses the live-login grant before any
 test('UAT-47 (b) the disclosure is plain text in the picker, not a tooltip and not gated on a hover', async ({
   page,
 }) => {
-  await ensureSession(page);
   const popover = await openAddAgentPicker(page);
 
   const disclosure = popover.getByText(/act as whoever|acts as whoever/i).first();
@@ -295,8 +367,12 @@ for (const screen of SCREENS) {
       if (res.status() >= 400) failedURLs.push(`${res.status()} ${new URL(res.url()).pathname}`);
     });
 
-    await ensureSession(page);
-    await page.goto(`${BASE_URL}${screen.path}`);
+    // Boot AT the screen rather than at "/#/" and then changing the hash — the
+    // dropped-navigation defect in ensureSession's landingUrl note would show
+    // up here as the screen's heading never appearing while the app sits on
+    // the default workspace's Chat tab.
+    await ensureSession(page, `${BASE_URL}${screen.path}`);
+    await expectOnPath(page, screen.path.replace(/^\/#/, ''));
     await expect(page.getByText(screen.expect).first()).toBeVisible({ timeout: 20_000 });
     // Settle: these screens fire their data fetches after first paint, so an
     // assertion that returns the moment the heading appears tears the page down
@@ -325,8 +401,11 @@ for (const screen of SCREENS) {
 }
 
 test('shell: the workspace tabs the plan drives all render', async ({ page }) => {
-  await ensureSession(page);
   const wsId = await defaultWorkspaceId(page);
+  // Boot at the first tab. The remaining hops are hash changes on a fully
+  // booted router, which is the case that has never been in doubt — only a
+  // navigation that lands DURING the initial load is dropped.
+  await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/chat`);
 
   for (const [tab, marker] of [
     ['chat', /Message|Welcome to omnipus/i],
@@ -343,10 +422,10 @@ test('shell: the workspace tabs the plan drives all render', async ({ page }) =>
 });
 
 test('shell: the retired Command Center surfaces stay retired (plan N-14)', async ({ page }) => {
-  await ensureSession(page);
   // /tasks and /automations must be redirects into the workspace board and
-  // calendar, never screens of their own.
-  await page.goto(`${BASE_URL}/#/tasks`);
+  // calendar, never screens of their own. Boot at /#/tasks so the redirect is
+  // exercised from the router's initial location.
+  await ensureSession(page, `${BASE_URL}/#/tasks`);
   await expect(page).toHaveURL(/\/workspaces\/[^/]+\/board/, { timeout: 20_000 });
 
   await page.goto(`${BASE_URL}/#/automations`);
