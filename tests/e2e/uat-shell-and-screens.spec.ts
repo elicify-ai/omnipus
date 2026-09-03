@@ -43,24 +43,72 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 
 
 /**
- * This install keeps ONE session token per user (`gateway.users[].session_token_hash`),
- * so any other login as the same admin — another operator, another suite, a
- * second shard — silently invalidates the cookie captured in `storageState` at
- * global setup. Playwright reuses that same storageState on every retry, so a
- * rotated cookie reads as a hard, "reproducible" 401 on whichever screen
- * happens to fetch first. Re-authenticate only when the session is actually
- * dead, so the common case costs one cheap validate call and does not rotate
- * anybody else's token in turn.
+ * The route this spec asks "is my session usable?".
+ *
+ * NOT `/api/v1/auth/validate`, which is the obvious choice and cannot see the
+ * session at all on an e2e gateway. Those run with `gateway.dev_mode_bypass:
+ * true`, and `checkBearerAuth` (pkg/gateway/auth.go) short-circuits to the
+ * synthetic `_dev_bypass` identity BEFORE its cookie branch for any request
+ * with no `Authorization: Bearer` header — which is every SPA request since
+ * ADR-044. Measured against a throwaway gateway seeded from a real e2e home
+ * (2026-09-03, bypass on, the CI config):
+ *
+ *     no cookie at all        → 200  {"username":"_dev_bypass"}
+ *     garbage/rotated cookie  → 200
+ *     30th call within 1 min  → 429, Retry-After: 60
+ *
+ * The cookie is never read, so a non-200 there could NEVER have meant "the
+ * session is dead" — the only reachable non-200 is `validateLimiter`'s 429
+ * (30/min per IP, pkg/gateway/rest_auth.go). That is what actually failed this
+ * spec in CI run 33696333101: nine tests in this file passed, two failed
+ * claiming a rotated token, and the third attempt passed 2s later with no
+ * login in between — which a rotated single-slot hash cannot do, and a
+ * draining sliding window does. Reproduced deterministically by exhausting the
+ * bucket with 32 curls while the storageState cookie was proven alive.
+ *
+ * `/api/v1/providers` is `withOptionalAuth` + `requireAuthOutsideOnboarding`,
+ * which deliberately does not honour bypass, and it carries no rate limiter
+ * (40 consecutive calls, no 429). Measured on the same gateway with bypass
+ * ON: no cookie → 401, garbage cookie → 401, real session cookie → 200. It is
+ * therefore a real oracle for the session in both bypass modes. It is also the
+ * exact route the 2026-08-28 create-agent incident surfaced on, for the same
+ * reason.
+ */
+const SESSION_PROBE_PATH = '/api/v1/providers';
+
+/**
+ * Status of `SESSION_PROBE_PATH` for the session this page context carries.
+ *
+ * Deliberately an IN-PAGE `fetch`, not `page.request.get`. The out-of-band
+ * `page.request` version is tidier on paper — its responses never reach the
+ * `page.on('response')` listener the console-error tests install — but it made
+ * three tests fail: it answers without ever touching the page, so
+ * `ensureSession` returned before the SPA on `/#/` had booted, and the caller's
+ * next `page.goto` (same document, hash-only change) then raced the router's
+ * mount and lost. The app landed on its default workspace Chat route and every
+ * screen assertion timed out looking for a screen it never navigated to.
+ * An in-page `fetch` has to wait for the page's JS execution context, which is
+ * the readiness barrier this function has always implicitly provided.
+ */
+async function probeSession(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(async (path) => {
+    const res = await fetch(path, { credentials: 'include' });
+    return res.status;
+  }, SESSION_PROBE_PATH);
+}
+
+/**
+ * Guard the session every assertion in this file depends on — and when it is
+ * not usable, report WHAT WAS OBSERVED, never a mechanism this spec did not
+ * measure. The previous version of this function named one specific cause (a
+ * concurrent login rotating the single-slot `session_token_hash`) that it had
+ * no way to detect and that was not, in fact, what was happening; a confident
+ * wrong diagnosis sends the next reader down the wrong path.
  */
 async function ensureSession(page: import('@playwright/test').Page): Promise<void> {
-  const alive = async () =>
-    page.evaluate(async () => {
-      const res = await fetch('/api/v1/auth/validate', { credentials: 'include' });
-      return res.status === 200;
-    });
-
   await page.goto(`${BASE_URL}/#/`);
-  if (await alive()) return;
+  const before = await probeSession(page);
+  if (before === 200) return;
 
   // Re-arm from the SHARED storageState rather than logging in. A login here
   // would re-mint the single slot and kill the next spec's cookie in turn —
@@ -70,12 +118,33 @@ async function ensureSession(page: import('@playwright/test').Page): Promise<voi
   // rewritten by auth.spec.ts's afterAll) and mints nothing.
   await restoreAdminSession(page);
   await page.reload();
-  if (await alive()) return;
+  const after = await probeSession(page);
+  if (after === 200) return;
+
+  // Everything below is an observation or a named possibility — no cause is
+  // asserted, because this spec cannot distinguish between them.
+  const reading =
+    `GET ${SESSION_PROBE_PATH} answered ${before}, and ${after} after re-applying the ` +
+    'cookies from the shared storageState file (which mints nothing).';
+  const meaning =
+    after === 401
+      ? 'A 401 means the gateway did not accept this cookie. This spec cannot tell you why. ' +
+        'Candidates, in the order worth checking: the cookie expired (24 h max-age, ' +
+        'middleware.SessionCookieMaxAge); another login as the same admin re-minted the ' +
+        'single-slot session_token_hash (HandleLogin, pkg/gateway/rest_auth.go) — real, but ' +
+        'only if something actually logged in, so check the gateway log before assuming it; ' +
+        'or the gateway is running against a different OMNIPUS_HOME than global-setup ' +
+        'onboarded.'
+      : after === 429
+        ? 'A 429 is the per-IP rate limiter refusing the probe, NOT a verdict on the session. ' +
+          'Re-run; if it persists, the suite is outrunning that route\'s budget.'
+        : 'That status is neither 200 nor an authentication answer — treat it as the gateway ' +
+          'being unhealthy and check its log before touching this spec.';
 
   throw new Error(
-    'BLOCKED: the shared admin session is dead and cannot be restored from storageState — ' +
-      "another run's login rotated the single-slot session_token_hash. This is an environment " +
-      'collision, not a product defect. Re-run the suite; do NOT log in from a spec.',
+    `BLOCKED: this spec's admin session is not usable. ${reading} ${meaning} ` +
+      'Whatever the cause: do NOT log in from a spec — that re-mints the single slot and ' +
+      'breaks the next spec in turn (scripts/check-e2e-login-crosstalk.sh enforces this).',
   );
 }
 
@@ -247,8 +316,10 @@ for (const screen of SCREENS) {
     expect(
       unexpected,
       `${screen.name}: failing requests that the dev_mode_bypass guard does not explain. ` +
-        `A 401 here usually means the shared admin session was rotated by another login ` +
-        `mid-test — this install keeps one session token per user.`,
+        `Read the status: a 401 means the gateway refused this run's session cookie on that ` +
+        `route (ensureSession's BLOCKED message lists the candidate causes — do not assume ` +
+        `one); a 429 is a per-IP rate limiter, not an auth verdict; a 5xx is the screen's own ` +
+        `defect.`,
     ).toEqual([]);
   });
 }
