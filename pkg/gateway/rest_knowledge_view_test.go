@@ -16,6 +16,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -263,6 +264,235 @@ func TestKnowledgeView_UnknownViewAndOutOfScopeCollectionAnswerAlike(t *testing.
 		w = knowledgeGet(t, api, "/api/v1/library/"+ws+"/knowledge/view?collection_id="+colID)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+}
+
+// --- hardening: auth ---------------------------------------------------------
+
+// TestKnowledgeView_RefusesUnauthenticatedCallsLikeItsNeighbours drives the
+// REAL registered middleware chain (a.withUploadAuth, the same wrapper every
+// other /api/v1/library/{workspace_id}/... endpoint is registered under —
+// rest.go's "/api/v1/library/" registration), not the bare HandleLibraryTree
+// shortcut every other test in this file uses. That shortcut is exactly what
+// would hide an auth regression on this one endpoint while its neighbours
+// (search, graph, outline, the plain knowledge-info GET) stayed protected: no
+// Authorization header, no OMNIPUS_BEARER_TOKEN, dev_mode_bypass off
+// (buildLibraryTestAPI's default config) must refuse before the handler is
+// ever reached, exactly as checkBearerAuth's "no users configured" branch
+// documents.
+func TestKnowledgeView_RefusesUnauthenticatedCallsLikeItsNeighbours(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{
+		"all-invoices.yaml": "name: all-invoices\ntype: invoice\nlayout: table\n",
+	})
+
+	guarded := api.withUploadAuth(api.HandleLibraryTree)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet,
+		"/api/v1/library/"+ws+"/knowledge/view?collection_id="+colID+"&view=all-invoices", nil)
+	guarded(w, r)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"an unauthenticated caller must be refused before the view is ever evaluated")
+}
+
+// --- hardening: loader rejection, not a 500 ---------------------------------
+
+// TestKnowledgeView_UnknownPropertyViewSurfacesLoaderRejectionNotServerError
+// covers a view file that PARSED but names a property `invoice` does not
+// declare. records.LoadViews refuses it at load time with
+// RejectViewUnknownProperty; env.Views.Get therefore misses, and the
+// handler's documented fallback (buildViewResult, rest_knowledge_view.go) is
+// to search env.ViewReport.Rejections and answer BY THAT REJECTION rather
+// than either a 500 or the generic "unknown view" refusal — a statement this
+// endpoint could disprove (the view file is right there) is a statement it
+// must not make.
+func TestKnowledgeView_UnknownPropertyViewSurfacesLoaderRejectionNotServerError(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{
+		"bad-columns.yaml": "name: bad-columns\n" +
+			"type: invoice\n" +
+			"properties: [not_a_real_property]\n",
+	})
+
+	res, code := getViewResult(t, api, ws, colID, "bad-columns")
+	require.Equal(t, http.StatusOK, code, "a loader rejection is an ANSWER, not a transport error")
+
+	require.NotNil(t, res.Refusal, "a view naming an unknown property must refuse by name, never render an empty or wrong table")
+	assert.Equal(t, string(records.RejectViewUnknownProperty), res.Refusal.Code)
+	assert.Contains(t, res.Refusal.Reason, "not_a_real_property",
+		"the refusal must name the offending property, exactly as the loader's own rejection does")
+	assert.Empty(t, res.Parts)
+	assert.Empty(t, res.Rows)
+	assert.False(t, res.Complete)
+}
+
+// --- hardening: a base with zero servable views -----------------------------
+
+// TestKnowledgeView_BaseWithZeroServableViewsRefusesCleanlyNotServerError
+// covers the collection that has NO saved-view files at all: env.Views is
+// empty and env.ViewReport.Rejections is empty too, so buildViewResult's
+// rejection-search loop runs over a genuinely empty slice. Requesting any
+// view name here exercises that empty-set path end to end (never a panic,
+// never a 500) and must land on the same generic unknown-view refusal a
+// populated-but-unmatching base would give.
+func TestKnowledgeView_BaseWithZeroServableViewsRefusesCleanlyNotServerError(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{})
+
+	res, code := getViewResult(t, api, ws, colID, "anything")
+	require.Equal(t, http.StatusOK, code, "a base with no saved views must still answer 200, never a 500")
+
+	require.NotNil(t, res.Refusal)
+	assert.Equal(t, string(records.ServeRefusalUnknownView), res.Refusal.Code)
+	assert.Empty(t, res.Parts)
+	assert.Empty(t, res.Rows)
+}
+
+// --- hardening: grouping must not under-report --------------------------
+
+// TestKnowledgeView_GroupingSurfacesTheNoValueGroupNeverDropsIt groups by
+// `currency`, which is UNSET on one of the four fixture rows (INV-4/d.md, the
+// same G3 row the summary test uses). The design bans exactly one failure
+// here: a reader asking "unpaid by currency" who never learns that a row with
+// no currency exists at all, because the group holding it silently vanished
+// instead of rendering as its own "(no value)" bucket. The engine already
+// carries this as one group with `absent: true` and an empty `key`
+// (ViewResultGroup's own documented contract) — this test pins that the
+// gateway's table-part builder passes that group through unchanged rather
+// than filtering it, which nothing in buildTablePartData does today but
+// nothing stops a future edit from doing either.
+func TestKnowledgeView_GroupingSurfacesTheNoValueGroupNeverDropsIt(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{
+		"by-currency.yaml": "name: by-currency\n" +
+			"type: invoice\n" +
+			"kind: summary\n" +
+			"parts:\n" +
+			"  - part: table\n" +
+			"    grouping: [{property: currency, direction: asc}]\n",
+	})
+
+	res, code := getViewResult(t, api, ws, colID, "by-currency")
+	require.Equal(t, http.StatusOK, code)
+	require.Nil(t, res.Refusal)
+	require.Len(t, res.Parts, 1)
+	require.NotNil(t, res.Parts[0].Groups)
+	groups := *res.Parts[0].Groups
+
+	require.Len(t, groups, 3, "SGD, EUR, and the no-value group — three groups, not two")
+
+	var absent *gen.ViewResultGroup
+	byKey := map[string]gen.ViewResultGroup{}
+	for i := range groups {
+		g := groups[i]
+		if g.Absent != nil && *g.Absent {
+			require.Nil(t, absent, "at most one absent group can exist per grouping")
+			gCopy := g
+			absent = &gCopy
+			continue
+		}
+		byKey[g.Key] = g
+	}
+
+	require.NotNil(t, absent, "the row with no currency must produce its OWN group, not vanish")
+	assert.Equal(t, "", absent.Key, "an absent group's key is empty text, distinguished by the absent flag, not by a synthesized label")
+	assert.Equal(t, 1, absent.Count)
+	require.Len(t, absent.Paths, 1)
+	assert.Equal(t, "d.md", absent.Paths[0], "the unit-less invoice (INV-4) is the row with no currency")
+
+	require.Contains(t, byKey, "SGD")
+	require.Contains(t, byKey, "EUR")
+	assert.ElementsMatch(t, []string{"a.md", "c.md"}, byKey["SGD"].Paths)
+	assert.ElementsMatch(t, []string{"b.md"}, byKey["EUR"].Paths)
+}
+
+// --- hardening: crosstab cell math, verified by hand ------------------------
+
+// TestKnowledgeView_CrosstabCellMathHandVerified crosstabs client × currency
+// over the fixture's four invoices:
+//
+//	INV-1 Acme SGD 100.50    INV-2 Acme EUR 200.00
+//	INV-3 Bolt SGD  49.50    INV-4 Bolt (no currency) 10.00
+//
+// so every cell traces to exactly one invoice and the numbers are checked by
+// hand, not against the handler's own output: Acme×SGD=100.50 (INV-1 alone),
+// Acme×EUR=200.00 (INV-2 alone), Bolt×SGD=49.50 (INV-3 alone). Bolt's
+// unit-less INV-4 lands in G3 — excluded from every cell, never averaged into
+// one — so there is NO Bolt×(absent) cell, even though the crosstab still
+// reports "" as a column key for it (an aggregated-but-empty column, not a
+// dropped row: INV-4 is still counted in the crosstab's own excluded_count).
+func TestKnowledgeView_CrosstabCellMathHandVerified(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{
+		"breakdown--client-currency.yaml": "name: breakdown--client-currency\n" +
+			"type: invoice\n" +
+			"kind: breakdown\n" +
+			"parts:\n" +
+			"  - part: crosstab\n" +
+			"    number: amount\n" +
+			"    aggregate: sum\n" +
+			"    grouping: [{property: client, direction: asc}, {property: currency, direction: asc}]\n",
+	})
+
+	res, code := getViewResult(t, api, ws, colID, "breakdown--client-currency")
+	require.Equal(t, http.StatusOK, code)
+	require.Nil(t, res.Refusal)
+	require.Len(t, res.Parts, 1)
+	require.NotNil(t, res.Parts[0].Crosstab)
+	ct := *res.Parts[0].Crosstab
+
+	assert.Equal(t, "client", ct.RowProperty)
+	assert.Equal(t, "currency", ct.ColumnProperty)
+	assert.ElementsMatch(t, []string{"Acme", "Bolt"}, ct.RowKeys)
+	assert.ElementsMatch(t, []string{"SGD", "EUR", ""}, ct.ColumnKeys,
+		"the absent-currency bucket still names a column, even though it draws no cell")
+
+	type cell struct {
+		value string
+		count int
+		unit  string
+	}
+	byRowCol := map[string]cell{}
+	for _, c := range ct.Cells {
+		u := ""
+		if c.Unit != nil {
+			u = *c.Unit
+		}
+		byRowCol[c.Row+"|"+c.Column] = cell{value: c.Value, count: c.Count, unit: u}
+	}
+
+	require.Len(t, ct.Cells, 3, "exactly three cells: Acme×SGD, Acme×EUR, Bolt×SGD — never a fourth for Bolt's absent currency")
+	assert.Equal(t, cell{"100.50", 1, "SGD"}, byRowCol["Acme|SGD"], "INV-1 alone, by hand: 100.50")
+	assert.Equal(t, cell{"200.00", 1, "EUR"}, byRowCol["Acme|EUR"], "INV-2 alone, by hand: 200.00")
+	assert.Equal(t, cell{"49.50", 1, "SGD"}, byRowCol["Bolt|SGD"], "INV-3 alone, by hand: 49.50")
+	_, hasBoltAbsent := byRowCol["Bolt|"]
+	assert.False(t, hasBoltAbsent, "INV-4's missing currency must produce NO cell, never a zero or a guess")
+
+	require.NotNil(t, ct.ExcludedCount, "INV-4 must be counted excluded at the crosstab level too")
+	assert.Equal(t, 1, *ct.ExcludedCount)
+	require.NotNil(t, ct.ExcludedReason)
+	assert.Contains(t, *ct.ExcludedReason, "currency")
+}
+
+// --- hardening: legacy layout:map never synthesizes a table -----------------
+
+// TestKnowledgeView_LegacyMapLayoutRefusesRatherThanSynthesizingTable covers
+// design §2.2's deliberate exclusion: `map` is a legacy layout the CONTRACT
+// still accepts (ViewDefLayoutMap is a valid enum member, so the view loads
+// cleanly with no rejection) but has no drawable part
+// (viewPartForLayout returns ok=false for it, records/view.go). EffectiveParts
+// therefore reports drawable=false, and the handler's own rule
+// ("no_drawable_parts", rest_knowledge_view.go) must refuse rather than
+// falling back to a table nobody asked for — the exact silent-flattening
+// failure the design's part-vocabulary comments are written against.
+func TestKnowledgeView_LegacyMapLayoutRefusesRatherThanSynthesizingTable(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{
+		"old-map.yaml": "name: old-map\ntype: invoice\nlayout: map\n",
+	})
+
+	res, code := getViewResult(t, api, ws, colID, "old-map")
+	require.Equal(t, http.StatusOK, code, "a no-drawable-parts refusal is an ANSWER, not a transport error")
+
+	require.NotNil(t, res.Refusal, "a legacy map view must refuse, never silently render as a table")
+	assert.Equal(t, "no_drawable_parts", res.Refusal.Code)
+	assert.Contains(t, res.Refusal.Reason, "map")
+	assert.Empty(t, res.Parts, "no table part may be synthesized for a layout that declares none")
+	assert.Empty(t, res.Rows)
 }
 
 // guard against the fixture writing files nothing reads back
