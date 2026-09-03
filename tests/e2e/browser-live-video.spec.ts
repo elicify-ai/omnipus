@@ -308,8 +308,6 @@ test(
   async ({ page }, testInfo) => {
     // Budget (worst-case ceiling, same accounting discipline as media.spec.ts):
     //   Agent picker + Jim selection + input visibility ...................... ~35s
-    //   operator opens the live browser first: panel(30s) + omnibox(120s,
-    //     the run's genuinely cold Chrome launch) + close(15s) ............... 165s
     //   assistantMessages toHaveCount ceiling ................................ 240s
     //   waitForTurnFullyDone: gapMs(8s) + follow-up-call ceiling(180s) ....... 188s
     //   LIVE_PROBE_READY text assertion ........................................ 15s
@@ -319,13 +317,13 @@ test(
     //   audio RMS sampling (~800ms sampling window) ........................... 15s
     //   input-latency poll ceiling ............................................. 5s
     //   a11y scan ............................................................. 10s
-    // Worst-case total: 35+165+240+188+15+30+90+20+15+5+10 = 813s.
-    // Budget: 813s ceiling + ~11% margin for CI scheduling jitter = 900s (15 min).
-    // (Was 720s for a 648s ceiling; the operator-opens-first step moved the
-    // cold Chrome launch OUT of the agent turn and in front of it, so the
-    // ceiling grew by that step's own 165s while real runs got no slower —
-    // the launch was always being paid, just inside the 240s turn budget.)
-    test.setTimeout(900_000);
+    // Worst-case total: 35+240+188+15+30+90+20+15+5+10 = 648s.
+    // Budget: 648s ceiling + ~11% margin for CI scheduling jitter = 720s (12 min).
+    // (Was 900s while this spec opened the live browser up front as an
+    // issue-#671 mitigation. Removing that step does not make real runs
+    // slower — it moves the cold Chrome launch back inside the 240s agent
+    // turn, which is where it was always paid before the mitigation existed.)
+    test.setTimeout(720_000);
 
     // ── Setup: seed the deterministic fixture directly on disk (no LLM
     // authoring involved — deterministic content, matching media.spec.ts's
@@ -353,70 +351,31 @@ test(
     // diagnosis when no frame ever paints.
     const addressBar = page.getByRole('textbox', { name: 'Address bar' });
 
-    // ── Establish the OPERATOR's tab set BEFORE the agent browses ─────────
+    // ── The operator's tab set is deliberately left EMPTY here ───────────
     //
-    // Not a warm-up, and not a convenience: without this the panel watches a
-    // DIFFERENT TAB than the one the agent drives, and no amount of waiting
-    // fixes it. Under ADR-072 a browser has two tab sets — the chat session's
-    // own (TabOwnerSession) and the operator's workspace-owned one
-    // (TabOwnerWorkspace, pkg/tools/browser/key.go). The live panel is hard-
-    // wired to the operator's set: every gateway call site resolves
-    // `mgr.OperatorSessionID()` (pkg/gateway/browser_ws.go), and the WebRTC
-    // capture binds to that same tab (pkg/tools/browser/capture_session.go).
-    // An agent's browser_* tools address their OWN session's set — UNLESS
-    // BrowserManager.focusedTabSet diverts them, which it does only when the
-    // session has no tabs of its own AND "the operator's set HAS tabs"
-    // (pkg/tools/browser/manager.go::focusedTabSet, the hasTabsLocked pair).
+    // This is the regression guard for issue #671, and the reason it is an
+    // absence rather than a step.
     //
-    // So whether the panel shows the agent's page is decided by whether the
-    // operator's set was already populated when the agent first browsed. In
-    // production it normally is — WarmTabAtBoot parks a tab on the start page
-    // at boot (pkg/gateway/gateway.go, `mgr.Session(mgr.OperatorSessionID())`)
-    // — but on a gateway whose home directory was empty at boot there is no
-    // workspace yet to warm, so the set stays empty until something opens the
-    // panel. That is precisely the CI shape, and it is what made this test
-    // fail its FIRST attempt in four consecutive runs and pass every retry:
-    // attempt 1's own panel-open created the operator tab, and the retry
-    // inherited it. The measured top-band luminance was 22.7 on both a 15s and
-    // a 45s budget — identical to the decimal, because it was never a stream
-    // that was starting slowly. It was the Omnipus /browser-start page
-    // (Deep Space Black plus the gold octopus and headline), painted
-    // perfectly, in the wrong tab. The captured artifact's own accessibility
-    // snapshot named it: one tab, address bar "http://localhost:6060/
-    // browser-start", while the agent's tool row showed a successful navigate
-    // to 127.0.0.1/preview/jim/… titled "Omnipus E2E Live Probe".
+    // A browser has two tab sets: the operator's workspace-owned one and each
+    // chat's own. The live panel used to be hard-wired to the operator's,
+    // while an agent's browser_* tools drive the chat's — so whenever the
+    // operator's set was empty, the agent browsed in a tab the panel
+    // structurally could not look at, and "Watch live" showed a perfectly
+    // painted /browser-start page with no error of any kind. Measured
+    // top-band luminance was 22.7 on both a 15s and a 45s budget, identical to
+    // the decimal, because nothing was ever starting slowly: it was the wrong
+    // tab, rendered correctly.
     //
-    // This step therefore runs the scenario ADR-072 §3.1 D1 case 1 actually
-    // specifies — "operator watches, agent drives" — by opening the panel
-    // once up front, which creates the operator's tab set, then closing it so
-    // the "Watch live" step below still exercises a real panel open. The
-    // agent's navigate is then diverted onto that tab and the panel sees it.
-    //
-    // KNOWN PRODUCT DEFECT, deliberately NOT papered over: on a browser whose
-    // operator set is still empty (fresh install, first browse of a new
-    // workspace), an agent browses in its own set and "Watch live" shows a
-    // blank start page instead of the page the agent is on, with no error.
-    // That breaks ADR-072's own acceptance criterion D1 case 1. Fixing it is
-    // not a test-side change — it means either the panel resolving to the
-    // chat's own tab set (21 gateway call sites plus the per-agent capture
-    // session, which is bound to the operator tab) or the manager creating the
-    // operator set before a session's first browse. Both need an ADR-072
-    // amendment. This spec is scoped to the video/audio/input pipeline and
-    // must not be the place that silently absorbs it, so the failure mode is
-    // named here and reported explicitly if the frame never paints (below).
-    await test.step('operator opens the live browser first (creates the tab set the panel captures)', async () => {
-      const openBrowser = page.getByRole('button', { name: 'Open browser' });
-      await expect(openBrowser).toBeVisible({ timeout: 15_000 });
-      await openBrowser.click();
-      await expect(panel).toBeVisible({ timeout: 30_000 });
-      // A non-empty omnibox means the gateway pushed a real tab strip
-      // (browser_ws.go only pushes on TabStateOpen), i.e. the operator's tab
-      // genuinely exists. Generous budget: this is the run's genuinely cold
-      // Chrome launch, which used to be paid inside the agent turn below.
-      await expect(addressBar).toHaveValue(/\S/, { timeout: 120_000 });
-      await page.getByRole('button', { name: 'Close live browser panel' }).click();
-      await expect(panel).not.toBeVisible({ timeout: 15_000 });
-    });
+    // This test used to paper over that by opening the panel once up front to
+    // create the operator's set, which made the agent's navigate divert onto a
+    // tab the panel already watched. That mitigation is removed: the panel now
+    // resolves the tab set from the chat it was opened for
+    // (BrowserManager.PanelTabSetID), so panel and agent can no longer
+    // diverge. Leaving the set empty means this spec exercises the exact shape
+    // that used to fail — a fresh workspace whose first browse is the agent's
+    // own — and the video assertions below are what would catch it coming
+    // back, including in the capture binding, which has no unit-level proof
+    // because it needs a real Chromium.
 
     const countBefore = await assistantMessages(page).count();
     await test.step('drive the agent to serve+navigate+click a deterministic motion+audio page', async () => {
@@ -548,8 +507,8 @@ test(
       // That theory was disproven by its own evidence: CI reported top-band
       // luminance 22.7 under BOTH budgets, identical to the decimal. A stream
       // that was slowly starting would have climbed; this one never moved,
-      // because the panel was watching the wrong tab entirely (see the
-      // operator-tab-set step near the top of this test for the full
+      // because the panel was watching the wrong tab entirely (issue #671 —
+      // see the empty-operator-set note near the top of this test for the full
       // mechanism). Waiting is not what fixed it and never could have been.
       //
       // 45s survives anyway, for a reason that can be checked rather than
@@ -599,7 +558,8 @@ test(
         firstFrameDiagnosis =
           `. The panel is capturing "${capturedUrl}" — if that is not the /preview/ URL the ` +
           'agent navigated to, the capture is bound to a DIFFERENT TAB and no wait would ever ' +
-          'have helped (see the operator-tab-set step at the top of this test). Panel state: ' +
+          'have helped — that is issue #671 regressing; see the empty-operator-set note at the ' +
+          'top of this test). Panel state: ' +
           `"${overlayText?.trim() ?? '(no waiting overlay — the panel believes it has frames)'}"`;
       }
       expect(
