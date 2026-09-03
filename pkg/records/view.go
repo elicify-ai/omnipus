@@ -147,6 +147,26 @@ const (
 	// RejectViewUnknownFormula is a `formula.<name>` reference in a property
 	// position naming a formula the view does not declare.
 	RejectViewUnknownFormula ViewRejectionCode = "view_unknown_formula"
+	// RejectViewInvalidKind is a `kind` outside the eight declared view kinds
+	// (view-kinds-design-2026-09-03 §2.3). The field is PROVENANCE — nothing
+	// renders from it — so an unrecognised value cannot draw the wrong thing;
+	// what it can do is send the composer's re-edit path looking for a kind
+	// that does not exist, and answer "what kind is this view?" with a word no
+	// part of the system knows.
+	RejectViewInvalidKind ViewRejectionCode = "view_invalid_kind"
+	// RejectViewInvalidPart is a malformed entry in a view's `parts` stack: an
+	// unrecognised `part`, a blank binding, an unrecognised aggregate, or a
+	// grouping direction outside asc/desc.
+	//
+	// AN UNKNOWN PART IS REFUSED RATHER THAN SKIPPED, which is the same ruling
+	// RejectViewInvalidLayout carries and it is here for the same measured
+	// reason. A part nobody recognises, quietly dropped, leaves a view that
+	// loads clean, renders a stack one element short, and says nothing — the
+	// silently-flattened cards view again, one layer down. A blank binding is
+	// the same failure with a different shape: `number: ""` on a figures part
+	// is a headline number bound to no property, which draws an empty figure
+	// rather than an error.
+	RejectViewInvalidPart ViewRejectionCode = "view_invalid_part"
 	// RejectViewUnknownEnumValue is a filter literal that is not a member of
 	// the enum the compared property declares — the ViewDef contract's "or
 	// enum value" half. Reported rather than served, because an undeclared
@@ -238,6 +258,99 @@ func (v *SavedView) DisplayLabel() string {
 		return *v.Def.Label
 	}
 	return v.Def.Name
+}
+
+// ---------------------------------------------------------------------------
+// EffectiveParts — ONE SHAPE FOR TWO FILE FORMATS
+//
+// view-kinds-design-2026-09-03 §4 adds a `parts` stack to a view and keeps
+// every view written before it loading unchanged. That is a back-compat rule,
+// and back-compat rules are where a codebase grows two readers: one consumer
+// writes `if v.Def.Parts == nil { … legacy … }`, the next writes a slightly
+// different version of the same branch, and the two disagree the first time a
+// legacy view carries a grouping.
+//
+// So the branch is written ONCE, here, and every downstream phase — the
+// composer, the describe block, the renderer — consumes this accessor and
+// never reads Def.Parts directly. The rule it implements is the design's, in
+// full: an explicit stack is returned AS WRITTEN, and an absent one is one
+// part derived from `layout` plus the view's own grouping and properties.
+//
+// A PART IS NEVER INVENTED FOR A LAYOUT THAT HAS NONE, and that is what the
+// second return value is for. `map` is a declared LAYOUT (the importer must be
+// able to record that an Obsidian view asked for one) and it is deliberately
+// NOT a part — the design lists map among the things left out, for want of any
+// coordinate data to draw. Synthesising a `table` for it would be FR-109's
+// measured failure repeated exactly: a cards view that imported as a table,
+// recorded no loss, and scored CLEAN. A caller that gets `false` must SAY the
+// view has no drawable stack; it must not fall back to a table.
+// ---------------------------------------------------------------------------
+
+// EffectiveParts returns the part stack a renderer should walk, and reports
+// whether there is one at all.
+//
+// ok is false only for a view whose `layout` names a rendering with no part
+// equivalent (`map`) and which declares no explicit `parts` of its own. Every
+// other view — including one that declares neither `layout` nor `parts` —
+// yields at least one part.
+func (v *SavedView) EffectiveParts() ([]generated.ViewPart, bool) {
+	if v == nil {
+		return nil, false
+	}
+
+	// An explicit stack is authoritative and is returned verbatim. The copy is
+	// not ceremony: the slice header would otherwise alias Def.Parts, and a
+	// caller appending to it would be writing into the loaded view.
+	if v.Def.Parts != nil && len(*v.Def.Parts) > 0 {
+		return append([]generated.ViewPart(nil), (*v.Def.Parts)...), true
+	}
+
+	// Omitted `layout` means `table`, which the contract states and which the
+	// SPA has always assumed. Stating it here keeps the two agreeing.
+	layout := generated.ViewDefLayoutTable
+	if v.Def.Layout != nil {
+		layout = *v.Def.Layout
+	}
+	part, ok := viewPartForLayout(layout)
+	if !ok {
+		return nil, false
+	}
+
+	synth := generated.ViewPart{Part: part}
+	if v.Def.Grouping != nil && len(*v.Def.Grouping) > 0 {
+		grouping := append([]generated.ViewGroupBy(nil), (*v.Def.Grouping)...)
+		synth.Grouping = &grouping
+	}
+	if v.Def.Properties != nil && len(*v.Def.Properties) > 0 {
+		props := append([]string(nil), (*v.Def.Properties)...)
+		synth.Properties = &props
+	}
+	return []generated.ViewPart{synth}, true
+}
+
+// viewPartForLayout maps a legacy `layout` onto the part that draws it, and
+// reports whether one exists.
+//
+// `cards` and `gallery` both map to `tiles`, and no information is lost by
+// that: `layout` stays on the view as the record of what was actually asked
+// for, so the narrower part vocabulary never becomes the only surviving
+// answer. `map` has no part, deliberately — see the note above.
+func viewPartForLayout(layout generated.ViewDefLayout) (generated.ViewPartPart, bool) {
+	switch layout {
+	case generated.ViewDefLayoutTable:
+		return generated.ViewPartPartTable, true
+	case generated.ViewDefLayoutCards, generated.ViewDefLayoutGallery:
+		return generated.ViewPartPartTiles, true
+	case generated.ViewDefLayoutBoard:
+		return generated.ViewPartPartColumns, true
+	case generated.ViewDefLayoutCalendar:
+		return generated.ViewPartPartCalendar, true
+	default:
+		// `map`, and anything a later contract adds without adding a part.
+		// Reached only through a layout ParseView already accepted as valid,
+		// so this is the "no part exists" answer rather than a parse failure.
+		return "", false
+	}
 }
 
 // ViewSet is every saved view a vault declares.
@@ -536,6 +649,23 @@ func parseCheckShape(
 			def.Name, string(*def.Layout), strings.Join(viewLayoutNames(), ", "))
 	}
 
+	// `kind` and `parts` are the view-kinds addition (design §4), and both are
+	// bare strings to the JSON decoder for exactly the reason `layout` is:
+	// the contract's enum is not enforced by the decode, so an unrecognised
+	// value arrives as a perfectly well-formed view.
+	if def.Kind != nil && !def.Kind.Valid() {
+		return reject(RejectViewInvalidKind, def.Name,
+			"view %q declares kind %q, which is not one of the declared view kinds; permitted: %s",
+			def.Name, string(*def.Kind), strings.Join(viewKindNames(), ", "))
+	}
+	if def.Parts != nil {
+		for i, part := range *def.Parts {
+			if rej := checkViewPartShape(def.Name, i, part, reject); rej != nil {
+				return rej
+			}
+		}
+	}
+
 	// FR-023c's bound applies to a view's tree identically to a request's.
 	// Measured HERE rather than left to the query path because a view is
 	// written once and evaluated forever: a tree that will be refused on every
@@ -555,6 +685,110 @@ func parseCheckShape(
 			return reject(RejectViewFilterTooLarge, def.Name,
 				"view %q has a filter tree %d levels deep; FR-023c caps a filter at %d",
 				def.Name, depth, maxViewFilterDepth)
+		}
+	}
+	return nil
+}
+
+// checkViewPartShape is the FORMAT half of one entry in a view's part stack
+// (view-kinds-design-2026-09-03 §4). Whether the properties it names still
+// exist is ValidateViewAgainstSchemas', exactly as it is for every other
+// property position on a view.
+//
+// EVERY CHECK HERE EXISTS BECAUSE THE DECODE DOES NOT MAKE IT. `part` and
+// `aggregate` are Go string types, so any string decodes; a `minLength: 1` in
+// the contract is a JSON Schema assertion nothing on this path evaluates. Left
+// unchecked, `part: figure` (singular) and `number: ""` both load, and both
+// produce a stack element that draws nothing while the view reports itself
+// fine.
+func checkViewPartShape(
+	viewName string,
+	index int,
+	part generated.ViewPart,
+	reject func(ViewRejectionCode, string, string, ...any) *ViewRejection,
+) *ViewRejection {
+	where := fmt.Sprintf("parts[%d]", index)
+
+	if !part.Part.Valid() {
+		return reject(RejectViewInvalidPart, viewName,
+			"view %q declares %s as part %q, which is not one of the declared parts; permitted: %s",
+			viewName, where, string(part.Part), strings.Join(viewPartNames(), ", "))
+	}
+
+	// The bindings, in the order the design lists them, so a reader comparing
+	// this against §4 reads down both at once. A binding is OPTIONAL — which
+	// of them a given part requires is the composer's gate G1, not the
+	// loader's — but a binding that is PRESENT and blank is refused: the
+	// author wrote a key, and a key that means nothing must never be accepted
+	// in silence.
+	for _, b := range []struct {
+		key   string
+		value *string
+	}{
+		{"number", part.Number},
+		{"unit", part.Unit},
+		{"date", part.Date},
+		{"image", part.Image},
+		{"choice", part.Choice},
+	} {
+		if b.value != nil && strings.TrimSpace(*b.value) == "" {
+			return reject(RejectViewInvalidPart, viewName,
+				"view %q declares %s with a blank `%s`; a binding names a property, so omit the key entirely rather than leaving it empty",
+				viewName, where, b.key)
+		}
+	}
+
+	if part.Aggregate != nil && !part.Aggregate.Valid() {
+		return reject(RejectViewInvalidPart, viewName,
+			"view %q declares %s with aggregate %q, which is not one of the declared reductions; permitted: %s",
+			viewName, where, string(*part.Aggregate), strings.Join(viewPartAggregateNames(), ", "))
+	}
+
+	// The subtotal map is walked in SORTED key order, not map order: a map
+	// walk would report a different one of two bad entries on every run, and
+	// an operator fixing the file would be chasing a moving refusal.
+	if part.Subtotals != nil {
+		keys := make([]string, 0, len(*part.Subtotals))
+		for k := range *part.Subtotals {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if strings.TrimSpace(k) == "" {
+				return reject(RejectViewInvalidPart, viewName,
+					"view %q declares %s with a blank `subtotals` key; a subtotal is keyed by a property name",
+					viewName, where)
+			}
+			if op := (*part.Subtotals)[k]; !op.Valid() {
+				return reject(RejectViewInvalidPart, viewName,
+					"view %q declares %s with subtotal %q = %q, which is not one of the declared reductions; permitted: %s",
+					viewName, where, k, string(op), strings.Join(viewPartAggregateNames(), ", "))
+			}
+		}
+	}
+
+	if part.Grouping != nil {
+		for gi, g := range *part.Grouping {
+			if strings.TrimSpace(g.Property) == "" {
+				return reject(RejectViewInvalidPart, viewName,
+					"view %q declares %s.grouping[%d] with a blank `property`; a grouping key names a property",
+					viewName, where, gi)
+			}
+			if g.Direction != nil && !g.Direction.Valid() {
+				return reject(RejectViewInvalidPart, viewName,
+					"view %q declares %s.grouping[%d] in direction %q, which is not a declared direction; permitted: asc, desc",
+					viewName, where, gi, string(*g.Direction))
+			}
+		}
+	}
+
+	if part.Properties != nil {
+		for pi, p := range *part.Properties {
+			if strings.TrimSpace(p) == "" {
+				return reject(RejectViewInvalidPart, viewName,
+					"view %q declares %s.properties[%d] as a blank name; a column names a property",
+					viewName, where, pi)
+			}
 		}
 	}
 	return nil
@@ -646,6 +880,46 @@ func viewLayoutNames() []string {
 		string(generated.ViewDefLayoutCalendar),
 		string(generated.ViewDefLayoutGallery),
 		string(generated.ViewDefLayoutMap),
+	}
+}
+
+// viewKindNames lists the eight view kinds in the order the design's table
+// lists them (§2.3), so a refusal reads in the same order as the document the
+// author was working from.
+func viewKindNames() []string {
+	return []string{
+		string(generated.ViewDefKindTable),
+		string(generated.ViewDefKindList),
+		string(generated.ViewDefKindTiles),
+		string(generated.ViewDefKindBoard),
+		string(generated.ViewDefKindCalendar),
+		string(generated.ViewDefKindSummary),
+		string(generated.ViewDefKindTrend),
+		string(generated.ViewDefKindBreakdown),
+	}
+}
+
+// viewPartNames lists the eight parts in the design's own order (§2.2).
+func viewPartNames() []string {
+	return []string{
+		string(generated.ViewPartPartTable),
+		string(generated.ViewPartPartList),
+		string(generated.ViewPartPartTiles),
+		string(generated.ViewPartPartColumns),
+		string(generated.ViewPartPartCalendar),
+		string(generated.ViewPartPartFigures),
+		string(generated.ViewPartPartChart),
+		string(generated.ViewPartPartCrosstab),
+	}
+}
+
+func viewPartAggregateNames() []string {
+	return []string{
+		string(generated.ViewPartAggregateSum),
+		string(generated.ViewPartAggregateAvg),
+		string(generated.ViewPartAggregateMin),
+		string(generated.ViewPartAggregateMax),
+		string(generated.ViewPartAggregateCount),
 	}
 }
 
@@ -889,6 +1163,61 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 			}
 			if rej := checkViewProp(*a.Property, "aggregates", true); rej != nil {
 				return rej
+			}
+		}
+	}
+
+	// A part's bindings and columns are property positions like any other, and
+	// they are checked like any other. A part is the ONE place a property name
+	// could otherwise reach a renderer unchecked — every position above
+	// predates the part stack — and a `number: amount` binding on a type that
+	// no longer declares `amount` draws a headline figure over nothing.
+	if v.Def.Parts != nil {
+		for i, part := range *v.Def.Parts {
+			where := fmt.Sprintf("parts[%d]", i)
+			for _, b := range []struct {
+				key        string
+				value      *string
+				comparison bool
+			}{
+				{"number", part.Number, true},
+				{"unit", part.Unit, true},
+				{"date", part.Date, true},
+				{"image", part.Image, false},
+				{"choice", part.Choice, true},
+			} {
+				if b.value == nil {
+					continue
+				}
+				if rej := checkViewProp(*b.value, where+"."+b.key, b.comparison); rej != nil {
+					return rej
+				}
+			}
+			if part.Grouping != nil {
+				for gi, g := range *part.Grouping {
+					if rej := checkViewProp(g.Property, fmt.Sprintf("%s.grouping[%d]", where, gi), true); rej != nil {
+						return rej
+					}
+				}
+			}
+			if part.Subtotals != nil {
+				names := make([]string, 0, len(*part.Subtotals))
+				for name := range *part.Subtotals {
+					names = append(names, name)
+				}
+				sort.Strings(names) // deterministic: a map walk would report a random one
+				for _, name := range names {
+					if rej := checkViewProp(name, where+".subtotals", true); rej != nil {
+						return rej
+					}
+				}
+			}
+			if part.Properties != nil {
+				for _, p := range *part.Properties {
+					if rej := checkViewProp(p, where+".properties", false); rej != nil {
+						return rej
+					}
+				}
 			}
 		}
 	}

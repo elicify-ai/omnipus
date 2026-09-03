@@ -495,6 +495,31 @@ type RecordWriteRequest = {
   version_token?: string | undefined;
   properties: Array<RecordPropertyValue>;
 };
+type ViewPart = {
+  part:
+    | "table"
+    | "list"
+    | "tiles"
+    | "columns"
+    | "calendar"
+    | "figures"
+    | "chart"
+    | "crosstab";
+  number?: string | undefined;
+  unit?: string | undefined;
+  date?: string | undefined;
+  image?: string | undefined;
+  choice?: string | undefined;
+  aggregate?: ViewPartAggregate | undefined;
+  grouping?: Array<ViewGroupBy> | undefined;
+  subtotals?: {} | undefined;
+  properties?: Array<string> | undefined;
+};
+type ViewPartAggregate = "sum" | "avg" | "min" | "max" | "count";
+type ViewGroupBy = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
 type ViewDef = {
   name: string;
   type?: string | undefined;
@@ -507,16 +532,25 @@ type ViewDef = {
   layout?:
     | ("table" | "cards" | "board" | "calendar" | "gallery" | "map")
     | undefined;
+  kind?:
+    | (
+        | "table"
+        | "list"
+        | "tiles"
+        | "board"
+        | "calendar"
+        | "summary"
+        | "trend"
+        | "breakdown"
+      )
+    | undefined;
+  parts?: Array<ViewPart> | undefined;
   formulas?: {} | undefined;
   aggregates?: Array<RecordAggregate> | undefined;
   limit?: number | undefined;
   disabled?: boolean | undefined;
   source?: string | undefined;
   untranslated?: Array<string> | undefined;
-};
-type ViewGroupBy = {
-  property: string;
-  direction?: ("asc" | "desc") | undefined;
 };
 type ViewPropertyConfig = Partial<{
   display_name: string;
@@ -4325,6 +4359,28 @@ export const ViewGroupBy: z.ZodType<ViewGroupBy> = z.object({
 export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
   .object({ display_name: z.string().min(1) })
   .partial();
+export const ViewPartAggregate = z.enum(["sum", "avg", "min", "max", "count"]);
+export const ViewPart: z.ZodType<ViewPart> = z.object({
+  part: z.enum([
+    "table",
+    "list",
+    "tiles",
+    "columns",
+    "calendar",
+    "figures",
+    "chart",
+    "crosstab",
+  ]),
+  number: z.string().min(1).optional(),
+  unit: z.string().min(1).optional(),
+  date: z.string().min(1).optional(),
+  image: z.string().min(1).optional(),
+  choice: z.string().min(1).optional(),
+  aggregate: ViewPartAggregate.optional(),
+  grouping: z.array(ViewGroupBy).max(2).optional(),
+  subtotals: z.record(ViewPartAggregate).optional(),
+  properties: z.array(z.string().min(1)).optional(),
+});
 export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
   z
     .object({
@@ -4361,6 +4417,19 @@ export const ViewDef: z.ZodType<ViewDef> = z.object({
   layout: z
     .enum(["table", "cards", "board", "calendar", "gallery", "map"])
     .optional(),
+  kind: z
+    .enum([
+      "table",
+      "list",
+      "tiles",
+      "board",
+      "calendar",
+      "summary",
+      "trend",
+      "breakdown",
+    ])
+    .optional(),
+  parts: z.array(ViewPart).optional(),
   formulas: z.record(z.string().min(1)).optional(),
   aggregates: z.array(RecordAggregate).optional(),
   limit: z.number().int().gte(1).optional(),

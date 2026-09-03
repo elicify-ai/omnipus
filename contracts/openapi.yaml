@@ -304,6 +304,10 @@ components:
       $ref: ./components/schemas/ViewGroupBy.yaml
     ViewPropertyConfig:
       $ref: ./components/schemas/ViewPropertyConfig.yaml
+    ViewPart:
+      $ref: ./components/schemas/ViewPart.yaml
+    ViewPartAggregate:
+      $ref: ./components/schemas/ViewPartAggregate.yaml
     # ── ViewDef — ADR-068 D10 and D24.1, spec FR-018b/FR-018d, FR-105, FR-109 ───
     # HOSTED INLINE, NOT IN ITS OWN FILE, for the same mechanical reason
     # VaultFindRequest is (see its note below): a view's
@@ -511,6 +515,80 @@ components:
             whole surface is written against. An unrenderable layout is a
             visible gap; a silently flattened one is a wrong answer.
           example: "cards"
+        kind:
+          type: string
+          enum:
+            - table
+            - list
+            - tiles
+            - board
+            - calendar
+            - summary
+            - trend
+            - breakdown
+          x-enum-varnames:
+            - ViewDefKindTable
+            - ViewDefKindList
+            - ViewDefKindTiles
+            - ViewDefKindBoard
+            - ViewDefKindCalendar
+            - ViewDefKindSummary
+            - ViewDefKindTrend
+            - ViewDefKindBreakdown
+          description: >
+            WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW
+            (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on
+            every view written before the kinds existed.
+
+
+            IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The
+            renderer walks `parts` and only `parts`; nothing switches on this
+            field at render time. It records what the agent asked for, so a
+            later "make that summary group by month instead" can be answered by
+            re-composing the same kind rather than by reverse-engineering a
+            part stack.
+
+
+            The eight and what each stacks: `table` → table. `list` → list.
+            `tiles` → tiles (needs an image property). `board` → columns (needs
+            an enum property with at most 8 values). `calendar` → calendar
+            (needs a date property). `summary` → figures then a grouped table
+            with subtotals (needs a number). `trend` → figures then chart then
+            table (needs a date and a number). `breakdown` → figures then
+            crosstab (needs two groupable properties and a number).
+
+
+            A kind is OFFERED only when the collection holds what it requires,
+            and a refusal names the missing property (design §3 G1). That gate
+            lives in the composer, which is the only thing that writes this
+            field on the normal path.
+          example: "summary"
+        parts:
+          type: array
+          description: >
+            THE ORDERED STACK THE RENDERER WALKS
+            (view-kinds-design-2026-09-03 §4). Optional.
+
+
+            ABSENT MEANS THE VIEW IS READ EXACTLY AS IT WAS BEFORE THIS FIELD
+            EXISTED: one part, derived from `layout` plus the view's own
+            grouping and properties. All 69 views in the founder's imported
+            vault load unchanged, and no file has to be migrated for the
+            renderer to keep working. The loader exposes one accessor for both
+            shapes, so no consumer downstream has to know which of the two it
+            is looking at — a consumer that branched on `parts == nil` is a
+            consumer that would eventually branch differently from the next
+            one.
+
+
+            `filter` is SHARED BY EVERY PART and is never per-part. One view
+            answers one question about one row set; a part that could narrow
+            the rows under it would make the figures row and the table beneath
+            it disagree about what they are counting, with nothing on screen to
+            say so.
+          items:
+            $ref: "./components/schemas/ViewPart.yaml"
+            x-go-type: ViewPart
         formulas:
           type: object
           description: >

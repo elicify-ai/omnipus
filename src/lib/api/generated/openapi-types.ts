@@ -5374,6 +5374,94 @@ export interface components {
             display_name?: string;
         };
         /**
+         * ViewPart
+         * @description One drawn element of a saved view's part stack (view-kinds-design-2026-09-03 §2.2, §4).
+         *     A view used to be ONE flat layout, and nothing composed. A financial report is a figures row plus a grouped table with subtotals plus an aging cross-table; a performance report is figures plus a chart plus a worst-offenders table. Neither fits "one layout", so all 69 views in the founder's imported vault were flat tables that totalled nothing.
+         *     PARTS ARE NOT AN AUTHORING SURFACE. The agent picks one of the eight named view KINDS (ViewDef.kind); the composer emits the part stack that kind stands for, and the renderer walks it. Free part composition was considered and deliberately left out (design §2.3): it is untestable, and the raw `write_view` path already covers the tail.
+         *     THE BINDING FIELDS ARE OPTIONAL HERE AND REQUIRED BY THE PART. This schema cannot say "a chart needs a date AND a number" without a per-part oneOf that oapi-codegen would inline as eight anonymous structs. The requirement table lives in the composer's gate G1, which refuses by NAME — "board needs an enum with at most 8 values; `status` has 26" — and that refusal is the surface an agent actually reads. What this schema does enforce is that a binding, when present, is a real non-empty property name: the loader refuses a blank one rather than rendering a part bound to nothing.
+         */
+        ViewPart: {
+            /**
+             * @description Which element this draws. Eight, and the list is closed.
+             *
+             *     "table" — rows by columns. "list" — a name and one detail per row. "tiles" — a grid keyed on an image property. "columns" — status columns, i.e. a board, keyed on an enum property. "calendar" — a month grid keyed on a date property. "figures" — a headline row of numbers. "chart" — a line or bar over time, needing a date and a number. "crosstab" — rows by columns with aggregated cells, needing two group properties and a number.
+             *
+             *     A value outside this set is a LOAD REJECTION, not a part that renders as a table. That is the same rule `layout` already carries and for the same measured reason: an unrecognised layout that fell back to a table scored CLEAN under the parity criterion while silently losing what the view actually asked for.
+             * @example figures
+             * @enum {string}
+             */
+            part: "table" | "list" | "tiles" | "columns" | "calendar" | "figures" | "chart" | "crosstab";
+            /**
+             * @description The number property this part totals or plots. Required in practice by `figures`, `chart` and `crosstab`; meaningless on the others.
+             *
+             *     If the property declares a companion unit (PropertyDef.unit_property), every total this part draws is computed ONCE PER UNIT VALUE and never across units (design §3 G2).
+             * @example amount
+             */
+            number?: string;
+            /**
+             * @description The companion unit property of `number`, named explicitly so the part records which pairing it was composed against.
+             *
+             *     IT IS NEVER INFERRED. Pairing any number with any nearby enum works on invoices and is wrong the first time a record holds two amounts, which is why the pairing is declared on the record type (PropertyDef.unit_property) and merely restated here. A `unit` naming a property that is not the declared companion of `number` is the composer's to refuse.
+             * @example currency
+             */
+            unit?: string;
+            /**
+             * @description The date property this part lays out or plots against. Used by `calendar` and `chart`.
+             * @example due_date
+             */
+            date?: string;
+            /**
+             * @description The file/image property `tiles` draws its grid from.
+             * @example cover
+             */
+            image?: string;
+            /**
+             * @description The enum property `columns` draws its board columns from. The composer's gate G1 additionally requires it to hold at most 8 values — a board with 26 columns is not a board.
+             * @example status
+             */
+            choice?: string;
+            /** @description The reduction `figures` and `crosstab` apply to `number`. Omitted means the part draws no aggregate of its own. */
+            aggregate?: components["schemas"]["ViewPartAggregate"];
+            /**
+             * @description Grouping keys for this part, outermost first, each carrying its own direction — the SAME shape as ViewDef.grouping, deliberately, so a part's grouping and a view's grouping can never mean two different things.
+             *
+             *     Omitted means this part declares NO grouping of its own, and the view's own `grouping` is what stands. The loader never copies one into the other: a part is returned exactly as its file wrote it, so a reader can always tell a part that asked for something from a part that inherited it.
+             */
+            grouping?: components["schemas"]["ViewGroupBy"][];
+            /**
+             * @description Per-group subtotal row, keyed by PROPERTY name, valued by the reduction to apply to it (design §4's `subtotals: {amount: sum}`).
+             *
+             *     PER GROUP AND PER UNIT. A subtotal over a number carrying a companion unit is drawn once per unit value under G2, with the rows whose unit is missing shown, excluded and counted separately under G3 — never one combined figure, because a combined figure across currencies is a wrong number that looks right.
+             * @example {
+             *       "amount": "sum"
+             *     }
+             */
+            subtotals?: {
+                [key: string]: components["schemas"]["ViewPartAggregate"];
+            };
+            /**
+             * @description Columns for the table-ish parts (`table`, `list`, `crosstab`), in this order. Omitted means this part names no columns of its own, and the view's own `properties` is what stands — which in turn, omitted, shows every declared property.
+             *
+             *     Narrowing this changes what is RENDERED, never what is matched — the same rule ViewDef.properties carries, restated because a part-level column list is exactly where somebody would expect a filter to hide.
+             * @example [
+             *       "file.name",
+             *       "client",
+             *       "due_date",
+             *       "amount"
+             *     ]
+             */
+            properties?: string[];
+        };
+        /**
+         * ViewPartAggregate
+         * @description The reduction one part of a view applies to a number (view-kinds-design-2026-09-03 §4). FIVE, and the list is closed.
+         *     IT IS DELIBERATELY NARROWER THAN RecordAggregate's FIFTEEN. RecordAggregate is the query surface's full vocabulary, including the two population-class ops that buffer a column (`median`, `unique`) and the domain-specific ones (`earliest`, `checked`, `stddev`). A view PART's figure row and per-group subtotal row are drawn for a reader, per unit value, on every render — so the set here is the one every number answers and nothing here can abort mid-scan. A view that genuinely needs a median asks for it through `aggregates`, which is RecordAggregate's own field and is unchanged.
+         *     THE UNIT RULE IS NOT OPTIONAL AND IS NOT EXPRESSIBLE HERE. A number carrying a companion unit property (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units (design §3 G2), and a row whose unit is missing is shown, excluded from every total, and counted separately (G3). Those are composer and renderer rules; this enum only names which reduction is asked for.
+         * @example sum
+         * @enum {string}
+         */
+        ViewPartAggregate: "sum" | "avg" | "min" | "max" | "count";
+        /**
          * ViewDef
          * @description A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
          *     A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
@@ -5447,6 +5535,26 @@ export interface components {
              * @enum {string}
              */
             layout?: "table" | "cards" | "board" | "calendar" | "gallery" | "map";
+            /**
+             * @description WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
+             *
+             *     IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+             *
+             *     The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
+             *
+             *     A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
+             * @example summary
+             * @enum {string}
+             */
+            kind?: "table" | "list" | "tiles" | "board" | "calendar" | "summary" | "trend" | "breakdown";
+            /**
+             * @description THE ORDERED STACK THE RENDERER WALKS (view-kinds-design-2026-09-03 §4). Optional.
+             *
+             *     ABSENT MEANS THE VIEW IS READ EXACTLY AS IT WAS BEFORE THIS FIELD EXISTED: one part, derived from `layout` plus the view's own grouping and properties. All 69 views in the founder's imported vault load unchanged, and no file has to be migrated for the renderer to keep working. The loader exposes one accessor for both shapes, so no consumer downstream has to know which of the two it is looking at — a consumer that branched on `parts == nil` is a consumer that would eventually branch differently from the next one.
+             *
+             *     `filter` is SHARED BY EVERY PART and is never per-part. One view answers one question about one row set; a part that could narrow the rows under it would make the figures row and the table beneath it disagree about what they are counting, with nothing on screen to say so.
+             */
+            parts?: components["schemas"]["ViewPart"][];
             /**
              * @description Computed properties, keyed by name, each value the expression's SOURCE TEXT (FR-141) — human-diffable and directly comparable against the Obsidian original it was translated from. A formula is referenced from any property position as `formula.<name>`.
              *
@@ -19780,6 +19888,8 @@ export type RecordWriteRequest = components["schemas"]["RecordWriteRequest"];
 export type RelationWriteRequest = components["schemas"]["RelationWriteRequest"];
 export type ViewGroupBy = components["schemas"]["ViewGroupBy"];
 export type ViewPropertyConfig = components["schemas"]["ViewPropertyConfig"];
+export type ViewPart = components["schemas"]["ViewPart"];
+export type ViewPartAggregate = components["schemas"]["ViewPartAggregate"];
 export type ViewDef = components["schemas"]["ViewDef"];
 export type VaultFindRequest = components["schemas"]["VaultFindRequest"];
 export type VaultFilterNode = components["schemas"]["VaultFilterNode"];
