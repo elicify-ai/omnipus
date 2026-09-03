@@ -107,12 +107,18 @@ const (
 	opDeleteRecordType = "delete_record_type"
 	opWriteView        = "write_view"
 	opDeleteView       = "delete_view"
+	// opCreateView is the composer path (view-kinds-design-2026-09-03 §6.1):
+	// eight named kinds plus a handful of property bindings, in place of a
+	// raw `definition`. write_view (the definition-shaped escape hatch) and
+	// delete_view are unchanged by its addition.
+	opCreateView = "create_view"
 )
 
 // vaultConfigureOps lists the accepted ops, in the order spec §4.1.6
-// documents them.
+// documents them, with create_view placed next to write_view (both author a
+// saved view; create_view is the composer, write_view the raw escape hatch).
 var vaultConfigureOps = []string{
-	opCreateRecordType, opEditRecordType, opDeleteRecordType, opWriteView, opDeleteView,
+	opCreateRecordType, opEditRecordType, opDeleteRecordType, opWriteView, opCreateView, opDeleteView,
 }
 
 // vaultConfigureNoteOps are knowledge_edit's ops (write ONE named note,
@@ -147,7 +153,12 @@ const authorOpConfigure AuthorOperation = "knowledge.configure"
 // is DELIBERATELY absent (FR-018a, AC-C3) — its absence from this list is
 // what makes it absent from the tool schema, which is what the acceptance
 // criterion actually tests.
-var configureArgNames = []string{"op", "collection", "type", "view", "definition"}
+//
+// createViewArgNames (knowledge_configure_create_view.go) is appended here
+// rather than kept separate, because unknownArgs (below) is a SINGLE check
+// run once in Execute for every op — the same posture "definition" already
+// takes, being used by three ops and declared once.
+var configureArgNames = append([]string{"op", "collection", "type", "view", "definition"}, createViewArgNames...)
 
 // ---------------------------------------------------------------------------
 // THE DESCRIPTION IS DERIVED, NEVER TRANSCRIBED
@@ -227,11 +238,17 @@ func (t *ConfigureTool) Description() string {
 		"bytes: deleting a record type (delete_record_type) reverts every record of that type " +
 		"to an ordinary note in one call, and declaring or changing a type " +
 		"(create_record_type / edit_record_type) can validate or revalidate every pre-existing " +
-		"note that already carries that type in its frontmatter. write_view / delete_view " +
-		"author a saved query — no note's bytes or validity changes, only what a query returns. " +
-		"Never touches a note's own content or path; use knowledge_edit or knowledge_restructure " +
-		"for those. There is no built-in vocabulary: this vault's record types, properties and " +
-		"enum values are entirely what this tool (or the operator) has declared."
+		"note that already carries that type in its frontmatter. create_view / write_view / " +
+		"delete_view author a saved query — no note's bytes or validity changes, only what a " +
+		"query returns. Prefer create_view for the ordinary case: it picks one of eight named " +
+		"view kinds (table, list, tiles, board, calendar, summary, trend, breakdown) and a few " +
+		"property bindings, and assembles the correct render stack itself — including the rule " +
+		"that a number's total is computed per unit and never combined across units when the " +
+		"property declares one. write_view is the raw escape hatch for anything create_view's " +
+		"eight kinds do not cover. Never touches a note's own content or path; use " +
+		"knowledge_edit or knowledge_restructure for those. There is no built-in vocabulary: " +
+		"this vault's record types, properties and enum values are entirely what this tool " +
+		"(or the operator) has declared."
 }
 
 // Scope classifies the tool for per-agent visibility filtering.
@@ -259,7 +276,73 @@ func (t *ConfigureTool) Parameters() map[string]any {
 			},
 			"view": map[string]any{
 				"type":        "string",
-				"description": "write_view / delete_view: the view name.",
+				"description": "create_view / write_view / delete_view: the view name.",
+			},
+			"kind": map[string]any{
+				"type": "string",
+				"enum": createViewKindNames,
+				"description": "create_view only, required. One of the eight view kinds. table/list: no " +
+					"requirement, work on anything. tiles: needs 'image' naming a text property (this " +
+					"schema layer has no dedicated file/image type; a text property carrying a path or " +
+					"URL stands in for one). board: needs 'choice' naming an enum property with at most " +
+					"8 declared values. calendar: needs 'date' naming a date property. summary: needs " +
+					"'number' naming an integer or decimal property, plus optional 'group_by' (one " +
+					"property) for a grouped, subtotalled table. trend: needs 'date' and 'number'. " +
+					"breakdown: needs 'number' and 'group_by' naming exactly TWO different properties. " +
+					"A kind is refused, naming the missing or near-miss property, when the target " +
+					"record type does not have what it requires — nothing is written on a refusal.",
+			},
+			"filter": map[string]any{
+				"type": "object",
+				"description": "create_view only, optional. Same shape as write_view's " +
+					"definition.filter: one tree of {all|any|not} over leaves of {property, op, value}.",
+			},
+			"number": map[string]any{
+				"type": "string",
+				"description": "create_view only. Required for kind=summary/trend/breakdown: the " +
+					"integer or decimal property to total. A text property is refused even when its " +
+					"values look numeric — declare it as a number via edit_record_type first. If the " +
+					"property declares a companion unit (unit_property), the total is computed once " +
+					"per unit value and never combined across units; that pairing is applied " +
+					"automatically unless 'unit' is also given.",
+			},
+			"unit": map[string]any{
+				"type": "string",
+				"description": "create_view only, optional. Names the companion unit property of " +
+					"'number'. Leave unset to let the schema's own declared pairing apply " +
+					"automatically. Setting it to anything other than that declared pairing (including " +
+					"an empty string) is refused — a number that totals per unit never draws one " +
+					"combined figure across units.",
+			},
+			"date": map[string]any{
+				"type":        "string",
+				"description": "create_view only. Required for kind=calendar/trend: the date property.",
+			},
+			"image": map[string]any{
+				"type":        "string",
+				"description": "create_view only. Required for kind=tiles: the text property carrying an image path or URL.",
+			},
+			"choice": map[string]any{
+				"type":        "string",
+				"description": "create_view only. Required for kind=board: the enum property (at most 8 declared values) that becomes the board's columns.",
+			},
+			"group_by": map[string]any{
+				"description": "create_view only. A property name, or (kind=breakdown only) a list of " +
+					"exactly two DIFFERENT property names. Optional for summary/trend (at most one); " +
+					"required and exactly two for breakdown; refused for every other kind.",
+			},
+			"columns": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "create_view only, optional. Properties to display, in this order. Omitted shows every declared property.",
+			},
+			"sort": map[string]any{
+				"type":        "array",
+				"description": "create_view only, optional. Same shape as write_view's definition.sort.",
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "create_view only, optional. Same as write_view's definition.limit.",
 			},
 			"definition": map[string]any{
 				"type": "object",
@@ -269,9 +352,11 @@ func (t *ConfigureTool) Parameters() map[string]any {
 					"required, and per-type: label, values, to, inverse, unit}). " +
 					configurePropertyTypeSentence + " There is no built-in vocabulary; every " +
 					"type name, property name and enum value is this vault's own. " +
-					"write_view: an OPTIONAL type (the record type queried; omit it for a " +
-					"view that spans every note in scope), one optional `filter` tree of " +
-					"{all|any|not} over leaves of {property, op, value} where " +
+					"write_view: the raw escape hatch — prefer create_view for a table, list, tiles, " +
+					"board, calendar, summary, trend or breakdown view; use write_view only for a " +
+					"shape those eight kinds do not cover. An OPTIONAL type (the record type " +
+					"queried; omit it for a view that spans every note in scope), one optional " +
+					"`filter` tree of {all|any|not} over leaves of {property, op, value} where " +
 					configureOperatorSentence + " and optional label, grouping ({property, " +
 					"direction}), sort, properties, aggregates, limit, layout, formulas and " +
 					"property_config. `formulas` and a DESCENDING grouping are stored " +
@@ -328,6 +413,8 @@ func (t *ConfigureTool) Execute(ctx context.Context, args map[string]any) *tools
 		return t.execDeleteRecordType(target, args)
 	case opWriteView:
 		return t.execWriteView(target, args)
+	case opCreateView:
+		return t.execCreateView(target, args)
 	case opDeleteView:
 		return t.execDeleteView(target, args)
 	default:
@@ -969,13 +1056,24 @@ type ConfigureData struct {
 	// ordinary notes (AC-C4).
 	Reverted int
 
-	// ViewType is write_view's record type, named so the response confirms
-	// what the view queries without a second call. Empty means the view is
-	// UNTYPED (FR-018b) and spans every note in scope — a legal view, not a
-	// missing value.
+	// ViewType is write_view's/create_view's record type, named so the
+	// response confirms what the view queries without a second call. Empty
+	// means the view is UNTYPED (FR-018b) and spans every note in scope — a
+	// legal view, not a missing value.
 	ViewType string
 
-	// Unservable is write_view's answer to "will knowledge_find run this?",
+	// Kind is create_view's own kind argument, echoed back so the response
+	// confirms which of the eight it built without a second call. Empty for
+	// every op other than create_view.
+	Kind string
+
+	// PartsSummary is create_view's assembled part stack, one entry per
+	// part, in draw order — design §6.1: "the answer with … the assembled
+	// stack so the agent can read back what it built." Empty for every op
+	// other than create_view.
+	PartsSummary []string
+
+	// Unservable is write_view's/create_view's answer to "will knowledge_find run this?",
 	// empty when it will. See ConfigureTool.serveRefusalFor: a view carrying
 	// `formulas`, a descending grouping or a stored `disabled` flag is written
 	// faithfully and REFUSED at query time, and the write is the only place
@@ -1012,6 +1110,17 @@ func RenderConfigure(d ConfigureData) string {
 			// first) and before anything else, in the words the loader itself
 			// uses, so the same sentence appears here and in a
 			// knowledge_describe listing of the same view.
+			fmt.Fprintf(&b, "NOT SERVABLE by knowledge_find: %s\n", d.Unservable)
+		}
+	case opCreateView:
+		queries := fmt.Sprintf("querying record type %q", d.ViewType)
+		if d.ViewType == "" {
+			queries = "untyped: it spans every note in scope"
+		}
+		fmt.Fprintf(&b, "view %q saved at %s, kind=%s, %s\n", d.Name, d.Path, d.Kind, queries)
+		fmt.Fprintf(&b, "CASCADE (meaning): what this view returns changes; no note's own validity changes\n")
+		fmt.Fprintf(&b, "PARTS: %s\n", strings.Join(d.PartsSummary, " -> "))
+		if d.Unservable != "" {
 			fmt.Fprintf(&b, "NOT SERVABLE by knowledge_find: %s\n", d.Unservable)
 		}
 	case opDeleteView:
