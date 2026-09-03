@@ -304,3 +304,43 @@ func TestRenderAvailableViews_NeverEmitsJSONKeySyntax(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The compressed tool-description text for knowledge_configure's create_view
+// (design §6.2's second requirement: "the same block appears in the tool's
+// own schema description in compressed form ... because the tool description
+// is what is in front of the agent at call time"). These two are exported,
+// ready-to-paste strings for ConfigureTool.Description()/Parameters() — see
+// this file's own header comment on why they are not wired in here.
+// ---------------------------------------------------------------------------
+
+func TestConfigureCreateViewDescriptionFragment_NamesOpAndAllEightKindsWithRequirements(t *testing.T) {
+	frag := ConfigureCreateViewDescriptionFragment
+	if !strings.Contains(frag, "create_view") {
+		t.Fatalf("fragment does not name the op at all: %q", frag)
+	}
+	wantPerKind := map[string]string{
+		ViewKindTable:     "any collection",
+		ViewKindList:      "any collection",
+		ViewKindTiles:     imageIneligibleReason,
+		ViewKindBoard:     "an enum property with ≤ 8 values",
+		ViewKindCalendar:  "a date property",
+		ViewKindSummary:   "a number property",
+		ViewKindTrend:     "a date property and a number property",
+		ViewKindBreakdown: "two other properties and a number property",
+	}
+	for kind, requirement := range wantPerKind {
+		if !strings.Contains(frag, kind) {
+			t.Errorf("fragment does not name kind %q: %q", kind, frag)
+		}
+		if !strings.Contains(frag, requirement) {
+			t.Errorf("fragment does not state %q's requirement (%q): %q", kind, requirement, frag)
+		}
+	}
+}
+
+func TestConfigureWriteViewSteerLine_PointsToCreateView(t *testing.T) {
+	if !strings.Contains(ConfigureWriteViewSteerLine, "create_view") {
+		t.Fatalf("write_view steer line never mentions create_view: %q", ConfigureWriteViewSteerLine)
+	}
+}
