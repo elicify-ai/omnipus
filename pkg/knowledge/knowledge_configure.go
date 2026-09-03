@@ -240,12 +240,9 @@ func (t *ConfigureTool) Description() string {
 		"(create_record_type / edit_record_type) can validate or revalidate every pre-existing " +
 		"note that already carries that type in its frontmatter. create_view / write_view / " +
 		"delete_view author a saved query — no note's bytes or validity changes, only what a " +
-		"query returns. Prefer create_view for the ordinary case: it picks one of eight named " +
-		"view kinds (table, list, tiles, board, calendar, summary, trend, breakdown) and a few " +
-		"property bindings, and assembles the correct render stack itself — including the rule " +
-		"that a number's total is computed per unit and never combined across units when the " +
-		"property declares one. write_view is the raw escape hatch for anything create_view's " +
-		"eight kinds do not cover. Never touches a note's own content or path; use " +
+		"query returns. " + ConfigureCreateViewDescriptionFragment + " Its own render stack " +
+		"includes the rule that a number's total is computed per unit and never combined " +
+		"across units when the property declares one. Never touches a note's own content or path; use " +
 		"knowledge_edit or knowledge_restructure for those. There is no built-in vocabulary: " +
 		"this vault's record types, properties and enum values are entirely what this tool " +
 		"(or the operator) has declared."
@@ -281,16 +278,20 @@ func (t *ConfigureTool) Parameters() map[string]any {
 			"kind": map[string]any{
 				"type": "string",
 				"enum": createViewKindNames,
-				"description": "create_view only, required. One of the eight view kinds. table/list: no " +
-					"requirement, work on anything. tiles: needs 'image' naming a text property (this " +
-					"schema layer has no dedicated file/image type; a text property carrying a path or " +
-					"URL stands in for one). board: needs 'choice' naming an enum property with at most " +
-					"8 declared values. calendar: needs 'date' naming a date property. summary: needs " +
-					"'number' naming an integer or decimal property, plus optional 'group_by' (one " +
-					"property) for a grouped, subtotalled table. trend: needs 'date' and 'number'. " +
-					"breakdown: needs 'number' and 'group_by' naming exactly TWO different properties. " +
-					"A kind is refused, naming the missing or near-miss property, when the target " +
-					"record type does not have what it requires — nothing is written on a refusal.",
+				"description": fmt.Sprintf(
+					"create_view only, required. One of the eight view kinds. table/list: no "+
+						"requirement, work on anything. tiles: %s (D5) — refused unconditionally; "+
+						"'image' is accepted but can never satisfy it today. board: needs 'choice' "+
+						"naming an enum property with at most %d declared values. calendar: needs "+
+						"'date' naming a date property. summary: needs 'number' naming an integer or "+
+						"decimal property, plus optional 'group_by' (one property) for a grouped, "+
+						"subtotalled table. trend: needs 'date' and 'number'. breakdown: needs "+
+						"'number' and 'group_by' naming exactly TWO different properties. "+
+						"A kind is refused, naming the missing or near-miss property, when the target "+
+						"record type does not have what it requires — nothing is written on a refusal. "+
+						"Call knowledge_describe on the record type first — it states, per type, "+
+						"which kinds are actually available.",
+					imageIneligibleReason, maxBoardEnumValues),
 			},
 			"filter": map[string]any{
 				"type": "object",
@@ -319,12 +320,17 @@ func (t *ConfigureTool) Parameters() map[string]any {
 				"description": "create_view only. Required for kind=calendar/trend: the date property.",
 			},
 			"image": map[string]any{
-				"type":        "string",
-				"description": "create_view only. Required for kind=tiles: the text property carrying an image path or URL.",
+				"type": "string",
+				"description": fmt.Sprintf(
+					"create_view only. Accepted for kind=tiles, but never satisfies it: %s (D5) — "+
+						"kind=tiles is refused unconditionally regardless of this argument.",
+					imageIneligibleReason),
 			},
 			"choice": map[string]any{
-				"type":        "string",
-				"description": "create_view only. Required for kind=board: the enum property (at most 8 declared values) that becomes the board's columns.",
+				"type": "string",
+				"description": fmt.Sprintf(
+					"create_view only. Required for kind=board: the enum property (at most %d declared "+
+						"values) that becomes the board's columns.", maxBoardEnumValues),
 			},
 			"group_by": map[string]any{
 				"description": "create_view only. A property name, or (kind=breakdown only) a list of " +
@@ -352,9 +358,15 @@ func (t *ConfigureTool) Parameters() map[string]any {
 					"required, and per-type: label, values, to, inverse, unit}). " +
 					configurePropertyTypeSentence + " There is no built-in vocabulary; every " +
 					"type name, property name and enum value is this vault's own. " +
-					"write_view: the raw escape hatch — prefer create_view for a table, list, tiles, " +
-					"board, calendar, summary, trend or breakdown view; use write_view only for a " +
-					"shape those eight kinds do not cover. An OPTIONAL type (the record type " +
+					"write_view: the raw escape hatch. " + ConfigureWriteViewSteerLine + " " +
+					"write_view may also set `kind` (one of the eight create_view kind names, " +
+					"provenance only) and `parts` directly — an ordered list of " +
+					"{part, number, unit, date, image, choice, aggregate, grouping, subtotals, " +
+					"properties} objects, the same shape create_view itself assembles (part is " +
+					"one of table/list/tiles/columns/calendar/figures/chart/crosstab) — for a " +
+					"render stack the eight named kinds do not produce; the SAME rules apply " +
+					"(a number's unit pairing, once declared, is never overridden to a combined " +
+					"total). An OPTIONAL type (the record type " +
 					"queried; omit it for a view that spans every note in scope), one optional " +
 					"`filter` tree of {all|any|not} over leaves of {property, op, value} where " +
 					configureOperatorSentence + " and optional label, grouping ({property, " +

@@ -25,9 +25,12 @@ import (
 // file exercises.
 //
 //	name      text    — an ordinary display property, never a valid `number`
-//	cover     text    — tiles' image binding (this schema layer's stand-in
-//	                    for a dedicated file/image type — see
-//	                    gateG1RequireImage's own doc comment)
+//	cover     text    — an ordinary text property; NOT tiles-eligible (D5:
+//	                    ImageEligible returns false for every declared type,
+//	                    text included — see gateG1RequireImage's own doc
+//	                    comment). Kept in the fixture so a G1-tiles test can
+//	                    prove that even a plausible-looking binding still
+//	                    refuses.
 //	status    enum(3) — board-eligible (≤ 8 values); also a grouping property
 //	category  enum(26)— NOT board-eligible; G1's own near-miss example
 //	due_date  date    — calendar's and trend's date binding
@@ -115,6 +118,68 @@ func TestKnowledgeConfigure_CreateView_G1_Board_RefuseAndPass(t *testing.T) {
 		require.Contains(t, string(raw), "choice: status")
 		require.Contains(t, string(raw), "part: columns")
 	})
+}
+
+// TestKnowledgeConfigure_CreateView_G1_Tiles_AlwaysRefused is D5 (design §9,
+// ratified 2026-09-03): no image-capable property type exists yet, so
+// kind=tiles refuses UNCONDITIONALLY — even when 'image' names a real,
+// declared text property that looks like a plausible binding (option (a) in
+// D5, explicitly rejected: binding tiles to `text` would make it available
+// on every vault and attach rendering behaviour to unvalidated strings).
+//
+// This is the composer half of the D5 agreement; see
+// TestKnowledgeConfigure_CreateView_TilesAgreesWithDescribeAvailability below
+// for the same fact checked against knowledge_describe's discovery block.
+func TestKnowledgeConfigure_CreateView_G1_Tiles_AlwaysRefused(t *testing.T) {
+	tool, ws, root := cvFixture(t)
+
+	t.Run("refuse even with a plausible text property named", func(t *testing.T) {
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "g1-tiles-refuse-named",
+			"kind": "tiles", "type": "invoice", "image": "cover",
+		})
+		require.True(t, res.IsError)
+		require.Contains(t, res.ForLLM, imageIneligibleReason)
+		cvAssertFileAbsent(t, root, "g1-tiles-refuse-named")
+	})
+
+	t.Run("refuse with no image binding given at all", func(t *testing.T) {
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "g1-tiles-refuse-blank",
+			"kind": "tiles", "type": "invoice",
+		})
+		require.True(t, res.IsError)
+		require.Contains(t, res.ForLLM, imageIneligibleReason)
+		cvAssertFileAbsent(t, root, "g1-tiles-refuse-blank")
+	})
+}
+
+// TestKnowledgeConfigure_CreateView_TilesAgreesWithDescribeAvailability is
+// the direct regression for the D5 discover/compose disagreement: before the
+// fix, RenderAvailableViews (knowledge_describe's discovery block) called
+// tiles unavailable while execCreateView happily wrote one bound to a text
+// property — the exact "a kind knowledge_describe calls available must
+// never disagree with the composer" failure view_kinds.go's own header
+// warns against.
+func TestKnowledgeConfigure_CreateView_TilesAgreesWithDescribeAvailability(t *testing.T) {
+	tool, ws, root := cvFixture(t)
+
+	schemas, _, lerr := records.LoadSchemas(root)
+	require.NoError(t, lerr)
+	sc, ok := schemas.Get("invoice")
+	require.True(t, ok)
+
+	avail := RenderAvailableViews(sc)
+	require.Contains(t, avail, "tiles — NO ("+imageIneligibleReason+")",
+		"discovery block must call tiles unavailable, naming D5's exact reason")
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_view", "view": "tiles-must-agree",
+		"kind": "tiles", "type": "invoice", "image": "cover",
+	})
+	require.True(t, res.IsError, "the composer must refuse exactly what the discovery block calls unavailable")
+	require.Contains(t, res.ForLLM, imageIneligibleReason)
+	cvAssertFileAbsent(t, root, "tiles-must-agree")
 }
 
 func TestKnowledgeConfigure_CreateView_G1_MissingRequiredProperty_Refused(t *testing.T) {
@@ -425,7 +490,14 @@ func TestKnowledgeConfigure_CreateView_SummaryRoundTripsThroughLoadViews(t *test
 	require.Equal(t, "currency", *table.Unit)
 }
 
-func TestKnowledgeConfigure_CreateView_AllEightKindsAreSchemaValid(t *testing.T) {
+// TestKnowledgeConfigure_CreateView_SevenOfEightKindsAreSchemaValid is D5's
+// own acceptance fixture (design §9): "7-of-8 available plus
+// tiles-unavailable-with-this-exact-reason." Seven kinds must SUCCEED and
+// round-trip through the real loader; tiles must REFUSE, unconditionally,
+// with D5's exact wording — see
+// TestKnowledgeConfigure_CreateView_G1_Tiles_AlwaysRefused for that half in
+// isolation.
+func TestKnowledgeConfigure_CreateView_SevenOfEightKindsAreSchemaValid(t *testing.T) {
 	tool, ws, root := cvFixture(t)
 
 	cases := []struct {
@@ -434,7 +506,6 @@ func TestKnowledgeConfigure_CreateView_AllEightKindsAreSchemaValid(t *testing.T)
 	}{
 		{"table", map[string]any{}},
 		{"list", map[string]any{}},
-		{"tiles", map[string]any{"image": "cover"}},
 		{"board", map[string]any{"choice": "status"}},
 		{"calendar", map[string]any{"date": "due_date"}},
 		{"summary", map[string]any{"number": "amount", "group_by": "status"}},
@@ -457,7 +528,17 @@ func TestKnowledgeConfigure_CreateView_AllEightKindsAreSchemaValid(t *testing.T)
 		})
 	}
 
-	// Every one of the eight files just written must load and validate
+	t.Run("tiles", func(t *testing.T) {
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "all-kinds-tiles",
+			"kind": "tiles", "type": "invoice", "image": "cover",
+		})
+		require.True(t, res.IsError, "D5: tiles must refuse unconditionally")
+		require.Contains(t, res.ForLLM, imageIneligibleReason)
+		cvAssertFileAbsent(t, root, "all-kinds-tiles")
+	})
+
+	// Every one of the seven files just written must load and validate
 	// clean through the SAME loader knowledge_describe and knowledge_find use
 	// — a composer that produced a shape ONLY this tool's own write path
 	// accepted would be exactly the two-notions-of-valid failure view.go's
@@ -471,6 +552,8 @@ func TestKnowledgeConfigure_CreateView_AllEightKindsAreSchemaValid(t *testing.T)
 		_, ok := set.Get("all-kinds-" + tc.kind)
 		require.True(t, ok, "kind=%s must have loaded", tc.kind)
 	}
+	_, tilesWritten := set.Get("all-kinds-tiles")
+	require.False(t, tilesWritten, "a refused tiles view must not have been written")
 }
 
 // ---------------------------------------------------------------------------

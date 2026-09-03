@@ -31,10 +31,11 @@
 // G1 (kind offered only when required properties exist) is not one function
 // — it is one function PER KIND, because each kind's requirement is a
 // DIFFERENT property type with a DIFFERENT near-miss story (board's is "an
-// enum with too many values"; tiles' is "no text property to serve as an
-// image"). Naming them gateG1RequireDate / …Image / …Choice / …GroupProperty
-// keeps each testable and keeps a near-miss message next to the requirement
-// it is a near miss OF.
+// enum with too many values"; tiles' — per D5, design §9 — is that NO
+// property type is eligible yet, so it refuses unconditionally rather than
+// naming a near miss). Naming them gateG1RequireDate / …Image / …Choice /
+// …GroupProperty keeps each testable and keeps a near-miss message next to
+// the requirement it is a near miss OF.
 //
 // G2 (never a combined total across units) and G3 (the composer must RECORD
 // the exclusion, even though enforcing it is the renderer's job) are two
@@ -249,54 +250,49 @@ func gateG1RequireDate(schema *records.Schema, kindLabel, propName string) (*rec
 
 // gateG1RequireImage is G1 for `tiles`.
 //
-// records.PropertyTypes (schema.go) is the CLOSED eight-type set as of this
-// phase, and it has no dedicated file/image type — design §2.1 names one as
-// a field kind, but the schema layer this composer reads has not grown it
-// yet. Until it does, an image is what this vault's own schemas already use
-// to carry one: a TEXT property holding a path or a URL. That substitution
-// is stated here, once, rather than left for a reader to wonder why `image`
-// resolves against TypeText.
+// D5 (design §9, ratified 2026-09-03, commit ac787a307 — BEFORE this file):
+// records.PropertyTypes (schema.go) is the CLOSED eight-type set, and it has
+// no image-capable type yet. Binding tiles to TypeText (option (a) in D5) was
+// explicitly REJECTED — it would make tiles available on every vault and
+// attach rendering behaviour to unvalidated strings. So this gate calls the
+// ONE shared eligibility switch, view_kinds.go's ImageEligible, which is the
+// exact function knowledge_describe's discovery block (RenderAvailableViews)
+// also calls for the same question. ImageEligible returns false for every
+// type today, so this refuses unconditionally, with the SAME wording
+// (imageIneligibleReason) the discovery block gives — the two paths cannot
+// disagree, because there is only the one function to disagree with. The day
+// an image-capable property type lands in the records layer, flipping
+// ImageEligible is the whole of what makes both paths agree that tiles is
+// available — nothing here changes.
 func gateG1RequireImage(schema *records.Schema, propName string) (*records.Property, string) {
 	if schema == nil {
-		return nil, "kind=tiles requires a declared record type with a text property to serve as the image binding; 'type' was not given"
+		return nil, fmt.Sprintf("kind=tiles requires a declared record type; 'type' was not given (%s)", imageIneligibleReason)
 	}
-	cands := propertiesOfType(schema, records.TypeText)
-	if propName == "" {
-		if len(cands) == 0 {
-			return nil, fmt.Sprintf(
-				"kind=tiles needs an image property; record type %q declares no file/image property "+
-					"(this schema layer models one as a text property carrying a path or URL) and no text property either",
-				schema.Type)
+	for _, name := range schema.PropertyNames() {
+		p, ok := schema.Property(name)
+		if !ok || !ImageEligible(p.Type) {
+			continue
 		}
-		return nil, fmt.Sprintf(
-			"kind=tiles needs 'image' naming one of record type %q's text properties: %s",
-			schema.Type, strings.Join(cands, ", "))
-	}
-	prop, ok := schema.Property(propName)
-	if !ok {
-		return nil, fmt.Sprintf("record type %q declares no property %q; declared: %s",
-			schema.Type, propName, strings.Join(schema.PropertyNames(), ", "))
-	}
-	if prop.Type != records.TypeText {
-		msg := fmt.Sprintf(
-			"property %q is %s, not text; kind=tiles's image binding names the text property carrying an image path or URL "+
-				"(this schema layer has no dedicated file/image type)", propName, prop.Type)
-		if len(cands) > 0 {
-			msg += fmt.Sprintf(" (candidates: %s)", strings.Join(cands, ", "))
+		if propName != "" && propName != p.Name {
+			continue
 		}
-		return nil, msg
+		return p, ""
 	}
-	return prop, ""
+	return nil, fmt.Sprintf("kind=tiles: %s", imageIneligibleReason)
 }
 
 // gateG1RequireChoice is G1 for `board`: the bound property must be an enum
-// of AT MOST 8 declared values. The near-miss wording — "board needs an enum
-// with ≤ 8 values; `status` has 26" — is design §3 G1's own worked example,
-// reproduced verbatim in the format string below so the refusal an agent
-// reads is the sentence the design was ratified against.
+// of AT MOST maxBoardEnumValues declared values (view_kinds.go — the SAME
+// bound boardAvailability's discovery-path check reads, so a near-miss
+// message here can never cite a different threshold than knowledge_describe
+// does). The near-miss wording — "board needs an enum with ≤ 8 values;
+// `status` has 26" — is design §3 G1's own worked example, and the bound in
+// it is built from the constant rather than retyped, so a future change to
+// maxBoardEnumValues moves this wording with it instead of leaving a second
+// hardcoded "8" behind.
 func gateG1RequireChoice(schema *records.Schema, propName string) (*records.Property, string) {
 	if schema == nil {
-		return nil, "kind=board requires a declared record type with an enum property of at most 8 values; 'type' was not given"
+		return nil, fmt.Sprintf("kind=board requires a declared record type with an enum property of at most %d values; 'type' was not given", maxBoardEnumValues)
 	}
 	if propName == "" {
 		if eligible := boardEligibleEnums(schema); len(eligible) > 0 {
@@ -305,10 +301,10 @@ func gateG1RequireChoice(schema *records.Schema, propName string) (*records.Prop
 				schema.Type, strings.Join(eligible, ", "))
 		}
 		if report := enumPropertiesReport(schema); len(report) > 0 {
-			return nil, fmt.Sprintf("board needs an enum with ≤ 8 values; %s", strings.Join(report, ", "))
+			return nil, fmt.Sprintf("board needs an enum with ≤ %d values; %s", maxBoardEnumValues, strings.Join(report, ", "))
 		}
 		return nil, fmt.Sprintf(
-			"board needs an enum with ≤ 8 values; record type %q declares no enum property", schema.Type)
+			"board needs an enum with ≤ %d values; record type %q declares no enum property", maxBoardEnumValues, schema.Type)
 	}
 	prop, ok := schema.Property(propName)
 	if !ok {
@@ -317,10 +313,10 @@ func gateG1RequireChoice(schema *records.Schema, propName string) (*records.Prop
 	}
 	if prop.Type != records.TypeEnum {
 		return nil, fmt.Sprintf(
-			"property %q is %s, not enum; board needs an enum with ≤ 8 values", propName, prop.Type)
+			"property %q is %s, not enum; board needs an enum with ≤ %d values", propName, prop.Type, maxBoardEnumValues)
 	}
-	if len(prop.Values) > 8 {
-		return nil, fmt.Sprintf("board needs an enum with ≤ 8 values; %q has %d", propName, len(prop.Values))
+	if len(prop.Values) > maxBoardEnumValues {
+		return nil, fmt.Sprintf("board needs an enum with ≤ %d values; %q has %d", maxBoardEnumValues, propName, len(prop.Values))
 	}
 	return prop, ""
 }
@@ -338,12 +334,13 @@ func enumPropertiesReport(schema *records.Schema) []string {
 	return out
 }
 
-// boardEligibleEnums lists enum properties with at most 8 declared values —
-// the set `choice` may legally name when the agent left it blank.
+// boardEligibleEnums lists enum properties with at most maxBoardEnumValues
+// declared values — the set `choice` may legally name when the agent left it
+// blank.
 func boardEligibleEnums(schema *records.Schema) []string {
 	var out []string
 	for _, name := range schema.PropertyNames() {
-		if p, ok := schema.Property(name); ok && p.Type == records.TypeEnum && len(p.Values) <= 8 {
+		if p, ok := schema.Property(name); ok && p.Type == records.TypeEnum && len(p.Values) <= maxBoardEnumValues {
 			out = append(out, name)
 		}
 	}
