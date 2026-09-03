@@ -1,0 +1,978 @@
+// Omnipus — GET /api/v1/library/{workspace_id}/knowledge/view: evaluate a
+// saved view and return everything the SPA needs to draw it
+// (view-kinds-design-2026-09-03 §7).
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package gateway
+
+import (
+	"context"
+	"fmt"
+	"math/big"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
+	"github.com/elicify-ai/omnipus/pkg/vaultprops"
+)
+
+// ---------------------------------------------------------------------------
+// WHAT THIS FILE IS, AND THE TWO RULES IT ENFORCES
+//
+// The endpoint resolves a saved view by name inside one in-scope knowledge
+// base and EVALUATES it — through the same engine knowledge_find uses
+// (knowledgefind.Find over vaultprops.OpenFindEnv, the moved body of
+// FindTool.buildDeps), never through a second query engine. What this file
+// adds on top of the engine's answer is the view-kinds renderer contract:
+//
+//   G2 — a number with a companion unit (Property.UnitProperty) totals ONCE
+//   PER UNIT VALUE, never across units. Every total this file computes is a
+//   list of gen.ViewUnitTotal; there is no code path that could produce a
+//   combined figure, because no accumulator here is ever keyed by anything
+//   other than (property, unit value).
+//
+//   G3 — a row whose unit is missing or unconfirmed is SHOWN (it stays in
+//   `rows`), EXCLUDED from every total, and COUNTED in the owning scope's
+//   excluded_count with the reason spelled out.
+//
+// THE VALUES ARE READ FROM THE ENGINE'S OWN RENDERED CELLS, deliberately.
+// VaultFindCell.Value is the exact decimal text (renderTyped renders
+// Number.String() with thousands separators; multi-values join with ", "),
+// so parsing here is the mechanical inverse of one known renderer — strip
+// the separators, split on ", " — rather than a second read of the vault
+// that could disagree with what the rows on screen say.
+//
+// A VIEW THAT CANNOT ANSWER IS A 200 WITH `refusal` SET — the wire form of
+// records.ViewServeRefusal, the same shape knowledge_describe's "NOT
+// SERVABLE by knowledge_find" line reads — never a blank panel and never a
+// transport error. An out-of-scope collection_id answers exactly like an
+// unknown view (FR-052/FR-053): the error channel must not confirm what
+// exists in another workspace.
+// ---------------------------------------------------------------------------
+
+const (
+	// viewResultPageSize is knowledgefind's own MaxLimit, asked for
+	// explicitly so paging takes as few round trips as the engine permits.
+	viewResultPageSize = 200
+	// maxViewResultRows bounds how many rows one view result will carry.
+	// Above it the result reports rows_truncated and computes NO totals —
+	// a total over a truncated set is a wrong number that looks right,
+	// which is the one output this surface exists to make impossible.
+	maxViewResultRows = 2000
+)
+
+// viewResultExcludedReason writes the G3 footer line for one scope.
+func viewResultExcludedReason(n int, unitProps []string) string {
+	rows := "rows have"
+	if n == 1 {
+		rows = "row has"
+	}
+	return fmt.Sprintf("%d %s no confirmed %s value and are excluded from every total (G3); the rows themselves are still shown",
+		n, rows, strings.Join(unitProps, "/"))
+}
+
+func (a *restAPI) handleKnowledgeViewResult(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	q := r.URL.Query()
+	collectionID := strings.TrimSpace(q.Get("collection_id"))
+	if collectionID == "" {
+		jsonErr(w, http.StatusBadRequest, "collection_id is required")
+		return
+	}
+	viewName := strings.TrimSpace(q.Get("view"))
+	if viewName == "" {
+		jsonErr(w, http.StatusBadRequest, "view is required")
+		return
+	}
+
+	// US-9/FR-053: an out-of-scope collection is answered exactly like an
+	// unknown view — resolved BEFORE the rate limiter so the two cannot be
+	// told apart by timing a 429 either (the same ordering the search
+	// endpoint documents).
+	col, inScope := a.resolveScopedCollection(workspaceID, collectionID)
+	if !inScope {
+		jsonOK(w, viewResultRefusedUnknown(viewName))
+		return
+	}
+
+	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+		return
+	}
+
+	env, closeEnv, err := vaultprops.OpenFindEnv(r.Context(), a.homePath, col)
+	defer closeEnv()
+	if err != nil {
+		logger.ErrorCF("rest", "knowledge: open view environment",
+			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	jsonOK(w, buildViewResult(r.Context(), env, viewName))
+}
+
+// ---------------------------------------------------------------------------
+// Refusals
+// ---------------------------------------------------------------------------
+
+// newViewResult is the empty-but-honest base every answer builds on: the
+// required arrays are real empty arrays, never nil, so no code path can
+// marshal a null where the contract promises [].
+func newViewResult(name string) gen.ViewResult {
+	return gen.ViewResult{
+		View:     name,
+		Label:    name,
+		Parts:    []gen.ViewResultPart{},
+		Rows:     []gen.VaultFindRow{},
+		Problems: []gen.RecordProblem{},
+	}
+}
+
+func viewResultRefused(out gen.ViewResult, code, reason, remedy string) gen.ViewResult {
+	out.Refusal = &gen.ViewResultRefusal{Code: code, Reason: reason, Remedy: remedy}
+	out.Complete = false
+	rs := reason
+	out.CompleteReason = &rs
+	return out
+}
+
+// viewResultRefusedUnknown is the one refusal two different facts share on
+// purpose: "no such view in this collection" and "no such collection in this
+// workspace's scope" must be indistinguishable (FR-052/FR-053).
+func viewResultRefusedUnknown(name string) gen.ViewResult {
+	return viewResultRefused(newViewResult(name),
+		string(records.ServeRefusalUnknownView),
+		fmt.Sprintf("no saved view named %q is addressable in this workspace", name),
+		"call knowledge_describe include=views to see the saved views in scope")
+}
+
+// ---------------------------------------------------------------------------
+// The builder
+// ---------------------------------------------------------------------------
+
+type viewResultBuilder struct {
+	ctx       context.Context
+	env       vaultprops.FindEnv
+	view      *records.SavedView
+	sel       *[]string
+	rowByPath map[string]*gen.VaultFindRow
+	// groupCache caches full-evaluated-set groupings by signature, so a part
+	// whose grouping matches the view's own reuses the base call's groups.
+	groupCache map[string][]gen.VaultFindGroup
+	truncated  bool
+	out        *gen.ViewResult
+}
+
+func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) gen.ViewResult {
+	out := newViewResult(name)
+
+	v, ok := env.Views.Get(name)
+	if !ok {
+		// A view that EXISTS on disk but was refused at load is reported by
+		// its rejection, not as "unknown" — a statement this endpoint could
+		// disprove is a statement it must not make.
+		if env.ViewReport != nil {
+			for _, rej := range env.ViewReport.Rejections {
+				if rej.Name == name {
+					return viewResultRefused(out, string(rej.Code), rej.Reason,
+						"fix the view file and re-save; knowledge_configure re-validates on write")
+				}
+			}
+		}
+		return viewResultRefusedUnknown(name)
+	}
+
+	out.Label = v.DisplayLabel()
+	if v.Def.Kind != nil {
+		k := string(*v.Def.Kind)
+		out.Kind = &k
+	}
+	if v.Def.Type != nil {
+		t := *v.Def.Type
+		out.Type = &t
+	}
+
+	// The SAME refusal knowledge_find would give, from the SAME loader —
+	// today that is only records.ServeRefusalDisabled (FR-105), but this
+	// reads the refusal generically so a new code arrives here without
+	// anyone remembering to come back (the renderViewServeRefusal pattern).
+	loader := records.NewViewFindLoader(env.Views)
+	if refusal, refused := loader.ServeRefusal(name); refused {
+		return viewResultRefused(out, string(refusal.Code), refusal.Reason, refusal.Remedy)
+	}
+
+	parts, drawable := v.EffectiveParts()
+	if !drawable {
+		layout := ""
+		if v.Def.Layout != nil {
+			layout = string(*v.Def.Layout)
+		}
+		return viewResultRefused(out, "no_drawable_parts",
+			fmt.Sprintf("view %q asks for layout %q, which has no drawable part equivalent, and declares no parts of its own", name, layout),
+			"give the view an explicit `parts` stack through knowledge_configure, or use a layout with a drawable part")
+	}
+
+	b := &viewResultBuilder{
+		ctx:        ctx,
+		env:        env,
+		view:       v,
+		rowByPath:  map[string]*gen.VaultFindRow{},
+		groupCache: map[string][]gen.VaultFindGroup{},
+		out:        &out,
+	}
+	b.sel = b.buildSelect(parts)
+
+	if refused := b.collectRows(name); refused != nil {
+		return *refused
+	}
+
+	for _, src := range parts {
+		out.Parts = append(out.Parts, b.buildPart(src))
+	}
+	return out
+}
+
+// buildSelect widens the view's own column selection so every property a part
+// aggregates or binds is present as a cell on every row. When the view names
+// NO `properties`, the engine renders every declared property already and
+// nothing needs widening — nil keeps that default.
+func (b *viewResultBuilder) buildSelect(parts []gen.ViewPart) *[]string {
+	if b.view.Def.Properties == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	sel := []string{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		sel = append(sel, name)
+	}
+	for _, p := range *b.view.Def.Properties {
+		add(p)
+	}
+	addPtr := func(p *string) {
+		if p != nil {
+			add(*p)
+		}
+	}
+	for _, part := range parts {
+		if part.Properties != nil {
+			for _, p := range *part.Properties {
+				add(p)
+			}
+		}
+		addPtr(part.Number)
+		addPtr(part.Unit)
+		addPtr(part.Date)
+		addPtr(part.Choice)
+		addPtr(part.Image)
+		if part.Number != nil {
+			add(b.unitPropertyOf(*part.Number))
+		}
+		if part.Subtotals != nil {
+			for prop := range *part.Subtotals {
+				add(prop)
+				add(b.unitPropertyOf(prop))
+			}
+		}
+	}
+	return &sel
+}
+
+// collectRows pages the WHOLE row set through the engine's own cursor,
+// bounded by maxViewResultRows. It returns a refusal result when the engine
+// refuses, and nil on success.
+func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
+	limit := viewResultPageSize
+	req := gen.VaultFindRequest{View: &name, Limit: &limit}
+	if b.sel != nil {
+		req.Select = b.sel
+	}
+
+	first, err := knowledgefind.Find(b.ctx, b.env.Deps, req)
+	if err != nil || first.Refused {
+		ref := viewResultRefused(*b.out, "evaluation_refused",
+			fmt.Sprintf("the view %q could not be evaluated", name), "")
+		if len(first.Problems) > 0 {
+			p := first.Problems[0]
+			remedy := ""
+			if p.Fix != nil {
+				remedy = *p.Fix
+			}
+			ref = viewResultRefused(*b.out, string(p.Code), p.Reason, remedy)
+		}
+		return &ref
+	}
+
+	b.out.Complete = first.Complete
+	b.out.CompleteReason = first.CompleteReason
+	// Problems are carried from the FIRST page only. Query-level problems
+	// (exclusions, clamps) are recomputed identically on every page, so
+	// appending each page's copy would state every one of them N times; the
+	// cost is that a stale-row problem for a row on a later page is carried
+	// only by that row's own `stale` flag, which survives in `rows`.
+	b.out.Problems = first.Problems
+	if b.out.Problems == nil {
+		b.out.Problems = []gen.RecordProblem{}
+	}
+
+	appendRows := func(rows []gen.VaultFindRow) {
+		for i := range rows {
+			b.out.Rows = append(b.out.Rows, rows[i])
+			if _, dup := b.rowByPath[rows[i].Path]; !dup {
+				b.rowByPath[rows[i].Path] = &b.out.Rows[len(b.out.Rows)-1]
+			}
+		}
+	}
+	appendRows(first.Rows)
+
+	if first.Groups != nil {
+		b.groupCache[viewGroupingSignature(b.viewGrouping())] = *first.Groups
+	}
+
+	cursor := first.NextCursor
+	for cursor != nil && len(b.out.Rows) < maxViewResultRows {
+		pageReq := req
+		pageReq.Cursor = cursor
+		page, pageErr := knowledgefind.Find(b.ctx, b.env.Deps, pageReq)
+		if pageErr != nil || page.Refused {
+			// A page that refuses mid-walk (a stale cursor after a concurrent
+			// reindex) degrades the VERDICT, never the rows already gathered.
+			b.out.Complete = false
+			reason := "the row set changed while it was being read; re-request the view"
+			b.out.CompleteReason = &reason
+			b.truncated = true
+			t := true
+			b.out.RowsTruncated = &t
+			return nil
+		}
+		appendRows(page.Rows)
+		b.out.Complete = b.out.Complete && page.Complete
+		cursor = page.NextCursor
+	}
+	if cursor != nil {
+		b.truncated = true
+		t := true
+		b.out.RowsTruncated = &t
+		b.out.Complete = false
+		reason := fmt.Sprintf("the view matches more than %d rows; only the first %d are carried and no total is computed over a truncated set",
+			maxViewResultRows, len(b.out.Rows))
+		b.out.CompleteReason = &reason
+	}
+
+	// The rows the row map indexes must be the FINAL slice elements: the
+	// appends above may have reallocated the backing array, so the map is
+	// rebuilt once over the settled slice rather than trusted.
+	b.rowByPath = make(map[string]*gen.VaultFindRow, len(b.out.Rows))
+	for i := range b.out.Rows {
+		if _, dup := b.rowByPath[b.out.Rows[i].Path]; !dup {
+			b.rowByPath[b.out.Rows[i].Path] = &b.out.Rows[i]
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Groupings
+// ---------------------------------------------------------------------------
+
+func (b *viewResultBuilder) viewGrouping() []gen.ViewGroupBy {
+	if b.view.Def.Grouping == nil {
+		return nil
+	}
+	return *b.view.Def.Grouping
+}
+
+// effectiveGrouping is the ViewPart contract's inheritance rule: a part's own
+// `grouping` stands when declared; otherwise the view's.
+func (b *viewResultBuilder) effectiveGrouping(src gen.ViewPart) []gen.ViewGroupBy {
+	if src.Grouping != nil && len(*src.Grouping) > 0 {
+		return *src.Grouping
+	}
+	return b.viewGrouping()
+}
+
+func viewGroupingSignature(grouping []gen.ViewGroupBy) string {
+	parts := make([]string, 0, len(grouping))
+	for _, g := range grouping {
+		dir := "asc"
+		if g.Direction != nil {
+			dir = string(*g.Direction)
+		}
+		parts = append(parts, g.Property+"\x00"+dir)
+	}
+	return strings.Join(parts, "\x01")
+}
+
+// groupsFor returns the FULL-evaluated-set groups for one grouping, reusing
+// the base call's groups when the signature matches and otherwise asking the
+// engine once more with the grouping overridden (caller arguments win over
+// the view's own, which is exactly the applyView contract). ok=false means
+// the extra evaluation failed; the failure is already recorded in problems.
+func (b *viewResultBuilder) groupsFor(grouping []gen.ViewGroupBy) ([]gen.VaultFindGroup, bool) {
+	if len(grouping) == 0 {
+		return nil, true
+	}
+	sig := viewGroupingSignature(grouping)
+	if cached, hit := b.groupCache[sig]; hit {
+		return cached, true
+	}
+
+	gb := make([]gen.VaultFindGroupBy, 0, len(grouping))
+	for _, g := range grouping {
+		key := gen.VaultFindGroupBy{Property: g.Property}
+		if g.Direction != nil {
+			dir := gen.VaultFindGroupByDirection(string(*g.Direction))
+			key.Direction = &dir
+		}
+		gb = append(gb, key)
+	}
+	// Groups are computed over the FULL evaluated set regardless of the page
+	// size (FR-125a's ordering), so the page here is deliberately minimal.
+	limit := 1
+	name := b.view.Name()
+	req := gen.VaultFindRequest{View: &name, Limit: &limit, GroupBy: &gb}
+	if b.sel != nil {
+		req.Select = b.sel
+	}
+	resp, err := knowledgefind.Find(b.ctx, b.env.Deps, req)
+	if err != nil || resp.Refused || resp.Groups == nil {
+		reason := "grouped evaluation failed"
+		if len(resp.Problems) > 0 {
+			reason = resp.Problems[0].Reason
+		}
+		fix := "re-request the view"
+		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+			Code:    gen.AggregateRefused,
+			Reason:  fmt.Sprintf("this part's grouping could not be evaluated: %s", reason),
+			Fix:     &fix,
+			Records: []string{},
+		})
+		b.out.Complete = false
+		return nil, false
+	}
+	b.groupCache[sig] = *resp.Groups
+	return *resp.Groups, true
+}
+
+// ---------------------------------------------------------------------------
+// Cell reading — the mechanical inverse of knowledgefind's renderTyped
+// ---------------------------------------------------------------------------
+
+func viewCellValue(row *gen.VaultFindRow, prop string) string {
+	if row == nil {
+		return ""
+	}
+	for _, c := range row.Cells {
+		if c.Property == prop {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// viewNumberValues parses a rendered number cell back into exact decimals.
+// Multi-values join with ", " (comma-space) and thousands separators are bare
+// commas with no space, so the split is unambiguous. A segment that does not
+// parse (a non-conforming value rendered verbatim, or "(unreadable)")
+// contributes nothing — the engine's own problem list already names it.
+func viewNumberValues(cell string) []records.Decimal {
+	if strings.TrimSpace(cell) == "" {
+		return nil
+	}
+	var out []records.Decimal
+	for _, seg := range strings.Split(cell, ", ") {
+		seg = strings.ReplaceAll(strings.TrimSpace(seg), ",", "")
+		if seg == "" {
+			continue
+		}
+		d, err := records.ParseDecimal(seg)
+		if err != nil {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// viewUnitValue reads a row's unit cell. ok=false is G3's trigger: the unit
+// is ABSENT, UNREADABLE, or MULTI-VALUED (a row carrying two units for one
+// number has not confirmed which one the number is in).
+func viewUnitValue(cell string) (string, bool) {
+	if cell == "" || cell == "(unreadable)" {
+		return "", false
+	}
+	if strings.Contains(cell, ", ") {
+		return "", false
+	}
+	return cell, true
+}
+
+// unitPropertyOf resolves the DECLARED companion unit of a number property —
+// declared on the record type, never inferred (design §5). An untyped view
+// has no schema to declare one, so its numbers total unit-less.
+func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
+	if b.view.Def.Type == nil {
+		return ""
+	}
+	sc, ok := b.env.Schemas.Get(*b.view.Def.Type)
+	if !ok {
+		return ""
+	}
+	p, found := sc.Property(numberProp)
+	if !found || p == nil {
+		return ""
+	}
+	return p.UnitProperty
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation — G2 and G3 live here
+// ---------------------------------------------------------------------------
+
+type viewUnitAccum struct {
+	count     int
+	sum       records.Decimal
+	hasSum    bool
+	sumFailed bool
+	min       records.Decimal
+	max       records.Decimal
+	hasMinMax bool
+}
+
+func (a *viewUnitAccum) add(d records.Decimal) {
+	a.count++
+	if !a.hasSum {
+		a.sum, a.hasSum = d, true
+	} else if !a.sumFailed {
+		s, err := a.sum.Add(d)
+		if err != nil {
+			a.sumFailed = true
+		} else {
+			a.sum = s
+		}
+	}
+	if !a.hasMinMax {
+		a.min, a.max, a.hasMinMax = d, d, true
+		return
+	}
+	if d.Cmp(a.min) < 0 {
+		a.min = d
+	}
+	if d.Cmp(a.max) > 0 {
+		a.max = d
+	}
+}
+
+// aggregateViewRows reduces one number property over one row scope, ONCE PER
+// UNIT VALUE (G2). Rows whose unit is missing or unconfirmed are returned in
+// excludedPaths (G3) — counted by the caller, shown by the rows list, and in
+// no total.
+func (b *viewResultBuilder) aggregateViewRows(
+	rows []*gen.VaultFindRow, numberProp, unitProp string, op gen.ViewPartAggregate,
+) (totals []gen.ViewUnitTotal, excludedPaths []string) {
+	accums := map[string]*viewUnitAccum{}
+	var order []string
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		nums := viewNumberValues(viewCellValue(row, numberProp))
+		if len(nums) == 0 {
+			continue
+		}
+		unitKey := ""
+		if unitProp != "" {
+			u, ok := viewUnitValue(viewCellValue(row, unitProp))
+			if !ok {
+				excludedPaths = append(excludedPaths, row.Path)
+				continue
+			}
+			unitKey = u
+		}
+		acc := accums[unitKey]
+		if acc == nil {
+			acc = &viewUnitAccum{}
+			accums[unitKey] = acc
+			order = append(order, unitKey)
+		}
+		for _, n := range nums {
+			acc.add(n)
+		}
+	}
+	sort.Strings(order)
+	totals = make([]gen.ViewUnitTotal, 0, len(order))
+	for _, unitKey := range order {
+		acc := accums[unitKey]
+		value, ok := renderViewAggregate(acc, op)
+		if !ok {
+			fix := "narrow the view's filter"
+			b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+				Code:    gen.AggregateRefused,
+				Reason:  fmt.Sprintf("the %s of %q could not be computed for unit %q", string(op), numberProp, unitKey),
+				Fix:     &fix,
+				Records: []string{},
+			})
+			continue
+		}
+		t := gen.ViewUnitTotal{Property: numberProp, Op: op, Value: value, Count: acc.count}
+		if unitProp != "" {
+			u := unitKey
+			t.Unit = &u
+		}
+		totals = append(totals, t)
+	}
+	return totals, excludedPaths
+}
+
+func renderViewAggregate(acc *viewUnitAccum, op gen.ViewPartAggregate) (string, bool) {
+	switch op {
+	case gen.ViewPartAggregateCount:
+		return strconv.Itoa(acc.count), true
+	case gen.ViewPartAggregateSum:
+		if acc.sumFailed {
+			return "", false
+		}
+		return acc.sum.String(), true
+	case gen.ViewPartAggregateMin:
+		return acc.min.String(), true
+	case gen.ViewPartAggregateMax:
+		return acc.max.String(), true
+	case gen.ViewPartAggregateAvg:
+		if acc.sumFailed || acc.count == 0 {
+			return "", false
+		}
+		return renderViewAverage(acc.sum, acc.count), true
+	default:
+		return "", false
+	}
+}
+
+// renderViewAverage renders sum/count in exact rational arithmetic, rounded
+// half-up at two digits past the sum's own scale — never through a float.
+func renderViewAverage(sum records.Decimal, count int) string {
+	num := new(big.Int).Set(sum.Unscaled())
+	den := big.NewInt(int64(count))
+	scale := sum.Scale()
+	if scale >= 0 {
+		den.Mul(den, viewPow10(int64(scale)))
+	} else {
+		num.Mul(num, viewPow10(int64(-scale)))
+		scale = 0
+	}
+	outScale := scale + 2
+	r := new(big.Rat).SetFrac(num, den)
+	m := new(big.Int).Mul(r.Num(), viewPow10(int64(outScale)))
+	q, rem := new(big.Int).QuoRem(m, r.Denom(), new(big.Int))
+	if rem.Sign() != 0 {
+		twice := new(big.Int).Abs(new(big.Int).Lsh(rem, 1))
+		if twice.Cmp(r.Denom()) >= 0 {
+			if r.Sign() >= 0 {
+				q.Add(q, big.NewInt(1))
+			} else {
+				q.Sub(q, big.NewInt(1))
+			}
+		}
+	}
+	return records.NewDecimal(q, outScale).String()
+}
+
+func viewPow10(n int64) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(n), nil)
+}
+
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
+func (b *viewResultBuilder) rowsFor(paths []string) []*gen.VaultFindRow {
+	out := make([]*gen.VaultFindRow, 0, len(paths))
+	for _, p := range paths {
+		if row, ok := b.rowByPath[p]; ok {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func (b *viewResultBuilder) allRows() []*gen.VaultFindRow {
+	out := make([]*gen.VaultFindRow, 0, len(b.out.Rows))
+	for i := range b.out.Rows {
+		out = append(out, &b.out.Rows[i])
+	}
+	return out
+}
+
+// resolveColumns is the part contract's column ladder: the part's own
+// `properties`, else the view's, else the record type's declaration order.
+func (b *viewResultBuilder) resolveColumns(src gen.ViewPart) *[]string {
+	if src.Properties != nil && len(*src.Properties) > 0 {
+		cols := append([]string(nil), (*src.Properties)...)
+		return &cols
+	}
+	if b.view.Def.Properties != nil && len(*b.view.Def.Properties) > 0 {
+		cols := append([]string(nil), (*b.view.Def.Properties)...)
+		return &cols
+	}
+	if b.view.Def.Type != nil {
+		if sc, ok := b.env.Schemas.Get(*b.view.Def.Type); ok {
+			cols := sc.PropertyNames()
+			if len(cols) > 0 {
+				return &cols
+			}
+		}
+	}
+	return nil
+}
+
+// setExcluded stamps a scope's G3 counter from the union of excluded rows.
+func viewExcludedFields(paths []string, unitProps []string) (*int, *string) {
+	seen := map[string]struct{}{}
+	for _, p := range paths {
+		seen[p] = struct{}{}
+	}
+	n := len(seen)
+	if n == 0 {
+		return nil, nil
+	}
+	reason := viewResultExcludedReason(n, unitProps)
+	return &n, &reason
+}
+
+func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
+	p := gen.ViewResultPart{
+		Part:   gen.ViewResultPartPart(string(src.Part)),
+		Source: src,
+	}
+
+	switch src.Part {
+	case gen.ViewPartPartTable, gen.ViewPartPartList, gen.ViewPartPartTiles,
+		gen.ViewPartPartColumns, gen.ViewPartPartCalendar:
+		p.Columns = b.resolveColumns(src)
+		b.buildTablePartData(&p, src)
+	case gen.ViewPartPartFigures:
+		b.buildFiguresPartData(&p, src)
+	case gen.ViewPartPartChart:
+		b.buildChartPartData(&p, src)
+	case gen.ViewPartPartCrosstab:
+		b.buildCrosstabPartData(&p, src)
+	}
+	return p
+}
+
+func viewPartAggregateOf(src gen.ViewPart) gen.ViewPartAggregate {
+	if src.Aggregate != nil {
+		return *src.Aggregate
+	}
+	return gen.ViewPartAggregateSum
+}
+
+// buildTablePartData attaches groups (with per-group per-unit subtotals) and
+// the footer totals to a table-ish part.
+func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.ViewPart) {
+	grouping := b.effectiveGrouping(src)
+	subtotalProps, subtotalOps := viewSubtotalPlan(src)
+
+	if len(grouping) > 0 {
+		if groups, ok := b.groupsFor(grouping); ok {
+			resultGroups := make([]gen.ViewResultGroup, 0, len(groups))
+			for _, g := range groups {
+				rg := gen.ViewResultGroup{
+					Key:       g.Key,
+					Absent:    g.Absent,
+					Count:     g.Count,
+					Paths:     append([]string{}, g.Paths...),
+					Subtotals: []gen.ViewUnitTotal{},
+				}
+				if len(subtotalProps) > 0 && !b.truncated {
+					rows := b.rowsFor(g.Paths)
+					excluded := make([]string, 0, len(rows))
+					var unitProps []string
+					for i, prop := range subtotalProps {
+						unitProp := b.unitPropertyOf(prop)
+						totals, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
+						rg.Subtotals = append(rg.Subtotals, totals...)
+						excluded = append(excluded, ex...)
+						if unitProp != "" {
+							unitProps = append(unitProps, unitProp)
+						}
+					}
+					rg.ExcludedCount, rg.ExcludedReason = viewExcludedFields(excluded, unitProps)
+				}
+				resultGroups = append(resultGroups, rg)
+			}
+			p.Groups = &resultGroups
+		}
+	}
+
+	if len(subtotalProps) > 0 && !b.truncated {
+		rows := b.allRows()
+		totals := make([]gen.ViewUnitTotal, 0, len(subtotalProps))
+		excluded := make([]string, 0, len(rows))
+		var unitProps []string
+		for i, prop := range subtotalProps {
+			unitProp := b.unitPropertyOf(prop)
+			ts, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
+			totals = append(totals, ts...)
+			excluded = append(excluded, ex...)
+			if unitProp != "" {
+				unitProps = append(unitProps, unitProp)
+			}
+		}
+		p.Totals = &totals
+		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, unitProps)
+	}
+}
+
+// viewSubtotalPlan reads a part's subtotal map in SORTED property order, so
+// two renders of one view emit totals in one order.
+func viewSubtotalPlan(src gen.ViewPart) ([]string, []gen.ViewPartAggregate) {
+	if src.Subtotals == nil || len(*src.Subtotals) == 0 {
+		return nil, nil
+	}
+	props := make([]string, 0, len(*src.Subtotals))
+	for prop := range *src.Subtotals {
+		props = append(props, prop)
+	}
+	sort.Strings(props)
+	ops := make([]gen.ViewPartAggregate, 0, len(props))
+	for _, prop := range props {
+		ops = append(ops, (*src.Subtotals)[prop])
+	}
+	return props, ops
+}
+
+func (b *viewResultBuilder) buildFiguresPartData(p *gen.ViewResultPart, src gen.ViewPart) {
+	if src.Number == nil || b.truncated {
+		return
+	}
+	numberProp := *src.Number
+	unitProp := b.unitPropertyOf(numberProp)
+	totals, excluded := b.aggregateViewRows(b.allRows(), numberProp, unitProp, viewPartAggregateOf(src))
+	p.Totals = &totals
+	if unitProp != "" {
+		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+	}
+}
+
+func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.ViewPart) {
+	if src.Number == nil || src.Date == nil || b.truncated {
+		return
+	}
+	numberProp, dateProp := *src.Number, *src.Date
+	unitProp := b.unitPropertyOf(numberProp)
+	op := viewPartAggregateOf(src)
+
+	groups, ok := b.groupsFor([]gen.ViewGroupBy{{Property: dateProp}})
+	if !ok {
+		return
+	}
+	pointsByUnit := map[string][]gen.ViewResultPoint{}
+	var unitOrder []string
+	var excluded []string
+	for _, g := range groups {
+		if g.Absent != nil && *g.Absent {
+			// An undated row has no x position; it stays in `rows` and simply
+			// is not plotted — a point at an invented date would be a value
+			// nobody recorded.
+			continue
+		}
+		totals, ex := b.aggregateViewRows(b.rowsFor(g.Paths), numberProp, unitProp, op)
+		excluded = append(excluded, ex...)
+		for _, t := range totals {
+			unitKey := ""
+			if t.Unit != nil {
+				unitKey = *t.Unit
+			}
+			if _, exists := pointsByUnit[unitKey]; !exists {
+				unitOrder = append(unitOrder, unitKey)
+			}
+			pointsByUnit[unitKey] = append(pointsByUnit[unitKey],
+				gen.ViewResultPoint{Key: g.Key, Value: t.Value, Count: t.Count})
+		}
+	}
+	sort.Strings(unitOrder)
+	series := make([]gen.ViewResultSeries, 0, len(unitOrder))
+	for _, unitKey := range unitOrder {
+		s := gen.ViewResultSeries{Points: pointsByUnit[unitKey]}
+		if unitProp != "" {
+			u := unitKey
+			s.Unit = &u
+		}
+		series = append(series, s)
+	}
+	p.Series = &series
+	if unitProp != "" {
+		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+	}
+}
+
+func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen.ViewPart) {
+	if src.Number == nil || b.truncated {
+		return
+	}
+	if src.Grouping == nil || len(*src.Grouping) < 2 {
+		fix := "give the crosstab part two grouping keys through knowledge_configure"
+		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+			Code:    gen.AggregateRefused,
+			Reason:  "a crosstab part needs two grouping keys, and this one declares fewer",
+			Fix:     &fix,
+			Records: []string{},
+		})
+		return
+	}
+	grouping := (*src.Grouping)[:2]
+	numberProp := *src.Number
+	unitProp := b.unitPropertyOf(numberProp)
+	op := viewPartAggregateOf(src)
+
+	groups, ok := b.groupsFor(grouping)
+	if !ok {
+		return
+	}
+	ct := gen.ViewResultCrosstab{
+		RowProperty:    grouping[0].Property,
+		ColumnProperty: grouping[1].Property,
+		RowKeys:        []string{},
+		ColumnKeys:     []string{},
+		Cells:          []gen.ViewResultCrosstabCell{},
+	}
+	colSeen := map[string]bool{}
+	var excluded []string
+	for _, g := range groups {
+		ct.RowKeys = append(ct.RowKeys, g.Key)
+		if g.Subgroups == nil {
+			continue
+		}
+		for _, sg := range *g.Subgroups {
+			if !colSeen[sg.Key] {
+				colSeen[sg.Key] = true
+				ct.ColumnKeys = append(ct.ColumnKeys, sg.Key)
+			}
+			totals, ex := b.aggregateViewRows(b.rowsFor(sg.Paths), numberProp, unitProp, op)
+			excluded = append(excluded, ex...)
+			for _, t := range totals {
+				cell := gen.ViewResultCrosstabCell{
+					Row:    g.Key,
+					Column: sg.Key,
+					Value:  t.Value,
+					Count:  t.Count,
+					Unit:   t.Unit,
+				}
+				ct.Cells = append(ct.Cells, cell)
+			}
+		}
+	}
+	if unitProp != "" {
+		ct.ExcludedCount, ct.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+	}
+	p.Crosstab = &ct
+}

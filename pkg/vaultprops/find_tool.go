@@ -20,7 +20,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
-	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -292,110 +291,13 @@ func strPtr(s string) *string { return &s }
 // that is always safe to call (nil-checked internally), even on a partial
 // build — so `defer closeDeps()` above is correct whether buildDeps returned
 // an error or not.
+//
+// The body moved to OpenFindEnv (find_env.go) when the gateway's view-result
+// endpoint needed the SAME environment — one open, one set of rules — rather
+// than a second copy of it; this method is the tool-shaped shim over it.
 func (t *FindTool) buildDeps(ctx context.Context, col knowledge.ScopedCollection) (knowledgefind.Deps, func(), error) {
-	closers := make([]func() error, 0, 2)
-	closeAll := func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			if cerr := closers[i](); cerr != nil {
-				slog.Warn("vaultprops: knowledge_find: closing a dependency failed", "error", cerr)
-			}
-		}
-	}
-
-	root, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root)
-	if err != nil {
-		return knowledgefind.Deps{}, closeAll, err
-	}
-
-	schemas, _, err := records.LoadSchemas(root.Path())
-	if err != nil {
-		return knowledgefind.Deps{}, closeAll, fmt.Errorf("loading record schemas: %w", err)
-	}
-
-	views, _, err := records.LoadViews(root.Path(), schemas)
-	if err != nil {
-		return knowledgefind.Deps{}, closeAll, fmt.Errorf("loading saved views: %w", err)
-	}
-
-	// index_epoch, read BEFORE anything else opens: a cursor check is
-	// meaningless against an epoch this call could not honestly read, and
-	// epoch.go's IndexEpoch distinguishes "never touched" (0, nil) from
-	// "unreadable" (0, non-nil) precisely so this refuses rather than
-	// silently treating a corrupt epoch file as a fresh index.
-	epoch, err := knowledge.IndexEpoch(t.home, col.Root)
-	if err != nil {
-		return knowledgefind.Deps{}, closeAll, fmt.Errorf("reading the index generation counter: %w", err)
-	}
-
-	ix, err := knowledge.OpenIndex(t.home, col.Root)
-	if err != nil {
-		return knowledgefind.Deps{}, closeAll, fmt.Errorf("opening the text index: %w", err)
-	}
-	closers = append(closers, ix.Close)
-
-	// The properties index (Store) is BEST-EFFORT TO OPEN — nil is a
-	// documented, supported wiring, exactly like knowledge_describe's
-	// injected OpenPropertyIndexFunc — but it is NOT optional for what
-	// Find() can actually answer. findRecords requires a non-nil Store
-	// UNCONDITIONALLY, even for a bare `words` query with no typed filter:
-	// the store is what enumerates the candidate population to text-search
-	// within, not only typed metadata, so a `words`-only query still refuses
-	// with "the properties index is not open, so no record can be read"
-	// when Store is nil. This function does not paper over that by forcing
-	// the open to succeed — Find() already reports the honest refusal by
-	// name — it only means "no dependency this call never touches" is the
-	// WRONG mental model here; every non-explain, non-cursor-error query
-	// reaches the store.
-	//
-	// THE PRODUCTION WRITER EXISTS — this paragraph used to say it did not,
-	// and that stale sentence was read as a live defect on 2026-08-31 and
-	// reported as "the properties index has no production writer". It is
-	// dated here so the next reader can check it rather than trust it.
-	//
-	// Wired 2026-08-30 in commit 015afa0e ("feat(records): build the
-	// properties-index sync pipeline", Stage 4/Wave 2.5):
-	// pkg/gateway/knowledge_lifecycle.go defaults its `propsSync` hook to
-	// vaultprops.Sync, and calls it UNCONDITIONALLY after every text-index
-	// reconcile — on a brand-new mount and on every later one alike. Sync
-	// writes through Store.UpsertNote (two call sites in sync.go: the
-	// attachment row and the note row). So on a real install the store is
-	// populated by the same lifecycle that builds the text index, and the
-	// refusal described above is the store-unopenable case, NOT the
-	// steady state.
-	//
-	// ONE HALF OF THE OLD CLAIM IS STILL TRUE, and collapsing the two would
-	// swap one wrong comment for another: propindex.IndexNote — the ordering
-	// wrapper in pkg/records/propindex/store.go — genuinely has no caller
-	// outside pkg/records/propindex/ordering_test.go. Sync calls
-	// Store.UpsertNote directly rather than going through it. That is a real
-	// observation about IndexNote's reachability and nothing more; it does
-	// not mean the index goes unwritten.
-	store, closeStore := openFindStore(ctx, t.home, col.Root)
-	if closeStore != nil {
-		closers = append(closers, closeStore)
-	}
-
-	var resolve records.RelationResolver
-	if store != nil {
-		walk, werr := knowledge.WalkContained(knowledge.OSLinkFS(), root)
-		if werr != nil {
-			slog.Warn("vaultprops: knowledge_find: could not walk collection for relation resolution; "+
-				"relation comparisons will report unresolved", "root", col.Root, "error", werr)
-		} else {
-			notes := knowledge.NewNoteIndex(walk.Files)
-			resolve = NewRelationResolver(ctx, notes, store).AsFunc()
-		}
-	}
-
-	return knowledgefind.Deps{
-		Schemas:    schemas,
-		Store:      store,
-		PathPrefix: "", // the whole mounted collection — knowledge_find has no per-call folder narrowing argument
-		Text:       &findTextSearcher{ix: ix},
-		Views:      records.NewViewFindLoader(views),
-		Resolve:    resolve,
-		Epoch:      epoch,
-	}, closeAll, nil
+	env, closeEnv, err := OpenFindEnv(ctx, t.home, col)
+	return env.Deps, closeEnv, err
 }
 
 // findTextSearcher adapts an already-open *knowledge.Index to

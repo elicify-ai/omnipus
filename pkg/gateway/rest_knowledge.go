@@ -42,6 +42,7 @@ import (
 //	POST /api/v1/library/{workspace_id}/knowledge/search    relevance search
 //	GET  /api/v1/library/{workspace_id}/knowledge/graph     links/backlinks/…
 //	GET  /api/v1/library/{workspace_id}/knowledge/outline   heading outline
+//	GET  /api/v1/library/{workspace_id}/knowledge/view      saved-view result (rest_knowledge_view.go)
 //
 // Every one of them CALLS pkg/knowledge. None of them reimplements it: link
 // resolution, containment, the index, the incompleteness report and the
@@ -163,6 +164,12 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 			return
 		}
 		a.handleKnowledgeOutline(w, r, workspaceID)
+	case "view":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeViewResult(w, r, workspaceID)
 	default:
 		http.NotFound(w, r)
 	}
