@@ -311,8 +311,27 @@ func renderTypes(b *strings.Builder, d DescribeData, detail string) {
 		}
 		b.WriteString(head + "\n")
 		renderProperties(b, sc, detail)
+		renderAvailableViews(b, sc, detail)
 	}
 	renderSchemaRejections(b, d.SchemaReport)
+}
+
+// renderAvailableViews is design view-kinds-design-2026-09-03 §6.2's
+// discovery block: for each of the eight closed view kinds, states whether
+// THIS record type can back it and, if not, exactly what it is missing —
+// "the agent asks, it does not remember" (§6.3). The gate rules themselves
+// live in view_kinds.go (RenderAvailableViews / ViewKindAvailabilityFor),
+// shared with knowledge_configure's create_view composer, so the two can
+// never disagree about which kind is offered.
+//
+// Skipped at DetailMinimal for the same reason an enum's value list is
+// (renderProperties above): it is elaboration on a property this section
+// already named, not the fact of the property's existence.
+func renderAvailableViews(b *strings.Builder, sc *records.Schema, detail string) {
+	if detail == DetailMinimal {
+		return
+	}
+	b.WriteString("    " + RenderAvailableViews(sc) + "\n")
 }
 
 func renderProperties(b *strings.Builder, sc *records.Schema, detail string) {
