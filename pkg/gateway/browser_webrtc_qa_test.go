@@ -135,7 +135,11 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	t.Cleanup(func() { close(pumpStop) })
 
 	fakeStarter := browser.EncoderStarter(
-		func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, _ string) (context.Context, context.CancelFunc, error) {
+		func(
+			_ context.Context,
+			_ *browser.BrowserManager,
+			_, tokenHex, ingestURL, _ string,
+		) (context.Context, context.CancelFunc, error) {
 			enc, startErr := startE2EFakeEncoder(ingestURL, tokenHex)
 			if startErr != nil {
 				return nil, nil, fmt.Errorf("qa fake encoder: %w", startErr)
@@ -151,7 +155,7 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	// traveled through webrtcInputSink -> browserInputFrameToLiveInput ->
 	// mgr.Live().Input, exactly like TestWebRTCEndToEndInProcess's
 	// dcFramesObserved counter, just with the raw bytes retained.
-	realSink := handler.webrtcInputSink(mgr, al.GetConfig())
+	realSink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
 		realSink(viewerID, raw)
 		if dcRecorder != nil {

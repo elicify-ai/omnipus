@@ -257,7 +257,14 @@ type viewerRegistration struct {
 // Exported purely as a test-injection seam (mirrors this package's existing
 // createTabFn/pipeLauncher/listTargets testability pattern) — production code
 // always uses defaultEncoderStarter.
-type EncoderStarter func(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL, stunServer string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
+//
+// panelSessionID (issue #671) is the manager-level tab set the LIVE PANEL
+// resolved for this capture — the encoder page must be raised alongside
+// THAT set's tab, not the operator's workspace-owned one, or the video
+// shows a different tab from the one the panel's clicks drive. Empty means
+// "no panel context" and falls back to the operator's set, which is what
+// every fake starter in the tests passes.
+type EncoderStarter func(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
 
 // CaptureSession owns one agent's WebRTC capture stream end to end: the
 // encoder-page CDP target, the minted ingest capability token, the Pion SFU
@@ -283,6 +290,18 @@ type CaptureSession struct {
 	// (production), empty for NewCaptureSessionWithDeps callers (tests) unless
 	// they choose to care about it.
 	stunServer string
+	// panelSessionID is the manager-level tab set the live panel resolved for
+	// this capture (issue #671), fixed at construction. Empty means "no panel
+	// context": panelTabSet() then falls back to the operator's
+	// workspace-owned set, which is exactly the pre-#671 behaviour and what
+	// every NewCaptureSessionWithDeps caller gets.
+	//
+	// Fixed rather than mutable on purpose. One capture serves one browser
+	// (EnsureCaptureSession memoizes per browsing key), so the first offer's
+	// resolution is the one the encoder page is built against; letting a later
+	// viewer re-point it would move the video out from under the viewers
+	// already watching it.
+	panelSessionID string
 
 	mu sync.Mutex
 	// startOnce/startErr collapse concurrent Start() callers into exactly one
@@ -382,6 +401,7 @@ type CaptureSession struct {
 func NewCaptureSession(
 	mgr *BrowserManager,
 	agentID string,
+	panelSessionID string,
 	cfg webrtc.Config,
 	sink webrtc.InputSink,
 	logf func(string, ...any),
@@ -393,6 +413,7 @@ func NewCaptureSession(
 	relay := webrtc.NewSession(cfg, sink, logf)
 	cs := newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf)
 	cs.stunServer = cfg.StunServer
+	cs.panelSessionID = panelSessionID
 	return cs, nil
 }
 
@@ -505,8 +526,26 @@ type captureInjectPayload struct {
 	StunServer string `json:"stunServer,omitempty"`
 }
 
+// panelTabSet reports the manager-level tab set this capture is bound to
+// (issue #671): the id the live panel resolved, or — when this session was
+// built without one (every NewCaptureSessionWithDeps caller, and any path with
+// no panel context) — the operator's workspace-owned set, which is the
+// pre-#671 behaviour.
+//
+// Returns "" for a session with neither, i.e. a nil-manager test construction:
+// callers treat that as "no tab set to act on" rather than substituting one.
+func (cs *CaptureSession) panelTabSet() string {
+	if cs.panelSessionID != "" {
+		return cs.panelSessionID
+	}
+	if cs.mgr == nil {
+		return ""
+	}
+	return cs.mgr.OperatorSessionID()
+}
+
 // defaultEncoderStarter is the production EncoderStarter: it ensures the
-// WORKSPACE-OWNED operator tab set exists (so there is a tab to capture),
+// tab set the live panel resolved exists (so there is a tab to capture),
 // ensures the capture extension is loaded into this workspace's Chrome,
 // creates an UNTRACKED CDP target — deliberately NOT via mgr.OpenTab, which
 // would register it in the visible tab strip; the encoder page is a
@@ -519,18 +558,30 @@ type captureInjectPayload struct {
 func defaultEncoderStarter(
 	ctx context.Context,
 	mgr *BrowserManager,
-	tokenHex, ingestURL, stunServer string,
+	panelSessionID, tokenHex, ingestURL, stunServer string,
 ) (context.Context, context.CancelFunc, error) {
 	if mgr == nil {
 		return nil, nil, fmt.Errorf("capture session: no browser manager")
 	}
 
-	// 1. Ensure the workspace-owned operator tab set exists — the encoder
-	// page must share ITS window (see this file's top-of-file doc comment for
-	// why). OperatorSessionID is the workspace's own tab set, not a hardcoded
-	// default session: that identity was deleted by FR-002b, and
+	// 1. Ensure the tab set being watched exists — the encoder page must share
+	// ITS window (see this file's top-of-file doc comment for why).
+	//
+	// panelSessionID is what the live panel resolved for this viewer (issue
+	// #671): the watched chat's own tab set, or the operator's workspace-owned
+	// one. Passing the operator's unconditionally is the bug — with an empty
+	// operator set THIS call was what lazily created the blank /browser-start
+	// tab the video then showed, while the agent browsed in the chat's set.
+	// Empty falls back to the operator's set, the behaviour every caller
+	// without panel context had before.
+	//
+	// Either way it is a real (key, owner) tab set, never a hardcoded default
+	// session: that identity was deleted by FR-002b, and
 	// TestNoResidualDefaultSessionID exists to keep it deleted.
-	if _, err := mgr.Session(mgr.OperatorSessionID()); err != nil {
+	if panelSessionID == "" {
+		panelSessionID = mgr.OperatorSessionID()
+	}
+	if _, err := mgr.Session(panelSessionID); err != nil {
 		return nil, nil, fmt.Errorf("capture session: ensure agent browsing context: %w", err)
 	}
 
@@ -644,6 +695,7 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 		tabCtx, tabCancel, startErr := cs.startEncoder(
 			ctx,
 			cs.mgr,
+			cs.panelTabSet(),
 			hex.EncodeToString(cs.token),
 			ingestURL,
 			cs.stunServer,
@@ -725,8 +777,8 @@ const bringToFrontTimeout = 5 * time.Second
 // is not left watching a ~0.5fps stream while it waits.
 const foregroundReassertDelay = 6 * time.Second
 
-// bringAgentTabToFront focuses this agent's current active tab (Page.
-// bringToFront on the workspace-owned session's active-tab context) so
+// bringAgentTabToFront focuses the active tab of the tab set this capture is
+// bound to (Page.bringToFront on panelTabSet()'s active-tab context) so
 // encoder.js's active-in-last-focused-window tab resolution binds THIS
 // agent's tab — see the call site in Start for the full rationale.
 // Best-effort by design: on any failure OR timeout the capture proceeds with
@@ -745,7 +797,7 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sid := cs.mgr.OperatorSessionID()
+		sid := cs.panelTabSet()
 		// Focus the tab that EXISTS; never manufacture one as a side effect of
 		// focusing. By the time this runs on the real path the encoder starter
 		// has already ensured the workspace-owned browsing context (step 1 of

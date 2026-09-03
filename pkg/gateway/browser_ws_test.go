@@ -669,7 +669,11 @@ func newControlTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
-	state := &browserConnState{mgr: mgr, sessionID: "control-test-session"}
+	state := &browserConnState{
+		mgr:            mgr,
+		sessionID:      "control-test-session",
+		panelSessionID: mgr.PanelTabSetID("control-test-session"),
+	}
 	return wc, state
 }
 
@@ -710,7 +714,11 @@ func newTabActionTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) 
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
-	state := &browserConnState{mgr: mgr, sessionID: "tab-action-test-session"}
+	state := &browserConnState{
+		mgr:            mgr,
+		sessionID:      "tab-action-test-session",
+		panelSessionID: mgr.PanelTabSetID("tab-action-test-session"),
+	}
 	return wc, state
 }
 

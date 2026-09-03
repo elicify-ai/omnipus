@@ -356,6 +356,17 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	// own first viewer even had a chance to register, since AddViewer only
 	// happens once Start AND HandleViewerOffer both succeed, so a starting
 	// session always LOOKS viewerless to ViewerCount()).
+	// Issue #671: the capture must bind to the SAME tab set the control plane
+	// resolved, or the panel's video shows a different tab from the one its
+	// clicks and its tab strip drive. Prefer the id this connection pinned at
+	// attach; an offer that somehow arrives before an attach has committed
+	// re-runs the identical resolution against the same chat session id.
+	//
+	// Resolved BEFORE the fence: it takes the connection's attachMu and the
+	// manager's own mutex, and h.captureFenceMu is process-wide — every
+	// agent's offer queues behind it, so nothing avoidable belongs inside it.
+	panelSessionID := resolvePanelTabSet(state, mgr, sessID)
+
 	browsingKey := mgr.BrowsingKey().String()
 	h.captureFenceMu.Lock()
 	if mgr.CaptureSession() == nil {
@@ -412,7 +423,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		}
 	}
 
-	cs, err := h.ensureCaptureSession(mgr, frame.AgentId, cfg)
+	cs, err := h.ensureCaptureSession(mgr, frame.AgentId, panelSessionID, cfg)
 	h.captureFenceMu.Unlock()
 	if err != nil {
 		slog.Error("browser-webrtc: ensure capture session failed", "error", err, "agent_id", frame.AgentId)
@@ -601,11 +612,11 @@ func (h *BrowserWSHandler) applyColdStartRecapture(state *browserConnState, cs *
 	// state.mgr from the connection's worker. It was ALREADY a data race
 	// before that change — offers moved off readLoop first, so this read
 	// raced handleAttach's inline write — and the accessor closes it.
-	mgr, _ := state.attachment()
+	mgr, _, panelSessionID := state.attachment()
 	if mgr == nil {
 		return
 	}
-	if w, hgt, ok := mgr.Live().CSSViewport(mgr.OperatorSessionID()); ok {
+	if w, hgt, ok := mgr.Live().CSSViewport(panelSessionID); ok {
 		cs.RecaptureAt(w, hgt)
 	} else if scale > 0 {
 		cs.Recapture()
@@ -995,9 +1006,18 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 // (EnsureCaptureSession), so whichever agent on the workspace offers first
 // creates the session and every other agent on that team joins it. Reading
 // agentID as ownership is the bug FR-016a removes.
+//
+// panelSessionID (issue #671) is the tab set the capture binds to — the same
+// one this connection's control plane resolved, so the video shows the tab the
+// clicks drive. It is CONSUMED ONLY when this call actually creates the
+// session: one browser has one capture, so a later viewer joins the existing
+// stream rather than re-pointing it out from under whoever is already
+// watching. Empty means "no panel context" (the boot-time warm-up), which
+// binds the operator's workspace-owned set exactly as before.
 func (h *BrowserWSHandler) ensureCaptureSession(
 	mgr *browser.BrowserManager,
 	agentID string,
+	panelSessionID string,
 	cfg *config.Config,
 ) (*browser.CaptureSession, error) {
 	browsingKey := mgr.BrowsingKey().String()
@@ -1008,9 +1028,9 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 			MediaTCP:   h.sharedMediaTCP(cfg),
 			PublicIPs:  resolveWebRTCPublicIPs(cfg),
 		}
-		sink := h.webrtcInputSink(mgr, cfg)
+		sink := h.webrtcInputSink(mgr, panelSessionID, cfg)
 		logf := webrtcRelayLogf(agentID)
-		cs, err := browser.NewCaptureSession(mgr, agentID, webrtcCfg, sink, logf)
+		cs, err := browser.NewCaptureSession(mgr, agentID, panelSessionID, webrtcCfg, sink, logf)
 		if err != nil {
 			return nil, err
 		}
@@ -1084,7 +1104,11 @@ func webrtcRelayLineLooksErrorish(msg string) bool {
 // constraints at all. ValidateInboundFrameJSON("BrowserInputFrame", raw)
 // closes that parity gap using the exact same schema the WS path validates
 // against.
-func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *config.Config) webrtc.InputSink {
+func (h *BrowserWSHandler) webrtcInputSink(
+	mgr *browser.BrowserManager,
+	panelSessionID string,
+	cfg *config.Config,
+) webrtc.InputSink {
 	return func(viewerID string, raw []byte) {
 		if cfg.Gateway.ValidateInbound {
 			if errMsg, serverErr := ValidateInboundFrameJSON("BrowserInputFrame", raw); errMsg != "" {
@@ -1107,7 +1131,7 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 			return
 		}
 		in := browserInputFrameToLiveInput(frame)
-		if err := mgr.Live().Input(mgr.OperatorSessionID(), viewerID, in); err != nil {
+		if err := mgr.Live().Input(panelSessionID, viewerID, in); err != nil {
 			if browser.IsBenignLiveInputError(err) {
 				slog.Debug("browser-webrtc: input rejected (benign)", "error", err, "viewer_id", viewerID)
 				// 2026-07-30 UAT: "benign" must not mean "invisible" for the

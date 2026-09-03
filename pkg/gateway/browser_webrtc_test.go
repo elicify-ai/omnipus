@@ -117,7 +117,7 @@ func (f *fakeRelay) closeCount() int {
 // fakeEncoderStarter never touches real chromedp — it just counts
 // invocations and either returns a bare cancelable context or startErr.
 func fakeEncoderStarter(callCount *int32, startErr error) browser.EncoderStarter {
-	return func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+	return func(context.Context, *browser.BrowserManager, string, string, string, string) (context.Context, context.CancelFunc, error) {
 		atomic.AddInt32(callCount, 1)
 		if startErr != nil {
 			return nil, nil, startErr

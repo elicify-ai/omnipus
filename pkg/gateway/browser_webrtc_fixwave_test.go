@@ -160,7 +160,7 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	require.Nil(t, mgr.CaptureSession(),
 		"a failed Start() must not leave a stale CaptureSession registered on the manager")
 
-	cs2, err := handler.ensureCaptureSession(mgr, defaultAgent.ID, al.GetConfig())
+	cs2, err := handler.ensureCaptureSession(mgr, defaultAgent.ID, "", al.GetConfig())
 	require.NoError(t, err)
 	t.Cleanup(cs2.Stop)
 	require.NotNil(t, cs2, "ensureCaptureSession after the cleared failure must construct a genuinely fresh session")
@@ -561,7 +561,7 @@ func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 	handler.registerWebRTCViewerConn("viewer-nonbenign", wc, "sess-nonbenign")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-nonbenign") })
 
-	sink := handler.webrtcInputSink(mgr, al.GetConfig())
+	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	x, y := 1.0, 2.0
 	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move", X: &x, Y: &y}
 	raw, err := json.Marshal(inputFrame)
@@ -639,7 +639,7 @@ func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 	handler.registerWebRTCViewerConn("viewerB", wcB, "sess-arb")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerB") })
 
-	sink := handler.webrtcInputSink(mgr, al.GetConfig())
+	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move"}
 	raw, err := json.Marshal(inputFrame)
 	require.NoError(t, err)

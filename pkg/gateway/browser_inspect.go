@@ -93,7 +93,14 @@ func (a *restAPI) HandleBrowserInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := mgr.InspectPoint(float64(req.X), float64(req.Y))
+	// Issue #671: inspect the tab the live panel is actually showing, resolved
+	// by the same rule the panel's own WS attach uses. req.SessionId is the
+	// CHAT session id the SPA sends alongside the annotation upload
+	// (src/lib/browserAnnotate.ts) — a chat that has browsed resolves to its
+	// own tab set, and anything else (including an id that names no chat)
+	// resolves to the operator's workspace-owned set, which is what this call
+	// used unconditionally before.
+	result, err := mgr.InspectPoint(mgr.PanelTabSetID(req.SessionId), float64(req.X), float64(req.Y))
 	if err != nil {
 		// InspectPoint reserves a non-nil error for a genuine infrastructure
 		// failure (couldn't even resolve a tab session) — worth a log line,

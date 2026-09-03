@@ -189,7 +189,7 @@ func (f *fakeRelay) closeCount() int {
 // chromedp: it just counts invocations and returns either a canceled-on-cancel
 // bare context or the configured error.
 func fakeEncoderStarter(callCount *int32, startErr error) EncoderStarter {
-	return func(_ context.Context, _ *BrowserManager, _, _, _ string) (context.Context, context.CancelFunc, error) {
+	return func(_ context.Context, _ *BrowserManager, _, _, _, _ string) (context.Context, context.CancelFunc, error) {
 		atomic.AddInt32(callCount, 1)
 		if startErr != nil {
 			return nil, nil, startErr
@@ -333,6 +333,7 @@ func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *
 	_, _, err := defaultEncoderStarter(
 		context.Background(),
 		mgr,
+		"", // no panel context: falls back to the operator's set, as before (#671)
 		"deadbeef",
 		"ws://127.0.0.1:1/api/v1/browser/capture-ingest",
 		"",
@@ -366,7 +367,7 @@ func TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget(t *testing.T) 
 	var cancelOnce sync.Once
 
 	starter := EncoderStarter(
-		func(context.Context, *BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+		func(context.Context, *BrowserManager, string, string, string, string) (context.Context, context.CancelFunc, error) {
 			close(startCalled)
 			<-releaseStart // block until the test releases it, simulating a slow chromedp.Run
 			tabCtx, cancel := context.WithCancel(context.Background())

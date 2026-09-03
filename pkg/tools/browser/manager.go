@@ -722,9 +722,58 @@ func (m *BrowserManager) AttachPool(pool *BrowserPool, key BrowsingKey) {
 //
 // It is the exported seam the gateway addresses instead of the deleted
 // shared session constant. Exported rather than exposing sessionKey because
-// the gateway has no business minting an arbitrary (key, owner) pair: the live
-// panel is the operator, and the operator's tabs are the only set it drives.
+// the gateway has no business minting an arbitrary (key, owner) pair.
+//
+// It is NOT the answer to "which tab set should the live panel drive" — that
+// is PanelTabSetID below, and hardwiring this one there is issue #671. Use it
+// where the caller genuinely has no chat context (the boot-time warm-up) or
+// as the explicit no-chat fallback.
 func (m *BrowserManager) OperatorSessionID() string {
+	return sessionKey(m.key, TabOwnerWorkspace())
+}
+
+// PanelTabSetID resolves the manager-level session id the LIVE PANEL should
+// drive for a viewer watching the given chat (issue #671).
+//
+// It is the deliberate MIRROR IMAGE of focusedTabSet, and that is the whole
+// point: panel and agent must always resolve to the same tab set, so an
+// operator watching a chat sees the tab the agent in that chat is actually
+// driving. The two rules read as one:
+//
+//	agent (focusedTabSet):  own set has no tabs AND the operator's has some
+//	                        -> address the operator's; otherwise its own.
+//	panel (here):           this chat's set HAS tabs -> drive that;
+//	                        otherwise the operator's.
+//
+// Walk the two states they produce together and they never diverge. Operator
+// set EMPTY: the agent's first browse stays in its own set (focusedTabSet has
+// nothing to divert onto), so the chat HAS tabs and the panel follows it here.
+// Operator set NON-EMPTY: the agent diverts onto the operator's set, so the
+// chat still has no tabs of its own and the panel resolves to the operator
+// too.
+//
+// #671 is what the missing half cost: with an empty operator set the panel
+// asked for OperatorSessionID() anyway, which LAZILY CREATED a workspace-owned
+// tab parked on /browser-start and captured that — while the agent browsed,
+// successfully and truthfully, in the chat's own set. Nothing failed. The
+// operator was simply shown a different tab, with no error anywhere.
+//
+// chatSessionID is the CHAT (transcript) session id the client is watching.
+// Empty — or anything TabOwnerSession refuses — resolves to the operator's
+// set, which is exactly today's behaviour for a caller with no chat context.
+//
+// Holds m.mu only across the map lookup (hasTabsLocked), never across I/O, and
+// takes no other lock while holding it.
+func (m *BrowserManager) PanelTabSetID(chatSessionID string) string {
+	owner, err := TabOwnerSession(chatSessionID)
+	if err != nil {
+		return m.OperatorSessionID()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hasTabsLocked(owner) {
+		return sessionKey(m.key, owner)
+	}
 	return sessionKey(m.key, TabOwnerWorkspace())
 }
 

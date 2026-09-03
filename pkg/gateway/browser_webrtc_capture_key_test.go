@@ -94,10 +94,10 @@ func TestCaptureRegistry_OnePerBrowsingKey(t *testing.T) {
 	require.NotEqual(t, keyShared, keyOther)
 
 	// --- One capture session for the workspace, not one per agent ----------
-	csA, err := handler.ensureCaptureSession(mgrA, agentA, cfg)
+	csA, err := handler.ensureCaptureSession(mgrA, agentA, "", cfg)
 	require.NoError(t, err)
 	t.Cleanup(csA.Stop)
-	csB, err := handler.ensureCaptureSession(mgrB, agentB, cfg)
+	csB, err := handler.ensureCaptureSession(mgrB, agentB, "", cfg)
 	require.NoError(t, err)
 
 	assert.Same(t, csA, csB,

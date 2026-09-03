@@ -183,7 +183,9 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	releaseStart := make(chan struct{})
 	t.Cleanup(func() { close(releaseStart) })
 	starter := browser.EncoderStarter(
-		func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+		func(
+			context.Context, *browser.BrowserManager, string, string, string, string,
+		) (context.Context, context.CancelFunc, error) {
 			close(startCalled)
 			<-releaseStart
 			ctx, cancel := context.WithCancel(context.Background())
@@ -533,7 +535,7 @@ func TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField(t *testing.T)
 	handler.registerWebRTCViewerConn("viewer-oversized-text", wc, "sess-oversized-text")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-oversized-text") })
 
-	sink := handler.webrtcInputSink(mgr, al.GetConfig())
+	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 
 	oversized := generated.BrowserInputFrame{
 		Type: "browser_input",

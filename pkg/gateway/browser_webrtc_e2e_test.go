@@ -475,7 +475,11 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	t.Cleanup(func() { close(pumpStop) })
 
 	fakeStarter := browser.EncoderStarter(
-		func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
+		func(
+			_ context.Context,
+			_ *browser.BrowserManager,
+			_, tokenHex, ingestURL, stunServer string,
+		) (context.Context, context.CancelFunc, error) {
 			encMu.Lock()
 			encState.starterCalls++
 			encState.mintedToken = tokenHex
@@ -506,7 +510,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	// ensureCaptureSession wires up in production — no production code was
 	// changed to make this observable.
 	var dcFramesObserved atomic.Int32
-	realSink := handler.webrtcInputSink(mgr, al.GetConfig())
+	realSink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
 		realSink(viewerID, raw)
 		dcFramesObserved.Add(1)

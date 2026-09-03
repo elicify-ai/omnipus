@@ -81,7 +81,7 @@ func TestInspectPoint_SessionError(t *testing.T) {
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 
-	result, err := mgr.InspectPoint(10, 10)
+	result, err := mgr.InspectPoint("", 10, 10)
 	require.Error(t, err, "an unresolvable tab session must surface as a real error, not a soft ok:false")
 	assert.Contains(t, err.Error(), "browser: inspect: cannot resolve session")
 	assert.False(t, result.Ok)
@@ -154,7 +154,7 @@ func TestInspectPoint_ResolvesElementAtPoint(t *testing.T) {
 	defer cancel()
 	require.NoError(t, chromedp.Run(navCtx, chromedp.Navigate(srv.URL)))
 
-	result, err := mgr.InspectPoint(30, 20) // inside the button's [10,10]-[110,50] box
+	result, err := mgr.InspectPoint("", 30, 20) // inside the button's [10,10]-[110,50] box
 	require.NoError(t, err)
 	require.True(t, result.Ok)
 	assert.Equal(t, "button", result.Tag)
@@ -186,7 +186,7 @@ func TestInspectPoint_NoElementAtPoint(t *testing.T) {
 	defer cancel()
 	require.NoError(t, chromedp.Run(navCtx, chromedp.Navigate(srv.URL)))
 
-	result, err := mgr.InspectPoint(999999, 999999)
+	result, err := mgr.InspectPoint("", 999999, 999999)
 	require.NoError(t, err, "no element at the point is a soft outcome, not an error")
 	assert.False(t, result.Ok)
 	assert.Empty(t, result.Tag)
@@ -255,7 +255,7 @@ func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
 	time.Sleep(300 * time.Millisecond) // let the busy loop actually start occupying the queue
 
 	start := time.Now()
-	result, err := mgr.InspectPoint(30, 20)
+	result, err := mgr.InspectPoint("", 30, 20)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "a contended/timed-out CDP eval is a soft outcome, not an error")
@@ -299,7 +299,7 @@ func TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult(t *testing.T) {
 	}
 
 	require.NotPanics(t, func() {
-		result, err := mgr.InspectPoint(30, 20)
+		result, err := mgr.InspectPoint("", 30, 20)
 		require.NoError(t, err, "a recovered panic must still report the best-effort nil-error contract")
 		assert.False(t, result.Ok, "a recovered panic must never fabricate a resolved element")
 	}, "InspectPoint must never let an internal panic propagate to its caller")

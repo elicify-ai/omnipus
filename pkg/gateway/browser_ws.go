@@ -149,14 +149,32 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	attachEpoch uint64
 	mgr         *browser.BrowserManager
 	// sessionID is the CLIENT-supplied (chat) session id from the attach
-	// frame, kept only for logging and for echoing back on outgoing wire
-	// frames (ADR-038 finding #1). It is NEVER passed to mgr.Live() — every
-	// interaction with the live-view engine uses the browser's WORKSPACE-OWNED
-	// tab set (mgr.OperatorSessionID()),
-	// the one tab the agent's browser_* tools actually drive. A non-empty
+	// frame, kept for logging, for audit entries and for echoing back on
+	// outgoing wire frames (ADR-038 finding #1). It is never itself a
+	// manager-level session id and is never passed to mgr.Live() — the
+	// live-view engine is addressed through panelSessionID below. A non-empty
 	// value also doubles as "this connection currently has a live view
 	// attached."
 	sessionID string
+	// panelSessionID is the RESOLVED manager-level tab set this connection's
+	// live view drives — mgr.PanelTabSetID(sessionID), computed ONCE in
+	// handleAttach and pinned here for the life of the attachment (issue
+	// #671).
+	//
+	// It is either the chat's own tab set (when that chat has browsed) or the
+	// operator's workspace-owned set, resolved by the mirror image of the rule
+	// the agent's own tools resolve through — so the panel and the agent can
+	// never end up on different tabs. Before #671 this was hardwired to the
+	// operator's workspace-owned set at every call site, which meant that
+	// whenever the operator's set was empty the panel lazily created a blank
+	// /browser-start tab and showed THAT while the agent browsed elsewhere,
+	// reporting success, with no error anywhere.
+	//
+	// Pinned rather than re-resolved per frame, for the same reason
+	// attachEpoch exists: a viewer must stay on one tab set for the life of
+	// the connection, not migrate mid-stream because a tab opened or closed
+	// somewhere else. The SPA re-attaches (and so re-resolves) on reconnect.
+	panelSessionID string
 	// lastInputErrorSentAt throttles real-input-error browser_status(error)
 	// frames (ADR-038 finding #4): a dead/crashed browser tab can fail every
 	// subsequent input dispatch, and without this a fast input stream (mouse
@@ -287,14 +305,21 @@ func (s *browserConnState) invalidateAttach() {
 	s.attachMu.Unlock()
 }
 
-// bindAttachment installs mgr/sessionID as this connection's live-view
-// attachment iff epoch still matches the CURRENT attachEpoch — returns false
-// (and installs nothing) if a newer browser_attach, an explicit
+// bindAttachment installs mgr/sessionID/panelSessionID as this connection's
+// live-view attachment iff epoch still matches the CURRENT attachEpoch —
+// returns false (and installs nothing) if a newer browser_attach, an explicit
 // browser_detach, or the connection closing already superseded this
 // generation while Live().Attach was still starting the browser. A caller
 // that gets false owns the teardown of what it built (handleAttach detaches
 // it), mirroring commitWebRTCAttachment's contract.
-func (s *browserConnState) bindAttachment(epoch uint64, mgr *browser.BrowserManager, sessionID string) bool {
+//
+// panelSessionID is the RESOLVED tab set the live view drives (issue #671);
+// sessionID stays the client's chat session id. The two are installed
+// together, under one lock, so no handler can ever read a live manager
+// against an unresolved (empty) tab set.
+func (s *browserConnState) bindAttachment(
+	epoch uint64, mgr *browser.BrowserManager, sessionID, panelSessionID string,
+) bool {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
 	if s.attachEpoch != epoch {
@@ -302,17 +327,50 @@ func (s *browserConnState) bindAttachment(epoch uint64, mgr *browser.BrowserMana
 	}
 	s.mgr = mgr
 	s.sessionID = sessionID
+	s.panelSessionID = panelSessionID
 	return true
 }
 
 // attachment returns this connection's current live-view attachment without
-// clearing it. (nil, "") means "not attached" — every caller must check,
-// exactly as the bare `state.mgr == nil || state.sessionID == ""` guards did
-// before these fields needed a lock.
-func (s *browserConnState) attachment() (*browser.BrowserManager, string) {
+// clearing it: the manager, the client's CHAT session id, and the RESOLVED
+// manager-level tab set the live view drives (issue #671). (nil, "", "") means
+// "not attached" — every caller must check, exactly as the bare
+// `state.mgr == nil || state.sessionID == ""` guards did before these fields
+// needed a lock.
+//
+// All three come from one acquisition of attachMu on purpose: reading the
+// manager and the tab set separately could mix a live manager with a
+// just-cleared tab set and silently address the operator's set instead.
+func (s *browserConnState) attachment() (mgr *browser.BrowserManager, sessionID, panelSessionID string) {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
-	return s.mgr, s.sessionID
+	return s.mgr, s.sessionID, s.panelSessionID
+}
+
+// resolvePanelTabSet answers "which tab set should this connection's live video
+// bind to" for a path that runs OUTSIDE the attach handler — today, the
+// WebRTC offer (issue #671).
+//
+// It prefers the id handleAttach already resolved and pinned, so the video and
+// the control plane are provably the same tab set rather than two independent
+// resolutions that agree by luck. The pinned value is only trusted when it
+// belongs to the SAME manager this caller resolved: an offer whose agent (and
+// therefore whose workspace browser) differs from the attachment's would
+// otherwise be handed a session key minted for another browser entirely.
+//
+// The fallback re-runs the identical resolution against the same chat session
+// id, for the real case where an offer's background goroutine reaches here
+// before an attach has committed. mgr must not be nil — every caller has
+// already failed the request otherwise.
+func resolvePanelTabSet(
+	state *browserConnState, mgr *browser.BrowserManager, chatSessionID string,
+) string {
+	if state != nil {
+		if attached, _, pinned := state.attachment(); attached == mgr && pinned != "" {
+			return pinned
+		}
+	}
+	return mgr.PanelTabSetID(chatSessionID)
 }
 
 // clearAttachment atomically reads and clears the attachment, so teardown is
@@ -320,13 +378,14 @@ func (s *browserConnState) attachment() (*browser.BrowserManager, string) {
 // browser_detach, readLoop's close cleanup, and a re-attach all clear it).
 // The reader that gets a non-nil manager back is the one that owns calling
 // h.detach for it — the others get nil and do nothing.
-func (s *browserConnState) clearAttachment() (*browser.BrowserManager, string) {
+func (s *browserConnState) clearAttachment() (mgr *browser.BrowserManager, sessionID, panelSessionID string) {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
-	mgr, sessionID := s.mgr, s.sessionID
+	mgr, sessionID, panelSessionID = s.mgr, s.sessionID, s.panelSessionID
 	s.mgr = nil
 	s.sessionID = ""
-	return mgr, sessionID
+	s.panelSessionID = ""
+	return mgr, sessionID, panelSessionID
 }
 
 // shouldSendViewportRefusal reports whether the not-the-controller viewport
@@ -1028,18 +1087,19 @@ func (h *BrowserWSHandler) readLoop(
 	// Before the first successful browser_attach there is nothing to stamp,
 	// and the deadline refresh still happens.
 	//
-	// It stamps mgr.OperatorSessionID(), NOT the session id state carries.
-	// state's is the CHAT session id — kept for audit and wire echo only —
-	// whereas the live view, and therefore ViewerAttached/ViewerDetached,
-	// always target the workspace-owned tab set (ADR-038 finding #1; see
-	// handleAttach's Live().Attach call and h.detach). Stamping the chat id
-	// here would find no such session on the manager and silently do nothing,
-	// which does not fail loudly: it looks fine until every live viewer ages
-	// out of viewerLivenessWindow and has its browser closed while somebody is
+	// It stamps the RESOLVED panel tab set, NOT the chat session id state also
+	// carries. state's sessionID is the CHAT session id — kept for audit and
+	// wire echo only — whereas the live view, and therefore
+	// ViewerAttached/ViewerDetached, target the manager-level tab set this
+	// connection resolved at attach (issue #671; see handleAttach's
+	// Live().Attach call and h.detach). Stamping the chat id here would find
+	// no such session on the manager and silently do nothing, which does not
+	// fail loudly: it looks fine until every live viewer ages out of
+	// viewerLivenessWindow and has its browser closed while somebody is
 	// watching it.
 	conn.SetPongHandler(func(_ string) error {
-		if mgr, sessionID := state.attachment(); mgr != nil && sessionID != "" {
-			mgr.ViewerHeartbeat(mgr.OperatorSessionID())
+		if mgr, sessionID, panelSessionID := state.attachment(); mgr != nil && sessionID != "" {
+			mgr.ViewerHeartbeat(panelSessionID)
 		}
 		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	})
@@ -1056,8 +1116,8 @@ func (h *BrowserWSHandler) readLoop(
 		// only once.
 		state.work.close()
 		state.invalidateAttach()
-		if mgr, sessionID := state.clearAttachment(); mgr != nil && sessionID != "" {
-			h.detach(mgr, sessionID, viewerID, userID)
+		if mgr, sessionID, panelSessionID := state.clearAttachment(); mgr != nil && sessionID != "" {
+			h.detach(mgr, sessionID, panelSessionID, viewerID, userID)
 		}
 		// detachWebRTCViewer is called unconditionally (not gated on
 		// state.webrtc != nil): a browser_webrtc_offer dispatched via
@@ -1241,19 +1301,30 @@ func (h *BrowserWSHandler) dispatchViewport(
 // an already-attached connection first detaches the previous attachment —
 // one connection, one live view at a time.
 //
-// ADR-038 finding #1: the live view ALWAYS binds to the WORKSPACE-OWNED tab
-// set (mgr.OperatorSessionID())
-// — the one Chromium tab the target agent's browser_* tools actually drive —
-// never to frame.SessionId. frame.SessionId is the client's chat session id;
-// before this fix it was passed straight to mgr.Live().Attach(), which
-// lazily created a brand-new, blank tab keyed by that chat UUID, distinct
-// from the tab the agent was navigating. The result: the live view showed an
-// unrelated blank tab, and browser_control{take} locked a session the
-// agent's own tools (which check IsControlled on their own resolved owner) never
-// consulted — "take control" was a no-op from the agent's perspective.
-// frame.SessionId is retained ONLY as chatSessionID below, for logging and
-// for echoing back on outgoing wire frames so the client can correlate
-// responses with its own chat session.
+// ADR-038 finding #1, as amended by issue #671: the live view binds to the
+// tab set mgr.PanelTabSetID(frame.SessionId) RESOLVES — never to
+// frame.SessionId itself, and no longer unconditionally to the operator's
+// workspace-owned set either.
+//
+// frame.SessionId is the client's chat session id. ADR-038 found it being
+// passed straight to mgr.Live().Attach(), which lazily created a brand-new,
+// blank tab keyed by that chat UUID, distinct from the tab the agent was
+// navigating: the live view showed an unrelated blank tab, and
+// browser_control{take} locked a session the agent's own tools (which check
+// IsControlled on their own resolved owner) never consulted — "take control"
+// was a no-op from the agent's perspective. Hardwiring the operator's set
+// instead fixed that, and introduced #671's mirror image: with an EMPTY
+// operator set the agent browses in the chat's own tab set, so the panel
+// lazily created a workspace-owned tab parked on /browser-start and showed
+// that instead — again with no error anywhere.
+//
+// PanelTabSetID (pkg/tools/browser/manager.go) is the mirror image of the
+// rule the agent's own tools resolve through, so both land on one tab set in
+// both states. It is resolved ONCE, here, and pinned on the connection
+// (bindAttachment) for the life of the attachment. frame.SessionId is
+// retained as chatSessionID below for logging, audit and for echoing back on
+// outgoing wire frames so the client can correlate responses with its own
+// chat session.
 //
 // Runs on this connection's serial worker in production (dispatchAttach,
 // above), never on readLoop's own goroutine — epoch is the value
@@ -1283,8 +1354,8 @@ func (h *BrowserWSHandler) handleAttach(
 		return
 	}
 
-	if prev, prevSession := state.clearAttachment(); prev != nil && prevSession != "" {
-		h.detach(prev, prevSession, viewerID, userID)
+	if prev, prevSession, prevPanel := state.clearAttachment(); prev != nil && prevSession != "" {
+		h.detach(prev, prevSession, prevPanel, viewerID, userID)
 	}
 
 	// FR-017: the workspace is resolved on the SERVER from the attaching chat
@@ -1300,7 +1371,10 @@ func (h *BrowserWSHandler) handleAttach(
 	}
 
 	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
-	controlledByOther, err := mgr.Live().Attach(mgr.OperatorSessionID(), viewerID, func(message string) {
+	// Issue #671: resolved ONCE, here, and used for every live-view call this
+	// connection makes from now on (pinned via bindAttachment below).
+	panelSessionID := mgr.PanelTabSetID(chatSessionID)
+	controlledByOther, err := mgr.Live().Attach(panelSessionID, viewerID, func(message string) {
 		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
 		// context died without an explicit browser_detach — e.g. this
 		// connection is still holding a reference to a BrowserManager that
@@ -1369,10 +1443,10 @@ func (h *BrowserWSHandler) handleAttach(
 	// lock) registered against a connection that no longer wants it, and send
 	// nothing: an "attached" status frame for an attachment we just threw
 	// away would be a lie the SPA would act on.
-	if !state.bindAttachment(epoch, mgr, chatSessionID) {
+	if !state.bindAttachment(epoch, mgr, chatSessionID, panelSessionID) {
 		slog.Debug("browser-ws: attach superseded before commit — detaching what it built",
-			"viewer_id", viewerID, "session_id", chatSessionID)
-		h.detach(mgr, chatSessionID, viewerID, userID)
+			"viewer_id", viewerID, "session_id", chatSessionID, "panel_session_id", panelSessionID)
+		h.detach(mgr, chatSessionID, panelSessionID, viewerID, userID)
 		return
 	}
 
@@ -1419,7 +1493,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	// whole handler: browser_attach now commits from the worker goroutine, so
 	// re-reading state.mgr/state.sessionID field-by-field could observe an
 	// attach landing mid-handler and mix a nil manager with a live session id.
-	mgr, sessionID := state.attachment()
+	mgr, sessionID, panelSessionID := state.attachment()
 	if mgr == nil || sessionID == "" {
 		return
 	}
@@ -1430,7 +1504,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 
 	in := browserInputFrameToLiveInput(frame)
 
-	if err := mgr.Live().Input(mgr.OperatorSessionID(), viewerID, in); err != nil {
+	if err := mgr.Live().Input(panelSessionID, viewerID, in); err != nil {
 		if browser.IsBenignLiveInputError(err) {
 			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", sessionID)
 			// The not-controller repair that lived here is gone: input is
@@ -1471,8 +1545,8 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 // (handleInput, above) and the WebRTC data-channel input path
 // (browser_webrtc.go's webrtcInputSink) convert EXACTLY the same way and can
 // never drift — both funnel into the SAME
-// state.mgr.Live().Input(<the workspace-owned tab set>, viewerID, in) call this
-// function's result feeds.
+// mgr.Live().Input(<the tab set this connection resolved at attach>, viewerID,
+// in) call this function's result feeds (issue #671).
 func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.LiveInput {
 	in := browser.LiveInput{Kind: frame.Kind}
 	if frame.X != nil {
@@ -1560,9 +1634,11 @@ func (h *BrowserWSHandler) handleControl(
 	// One snapshot under attachMu for the whole handler — see handleInput.
 	//
 	// chatSessionID is echoed on outgoing frames / audit entries; every call
-	// into mgr.Live() below uses the workspace-owned tab set, the operator's actual
-	// tab (ADR-038 finding #1) — see handleAttach's doc comment.
-	mgr, chatSessionID := state.attachment()
+	// into mgr.Live() below uses panelSessionID, the tab set this connection
+	// resolved at attach (issue #671) — see handleAttach's doc comment. The
+	// control lock therefore runs on the SAME owner the panel is showing and
+	// the agent's tools consult, never split across two tab sets.
+	mgr, chatSessionID, panelSessionID := state.attachment()
 	if mgr == nil || chatSessionID == "" {
 		wc.sendCriticalGen(errorStatus("browser_control: attach before requesting control"),
 			dropContext("", viewerID, "control-not-attached"))
@@ -1583,7 +1659,7 @@ func (h *BrowserWSHandler) handleControl(
 				dropContext(chatSessionID, viewerID, "control-take-disabled"))
 			return
 		}
-		if !mgr.Live().TakeControl(mgr.OperatorSessionID(), viewerID) {
+		if !mgr.Live().TakeControl(panelSessionID, viewerID) {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"),
 				dropContext(chatSessionID, viewerID, "control-take-denied"))
@@ -1598,7 +1674,7 @@ func (h *BrowserWSHandler) handleControl(
 			Controller: &controller,
 		}, dropContext(chatSessionID, viewerID, "control-take-ok"))
 	case "release":
-		mgr.Live().ReleaseControl(mgr.OperatorSessionID(), viewerID)
+		mgr.Live().ReleaseControl(panelSessionID, viewerID)
 		h.auditRelease(userID, chatSessionID, viewerID)
 		wc.sendCriticalGen(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
@@ -1639,7 +1715,7 @@ func (h *BrowserWSHandler) handleControl(
 // OpenTab directly, never through this WS handler.
 func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	// One snapshot under attachMu for the whole handler — see handleInput.
-	mgr, chatSessionID := state.attachment()
+	mgr, chatSessionID, panelSessionID := state.attachment()
 	if mgr == nil || chatSessionID == "" {
 		wc.sendCriticalGen(errorStatus("browser_tab_action: attach before managing tabs"),
 			dropContext("", viewerID, "tab-action-not-attached"))
@@ -1653,10 +1729,11 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	}
 
 	// chatSessionID is echoed on outgoing error frames; every call into mgr
-	// below uses the workspace-owned tab set, the operator's own tabs
-	// (ADR-038 finding #1 / ADR-041) — see handleAttach's doc comment.
+	// below uses panelSessionID, the tab set this connection resolved at
+	// attach (ADR-038 finding #1 / ADR-041, amended by issue #671) — see
+	// handleAttach's doc comment.
 
-	if controller := mgr.Live().Controller(mgr.OperatorSessionID()); controller != "" && controller != viewerID {
+	if controller := mgr.Live().Controller(panelSessionID); controller != "" && controller != viewerID {
 		wc.sendCriticalGen(
 			sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
 			dropContext(chatSessionID, viewerID, "tab-action-not-controller"),
@@ -1671,7 +1748,7 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"))
 			return
 		}
-		if _, err := mgr.SwitchTab(mgr.OperatorSessionID(), *frame.Index); err != nil {
+		if _, err := mgr.SwitchTab(panelSessionID, *frame.Index); err != nil {
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
 		}
@@ -1681,12 +1758,12 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 				dropContext(chatSessionID, viewerID, "tab-close-missing-index"))
 			return
 		}
-		if _, _, err := mgr.CloseTab(mgr.OperatorSessionID(), *frame.Index); err != nil {
+		if _, _, err := mgr.CloseTab(panelSessionID, *frame.Index); err != nil {
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-close-failed"))
 		}
 	case "open":
-		if _, err := mgr.OpenTab(mgr.OperatorSessionID()); err != nil {
+		if _, err := mgr.OpenTab(panelSessionID); err != nil {
 			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-open-failed"))
 		}
@@ -1738,11 +1815,11 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 	// explicit detach must make its eventual commit fail so it tears down
 	// what it built instead of attaching a view the user just closed.
 	state.invalidateAttach()
-	mgr, chatSessionID := state.clearAttachment()
+	mgr, chatSessionID, panelSessionID := state.clearAttachment()
 	if mgr == nil || chatSessionID == "" {
 		return
 	}
-	h.detach(mgr, chatSessionID, viewerID, userID)
+	h.detach(mgr, chatSessionID, panelSessionID, viewerID, userID)
 	wc.sendCriticalGen(generated.BrowserStatusFrame{
 		Type:      string(generated.WsFrameTypeBrowserStatus),
 		State:     "detached",
@@ -1755,11 +1832,15 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 // viewer was the controller — used both by explicit browser_detach and by
 // readLoop's disconnect cleanup, so a dropped connection is indistinguishable
 // from a clean detach for audit and resource-cleanup purposes. chatSessionID
-// is used only for the audit entry / log context; the live-view call always
-// targets the workspace-owned tab set (ADR-038 finding #1).
-func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, viewerID, userID string) {
-	wasController := mgr.Live().Controller(mgr.OperatorSessionID()) == viewerID
-	mgr.Live().Detach(mgr.OperatorSessionID(), viewerID)
+// is used only for the audit entry / log context; panelSessionID is the
+// RESOLVED tab set the attachment was bound to (issue #671), and detaching
+// must run on exactly the one Attach ran on — otherwise a departing viewer
+// leaves its control lock dangling on a set nobody releases.
+func (h *BrowserWSHandler) detach(
+	mgr *browser.BrowserManager, chatSessionID, panelSessionID, viewerID, userID string,
+) {
+	wasController := mgr.Live().Controller(panelSessionID) == viewerID
+	mgr.Live().Detach(panelSessionID, viewerID)
 	if wasController {
 		h.auditRelease(userID, chatSessionID, viewerID)
 	}
@@ -1860,14 +1941,14 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// This ALSO makes a viewport job that was queued before an intervening
 	// browser_detach (or a connection close) a no-op rather than a resize of
 	// a tab this connection no longer watches.
-	mgr, sessionID := state.attachment()
+	mgr, sessionID, panelSessionID := state.attachment()
 	if mgr == nil || sessionID == "" {
 		return
 	}
 
 	// Control gate, mirroring handleTabAction's F3 check in this same file.
-	// the workspace-owned tab set is ONE tab shared by every attached viewer AND
-	// by the agent's own browser_* tools. Without this, any merely-attached
+	// The resolved tab set (issue #671) is ONE tab shared by every attached
+	// viewer on it AND by the agent's own browser_* tools. Without this, any merely-attached
 	// viewer — a second panel, a pop-out — could resize the tab out from under
 	// whoever holds control, or under an agent tool call mid-flight. A resize
 	// is if anything more disruptive than the tab switch that gate already
@@ -1892,7 +1973,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// resize drag emits one frame per debounce interval for as long as the
 	// drag lasts and every one of them is refused the same way — the same
 	// flood handleInput's cooldown exists to prevent.
-	if controller := mgr.Live().Controller(mgr.OperatorSessionID()); controller != "" && controller != viewerID {
+	if controller := mgr.Live().Controller(panelSessionID); controller != "" && controller != viewerID {
 		slog.Debug("browser-ws: refusing viewport from a non-controlling viewer",
 			"viewer_id", viewerID, "controller", controller)
 		const message = "another viewer is driving this browser, so the shared tab keeps their window size — " +
@@ -1941,7 +2022,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 		att.capture.SetCaptureScale(dsf)
 	}
 
-	applied, err := mgr.Live().SetViewport(mgr.OperatorSessionID(), frame.Width, frame.Height, dsf)
+	applied, err := mgr.Live().SetViewport(panelSessionID, frame.Width, frame.Height, dsf)
 	if err != nil {
 		slog.Warn("browser-ws: viewport resize failed",
 			"error", err, "viewer_id", viewerID, "width", frame.Width, "height", frame.Height)
@@ -1979,7 +2060,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// back to the no-hint Recapture() if the cache came back empty (e.g.
 	// SetViewport's own read-back was invalidated).
 	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
-		if w, h, ok := mgr.Live().CSSViewport(mgr.OperatorSessionID()); ok {
+		if w, h, ok := mgr.Live().CSSViewport(panelSessionID); ok {
 			// scale already recorded above, before the resize attempt
 			att.capture.RecaptureAt(w, h)
 		} else {

@@ -381,29 +381,33 @@ func TestBrowserWS_AttachEpoch_SupersededCommitIsRefused(t *testing.T) {
 	t.Run("uncontested commit succeeds", func(t *testing.T) {
 		var state browserConnState
 		epoch := state.beginAttach()
-		require.True(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "sess"),
+		require.True(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "sess", "key/operator"),
 			"an attach nothing superseded must commit")
-		mgr, sessionID := state.attachment()
+		mgr, sessionID, panelSessionID := state.attachment()
 		require.NotNil(t, mgr)
 		require.Equal(t, "sess", sessionID)
+		require.Equal(t, "key/operator", panelSessionID,
+			"the resolved panel tab set is pinned alongside the chat session id (#671)")
 	})
 
 	t.Run("a newer attach supersedes an older in-flight one", func(t *testing.T) {
 		var state browserConnState
 		older := state.beginAttach()
 		_ = state.beginAttach() // a second browser_attach frame arrived
-		require.False(t, state.bindAttachment(older, &browser.BrowserManager{}, "stale"),
+		require.False(t, state.bindAttachment(older, &browser.BrowserManager{}, "stale", "key/stale"),
 			"the older attach must not commit once a newer one has been dispatched")
-		mgr, sessionID := state.attachment()
+		mgr, sessionID, panelSessionID := state.attachment()
 		require.Nil(t, mgr)
 		require.Empty(t, sessionID)
+		require.Empty(t, panelSessionID,
+			"a refused commit must not leave a resolved tab set behind either")
 	})
 
 	t.Run("invalidateAttach supersedes an in-flight attach", func(t *testing.T) {
 		var state browserConnState
 		epoch := state.beginAttach()
 		state.invalidateAttach() // an explicit detach, or the connection closing
-		require.False(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "stale"),
+		require.False(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "stale", "key/stale"),
 			"a detach or close during Live().Attach must make the commit fail so the caller tears it down")
 	})
 }
@@ -426,7 +430,7 @@ func TestBrowserWS_HandleDetach_InvalidatesAnInFlightAttach(t *testing.T) {
 
 	handler.handleDetach(wc, &state, "viewer-1", "user-1")
 
-	require.False(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "sess"),
+	require.False(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "sess", "key/operator"),
 		"browser_detach must invalidate an in-flight attach even though nothing was attached yet — "+
 			"otherwise the attach commits after the user closed the panel and leaks a viewer")
 }
@@ -459,8 +463,8 @@ func TestBrowserWS_HandleViewport_NonControllingViewer_ExplainsRefusal(t *testin
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	mgr, _ := state.attachment()
-	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewer-A"),
+	mgr, _, panelSessionID := state.attachment()
+	require.True(t, mgr.Live().TakeControl(panelSessionID, "viewer-A"),
 		"viewer A must be able to take control of a fresh session")
 
 	handler.handleViewport(wc, state, "viewer-B", marshalViewportFrame(t, 900, 1010))
@@ -484,8 +488,8 @@ func TestBrowserWS_HandleViewport_RefusalIsThrottled(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	mgr, _ := state.attachment()
-	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewer-A"))
+	mgr, _, panelSessionID := state.attachment()
+	require.True(t, mgr.Live().TakeControl(panelSessionID, "viewer-A"))
 
 	handler.handleViewport(wc, state, "viewer-B", marshalViewportFrame(t, 900, 1010))
 	handler.handleViewport(wc, state, "viewer-B", marshalViewportFrame(t, 901, 1011))
@@ -506,8 +510,8 @@ func TestBrowserWS_HandleViewport_ControllingViewer_NotRefused(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	mgr, _ := state.attachment()
-	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewer-A"))
+	mgr, _, panelSessionID := state.attachment()
+	require.True(t, mgr.Live().TakeControl(panelSessionID, "viewer-A"))
 
 	// No live tab is bound on this never-started manager, so SetViewport
 	// returns (false, nil) and handleViewport takes its documented "no live

@@ -139,7 +139,7 @@ func formatCoord(v float64) string {
 // cannot contribute to the ADR-038 deadlock class that motivated
 // LiveView.runCDP. This mirrors the SAME established pattern
 // EvaluateTool/WaitTool (tools.go) already use for a one-off, timeout-bounded
-// chromedp.Run against the operator's own tab — it deliberately does not go through
+// chromedp.Run against a resolved tab — it deliberately does not go through
 // the LiveView/live-view registry at all (no screencast, no control-lock
 // interaction), so it stays disjoint from live.go/browser_ws.go.
 //
@@ -155,19 +155,29 @@ func formatCoord(v float64) string {
 // (pkg/gateway/browser_inspect.go) is written entirely in terms of this
 // function's (result, err) contract and needs no panic-handling of its own as
 // long as that contract genuinely always holds — this is where it's enforced.
-func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err error) {
+func (m *BrowserManager) InspectPoint(panelSessionID string, x, y float64) (result InspectResult, err error) {
+	// Issue #671: inspect must read the tab the panel is SHOWING. The caller
+	// resolves it the same way the live view does (PanelTabSetID); an empty id
+	// — a caller with no chat context — falls back to the operator's
+	// workspace-owned set, which is what this function used unconditionally
+	// before. Reading the operator's tab while the panel shows the chat's
+	// returns "no element at that point" for a point the user can plainly see,
+	// or worse, an element from a page they are not looking at.
+	if panelSessionID == "" {
+		panelSessionID = m.OperatorSessionID()
+	}
 	defer func() {
 		if rec := recover(); rec != nil {
 			logger.ErrorCF("browser", "inspect: panic recovered, reporting best-effort no-result", map[string]any{
 				"panic":      fmt.Sprintf("%v", rec),
 				"stack":      string(debug.Stack()),
-				"session_id": m.OperatorSessionID(),
+				"session_id": panelSessionID,
 			})
 			result, err = InspectResult{}, nil
 		}
 	}()
 
-	tabCtx, sessionErr := m.Session(m.OperatorSessionID())
+	tabCtx, sessionErr := m.Session(panelSessionID)
 	if sessionErr != nil {
 		return InspectResult{}, fmt.Errorf("browser: inspect: cannot resolve session: %w", sessionErr)
 	}
@@ -197,7 +207,7 @@ func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err e
 		// infrastructure problem undiagnosable from the logs.
 		logger.WarnCF("browser", "inspect: CDP/eval round trip failed, reporting best-effort no-result", map[string]any{
 			"error":      runErr.Error(),
-			"session_id": m.OperatorSessionID(),
+			"session_id": panelSessionID,
 		})
 		return InspectResult{}, nil
 	}

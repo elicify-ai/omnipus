@@ -142,7 +142,7 @@ func TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording(t *testi
 	require.NoError(t, err)
 
 	wc := newTestBrowserWSConn()
-	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp"}
+	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp", panelSessionID: mgr.PanelTabSetID("sess-clamp")}
 	// White-box: install the attachment directly (bypassing the full offer
 	// handshake, irrelevant to what this test targets) so handleViewport's
 	// direct att.capture.SetCaptureScale call path is exercised.
@@ -202,7 +202,7 @@ func TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording(t *testing.T
 	require.NoError(t, err)
 
 	wc := newTestBrowserWSConn()
-	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-low"}
+	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-low", panelSessionID: mgr.PanelTabSetID("sess-clamp-low")}
 	state.webrtc = &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}
 	viewerID := "viewer-clamp-low"
 
@@ -274,7 +274,11 @@ func TestBrowserWS_HandleViewport_ScaleClampBoundaries(t *testing.T) {
 			require.NoError(t, err)
 
 			wc := newTestBrowserWSConn()
-			state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-boundary-" + tc.name}
+			state := &browserConnState{
+				mgr:            mgr,
+				sessionID:      "sess-clamp-boundary-" + tc.name,
+				panelSessionID: mgr.PanelTabSetID("sess-clamp-boundary-" + tc.name),
+			}
 			state.webrtc = &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}
 			viewerID := "viewer-clamp-boundary-" + tc.name
 
@@ -354,7 +358,7 @@ func TestBrowserWS_ApplyColdStartRecapture_AppliesRememberedScale(t *testing.T) 
 	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 
-	state := &browserConnState{mgr: mgr, sessionID: "sess-cold-start"}
+	state := &browserConnState{mgr: mgr, sessionID: "sess-cold-start", panelSessionID: mgr.PanelTabSetID("sess-cold-start")}
 	require.Nil(t, state.webrtc, "precondition: no attachment exists yet — this is the exact cold-open window F2 covers")
 
 	// Simulate handleViewport having already run BEFORE any WebRTC
@@ -399,7 +403,11 @@ func TestBrowserWS_ApplyColdStartRecapture_NoPendingScale_LeavesDefault(t *testi
 	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 
-	state := &browserConnState{mgr: mgr, sessionID: "sess-cold-start-none"}
+	state := &browserConnState{
+		mgr:            mgr,
+		sessionID:      "sess-cold-start-none",
+		panelSessionID: mgr.PanelTabSetID("sess-cold-start-none"),
+	}
 	require.Equal(t, float64(0), state.pendingViewportScale(), "precondition: sentinel zero value, nothing remembered")
 
 	handler.applyColdStartRecapture(state, cs)

@@ -3606,8 +3606,14 @@ func startBrowserWarmBoot(
 		// for the same agent (ADR-048 condition 2 / the fence's own TOCTOU
 		// rationale). Released before Start, which does CDP work — never hold
 		// a process-wide mutex across that.
+		//
+		// The empty panel tab set id is deliberate (issue #671): boot-time
+		// warm-up has no viewer and no chat to resolve against, so the capture
+		// binds to the operator's workspace-owned set — the same set step 1
+		// above just warmed, and the same one this path has always used. A
+		// real viewer's offer resolves its own.
 		h.captureFenceMu.Lock()
-		cs, err := h.ensureCaptureSession(mgr, agentID, cfg)
+		cs, err := h.ensureCaptureSession(mgr, agentID, "", cfg)
 		h.captureFenceMu.Unlock()
 		if err != nil {
 			logger.WarnCF("browser", "boot-time capture warm-up: could not create the capture session",
