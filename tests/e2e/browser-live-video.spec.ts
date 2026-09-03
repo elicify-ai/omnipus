@@ -308,6 +308,8 @@ test(
   async ({ page }, testInfo) => {
     // Budget (worst-case ceiling, same accounting discipline as media.spec.ts):
     //   Agent picker + Jim selection + input visibility ...................... ~35s
+    //   operator opens the live browser first: panel(30s) + omnibox(120s,
+    //     the run's genuinely cold Chrome launch) + close(15s) ............... 165s
     //   assistantMessages toHaveCount ceiling ................................ 240s
     //   waitForTurnFullyDone: gapMs(8s) + follow-up-call ceiling(180s) ....... 188s
     //   LIVE_PROBE_READY text assertion ........................................ 15s
@@ -317,9 +319,13 @@ test(
     //   audio RMS sampling (~800ms sampling window) ........................... 15s
     //   input-latency poll ceiling ............................................. 5s
     //   a11y scan ............................................................. 10s
-    // Worst-case total: 35+240+188+15+30+90+20+15+5+10 = 648s.
-    // Budget: 648s ceiling + ~11% margin for CI scheduling jitter = 720s (12 min).
-    test.setTimeout(720_000);
+    // Worst-case total: 35+165+240+188+15+30+90+20+15+5+10 = 813s.
+    // Budget: 813s ceiling + ~11% margin for CI scheduling jitter = 900s (15 min).
+    // (Was 720s for a 648s ceiling; the operator-opens-first step moved the
+    // cold Chrome launch OUT of the agent turn and in front of it, so the
+    // ceiling grew by that step's own 165s while real runs got no slower —
+    // the launch was always being paid, just inside the 240s turn budget.)
+    test.setTimeout(900_000);
 
     // ── Setup: seed the deterministic fixture directly on disk (no LLM
     // authoring involved — deterministic content, matching media.spec.ts's
@@ -338,6 +344,79 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 10_000 });
+
+    const panel = browserLivePanel(page);
+    // The panel's omnibox. Its value is fed from the CAPTURED tab's own
+    // metadata (BrowserLiveView's urlInput ← the browser_tabs frame), so it is
+    // the honest answer to "which page is this panel actually showing?" — used
+    // below both as the "the operator's tab now exists" signal and as the
+    // diagnosis when no frame ever paints.
+    const addressBar = page.getByRole('textbox', { name: 'Address bar' });
+
+    // ── Establish the OPERATOR's tab set BEFORE the agent browses ─────────
+    //
+    // Not a warm-up, and not a convenience: without this the panel watches a
+    // DIFFERENT TAB than the one the agent drives, and no amount of waiting
+    // fixes it. Under ADR-072 a browser has two tab sets — the chat session's
+    // own (TabOwnerSession) and the operator's workspace-owned one
+    // (TabOwnerWorkspace, pkg/tools/browser/key.go). The live panel is hard-
+    // wired to the operator's set: every gateway call site resolves
+    // `mgr.OperatorSessionID()` (pkg/gateway/browser_ws.go), and the WebRTC
+    // capture binds to that same tab (pkg/tools/browser/capture_session.go).
+    // An agent's browser_* tools address their OWN session's set — UNLESS
+    // BrowserManager.focusedTabSet diverts them, which it does only when the
+    // session has no tabs of its own AND "the operator's set HAS tabs"
+    // (pkg/tools/browser/manager.go::focusedTabSet, the hasTabsLocked pair).
+    //
+    // So whether the panel shows the agent's page is decided by whether the
+    // operator's set was already populated when the agent first browsed. In
+    // production it normally is — WarmTabAtBoot parks a tab on the start page
+    // at boot (pkg/gateway/gateway.go, `mgr.Session(mgr.OperatorSessionID())`)
+    // — but on a gateway whose home directory was empty at boot there is no
+    // workspace yet to warm, so the set stays empty until something opens the
+    // panel. That is precisely the CI shape, and it is what made this test
+    // fail its FIRST attempt in four consecutive runs and pass every retry:
+    // attempt 1's own panel-open created the operator tab, and the retry
+    // inherited it. The measured top-band luminance was 22.7 on both a 15s and
+    // a 45s budget — identical to the decimal, because it was never a stream
+    // that was starting slowly. It was the Omnipus /browser-start page
+    // (Deep Space Black plus the gold octopus and headline), painted
+    // perfectly, in the wrong tab. The captured artifact's own accessibility
+    // snapshot named it: one tab, address bar "http://localhost:6060/
+    // browser-start", while the agent's tool row showed a successful navigate
+    // to 127.0.0.1/preview/jim/… titled "Omnipus E2E Live Probe".
+    //
+    // This step therefore runs the scenario ADR-072 §3.1 D1 case 1 actually
+    // specifies — "operator watches, agent drives" — by opening the panel
+    // once up front, which creates the operator's tab set, then closing it so
+    // the "Watch live" step below still exercises a real panel open. The
+    // agent's navigate is then diverted onto that tab and the panel sees it.
+    //
+    // KNOWN PRODUCT DEFECT, deliberately NOT papered over: on a browser whose
+    // operator set is still empty (fresh install, first browse of a new
+    // workspace), an agent browses in its own set and "Watch live" shows a
+    // blank start page instead of the page the agent is on, with no error.
+    // That breaks ADR-072's own acceptance criterion D1 case 1. Fixing it is
+    // not a test-side change — it means either the panel resolving to the
+    // chat's own tab set (21 gateway call sites plus the per-agent capture
+    // session, which is bound to the operator tab) or the manager creating the
+    // operator set before a session's first browse. Both need an ADR-072
+    // amendment. This spec is scoped to the video/audio/input pipeline and
+    // must not be the place that silently absorbs it, so the failure mode is
+    // named here and reported explicitly if the frame never paints (below).
+    await test.step('operator opens the live browser first (creates the tab set the panel captures)', async () => {
+      const openBrowser = page.getByRole('button', { name: 'Open browser' });
+      await expect(openBrowser).toBeVisible({ timeout: 15_000 });
+      await openBrowser.click();
+      await expect(panel).toBeVisible({ timeout: 30_000 });
+      // A non-empty omnibox means the gateway pushed a real tab strip
+      // (browser_ws.go only pushes on TabStateOpen), i.e. the operator's tab
+      // genuinely exists. Generous budget: this is the run's genuinely cold
+      // Chrome launch, which used to be paid inside the agent turn below.
+      await expect(addressBar).toHaveValue(/\S/, { timeout: 120_000 });
+      await page.getByRole('button', { name: 'Close live browser panel' }).click();
+      await expect(panel).not.toBeVisible({ timeout: 15_000 });
+    });
 
     const countBefore = await assistantMessages(page).count();
     await test.step('drive the agent to serve+navigate+click a deterministic motion+audio page', async () => {
@@ -360,7 +439,6 @@ test(
     });
 
     // ── Open the live view ────────────────────────────────────────────────
-    const panel = browserLivePanel(page);
     await test.step('open the live view via "Watch live"', async () => {
       const btn = watchLiveButton(page);
       await expect(btn).toBeVisible({ timeout: 15_000 });
@@ -463,19 +541,28 @@ test(
       // it stops handing the assertions a frame balanced on their threshold.
       const NEAR_BLACK_FLOOR = 20;
       const FIRST_FRAME_READY_LUMINANCE = 40;
-      // 45s, not 15s. The bar is right; the budget was not.
+      // 45s, DERIVED — not the guess it originally was.
       //
-      // CI failed the first attempt with top-band luminance 22.7 — not a dim
-      // frame near the bar, but a stream that had not painted AT ALL (the
-      // darkest real frame is 73.2). The retry then passed in 39s total. So on
-      // a COLD start the browser launch plus the capture pipeline plus the
-      // first WebRTC keyframe simply take longer than 15s on a loaded runner;
-      // by the retry, Chrome and the profile are warm.
+      // History worth keeping, because the wrong lesson is easy to draw. This
+      // was raised 15s → 45s on the theory that a cold start needed longer.
+      // That theory was disproven by its own evidence: CI reported top-band
+      // luminance 22.7 under BOTH budgets, identical to the decimal. A stream
+      // that was slowly starting would have climbed; this one never moved,
+      // because the panel was watching the wrong tab entirely (see the
+      // operator-tab-set step near the top of this test for the full
+      // mechanism). Waiting is not what fixed it and never could have been.
       //
-      // Raising the BUDGET is the correct lever and the bar stays at 40:
-      // waiting longer for the stream to start cannot let a black stream
-      // through, whereas lowering the bar could. This makes the test more
-      // patient, never more permissive.
+      // 45s survives anyway, for a reason that can be checked rather than
+      // guessed: it is exactly BrowserLiveView's own FIRST_FRAME_TIMEOUT_MS
+      // (DEFAULT_FIRST_ANSWER_TIMEOUT_MS 30s + 15s, src/components/browser/
+      // BrowserLiveView.tsx). That is the deadline the PRODUCT uses before it
+      // admits "no video received" and shows its Retry error. Matching it
+      // means this poll and the panel reach a verdict at the same moment — so
+      // when the poll gives up, the panel's own error text has just become
+      // available and is read into the failure message below, instead of the
+      // test declaring failure while the panel is still legitimately waiting.
+      // Waiting longer for a stream to start can never let a black stream
+      // through; the bar stays at 40 and does the judging.
       const FIRST_FRAME_BUDGET_MS = 45_000;
       const firstFrameDeadline = Date.now() + FIRST_FRAME_BUDGET_MS;
       let firstFrame = await sampleFrame(video);
@@ -487,12 +574,40 @@ test(
       // Budget exhausted without a painted frame is its own finding, and it
       // deserves to be reported as itself. Falling through to the generic
       // "frame at t0 must not be near-black" below describes the symptom but
-      // hides that the stream had a full 15s and never got there.
+      // hides that the stream had the full budget and never got there.
+      //
+      // And "no painted frame" is not one failure, it is at least three, which
+      // a bare luminance number cannot tell apart: a dead capture, a WebRTC
+      // failure the panel has already diagnosed, or a healthy capture of the
+      // WRONG TAB. The last one is what actually happened here and it read as
+      // an unremarkable dark number for four CI runs. Both of the surfaces
+      // that CAN tell them apart are free to read, so read them — the panel's
+      // own error text (its waiting overlay promotes to the real reason once
+      // FIRST_FRAME_TIMEOUT_MS elapses, which this budget is matched to) and
+      // the omnibox, which names the page the capture is actually showing.
+      let firstFrameDiagnosis = '';
+      if (luminance(firstFrame.top) < FIRST_FRAME_READY_LUMINANCE) {
+        const capturedUrl = await addressBar.inputValue().catch(() => '(unavailable)');
+        const overlayText = await page
+          .locator('[data-testid="browser-live-waiting-overlay"]')
+          .textContent()
+          .catch(() => null);
+        await testInfo.attach('first-frame-never-painted.png', {
+          body: dataUrlToPngBuffer(firstFrame.dataUrl),
+          contentType: 'image/png',
+        });
+        firstFrameDiagnosis =
+          `. The panel is capturing "${capturedUrl}" — if that is not the /preview/ URL the ` +
+          'agent navigated to, the capture is bound to a DIFFERENT TAB and no wait would ever ' +
+          'have helped (see the operator-tab-set step at the top of this test). Panel state: ' +
+          `"${overlayText?.trim() ?? '(no waiting overlay — the panel believes it has frames)'}"`;
+      }
       expect(
         luminance(firstFrame.top),
         `the live stream produced no painted frame within ${FIRST_FRAME_BUDGET_MS}ms — ` +
           `top-band luminance stayed at ${luminance(firstFrame.top).toFixed(1)}, below the ` +
-          `${FIRST_FRAME_READY_LUMINANCE} readiness bar (the fixture's darkest real frame is 73.2)`,
+          `${FIRST_FRAME_READY_LUMINANCE} readiness bar (the fixture's darkest real frame is 73.2)` +
+          firstFrameDiagnosis,
       ).toBeGreaterThanOrEqual(FIRST_FRAME_READY_LUMINANCE);
 
       sampleA = firstFrame;
