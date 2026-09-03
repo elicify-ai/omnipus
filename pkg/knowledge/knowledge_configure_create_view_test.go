@@ -585,3 +585,21 @@ func TestKnowledgeConfigure_CreateView_UnknownKind_Refused(t *testing.T) {
 	require.Contains(t, res.ForLLM, "breakdown") // and the last one too
 	cvAssertFileAbsent(t, root, "bad-kind")
 }
+
+// TestKnowledgeConfigure_CreateView_BreakdownNeverGroupsByItsOwnNumber pins
+// the discover/compose agreement the verify pass found broken: describe's
+// breakdownAvailability offers group candidates EXCLUDING the bound number,
+// so the composer must refuse a crosstab grouped by the number it aggregates
+// — the milder direction of the tiles disagreement, but a disagreement.
+func TestKnowledgeConfigure_CreateView_BreakdownNeverGroupsByItsOwnNumber(t *testing.T) {
+	tool, ws, root := cvFixture(t)
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_view", "view": "bd-selfgroup",
+		"kind": "breakdown", "type": "invoice", "number": "amount",
+		"group_by": []any{"amount", "status"},
+	})
+	require.True(t, res.IsError, "breakdown grouped by its own number must be refused: %s", res.ForLLM)
+	require.Contains(t, res.ForLLM, "OTHER than the number")
+	cvAssertFileAbsent(t, root, "bd-selfgroup")
+}

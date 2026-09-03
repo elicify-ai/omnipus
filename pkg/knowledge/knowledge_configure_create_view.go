@@ -628,6 +628,19 @@ func composePartsForKind(kind generated.ViewDefKind, schema *records.Schema, b c
 		if refusal != "" {
 			return nil, refusal
 		}
+		// Discover/compose agreement: breakdownAvailability's group candidates
+		// are every property EXCEPT the bound number ("two other properties
+		// to group by besides the number"), so a crosstab grouped by the same
+		// number it aggregates must be refused here too — the composer being
+		// more permissive than describe is the milder direction of the
+		// disagreement D5's tiles case bans, but it is still a disagreement.
+		for _, g := range b.groupBy {
+			if g == b.number {
+				return nil, fmt.Sprintf(
+					"breakdown groups by two properties OTHER than the number it aggregates; "+
+						"%q is the number binding itself — pick two different properties for group_by", g)
+			}
+		}
 
 		figures := map[string]any{"part": "figures", "number": numProp.Name, "aggregate": "sum"}
 		setPartUnit(figures, unit)
