@@ -39,6 +39,7 @@ export const LIBRARY_PREVIEW_KINDS = [
   'html',
   'pdf',
   'audio',
+  'base',
   'markdown',
   'mermaid',
   'text',
@@ -79,6 +80,12 @@ export function classifyLibraryEntry(entry: ClassifiableEntry): LibraryPreviewKi
   if (HTML_EXTS.has(e)) return 'html'
   if (e === 'pdf') return 'pdf'
   if (AUDIO_EXTS.has(e)) return 'audio'
+  // view-kinds-design-2026-09-03 §7 — a .base file opens as its views (tabs
+  // over evaluated view results), never as a download card and never as raw
+  // YAML-behind-Edit. Extension only, below the mime-driven checks, for the
+  // same two reasons the D15 kinds are (see the header note): the change must
+  // stay purely additive, and everything downstream keys off the extension.
+  if (e === 'base') return 'base'
   if (e === 'md' || e === 'markdown') return 'markdown'
   if (e === 'mmd' || e === 'mermaid') return 'mermaid'
   if (entry.is_text_editable) return 'text'

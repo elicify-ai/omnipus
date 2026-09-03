@@ -609,6 +609,18 @@ const KIND_CASES: Record<LibraryPreviewKind, KindCase> = {
     entry: makeEntry({ name: 'podcast.mp3', path: 'podcast.mp3', mime: 'audio/mpeg', is_text_editable: false }),
     surfaceTestId: 'library-audio-preview',
   },
+  base: {
+    // view-kinds-design-2026-09-03 §7 — a .base opens as its views. The base
+    // surface fetches the file's own content (the tab list comes from it), so
+    // this case provides one; the deeper states (tabs, refusal, empty) are
+    // BasePreview.test.tsx's job, not this dispatch guard's.
+    entry: makeEntry({ name: 'Invoices.base', path: 'Invoices.base', mime: 'text/yaml' }),
+    surfaceTestId: 'base-preview',
+    content: makeContent({
+      path: 'Invoices.base',
+      content: 'views:\n  - type: table\n    name: Outstanding\n',
+    }),
+  },
   markdown: {
     entry: makeEntry(),
     surfaceTestId: 'library-preview-view-body',
