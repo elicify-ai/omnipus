@@ -45,8 +45,14 @@ Three layers. Each is a closed enumeration.
 
 ### 2.1 Field kinds (already exist in the records layer)
 
-text · number · **number-with-unit** · date · checkbox · enum · relation ·
-file/image. Any may be single or many.
+text · enum · relation · date · integer · decimal · person · checkbox —
+the records layer's actual closed set — plus **number-with-unit** (the §5
+addition). Any may be single or many.
+
+**Correction (2026-09-03):** this section originally listed a "file/image"
+kind and claimed it already existed in the records layer. It does not — no
+such property type exists in `records.PropertyTypes`. See the tiles row in
+§2.3 and D5 in §9 for how that is handled.
 
 "Number-with-unit" is the one addition: a record type may declare that a
 number property has a companion unit property (§5). This is **declared in the
@@ -75,7 +81,7 @@ units the composer emits and the renderer consumes.
 |---|---|---|
 | `table` | table | anything |
 | `list` | list | anything |
-| `tiles` | tiles | an image property |
+| `tiles` | tiles | an image-capable property — **none exists yet, so tiles is currently never available** (D5) |
 | `board` | columns | an enum property with ≤ 8 values |
 | `calendar` | calendar | a date property |
 | `summary` | figures → table (grouped, subtotals) | a number property |
@@ -238,5 +244,16 @@ furniture.
 - D1. The 8-kind set and the closed-set rule (recommend: as specified).
 - D2. Formulas stay out for now (recommend: out).
 - D3. `unit_property` as the money/unit mechanism (recommend: yes).
+- D5. RULED 2026-09-03: no file/image property type exists, so `tiles` ships
+  gated off — its availability check and its `create_view` gate both flow
+  through ONE shared eligibility helper (in `pkg/knowledge/view_kinds.go`)
+  that currently returns not-eligible for every type, with the refusal
+  "no image-capable property type exists yet". Binding tiles to `text`
+  (option a) was rejected: it would make tiles available on every vault and
+  bind a rendering behaviour to unvalidated strings. When an image/file
+  property type lands in the records layer (its own small design), enabling
+  tiles is a one-helper change and discover/compose cannot disagree.
+  Acceptance fixtures assert 7-of-8 available plus tiles-unavailable-with-
+  this-exact-reason.
 - D4. Naming of the 8 kinds as the agent sees them (`summary`/`trend`/
   `breakdown` vs alternatives) — pure naming, but frozen once shipped.
