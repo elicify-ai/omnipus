@@ -194,6 +194,7 @@ export function BasePreview({
             <button
               key={v.slug}
               type="button"
+              tabIndex={0}
               role="tab"
               aria-selected={active}
               onClick={() => setSelectedSlug(v.slug)}

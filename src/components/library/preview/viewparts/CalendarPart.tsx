@@ -80,6 +80,7 @@ export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: Vault
       <div className="flex items-center gap-2 px-3 py-1.5">
         <button
           type="button"
+          tabIndex={0}
           onClick={() => step(-1)}
           aria-label="Previous month"
           className="flex h-6 w-6 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
@@ -91,6 +92,7 @@ export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: Vault
         </span>
         <button
           type="button"
+          tabIndex={0}
           onClick={() => step(1)}
           aria-label="Next month"
           className="flex h-6 w-6 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
