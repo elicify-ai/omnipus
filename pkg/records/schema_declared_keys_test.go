@@ -125,6 +125,16 @@ var contractKeyProbes = map[string]contractKeyProbe{
 	"inverse":  {base: "type: relation, to: company", extra: "inverse: deals"},
 	"unit":     {base: "type: integer", extra: "unit: minutes"},
 
+	// `unit_property` IS A PARSED KEY that nonetheless lands in the
+	// `withErr != ""` arm below, and that is evidence rather than a loophole.
+	// parseFixtureProperty builds a schema holding exactly ONE property, and
+	// `unit_property` names a SIBLING — so a one-property type declaring it is
+	// genuinely invalid, and the refusal naming the key is precisely the proof
+	// the guard is after: adding the key changed the outcome, so nothing was
+	// thrown away in silence. The behaviour on a well-formed type (a real
+	// sibling, of a usable kind) is covered by TestSchema_UnitProperty.
+	"unit_property": {base: "type: decimal", extra: "unit_property: currency"},
+
 	// `formula` IS A REFUSED KEY, and this probe lands in the `withErr != ""`
 	// arm below: the refusal has to NAME it. That is the whole point of it
 	// being published-and-refused rather than absent — a schema property

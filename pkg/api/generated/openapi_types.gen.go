@@ -12086,7 +12086,18 @@ type PropertyDef struct {
 	Type PropertyDefType `json:"type"`
 
 	// Unit Unit of measure for an "integer" or "decimal" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
+	//
+	// IT IS THE FIXED UNIT, THE SAME ON EVERY RECORD. A number whose unit VARIES per record — an amount that is SGD on one invoice and EUR on the next — declares `unit_property` instead, naming the sibling property that carries it.
 	Unit *string `json:"unit,omitempty"`
+
+	// UnitProperty Name of a SIBLING property on this same record type that carries this number's unit PER RECORD (view-kinds-design-2026-09-03 §5). Optional, and valid only on "integer" and "decimal".
+	//
+	// WHY IT IS DECLARED AND NEVER INFERRED. Pairing a number with any nearby enum works perfectly on invoices and is wrong the first time a record holds two amounts — a `total` in the record's currency beside a `tax_rate` that is a percentage. Where a number and a unit-like enum coexist UNDECLARED, knowledge_describe may MENTION the candidate pairing; nothing acts on it.
+	//
+	// WHAT IT BUYS. The pair renders as ONE value ("12,480.00 SGD") and the unit property loses its own row. More importantly it makes the totalling rule enforceable: a number with a unit totals ONCE PER UNIT VALUE and NEVER across units (design §3 G2), and a row whose unit is missing is shown, EXCLUDED from every total, and counted separately (G3). Without the declaration there is nothing to enforce that against, and summing across currencies produces a wrong number that looks right — the one failure mode in this area that reports nothing at all.
+	//
+	// VALIDATED AT LOAD, PER FILE, AND REFUSED BY NAME. The named property must EXIST on this record type, must be a DIFFERENT property (a number cannot be its own unit), and must be an "enum" or a "text" — a unit is a label, and a date or a second number is not one. A violation rejects this schema file naming the property and the reason; every other record type in the vault goes on loading.
+	UnitProperty *string `json:"unit_property,omitempty"`
 
 	// Values The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back.
 	//

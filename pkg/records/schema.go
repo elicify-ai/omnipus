@@ -271,7 +271,46 @@ type Property struct {
 	// Unit is numeric metadata — valid on `integer` and `decimal`, declared
 	// here rather than glued into the property name (D3's `exercise: 60
 	// minutes` failure).
+	//
+	// It is the FIXED unit, the same on every record. A number whose unit
+	// VARIES per record declares UnitProperty instead, and declaring both is
+	// refused: two authorities for one fact is a renderer picking one at
+	// random.
 	Unit string
+
+	// UnitProperty names a SIBLING property on the same record type that
+	// carries this number's unit PER RECORD
+	// (view-kinds-design-2026-09-03 §5). Empty for every property that has no
+	// per-record unit, which is nearly all of them.
+	//
+	// ---------------------------------------------------------------------
+	// WHY THE PAIRING IS DECLARED AND NEVER INFERRED
+	//
+	// Pairing a number with any nearby enum works perfectly on invoices and
+	// is wrong the first time a record holds two numbers — a `total` in the
+	// record's currency beside a `tax_rate` that is a percentage. The design
+	// is explicit that where a number and a unit-like enum coexist
+	// UNDECLARED, knowledge_describe may MENTION the candidate pairing and
+	// nothing acts on it.
+	//
+	// WHAT IT BUYS, and it is the only reason the field exists: it makes the
+	// totalling rule enforceable. A number with a unit totals ONCE PER UNIT
+	// VALUE and NEVER across units (design §3 G2), and a row whose unit is
+	// missing is shown, EXCLUDED from every total and counted separately
+	// (G3). Without a declaration there is nothing to enforce that against,
+	// and a sum across currencies is a wrong number that looks right — the
+	// one failure in this area that reports nothing at all.
+	//
+	// WHAT IT DOES NOT CHANGE: the number's own parsing and validation. An
+	// `integer` with a UnitProperty is parsed, bound-checked and compared
+	// exactly as one without. This field is read by the composer and the
+	// renderer; value.go does not consult it.
+	//
+	// The cross-property half of its validation (the sibling exists, is a
+	// different property, and is an enum or a text) cannot live in finalize,
+	// which sees one property at a time. It is validateUnitProperties, run by
+	// ParseSchema once every property is known.
+	UnitProperty string
 
 	// RecordType is the type this property belongs to. FR-009: `status` on one
 	// record type and `status` on another are UNRELATED declarations, so a
@@ -806,7 +845,55 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 		return nil, reject(RejectNoProperties, recordType, "the schema declares no properties")
 	}
 
+	// LAST, because it is the only rule that needs the WHOLE type. Every check
+	// above judges one declaration in isolation; `unit_property` names a
+	// sibling, so it cannot be judged until every sibling is known.
+	if err := validateUnitProperties(sc); err != nil {
+		return nil, reject(RejectBadProperty, recordType, "%v", err)
+	}
+
 	return sc, nil
+}
+
+// validateUnitProperties checks the CROSS-PROPERTY half of `unit_property`
+// (view-kinds-design-2026-09-03 §5): the named sibling exists on this same
+// record type, and it is a kind that can actually carry a unit.
+//
+// WHY THIS IS A LOAD REJECTION RATHER THAN A WARNING. The declaration's whole
+// purpose is to make G2 enforceable — total once per unit value, never across
+// units. A `unit_property` pointing at nothing does not degrade to "no unit";
+// it degrades to a number that LOOKS unit-aware and is summed across
+// currencies anyway, which is the wrong-number-that-looks-right this field
+// exists to prevent. The refusal takes THIS schema file out of the set; every
+// other record type in the vault goes on loading, which is the same posture
+// the `formula` refusal takes.
+//
+// WHY ONLY enum AND text. A unit is a LABEL — "SGD", "kg", "hours". An enum is
+// the declared, closed set of them, which is the shape a vault should prefer;
+// a text is the honest escape hatch for an imported vault that has not closed
+// the set yet. A date, a checkbox, a relation or a second number is not a
+// label, and pairing one would produce totals grouped by something nobody
+// could read as a unit.
+//
+// Properties are walked in DECLARATION order so a file with two faults reports
+// the first one the author wrote, not a random one.
+func validateUnitProperties(sc *Schema) error {
+	for _, name := range sc.PropertyOrder {
+		p := sc.Properties[name]
+		if p == nil || p.UnitProperty == "" {
+			continue
+		}
+		companion, found := sc.Property(p.UnitProperty)
+		if !found {
+			return fmt.Errorf("property %q declares `unit_property: %s`, which record type %q does not declare; it must name a property of this same type that carries the unit. Declared: %s",
+				name, p.UnitProperty, sc.Type, strings.Join(sc.PropertyNames(), ", "))
+		}
+		if companion.Type != TypeEnum && companion.Type != TypeText {
+			return fmt.Errorf("property %q declares `unit_property: %s`, but %q is a %s; a unit is a label, so it must be an %s or a %s",
+				name, p.UnitProperty, p.UnitProperty, companion.Type, TypeEnum, TypeText)
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -898,6 +985,13 @@ var propertyDeclKeys = map[string]declKey{
 	"to":       {kind: declKeyParsed},
 	"inverse":  {kind: declKeyParsed},
 	"unit":     {kind: declKeyParsed},
+
+	// `unit_property` is the per-record companion of `unit`
+	// (view-kinds-design-2026-09-03 §5). Parsed, and then checked against the
+	// rest of the type by validateUnitProperties — this key is the first on a
+	// property declaration whose validity depends on ANOTHER property, which
+	// is why its check is not in finalize with the others.
+	"unit_property": {kind: declKeyParsed},
 
 	// `formula` IS PUBLISHED AND REFUSED, which is not a contradiction: the
 	// contract defines the key, so calling it "unknown" would tell the author
@@ -1117,6 +1211,8 @@ type propertyDecl struct {
 	To       string      `yaml:"to"`
 	Inverse  string      `yaml:"inverse"`
 	Unit     string      `yaml:"unit"`
+
+	UnitProperty string `yaml:"unit_property"`
 	// No `Formula` field: `formula` is declKeyRefused, and this struct holds
 	// the declKeyParsed half of propertyDeclKeys and nothing else. A field here
 	// would make the key decodable again, and a decodable key is one a later
@@ -1149,14 +1245,17 @@ func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) 
 	}
 
 	p := &Property{
-		Name:       name,
-		Type:       pt,
-		Many:       decl.Many, // FR-006: arity is declared, and `many` absent means scalar
-		Required:   decl.Required,
-		Label:      strings.TrimSpace(decl.Label),
-		To:         strings.TrimSpace(decl.To),
-		Inverse:    strings.TrimSpace(decl.Inverse),
-		Unit:       strings.TrimSpace(decl.Unit),
+		Name:     name,
+		Type:     pt,
+		Many:     decl.Many, // FR-006: arity is declared, and `many` absent means scalar
+		Required: decl.Required,
+		Label:    strings.TrimSpace(decl.Label),
+		To:       strings.TrimSpace(decl.To),
+		Inverse:  strings.TrimSpace(decl.Inverse),
+		Unit:     strings.TrimSpace(decl.Unit),
+
+		UnitProperty: strings.TrimSpace(decl.UnitProperty),
+
 		RecordType: recordType,
 	}
 
@@ -1247,6 +1346,25 @@ func (p *Property) finalize() error {
 	}
 	if !isNumericType(p.Type) && p.Unit != "" {
 		return fmt.Errorf("`unit` is only meaningful on an integer or a decimal, not on a %s", p.Type)
+	}
+	if p.UnitProperty != "" {
+		// The rules that need only THIS property. Whether the named sibling
+		// exists and is a usable kind is validateUnitProperties', because it
+		// needs the whole type.
+		if !isNumericType(p.Type) {
+			return fmt.Errorf("`unit_property` is only meaningful on an integer or a decimal, not on a %s; a %s has no total for a unit to qualify",
+				p.Type, p.Type)
+		}
+		if p.UnitProperty == p.Name {
+			return fmt.Errorf("`unit_property` names this property itself; it must name a DIFFERENT property that carries the unit — a number cannot be its own unit")
+		}
+		if p.Unit != "" {
+			// Two authorities for one fact. `unit: minutes` says the unit is
+			// fixed on every record; `unit_property: currency` says it varies
+			// per record. Accepted together, the renderer picks one and the
+			// other silently means nothing.
+			return fmt.Errorf("`unit` and `unit_property` cannot both be declared: `unit` is a FIXED unit on every record and `unit_property` is one that VARIES per record — declare whichever this property actually is")
+		}
 	}
 	if p.Type != TypeRelation && p.Type != TypePerson && (p.To != "" || p.Inverse != "") {
 		return fmt.Errorf("`to`/`inverse` are only meaningful on a relation or person, not on a %s", p.Type)
