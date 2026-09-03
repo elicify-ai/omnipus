@@ -206,7 +206,18 @@ async function ensureSession(
  */
 async function defaultWorkspaceId(page: import('@playwright/test').Page): Promise<string> {
   const res = await page.request.get(`${BASE_URL}/api/v1/workspaces`);
-  if (!res.ok()) throw new Error(`GET /api/v1/workspaces → ${res.status()}`);
+  if (!res.ok()) {
+    // This now runs BEFORE ensureSession (the id is what builds the URL the
+    // app boots at), so it is the first thing a dead session hits — say so,
+    // rather than leaving a bare status code where ensureSession's BLOCKED
+    // message used to be the reader's first signal.
+    throw new Error(
+      `GET /api/v1/workspaces → ${res.status()}. This runs before ensureSession, so a 401 here ` +
+        "means the same thing its BLOCKED message describes: the gateway did not accept this " +
+        "run's session cookie. Read that message's candidate list rather than assuming a cause; " +
+        'a 429 is the per-IP rate limiter and not an auth verdict.',
+    );
+  }
   const rows = (await res.json()) as Array<{ id: string; is_default?: boolean }>;
   const row = rows.find((w) => w.is_default) ?? rows[0];
   if (!row) throw new Error('no workspace exists to drive the Team tab against');
