@@ -463,7 +463,20 @@ test(
       // it stops handing the assertions a frame balanced on their threshold.
       const NEAR_BLACK_FLOOR = 20;
       const FIRST_FRAME_READY_LUMINANCE = 40;
-      const FIRST_FRAME_BUDGET_MS = 15_000;
+      // 45s, not 15s. The bar is right; the budget was not.
+      //
+      // CI failed the first attempt with top-band luminance 22.7 — not a dim
+      // frame near the bar, but a stream that had not painted AT ALL (the
+      // darkest real frame is 73.2). The retry then passed in 39s total. So on
+      // a COLD start the browser launch plus the capture pipeline plus the
+      // first WebRTC keyframe simply take longer than 15s on a loaded runner;
+      // by the retry, Chrome and the profile are warm.
+      //
+      // Raising the BUDGET is the correct lever and the bar stays at 40:
+      // waiting longer for the stream to start cannot let a black stream
+      // through, whereas lowering the bar could. This makes the test more
+      // patient, never more permissive.
+      const FIRST_FRAME_BUDGET_MS = 45_000;
       const firstFrameDeadline = Date.now() + FIRST_FRAME_BUDGET_MS;
       let firstFrame = await sampleFrame(video);
       while (luminance(firstFrame.top) < FIRST_FRAME_READY_LUMINANCE && Date.now() < firstFrameDeadline) {
