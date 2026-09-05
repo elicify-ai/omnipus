@@ -171,6 +171,14 @@ type viewResultBuilder struct {
 	// refusedUnitProps dedupes the untyped-view G2 refusal: one problem per
 	// property per result, however many parts and groups total it.
 	refusedUnitProps map[string]bool
+	// refusedG4Props is the same dedupe for G4 — a property refused as
+	// non-arithmetic says so once, not once per part, group and cell.
+	refusedG4Props map[string]bool
+	// formulas is the view's own computed properties, validated lazily and at
+	// most once (a formula's static type is inferred from its expression, so
+	// it cannot be read off the file).
+	formulas         *records.FormulaSet
+	formulasResolved bool
 	out              *gen.ViewResult
 }
 
@@ -543,6 +551,162 @@ func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
 	return p.UnitProperty
 }
 
+// ---------------------------------------------------------------------------
+// G4 — "Text is never totalled, even when it parses as a number"
+// ---------------------------------------------------------------------------
+//
+// The design puts all six gates in the COMPOSER AND THE RENDERER. The composer
+// half exists; this is the renderer half, and it was missing.
+//
+// aggregateViewRows reads the engine's RENDERED CELL TEXT (the deliberate
+// choice this file's header explains) and parses whatever looks decimal. That
+// is safe only once something upstream has established that the column IS
+// arithmetic. Nothing did: a `figures` part bound to a TEXT property holding
+// "1200" and "3400" served a headline 4,600 — a number nobody recorded, over a
+// column the schema calls prose. The composer refuses to write such a view;
+// `write_view` (the raw escape hatch), a hand-edited file and an imported
+// .base view all reach here without passing the composer.
+//
+// The permitted set is `integer` and `decimal` — §8 R-1's one comparison
+// domain — and it is the whole of the rule. Every other declared type is
+// refused for the five reductions a view part can name: `avg`/`sum` over a
+// date or a checkbox is undefined, and `min`/`max`/`count` are refused too
+// rather than half-implemented, because this file's accumulator parses
+// DECIMALS and would silently reduce over only those rows whose text happened
+// to parse. A count of rows is already on every group as `count`.
+
+// viewTotalsAsNumber is G4's permitted set, named once so the gate and its
+// refusal message cannot disagree about what it is.
+func viewTotalsAsNumber(t records.PropertyType) bool {
+	return t == records.TypeInteger || t == records.TypeDecimal
+}
+
+// declaredTypeOf resolves a property's DECLARED type through the same three
+// namespaces one query resolves names against (knowledgefind's `namespace`):
+// `formula.<name>` from the view's own formulas, `file.<name>` from the twelve
+// reserved file properties, and otherwise the schema — the view's own when it
+// declares a `type`, or every schema in scope when it does not.
+//
+// The second return names the AUTHORITY the type was read from, so a refusal
+// can be checked against a file rather than merely believed.
+//
+// UNRESOLVED IS TEXT, not "unknown, proceed". An untyped query resolves every
+// name it cannot place in the text domain (namespace.resolveUntyped: "by rule,
+// every name is legal there and resolves in the text domain"), so a binding no
+// schema declares is prose by resolution — and G4 refuses prose. A typed view
+// cannot reach that branch at all: the loader's checkViewProp already rejects
+// a part binding the record type does not declare.
+func (b *viewResultBuilder) declaredTypeOf(prop string) (records.PropertyType, string) {
+	if strings.HasPrefix(prop, knowledgefind.FormulaNamespace) {
+		if decl, ok := b.formulaDecl(strings.TrimPrefix(prop, knowledgefind.FormulaNamespace)); ok {
+			if pt, mapped := records.FormulaPropertyType(decl.Type); mapped {
+				return pt, "the view's own formula"
+			}
+		}
+		return records.TypeText, "the view's own formula"
+	}
+	if records.IsFileNamespace(prop) {
+		if p, ok := records.FileProperty(prop); ok && p != nil {
+			return p.Type, "the reserved file properties"
+		}
+		return records.TypeText, "the reserved file properties"
+	}
+	if b.view.Def.Type != nil {
+		if sc, ok := b.env.Schemas.Get(*b.view.Def.Type); ok {
+			if p, found := sc.Property(prop); found && p != nil {
+				return p.Type, "record type " + *b.view.Def.Type
+			}
+		}
+		return records.TypeText, "record type " + *b.view.Def.Type
+	}
+	// Untyped: every in-scope declaration. The engine has already refused the
+	// query outright if two of them disagree on the comparison domain
+	// (namespace.refuseSplitDomain), so the first is the domain — but the scan
+	// still prefers a NON-number declaration when it meets one, because a
+	// refusal is the safe direction to be wrong in.
+	var (
+		firstType   records.PropertyType
+		firstOwner  string
+		haveAny     bool
+		nonNumber   records.PropertyType
+		nonNumOwner string
+	)
+	for _, t := range b.env.Schemas.Types() {
+		sc, ok := b.env.Schemas.Get(t)
+		if !ok || sc == nil {
+			continue
+		}
+		p, found := sc.Property(prop)
+		if !found || p == nil {
+			continue
+		}
+		if !haveAny {
+			firstType, firstOwner, haveAny = p.Type, "record type "+t, true
+		}
+		if !viewTotalsAsNumber(p.Type) && nonNumOwner == "" {
+			nonNumber, nonNumOwner = p.Type, "record type "+t
+		}
+	}
+	if nonNumOwner != "" {
+		return nonNumber, nonNumOwner
+	}
+	if haveAny {
+		return firstType, firstOwner
+	}
+	return records.TypeText, "no record type in scope"
+}
+
+// formulaDecl resolves one of the view's own formulas, validating the set ONCE
+// per result. The set is validated rather than read raw because a formula's
+// static type is INFERRED from its expression (FR-143a) and exists nowhere on
+// disk — the file stores source text only.
+func (b *viewResultBuilder) formulaDecl(name string) (records.FormulaDecl, bool) {
+	if !b.formulasResolved {
+		b.formulasResolved = true
+		if b.view.Def.Formulas != nil && len(*b.view.Def.Formulas) > 0 {
+			var schema *records.Schema
+			if b.view.Def.Type != nil {
+				if sc, ok := b.env.Schemas.Get(*b.view.Def.Type); ok {
+					schema = sc
+				}
+			}
+			set, _ := records.ValidateFormulaSet(*b.view.Def.Formulas, schema)
+			b.formulas = set
+		}
+	}
+	if b.formulas == nil {
+		return records.FormulaDecl{}, false
+	}
+	return b.formulas.Get(name)
+}
+
+// permittedToTotal is G4 as a gate: false means the caller computes nothing
+// and the refusal has already been recorded, ONCE per property per result.
+func (b *viewResultBuilder) permittedToTotal(numberProp string) bool {
+	declared, authority := b.declaredTypeOf(numberProp)
+	if viewTotalsAsNumber(declared) {
+		return true
+	}
+	if b.refusedG4Props == nil {
+		b.refusedG4Props = map[string]bool{}
+	}
+	if b.refusedG4Props[numberProp] {
+		return false
+	}
+	b.refusedG4Props[numberProp] = true
+	fix := fmt.Sprintf("convert %q to a number property (change its `type:` to integer or decimal and re-validate the records), or bind this part to a property that is already one",
+		numberProp)
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("no total of %q: %s declares it %s, and only integer and decimal are totalled — values that merely LOOK like numbers are not added up (G4); the rows themselves are still shown",
+			numberProp, authority, declared),
+		Fix:     &fix,
+		Records: []string{},
+	})
+	b.out.Complete = false
+	return false
+}
+
 // unitPropertyForTotals is the gate every total passes before any accumulator
 // is keyed: it resolves the companion unit AND answers whether totalling this
 // property is permitted at all (ok=false → the caller computes nothing; the
@@ -564,6 +728,12 @@ func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
 // property no schema pairs with a unit keeps its unit-less total: with no
 // declaration there are no units to cross (declared, never inferred).
 func (b *viewResultBuilder) unitPropertyForTotals(numberProp string) (unitProp string, ok bool) {
+	// G4 RUNS FIRST, because it decides whether the column is arithmetic at
+	// all — asking which unit a paragraph of prose is denominated in is a
+	// question that only makes sense after that.
+	if !b.permittedToTotal(numberProp) {
+		return "", false
+	}
 	if b.view.Def.Type != nil {
 		return b.unitPropertyOf(numberProp), true
 	}
