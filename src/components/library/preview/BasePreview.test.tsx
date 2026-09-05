@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import type { KnowledgeBaseInfo, ViewResult } from '@/lib/api/generated/openapi-types'
 import type { LibraryEntry } from '@/lib/api'
 import { BasePreview } from './BasePreview'
@@ -116,6 +116,33 @@ describe('BasePreview — tabs over the base file views', () => {
     // The result renders: its one row count appears on the active tab.
     await waitFor(() => expect(first.textContent).toContain('1'))
     expect(loadViewResult).not.toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--aged')
+  })
+
+  // code-review finding #3(c) — the view-result query is a full server-side
+  // view EVALUATION, not a static file read; TanStack Query's library
+  // default (`refetchOnWindowFocus: true`) would refire it every time the
+  // reader alt-tabs back into the app once its staleTime has elapsed, which
+  // for an expensive fetch is wasted work on every refocus. It must stay
+  // fetched exactly once across a long idle period plus a refocus.
+  it('does not refire the (expensive) view-result fetch merely because the window regained focus', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const loadViewResult = vi.fn().mockResolvedValue(result())
+      renderBase({ loadViewResult })
+      await vi.waitFor(() => expect(loadViewResult).toHaveBeenCalledTimes(1))
+
+      // Cross well past any sensible staleTime for this fetch.
+      await vi.advanceTimersByTimeAsync(120_000)
+
+      // Simulate the window losing then regaining focus (alt-tab away and back).
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+      await vi.advanceTimersByTimeAsync(50)
+
+      expect(loadViewResult).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('switching tabs fetches the newly selected view', async () => {
