@@ -54,6 +54,11 @@ func (s *parityText) NearestTerms(context.Context, string, int) ([]generated.Vau
 	return nil, nil
 }
 
+// Populated satisfies the interface's freshness contract for a stub that
+// stands in for a BUILT index: these parity tests exercise search behaviour,
+// not the unbuilt-index refusal, so the stub reports one completed build pass.
+func (s *parityText) Populated(context.Context) (bool, error) { return true, nil }
+
 func (s *parityText) SourceHash(_ context.Context, path string) (string, bool, error) {
 	h, ok := s.hashes[path]
 	return h, ok, nil
