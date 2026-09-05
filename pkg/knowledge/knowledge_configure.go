@@ -149,16 +149,73 @@ var vaultConfigureCascadeOps = map[string]bool{
 // split one operation across two names in the audit history.
 const authorOpConfigure AuthorOperation = "knowledge.configure"
 
-// configureArgNames is every argument Parameters() declares. expect_version
-// is DELIBERATELY absent (FR-018a, AC-C3) — its absence from this list is
-// what makes it absent from the tool schema, which is what the acceptance
-// criterion actually tests.
+// configureCommonArgNames are the two arguments every op takes: which change
+// to make, and where.
+var configureCommonArgNames = []string{"op", "collection"}
+
+// configureOpArgNames is each op's OWN accepted argument set, on top of
+// configureCommonArgNames.
 //
-// createViewArgNames (knowledge_configure_create_view.go) is appended here
-// rather than kept separate, because unknownArgs (below) is a SINGLE check
-// run once in Execute for every op — the same posture "definition" already
-// takes, being used by three ops and declared once.
-var configureArgNames = append([]string{"op", "collection", "type", "view", "definition"}, createViewArgNames...)
+// WHY PER-OP AND NOT ONE UNION. This tool's unknown-argument sweep used to
+// run once, in Execute, against a single flat list — which was correct while
+// every argument in that list was read by at least one of five ops that
+// mostly shared them. op=create_view then added ELEVEN flat bindings (kind,
+// number, unit, date, image, choice, group_by, columns, sort, limit, filter)
+// to the same union, and that quietly made all eleven acceptable on
+// write_view, where nothing reads them. `write_view` with `kind: "board"`
+// returned "view saved" and dropped the kind without a word — the exact
+// silent-drop failure the sweep exists to prevent, arriving through the
+// sweep's own accepted list.
+//
+// So the sweep now resolves the op first and checks against THAT op's set.
+// create_view takes `type` (the record type it composes against) and its
+// eleven bindings; write_view takes `definition` and nothing else, because
+// everything write_view honours lives inside that object.
+var configureOpArgNames = map[string][]string{
+	opCreateRecordType: {"type", "definition"},
+	opEditRecordType:   {"type", "definition"},
+	opDeleteRecordType: {"type"},
+	opWriteView:        {"view", "definition"},
+	opCreateView:       append([]string{"view", "type"}, createViewArgNames...),
+	opDeleteView:       {"view"},
+}
+
+// configureArgNames is every argument Parameters() declares — the UNION of
+// the sets above, DERIVED from them rather than restated, so an argument an
+// op accepts is necessarily advertised and an advertised argument is
+// necessarily accepted somewhere. expect_version is DELIBERATELY absent
+// (FR-018a, AC-C3) — its absence from this list is what makes it absent from
+// the tool schema, which is what the acceptance criterion actually tests.
+var configureArgNames = buildConfigureArgNames()
+
+func buildConfigureArgNames() []string {
+	out := append([]string(nil), configureCommonArgNames...)
+	seen := map[string]bool{}
+	for _, n := range out {
+		seen[n] = true
+	}
+	// vaultConfigureOps, not a range over the map: a map range is unordered,
+	// and this list is rendered into refusal text.
+	for _, op := range vaultConfigureOps {
+		for _, n := range configureOpArgNames[op] {
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// configureAcceptedArgs is the full accepted set for one op — the common
+// arguments plus its own.
+func configureAcceptedArgs(op string) []string {
+	own := configureOpArgNames[op]
+	out := make([]string, 0, len(configureCommonArgNames)+len(own))
+	out = append(out, configureCommonArgNames...)
+	out = append(out, own...)
+	return out
+}
 
 // ---------------------------------------------------------------------------
 // THE DESCRIPTION IS DERIVED, NEVER TRANSCRIBED
@@ -398,12 +455,6 @@ func (t *ConfigureTool) Execute(ctx context.Context, args map[string]any) *tools
 			"knowledge_configure takes no expect_version: a single-file token cannot guard a "+
 				"change to every note declaring this type. Re-read with knowledge_describe and re-send")
 	}
-	if unknown := unknownArgs(args, configureArgNames); len(unknown) > 0 {
-		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
-			"unknown argument(s) %s; accepted: %s",
-			strings.Join(unknown, ", "), strings.Join(configureArgNames, ", ")))
-	}
-
 	op := strings.TrimSpace(stringArg(args["op"]))
 	if op == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil,
@@ -414,6 +465,20 @@ func (t *ConfigureTool) Execute(ctx context.Context, args map[string]any) *tools
 	}
 	if vaultConfigureCascadeOps[op] {
 		return t.deps.refuse(authorOpConfigure, target, nil, op+" writes notes you did not name; use knowledge_restructure")
+	}
+	// The unknown-argument sweep runs AFTER the op is resolved, because what
+	// counts as unknown is a property of the op — see configureOpArgNames.
+	// An unrecognised op is refused first: "op=frobnicate accepts …" would be
+	// a nonsense sentence, and the op is the thing actually wrong.
+	if _, known := configureOpArgNames[op]; !known {
+		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
+			"unsupported op %q; supported ops are %s", op, strings.Join(vaultConfigureOps, ", ")))
+	}
+	accepted := configureAcceptedArgs(op)
+	if unknown := unknownArgs(args, accepted); len(unknown) > 0 {
+		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
+			"unknown argument(s) %s; op=%s accepts: %s",
+			strings.Join(unknown, ", "), op, strings.Join(accepted, ", ")))
 	}
 
 	switch op {

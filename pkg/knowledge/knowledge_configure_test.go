@@ -569,3 +569,86 @@ func TestKnowledgeConfigure_CreateRecordType_NameEscapingTheRecordsDir_Refused(t
 		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-op argument sets
+// ---------------------------------------------------------------------------
+
+// TestKnowledgeConfigure_WriteView_CreateViewArguments_Refused pins the
+// refusal write_view lost when create_view landed.
+//
+// unknownArgs is a SINGLE sweep over one union of every op's arguments, so
+// folding create_view's eleven flat bindings into that union made all eleven
+// silently acceptable on write_view — where nothing reads them. `kind` and
+// `number` on a write_view call are dropped without a word, which is the
+// exact silent-drop failure the unknown-argument sweep exists to prevent.
+func TestKnowledgeConfigure_WriteView_CreateViewArguments_Refused(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	require.False(t, tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_record_type", "type": "widget",
+		"definition": map[string]any{
+			"schema_version": float64(1),
+			"properties":     map[string]any{"amount": map[string]any{"type": "decimal"}},
+		},
+	}).IsError)
+
+	for _, arg := range []string{"kind", "number", "unit", "date", "image", "choice", "group_by", "columns", "sort", "limit", "filter"} {
+		t.Run(arg, func(t *testing.T) {
+			res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+				"collection": "kb", "op": "write_view", "view": "wv-" + arg,
+				"definition": map[string]any{"type": "widget"},
+				arg:          "amount",
+			})
+			require.True(t, res.IsError, "write_view must refuse %q, got: %s", arg, res.ForLLM)
+			require.Contains(t, res.ForLLM, arg, "the refusal must name the argument")
+			_, serr := os.Stat(filepath.Join(root, ".omnipus-vault", "views", "wv-"+arg+".yaml"))
+			require.True(t, os.IsNotExist(serr), "nothing may be written on a refused call")
+		})
+	}
+}
+
+// TestKnowledgeConfigure_CreateView_WriteViewArgument_Refused is the mirror:
+// create_view composes its own `definition`, so accepting one is the same
+// silent drop in the other direction.
+func TestKnowledgeConfigure_CreateView_DefinitionArgument_Refused(t *testing.T) {
+	home, ws, _ := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_view", "view": "cv-def", "kind": "table",
+		"definition": map[string]any{"type": "widget"},
+	})
+	require.True(t, res.IsError, "create_view must refuse 'definition', got: %s", res.ForLLM)
+	require.Contains(t, res.ForLLM, "definition")
+}
+
+// TestKnowledgeConfigure_EveryOpArgSetIsInTheDeclaredSchema keeps the per-op
+// sets and the one union the tool schema is built from as one fact: an
+// argument an op accepts but Parameters() never declares is unreachable, and
+// a union member no op accepts is advertised and always refused.
+func TestKnowledgeConfigure_EveryOpArgSetIsInTheDeclaredSchema(t *testing.T) {
+	union := map[string]bool{}
+	for _, n := range configureArgNames {
+		union[n] = true
+	}
+	covered := map[string]bool{}
+	for _, n := range configureCommonArgNames {
+		require.True(t, union[n], "common argument %q is not in the declared union", n)
+		covered[n] = true
+	}
+	for _, op := range vaultConfigureOps {
+		names, ok := configureOpArgNames[op]
+		require.True(t, ok, "op %q declares no argument set", op)
+		for _, n := range names {
+			require.True(t, union[n], "op %q accepts %q, which is not in the declared union", op, n)
+			covered[n] = true
+		}
+	}
+	for n := range union {
+		require.True(t, covered[n], "argument %q is advertised but no op accepts it", n)
+	}
+}
