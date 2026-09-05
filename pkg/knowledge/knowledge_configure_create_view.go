@@ -684,6 +684,16 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	if viewName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'view' is required for create_view")
 	}
+	// The name becomes a filename under records.ViewsDir. G6 guarantees that
+	// a REFUSED call writes nothing; it says nothing about WHERE an accepted
+	// call writes, and none of the six gates below ever looks at `view`. This
+	// is the check that makes "the composer writes one view file" true —
+	// controlPlaneNameRefusal (knowledge_configure.go) is the same validator
+	// write_view's raw path takes, so the composer and the escape hatch
+	// cannot disagree about what a view name may be.
+	if nrefusal := controlPlaneNameRefusal("view", viewName, records.ViewsDir(root)); nrefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+nrefusal)
+	}
 
 	kindStr := strings.TrimSpace(stringArg(args["kind"]))
 	if kindStr == "" {
@@ -755,7 +765,7 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+merr.Error())
 	}
-	viewPath := filepath.Join(records.ViewsDir(root), viewName+".yaml")
+	viewPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
 	parsed, rej := records.ParseView(viewPath, yamlBytes)
 	if rej != nil {
 		// Reaching a REJECTION here (rather than a gate refusal above) means

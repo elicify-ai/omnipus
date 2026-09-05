@@ -445,6 +445,11 @@ func (t *ConfigureTool) execCreateRecordType(target mutationTarget, args map[str
 	if typeName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'type' is required for create_record_type")
 	}
+	// The name becomes a filename under records.SchemaDir — see
+	// controlPlaneNameRefusal for why that is checked before anything else.
+	if nrefusal := controlPlaneNameRefusal("type", typeName, records.SchemaDir(root)); nrefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "create_record_type: "+nrefusal)
+	}
 
 	defMap, derr := definitionMap(args["definition"])
 	if derr != nil {
@@ -468,7 +473,7 @@ func (t *ConfigureTool) execCreateRecordType(target mutationTarget, args map[str
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_record_type: "+merr.Error())
 	}
-	schemaPath := filepath.Join(records.SchemaDir(root), typeName+".yaml")
+	schemaPath := filepath.Join(records.SchemaDir(root), typeName+controlPlaneFileExt)
 	if _, rej := records.ParseSchema(schemaPath, yamlBytes); rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_record_type: "+rej.Reason)
 	}
@@ -641,6 +646,11 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if viewName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'view' is required for write_view")
 	}
+	// The name becomes a filename under records.ViewsDir — see
+	// controlPlaneNameRefusal for why that is checked before anything else.
+	if nrefusal := controlPlaneNameRefusal("view", viewName, records.ViewsDir(root)); nrefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+nrefusal)
+	}
 
 	defMap, derr := definitionMap(args["definition"])
 	if derr != nil {
@@ -658,7 +668,7 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+merr.Error())
 	}
-	viewPath := filepath.Join(records.ViewsDir(root), viewName+".yaml")
+	viewPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
 	parsed, rej := records.ParseView(viewPath, yamlBytes)
 	if rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
@@ -1035,6 +1045,77 @@ func removeControlPlaneFile(target mutationTarget, abs string) error {
 		}
 		return nil
 	})
+}
+
+// controlPlaneFileExt is the suffix every control-plane name is given when it
+// becomes a filename. Named once so controlPlaneNameRefusal validates the
+// EXACT string the callers below join, rather than a second spelling of it.
+const controlPlaneFileExt = ".yaml"
+
+// controlPlaneNameRefusal is the ONE validator for every argument that becomes
+// a control-plane FILENAME — `view` under records.ViewsDir, `type` under
+// records.SchemaDir. It returns "" when the name is safe, or the refusal to
+// give the caller.
+//
+// THE THREAT, PLAINLY. These names arrive from an agent, and the only thing
+// standing between the argument and an os.OpenFile is a filepath.Join. A
+// `view` of "../records/company" joins to <vault>/.omnipus-vault/records/
+// company.yaml — the record-type SCHEMA for `company` — and every other gate
+// in this tool passes it, because none of them ever looked at the name's
+// shape: the view document is valid, it names a declared type, and the write
+// is an ordinary atomic overwrite. Longer "../.." chains leave the vault
+// entirely and land anywhere the process can write. The same join guards
+// nothing under records.SchemaDir either; that door writes with O_EXCL, so it
+// cannot overwrite, but it can still CREATE a file outside the vault.
+//
+// So the rule is deliberately narrow and stated positively: a control-plane
+// name is a plain filename, and it produces a file DIRECTLY inside the
+// directory that kind of file lives in. Nothing about "sanitising" the name
+// into something safe — a name that is not already safe is refused by name,
+// because an agent that asked for "../records/company" did not mean
+// "records-company" and must be told so rather than silently redirected.
+//
+// The checks are belt and braces on purpose. The three explicit refusals
+// (separator, absolute, bare dot segment) name what is wrong in words the
+// caller can act on; the containment assertion afterwards is the backstop
+// that catches anything the three did not anticipate on a platform whose
+// separator rules differ, and it compares against the SAME joined path the
+// callers go on to use.
+func controlPlaneNameRefusal(argName, name, dir string) string {
+	label := records.VaultMarkerDirName + "/" + filepath.Base(dir)
+	refuse := func(why string) string {
+		return fmt.Sprintf(
+			"'%s' must be a name, not a path: %q %s. It becomes one file directly inside %s/, "+
+				"so it may not contain a path separator, may not be an absolute path, and may "+
+				"not be \".\" or \"..\"",
+			argName, name, why, label)
+	}
+
+	switch {
+	case name == "":
+		return refuse("is blank")
+	case strings.ContainsRune(name, 0):
+		return refuse("contains a NUL byte")
+	case strings.ContainsAny(name, `/\`):
+		// Both separators, on every platform: a backslash is not a separator
+		// on Linux or macOS, but a name carrying one is still an attempt to
+		// address a path and is refused rather than turned into a file whose
+		// name contains a backslash.
+		return refuse("contains a path separator")
+	case filepath.IsAbs(name):
+		return refuse("is an absolute path")
+	case name == "." || name == "..":
+		return refuse("names a directory, not a file")
+	}
+
+	// The backstop: the file this name produces must sit directly in dir.
+	// Checked against the join the callers actually perform, so the two can
+	// never drift.
+	target := filepath.Join(dir, name+controlPlaneFileExt)
+	if filepath.Dir(target) != filepath.Clean(dir) {
+		return refuse("resolves outside the directory it must be written in")
+	}
+	return ""
 }
 
 // relControlPlanePath renders a schema/view's absolute path as the
