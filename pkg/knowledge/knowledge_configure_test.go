@@ -652,3 +652,24 @@ func TestKnowledgeConfigure_EveryOpArgSetIsInTheDeclaredSchema(t *testing.T) {
 		require.True(t, covered[n], "argument %q is advertised but no op accepts it", n)
 	}
 }
+
+// TestKnowledgeConfigure_KindDescriptionIsDerivedFromViewKinds is the
+// composer-agreement half of the availability finding: the `kind` parameter
+// description must state each kind's requirement in view_kinds.go's OWN
+// words, not a second hand-written copy of the same table.
+func TestKnowledgeConfigure_KindDescriptionIsDerivedFromViewKinds(t *testing.T) {
+	params := NewConfigureTool(AuthoringDeps{}).Parameters()
+	props, _ := params["properties"].(map[string]any)
+	kind, _ := props["kind"].(map[string]any)
+	desc, _ := kind["description"].(string)
+	require.NotEmpty(t, desc)
+
+	for _, k := range ViewKindOrder {
+		phrase := viewKindRequirementPhrase[k]
+		require.NotEmpty(t, phrase, "view_kinds.go declares no requirement phrase for %q", k)
+		require.Contains(t, desc, phrase,
+			"the kind description must state %q's requirement in view_kinds.go's own words", k)
+	}
+	require.Equal(t, ViewKindOrder, kind["enum"],
+		"the declared kind enum must be view_kinds.go's ViewKindOrder, not a second list")
+}

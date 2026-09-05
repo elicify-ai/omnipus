@@ -65,20 +65,60 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// createViewKindNames lists the eight view kinds in view-kinds-design's own
-// §2.3 order — records.viewKindNames says the same thing but is unexported,
-// and duplicating the eight literals (rather than importing an unexported
-// symbol across a package boundary that does not exist) keeps this file
-// honest about which package actually owns the enum: generated.ViewDefKind*.
-var createViewKindNames = []string{
-	string(generated.ViewDefKindTable),
-	string(generated.ViewDefKindList),
-	string(generated.ViewDefKindTiles),
-	string(generated.ViewDefKindBoard),
-	string(generated.ViewDefKindCalendar),
-	string(generated.ViewDefKindSummary),
-	string(generated.ViewDefKindTrend),
-	string(generated.ViewDefKindBreakdown),
+// createViewKindArguments names, per kind, the create_view ARGUMENT that
+// binds the property that kind's requirement asks for.
+//
+// This is the ONE thing about the eight kinds that belongs to this file
+// rather than to view_kinds.go: view_kinds.go's rulebook states WHAT each
+// kind requires ("an enum property with ≤ 8 values"), and this states WHICH
+// ARGUMENT supplies it ('choice'). Neither restates the other, so the two
+// can be read together without either being a copy. `table` and `list`
+// require nothing and so bind nothing.
+var createViewKindArguments = map[string][]string{
+	ViewKindTiles:     {"image"},
+	ViewKindBoard:     {"choice"},
+	ViewKindCalendar:  {"date"},
+	ViewKindSummary:   {"number"},
+	ViewKindTrend:     {"date", "number"},
+	ViewKindBreakdown: {"number", "group_by"},
+}
+
+// createViewKindParamDescription is the `kind` parameter's description in
+// ConfigureTool.Parameters() (knowledge_configure.go), BUILT from
+// view_kinds.go's own requirement table rather than transcribed from it.
+//
+// WHY IT IS DERIVED. view_kinds.go's header states the promise this file is
+// held to: the availability check and the create_view gate flow through ONE
+// shared rulebook, so a kind knowledge_describe calls available can never be
+// one the composer then refuses. The tool DESCRIPTION is the third reader of
+// that same §2.3 table, and it had been hand-written — "board: needs
+// 'choice' naming an enum property with at most 8 declared values" restated
+// the rulebook's own row in prose, and a change to the rulebook would have
+// left the sentence the model actually reads asserting the old rule. It now
+// reads viewKindRequirementPhrase, in ViewKindOrder, so there is nothing
+// left to fall out of step.
+var createViewKindParamDescription = buildCreateViewKindParamDescription()
+
+func buildCreateViewKindParamDescription() string {
+	parts := make([]string, 0, len(ViewKindOrder))
+	for _, kind := range ViewKindOrder {
+		phrase := viewKindRequirementPhrase[kind]
+		args := createViewKindArguments[kind]
+		if len(args) == 0 {
+			parts = append(parts, fmt.Sprintf("%s — %s", kind, phrase))
+			continue
+		}
+		quoted := make([]string, 0, len(args))
+		for _, a := range args {
+			quoted = append(quoted, "'"+a+"'")
+		}
+		parts = append(parts, fmt.Sprintf("%s — %s, bound with %s", kind, phrase, strings.Join(quoted, " and ")))
+	}
+	return "create_view only, required. One of the eight view kinds, each offered only when the " +
+		"target record type has what it needs: " + strings.Join(parts, "; ") + ". A kind the record " +
+		"type does not support is refused naming the missing requirement and any near-miss " +
+		"property — nothing is written on a refusal. Call knowledge_describe on the record type " +
+		"first: it states, per type, which of these are actually available."
 }
 
 // createViewArgNames is create_view's own flat argument surface (design
@@ -200,15 +240,24 @@ func stringListArg(raw any, argName string) ([]string, string) {
 // candidate.
 // ---------------------------------------------------------------------------
 
-// propertiesOfType lists a schema's own properties of exactly one declared
-// type, in declaration order — the candidate list a G1 refusal names when the
-// binding the agent gave was blank rather than wrong.
-func propertiesOfType(schema *records.Schema, t records.PropertyType) []string {
-	var out []string
-	for _, name := range schema.PropertyNames() {
-		if p, ok := schema.Property(name); ok && p.Type == t {
-			out = append(out, name)
-		}
+// propertyNamesOfTypes lists a schema's own properties of the given declared
+// types, in declaration order — the candidate list a G1 refusal names when
+// the binding the agent gave was blank rather than wrong.
+//
+// It is a thin renaming of view_kinds.go's propertiesOfTypes, deliberately:
+// "which properties of this type does this schema declare, and in what
+// order" is the question knowledge_describe's availability block answers too,
+// and it must be answered the same way in both places or a refusal here can
+// list candidates in an order — or a set — the discovery block does not.
+// Only the shape differs (names, for a message; properties, for a binding).
+func propertyNamesOfTypes(schema *records.Schema, types ...records.PropertyType) []string {
+	props := propertiesOfTypes(schema, types...)
+	if len(props) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(props))
+	for _, p := range props {
+		out = append(out, p.Name)
 	}
 	return out
 }
@@ -221,7 +270,7 @@ func gateG1RequireDate(schema *records.Schema, kindLabel, propName string) (*rec
 			"kind=%s requires a declared record type with a date property; 'type' was not given", kindLabel)
 	}
 	if propName == "" {
-		cands := propertiesOfType(schema, records.TypeDate)
+		cands := propertyNamesOfTypes(schema, records.TypeDate)
 		if len(cands) == 0 {
 			return nil, fmt.Sprintf(
 				"kind=%s needs a date property; record type %q declares none", kindLabel, schema.Type)
@@ -238,7 +287,7 @@ func gateG1RequireDate(schema *records.Schema, kindLabel, propName string) (*rec
 	if prop.Type != records.TypeDate {
 		msg := fmt.Sprintf("property %q is %s, not a date; kind=%s needs a date property",
 			propName, prop.Type, kindLabel)
-		if cands := propertiesOfType(schema, records.TypeDate); len(cands) > 0 {
+		if cands := propertyNamesOfTypes(schema, records.TypeDate); len(cands) > 0 {
 			msg += fmt.Sprintf(" (candidates: %s)", strings.Join(cands, ", "))
 		} else {
 			msg += fmt.Sprintf("; record type %q declares no date property at all", schema.Type)
@@ -315,7 +364,7 @@ func gateG1RequireChoice(schema *records.Schema, propName string) (*records.Prop
 		return nil, fmt.Sprintf(
 			"property %q is %s, not enum; board needs an enum with ≤ %d values", propName, prop.Type, maxBoardEnumValues)
 	}
-	if len(prop.Values) > maxBoardEnumValues {
+	if !boardEnumEligible(prop) {
 		return nil, fmt.Sprintf("board needs an enum with ≤ %d values; %q has %d", maxBoardEnumValues, propName, len(prop.Values))
 	}
 	return prop, ""
@@ -323,25 +372,34 @@ func gateG1RequireChoice(schema *records.Schema, propName string) (*records.Prop
 
 // enumPropertiesReport lists every enum property with its value count, in
 // declaration order — the raw material a "no board-eligible enum, but here
-// is what you do have" refusal names.
+// is what you do have" refusal names. The enum scan itself comes from
+// view_kinds.go's propertiesOfTypes, the same one boardAvailability uses, so
+// the two paths can never disagree about which properties are even in the
+// running.
 func enumPropertiesReport(schema *records.Schema) []string {
-	var out []string
-	for _, name := range schema.PropertyNames() {
-		if p, ok := schema.Property(name); ok && p.Type == records.TypeEnum {
-			out = append(out, fmt.Sprintf("%q has %d", name, len(p.Values)))
-		}
+	enums := propertiesOfTypes(schema, records.TypeEnum)
+	if len(enums) == 0 {
+		// nil, not an empty slice: every caller tests len() > 0, and the
+		// refusal that follows says "declares no enum property".
+		return nil
+	}
+	out := make([]string, 0, len(enums))
+	for _, p := range enums {
+		out = append(out, fmt.Sprintf("%q has %d", p.Name, len(p.Values)))
 	}
 	return out
 }
 
-// boardEligibleEnums lists enum properties with at most maxBoardEnumValues
-// declared values — the set `choice` may legally name when the agent left it
-// blank.
+// boardEligibleEnums lists the enum properties `choice` may legally name when
+// the agent left it blank. Eligibility is boardEnumEligible — view_kinds.go's
+// own predicate, the one boardAvailability decides on — so the set this
+// refusal offers and the set knowledge_describe calls board-available are one
+// set by construction, not by two matching comparisons.
 func boardEligibleEnums(schema *records.Schema) []string {
 	var out []string
-	for _, name := range schema.PropertyNames() {
-		if p, ok := schema.Property(name); ok && p.Type == records.TypeEnum && len(p.Values) <= maxBoardEnumValues {
-			out = append(out, name)
+	for _, p := range propertiesOfTypes(schema, records.TypeEnum) {
+		if boardEnumEligible(p) {
+			out = append(out, p.Name)
 		}
 	}
 	return out
@@ -389,8 +447,12 @@ func gateG4NumberBinding(schema *records.Schema, propName string) (*records.Prop
 		return nil, "'number' requires a declared record type; 'type' was not given"
 	}
 	if propName == "" {
-		cands := append(propertiesOfType(schema, records.TypeInteger), propertiesOfType(schema, records.TypeDecimal)...)
-		sort.Strings(cands)
+		// Declaration order, from the shared helper — the SAME order
+		// knowledge_describe lists number candidates in. Sorting them here
+		// alphabetically was a second, quieter disagreement with the
+		// discovery block: same set, different order, so the two surfaces
+		// named a different property first.
+		cands := propertyNamesOfTypes(schema, records.TypeInteger, records.TypeDecimal)
 		if len(cands) == 0 {
 			return nil, fmt.Sprintf("'number' is required; record type %q declares no integer or decimal property", schema.Type)
 		}
@@ -663,7 +725,7 @@ func composePartsForKind(kind generated.ViewDefKind, schema *records.Schema, b c
 		// but a refusal here rather than a panic is cheap insurance against a
 		// future caller that skips that check.
 		return nil, fmt.Sprintf("kind %q is not one of the eight declared view kinds; permitted: %s",
-			string(kind), strings.Join(createViewKindNames, ", "))
+			string(kind), strings.Join(ViewKindOrder, ", "))
 	}
 }
 
@@ -698,13 +760,13 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	kindStr := strings.TrimSpace(stringArg(args["kind"]))
 	if kindStr == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil,
-			"'kind' is required for create_view; one of "+strings.Join(createViewKindNames, ", "))
+			"'kind' is required for create_view; one of "+strings.Join(ViewKindOrder, ", "))
 	}
 	kind := generated.ViewDefKind(kindStr)
 	if !kind.Valid() {
 		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
 			"kind %q is not one of the eight declared view kinds; permitted: %s",
-			kindStr, strings.Join(createViewKindNames, ", ")))
+			kindStr, strings.Join(ViewKindOrder, ", ")))
 	}
 
 	typeName := strings.TrimSpace(stringArg(args["type"]))

@@ -334,21 +334,13 @@ func (t *ConfigureTool) Parameters() map[string]any {
 			},
 			"kind": map[string]any{
 				"type": "string",
-				"enum": createViewKindNames,
-				"description": fmt.Sprintf(
-					"create_view only, required. One of the eight view kinds. table/list: no "+
-						"requirement, work on anything. tiles: %s (D5) — refused unconditionally; "+
-						"'image' is accepted but can never satisfy it today. board: needs 'choice' "+
-						"naming an enum property with at most %d declared values. calendar: needs "+
-						"'date' naming a date property. summary: needs 'number' naming an integer or "+
-						"decimal property, plus optional 'group_by' (one property) for a grouped, "+
-						"subtotalled table. trend: needs 'date' and 'number'. breakdown: needs "+
-						"'number' and 'group_by' naming exactly TWO different properties. "+
-						"A kind is refused, naming the missing or near-miss property, when the target "+
-						"record type does not have what it requires — nothing is written on a refusal. "+
-						"Call knowledge_describe on the record type first — it states, per type, "+
-						"which kinds are actually available.",
-					imageIneligibleReason, maxBoardEnumValues),
+				// Both DERIVED from view_kinds.go's rulebook, never
+				// transcribed: the enum is its ViewKindOrder, and the prose is
+				// built from its per-kind requirement phrases — see
+				// createViewKindParamDescription for what went wrong when this
+				// sentence was written by hand.
+				"enum":        ViewKindOrder,
+				"description": createViewKindParamDescription,
 			},
 			"filter": map[string]any{
 				"type": "object",

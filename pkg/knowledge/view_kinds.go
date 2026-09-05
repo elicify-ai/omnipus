@@ -67,6 +67,17 @@ var ViewKindOrder = []string{
 // maxBoardEnumValues is design §2.3's "≤ 8 values" bound for `board`.
 const maxBoardEnumValues = 8
 
+// boardEnumEligible is the ONE place the board bound is APPLIED, as
+// ImageEligible is the one place tiles' eligibility is decided. Both the
+// discovery block below and knowledge_configure's create_view gate
+// (gateG1RequireChoice, knowledge_configure_create_view.go) call it, so the
+// set of enums knowledge_describe calls board-available and the set the
+// composer accepts are one set by construction — not two comparisons that
+// happen to read the same constant today.
+func boardEnumEligible(p *records.Property) bool {
+	return p != nil && len(p.Values) <= maxBoardEnumValues
+}
+
 // ---------------------------------------------------------------------------
 // D5 — the one place the design's own §2.1 was wrong, corrected 2026-09-03
 //
@@ -200,7 +211,7 @@ func boardAvailability(sc *records.Schema) ViewKindAvailability {
 		}
 	}
 	for _, p := range enums {
-		if len(p.Values) <= maxBoardEnumValues {
+		if boardEnumEligible(p) {
 			return ViewKindAvailability{
 				Kind: string(generated.ViewDefKindBoard), Available: true,
 				Bindings: "choice: " + p.Name,
@@ -363,7 +374,7 @@ var viewKindRequirementPhrase = map[string]string{
 	string(generated.ViewDefKindTable):     "any collection",
 	string(generated.ViewDefKindList):      "any collection",
 	string(generated.ViewDefKindTiles):     imageIneligibleReason,
-	string(generated.ViewDefKindBoard):     "an enum property with ≤ 8 values",
+	string(generated.ViewDefKindBoard):     fmt.Sprintf("an enum property with ≤ %d values", maxBoardEnumValues),
 	string(generated.ViewDefKindCalendar):  "a date property",
 	string(generated.ViewDefKindSummary):   "a number property",
 	string(generated.ViewDefKindTrend):     "a date property and a number property",
