@@ -576,11 +576,14 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	coll, collDone := newEventCollector(t, al)
 	defer collDone()
 
-	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty) and
-	// emits the conversational confirm-in-chat frame (goal_status active).
+	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty after
+	// confirm) and emits the confirm-in-chat surface. ADR-074 D4a: a PROSE
+	// intent parks as a pending goal (pill=queued) and activates on the
+	// explicit confirm (pill=active).
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal land the contract-first layer", UserInitiated: true},
 		agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	meta, _ := store.GetMeta(sid)
 	if meta.GoalCondition == "" {
 		t.Fatal("(1) /goal set must persist the goal condition")
@@ -660,15 +663,18 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 			walk = append(walk, p)
 		}
 	}
-	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
+	// ADR-074 D4a prepends the pending step: queued (compiled, awaiting the
+	// user's confirmation) precedes active.
+	wantWalk := []string{goalPillQueued, goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
 	if !equalStringSlices(walk, wantWalk) {
-		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
+		t.Fatalf("(5) pill walk = %v, want %v (queued→active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
 	}
 
 	// (6) /goal clear cancels an in-flight verifier session registered for this
 	// goal (FR-037/N-12). Set a fresh goal, register a verifier session, clear.
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal a second goal", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	verifierUnit := verifierUnitForGoal(sid)
 	pe.VerifierRegistry().Register(verifierUnit, "verifier-t0-inflight")
 	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); !ok {

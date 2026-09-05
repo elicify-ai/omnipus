@@ -86,7 +86,27 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		return true, true, al.clearGoal(sessionID, store, goalClearNoteUser)
 	}
 	if isGoalConfirmVerb(args) {
-		return true, true, al.confirmPendingGoal(sessionID, store)
+		// US-3 S9: while a clarification question is pending, nothing is
+		// confirmable yet — `/goal confirm` gets an informative redirect,
+		// never "No pending goal to confirm".
+		if meta, _ := store.GetMeta(sessionID); meta != nil &&
+			loadGoalClarification(meta.GoalClarificationJSON) != nil {
+			return true, true, "Answer the pending question first (or `/goal clear` to discard the goal draft)."
+		}
+		reply, startCondition := al.confirmPendingGoal(sessionID, store)
+		if startCondition != "" {
+			// A FRESH pending goal just activated (ADR-074 D4a): run round 1
+			// in this same turn — the confirm is the activation, exactly like
+			// the marker-only path's own same-turn round 1 (US-3 S1).
+			routeAgentID := ""
+			if agentInst != nil {
+				routeAgentID = agentInst.ID
+			}
+			al.recordGoalRouting(sessionID, opts.Channel, opts.ChatID, opts.SessionKey, routeAgentID)
+			opts.UserMessage = startCondition
+			return true, false, ""
+		}
+		return true, true, reply
 	}
 
 	// ADR-053 Phase-2 compile (FR-110, G-7): the engine-invoked SMART compiler
@@ -99,6 +119,49 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	if agentInst != nil {
 		fc = agentFeasibilityContext{agentInst: agentInst}
 	}
+
+	// Re-statement amendment gate (N-6/D11, FR-113): a `/goal <new intent>`
+	// issued while a goal is ALREADY active is diffed as an amendment and
+	// confirmed via `/goal confirm` — NEVER silently recompiled. The active
+	// goal's Condition + GoalCriteriaJSON are untouched while pending.
+	// ADR-074 D4a keeps this path DETERMINISTIC this phase (US-3 S8) — no LLM
+	// call on an active-goal restate.
+	if meta, _ := store.GetMeta(sessionID); meta != nil && meta.GoalCondition != "" {
+		res := compileGoalIntent(args, fc, sessionID)
+		if res.Rejection != nil {
+			return true, true, formatCompileRejection(res.Rejection)
+		}
+		return true, true, al.proposeGoalAmendment(sessionID, store, meta, res.Goal)
+	}
+
+	// ADR-074 D4a (US-3 S1/S2): a prose or mixed intent takes the two-phase
+	// LLM path — admission CHECK first (a capped user never pays for a refused
+	// compile, S6; the authoritative Admit still runs at confirm), then the
+	// bounded compile producing a PENDING goal (or one clarifying question, or
+	// a plain-language rejection). Activation happens ONLY on confirm. A fresh
+	// `/goal <intent>` also supersedes any pending compile or clarification
+	// from an earlier attempt (US-3 S9, R2-10).
+	if goalIntentNeedsLLMCompile(args) {
+		if pe := GetPlanEngine(al); pe != nil {
+			if admitted, active, capN := pe.Admit("goal"); !admitted {
+				return true, true, fmt.Sprintf(
+					"Cannot start a new goal: active loops %d/%d (cap reached). "+
+						"Stop an existing /goal or /loop, or wait for a running plan to finish.",
+					active, capN,
+				)
+			}
+		}
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, args, sessionID, "", "")
+		return true, true, al.applyGoalCompileOutcome(sessionID, store, args, outcome)
+	}
+
+	// Marker-only intent (every criterion from explicit markers — US-3 S3):
+	// today's path PINNED unchanged. Deterministic compile, immediate
+	// activation, same-turn round 1, zero LLM calls. The `/goal` command IS
+	// the chat confirmation here (FR-113, narrowed to marker-only by ADR-074
+	// D4a); the compiled goal is echoed via the goal_status frame and the
+	// persisted GoalCriteriaJSON (the S1 unified record). Admit to the R5 cap
+	// first.
 	res := compileGoalIntent(args, fc, sessionID)
 	if res.Rejection != nil {
 		// Fail-closed: no rejected criterion persists (FR-111). Surface the
@@ -107,18 +170,6 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	}
 	compiled := res.Goal
 
-	// Re-statement amendment gate (N-6/D11, FR-113): a `/goal <new intent>`
-	// issued while a goal is ALREADY active is diffed as an amendment and
-	// confirmed via `/goal confirm` — NEVER silently recompiled. The active
-	// goal's Condition + GoalCriteriaJSON are untouched while pending.
-	if meta, _ := store.GetMeta(sessionID); meta != nil && meta.GoalCondition != "" {
-		return true, true, al.proposeGoalAmendment(sessionID, store, meta, compiled)
-	}
-
-	// No active goal: compile + echo + activate. The `/goal` command IS the
-	// chat confirmation (FR-113 — no form/modal); the compiled goal is echoed
-	// via the goal_status frame and the persisted GoalCriteriaJSON (the S1
-	// unified record). Admit to the R5 cap first.
 	if pe := GetPlanEngine(al); pe != nil {
 		if admitted, active, capN := pe.Admit("goal"); !admitted {
 			return true, true, fmt.Sprintf(
@@ -152,15 +203,16 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// into the first goal's bucket.
 	goalID := newGoalID()
 	if err := store.SetMeta(sessionID, session.MetaPatch{
-		GoalID:             &goalID,
-		GoalCondition:      &condition,
-		GoalCriteriaJSON:   &criteriaJSON,
-		GoalPendingJSON:    &emptyPending,
-		GoalRoundsUsed:     &zero,
-		GoalMaxRounds:      &maxRounds,
-		GoalLatestReason:   &emptyReason,
-		GoalStartedAt:      &nowStr,
-		GoalLastActivityAt: &nowStr,
+		GoalID:                &goalID,
+		GoalCondition:         &condition,
+		GoalCriteriaJSON:      &criteriaJSON,
+		GoalPendingJSON:       &emptyPending,
+		GoalClarificationJSON: &emptyPending,
+		GoalRoundsUsed:        &zero,
+		GoalMaxRounds:         &maxRounds,
+		GoalLatestReason:      &emptyReason,
+		GoalStartedAt:         &nowStr,
+		GoalLastActivityAt:    &nowStr,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: failed to persist goal set",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
@@ -199,6 +251,158 @@ func formatCompileRejection(r *FeasibilityRejection) string {
 		"\n\nNo criterion was saved. Please restate the goal with a verifiable criterion."
 }
 
+// applyGoalCompileOutcome lands one D4a compile outcome (initial or resumed)
+// on the session: a clarifying question becomes the pending-clarification
+// record; a rejection is surfaced plain-language (nothing persists); compiled
+// criteria become a PENDING goal awaiting `/goal confirm` (US-3 S1) with the
+// itemized plain-language echo as the reply — the FR-113 confirmation surface.
+// Every branch clears the clarification record (the question round, if any,
+// is spent) and stamps GoalLastActivityAt so the idle-expiry sweep covers the
+// pending state (US-3 S10).
+func (al *AgentLoop) applyGoalCompileOutcome(
+	sessionID string, store *session.UnifiedStore, intent string, outcome llmGoalCompileOutcome,
+) string {
+	empty := ""
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+
+	if outcome.ClarifyingQuestion != "" {
+		record := &goalClarificationRecord{
+			Intent: intent, Question: outcome.ClarifyingQuestion, AskedAt: nowStr,
+		}
+		recordJSON, merr := marshalGoalClarification(record)
+		if merr != nil {
+			logger.WarnCF("agent", "goal: could not marshal clarification record",
+				map[string]any{"session_id": sessionID, "error": merr.Error()})
+			return "Could not record the clarifying question (internal error). Please restate the goal."
+		}
+		if err := store.SetMeta(sessionID, session.MetaPatch{
+			GoalClarificationJSON: &recordJSON,
+			GoalPendingJSON:       &empty, // a question supersedes any earlier pending compile
+			GoalLastActivityAt:    &nowStr,
+		}); err != nil {
+			logger.WarnCF("agent", "goal: could not persist clarification record",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+			return "Could not record the clarifying question (internal error). Please restate the goal."
+		}
+		return "Before I lock this goal in, one question:\n\n" + outcome.ClarifyingQuestion +
+			"\n\nAnswer in chat, or `/goal clear` to discard the draft."
+	}
+
+	if outcome.Result.Rejection != nil {
+		// Fail-closed: nothing persists — and any clarification record is
+		// spent (US-3 S7: one round, answered or not).
+		if err := store.SetMeta(sessionID, session.MetaPatch{
+			GoalClarificationJSON: &empty,
+			GoalPendingJSON:       &empty,
+		}); err != nil {
+			logger.WarnCF("agent", "goal: could not clear pending state after compile rejection",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+		}
+		return formatCompileRejection(outcome.Result.Rejection)
+	}
+
+	compiled := outcome.Result.Goal
+	pendingJSON, merr := marshalCompiledGoal(compiled)
+	if merr != nil {
+		logger.WarnCF("agent", "goal: could not marshal pending compiled goal",
+			map[string]any{"session_id": sessionID, "error": merr.Error()})
+		return "Could not store the compiled goal (internal error). Please restate it."
+	}
+	if err := store.SetMeta(sessionID, session.MetaPatch{
+		GoalPendingJSON:       &pendingJSON,
+		GoalClarificationJSON: &empty,
+		GoalLastActivityAt:    &nowStr,
+	}); err != nil {
+		logger.WarnCF("agent", "goal: could not persist pending compiled goal",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return "Could not store the compiled goal (internal error). Please restate it."
+	}
+
+	// The pending state occupies the `queued` pill (ADR-074 D4a: compiled,
+	// awaiting user confirmation — not yet admitted). No goal-id yet: the
+	// generation is minted at confirm (newGoalID's own contract).
+	condition := compiled.Prompt
+	if condition == "" {
+		condition = compiled.Intent
+	}
+	maxRounds := config.DefaultGoalMaxRounds
+	if cfg := al.GetConfig(); cfg != nil {
+		maxRounds = cfg.Planning.EffectiveGoalMaxRounds()
+	}
+	al.emitGoalStatusFrame(sessionID, "", condition, 0, maxRounds, "", goalPillQueued)
+
+	echo := formatGoalEcho(compiled)
+	if outcome.UsedFallback {
+		echo += goalEchoFallbackNote
+	}
+	return echo
+}
+
+// applyGoalPendingReply is the ADR-074 D4a pre-LLM reply-routing hook (US-3
+// S9): called from processMessage right after handleCommand, it intercepts
+// BARE (non-slash) messages only when the session carries a pending goal
+// state. Taxonomy:
+//
+//   - Pending-clarification: the next ordinary chat message — whatever it
+//     says, confirm-words included — IS the answer, feeding ONE resumed
+//     compile (with its own single repair, FR-007).
+//   - Pending-confirm: a bare message that is exactly one confirm token
+//     (confirmGoalAliases) activates; a fresh activation rewrites the turn
+//     into round 1 (handled=false + opts.UserMessage). ANY other bare message
+//     passes through as ordinary chat and the pending goal stays pending — a
+//     routine chat message never silently mutates goal state.
+//
+// Slash commands never reach this hook's branches (handleCommand owns them);
+// the same fail-closed origin gate as applyGoalCommandPrompt applies.
+func (al *AgentLoop) applyGoalPendingReply(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	agentInst *AgentInstance,
+	opts *processOptions,
+) (handled bool, reply string) {
+	if opts == nil || !opts.UserInitiated || opts.IsTaskRun {
+		return false, ""
+	}
+	if opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
+		return false, ""
+	}
+	if commands.HasCommandPrefix(msg.Content) {
+		return false, ""
+	}
+	store := opts.TranscriptStore
+	sessionID := opts.TranscriptSessionID
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return false, ""
+	}
+
+	if clar := loadGoalClarification(meta.GoalClarificationJSON); clar != nil {
+		var fc FeasibilityContext
+		if agentInst != nil {
+			fc = agentFeasibilityContext{agentInst: agentInst}
+		}
+		answer := strings.TrimSpace(msg.Content)
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer)
+		return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome)
+	}
+
+	if strings.TrimSpace(meta.GoalPendingJSON) != "" && IsGoalConfirm(msg.Content) {
+		confirmReply, startCondition := al.confirmPendingGoal(sessionID, store)
+		if startCondition != "" {
+			routeAgentID := ""
+			if agentInst != nil {
+				routeAgentID = agentInst.ID
+			}
+			al.recordGoalRouting(sessionID, opts.Channel, opts.ChatID, opts.SessionKey, routeAgentID)
+			opts.UserMessage = startCondition
+			return false, "" // turn continues into round 1 with the condition
+		}
+		return true, confirmReply
+	}
+
+	return false, ""
+}
+
 // proposeGoalAmendment is the N-6/D11 re-statement path: a `/goal <new intent>`
 // issued while a goal is ALREADY active is diffed as an amendment (added/
 // changed/dropped) and stored as GoalPendingJSON for `/goal confirm` — never
@@ -232,22 +436,30 @@ func (al *AgentLoop) proposeGoalAmendment(
 }
 
 // confirmPendingGoal applies a pending amendment (or activates a pending fresh
-// goal) on `/goal confirm` (FR-113/D11). Mints a new goal generation: the
-// proposed Condition + GoalCriteriaJSON take effect, GoalPendingJSON clears,
-// and GoalRoundsUsed resets to 0 (the amended criteria are a fresh verification
-// target — R§8.1 "re-statement AMENDS to a new goal generation"). Returns the
-// chat reply.
-func (al *AgentLoop) confirmPendingGoal(sessionID string, store *session.UnifiedStore) string {
+// goal) on `/goal confirm` or a bare confirm token (FR-113/D11, extended by
+// ADR-074 D4a: the fresh-set prose path now parks its compile here as a
+// pending goal, so this is reachable from the fresh path too — not just
+// amendments). Mints a new goal generation: the proposed Condition +
+// GoalCriteriaJSON take effect, GoalPendingJSON clears, and GoalRoundsUsed
+// resets to 0 (the amended criteria are a fresh verification target — R§8.1
+// "re-statement AMENDS to a new goal generation").
+//
+// Returns (reply, startCondition): startCondition is non-empty ONLY when a
+// FRESH pending goal just activated (no goal was active before) — the caller
+// then rewrites the turn to run round 1 with that condition (US-3 S1
+// "activation only on confirmation → round 1"); an amendment confirm returns
+// ("...", "") and answers synchronously (the goal is already running).
+func (al *AgentLoop) confirmPendingGoal(sessionID string, store *session.UnifiedStore) (string, string) {
 	meta, err := store.GetMeta(sessionID)
 	if err != nil || meta == nil || strings.TrimSpace(meta.GoalPendingJSON) == "" {
-		return "No pending goal to confirm. Use `/goal <intent>` to start one."
+		return "No pending goal to confirm. Use `/goal <intent>` to start one.", ""
 	}
 	pending := loadCompiledGoal(meta.GoalPendingJSON)
 	if pending == nil {
 		// Malformed pending — clear it rather than leave a stuck state.
 		empty := ""
 		_ = store.SetMeta(sessionID, session.MetaPatch{GoalPendingJSON: &empty})
-		return "The pending goal could not be read; it was cleared. Please restate with `/goal <intent>`."
+		return "The pending goal could not be read; it was cleared. Please restate with `/goal <intent>`.", ""
 	}
 	condition := pending.Prompt
 	if condition == "" {
@@ -275,37 +487,42 @@ func (al *AgentLoop) confirmPendingGoal(sessionID string, store *session.Unified
 	// existing goal-id — it is the SAME goal being refined, not a new one; the
 	// pill/history entry for this generation continues, it does not restart.
 	goalID := meta.GoalID
-	if meta.GoalCondition == "" {
-		// Activating a fresh pending goal — admit to the R5 cap.
+	fresh := meta.GoalCondition == ""
+	if fresh {
+		// Activating a fresh pending goal — the authoritative Admit runs HERE
+		// (US-3 S6: the pre-compile check in applyGoalCommandPrompt was only a
+		// courtesy refusal before the compile spend).
 		if pe := GetPlanEngine(al); pe != nil {
 			if admitted, active, capN := pe.Admit("goal"); !admitted {
 				return fmt.Sprintf(
-					"Cannot activate the goal: active loops %d/%d (cap reached).", active, capN)
+					"Cannot activate the goal: active loops %d/%d (cap reached).", active, capN), ""
 			}
 		}
 		goalID = newGoalID()
 	}
 	if serr := store.SetMeta(sessionID, session.MetaPatch{
-		GoalID:             &goalID,
-		GoalCondition:      &condition,
-		GoalCriteriaJSON:   &criteriaJSON,
-		GoalPendingJSON:    &emptyPending,
-		GoalRoundsUsed:     &zero,
-		GoalMaxRounds:      &maxRounds,
-		GoalLatestReason:   &emptyReason,
-		GoalStartedAt:      &nowStr,
-		GoalLastActivityAt: &nowStr,
+		GoalID:                &goalID,
+		GoalCondition:         &condition,
+		GoalCriteriaJSON:      &criteriaJSON,
+		GoalPendingJSON:       &emptyPending,
+		GoalClarificationJSON: &emptyPending,
+		GoalRoundsUsed:        &zero,
+		GoalMaxRounds:         &maxRounds,
+		GoalLatestReason:      &emptyReason,
+		GoalStartedAt:         &nowStr,
+		GoalLastActivityAt:    &nowStr,
 	}); serr != nil {
 		logger.WarnCF("agent", "goal: could not apply confirmed amendment",
 			map[string]any{"session_id": sessionID, "error": serr.Error()})
-		return "Could not activate the goal (internal error persisting session state)."
+		return "Could not activate the goal (internal error persisting session state).", ""
 	}
 	al.emitGoalStatusFrame(sessionID, goalID, condition, 0, maxRounds, "", goalPillActive)
-	verb := "amended"
-	if meta.GoalCondition == "" {
-		verb = "activated"
+	if fresh {
+		// The caller rewrites the turn to run round 1 with the condition —
+		// the goal_status frame above is the activation surface in the UI.
+		return "", condition
 	}
-	return fmt.Sprintf("Goal %s: %s\nAcceptance criteria: %d.", verb, condition, len(pending.Criteria))
+	return fmt.Sprintf("Goal amended: %s\nAcceptance criteria: %d.", condition, len(pending.Criteria)), ""
 }
 
 // goalStatusReply formats `/goal status`'s deterministic reply (FR-069):
@@ -314,7 +531,29 @@ func (al *AgentLoop) confirmPendingGoal(sessionID string, store *session.Unified
 // and active loops: N/cap.
 func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedStore) string {
 	meta, err := store.GetMeta(sessionID)
-	if err != nil || meta == nil || meta.GoalCondition == "" {
+	if err != nil || meta == nil {
+		return "No active goal on this session. Use `/goal <condition>` to start one."
+	}
+	if meta.GoalCondition == "" {
+		// ADR-074 D4a pending states (US-3 S10): a `/goal` status during a
+		// pending compile must report it, never "No active goal".
+		if clar := loadGoalClarification(meta.GoalClarificationJSON); clar != nil {
+			return fmt.Sprintf(
+				"Goal compile waiting for your answer.\nIntent: %s\nQuestion: %s\n"+
+					"Answer in chat, restate with `/goal <intent>`, or `/goal clear` to discard.",
+				clar.Intent, clar.Question)
+		}
+		if pending := loadCompiledGoal(meta.GoalPendingJSON); pending != nil {
+			cond := pending.Prompt
+			if cond == "" {
+				cond = pending.Intent
+			}
+			return fmt.Sprintf(
+				"Goal pending your confirmation: %s\nAcceptance criteria: %d.\n"+
+					"Reply **%s** (or `/goal confirm`) to activate, `/goal <new intent>` to restate, "+
+					"or `/goal clear` to discard.",
+				cond, len(pending.Criteria), ConfirmGoalWord)
+		}
 		return "No active goal on this session. Use `/goal <condition>` to start one."
 	}
 	active, capN := al.activeLoopsSnapshot("goal")
@@ -362,10 +601,13 @@ const (
 func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, note string) string {
 	meta, err := store.GetMeta(sessionID)
 	// FR-114 (N-12): /goal clear cancels the in-flight verifier AND any in-flight
-	// compilation (a pending amendment or a pending fresh goal whose
-	// GoalCondition isn't set yet). hadGoal is true when there is an active goal
-	// OR a pending compilation to discard.
-	hadGoal := err == nil && meta != nil && (meta.GoalCondition != "" || meta.GoalPendingJSON != "" || meta.GoalCriteriaJSON != "")
+	// compilation (a pending amendment, a pending fresh goal whose
+	// GoalCondition isn't set yet, or an ADR-074 D4a pending-clarification
+	// record). hadGoal is true when there is an active goal OR a pending
+	// compilation/clarification to discard.
+	hadGoal := err == nil && meta != nil &&
+		(meta.GoalCondition != "" || meta.GoalPendingJSON != "" ||
+			meta.GoalCriteriaJSON != "" || meta.GoalClarificationJSON != "")
 
 	// Capture goal-id + condition + rounds BEFORE clearing so the terminal
 	// pill frame still carries the id/text the user was watching (UAT S3: the
@@ -390,15 +632,16 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 	empty := ""
 	zero := 0
 	serr := store.SetMeta(sessionID, session.MetaPatch{
-		GoalID:             &empty,
-		GoalCondition:      &empty,
-		GoalCriteriaJSON:   &empty,
-		GoalPendingJSON:    &empty,
-		GoalRoundsUsed:     &zero,
-		GoalMaxRounds:      &zero,
-		GoalLatestReason:   &empty,
-		GoalStartedAt:      &empty,
-		GoalLastActivityAt: &empty,
+		GoalID:                &empty,
+		GoalCondition:         &empty,
+		GoalCriteriaJSON:      &empty,
+		GoalPendingJSON:       &empty,
+		GoalClarificationJSON: &empty,
+		GoalRoundsUsed:        &zero,
+		GoalMaxRounds:         &zero,
+		GoalLatestReason:      &empty,
+		GoalStartedAt:         &empty,
+		GoalLastActivityAt:    &empty,
 	})
 	if serr != nil {
 		// SetMeta failed — the on-disk goal fields are still set. Do NOT
@@ -782,7 +1025,11 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 	}
 	maxDays := cfg.EffectiveIdleExpiryDays(nil)
 	for _, s := range sessions {
-		if s == nil || s.GoalCondition == "" {
+		// ADR-074 D4a (US-3 S10): the sweep's empty-condition skip is extended
+		// to cover the pending states — a compiled-but-unconfirmed goal and a
+		// pending-clarification record expire on the SAME TTL policy as an
+		// active goal (both stamp GoalLastActivityAt when created).
+		if s == nil || (s.GoalCondition == "" && s.GoalPendingJSON == "" && s.GoalClarificationJSON == "") {
 			continue
 		}
 		last := effectiveGoalActivity(s)
@@ -793,9 +1040,13 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 			continue
 		}
 		sessionID := s.ID
+		label := s.GoalCondition
+		if label == "" {
+			label = "(pending — never confirmed)"
+		}
 		handover := fmt.Sprintf(
 			"Goal %q idle-expired after %d day(s) with no activity (last activity: %s).",
-			s.GoalCondition, maxDays, last.Format(time.RFC3339),
+			label, maxDays, last.Format(time.RFC3339),
 		)
 		al.writeGoalSystemTranscript(store, sessionID, s.ActiveAgentID, handover)
 		// clearGoal Releases the "goal" R5 admission-cap slot (paired with the
