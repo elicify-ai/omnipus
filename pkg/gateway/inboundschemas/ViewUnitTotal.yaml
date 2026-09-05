@@ -38,6 +38,20 @@ properties:
       declares no companion unit property — then the single entry covers every
       included value. Present exactly when the total is unit-scoped.
     example: SGD
+  unit_property:
+    type: string
+    description: >
+      The property `unit` was read from — the companion the RECORD TYPE
+      declares for this number (PropertyDef.unit_property). Present exactly
+      when `unit` is present.
+
+
+      It travels WITH the unit value rather than beside it, one level up,
+      because a unit and the property it was read from are one fact: a
+      renderer that acquired "SGD" without knowing it came from `currency`
+      would have to guess which column to pair the figure with, and the schema
+      it would need in order to stop guessing is not something the SPA has.
+    example: currency
   value:
     type: string
     description: >

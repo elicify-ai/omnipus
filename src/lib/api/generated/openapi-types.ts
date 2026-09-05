@@ -5536,6 +5536,14 @@ export interface components {
             complete: boolean;
             /** @description Why the verdict is what it is. Empty when `complete` is true. */
             complete_reason?: string;
+            /**
+             * @description The view's own `aggregates:` results — the LEGACY, pre-part-stack summary key, which 69 saved views still use — carried through from the engine with the scope clause it computed them with (FR-125).
+             *
+             *     They are SEPARATE from a part's `totals`, and the shapes differ because the guarantees differ. A part total is a ViewUnitTotal: reduced once per unit value, never across units (G2), because this endpoint does that reduction itself. These come from the engine's `aggregate`, which is unit-blind — so an entry over a number with a DECLARED companion unit is NOT surfaced here at all; it is refused, and the refusal is in `problems`. Only summaries that cannot cross a unit (count, empty, filled, unique) and numbers no record type pairs with a unit appear.
+             *
+             *     Absent when the view declares no `aggregates`.
+             */
+            aggregates?: components["schemas"]["VaultFindTotal"][];
             /** @description Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null. */
             problems: components["schemas"]["RecordProblem"][];
         };
@@ -5569,6 +5577,19 @@ export interface components {
              * @example 2 rows have no confirmed currency value and are excluded from every total
              */
             excluded_reason?: string;
+            /**
+             * @description The companion unit property this part's `number` binding RESOLVED to, from the record type's own declaration (design section 5). Absent when the number declares no companion unit, or when the part totals nothing.
+             *
+             *     THE SCHEMA IS THE AUTHORITY AND THIS IS ITS ANSWER. A part's own `unit:` key records what the composer stamped when the view was written; it is provenance, and a record type edited afterwards can leave it stale. The server resolves the unit from the schema, refuses the total outright when the two disagree (naming both sides), and states the resolved answer here — so no consumer ever re-derives a unit from `source.unit` and no two consumers can derive different ones.
+             * @example currency
+             */
+            unit_property?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
             /** @description Chart parts only: the precomputed series, one per unit value (G2), points aggregated per date bucket server-side. */
             series?: components["schemas"]["ViewResultSeries"][];
             /** @description Crosstab parts only: the precomputed grid. */
@@ -5607,6 +5628,19 @@ export interface components {
              * @example 1 row has no confirmed currency value and is excluded from every subtotal
              */
             excluded_reason?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
+            /**
+             * @description How many of this group's members are NOT named in `paths` because the answer does not carry them. Absent when every member is named.
+             *
+             *     `paths` references rows in the result's own `rows` list, and `rows` is capped. A group's `count` is its size over the FULL evaluated set, so once the cap binds, count and len(paths) legitimately differ — and the difference has to be STATED. Copying every member path instead would make the payload grow with the corpus rather than with the cap (a 100k record match produced ~100k path strings per grouped part), and naming rows the answer does not carry would leave the references dangling.
+             * @example 8
+             */
+            paths_omitted?: number;
         };
         /**
          * ViewUnitTotal
@@ -5627,6 +5661,13 @@ export interface components {
              * @example SGD
              */
             unit?: string;
+            /**
+             * @description The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+             *
+             *     It travels WITH the unit value rather than beside it, one level up, because a unit and the property it was read from are one fact: a renderer that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with, and the schema it would need in order to stop guessing is not something the SPA has.
+             * @example currency
+             */
+            unit_property?: string;
             /**
              * @description The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
              * @example 12480.00
@@ -5697,6 +5738,12 @@ export interface components {
             excluded_count?: number;
             /** @description Why those rows were excluded, ready to render. */
             excluded_reason?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
         };
         /**
          * ViewResultCrosstabCell

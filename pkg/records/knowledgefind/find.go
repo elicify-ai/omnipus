@@ -132,6 +132,27 @@ type Deps struct {
 	// Epoch is the properties index's generation counter, which a cursor is
 	// issued against.
 	Epoch int64
+	// RenderRows lifts the two bounds that exist for a LANGUAGE-MODEL reader,
+	// for an IN-PROCESS RENDERER that is not one. Zero — the default — changes
+	// nothing, and no tool path sets it.
+	//
+	// MaxLimit (200) and ResponseBudgetBytes (4 kB) are both sized for what a
+	// model should be handed in one turn. The gateway's view-result endpoint
+	// is not a turn: it fills an HTTP response the SPA draws a table from, and
+	// under those two bounds it could only collect rows by walking the OFFSET
+	// cursor — where every page is a fresh Find() that re-runs the entire
+	// evaluation (filter, sort, aggregate over the whole candidate set) and
+	// discards everything before the offset. Ten pages cost ten complete
+	// evaluations of one query, and the byte budget still trimmed each page,
+	// so a few hundred records could not be collected at all.
+	//
+	// Set to the number of rows the caller can actually take, and this
+	// evaluation caps the page there instead of at MaxLimit and skips the byte
+	// budget entirely. It is NOT a way to ask for unbounded rows: the caller
+	// states its own bound and is answered within it. Nothing else changes —
+	// the same query, the same totals over the same full evaluated set, the
+	// same cursor when more rows exist than were asked for.
+	RenderRows int
 	// Now is the instant `now()` and `today()` are evaluated at, snapshotted
 	// ONCE for the whole response (FR-146). The zero value means "read the
 	// clock when the query starts", which is the same snapshot taken one layer
@@ -172,7 +193,7 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 		return refusalResponse(req, rawEcho(req), r), r
 	}
 
-	q, r := parse(req, set, viewFormulas(d.Views, req.View))
+	q, r := parse(req, set, viewFormulas(d.Views, req.View), d.RenderRows)
 	if r != nil {
 		// The echo is the RAW request here, not the executable one: parse is the
 		// step that failed, so there is no "as executed" form to report. A
@@ -961,7 +982,9 @@ func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated b
 		resp.LimitRequested = &asked
 	}
 
-	trimToBudget(&resp)
+	if q.renderRows == 0 {
+		trimToBudget(&resp)
+	}
 	finishVerdict(&resp, q)
 	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
 		c := encodeCursor(consumed, d.Epoch)

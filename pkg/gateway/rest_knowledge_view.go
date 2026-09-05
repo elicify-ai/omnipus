@@ -23,7 +23,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// WHAT THIS FILE IS, AND THE TWO RULES IT ENFORCES
+// WHAT THIS FILE IS, AND THE RULES IT ENFORCES
 //
 // The endpoint resolves a saved view by name inside one in-scope knowledge
 // base and EVALUATES it — through the same engine knowledge_find uses
@@ -42,7 +42,20 @@ import (
 //
 //   G3 — a row whose unit is missing or unconfirmed is SHOWN (it stays in
 //   `rows`), EXCLUDED from every total, and COUNTED in the owning scope's
-//   excluded_count with the reason spelled out.
+//   excluded_count with the reason spelled out. MISSING and AMBIGUOUS are
+//   counted apart: "no currency" and "two currencies" have opposite fixes.
+//
+//   G4 — text is never totalled, even when it parses as a number. A binding's
+//   declared type is resolved through the same three namespaces a query
+//   resolves names against, and anything outside {integer, decimal} refuses
+//   (permittedToTotal). The design puts every gate in the composer AND the
+//   renderer; this is the renderer's half.
+//
+//   ONE AUTHORITY FOR A UNIT — the SCHEMA declares it (§5), the part's own
+//   `unit:` key is the composer's stamp and can go stale, and where the two
+//   disagree the total is refused naming both rather than either being picked
+//   silently (unitStampAgrees). What the schema resolved reaches the wire, so
+//   nothing downstream re-derives it.
 //
 // THE VALUES ARE READ FROM THE ENGINE'S OWN RENDERED CELLS, deliberately.
 // VaultFindCell.Value is the exact decimal text (renderTyped renders
@@ -50,6 +63,14 @@ import (
 // so parsing here is the mechanical inverse of one known renderer — strip
 // the separators, split on ", " — rather than a second read of the vault
 // that could disagree with what the rows on screen say.
+//
+// THE VIEW IS EVALUATED ONCE. Deps.RenderRows lets an in-process renderer
+// state the row bound it can take, so the whole set arrives in a single call
+// instead of through the offset cursor — where every page re-runs the entire
+// evaluation and the engine's 4 kB budget (a language model's budget, not an
+// HTTP body's) trimmed each one. A part grouping some way the view does not
+// still costs its own call, and that call's index epoch is checked against the
+// row evaluation's so two snapshots are never paired.
 //
 // A VIEW THAT CANNOT ANSWER IS A 200 WITH `refusal` SET — the wire form of
 // records.ViewServeRefusal, the same shape knowledge_describe's "NOT
@@ -59,25 +80,64 @@ import (
 // exists in another workspace.
 // ---------------------------------------------------------------------------
 
-const (
-	// viewResultPageSize is knowledgefind's own MaxLimit, asked for
-	// explicitly so paging takes as few round trips as the engine permits.
-	viewResultPageSize = 200
-	// maxViewResultRows bounds how many rows one view result will carry.
-	// Above it the result reports rows_truncated and computes NO totals —
-	// a total over a truncated set is a wrong number that looks right,
-	// which is the one output this surface exists to make impossible.
-	maxViewResultRows = 2000
-)
+// maxViewResultRows bounds how many rows one view result will carry. Above it
+// the result reports rows_truncated and computes NO totals — a total over a
+// truncated set is a wrong number that looks right, which is the one output
+// this surface exists to make impossible.
+//
+// It is a var, not a const, ONLY so a test can lower it: proving the cap is
+// EXACT (2000 rows carried, not 2199) needs a corpus one row past it, and a
+// 2001-note fixture would make the proof too slow to run and therefore not
+// run. Nothing in production writes it.
+var maxViewResultRows = 2000
 
-// viewResultExcludedReason writes the G3 footer line for one scope.
-func viewResultExcludedReason(n int, unitProps []string) string {
-	rows := "rows have"
-	if n == 1 {
-		rows = "row has"
+// viewResultFind is the seam every evaluation in this file goes through.
+//
+// It is knowledgefind.Find and nothing else. It exists so a test can COUNT the
+// evaluations one request makes — the quantity the offset-paging defect was
+// about, and one that no field of the response reports. Behaviour that cannot
+// be observed cannot be regression-tested, and this endpoint's cost was
+// previously ten full re-evaluations of the whole query per request.
+var viewResultFind = knowledgefind.Find
+
+// viewExcluded is one scope's G3 exclusions, SPLIT BY CAUSE.
+//
+// A row with NO unit and a row with TWO are both rightly excluded — neither
+// has confirmed which unit its number is in — but they are excluded for
+// opposite reasons with opposite fixes: fill one in, or pick one of two.
+// Reporting both as "no confirmed currency value" told an operator to supply a
+// value that was already there twice, which is a footer that costs more than
+// it explains.
+type viewExcluded struct {
+	missing   []string
+	ambiguous []string
+}
+
+func (e *viewExcluded) add(other viewExcluded) {
+	e.missing = append(e.missing, other.missing...)
+	e.ambiguous = append(e.ambiguous, other.ambiguous...)
+}
+
+// viewResultExcludedReason writes the G3 footer line for one scope, naming
+// each cause with its OWN count.
+func viewResultExcludedReason(missing, ambiguous int, unitProps []string) string {
+	prop := strings.Join(unitProps, "/")
+	rowsOf := func(n int) string {
+		if n == 1 {
+			return "1 row"
+		}
+		return fmt.Sprintf("%d rows", n)
 	}
-	return fmt.Sprintf("%d %s no confirmed %s value and are excluded from every total (G3); the rows themselves are still shown",
-		n, rows, strings.Join(unitProps, "/"))
+	var causes []string
+	if missing > 0 {
+		causes = append(causes, fmt.Sprintf("%s has no confirmed %s value", rowsOf(missing), prop))
+	}
+	if ambiguous > 0 {
+		causes = append(causes, fmt.Sprintf("%s records more than one %s value, so which one its number is in is not confirmed",
+			rowsOf(ambiguous), prop))
+	}
+	return fmt.Sprintf("%s excluded from every total (G3), still shown: %s",
+		rowsOf(missing+ambiguous), strings.Join(causes, "; "))
 }
 
 func (a *restAPI) handleKnowledgeViewResult(w http.ResponseWriter, r *http.Request, workspaceID string) {
@@ -159,18 +219,42 @@ func viewResultRefusedUnknown(name string) gen.ViewResult {
 // ---------------------------------------------------------------------------
 
 type viewResultBuilder struct {
-	ctx       context.Context
-	env       vaultprops.FindEnv
-	view      *records.SavedView
+	ctx  context.Context
+	env  vaultprops.FindEnv
+	view *records.SavedView
+	// parts is the resolved part stack, held so the row collection can ask the
+	// engine for the grouping the stack actually needs.
+	parts     []gen.ViewPart
 	sel       *[]string
 	rowByPath map[string]*gen.VaultFindRow
 	// groupCache caches full-evaluated-set groupings by signature, so a part
 	// whose grouping matches the view's own reuses the base call's groups.
 	groupCache map[string][]gen.VaultFindGroup
 	truncated  bool
+	// snapshotEpoch is the properties-index generation the ROW evaluation ran
+	// against. Every later evaluation this request makes is checked against
+	// it, so a grouping computed over a re-indexed vault can never be paired
+	// with rows from before the reindex — the Count=N beside an N-1 subtotal
+	// case. Zero means the engine reported no epoch, and the check is skipped
+	// rather than passed on a coincidence of zeroes.
+	snapshotEpoch int64
 	// refusedUnitProps dedupes the untyped-view G2 refusal: one problem per
 	// property per result, however many parts and groups total it.
 	refusedUnitProps map[string]bool
+	// refusedG4Props is the same dedupe for G4 — a property refused as
+	// non-arithmetic says so once, not once per part, group and cell.
+	refusedG4Props map[string]bool
+	// refusedUnitStamps is the same dedupe for the unit-authority
+	// disagreement between a part's stamp and the schema's declaration.
+	refusedUnitStamps map[string]bool
+	// refusedLegacyAggs is the same dedupe for a legacy `aggregates:` entry
+	// withheld because the engine computes it across units.
+	refusedLegacyAggs map[string]bool
+	// formulas is the view's own computed properties, validated lazily and at
+	// most once (a formula's static type is inferred from its expression, so
+	// it cannot be read off the file).
+	formulas         *records.FormulaSet
+	formulasResolved bool
 	out              *gen.ViewResult
 }
 
@@ -229,6 +313,7 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) g
 		view:       v,
 		rowByPath:  map[string]*gen.VaultFindRow{},
 		groupCache: map[string][]gen.VaultFindGroup{},
+		parts:      parts,
 		out:        &out,
 	}
 	b.sel = b.buildSelect(parts)
@@ -293,22 +378,54 @@ func (b *viewResultBuilder) buildSelect(parts []gen.ViewPart) *[]string {
 	return &sel
 }
 
-// collectRows pages the WHOLE row set through the engine's own cursor,
-// bounded by maxViewResultRows. It returns a refusal result when the engine
-// refuses, and nil on success.
+// collectRows evaluates the view ONCE and keeps every row it is allowed to
+// carry. It returns a refusal result when the engine refuses, and nil on
+// success.
+//
+// IT IS ONE EVALUATION, AND THAT IS THE POINT. This used to walk the engine's
+// OFFSET cursor a page at a time, and an offset cursor is not a resumable
+// stream: every page is a fresh Find() that re-runs the WHOLE evaluation —
+// candidate selection, filter, sort, aggregate over the full set — and then
+// discards everything before the offset. Ten pages therefore cost ten complete
+// evaluations of one query per HTTP request, and the engine's 4 kB response
+// budget (sized for a language model's context window, not for an HTTP body)
+// trimmed each page as well, so a view over a few hundred records could not
+// reach its own row cap however many pages it took, and reported itself
+// INCOMPLETE after carrying every row.
+//
+// Deps.RenderRows is what makes one call sufficient: the caller states the
+// bound it can actually take and the engine answers within it, capping the
+// page there instead of at MaxLimit and skipping a byte budget written for a
+// different consumer. The request asks for ONE MORE row than will be kept,
+// which is how "there are more" is distinguished from "that was all" without
+// a second round trip — and the extra row is dropped, so the cap is EXACT
+// rather than a floor the last page overshoots from.
 func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
-	limit := viewResultPageSize
+	// One past the cap: the extra row is the truncation detector and is never
+	// carried.
+	limit := maxViewResultRows + 1
 	req := gen.VaultFindRequest{View: &name, Limit: &limit}
 	if b.sel != nil {
 		req.Select = b.sel
 	}
+	// THE GROUPING THE STACK NEEDS, ASKED FOR IN THE SAME CALL. A view whose
+	// own `grouping:` is empty but whose table part declares one would
+	// otherwise need a second full evaluation to obtain groups the first call
+	// could have produced — and a second evaluation is a second point in time
+	// as well as a second cost.
+	base := b.baseGrouping()
+	if gb := viewGroupByRequest(base); len(gb) > 0 {
+		req.GroupBy = &gb
+	}
+	deps := b.env.Deps
+	deps.RenderRows = limit
 
-	first, err := knowledgefind.Find(b.ctx, b.env.Deps, req)
-	if err != nil || first.Refused {
+	resp, err := viewResultFind(b.ctx, deps, req)
+	if err != nil || resp.Refused {
 		ref := viewResultRefused(*b.out, "evaluation_refused",
 			fmt.Sprintf("the view %q could not be evaluated", name), "")
-		if len(first.Problems) > 0 {
-			p := first.Problems[0]
+		if len(resp.Problems) > 0 {
+			p := resp.Problems[0]
 			remedy := ""
 			if p.Fix != nil {
 				remedy = *p.Fix
@@ -318,53 +435,24 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		return &ref
 	}
 
-	b.out.Complete = first.Complete
-	b.out.CompleteReason = first.CompleteReason
-	// Problems are carried from the FIRST page only. Query-level problems
-	// (exclusions, clamps) are recomputed identically on every page, so
-	// appending each page's copy would state every one of them N times; the
-	// cost is that a stale-row problem for a row on a later page is carried
-	// only by that row's own `stale` flag, which survives in `rows`.
-	b.out.Problems = first.Problems
+	b.out.Complete = resp.Complete
+	b.out.CompleteReason = resp.CompleteReason
+	b.out.Problems = resp.Problems
 	if b.out.Problems == nil {
 		b.out.Problems = []gen.RecordProblem{}
 	}
+	b.snapshotEpoch = viewResponseEpoch(resp)
 
-	appendRows := func(rows []gen.VaultFindRow) {
-		for i := range rows {
-			b.out.Rows = append(b.out.Rows, rows[i])
-			if _, dup := b.rowByPath[rows[i].Path]; !dup {
-				b.rowByPath[rows[i].Path] = &b.out.Rows[len(b.out.Rows)-1]
-			}
-		}
+	rows := resp.Rows
+	if len(rows) > maxViewResultRows {
+		rows = rows[:maxViewResultRows]
 	}
-	appendRows(first.Rows)
+	b.out.Rows = append(b.out.Rows, rows...)
 
-	if first.Groups != nil {
-		b.groupCache[viewGroupingSignature(b.viewGrouping())] = *first.Groups
-	}
-
-	cursor := first.NextCursor
-	for cursor != nil && len(b.out.Rows) < maxViewResultRows {
-		pageReq := req
-		pageReq.Cursor = cursor
-		page, pageErr := knowledgefind.Find(b.ctx, b.env.Deps, pageReq)
-		if pageErr != nil || page.Refused {
-			// A page that refuses mid-walk (a stale cursor after a concurrent
-			// reindex) degrades the VERDICT, never the rows already gathered.
-			b.out.Complete = false
-			reason := "the row set changed while it was being read; re-request the view"
-			b.out.CompleteReason = &reason
-			b.truncated = true
-			t := true
-			b.out.RowsTruncated = &t
-			return nil
-		}
-		appendRows(page.Rows)
-		b.out.Complete = b.out.Complete && page.Complete
-		cursor = page.NextCursor
-	}
-	if cursor != nil {
+	// TRUNCATION IS EITHER OF TWO FACTS, and both are the same answer: the
+	// engine offered a cursor (more rows exist than were asked for), or it
+	// returned the detector row.
+	if resp.NextCursor != nil || len(resp.Rows) > maxViewResultRows {
 		b.truncated = true
 		t := true
 		b.out.RowsTruncated = &t
@@ -374,9 +462,18 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		b.out.CompleteReason = &reason
 	}
 
-	// The rows the row map indexes must be the FINAL slice elements: the
-	// appends above may have reallocated the backing array, so the map is
-	// rebuilt once over the settled slice rather than trusted.
+	b.collectLegacyAggregates(resp.Totals)
+
+	// The base call's groups come from the SAME evaluation as the rows, so a
+	// group's count and its members are one consistent snapshot by
+	// construction — the property groupsFor has to work for to obtain.
+	if resp.Groups != nil {
+		b.groupCache[viewGroupingSignature(base)] = *resp.Groups
+	}
+
+	// The row map indexes the FINAL slice elements: the append above may have
+	// reallocated the backing array, so the map is built over the settled
+	// slice rather than during the copy.
 	b.rowByPath = make(map[string]*gen.VaultFindRow, len(b.out.Rows))
 	for i := range b.out.Rows {
 		if _, dup := b.rowByPath[b.out.Rows[i].Path]; !dup {
@@ -384,6 +481,135 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		}
 	}
 	return nil
+}
+
+// collectLegacyAggregates surfaces the view's own `aggregates:` results,
+// GATED.
+//
+// `aggregates` predates the part stack and 69 saved views still use it. The
+// bridge forwards it into the engine request and the engine computes it — and
+// this builder used to throw the answer away, so one saved view showed its
+// totals in knowledge_find and none at all in the base preview. A panel that
+// silently omits a number the chat will state teaches its reader that the view
+// has no totals, which is the confidently-wrong shape this whole surface
+// exists against.
+//
+// THE GATE IS G2, AND IT IS NEEDED BECAUSE THE SOURCE IS UNIT-BLIND. The
+// engine's `aggregate` has no idea PropertyDef.unit_property exists (the
+// deferred defect recorded in knowledgefind's unit_aggregate_g2_test.go), so
+// sum(amount) over SGD and EUR is a figure in no currency. Surfacing that raw
+// would import the very output every other total in this file refuses. So a
+// summary that COMBINES VALUES is dropped and refused by name whenever its
+// property declares a companion unit; summaries that count rows or distinct
+// values cross no units and pass through.
+//
+// G4 needs no gate here: the engine already refuses a summary a type does not
+// define (opDefinedForType) and marks the total refused rather than omitting
+// it, so a refused total is surfaced AS refused — which is the honest form of
+// the same answer.
+func (b *viewResultBuilder) collectLegacyAggregates(totals []gen.VaultFindTotal) {
+	if b.view.Def.Aggregates == nil || len(*b.view.Def.Aggregates) == 0 || len(totals) == 0 {
+		return
+	}
+	// The engine computes one total per requested aggregate, in request order,
+	// and the bridge builds that request from this same list in this same
+	// order — so position is the pairing. A length mismatch means that
+	// invariant no longer holds, and the honest response is to surface nothing
+	// rather than to attribute a number to the wrong property.
+	declared := *b.view.Def.Aggregates
+	if len(declared) != len(totals) {
+		fix := "re-request the view; if it persists, the view's `aggregates` and the engine's answer have diverged and the view needs re-saving"
+		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+			Code:    gen.AggregateRefused,
+			Reason:  "this view's `aggregates` could not be matched to the engine's answer, so none of them are shown rather than one being attributed to the wrong property",
+			Fix:     &fix,
+			Records: []string{},
+		})
+		b.out.Complete = false
+		return
+	}
+
+	out := make([]gen.VaultFindTotal, 0, len(totals))
+	for i, a := range declared {
+		if a.Property != nil && strings.TrimSpace(*a.Property) != "" &&
+			!viewAggregateCrossesNoUnits(string(a.Op)) {
+			prop := strings.TrimSpace(*a.Property)
+			if unitProp := b.anyDeclaredUnitFor(prop); unitProp != "" {
+				b.refuseLegacyUnitAggregate(prop, string(a.Op), unitProp)
+				continue
+			}
+		}
+		out = append(out, totals[i])
+	}
+	if len(out) > 0 {
+		b.out.Aggregates = &out
+	}
+}
+
+// viewAggregateCrossesNoUnits is the closed list of summaries whose answer is
+// a COUNT rather than a quantity. Counting rows, absences, presences or
+// distinct values says nothing about what the numbers are denominated in, so
+// no unit can be crossed. Everything else combines or selects values and is
+// gated.
+func viewAggregateCrossesNoUnits(op string) bool {
+	switch op {
+	case "count", "empty", "filled", "unique":
+		return true
+	default:
+		return false
+	}
+}
+
+// anyDeclaredUnitFor names the companion unit property declared for one
+// number, from the view's own record type when it has one and from every
+// in-scope type when it does not — the same reach the untyped G2 gate uses,
+// because the question is the same: could this total cross a unit?
+func (b *viewResultBuilder) anyDeclaredUnitFor(prop string) string {
+	if b.view.Def.Type != nil {
+		return b.unitPropertyOf(prop)
+	}
+	for _, t := range b.env.Schemas.Types() {
+		sc, ok := b.env.Schemas.Get(t)
+		if !ok || sc == nil {
+			continue
+		}
+		if p, found := sc.Property(prop); found && p != nil && p.UnitProperty != "" {
+			return p.UnitProperty
+		}
+	}
+	return ""
+}
+
+// refuseLegacyUnitAggregate records the G2 refusal for one legacy aggregate,
+// once per property per result.
+func (b *viewResultBuilder) refuseLegacyUnitAggregate(prop, op, unitProp string) {
+	if b.refusedLegacyAggs == nil {
+		b.refusedLegacyAggs = map[string]bool{}
+	}
+	if b.refusedLegacyAggs[prop] {
+		return
+	}
+	b.refusedLegacyAggs[prop] = true
+	fix := fmt.Sprintf("replace the view's `aggregates` entry with a part that totals %q — a `figures` part reduces once per %s value (G2), which the legacy key cannot",
+		prop, unitProp)
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("this view's legacy `aggregates` asks for %s of %q, and %q carries the companion unit %q — that summary is computed across every unit at once, which is the combined figure G2 forbids, so it is not shown; the rows themselves are still shown",
+			op, prop, prop, unitProp),
+		Fix:     &fix,
+		Records: []string{},
+	})
+	b.out.Complete = false
+}
+
+// viewResponseEpoch reads the properties-index generation an evaluation ran
+// against. Zero means the engine reported none, which is treated as "cannot be
+// compared" rather than as a generation that matches every other zero.
+func viewResponseEpoch(resp gen.VaultFindResponse) int64 {
+	if resp.Index == nil || resp.Index.Epoch == nil {
+		return 0
+	}
+	return *resp.Index.Epoch
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +621,42 @@ func (b *viewResultBuilder) viewGrouping() []gen.ViewGroupBy {
 		return nil
 	}
 	return *b.view.Def.Grouping
+}
+
+// baseGrouping is the grouping the single row-collecting evaluation asks for:
+// the view's own when it declares one, otherwise the first part's that does.
+//
+// It exists so the ordinary shape — a stack whose parts all group the way the
+// first one does, or do not group at all — costs ONE evaluation. A part
+// grouping some other way still needs its own call, and pays for it knowingly.
+func (b *viewResultBuilder) baseGrouping() []gen.ViewGroupBy {
+	if g := b.viewGrouping(); len(g) > 0 {
+		return g
+	}
+	for _, part := range b.parts {
+		if part.Grouping != nil && len(*part.Grouping) > 0 {
+			// A crosstab's grouping is two-level and the engine caps grouping
+			// at two levels, so this is safe to pass through as written.
+			return *part.Grouping
+		}
+	}
+	return nil
+}
+
+// viewGroupByRequest translates a view grouping into the engine's own group_by
+// argument. One translation, used by both the base call and groupsFor, so the
+// two cannot come to disagree about what a direction means.
+func viewGroupByRequest(grouping []gen.ViewGroupBy) []gen.VaultFindGroupBy {
+	gb := make([]gen.VaultFindGroupBy, 0, len(grouping))
+	for _, g := range grouping {
+		key := gen.VaultFindGroupBy{Property: g.Property}
+		if g.Direction != nil {
+			dir := gen.VaultFindGroupByDirection(string(*g.Direction))
+			key.Direction = &dir
+		}
+		gb = append(gb, key)
+	}
+	return gb
 }
 
 // effectiveGrouping is the ViewPart contract's inheritance rule: a part's own
@@ -449,7 +711,26 @@ func (b *viewResultBuilder) groupsFor(grouping []gen.ViewGroupBy) ([]gen.VaultFi
 	if b.sel != nil {
 		req.Select = b.sel
 	}
-	resp, err := knowledgefind.Find(b.ctx, b.env.Deps, req)
+	resp, err := viewResultFind(b.ctx, b.env.Deps, req)
+	if err == nil && !resp.Refused && !b.sameSnapshotAsRows(resp) {
+		// A SECOND EVALUATION IS A SECOND POINT IN TIME, and this is the one
+		// place this request cannot avoid taking one — a part grouping some
+		// way the view itself does not has no groups in the base call's
+		// answer. If the properties index was rebuilt in between, the groups
+		// describe a different row set from the one in `rows`, and pairing
+		// them would put a count of N beside a subtotal over N-1 with nothing
+		// said. The groups are dropped, not reconciled: reconciling two
+		// snapshots is inventing a third.
+		fix := "re-request the view; the vault was re-indexed while this answer was being assembled"
+		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+			Code:    gen.AggregateRefused,
+			Reason:  "this part's grouping was evaluated against a different index generation from the rows, so its groups and their subtotals are not shown — they would describe a row set this answer does not carry",
+			Fix:     &fix,
+			Records: []string{},
+		})
+		b.out.Complete = false
+		return nil, false
+	}
 	if err != nil || resp.Refused || resp.Groups == nil {
 		reason := "grouped evaluation failed"
 		if len(resp.Problems) > 0 {
@@ -467,6 +748,45 @@ func (b *viewResultBuilder) groupsFor(grouping []gen.ViewGroupBy) ([]gen.VaultFi
 	}
 	b.groupCache[sig] = *resp.Groups
 	return *resp.Groups, true
+}
+
+// carriedPaths bounds a group's member list to the rows this answer actually
+// carries, and COUNTS what it dropped.
+//
+// A group's `paths` are documented as references INTO the result's own `rows`.
+// Copying the engine's full membership broke that on both sides: it named rows
+// the answer does not carry (a dangling reference the SPA resolves to nothing),
+// and it made the payload grow with the CORPUS rather than with the row cap —
+// 100k matching records produced ~100k path strings per grouped part, whatever
+// the 2000-row cap said.
+//
+// The shortfall is stated, never silent. A group's `count` is still its size
+// over the full evaluated set, so count and len(paths) legitimately differ once
+// the cap binds; `paths_omitted` is the difference, and a reader who wants to
+// know why a group of 600 lists 40 members is told.
+func (b *viewResultBuilder) carriedPaths(paths []string) ([]string, int) {
+	out := make([]string, 0, len(paths))
+	omitted := 0
+	for _, p := range paths {
+		if _, ok := b.rowByPath[p]; ok {
+			out = append(out, p)
+			continue
+		}
+		omitted++
+	}
+	return out, omitted
+}
+
+// sameSnapshotAsRows reports whether a later evaluation ran against the same
+// properties-index generation as the row collection. An epoch of zero on
+// either side means the comparison cannot be made, and an unmakeable
+// comparison is not treated as a passing one.
+func (b *viewResultBuilder) sameSnapshotAsRows(resp gen.VaultFindResponse) bool {
+	got := viewResponseEpoch(resp)
+	if b.snapshotEpoch == 0 || got == 0 {
+		return true
+	}
+	return got == b.snapshotEpoch
 }
 
 // ---------------------------------------------------------------------------
@@ -509,17 +829,30 @@ func viewNumberValues(cell string) []records.Decimal {
 	return out
 }
 
-// viewUnitValue reads a row's unit cell. ok=false is G3's trigger: the unit
-// is ABSENT, UNREADABLE, or MULTI-VALUED (a row carrying two units for one
-// number has not confirmed which one the number is in).
-func viewUnitValue(cell string) (string, bool) {
+// viewUnitOutcome is what reading one row's unit cell settled.
+type viewUnitOutcome int
+
+const (
+	// viewUnitConfirmed: exactly one readable unit value.
+	viewUnitConfirmed viewUnitOutcome = iota
+	// viewUnitMissing: no value at all, or one that could not be read.
+	viewUnitMissing
+	// viewUnitAmbiguous: MORE THAN ONE value. The row has a unit — it has two
+	// — and the number is in one of them, unknowably.
+	viewUnitAmbiguous
+)
+
+// viewUnitValue reads a row's unit cell and says WHICH of G3's two triggers
+// fired, because the two have different fixes and a footer that merges them
+// helps with neither.
+func viewUnitValue(cell string) (string, viewUnitOutcome) {
 	if cell == "" || cell == "(unreadable)" {
-		return "", false
+		return "", viewUnitMissing
 	}
 	if strings.Contains(cell, ", ") {
-		return "", false
+		return "", viewUnitAmbiguous
 	}
-	return cell, true
+	return cell, viewUnitConfirmed
 }
 
 // unitPropertyOf resolves the DECLARED companion unit of a number property —
@@ -543,6 +876,162 @@ func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
 	return p.UnitProperty
 }
 
+// ---------------------------------------------------------------------------
+// G4 — "Text is never totalled, even when it parses as a number"
+// ---------------------------------------------------------------------------
+//
+// The design puts all six gates in the COMPOSER AND THE RENDERER. The composer
+// half exists; this is the renderer half, and it was missing.
+//
+// aggregateViewRows reads the engine's RENDERED CELL TEXT (the deliberate
+// choice this file's header explains) and parses whatever looks decimal. That
+// is safe only once something upstream has established that the column IS
+// arithmetic. Nothing did: a `figures` part bound to a TEXT property holding
+// "1200" and "3400" served a headline 4,600 — a number nobody recorded, over a
+// column the schema calls prose. The composer refuses to write such a view;
+// `write_view` (the raw escape hatch), a hand-edited file and an imported
+// .base view all reach here without passing the composer.
+//
+// The permitted set is `integer` and `decimal` — §8 R-1's one comparison
+// domain — and it is the whole of the rule. Every other declared type is
+// refused for the five reductions a view part can name: `avg`/`sum` over a
+// date or a checkbox is undefined, and `min`/`max`/`count` are refused too
+// rather than half-implemented, because this file's accumulator parses
+// DECIMALS and would silently reduce over only those rows whose text happened
+// to parse. A count of rows is already on every group as `count`.
+
+// viewTotalsAsNumber is G4's permitted set, named once so the gate and its
+// refusal message cannot disagree about what it is.
+func viewTotalsAsNumber(t records.PropertyType) bool {
+	return t == records.TypeInteger || t == records.TypeDecimal
+}
+
+// declaredTypeOf resolves a property's DECLARED type through the same three
+// namespaces one query resolves names against (knowledgefind's `namespace`):
+// `formula.<name>` from the view's own formulas, `file.<name>` from the twelve
+// reserved file properties, and otherwise the schema — the view's own when it
+// declares a `type`, or every schema in scope when it does not.
+//
+// The second return names the AUTHORITY the type was read from, so a refusal
+// can be checked against a file rather than merely believed.
+//
+// UNRESOLVED IS TEXT, not "unknown, proceed". An untyped query resolves every
+// name it cannot place in the text domain (namespace.resolveUntyped: "by rule,
+// every name is legal there and resolves in the text domain"), so a binding no
+// schema declares is prose by resolution — and G4 refuses prose. A typed view
+// cannot reach that branch at all: the loader's checkViewProp already rejects
+// a part binding the record type does not declare.
+func (b *viewResultBuilder) declaredTypeOf(prop string) (records.PropertyType, string) {
+	if strings.HasPrefix(prop, knowledgefind.FormulaNamespace) {
+		if decl, ok := b.formulaDecl(strings.TrimPrefix(prop, knowledgefind.FormulaNamespace)); ok {
+			if pt, mapped := records.FormulaPropertyType(decl.Type); mapped {
+				return pt, "the view's own formula"
+			}
+		}
+		return records.TypeText, "the view's own formula"
+	}
+	if records.IsFileNamespace(prop) {
+		if p, ok := records.FileProperty(prop); ok && p != nil {
+			return p.Type, "the reserved file properties"
+		}
+		return records.TypeText, "the reserved file properties"
+	}
+	if b.view.Def.Type != nil {
+		if sc, ok := b.env.Schemas.Get(*b.view.Def.Type); ok {
+			if p, found := sc.Property(prop); found && p != nil {
+				return p.Type, "record type " + *b.view.Def.Type
+			}
+		}
+		return records.TypeText, "record type " + *b.view.Def.Type
+	}
+	// Untyped: every in-scope declaration. The engine has already refused the
+	// query outright if two of them disagree on the comparison domain
+	// (namespace.refuseSplitDomain), so the first is the domain — but the scan
+	// still prefers a NON-number declaration when it meets one, because a
+	// refusal is the safe direction to be wrong in.
+	var (
+		firstType   records.PropertyType
+		firstOwner  string
+		haveAny     bool
+		nonNumber   records.PropertyType
+		nonNumOwner string
+	)
+	for _, t := range b.env.Schemas.Types() {
+		sc, ok := b.env.Schemas.Get(t)
+		if !ok || sc == nil {
+			continue
+		}
+		p, found := sc.Property(prop)
+		if !found || p == nil {
+			continue
+		}
+		if !haveAny {
+			firstType, firstOwner, haveAny = p.Type, "record type "+t, true
+		}
+		if !viewTotalsAsNumber(p.Type) && nonNumOwner == "" {
+			nonNumber, nonNumOwner = p.Type, "record type "+t
+		}
+	}
+	if nonNumOwner != "" {
+		return nonNumber, nonNumOwner
+	}
+	if haveAny {
+		return firstType, firstOwner
+	}
+	return records.TypeText, "no record type in scope"
+}
+
+// formulaDecl resolves one of the view's own formulas, validating the set ONCE
+// per result. The set is validated rather than read raw because a formula's
+// static type is INFERRED from its expression (FR-143a) and exists nowhere on
+// disk — the file stores source text only.
+func (b *viewResultBuilder) formulaDecl(name string) (records.FormulaDecl, bool) {
+	if !b.formulasResolved {
+		b.formulasResolved = true
+		if b.view.Def.Formulas != nil && len(*b.view.Def.Formulas) > 0 {
+			var schema *records.Schema
+			if b.view.Def.Type != nil {
+				if sc, ok := b.env.Schemas.Get(*b.view.Def.Type); ok {
+					schema = sc
+				}
+			}
+			set, _ := records.ValidateFormulaSet(*b.view.Def.Formulas, schema)
+			b.formulas = set
+		}
+	}
+	if b.formulas == nil {
+		return records.FormulaDecl{}, false
+	}
+	return b.formulas.Get(name)
+}
+
+// permittedToTotal is G4 as a gate: false means the caller computes nothing
+// and the refusal has already been recorded, ONCE per property per result.
+func (b *viewResultBuilder) permittedToTotal(numberProp string) bool {
+	declared, authority := b.declaredTypeOf(numberProp)
+	if viewTotalsAsNumber(declared) {
+		return true
+	}
+	if b.refusedG4Props == nil {
+		b.refusedG4Props = map[string]bool{}
+	}
+	if b.refusedG4Props[numberProp] {
+		return false
+	}
+	b.refusedG4Props[numberProp] = true
+	fix := fmt.Sprintf("convert %q to a number property (change its `type:` to integer or decimal and re-validate the records), or bind this part to a property that is already one",
+		numberProp)
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("no total of %q: %s declares it %s, and only integer and decimal are totalled — values that merely LOOK like numbers are not added up (G4); the rows themselves are still shown",
+			numberProp, authority, declared),
+		Fix:     &fix,
+		Records: []string{},
+	})
+	b.out.Complete = false
+	return false
+}
+
 // unitPropertyForTotals is the gate every total passes before any accumulator
 // is keyed: it resolves the companion unit AND answers whether totalling this
 // property is permitted at all (ok=false → the caller computes nothing; the
@@ -563,16 +1052,101 @@ func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
 // pairs with a unit — the rows stay shown, the refusal names the fix. A
 // property no schema pairs with a unit keeps its unit-less total: with no
 // declaration there are no units to cross (declared, never inferred).
-func (b *viewResultBuilder) unitPropertyForTotals(numberProp string) (unitProp string, ok bool) {
+//
+// IT ALSO RECONCILES THE TWO READERS OF A UNIT, which is the second defect it
+// was widened for. The part on disk carries the unit the COMPOSER stamped
+// (ViewPart.unit) and the schema carries the unit the RECORD TYPE declares,
+// and nothing rewrites a view when a record type changes. Deleting
+// `unit_property` from the type while keeping the `currency` property left the
+// part still saying `unit: currency` and this endpoint resolving none — one
+// combined SGD+EUR+unit-less figure, no refusal, and a view file that still
+// read as unit-aware to anyone inspecting it.
+//
+// The rule: THE SCHEMA IS THE AUTHORITY (design §5 — declared, never
+// inferred), and a DISAGREEMENT NEVER PASSES SILENTLY. Where the part's stamp
+// and the schema's declaration differ — including the schema resolving none
+// while the part stamps one — the total is refused, naming BOTH sides, because
+// picking either would total under a rule one of the two files does not
+// describe and the operator would not know which file to edit. A part with no
+// stamp of its own simply takes the schema's answer, which then reaches the
+// wire (ViewResultPart.unit_property) so nothing downstream re-derives it.
+func (b *viewResultBuilder) unitPropertyForTotals(src gen.ViewPart, numberProp string) (unitProp string, ok bool) {
+	// G4 RUNS FIRST, because it decides whether the column is arithmetic at
+	// all — asking which unit a paragraph of prose is denominated in is a
+	// question that only makes sense after that.
+	if !b.permittedToTotal(numberProp) {
+		return "", false
+	}
 	if b.view.Def.Type != nil {
-		return b.unitPropertyOf(numberProp), true
+		resolved := b.unitPropertyOf(numberProp)
+		if !b.unitStampAgrees(src, numberProp, resolved) {
+			return "", false
+		}
+		return resolved, true
 	}
-	declaring := b.typesDeclaringUnitFor(numberProp)
-	if len(declaring) == 0 {
-		return "", true
+	// The untyped G2 refusal is tried BEFORE the stamp check, because it is
+	// the more specific diagnosis of the same situation: "this view declares
+	// no type, so no schema can resolve the unit" tells the operator what to
+	// do, where "the part stamps currency and nothing resolves it" would send
+	// them to edit a view file that is not the problem.
+	if declaring := b.typesDeclaringUnitFor(numberProp); len(declaring) > 0 {
+		b.refuseUntypedUnitTotal(numberProp, declaring)
+		return "", false
 	}
-	b.refuseUntypedUnitTotal(numberProp, declaring)
-	return "", false
+	if !b.unitStampAgrees(src, numberProp, "") {
+		return "", false
+	}
+	return "", true
+}
+
+// unitStampAgrees is the reconciliation. false means the two authorities
+// disagree, the refusal has been recorded (once per property per result), and
+// the caller computes nothing.
+//
+// A part's `unit:` key belongs to its `number:` binding. A part that names a
+// number and stamps a unit is talking about THAT number, so a subtotal over
+// some OTHER property is not governed by the stamp; a part that stamps a unit
+// and names no number is talking about whatever it totals.
+func (b *viewResultBuilder) unitStampAgrees(src gen.ViewPart, numberProp, resolved string) bool {
+	if src.Unit == nil {
+		return true
+	}
+	if src.Number != nil && *src.Number != numberProp {
+		return true
+	}
+	stamped := strings.TrimSpace(*src.Unit)
+	if stamped == "" || stamped == resolved {
+		return true
+	}
+
+	if b.refusedUnitStamps == nil {
+		b.refusedUnitStamps = map[string]bool{}
+	}
+	if b.refusedUnitStamps[numberProp] {
+		return false
+	}
+	b.refusedUnitStamps[numberProp] = true
+
+	owner := "no record type in scope"
+	if b.view.Def.Type != nil {
+		owner = "record type " + *b.view.Def.Type
+	}
+	schemaSide := fmt.Sprintf("declares it with the companion unit %q", resolved)
+	fix := fmt.Sprintf("re-point the part's `unit:` at %q, or declare `unit_property: %s` on the number", resolved, stamped)
+	if resolved == "" {
+		schemaSide = "declares it with no companion unit"
+		fix = fmt.Sprintf("declare `unit_property: %s` on %q in the record type, or drop the part's `unit:` key so the number totals unit-less",
+			stamped, numberProp)
+	}
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("no total of %q: this part is stamped `unit: %s`, but %s %s — the two disagree, and a unit is DECLARED, never inferred (design §5), so neither reading may be picked silently; the rows themselves are still shown",
+			numberProp, stamped, owner, schemaSide),
+		Fix:     &fix,
+		Records: []string{},
+	})
+	b.out.Complete = false
+	return false
 }
 
 // typesDeclaringUnitFor lists, sorted, every record type in scope whose
@@ -653,11 +1227,11 @@ func (a *viewUnitAccum) add(d records.Decimal) {
 
 // aggregateViewRows reduces one number property over one row scope, ONCE PER
 // UNIT VALUE (G2). Rows whose unit is missing or unconfirmed are returned in
-// excludedPaths (G3) — counted by the caller, shown by the rows list, and in
-// no total.
+// `excluded` (G3), split by cause — counted by the caller, shown by the rows
+// list, and in no total.
 func (b *viewResultBuilder) aggregateViewRows(
 	rows []*gen.VaultFindRow, numberProp, unitProp string, op gen.ViewPartAggregate,
-) (totals []gen.ViewUnitTotal, excludedPaths []string) {
+) (totals []gen.ViewUnitTotal, excluded viewExcluded) {
 	accums := map[string]*viewUnitAccum{}
 	var order []string
 	for _, row := range rows {
@@ -670,9 +1244,13 @@ func (b *viewResultBuilder) aggregateViewRows(
 		}
 		unitKey := ""
 		if unitProp != "" {
-			u, ok := viewUnitValue(viewCellValue(row, unitProp))
-			if !ok {
-				excludedPaths = append(excludedPaths, row.Path)
+			u, outcome := viewUnitValue(viewCellValue(row, unitProp))
+			switch outcome {
+			case viewUnitMissing:
+				excluded.missing = append(excluded.missing, row.Path)
+				continue
+			case viewUnitAmbiguous:
+				excluded.ambiguous = append(excluded.ambiguous, row.Path)
 				continue
 			}
 			unitKey = u
@@ -706,10 +1284,17 @@ func (b *viewResultBuilder) aggregateViewRows(
 		if unitProp != "" {
 			u := unitKey
 			t.Unit = &u
+			// The unit value and the property it was READ FROM travel
+			// together: a consumer that acquired "SGD" without knowing it came
+			// from `currency` would have to guess which column to pair the
+			// figure with, and the schema it would need to stop guessing is
+			// not something the SPA has.
+			up := unitProp
+			t.UnitProperty = &up
 		}
 		totals = append(totals, t)
 	}
-	return totals, excludedPaths
+	return totals, excluded
 }
 
 func renderViewAggregate(acc *viewUnitAccum, op gen.ViewPartAggregate) (string, bool) {
@@ -735,8 +1320,17 @@ func renderViewAggregate(acc *viewUnitAccum, op gen.ViewPartAggregate) (string, 
 	}
 }
 
-// renderViewAverage renders sum/count in exact rational arithmetic, rounded
-// half-up at two digits past the sum's own scale — never through a float.
+// renderViewAverage renders sum/count in exact rational arithmetic — never
+// through a float — at the column's own scale plus two (FR-152), rounded HALF
+// TO EVEN by knowledgefind's own exported rule.
+//
+// The rule is BORROWED rather than reimplemented, and that is the whole point
+// of the change that put it here. This function used to round half UP while
+// knowledge_find rounded half to even and said "round-half-even" in its own
+// label: one column, one set of records, two answers, and the only reader who
+// could catch it is one who thought to compare a chat answer against a panel.
+// One rule needs one implementation, or the two drift again the next time
+// either is touched.
 func renderViewAverage(sum records.Decimal, count int) string {
 	num := new(big.Int).Set(sum.Unscaled())
 	den := big.NewInt(int64(count))
@@ -747,21 +1341,7 @@ func renderViewAverage(sum records.Decimal, count int) string {
 		num.Mul(num, viewPow10(int64(-scale)))
 		scale = 0
 	}
-	outScale := scale + 2
-	r := new(big.Rat).SetFrac(num, den)
-	m := new(big.Int).Mul(r.Num(), viewPow10(int64(outScale)))
-	q, rem := new(big.Int).QuoRem(m, r.Denom(), new(big.Int))
-	if rem.Sign() != 0 {
-		twice := new(big.Int).Abs(new(big.Int).Lsh(rem, 1))
-		if twice.Cmp(r.Denom()) >= 0 {
-			if r.Sign() >= 0 {
-				q.Add(q, big.NewInt(1))
-			} else {
-				q.Sub(q, big.NewInt(1))
-			}
-		}
-	}
-	return records.NewDecimal(q, outScale).String()
+	return knowledgefind.RoundHalfEven(new(big.Rat).SetFrac(num, den), scale+2)
 }
 
 func viewPow10(n int64) *big.Int {
@@ -812,18 +1392,41 @@ func (b *viewResultBuilder) resolveColumns(src gen.ViewPart) *[]string {
 	return nil
 }
 
-// setExcluded stamps a scope's G3 counter from the union of excluded rows.
-func viewExcludedFields(paths []string, unitProps []string) (*int, *string) {
+// viewExcludedFields stamps a scope's G3 fields from the union of excluded
+// rows: the count, the reason, and THE ROWS THEMSELVES.
+//
+// The paths are returned because the count alone was not enough. The unit a
+// row is excluded for is resolved from the RECORD TYPE, which the SPA cannot
+// read, so a part carrying no `unit:` stamp of its own left the renderer able
+// to say "1 row excluded" and unable to say which one. The three travel
+// together, from one deduplicated set, so the list can never disagree with the
+// count beside it.
+func viewExcludedFields(ex viewExcluded, unitProps []string) (*int, *string, *[]string) {
 	seen := map[string]struct{}{}
-	for _, p := range paths {
-		seen[p] = struct{}{}
+	dedupe := func(paths []string) []string {
+		out := make([]string, 0, len(paths))
+		for _, p := range paths {
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+		return out
 	}
-	n := len(seen)
+	// Missing is deduplicated FIRST, so a row that is somehow reported under
+	// both causes is counted once, under the cause with the simpler fix.
+	missing := dedupe(ex.missing)
+	ambiguous := dedupe(ex.ambiguous)
+
+	n := len(missing) + len(ambiguous)
 	if n == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	reason := viewResultExcludedReason(n, unitProps)
-	return &n, &reason
+	all := append(append(make([]string, 0, n), missing...), ambiguous...)
+	sort.Strings(all)
+	reason := viewResultExcludedReason(len(missing), len(ambiguous), unitProps)
+	return &n, &reason, &all
 }
 
 func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
@@ -864,30 +1467,35 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 		if groups, ok := b.groupsFor(grouping); ok {
 			resultGroups := make([]gen.ViewResultGroup, 0, len(groups))
 			for _, g := range groups {
+				paths, omitted := b.carriedPaths(g.Paths)
 				rg := gen.ViewResultGroup{
 					Key:       g.Key,
 					Absent:    g.Absent,
 					Count:     g.Count,
-					Paths:     append([]string{}, g.Paths...),
+					Paths:     paths,
 					Subtotals: []gen.ViewUnitTotal{},
+				}
+				if omitted > 0 {
+					n := omitted
+					rg.PathsOmitted = &n
 				}
 				if len(subtotalProps) > 0 && !b.truncated {
 					rows := b.rowsFor(g.Paths)
-					excluded := make([]string, 0, len(rows))
+					var excluded viewExcluded
 					var unitProps []string
 					for i, prop := range subtotalProps {
-						unitProp, permitted := b.unitPropertyForTotals(prop)
+						unitProp, permitted := b.unitPropertyForTotals(src, prop)
 						if !permitted {
 							continue
 						}
 						totals, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
 						rg.Subtotals = append(rg.Subtotals, totals...)
-						excluded = append(excluded, ex...)
+						excluded.add(ex)
 						if unitProp != "" {
 							unitProps = append(unitProps, unitProp)
 						}
 					}
-					rg.ExcludedCount, rg.ExcludedReason = viewExcludedFields(excluded, unitProps)
+					rg.ExcludedCount, rg.ExcludedReason, rg.ExcludedPaths = viewExcludedFields(excluded, unitProps)
 				}
 				resultGroups = append(resultGroups, rg)
 			}
@@ -898,22 +1506,22 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 	if len(subtotalProps) > 0 && !b.truncated {
 		rows := b.allRows()
 		totals := make([]gen.ViewUnitTotal, 0, len(subtotalProps))
-		excluded := make([]string, 0, len(rows))
+		var excluded viewExcluded
 		var unitProps []string
 		for i, prop := range subtotalProps {
-			unitProp, permitted := b.unitPropertyForTotals(prop)
+			unitProp, permitted := b.unitPropertyForTotals(src, prop)
 			if !permitted {
 				continue
 			}
 			ts, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
 			totals = append(totals, ts...)
-			excluded = append(excluded, ex...)
+			excluded.add(ex)
 			if unitProp != "" {
 				unitProps = append(unitProps, unitProp)
 			}
 		}
 		p.Totals = &totals
-		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, unitProps)
+		p.ExcludedCount, p.ExcludedReason, p.ExcludedPaths = viewExcludedFields(excluded, unitProps)
 	}
 }
 
@@ -940,7 +1548,7 @@ func (b *viewResultBuilder) buildFiguresPartData(p *gen.ViewResultPart, src gen.
 		return
 	}
 	numberProp := *src.Number
-	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
 		// The part still answers an EMPTY totals list — the SPA's explicit
 		// "no figures" state — while the refusal problem says why.
@@ -948,10 +1556,18 @@ func (b *viewResultBuilder) buildFiguresPartData(p *gen.ViewResultPart, src gen.
 		p.Totals = &totals
 		return
 	}
+	// THE RESOLVED UNIT, ON THE WIRE. The SPA cannot read the record type, so
+	// without this it would have to fall back on `source.unit` — the stamp the
+	// composer wrote, which a later schema edit can leave stale, and which is
+	// exactly the second authority this gate exists to eliminate.
+	if unitProp != "" {
+		up := unitProp
+		p.UnitProperty = &up
+	}
 	totals, excluded := b.aggregateViewRows(b.allRows(), numberProp, unitProp, viewPartAggregateOf(src))
 	p.Totals = &totals
 	if unitProp != "" {
-		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+		p.ExcludedCount, p.ExcludedReason, p.ExcludedPaths = viewExcludedFields(excluded, []string{unitProp})
 	}
 }
 
@@ -960,9 +1576,17 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 		return
 	}
 	numberProp, dateProp := *src.Number, *src.Date
-	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
 		return
+	}
+	// THE RESOLVED UNIT, ON THE WIRE. The SPA cannot read the record type, so
+	// without this it would have to fall back on `source.unit` — the stamp the
+	// composer wrote, which a later schema edit can leave stale, and which is
+	// exactly the second authority this gate exists to eliminate.
+	if unitProp != "" {
+		up := unitProp
+		p.UnitProperty = &up
 	}
 	op := viewPartAggregateOf(src)
 
@@ -972,7 +1596,7 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 	}
 	pointsByUnit := map[string][]gen.ViewResultPoint{}
 	var unitOrder []string
-	var excluded []string
+	var excluded viewExcluded
 	for _, g := range groups {
 		if g.Absent != nil && *g.Absent {
 			// An undated row has no x position; it stays in `rows` and simply
@@ -981,7 +1605,7 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 			continue
 		}
 		totals, ex := b.aggregateViewRows(b.rowsFor(g.Paths), numberProp, unitProp, op)
-		excluded = append(excluded, ex...)
+		excluded.add(ex)
 		for _, t := range totals {
 			unitKey := ""
 			if t.Unit != nil {
@@ -1006,7 +1630,7 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 	}
 	p.Series = &series
 	if unitProp != "" {
-		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+		p.ExcludedCount, p.ExcludedReason, p.ExcludedPaths = viewExcludedFields(excluded, []string{unitProp})
 	}
 }
 
@@ -1014,21 +1638,38 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 	if src.Number == nil || b.truncated {
 		return
 	}
-	if src.Grouping == nil || len(*src.Grouping) < 2 {
-		fix := "give the crosstab part two grouping keys through knowledge_configure"
+	// THE VIEW-LEVEL FALLBACK IS THE RENDERER'S TO APPLY. EffectiveParts
+	// deliberately does not copy a view's own `grouping:` down into a part
+	// that declares none — its comment says so — and this builder read
+	// src.Grouping directly, so a perfectly legal view that declared both keys
+	// at the top level and a bare `- part: crosstab` beneath refused with
+	// "needs two grouping keys" while the keys sat one level up in the same
+	// file. effectiveGrouping is the inheritance rule every other part already
+	// goes through.
+	grouping := b.effectiveGrouping(src)
+	if len(grouping) < 2 {
+		fix := "give the crosstab part two grouping keys through knowledge_configure, or declare them on the view so every part inherits them"
 		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
 			Code:    gen.AggregateRefused,
-			Reason:  "a crosstab part needs two grouping keys, and this one declares fewer",
+			Reason:  "a crosstab part needs two grouping keys, and neither it nor its view declares two",
 			Fix:     &fix,
 			Records: []string{},
 		})
 		return
 	}
-	grouping := (*src.Grouping)[:2]
+	grouping = grouping[:2]
 	numberProp := *src.Number
-	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
 		return
+	}
+	// THE RESOLVED UNIT, ON THE WIRE. The SPA cannot read the record type, so
+	// without this it would have to fall back on `source.unit` — the stamp the
+	// composer wrote, which a later schema edit can leave stale, and which is
+	// exactly the second authority this gate exists to eliminate.
+	if unitProp != "" {
+		up := unitProp
+		p.UnitProperty = &up
 	}
 	op := viewPartAggregateOf(src)
 
@@ -1044,7 +1685,7 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 		Cells:          []gen.ViewResultCrosstabCell{},
 	}
 	colSeen := map[string]bool{}
-	var excluded []string
+	var excluded viewExcluded
 	for _, g := range groups {
 		ct.RowKeys = append(ct.RowKeys, g.Key)
 		if g.Subgroups == nil {
@@ -1056,7 +1697,7 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 				ct.ColumnKeys = append(ct.ColumnKeys, sg.Key)
 			}
 			totals, ex := b.aggregateViewRows(b.rowsFor(sg.Paths), numberProp, unitProp, op)
-			excluded = append(excluded, ex...)
+			excluded.add(ex)
 			for _, t := range totals {
 				cell := gen.ViewResultCrosstabCell{
 					Row:    g.Key,
@@ -1070,7 +1711,7 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 		}
 	}
 	if unitProp != "" {
-		ct.ExcludedCount, ct.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+		ct.ExcludedCount, ct.ExcludedReason, ct.ExcludedPaths = viewExcludedFields(excluded, []string{unitProp})
 	}
 	p.Crosstab = &ct
 }

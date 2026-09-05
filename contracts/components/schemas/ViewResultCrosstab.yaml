@@ -56,3 +56,20 @@ properties:
   excluded_reason:
     type: string
     description: Why those rows were excluded, ready to render.
+  excluded_paths:
+    type: array
+    description: >
+      The excluded rows BY PATH, so a renderer can MARK them rather than only
+      count them. Present exactly when excluded_count is present.
+
+
+      The count alone was not enough. The unit a row is excluded for is
+      resolved from the RECORD TYPE (design section 5: declared, never
+      inferred), which the SPA cannot read — so a part carrying no `unit:`
+      stamp of its own left the renderer able to say "1 row excluded" and
+      unable to say which one. Naming the rows here is what makes the answer
+      self-sufficient: nothing downstream re-derives the exclusion, and the
+      list can never disagree with the count beside it.
+    items:
+      type: string
+      minLength: 1

@@ -16354,6 +16354,13 @@ type ViewPropertyConfig struct {
 // G3 — a row whose unit is missing or unconfirmed is in `rows` (shown), excluded from every total, and counted in the owning part's excluded_count.
 // A view that cannot be answered arrives as a 200 with `refusal` set and empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own "NOT SERVABLE" line would state it — never as a transport error and never as a silent empty table.
 type ViewResult struct {
+	// Aggregates The view's own `aggregates:` results — the LEGACY, pre-part-stack summary key, which 69 saved views still use — carried through from the engine with the scope clause it computed them with (FR-125).
+	//
+	// They are SEPARATE from a part's `totals`, and the shapes differ because the guarantees differ. A part total is a ViewUnitTotal: reduced once per unit value, never across units (G2), because this endpoint does that reduction itself. These come from the engine's `aggregate`, which is unit-blind — so an entry over a number with a DECLARED companion unit is NOT surfaced here at all; it is refused, and the refusal is in `problems`. Only summaries that cannot cross a unit (count, empty, filled, unique) and numbers no record type pairs with a unit appear.
+	//
+	// Absent when the view declares no `aggregates`.
+	Aggregates *[]VaultFindTotal `json:"aggregates,omitempty"`
+
 	// Complete True only when the evaluation covered everything the view asked to cover — the same verdict, with the same workspace-scope exception, as VaultFindResponse.complete, from which it is carried.
 	Complete bool `json:"complete"`
 
@@ -16402,6 +16409,11 @@ type ViewResultCrosstab struct {
 	// ExcludedCount Rows excluded from every cell because their unit value is missing or unconfirmed (G3). Absent when the aggregated number declares no companion unit, or when nothing was excluded.
 	ExcludedCount *int `json:"excluded_count,omitempty"`
 
+	// ExcludedPaths The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+	//
+	// The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+	ExcludedPaths *[]string `json:"excluded_paths,omitempty"`
+
 	// ExcludedReason Why those rows were excluded, ready to render.
 	ExcludedReason *string `json:"excluded_reason,omitempty"`
 
@@ -16443,6 +16455,11 @@ type ViewResultGroup struct {
 	// ExcludedCount Rows in this group excluded from every subtotal because their unit value is missing or unconfirmed (G3). Absent when the subtotalled numbers declare no companion unit, or when nothing was excluded.
 	ExcludedCount *int `json:"excluded_count,omitempty"`
 
+	// ExcludedPaths The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+	//
+	// The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+	ExcludedPaths *[]string `json:"excluded_paths,omitempty"`
+
 	// ExcludedReason Why those rows were excluded, ready to render. Present exactly when excluded_count is present and greater than zero.
 	ExcludedReason *string `json:"excluded_reason,omitempty"`
 
@@ -16451,6 +16468,11 @@ type ViewResultGroup struct {
 
 	// Paths The member rows, by path into the result's own `rows` list. Always present — an empty array, never null.
 	Paths []string `json:"paths"`
+
+	// PathsOmitted How many of this group's members are NOT named in `paths` because the answer does not carry them. Absent when every member is named.
+	//
+	// `paths` references rows in the result's own `rows` list, and `rows` is capped. A group's `count` is its size over the FULL evaluated set, so once the cap binds, count and len(paths) legitimately differ — and the difference has to be STATED. Copying every member path instead would make the payload grow with the corpus rather than with the cap (a 100k record match produced ~100k path strings per grouped part), and naming rows the answer does not carry would leave the references dangling.
+	PathsOmitted *int `json:"paths_omitted,omitempty"`
 
 	// Subtotals Per-group totals, one entry per (property, op, unit value) under G2. Always present — an empty array, never null, so "this part declares no subtotals" is stated rather than inferred.
 	Subtotals []ViewUnitTotal `json:"subtotals"`
@@ -16467,6 +16489,11 @@ type ViewResultPart struct {
 
 	// ExcludedCount Rows excluded from every total of this part because their unit value is missing or unconfirmed (G3). The rows themselves are still in `rows` — shown, excluded, counted. Absent when the part's numbers declare no companion unit, or when the part computes no totals.
 	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedPaths The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+	//
+	// The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+	ExcludedPaths *[]string `json:"excluded_paths,omitempty"`
 
 	// ExcludedReason Why those rows were excluded, ready to render as the G3 footer line. Present exactly when excluded_count is present and greater than zero.
 	ExcludedReason *string `json:"excluded_reason,omitempty"`
@@ -16485,6 +16512,11 @@ type ViewResultPart struct {
 
 	// Totals Whole-result totals for this part, one entry per (property, op, unit value) — the figures row, or a grouped table's footer. NEVER a combined figure across units (G2): the list shape is the enforcement, and the footer line explaining why is the renderer's to draw from it.
 	Totals *[]ViewUnitTotal `json:"totals,omitempty"`
+
+	// UnitProperty The companion unit property this part's `number` binding RESOLVED to, from the record type's own declaration (design section 5). Absent when the number declares no companion unit, or when the part totals nothing.
+	//
+	// THE SCHEMA IS THE AUTHORITY AND THIS IS ITS ANSWER. A part's own `unit:` key records what the composer stamped when the view was written; it is provenance, and a record type edited afterwards can leave it stale. The server resolves the unit from the schema, refuses the total outright when the two disagree (naming both sides), and states the resolved answer here — so no consumer ever re-derives a unit from `source.unit` and no two consumers can derive different ones.
+	UnitProperty *string `json:"unit_property,omitempty"`
 }
 
 // ViewResultPartPart Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
@@ -16539,6 +16571,11 @@ type ViewUnitTotal struct {
 
 	// Unit The unit value this total covers (e.g. "SGD"). ABSENT when the number declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped.
 	Unit *string `json:"unit,omitempty"`
+
+	// UnitProperty The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+	//
+	// It travels WITH the unit value rather than beside it, one level up, because a unit and the property it was read from are one fact: a renderer that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with, and the schema it would need in order to stop guessing is not something the SPA has.
+	UnitProperty *string `json:"unit_property,omitempty"`
 
 	// Value The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
 	Value string `json:"value"`
