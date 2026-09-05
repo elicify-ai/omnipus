@@ -23,7 +23,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// WHAT THIS FILE IS, AND THE TWO RULES IT ENFORCES
+// WHAT THIS FILE IS, AND THE RULES IT ENFORCES
 //
 // The endpoint resolves a saved view by name inside one in-scope knowledge
 // base and EVALUATES it — through the same engine knowledge_find uses
@@ -42,7 +42,20 @@ import (
 //
 //   G3 — a row whose unit is missing or unconfirmed is SHOWN (it stays in
 //   `rows`), EXCLUDED from every total, and COUNTED in the owning scope's
-//   excluded_count with the reason spelled out.
+//   excluded_count with the reason spelled out. MISSING and AMBIGUOUS are
+//   counted apart: "no currency" and "two currencies" have opposite fixes.
+//
+//   G4 — text is never totalled, even when it parses as a number. A binding's
+//   declared type is resolved through the same three namespaces a query
+//   resolves names against, and anything outside {integer, decimal} refuses
+//   (permittedToTotal). The design puts every gate in the composer AND the
+//   renderer; this is the renderer's half.
+//
+//   ONE AUTHORITY FOR A UNIT — the SCHEMA declares it (§5), the part's own
+//   `unit:` key is the composer's stamp and can go stale, and where the two
+//   disagree the total is refused naming both rather than either being picked
+//   silently (unitStampAgrees). What the schema resolved reaches the wire, so
+//   nothing downstream re-derives it.
 //
 // THE VALUES ARE READ FROM THE ENGINE'S OWN RENDERED CELLS, deliberately.
 // VaultFindCell.Value is the exact decimal text (renderTyped renders
@@ -50,6 +63,14 @@ import (
 // so parsing here is the mechanical inverse of one known renderer — strip
 // the separators, split on ", " — rather than a second read of the vault
 // that could disagree with what the rows on screen say.
+//
+// THE VIEW IS EVALUATED ONCE. Deps.RenderRows lets an in-process renderer
+// state the row bound it can take, so the whole set arrives in a single call
+// instead of through the offset cursor — where every page re-runs the entire
+// evaluation and the engine's 4 kB budget (a language model's budget, not an
+// HTTP body's) trimmed each one. A part grouping some way the view does not
+// still costs its own call, and that call's index epoch is checked against the
+// row evaluation's so two snapshots are never paired.
 //
 // A VIEW THAT CANNOT ANSWER IS A 200 WITH `refusal` SET — the wire form of
 // records.ViewServeRefusal, the same shape knowledge_describe's "NOT
@@ -1206,8 +1227,8 @@ func (a *viewUnitAccum) add(d records.Decimal) {
 
 // aggregateViewRows reduces one number property over one row scope, ONCE PER
 // UNIT VALUE (G2). Rows whose unit is missing or unconfirmed are returned in
-// excludedPaths (G3) — counted by the caller, shown by the rows list, and in
-// no total.
+// `excluded` (G3), split by cause — counted by the caller, shown by the rows
+// list, and in no total.
 func (b *viewResultBuilder) aggregateViewRows(
 	rows []*gen.VaultFindRow, numberProp, unitProp string, op gen.ViewPartAggregate,
 ) (totals []gen.ViewUnitTotal, excluded viewExcluded) {
