@@ -168,6 +168,36 @@ describe('TablePart', () => {
     expect(firstRow?.textContent).toContain('12,480.00')
     expect(firstRow?.textContent).toContain('SGD')
   })
+
+  // code-review finding #3(b) — `part.columns ?? [FILE_NAME_PROPERTY]` only
+  // falls back for `undefined`; a part whose columns list is the EMPTY ARRAY
+  // (a part that "declares no properties") sails straight through with
+  // `columns.length === 0`, which makes the group-header row's
+  // `colSpan={columns.length}` zero and the subtotal label's
+  // `colSpan={columns.length - 1}` NEGATIVE — both invalid HTML that a real
+  // browser silently clamps, hiding the underlying bug.
+  it('never renders an invalid (zero or negative) colSpan when the part declares no properties', () => {
+    const part = tablePart({ columns: [] })
+    render(<TablePart part={part} rows={ROWS} />)
+    const table = screen.getByTestId('viewpart-table')
+
+    // The columns ladder's fallback must trigger for an EMPTY list exactly
+    // as it already does for `undefined` — at least one column renders.
+    expect(within(table).getAllByRole('columnheader').length).toBeGreaterThanOrEqual(1)
+
+    // Every rendered colSpan (group headers, subtotal labels) must be a
+    // valid, positive integer.
+    const spanned = table.querySelectorAll('[colspan]')
+    expect(spanned.length).toBeGreaterThan(0)
+    spanned.forEach((td) => {
+      expect(Number(td.getAttribute('colspan'))).toBeGreaterThanOrEqual(1)
+    })
+
+    // The subtotal content itself must still be findable — a broken colSpan
+    // must never take the numbers down with it.
+    const subtotals = screen.getAllByTestId('viewpart-group-subtotal')
+    expect(subtotals[0]?.textContent).toContain('20,680.00')
+  })
 })
 
 // ── list ────────────────────────────────────────────────────────────────────
