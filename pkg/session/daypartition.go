@@ -185,6 +185,16 @@ type SessionMeta struct {
 	// proposed values, GoalPendingJSON clears). Ephemeral-ish: cleared on
 	// /goal clear and on a fresh `/goal <intent>` that supersedes it.
 	GoalPendingJSON string `json:"goal_pending,omitempty"`
+	// GoalClarificationJSON holds the ADR-074 D4a pending-clarification record
+	// (judgment-first spec US-3 S7): when the prose `/goal` LLM compile returns
+	// a clarifying question instead of criteria, the original intent + the
+	// question persist here (JSON, pkg/agent's goalClarificationRecord shape)
+	// until the user's next ordinary chat message answers it (feeding ONE
+	// resumed compile), or `/goal clear`/a fresh `/goal <intent>` discards it.
+	// Mutually exclusive with GoalPendingJSON in practice (a question round has
+	// produced no pending criteria yet). Covered by the same idle-expiry sweep
+	// as active goals (US-3 S10).
+	GoalClarificationJSON string `json:"goal_clarification,omitempty"`
 
 	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
 	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
