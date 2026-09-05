@@ -1633,13 +1633,13 @@ func (ix *Index) UpdatePath(ctx context.Context, relPath string) error {
 		return fmt.Errorf("knowledge: update path %q: empty path", relPath)
 	}
 
-	if err := ix.lockCtx(ctx); err != nil {
-		return err
+	if lockErr := ix.lockCtx(ctx); lockErr != nil {
+		return lockErr
 	}
 	defer ix.mu.Unlock()
 
-	if err := ctx.Err(); err != nil {
-		return err
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 
 	entry, err := StatEntry(ix.root, cleanRel)

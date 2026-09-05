@@ -60,8 +60,8 @@ func TestUpdatePath_NewFileBecomesFindable(t *testing.T) {
 
 	b2WriteFile(t, root, "new.md", "a note containing brandnewword right here\n")
 
-	if err := ix.UpdatePath(context.Background(), "new.md"); err != nil {
-		t.Fatalf("UpdatePath: %v", err)
+	if updateErr := ix.UpdatePath(context.Background(), "new.md"); updateErr != nil {
+		t.Fatalf("UpdatePath: %v", updateErr)
 	}
 
 	hits, err := ix.Search("brandnewword", 10)
@@ -185,20 +185,20 @@ func TestUpdatePath_ShrinkingEdit_LeavesNoOrphanSegments(t *testing.T) {
 	}
 
 	// PRECONDITION: the marker is findable before the edit.
-	if hits, err := ix.Search("oldtailmarkerxyz", 10); err != nil {
-		t.Fatal(err)
+	if hits, searchErr := ix.Search("oldtailmarkerxyz", 10); searchErr != nil {
+		t.Fatal(searchErr)
 	} else if !containsPath(hits, "shrink.md") {
 		t.Fatalf("precondition failed: marker should be findable before the shrink, got %v", b2HitPaths(hits))
 	}
 
 	// Shrink to a single short line: one segment, no marker.
 	b2WriteFile(t, root, "shrink.md", "a short replacement body\n")
-	if err := ix.UpdatePath(context.Background(), "shrink.md"); err != nil {
-		t.Fatalf("UpdatePath: %v", err)
+	if updateErr := ix.UpdatePath(context.Background(), "shrink.md"); updateErr != nil {
+		t.Fatalf("UpdatePath: %v", updateErr)
 	}
 
-	if hits, err := ix.Search("oldtailmarkerxyz", 10); err != nil {
-		t.Fatal(err)
+	if hits, searchErr := ix.Search("oldtailmarkerxyz", 10); searchErr != nil {
+		t.Fatal(searchErr)
 	} else if len(hits) != 0 {
 		t.Errorf("marker from the removed second segment is still findable after the shrink: %v", b2HitPaths(hits))
 	}
