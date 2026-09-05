@@ -4282,6 +4282,11 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				gid := p.GoalID
 				goalF.GoalId = &gid
 			}
+			// ADR-074 D5.2 / FR-011: the compiled criteria breakdown rides the
+			// `queued` (pending-confirm) emission so the SPA's echo card can
+			// itemize exactly what will run (commands verbatim). Optional on
+			// the wire — absent (nil) on every other emission.
+			setGoalStatusCriteria(&goalF, p.Criteria)
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run

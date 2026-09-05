@@ -313,6 +313,27 @@ type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
 	Condition   string `json:"condition"`
+	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
+	Criteria []struct {
+		Author struct {
+			Id   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int    `json:"max_count,omitempty"`
+			MinCount *int    `json:"min_count,omitempty"`
+			Scope    *string `json:"scope,omitempty"`
+			Tool     string  `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id     *string `json:"id,omitempty"`
+		Kind   string  `json:"kind"`
+		Status string  `json:"status"`
+		Text   string  `json:"text"`
+	} `json:"criteria,omitempty"`
 	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
 	GoalId       *string `json:"goal_id,omitempty"`
 	LatestReason string  `json:"latest_reason"`
@@ -616,7 +637,7 @@ type SubagentStateFrame struct {
 	SessionId       string `json:"session_id"`
 	SpanId          string `json:"span_id"`
 	State           string `json:"state"`
-	SteeringReceipt struct {
+	SteeringReceipt *struct {
 		AppliedAt     string `json:"applied_at"`
 		CorrelationId string `json:"correlation_id"`
 	} `json:"steering_receipt,omitempty"`

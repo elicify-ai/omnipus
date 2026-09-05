@@ -723,6 +723,34 @@ export const GoalStatusFrame = z
     cap: z.number().int().min(1),
     state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
     producing_session_id: z.string().min(1).optional(),
+    criteria: z.array(z
+    .object({
+      id: z.string().optional(),
+      kind: z.enum(["check", "prose", "behavior"]),
+      text: z.string().min(1).max(1000),
+      check: z
+      .object({
+        command: z.string().min(1),
+        expected_exit_code: z.number().int().min(0).max(255),
+      })
+      .strict().optional(),
+      behavior: z
+      .object({
+        tool: z.string().min(1),
+        min_count: z.number().int().min(0).optional(),
+        max_count: z.number().int().min(0).optional(),
+        scope: z.enum(["attempt", "task_session"]).optional(),
+      })
+      .strict().optional(),
+      author: z
+      .object({
+        kind: z.enum(["agent", "user"]),
+        id: z.string().min(1),
+      })
+      .strict(),
+      status: z.enum(["pending", "met", "unmet"]),
+    })
+    .strict()).optional(),
   })
   .strict();
 

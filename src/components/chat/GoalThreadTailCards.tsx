@@ -30,11 +30,12 @@ export function GoalThreadTailCards() {
   const pills = Object.values(goalPills) as GoalStatusFrame[]
 
   // Echo cards: one per pill in `queued` state (newly compiled, awaiting
-  // confirmation). `literalCommands` aren't carried on the GoalStatusFrame
-  // itself (the frame carries only the condition string); when the backend
-  // lands a structured echo frame the commands will populate here. For now
-  // the echo surfaces the condition verbatim, which is the user-facing
-  // contract: "the user sees exactly what will be run."
+  // confirmation). The `queued` emission carries the compiled criteria
+  // breakdown on the frame's optional `criteria` field (ADR-074 D5.2 /
+  // judgment-first FR-011), so the card itemizes exactly what will run —
+  // plain-language rows with verbatim technical payloads per row. A G-5
+  // `waiting_on_user` pause on an ACTIVE goal must never render this
+  // confirm card (US-6 S3 negative) — only `queued` does.
   const queuedPills = pills.filter((p) => p.state === 'queued')
 
   if (queuedPills.length === 0) return null

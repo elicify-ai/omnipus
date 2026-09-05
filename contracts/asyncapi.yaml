@@ -4111,6 +4111,94 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
+        criteria:
+          type: array
+          description: >
+            ADR-074 D5.2 / judgment-first FR-011 — compiled criteria
+            breakdown for the `queued` (pending-confirm) emission. Items
+            are a hand-synced INLINE duplicate of the canonical
+            components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI
+            does not resolve cross-file $ref for its own codegen — the
+            JudgeVerdictFrame/CriterionVerdict precedent); keep both in
+            sync by hand, never a third criteria shape.
+          items:
+            type: object
+            required:
+              - kind
+              - text
+              - author
+              - status
+            additionalProperties: false
+            properties:
+              id:
+                type: string
+              kind:
+                type: string
+                enum:
+                  - check
+                  - prose
+                  - behavior
+              text:
+                type: string
+                minLength: 1
+                maxLength: 1000
+              check:
+                type: object
+                required:
+                  - command
+                  - expected_exit_code
+                additionalProperties: false
+                properties:
+                  command:
+                    type: string
+                    minLength: 1
+                  expected_exit_code:
+                    type: integer
+                    minimum: 0
+                    maximum: 255
+              behavior:
+                type: object
+                required:
+                  - tool
+                additionalProperties: false
+                properties:
+                  tool:
+                    type: string
+                    minLength: 1
+                  min_count:
+                    type: integer
+                    minimum: 0
+                    default: 1
+                  max_count:
+                    type: integer
+                    minimum: 0
+                  scope:
+                    type: string
+                    enum:
+                      - attempt
+                      - task_session
+                    default: task_session
+              author:
+                type: object
+                required:
+                  - kind
+                  - id
+                additionalProperties: false
+                properties:
+                  kind:
+                    type: string
+                    enum:
+                      - agent
+                      - user
+                  id:
+                    type: string
+                    minLength: 1
+              status:
+                type: string
+                enum:
+                  - pending
+                  - met
+                  - unmet
 
     LoopStatusFrame:
       title: LoopStatusFrame

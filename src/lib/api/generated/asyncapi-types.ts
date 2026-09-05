@@ -638,6 +638,26 @@ export interface GoalStatusFrame {
   cap: number;
   state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
   producing_session_id?: string;
+  criteria?: Array<{
+    id?: string;
+    kind: "check" | "prose" | "behavior";
+    text: string;
+    check?: {
+      command: string;
+      expected_exit_code: number;
+    };
+    behavior?: {
+      tool: string;
+      min_count?: number;
+      max_count?: number;
+      scope?: "attempt" | "task_session";
+    };
+    author: {
+      kind: "agent" | "user";
+      id: string;
+    };
+    status: "pending" | "met" | "unmet";
+  }>;
 }
 
 export interface LoopStatusFrame {
