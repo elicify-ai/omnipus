@@ -119,7 +119,9 @@ func (t *PlanCreateTool) Description() string {
 	return "Create a draft Plan to decompose / break down a complex, multi-step goal — a " +
 		"Definition-of-Done-driven grouping of tasks. Attach member tasks afterward with " +
 		"create_task(plan_id=..., write_set=..., stream=..., is_join=...). Requires at least one " +
-		"Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. Also " +
+		"Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. " +
+		"Before authoring acceptance criteria, load the define-done skill (via the Skill tool) " +
+		"and follow its quality bar. Also " +
 		"requires rationale: the planning discipline behind the decomposition (e.g. which " +
 		"write-set/stream split was chosen and which member is the join). Names an owner_agent_id — " +
 		"the real, addressable agent woken at the plan's decision points; a System Agent or worker is " +
