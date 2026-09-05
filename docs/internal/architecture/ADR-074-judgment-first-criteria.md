@@ -72,14 +72,14 @@ New embedded skill `pkg/skills/embedded/define-done/SKILL.md`: the ratified qual
 
 ### D4b — Clarifying questions are delivered via a NEW general-purpose structured clarification tool (operator ruling, 2026-09-05 interview)
 
-The clarifying question in D4a is NOT a plain chat message. The operator ruled: a **structured clarification component, similar to the question tool in Claude Code/OpenCode but better** — and, critically, **a general-purpose agent tool, not a goal-specific surface**: any agent may use it for any clarification (goal compilation is merely its first consumer). Working name `ask_user`. Until it ships, D4a's question step falls back to a plain chat message.
+The clarifying question in D4a is NOT a plain chat message. The operator ruled: a **structured clarification component, similar to the question tool in Claude Code/OpenCode but better** — and, critically, **a general-purpose agent tool, not a goal-specific surface**: any agent may use it for any clarification (goal compilation is merely its first consumer). **Tool name: `AskUserQuestion`** — operator-ruled (interview #3, 2026-09-05) to match Claude Code's tool of the same name; consistent with Omnipus's existing CamelCase precedent for cross-cutting tools (`ToolSearch`, `Skill` — the verb-first snake_case convention applies to domain tools, not this class). Until it ships, D4a's question step falls back to a plain chat message.
 
 **UI rulings (operator interview #2, 2026-09-05 — fixed requirements the follow-up spec inherits):**
 - **Chat input is BLOCKED while a question card is pending**, with a **Cancel** affordance always present (dismiss the question, unblock chat, tool returns "cancelled" to the agent). Free-text answering happens through the card itself, never the chat box: **every question always carries a free-text option** in addition to its listed options.
 - **Up to 10 questions per tool call**, answered on one card. (Per-question multi-select was the unrejected part of the recommended option and is assumed supported; flagged for one-line confirmation in the follow-up spec, not re-ratification.)
 - **Recommended option: badge + listed first, never pre-selected** — the user must actively choose.
 - **Rich context in the card**: a question can carry a preview (diff, image, table, criteria list) so the decision is made looking at the thing.
-- **Timeout with a safe default**: when the agent explicitly marks a question default-safe, an unanswered question may resolve to the recommended option after a set time instead of blocking forever.
+- **Timeout with a safe default — fixed 30 minutes** (operator-ruled, interview #3): when the agent explicitly marks a question default-safe, an unanswered question resolves to the recommended option after 30 minutes. One global value, not agent-tunable — chosen deliberately conservative so a user who stepped away almost certainly had a real chance to answer; background plans accept the half-hour wait. All other questions wait indefinitely until answered or cancelled.
 - **Non-SPA channels get plain text, not UI**: on WhatsApp/Telegram/etc. the tool degrades to a numbered-options text message (rendering native UI per channel was explicitly rejected as not feasible/worth it); the reply parses as the answer.
 - Explicitly NOT wanted (offered, not selected): answer memory / "always do this" defaults.
 
