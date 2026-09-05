@@ -29,6 +29,11 @@ func TestGoalLoop_ParkedTurnNeverAdvancesRound(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	// ADR-074 D4a (wave-1 A6, merged AFTER this A5 test was written): a
+	// prose `/goal` now compiles to a PENDING goal awaiting the user's
+	// confirming reply — activate it explicitly so the scenario under test
+	// (a parked turn on an ACTIVE goal) is actually established.
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	// A judge that would return unmet IF it were (wrongly) invoked.
 	judgeInst.Provider = unmetJudgeProvider("3 tests still failing")

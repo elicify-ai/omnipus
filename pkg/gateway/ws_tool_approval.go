@@ -130,6 +130,20 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
+	// askuserquestion-tool-spec v3 US-6 S1/FR-9: snapshot every PENDING
+	// AskUserQuestion card so a reconnecting SPA re-hydrates its card +
+	// composer lock (the boot rearm sweep in gateway.go re-populates the
+	// registry from session meta after a restart). Optional field — absent
+	// when no registry is wired or nothing is pending.
+	if h.askUserReg != nil {
+		if pendingSets := h.askUserReg.PendingAll(); len(pendingSets) > 0 {
+			delay := h.askUserReg.EffectiveDefaultSafeDelay()
+			for _, set := range pendingSets {
+				frame.PendingAsks = append(frame.PendingAsks, toAskUserCard(set, delay))
+			}
+		}
+	}
+
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal session_state", "error", err)

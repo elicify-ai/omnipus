@@ -69,7 +69,7 @@ func validAskArgs() map[string]any {
 // webCtx builds an owner web-session tool context.
 func webCtx() context.Context {
 	ctx := context.Background()
-	ctx = WithToolContext(ctx, "web", "chat-1")
+	ctx = WithToolContext(ctx, "webchat", "chat-1")
 	ctx = WithSessionKey(ctx, "session:session_owner_1")
 	ctx = WithTranscriptSessionID(ctx, "session_owner_1")
 	ctx = WithAgentID(ctx, "mia")
@@ -109,7 +109,7 @@ func TestAskUserQuestion_ParksWithPendingStub(t *testing.T) {
 	set := reg.created[0]
 	if set.TranscriptSessionID != "session_owner_1" ||
 		set.RoutingSessionKey != "session:session_owner_1" ||
-		set.AgentID != "mia" || set.Channel != "web" || set.ChatID != "chat-1" ||
+		set.AgentID != "mia" || set.Channel != "webchat" || set.ChatID != "chat-1" ||
 		set.Owner != "alice" || set.CardID != stub.CardID {
 		t.Fatalf("set fields wrong: %+v", set)
 	}
@@ -239,7 +239,7 @@ func TestAskUserQuestion_UnwiredRegistryFailsClosed(t *testing.T) {
 func TestAskUserQuestion_RequiresSessionContext(t *testing.T) {
 	reg := &fakeAskRegistry{}
 	tool := newAskTool(reg)
-	ctx := WithToolContext(context.Background(), "web", "chat-1")
+	ctx := WithToolContext(context.Background(), "webchat", "chat-1")
 	res := tool.Execute(ctx, validAskArgs())
 	if !res.IsError || res.ParksTurn {
 		t.Fatalf("missing transcript session must error: %+v", res)
