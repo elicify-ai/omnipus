@@ -5,7 +5,15 @@
 
 //go:build !records_no_sqlite && !mipsle && !netbsd && !windows && !(freebsd && arm)
 
-package propindex
+// package propindex_test (external/black-box), not propindex: this file
+// imports pkg/knowledge for the dual-index measurement below, and
+// pkg/knowledge/author.go imports pkg/records/propindex back — so a
+// white-box test here would be an import cycle. Living in the external test
+// package breaks the cycle; plantSchema/note/mustWriteFile and
+// peakRSSBytes/mib/budgetBytes/childWork, which the sibling white-box tests
+// in fixture_test.go and memory_test.go own, are reached through the
+// exported test-only forwarders in export_test.go.
+package propindex_test
 
 import (
 	"context"
@@ -13,11 +21,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,6 +51,33 @@ const (
 	envBothRoot  = "PROPINDEX_BOTH_ROOT"
 	envBothDB    = "PROPINDEX_BOTH_DB"
 )
+
+// TestMemory_BothIndexesTogether is D16.4 item 4's "both indexes" half.
+//
+// It is OPT-IN because it builds a real corpus of Markdown files on disk and
+// syncs a real bleve index over them, which is minutes of work and hundreds of
+// megabytes of disk — a cost that does not belong in every run of the package's
+// tests. Run it with:
+//
+//	PROPINDEX_MEASURE_BLEVE=<n> go test -tags goolm,stdjson \
+//	  -run '^TestMemory_BothIndexesTogether$' -timeout 60m ./pkg/records/propindex/
+//
+// The number it reports is the one D16.4 item 4 asks for and the one the ADR is
+// careful NOT to claim: the budget is a target, and this is what says whether it
+// is met on a given machine.
+func TestMemory_BothIndexesTogether(t *testing.T) {
+	raw := os.Getenv("PROPINDEX_MEASURE_BLEVE")
+	if raw == "" {
+		t.Skip("opt-in: set PROPINDEX_MEASURE_BLEVE=<record count> to build a real corpus and measure both indexes")
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		t.Fatalf("PROPINDEX_MEASURE_BLEVE must be a positive record count, got %q", raw)
+	}
+	t.Logf("measurement harness: writes %d notes to a temp dir, syncs a real bleve index over them, "+
+		"then measures a fresh child process holding BOTH indexes (memory_both_test.go)", n)
+	measureBothIndexes(t, n)
+}
 
 func measureBothIndexes(t *testing.T, n int) {
 	t.Helper()
@@ -79,18 +116,18 @@ func measureBothIndexes(t *testing.T, n int) {
 		if !ok {
 			t.Fatal("this platform does not report rusage; the budget cannot be measured here")
 		}
-		peak := peakRSSBytes(usage)
-		work := childWork(string(out))
+		peak := propindex.ExportedPeakRSSBytes(usage)
+		work := propindex.ExportedChildWork(string(out))
 		t.Logf("BOTH INDEXES, %s: PEAK RSS %s (%d bytes), budget %s, %s",
-			phase, mib(peak), peak, mib(budgetBytes), work)
+			phase, propindex.ExportedMib(peak), peak, propindex.ExportedMib(propindex.ExportedBudgetBytes), work)
 		if work == "" {
 			t.Fatalf("the child reported no work; the measurement proves nothing\n%s", out)
 		}
-		if peak > budgetBytes {
+		if peak > propindex.ExportedBudgetBytes {
 			t.Errorf("BOTH INDEXES, %s: peaked at %s, above the %s target. "+
 				"D16.4 item 4 states the budget is inherited and unverified for this design; "+
 				"this is the verification and it MISSES.",
-				phase, mib(peak), mib(budgetBytes))
+				phase, propindex.ExportedMib(peak), propindex.ExportedMib(propindex.ExportedBudgetBytes))
 		}
 	}
 }
@@ -115,7 +152,7 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 		}
 	}()
 
-	props, err := Open(ctx, os.Getenv(envBothDB), Options{})
+	props, err := propindex.Open(ctx, os.Getenv(envBothDB), propindex.Options{})
 	if err != nil {
 		t.Fatalf("opening the properties index: %v", err)
 	}
@@ -127,7 +164,7 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 
 	switch phase {
 	case "idle":
-		count, err := props.CountCandidates(ctx, Selector{RecordType: "plant"})
+		count, err := props.CountCandidates(ctx, propindex.Selector{RecordType: "plant"})
 		if err != nil {
 			t.Fatalf("CountCandidates: %v", err)
 		}
@@ -140,11 +177,11 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 
 	case "b2":
 		accepted := 0
-		err := props.Candidates(ctx, Selector{RecordType: "plant"}, func(Candidate) (Verdict, error) {
+		err := props.Candidates(ctx, propindex.Selector{RecordType: "plant"}, func(propindex.Candidate) (propindex.Verdict, error) {
 			accepted++
-			return Accepted, nil
+			return propindex.Accepted, nil
 		})
-		if err != nil && !IsBoundExceeded(err) {
+		if err != nil && !propindex.IsBoundExceeded(err) {
 			t.Fatalf("Candidates: %v", err)
 		}
 		hits, herr := text.Search("monstera", 200)
@@ -156,8 +193,8 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 
 	case "b1":
 		evaluated, values := 0, 0
-		sc := plantSchema(t)
-		err := props.Candidates(ctx, Selector{RecordType: "plant"}, func(c Candidate) (Verdict, error) {
+		sc := propindex.ExportedPlantSchema(t)
+		err := props.Candidates(ctx, propindex.Selector{RecordType: "plant"}, func(c propindex.Candidate) (propindex.Verdict, error) {
 			evaluated++
 			for _, name := range c.PropOrder {
 				prop, ok := sc.Property(name)
@@ -166,11 +203,11 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 				}
 				pv, terr := c.Props[name].Typed(prop)
 				if terr != nil {
-					return Rejected, terr
+					return propindex.Rejected, terr
 				}
 				values += len(pv.Values)
 			}
-			return Rejected, nil
+			return propindex.Rejected, nil
 		})
 		if err != nil {
 			t.Fatalf("Candidates: %v", err)
@@ -193,8 +230,8 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 // meaningful rather than decorative.
 func writeCorpus(t *testing.T, root, dbPath string, n int) {
 	t.Helper()
-	sc := plantSchema(t)
-	store, err := Open(context.Background(), dbPath, Options{})
+	sc := propindex.ExportedPlantSchema(t)
+	store, err := propindex.Open(context.Background(), dbPath, propindex.Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -205,7 +242,7 @@ func writeCorpus(t *testing.T, root, dbPath string, n int) {
 	}()
 
 	const batchSize = 1000
-	batch := make([]NoteRows, 0, batchSize)
+	batch := make([]propindex.NoteRows, 0, batchSize)
 	for i := range n {
 		rel := fmt.Sprintf("garden/p-%06d.md", i)
 		src := fmt.Sprintf(`---
@@ -228,17 +265,17 @@ A cutting taken in spring, kept in bright indirect light near the east window.
 - [ ] repot in spring
 - [x] moved to the east window
 `, i, []string{"seedling", "growing", "dormant"}[i%3], i%28+1, i%9, i%40, i)
-		mustWriteFile(t, filepath.Join(root, rel), src)
-		batch = append(batch, note(t, rel, sc, src))
+		propindex.ExportedMustWriteFile(t, filepath.Join(root, rel), src)
+		batch = append(batch, propindex.ExportedNote(t, rel, sc, src))
 		if len(batch) == batchSize {
-			if err := store.(*Index).UpsertNotes(context.Background(), batch); err != nil {
+			if err := store.(*propindex.Index).UpsertNotes(context.Background(), batch); err != nil {
 				t.Fatalf("UpsertNotes: %v", err)
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
-		if err := store.(*Index).UpsertNotes(context.Background(), batch); err != nil {
+		if err := store.(*propindex.Index).UpsertNotes(context.Background(), batch); err != nil {
 			t.Fatalf("UpsertNotes: %v", err)
 		}
 	}

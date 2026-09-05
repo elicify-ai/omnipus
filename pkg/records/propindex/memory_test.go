@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -246,29 +245,9 @@ func runMemoryPhase(t *testing.T, phase, dbPath string) {
 	}
 }
 
-// TestMemory_BothIndexesTogether is D16.4 item 4's "both indexes" half.
-//
-// It is OPT-IN because it builds a real corpus of Markdown files on disk and
-// syncs a real bleve index over them, which is minutes of work and hundreds of
-// megabytes of disk — a cost that does not belong in every run of the package's
-// tests. Run it with:
-//
-//	PROPINDEX_MEASURE_BLEVE=<n> go test -tags goolm,stdjson \
-//	  -run '^TestMemory_BothIndexesTogether$' -timeout 60m ./pkg/records/propindex/
-//
-// The number it reports is the one D16.4 item 4 asks for and the one the ADR is
-// careful NOT to claim: the budget is a target, and this is what says whether it
-// is met on a given machine.
-func TestMemory_BothIndexesTogether(t *testing.T) {
-	raw := os.Getenv("PROPINDEX_MEASURE_BLEVE")
-	if raw == "" {
-		t.Skip("opt-in: set PROPINDEX_MEASURE_BLEVE=<record count> to build a real corpus and measure both indexes")
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		t.Fatalf("PROPINDEX_MEASURE_BLEVE must be a positive record count, got %q", raw)
-	}
-	t.Logf("measurement harness: writes %d notes to a temp dir, syncs a real bleve index over them, "+
-		"then measures a fresh child process holding BOTH indexes (memory_both_test.go)", n)
-	measureBothIndexes(t, n)
-}
+// TestMemory_BothIndexesTogether (D16.4 item 4's "both indexes" half) lives in
+// memory_both_test.go, in the external propindex_test package — it needs
+// pkg/knowledge, which imports this package back (pkg/knowledge/author.go), so
+// it cannot be a white-box test here without an import cycle. This file keeps
+// only the single-index measurement; peakRSSBytes, mib, budgetBytes and
+// childWork are exported for that file via export_test.go.
