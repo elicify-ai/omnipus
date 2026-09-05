@@ -33,9 +33,12 @@ import (
 //
 //   G2 — a number with a companion unit (Property.UnitProperty) totals ONCE
 //   PER UNIT VALUE, never across units. Every total this file computes is a
-//   list of gen.ViewUnitTotal; there is no code path that could produce a
-//   combined figure, because no accumulator here is ever keyed by anything
-//   other than (property, unit value).
+//   list of gen.ViewUnitTotal, keyed by (property, unit value) — and where
+//   the unit CANNOT be resolved at all (an untyped view, FR-018b, totalling
+//   a property some schema pairs with a unit), the total is REFUSED rather
+//   than computed unit-less, because "unit-less" over unit-carrying rows IS
+//   the combined figure (unitPropertyForTotals, the gate every aggregation
+//   passes first).
 //
 //   G3 — a row whose unit is missing or unconfirmed is SHOWN (it stays in
 //   `rows`), EXCLUDED from every total, and COUNTED in the owning scope's
@@ -165,7 +168,10 @@ type viewResultBuilder struct {
 	// whose grouping matches the view's own reuses the base call's groups.
 	groupCache map[string][]gen.VaultFindGroup
 	truncated  bool
-	out        *gen.ViewResult
+	// refusedUnitProps dedupes the untyped-view G2 refusal: one problem per
+	// property per result, however many parts and groups total it.
+	refusedUnitProps map[string]bool
+	out              *gen.ViewResult
 }
 
 func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) gen.ViewResult {
@@ -517,8 +523,11 @@ func viewUnitValue(cell string) (string, bool) {
 }
 
 // unitPropertyOf resolves the DECLARED companion unit of a number property —
-// declared on the record type, never inferred (design §5). An untyped view
-// has no schema to declare one, so its numbers total unit-less.
+// declared on the record type, never inferred (design §5). For an untyped
+// view it answers "" because no single schema speaks for the rows; whether
+// totalling unit-less is then even PERMITTED is unitPropertyForTotals'
+// question, and every aggregation goes through that gate, never through this
+// lookup alone.
 func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
 	if b.view.Def.Type == nil {
 		return ""
@@ -532,6 +541,76 @@ func (b *viewResultBuilder) unitPropertyOf(numberProp string) string {
 		return ""
 	}
 	return p.UnitProperty
+}
+
+// unitPropertyForTotals is the gate every total passes before any accumulator
+// is keyed: it resolves the companion unit AND answers whether totalling this
+// property is permitted at all (ok=false → the caller computes nothing; the
+// refusal has already been recorded as a problem).
+//
+// The case it exists for: a view with no `type` (legal, FR-018b) spans every
+// note in scope, so no single schema resolves its units. This builder used to
+// total such numbers unit-less — which, over a property SOME schema declares
+// with a companion unit (Property.UnitProperty), silently keyed every row
+// into the one unit-less accumulator: SGD + EUR + the unit-less G3 row, one
+// combined figure, no caveat. That is the exact output G2 ("no combined
+// figure is ever emitted") and G3 ("excluded from every total") forbid, and
+// the design admits no untyped exception. Reachable through the raw
+// write_view escape hatch, a hand-edited view file, and imported .base views
+// that resolve untyped (pkg/vaultimport ResolvedType == "").
+//
+// So: an untyped view refuses to total any property that ANY schema in scope
+// pairs with a unit — the rows stay shown, the refusal names the fix. A
+// property no schema pairs with a unit keeps its unit-less total: with no
+// declaration there are no units to cross (declared, never inferred).
+func (b *viewResultBuilder) unitPropertyForTotals(numberProp string) (unitProp string, ok bool) {
+	if b.view.Def.Type != nil {
+		return b.unitPropertyOf(numberProp), true
+	}
+	declaring := b.typesDeclaringUnitFor(numberProp)
+	if len(declaring) == 0 {
+		return "", true
+	}
+	b.refuseUntypedUnitTotal(numberProp, declaring)
+	return "", false
+}
+
+// typesDeclaringUnitFor lists, sorted, every record type in scope whose
+// schema declares numberProp with a companion unit property.
+func (b *viewResultBuilder) typesDeclaringUnitFor(numberProp string) []string {
+	var out []string
+	for _, t := range b.env.Schemas.Types() {
+		sc, ok := b.env.Schemas.Get(t)
+		if !ok {
+			continue
+		}
+		if p, found := sc.Property(numberProp); found && p != nil && p.UnitProperty != "" {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// refuseUntypedUnitTotal records the G2 refusal for one property, ONCE per
+// result — figures, footer totals and every group's subtotal all funnel here,
+// and one problem line says it all.
+func (b *viewResultBuilder) refuseUntypedUnitTotal(numberProp string, declaring []string) {
+	if b.refusedUnitProps == nil {
+		b.refusedUnitProps = map[string]bool{}
+	}
+	if b.refusedUnitProps[numberProp] {
+		return
+	}
+	b.refusedUnitProps[numberProp] = true
+	fix := fmt.Sprintf("declare `type:` on the view so %q resolves its companion unit and totals once per unit value, or total a property no record type pairs with a unit", numberProp)
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("no total of %q: this view declares no `type`, and record type %s declares %q with a companion unit — a total that cannot resolve units would add across them (G2); the rows themselves are still shown",
+			numberProp, strings.Join(declaring, "/"), numberProp),
+		Fix:     &fix,
+		Records: []string{},
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -797,7 +876,10 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 					excluded := make([]string, 0, len(rows))
 					var unitProps []string
 					for i, prop := range subtotalProps {
-						unitProp := b.unitPropertyOf(prop)
+						unitProp, permitted := b.unitPropertyForTotals(prop)
+						if !permitted {
+							continue
+						}
 						totals, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
 						rg.Subtotals = append(rg.Subtotals, totals...)
 						excluded = append(excluded, ex...)
@@ -819,7 +901,10 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 		excluded := make([]string, 0, len(rows))
 		var unitProps []string
 		for i, prop := range subtotalProps {
-			unitProp := b.unitPropertyOf(prop)
+			unitProp, permitted := b.unitPropertyForTotals(prop)
+			if !permitted {
+				continue
+			}
 			ts, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
 			totals = append(totals, ts...)
 			excluded = append(excluded, ex...)
@@ -855,7 +940,14 @@ func (b *viewResultBuilder) buildFiguresPartData(p *gen.ViewResultPart, src gen.
 		return
 	}
 	numberProp := *src.Number
-	unitProp := b.unitPropertyOf(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	if !permitted {
+		// The part still answers an EMPTY totals list — the SPA's explicit
+		// "no figures" state — while the refusal problem says why.
+		totals := []gen.ViewUnitTotal{}
+		p.Totals = &totals
+		return
+	}
 	totals, excluded := b.aggregateViewRows(b.allRows(), numberProp, unitProp, viewPartAggregateOf(src))
 	p.Totals = &totals
 	if unitProp != "" {
@@ -868,7 +960,10 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 		return
 	}
 	numberProp, dateProp := *src.Number, *src.Date
-	unitProp := b.unitPropertyOf(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	if !permitted {
+		return
+	}
 	op := viewPartAggregateOf(src)
 
 	groups, ok := b.groupsFor([]gen.ViewGroupBy{{Property: dateProp}})
@@ -931,7 +1026,10 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 	}
 	grouping := (*src.Grouping)[:2]
 	numberProp := *src.Number
-	unitProp := b.unitPropertyOf(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	if !permitted {
+		return
+	}
 	op := viewPartAggregateOf(src)
 
 	groups, ok := b.groupsFor(grouping)
