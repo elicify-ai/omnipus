@@ -147,6 +147,58 @@ func mustCatalog(t *testing.T, data []byte) *Catalog {
 	return c
 }
 
+// TestDefaultClock_RealNowStaleness exercises the DEFAULT nil-nowFn path
+// (Catalog.now falling back to time.Now), which the pinned-clock
+// constructors above no longer touch. A fixture freshly stamped with the
+// real wall clock must serve non-stale and non-degraded, and one stamped
+// past the StaleAfter horizon must serve stale — proving the fallback
+// returns the actual current time in both directions (a broken fallback,
+// e.g. one returning the zero time, fails the stale half: a zero "now"
+// makes every document look fresh).
+func TestDefaultClock_RealNowStaleness(t *testing.T) {
+	apply := func(t *testing.T, updatedAt time.Time) *Catalog {
+		t.Helper()
+		m := fixtureMap(t)
+		m["updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+		c := New()
+		if c.nowFn != nil {
+			t.Fatal("New() must leave nowFn nil — this test exercises the time.Now fallback")
+		}
+		if err := c.Apply(encode(t, m)); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		return c
+	}
+
+	t.Run("freshly stamped → non-stale, non-degraded", func(t *testing.T) {
+		c := apply(t, time.Now())
+		s, ok := c.Served()
+		if !ok {
+			t.Fatal("Served() must return a pair after Apply")
+		}
+		if s.Stale {
+			t.Fatal("a document stamped updated_at=now must not be stale under the default clock")
+		}
+		if degraded, err := c.Degraded(); degraded || err != nil {
+			t.Fatalf("a fresh document must not degrade /health under the default clock: %v %v", degraded, err)
+		}
+	})
+
+	t.Run("stamped past StaleAfter → stale, degraded", func(t *testing.T) {
+		c := apply(t, time.Now().Add(-StaleAfter-24*time.Hour))
+		s, ok := c.Served()
+		if !ok {
+			t.Fatal("Served() must return a pair after Apply")
+		}
+		if !s.Stale {
+			t.Fatal("a document older than StaleAfter must be stale under the default clock")
+		}
+		if degraded, err := c.Degraded(); !degraded || err == nil {
+			t.Fatalf("a stale document must degrade /health under the default clock: %v %v", degraded, err)
+		}
+	})
+}
+
 // TestNewCatalog keeps the production convenience constructor covered now
 // that mustCatalog pins the clock via New+Apply instead of calling it.
 func TestNewCatalog(t *testing.T) {
