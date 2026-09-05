@@ -2969,6 +2969,30 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 	sendRawFrameBytes(wc, frameType, data)
 }
 
+// broadcastRaw fans one pre-marshaled frame out to every connected WS client
+// (single-user model — every connection is the one account, so no per-account
+// scoping). Best-effort: a connection whose send buffer is full drops the
+// frame (logged with the caller-supplied message/attrs, counted on
+// wc.droppedFrames) and must recover from the next reconnect snapshot.
+// Shared by broadcastAskUserCard and broadcastToolApprovalRequired, which
+// each keep their own frame construction and drop-log identity.
+func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...any) {
+	h.mu.Lock()
+	conns := make([]*wsConn, 0, len(h.sessions))
+	for _, wc := range h.sessions {
+		conns = append(conns, wc)
+	}
+	h.mu.Unlock()
+	for _, wc := range conns {
+		select {
+		case wc.sendCh <- raw:
+		default:
+			slog.Warn(dropLogMsg, dropLogAttrs...)
+			wc.droppedFrames.Add(1)
+		}
+	}
+}
+
 // sendRawFrameBytes routes pre-marshaled frame bytes to the connection's send channel.
 // It implements the replay-divert logic (W1-1), critical-frame blocking, and
 // backpressure drop logic shared by sendConnGenFrame and wsStreamer.Update.
