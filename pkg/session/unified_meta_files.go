@@ -98,6 +98,9 @@ type u5GoalFile struct {
 	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
 	GoalCriteriaJSON   string `json:"goal_criteria,omitempty"`
 	GoalPendingJSON    string `json:"goal_pending,omitempty"`
+	// PendingAskJSON (AskUserQuestion durable pending set) rides in the goal
+	// group: pending interaction state, no recency bump (see SessionMeta).
+	PendingAskJSON string `json:"pending_ask,omitempty"`
 }
 
 // u5LoopFile is loop.json's on-disk shape: the 9 Loop* fields, verbatim
@@ -158,6 +161,7 @@ func u5GoalFromMeta(meta *UnifiedMeta) u5GoalFile {
 		GoalLastActivityAt: meta.GoalLastActivityAt,
 		GoalCriteriaJSON:   meta.GoalCriteriaJSON,
 		GoalPendingJSON:    meta.GoalPendingJSON,
+		PendingAskJSON:     meta.PendingAskJSON,
 	}
 }
 
@@ -221,6 +225,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, goal u5Goa
 			GoalLastActivityAt:    goal.GoalLastActivityAt,
 			GoalCriteriaJSON:      goal.GoalCriteriaJSON,
 			GoalPendingJSON:       goal.GoalPendingJSON,
+			PendingAskJSON:        goal.PendingAskJSON,
 			LoopMode:              loop.LoopMode,
 			LoopPrompt:            loop.LoopPrompt,
 			LoopRunCount:          loop.LoopRunCount,
@@ -435,6 +440,7 @@ func (us *UnifiedStore) u5WriteGoalLocked(sessionID string, meta *UnifiedMeta) e
 		cached.GoalLastActivityAt = meta.GoalLastActivityAt
 		cached.GoalCriteriaJSON = meta.GoalCriteriaJSON
 		cached.GoalPendingJSON = meta.GoalPendingJSON
+		cached.PendingAskJSON = meta.PendingAskJSON
 	} else {
 		us.metaCache[sessionID] = meta.Clone()
 	}
