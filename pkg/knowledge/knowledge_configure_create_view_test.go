@@ -603,3 +603,74 @@ func TestKnowledgeConfigure_CreateView_BreakdownNeverGroupsByItsOwnNumber(t *tes
 	require.Contains(t, res.ForLLM, "OTHER than the number")
 	cvAssertFileAbsent(t, root, "bd-selfgroup")
 }
+
+// ---------------------------------------------------------------------------
+// The view name is a FILENAME, and the agent supplies it
+// ---------------------------------------------------------------------------
+
+// TestKnowledgeConfigure_CreateView_NameEscapingTheViewsDir_Refused is the
+// create_view half of the traversal finding.
+//
+// Every gate G1..G6 above judges the composed STACK. None of them judges the
+// `view` argument, which is trimmed and then joined straight onto
+// records.ViewsDir(root) with a ".yaml" suffix — so "../records/invoice"
+// passes every gate, composes a perfectly valid table view, and lands on top
+// of the invoice record type's own schema file. G6's promise that "a refused
+// call writes nothing" is intact; what is broken is that an ACCEPTED call
+// writes somewhere the views directory does not contain.
+//
+// The oracle is the fixture's schema file still holding its own bytes.
+func TestKnowledgeConfigure_CreateView_NameEscapingTheViewsDir_Refused(t *testing.T) {
+	tool, ws, root := cvFixture(t)
+
+	schemaPath := filepath.Join(root, ".omnipus-vault", "records", "invoice.yaml")
+	before, err := os.ReadFile(schemaPath)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		view string
+	}{
+		{"climbs into the sibling records directory", "../records/invoice"},
+		{"escapes the vault entirely", "../../../../pwned"},
+		{"windows-style separator", `..\records\invoice`},
+		{"absolute path", "/tmp/omnipus-cv-pwned"},
+		{"bare dot", "."},
+		{"bare dotdot", ".."},
+		{"nested below views", "sub/dir/view"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+				"collection": "kb", "op": "create_view", "view": tc.view,
+				"kind": "table", "type": "invoice",
+			})
+			require.True(t, res.IsError, "must be refused, got: %s", res.ForLLM)
+			require.Contains(t, res.ForLLM, "must be a name, not a path",
+				"the refusal must name the rule it enforced")
+
+			after, rerr := os.ReadFile(schemaPath)
+			require.NoError(t, rerr, "the record-type schema must still exist")
+			require.Equal(t, string(before), string(after),
+				"the record-type schema must not have been overwritten")
+		})
+	}
+
+	for _, escaped := range []string{
+		filepath.Join(root, ".omnipus-vault", "pwned.yaml"),
+		filepath.Join(filepath.Dir(root), "pwned.yaml"),
+		filepath.Join(root, ".omnipus-vault", "views", "sub", "dir", "view.yaml"),
+		"/tmp/omnipus-cv-pwned.yaml",
+	} {
+		_, serr := os.Stat(escaped)
+		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
+	}
+
+	// Control: an ordinary name still composes and writes.
+	ok := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_view", "view": "plain-invoices",
+		"kind": "table", "type": "invoice",
+	})
+	require.False(t, ok.IsError, ok.ForLLM)
+	_, err = os.Stat(cvViewPath(root, "plain-invoices"))
+	require.NoError(t, err)
+}

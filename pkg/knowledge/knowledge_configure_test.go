@@ -456,3 +456,220 @@ func TestKnowledgeConfigure_UnknownArgument_Refused(t *testing.T) {
 // is commented out during development; harmless once every test above is
 // active, since records.ValidateOptions etc. are already referenced.
 var _ = records.ValidateOptions{}
+
+// ---------------------------------------------------------------------------
+// The view/type name is a FILENAME, and an agent supplies it
+// ---------------------------------------------------------------------------
+
+// TestKnowledgeConfigure_WriteView_NameEscapingTheViewsDir_Refused is the
+// write_view half of the traversal finding.
+//
+// `view` is joined straight onto records.ViewsDir(root) and given a ".yaml"
+// suffix, so a name carrying a path separator names a file the views
+// directory does not contain. "../records/widget" reaches the record-type
+// SCHEMA for `widget` and overwrites it with a view document — every gate in
+// this tool passes, because none of them ever looked at the name's shape.
+// Deeper chains leave the vault altogether.
+//
+// The oracle is not "some refusal happened": it is that the schema file still
+// holds its own bytes afterwards, and that the escaped path was never
+// created at all.
+func TestKnowledgeConfigure_WriteView_NameEscapingTheViewsDir_Refused(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	require.False(t, tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_record_type", "type": "widget",
+		"definition": map[string]any{
+			"schema_version": float64(1),
+			"properties":     map[string]any{"name": map[string]any{"type": "text"}},
+		},
+	}).IsError)
+
+	schemaPath := filepath.Join(root, ".omnipus-vault", "records", "widget.yaml")
+	before, err := os.ReadFile(schemaPath)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		view string
+	}{
+		{"climbs into the sibling records directory", "../records/widget"},
+		{"escapes the vault entirely", "../../../../pwned"},
+		{"windows-style separator", `..\records\widget`},
+		{"absolute path", "/tmp/omnipus-pwned"},
+		{"bare dot", "."},
+		{"bare dotdot", ".."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+				"collection": "kb", "op": "write_view", "view": tc.view,
+				"definition": map[string]any{"type": "widget"},
+			})
+			require.True(t, res.IsError, "must be refused, got: %s", res.ForLLM)
+			require.Contains(t, res.ForLLM, "must be a name, not a path",
+				"the refusal must name the rule it enforced")
+
+			after, rerr := os.ReadFile(schemaPath)
+			require.NoError(t, rerr, "the record-type schema must still exist")
+			require.Equal(t, string(before), string(after),
+				"the record-type schema must not have been overwritten")
+		})
+	}
+
+	// Nothing at all was written anywhere the names pointed.
+	for _, escaped := range []string{
+		filepath.Join(root, ".omnipus-vault", "pwned.yaml"),
+		filepath.Join(filepath.Dir(root), "pwned.yaml"),
+		"/tmp/omnipus-pwned.yaml",
+	} {
+		_, serr := os.Stat(escaped)
+		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
+	}
+
+	// The control case: an ordinary name still writes, so the guard refuses
+	// traversal rather than refusing write_view.
+	ok := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "write_view", "view": "plain-widgets",
+		"definition": map[string]any{"type": "widget"},
+	})
+	require.False(t, ok.IsError, ok.ForLLM)
+	_, err = os.Stat(filepath.Join(root, ".omnipus-vault", "views", "plain-widgets.yaml"))
+	require.NoError(t, err)
+}
+
+// TestKnowledgeConfigure_CreateRecordType_NameEscapingTheRecordsDir_Refused
+// is the same unguarded join one door over: `type` becomes a filename under
+// records.SchemaDir the same way `view` does under ViewsDir. The write there
+// is O_EXCL, so it cannot overwrite — it can still CREATE a file anywhere the
+// process can write.
+func TestKnowledgeConfigure_CreateRecordType_NameEscapingTheRecordsDir_Refused(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	for _, typeName := range []string{"../views/planted", "../../../../planted", `..\views\planted`, "."} {
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_record_type", "type": typeName,
+			"definition": map[string]any{
+				"schema_version": float64(1),
+				"properties":     map[string]any{"name": map[string]any{"type": "text"}},
+			},
+		})
+		require.True(t, res.IsError, "type=%q must be refused, got: %s", typeName, res.ForLLM)
+		require.Contains(t, res.ForLLM, "must be a name, not a path")
+	}
+
+	for _, escaped := range []string{
+		filepath.Join(root, ".omnipus-vault", "views", "planted.yaml"),
+		filepath.Join(filepath.Dir(root), "planted.yaml"),
+	} {
+		_, serr := os.Stat(escaped)
+		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-op argument sets
+// ---------------------------------------------------------------------------
+
+// TestKnowledgeConfigure_WriteView_CreateViewArguments_Refused pins the
+// refusal write_view lost when create_view landed.
+//
+// unknownArgs is a SINGLE sweep over one union of every op's arguments, so
+// folding create_view's eleven flat bindings into that union made all eleven
+// silently acceptable on write_view — where nothing reads them. `kind` and
+// `number` on a write_view call are dropped without a word, which is the
+// exact silent-drop failure the unknown-argument sweep exists to prevent.
+func TestKnowledgeConfigure_WriteView_CreateViewArguments_Refused(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	require.False(t, tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_record_type", "type": "widget",
+		"definition": map[string]any{
+			"schema_version": float64(1),
+			"properties":     map[string]any{"amount": map[string]any{"type": "decimal"}},
+		},
+	}).IsError)
+
+	for _, arg := range []string{"kind", "number", "unit", "date", "image", "choice", "group_by", "columns", "sort", "limit", "filter"} {
+		t.Run(arg, func(t *testing.T) {
+			res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+				"collection": "kb", "op": "write_view", "view": "wv-" + arg,
+				"definition": map[string]any{"type": "widget"},
+				arg:          "amount",
+			})
+			require.True(t, res.IsError, "write_view must refuse %q, got: %s", arg, res.ForLLM)
+			require.Contains(t, res.ForLLM, arg, "the refusal must name the argument")
+			_, serr := os.Stat(filepath.Join(root, ".omnipus-vault", "views", "wv-"+arg+".yaml"))
+			require.True(t, os.IsNotExist(serr), "nothing may be written on a refused call")
+		})
+	}
+}
+
+// TestKnowledgeConfigure_CreateView_WriteViewArgument_Refused is the mirror:
+// create_view composes its own `definition`, so accepting one is the same
+// silent drop in the other direction.
+func TestKnowledgeConfigure_CreateView_DefinitionArgument_Refused(t *testing.T) {
+	home, ws, _ := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_view", "view": "cv-def", "kind": "table",
+		"definition": map[string]any{"type": "widget"},
+	})
+	require.True(t, res.IsError, "create_view must refuse 'definition', got: %s", res.ForLLM)
+	require.Contains(t, res.ForLLM, "definition")
+}
+
+// TestKnowledgeConfigure_EveryOpArgSetIsInTheDeclaredSchema keeps the per-op
+// sets and the one union the tool schema is built from as one fact: an
+// argument an op accepts but Parameters() never declares is unreachable, and
+// a union member no op accepts is advertised and always refused.
+func TestKnowledgeConfigure_EveryOpArgSetIsInTheDeclaredSchema(t *testing.T) {
+	union := map[string]bool{}
+	for _, n := range configureArgNames {
+		union[n] = true
+	}
+	covered := map[string]bool{}
+	for _, n := range configureCommonArgNames {
+		require.True(t, union[n], "common argument %q is not in the declared union", n)
+		covered[n] = true
+	}
+	for _, op := range vaultConfigureOps {
+		names, ok := configureOpArgNames[op]
+		require.True(t, ok, "op %q declares no argument set", op)
+		for _, n := range names {
+			require.True(t, union[n], "op %q accepts %q, which is not in the declared union", op, n)
+			covered[n] = true
+		}
+	}
+	for n := range union {
+		require.True(t, covered[n], "argument %q is advertised but no op accepts it", n)
+	}
+}
+
+// TestKnowledgeConfigure_KindDescriptionIsDerivedFromViewKinds is the
+// composer-agreement half of the availability finding: the `kind` parameter
+// description must state each kind's requirement in view_kinds.go's OWN
+// words, not a second hand-written copy of the same table.
+func TestKnowledgeConfigure_KindDescriptionIsDerivedFromViewKinds(t *testing.T) {
+	params := NewConfigureTool(AuthoringDeps{}).Parameters()
+	props, _ := params["properties"].(map[string]any)
+	kind, _ := props["kind"].(map[string]any)
+	desc, _ := kind["description"].(string)
+	require.NotEmpty(t, desc)
+
+	for _, k := range ViewKindOrder {
+		phrase := viewKindRequirementPhrase[k]
+		require.NotEmpty(t, phrase, "view_kinds.go declares no requirement phrase for %q", k)
+		require.Contains(t, desc, phrase,
+			"the kind description must state %q's requirement in view_kinds.go's own words", k)
+	}
+	require.Equal(t, ViewKindOrder, kind["enum"],
+		"the declared kind enum must be view_kinds.go's ViewKindOrder, not a second list")
+}

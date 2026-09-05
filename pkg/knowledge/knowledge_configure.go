@@ -149,16 +149,73 @@ var vaultConfigureCascadeOps = map[string]bool{
 // split one operation across two names in the audit history.
 const authorOpConfigure AuthorOperation = "knowledge.configure"
 
-// configureArgNames is every argument Parameters() declares. expect_version
-// is DELIBERATELY absent (FR-018a, AC-C3) — its absence from this list is
-// what makes it absent from the tool schema, which is what the acceptance
-// criterion actually tests.
+// configureCommonArgNames are the two arguments every op takes: which change
+// to make, and where.
+var configureCommonArgNames = []string{"op", "collection"}
+
+// configureOpArgNames is each op's OWN accepted argument set, on top of
+// configureCommonArgNames.
 //
-// createViewArgNames (knowledge_configure_create_view.go) is appended here
-// rather than kept separate, because unknownArgs (below) is a SINGLE check
-// run once in Execute for every op — the same posture "definition" already
-// takes, being used by three ops and declared once.
-var configureArgNames = append([]string{"op", "collection", "type", "view", "definition"}, createViewArgNames...)
+// WHY PER-OP AND NOT ONE UNION. This tool's unknown-argument sweep used to
+// run once, in Execute, against a single flat list — which was correct while
+// every argument in that list was read by at least one of five ops that
+// mostly shared them. op=create_view then added ELEVEN flat bindings (kind,
+// number, unit, date, image, choice, group_by, columns, sort, limit, filter)
+// to the same union, and that quietly made all eleven acceptable on
+// write_view, where nothing reads them. `write_view` with `kind: "board"`
+// returned "view saved" and dropped the kind without a word — the exact
+// silent-drop failure the sweep exists to prevent, arriving through the
+// sweep's own accepted list.
+//
+// So the sweep now resolves the op first and checks against THAT op's set.
+// create_view takes `type` (the record type it composes against) and its
+// eleven bindings; write_view takes `definition` and nothing else, because
+// everything write_view honours lives inside that object.
+var configureOpArgNames = map[string][]string{
+	opCreateRecordType: {"type", "definition"},
+	opEditRecordType:   {"type", "definition"},
+	opDeleteRecordType: {"type"},
+	opWriteView:        {"view", "definition"},
+	opCreateView:       append([]string{"view", "type"}, createViewArgNames...),
+	opDeleteView:       {"view"},
+}
+
+// configureArgNames is every argument Parameters() declares — the UNION of
+// the sets above, DERIVED from them rather than restated, so an argument an
+// op accepts is necessarily advertised and an advertised argument is
+// necessarily accepted somewhere. expect_version is DELIBERATELY absent
+// (FR-018a, AC-C3) — its absence from this list is what makes it absent from
+// the tool schema, which is what the acceptance criterion actually tests.
+var configureArgNames = buildConfigureArgNames()
+
+func buildConfigureArgNames() []string {
+	out := append([]string(nil), configureCommonArgNames...)
+	seen := map[string]bool{}
+	for _, n := range out {
+		seen[n] = true
+	}
+	// vaultConfigureOps, not a range over the map: a map range is unordered,
+	// and this list is rendered into refusal text.
+	for _, op := range vaultConfigureOps {
+		for _, n := range configureOpArgNames[op] {
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// configureAcceptedArgs is the full accepted set for one op — the common
+// arguments plus its own.
+func configureAcceptedArgs(op string) []string {
+	own := configureOpArgNames[op]
+	out := make([]string, 0, len(configureCommonArgNames)+len(own))
+	out = append(out, configureCommonArgNames...)
+	out = append(out, own...)
+	return out
+}
 
 // ---------------------------------------------------------------------------
 // THE DESCRIPTION IS DERIVED, NEVER TRANSCRIBED
@@ -277,21 +334,13 @@ func (t *ConfigureTool) Parameters() map[string]any {
 			},
 			"kind": map[string]any{
 				"type": "string",
-				"enum": createViewKindNames,
-				"description": fmt.Sprintf(
-					"create_view only, required. One of the eight view kinds. table/list: no "+
-						"requirement, work on anything. tiles: %s (D5) — refused unconditionally; "+
-						"'image' is accepted but can never satisfy it today. board: needs 'choice' "+
-						"naming an enum property with at most %d declared values. calendar: needs "+
-						"'date' naming a date property. summary: needs 'number' naming an integer or "+
-						"decimal property, plus optional 'group_by' (one property) for a grouped, "+
-						"subtotalled table. trend: needs 'date' and 'number'. breakdown: needs "+
-						"'number' and 'group_by' naming exactly TWO different properties. "+
-						"A kind is refused, naming the missing or near-miss property, when the target "+
-						"record type does not have what it requires — nothing is written on a refusal. "+
-						"Call knowledge_describe on the record type first — it states, per type, "+
-						"which kinds are actually available.",
-					imageIneligibleReason, maxBoardEnumValues),
+				// Both DERIVED from view_kinds.go's rulebook, never
+				// transcribed: the enum is its ViewKindOrder, and the prose is
+				// built from its per-kind requirement phrases — see
+				// createViewKindParamDescription for what went wrong when this
+				// sentence was written by hand.
+				"enum":        ViewKindOrder,
+				"description": createViewKindParamDescription,
 			},
 			"filter": map[string]any{
 				"type": "object",
@@ -398,12 +447,6 @@ func (t *ConfigureTool) Execute(ctx context.Context, args map[string]any) *tools
 			"knowledge_configure takes no expect_version: a single-file token cannot guard a "+
 				"change to every note declaring this type. Re-read with knowledge_describe and re-send")
 	}
-	if unknown := unknownArgs(args, configureArgNames); len(unknown) > 0 {
-		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
-			"unknown argument(s) %s; accepted: %s",
-			strings.Join(unknown, ", "), strings.Join(configureArgNames, ", ")))
-	}
-
 	op := strings.TrimSpace(stringArg(args["op"]))
 	if op == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil,
@@ -414,6 +457,20 @@ func (t *ConfigureTool) Execute(ctx context.Context, args map[string]any) *tools
 	}
 	if vaultConfigureCascadeOps[op] {
 		return t.deps.refuse(authorOpConfigure, target, nil, op+" writes notes you did not name; use knowledge_restructure")
+	}
+	// The unknown-argument sweep runs AFTER the op is resolved, because what
+	// counts as unknown is a property of the op — see configureOpArgNames.
+	// An unrecognised op is refused first: "op=frobnicate accepts …" would be
+	// a nonsense sentence, and the op is the thing actually wrong.
+	if _, known := configureOpArgNames[op]; !known {
+		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
+			"unsupported op %q; supported ops are %s", op, strings.Join(vaultConfigureOps, ", ")))
+	}
+	accepted := configureAcceptedArgs(op)
+	if unknown := unknownArgs(args, accepted); len(unknown) > 0 {
+		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
+			"unknown argument(s) %s; op=%s accepts: %s",
+			strings.Join(unknown, ", "), op, strings.Join(accepted, ", ")))
 	}
 
 	switch op {
@@ -445,6 +502,11 @@ func (t *ConfigureTool) execCreateRecordType(target mutationTarget, args map[str
 	if typeName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'type' is required for create_record_type")
 	}
+	// The name becomes a filename under records.SchemaDir — see
+	// controlPlaneNameRefusal for why that is checked before anything else.
+	if nrefusal := controlPlaneNameRefusal("type", typeName, records.SchemaDir(root)); nrefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "create_record_type: "+nrefusal)
+	}
 
 	defMap, derr := definitionMap(args["definition"])
 	if derr != nil {
@@ -468,7 +530,7 @@ func (t *ConfigureTool) execCreateRecordType(target mutationTarget, args map[str
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_record_type: "+merr.Error())
 	}
-	schemaPath := filepath.Join(records.SchemaDir(root), typeName+".yaml")
+	schemaPath := filepath.Join(records.SchemaDir(root), typeName+controlPlaneFileExt)
 	if _, rej := records.ParseSchema(schemaPath, yamlBytes); rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_record_type: "+rej.Reason)
 	}
@@ -641,6 +703,11 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if viewName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'view' is required for write_view")
 	}
+	// The name becomes a filename under records.ViewsDir — see
+	// controlPlaneNameRefusal for why that is checked before anything else.
+	if nrefusal := controlPlaneNameRefusal("view", viewName, records.ViewsDir(root)); nrefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+nrefusal)
+	}
 
 	defMap, derr := definitionMap(args["definition"])
 	if derr != nil {
@@ -658,7 +725,7 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+merr.Error())
 	}
-	viewPath := filepath.Join(records.ViewsDir(root), viewName+".yaml")
+	viewPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
 	parsed, rej := records.ParseView(viewPath, yamlBytes)
 	if rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
@@ -1035,6 +1102,77 @@ func removeControlPlaneFile(target mutationTarget, abs string) error {
 		}
 		return nil
 	})
+}
+
+// controlPlaneFileExt is the suffix every control-plane name is given when it
+// becomes a filename. Named once so controlPlaneNameRefusal validates the
+// EXACT string the callers below join, rather than a second spelling of it.
+const controlPlaneFileExt = ".yaml"
+
+// controlPlaneNameRefusal is the ONE validator for every argument that becomes
+// a control-plane FILENAME — `view` under records.ViewsDir, `type` under
+// records.SchemaDir. It returns "" when the name is safe, or the refusal to
+// give the caller.
+//
+// THE THREAT, PLAINLY. These names arrive from an agent, and the only thing
+// standing between the argument and an os.OpenFile is a filepath.Join. A
+// `view` of "../records/company" joins to <vault>/.omnipus-vault/records/
+// company.yaml — the record-type SCHEMA for `company` — and every other gate
+// in this tool passes it, because none of them ever looked at the name's
+// shape: the view document is valid, it names a declared type, and the write
+// is an ordinary atomic overwrite. Longer "../.." chains leave the vault
+// entirely and land anywhere the process can write. The same join guards
+// nothing under records.SchemaDir either; that door writes with O_EXCL, so it
+// cannot overwrite, but it can still CREATE a file outside the vault.
+//
+// So the rule is deliberately narrow and stated positively: a control-plane
+// name is a plain filename, and it produces a file DIRECTLY inside the
+// directory that kind of file lives in. Nothing about "sanitising" the name
+// into something safe — a name that is not already safe is refused by name,
+// because an agent that asked for "../records/company" did not mean
+// "records-company" and must be told so rather than silently redirected.
+//
+// The checks are belt and braces on purpose. The three explicit refusals
+// (separator, absolute, bare dot segment) name what is wrong in words the
+// caller can act on; the containment assertion afterwards is the backstop
+// that catches anything the three did not anticipate on a platform whose
+// separator rules differ, and it compares against the SAME joined path the
+// callers go on to use.
+func controlPlaneNameRefusal(argName, name, dir string) string {
+	label := records.VaultMarkerDirName + "/" + filepath.Base(dir)
+	refuse := func(why string) string {
+		return fmt.Sprintf(
+			"'%s' must be a name, not a path: %q %s. It becomes one file directly inside %s/, "+
+				"so it may not contain a path separator, may not be an absolute path, and may "+
+				"not be \".\" or \"..\"",
+			argName, name, why, label)
+	}
+
+	switch {
+	case name == "":
+		return refuse("is blank")
+	case strings.ContainsRune(name, 0):
+		return refuse("contains a NUL byte")
+	case strings.ContainsAny(name, `/\`):
+		// Both separators, on every platform: a backslash is not a separator
+		// on Linux or macOS, but a name carrying one is still an attempt to
+		// address a path and is refused rather than turned into a file whose
+		// name contains a backslash.
+		return refuse("contains a path separator")
+	case filepath.IsAbs(name):
+		return refuse("is an absolute path")
+	case name == "." || name == "..":
+		return refuse("names a directory, not a file")
+	}
+
+	// The backstop: the file this name produces must sit directly in dir.
+	// Checked against the join the callers actually perform, so the two can
+	// never drift.
+	target := filepath.Join(dir, name+controlPlaneFileExt)
+	if filepath.Dir(target) != filepath.Clean(dir) {
+		return refuse("resolves outside the directory it must be written in")
+	}
+	return ""
 }
 
 // relControlPlanePath renders a schema/view's absolute path as the
