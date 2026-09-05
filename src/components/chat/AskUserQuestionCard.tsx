@@ -168,16 +168,27 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
 
   // Client-fired 5-minute grace auto-submit (US-3 S3): checked on a
   // low-frequency tick against the last interaction timestamp.
+  //
+  // The tick callback goes through a ref that is refreshed every render
+  // (latest-ref pattern) instead of being captured by the interval closure.
+  // The earlier version keyed the interval on `allAnswered` and closed over
+  // that render's `submit`/`drafts`: once every question was first answered
+  // the closure froze, so a LATER edit to an answer changed the drafts but
+  // not the closure, and the grace timer submitted the stale pre-edit
+  // answers. Regression test: "grace auto-submit sends the EDITED answer".
+  const graceTick = useRef<() => void>(() => {})
   useEffect(() => {
-    if (card.status !== 'pending') return
-    const t = setInterval(() => {
+    graceTick.current = () => {
       if (!submitted.current && allAnswered && Date.now() - lastInteraction.current >= ASK_GRACE_MS) {
         submit()
       }
-    }, 5000)
+    }
+  })
+  useEffect(() => {
+    if (card.status !== 'pending') return
+    const t = setInterval(() => graceTick.current(), 5000)
     return () => clearInterval(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card.status, allAnswered])
+  }, [card.status])
 
   // ── Terminal: collapsed question → answer record (§0.6) ──────────────────
   if (card.status !== 'pending') {
