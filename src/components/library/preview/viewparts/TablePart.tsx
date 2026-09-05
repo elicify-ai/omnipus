@@ -104,14 +104,24 @@ function BodyRows({
 }
 
 export function TablePart({ part, rows }: { part: ViewResultPart; rows: VaultFindRow[] }) {
-  const allColumns = part.columns ?? [FILE_NAME_PROPERTY]
+  // code-review finding #3(b): `part.columns ?? [FILE_NAME_PROPERTY]` only
+  // caught `undefined` — a part that "declares no properties" as the EMPTY
+  // ARRAY sailed through with zero columns, which made the group-header
+  // row's `colSpan={columns.length}` zero and the subtotal label's
+  // `colSpan={columns.length - 1}` negative (both invalid HTML). Guard both
+  // shapes the same way.
+  const allColumns = part.columns !== undefined && part.columns.length > 0 ? part.columns : [FILE_NAME_PROPERTY]
   // §5: the declared unit property draws inside the number cell, not as its
   // own column — but only when the part actually binds a number to it.
   const unitProperty = part.source.unit
-  const columns =
+  const filteredColumns =
     unitProperty !== undefined && unitProperty !== '' && part.source.number !== undefined
       ? allColumns.filter((c) => c !== unitProperty)
       : allColumns
+  // The unit-column filter above can ALSO empty the list (a one-column part
+  // whose sole column happens to be the unit property) — re-apply the same
+  // floor rather than trust the filter to always leave something behind.
+  const columns = filteredColumns.length > 0 ? filteredColumns : [FILE_NAME_PROPERTY]
   const numeric = numericProperties(part)
   const byPath = rowsByPath(rows)
   const groups = part.groups
@@ -197,7 +207,12 @@ function FragmentRows({
       {group.subtotals.map((s, i) => (
         <tr key={`${s.property}|${s.op}|${s.unit ?? ' '}|${i}`} data-testid="viewpart-group-subtotal">
           <td
-            colSpan={columns.length - 1}
+            // A colSpan must be >= 1: with exactly one rendered column (the
+            // columns floor above guarantees at least one, never zero) there
+            // is no width left over for the label once the value cell takes
+            // its own column, so the label claims one anyway rather than an
+            // invalid 0.
+            colSpan={Math.max(columns.length - 1, 1)}
             className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-muted)]"
           >
             Subtotal · {s.property}

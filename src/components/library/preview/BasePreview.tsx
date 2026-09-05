@@ -24,8 +24,9 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { SpinnerGap } from '@phosphor-icons/react'
+import { Code, DownloadSimple, SpinnerGap } from '@phosphor-icons/react'
 
+import { Button } from '@/components/ui/button'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import {
   fetchKnowledgeBaseInfo,
@@ -38,8 +39,9 @@ import type { LibraryEntry } from '@/lib/api'
 import type { KnowledgeBaseInfo, ViewResult } from '@/lib/api/generated/openapi-types'
 
 import { noteAncestorDirs } from '../knowledge/KnowledgeNoteView'
-import { parseBaseViews } from './baseViewNames'
+import { parseBaseViews, hasViewsBlock } from './baseViewNames'
 import type { BaseViewRef } from './baseViewNames'
+import { LibraryCodePreview } from './LibraryCodePreview'
 import { ViewPartsRenderer } from './viewparts/ViewPartsRenderer'
 
 /** Test seams; production passes nothing and gets the shared clients. */
@@ -52,6 +54,22 @@ export interface BasePreviewLoaders {
 export interface BasePreviewProps extends BasePreviewLoaders {
   workspaceId: string
   entry: LibraryEntry
+}
+
+/**
+ * Triggers a real browser download of the file, the same click-a-detached-
+ * anchor pattern LibraryExplorer's own `handleDownload` uses — self-contained
+ * here so the "no views" escape hatch (below) works without the caller
+ * having to thread an `onDownload` prop through LibraryPreviewPane.
+ */
+function downloadLibraryEntry(workspaceId: string, entry: LibraryEntry): void {
+  const a = document.createElement('a')
+  a.href = libraryDownloadUrl(workspaceId, entry.path)
+  a.download = entry.name
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
@@ -87,6 +105,13 @@ export function BasePreview({
   useEffect(() => setSelectedSlug(undefined), [entry.path])
   const selected = views.find((v) => v.slug === selectedSlug) ?? views[0]
 
+  // code-review finding #9 — the escape hatch for the "no views" dead end:
+  // whether the "no views" state should show the raw file (view/edit, the
+  // existing text-file edit path) instead of its stated message. Reset per
+  // file so switching files never leaves a stale raw view mounted.
+  const [showRaw, setShowRaw] = useState(false)
+  useEffect(() => setShowRaw(false), [entry.path])
+
   // ── 2. The enclosing collection, nearest ancestor first ───────────────────
   const ancestors = useMemo(() => noteAncestorDirs(entry.path), [entry.path])
   const ancestorQueries = useQueries({
@@ -111,11 +136,18 @@ export function BasePreview({
   }, [ancestors, ancestorQueries])
 
   // ── 3. The selected view's evaluated result ───────────────────────────────
+  // code-review finding #3(c) — this is the EXPENSIVE fetch (a full view
+  // evaluation, not a static file read), so window refocus must not refire
+  // it on every alt-tab back into the app the way the library default would.
+  // staleTime is raised to match: a minute is long enough that a reader
+  // flipping between two apps never re-triggers evaluation mid-read, while
+  // still refreshing well within a normal editing session.
   const resultQuery = useQuery({
     queryKey: ['library', workspaceId, 'knowledge', 'view-result', collectionId, selected?.slug],
     queryFn: () => loadViewResult(workspaceId, collectionId as string, selected?.slug as string),
     enabled: collectionId !== undefined && selected !== undefined,
-    staleTime: 10_000,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   })
 
   const resolveImageUrl = useMemo(
@@ -149,11 +181,56 @@ export function BasePreview({
       )
     }
     if (views.length === 0) {
+      const c = contentQuery.data
+      const readable = c?.is_text === true && !c.too_large && c.content !== undefined
+      // code-review finding #9 — the escape hatch. View/edit reuses the same
+      // shared edit path every other text file gets (LibraryCodePreview);
+      // Download reuses the same authenticated download URL the rest of the
+      // Library uses. Neither depends on the parser having understood the
+      // file, so both work even when parsing fails outright.
+      if (showRaw && readable) {
+        return (
+          <div className="flex h-full min-h-0 flex-col" data-testid="base-preview-raw">
+            <LibraryCodePreview workspaceId={workspaceId} entry={entry} content={c.content as string} />
+          </div>
+        )
+      }
+      // A `views:` key that exists but produced zero addressable views means
+      // the parser failed to read its shape (e.g. flow-style YAML) — that is
+      // NOT the same fact as the file genuinely declaring no views at all,
+      // and saying so would be false for a file that plainly is not empty.
+      const parseFailed = readable && hasViewsBlock(c.content as string)
       return (
         <Centered>
-          <p data-testid="base-preview-no-views">
-            This base file declares no views the preview can name, so there is nothing to draw.
-          </p>
+          <div className="flex flex-col items-center gap-3">
+            <p data-testid="base-preview-no-views">
+              {parseFailed
+                ? "This base file's views could not be parsed by this preview."
+                : 'This base file declares no views the preview can name, so there is nothing to draw.'}
+            </p>
+            <div className="flex items-center gap-2">
+              {readable && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowRaw(true)}
+                  data-testid="base-preview-view-raw"
+                  className="gap-1.5"
+                >
+                  <Code size={14} /> View raw
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => downloadLibraryEntry(workspaceId, entry)}
+                data-testid="base-preview-download"
+                className="gap-1.5"
+              >
+                <DownloadSimple size={14} /> Download
+              </Button>
+            </div>
+          </div>
         </Centered>
       )
     }

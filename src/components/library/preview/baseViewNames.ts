@@ -60,10 +60,28 @@ function indentOf(line: string): number {
 }
 
 /**
+ * True when the raw file text declares a top-level `views:` key AT ALL,
+ * in any form the indentation-walk parser below can or cannot read (code
+ * review finding #9). `parseBaseViews`'s own block-start regex only matches
+ * the BLOCK form (`views:` with nothing else on the line); a flow-style
+ * declaration such as `views: [{name: All}]` never matches it, so
+ * `parseBaseViews` returns an empty list for a file that is very much NOT
+ * declaring zero views. This lenient, prefix-only check exists so the
+ * caller can tell those two zero-views cases apart and say the honest one:
+ * "this file declares no views" (this returns false) vs. "this file's views
+ * could not be parsed" (this returns true, `parseBaseViews` still empty).
+ */
+export function hasViewsBlock(content: string): boolean {
+  return /^views:/m.test(content)
+}
+
+/**
  * The views a .base file declares, in declaration order. Unparseable or
  * unnamed items are skipped — they cannot be addressed, so they cannot be a
  * tab. An empty answer is an answer ("this base declares no views"), which
- * the caller must render as such, never as a blank.
+ * the caller must render as such, never as a blank — UNLESS `hasViewsBlock`
+ * above says a `views:` key exists at all, in which case the empty answer
+ * means the parser failed to read it, not that the file has none.
  */
 export function parseBaseViews(content: string, baseFileName: string): BaseViewRef[] {
   const lines = content.split('\n')
