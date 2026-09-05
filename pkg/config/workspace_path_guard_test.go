@@ -450,7 +450,7 @@ func TestWorkspacePathGuard_ConfigKeyMatchesJSONTag(t *testing.T) {
 	if !strings.Contains(field.Tag.Get("json"), "omitempty") {
 		t.Error("WorkspacePathGuard must keep omitempty so an unset guard is never written to config.json")
 	}
-	if field.Type.Kind() != reflect.Ptr {
+	if field.Type.Kind() != reflect.Pointer {
 		t.Error("WorkspacePathGuard must stay a *bool — a plain bool cannot distinguish " +
 			"\"operator chose false\" from \"never set\"")
 	}
