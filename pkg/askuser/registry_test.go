@@ -528,6 +528,11 @@ func TestTimer_MixedSet_ResolvesPendingSubmitButNeverServerSubmits(t *testing.T)
 		t.Fatalf("CreatePending: %v", err)
 	}
 	waitFor(t, "auto-default audit entry", func() bool { return audit.count() == 1 })
+	// Quiesce waits for the fired timer callback — including its persist —
+	// to fully finish. Without it this test raced the callback's SetMeta
+	// (a fixed sleep lost to a slow fsync) and flaked on the persistence
+	// assertion below.
+	reg.Quiesce()
 	// The non-default-safe question keeps the card pending indefinitely
 	// (US-3 S4 — the closed-tab outcome: it genuinely needs the human).
 	time.Sleep(60 * time.Millisecond)
@@ -561,6 +566,81 @@ func TestTimer_MixedSet_ResolvesPendingSubmitButNeverServerSubmits(t *testing.T)
 	}
 	if resume.count() != 1 {
 		t.Fatalf("want exactly 1 resume, got %d", resume.count())
+	}
+}
+
+// countingMeta wraps a MetaStore and counts SetMeta calls, so tests can
+// assert how many persists a code path performed.
+type countingMeta struct {
+	inner    MetaStore
+	mu       sync.Mutex
+	setCalls int
+}
+
+func (c *countingMeta) GetMeta(sessionID string) (*session.UnifiedMeta, error) {
+	return c.inner.GetMeta(sessionID)
+}
+
+func (c *countingMeta) SetMeta(sessionID string, patch session.MetaPatch) error {
+	c.mu.Lock()
+	c.setCalls++
+	c.mu.Unlock()
+	return c.inner.SetMeta(sessionID, patch)
+}
+
+func (c *countingMeta) sets() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.setCalls
+}
+
+// One timer per SET, not per question: all default-safe questions share the
+// set's single CreatedAt+delay deadline, so their auto-resolutions must land
+// as ONE batch — one persist and one card emission — never one round per
+// question. (The old per-question timers produced 2 persists + 2 emissions
+// for this fixture: this test fails against that behavior.)
+func TestTimer_BatchResolvesAllDueHeaders_SinglePersistAndEmit(t *testing.T) {
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	meta := &countingMeta{inner: store}
+	resume := &fakeResume{}
+	sink := &fakeSink{}
+	audit := &fakeAudit{}
+	reg := NewRegistry(meta, resume, Options{DefaultSafeDelay: 20 * time.Millisecond, Sink: sink, Audit: audit})
+	t.Cleanup(reg.Quiesce)
+
+	set := testSet(sid,
+		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
+			Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
+		Question{Header: "Deploy", Question: "Deploy where?", Recommended: "Staging", DefaultSafe: true,
+			Options: []Option{{Label: "Staging"}, {Label: "Prod"}}},
+		Question{Header: "Name", Question: "Name it?",
+			Options: []Option{{Label: "A"}, {Label: "B"}}},
+	)
+	if err := reg.CreatePending(set); err != nil {
+		t.Fatalf("CreatePending: %v", err)
+	}
+	// Both default-safe headers resolve (audit stays per question).
+	waitFor(t, "both auto-default audit entries", func() bool { return audit.count() == 2 })
+	reg.Quiesce() // let the callback's persist+emit fully finish
+
+	pending, ok := reg.PendingForSession(sid)
+	if !ok {
+		t.Fatal("mixed set must remain pending (Name needs the human)")
+	}
+	if len(pending.AutoResolved) != 2 {
+		t.Fatalf("want both default-safe headers auto-resolved, got %v", pending.AutoResolved)
+	}
+	if resume.count() != 0 {
+		t.Fatal("mixed set must never server-submit")
+	}
+	// ONE batch: park persist + park emission, then exactly one more of each
+	// for the whole auto-resolution batch.
+	if got := meta.sets(); got != 2 {
+		t.Fatalf("want 2 persists (park + one batch), got %d", got)
+	}
+	if got := sink.count(); got != 2 {
+		t.Fatalf("want 2 card emissions (park + one batch), got %d", got)
 	}
 }
 

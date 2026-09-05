@@ -428,11 +428,18 @@ func (r *Registry) RearmSession(sessionID string) error {
 
 // --- timers (US-3): server-side, over durable state ---
 
-// armTimers arms one timer per default-safe question at
-// CreatedAt+defaultSafeDelay (already-resolved questions are skipped; an
-// already-elapsed deadline fires near-immediately).
+// armTimers arms ONE timer per SET, not one per question: every default-safe
+// question in a set shares the same CreatedAt+defaultSafeDelay deadline (the
+// 30:00 clock is per set, US-3 S2), so per-question timers only produced N
+// near-simultaneous callbacks each doing its own persist + card emission —
+// N-1 redundant fsync-bound writes and WS broadcasts for an N-question set.
+// The single callback (fireDefaultSafeSet) resolves every due header at once
+// with one persist, one emission, and — when the whole set is default-safe —
+// the terminal server auto-submit path. An already-elapsed deadline (boot
+// re-arm) fires near-immediately; a set with no unresolved default-safe
+// question arms nothing.
 func (r *Registry) armTimers(set *PendingSet) {
-	var timers []*time.Timer
+	due := false
 	for i := range set.Questions {
 		q := set.Questions[i]
 		if !q.DefaultSafe {
@@ -441,23 +448,25 @@ func (r *Registry) armTimers(set *PendingSet) {
 		if _, done := set.AutoResolved[q.Header]; done {
 			continue
 		}
-		delay := set.CreatedAt.Add(r.defaultSafeDelay).Sub(r.now())
-		if delay < 0 {
-			delay = 0
-		}
-		header := q.Header
-		cardID := set.CardID
-		r.timerWG.Add(1)
-		timers = append(timers, time.AfterFunc(delay, func() {
-			defer r.timerWG.Done()
-			r.fireDefaultSafe(cardID, header)
-		}))
+		due = true
+		break
 	}
-	if len(timers) > 0 {
-		r.mu.Lock()
-		r.timers[set.CardID] = append(r.timers[set.CardID], timers...)
-		r.mu.Unlock()
+	if !due {
+		return
 	}
+	delay := set.CreatedAt.Add(r.defaultSafeDelay).Sub(r.now())
+	if delay < 0 {
+		delay = 0
+	}
+	cardID := set.CardID
+	r.timerWG.Add(1)
+	t := time.AfterFunc(delay, func() {
+		defer r.timerWG.Done()
+		r.fireDefaultSafeSet(cardID)
+	})
+	r.mu.Lock()
+	r.timers[cardID] = append(r.timers[cardID], t)
+	r.mu.Unlock()
 }
 
 func (r *Registry) stopTimers(cardID string) {
@@ -480,31 +489,44 @@ func (r *Registry) Quiesce() {
 	r.timerWG.Wait()
 }
 
-// fireDefaultSafe marks one default-safe question resolved-pending-submit
-// (US-3 S2), records the audit entry, persists the updated state, and — when
-// EVERY question in the set is default-safe and now resolved with no client
-// submission landed — performs the server auto-submit (US-3 S3).
-func (r *Registry) fireDefaultSafe(cardID, header string) {
+// fireDefaultSafeSet is the single per-set timer callback: it marks EVERY
+// still-unresolved default-safe question in the set resolved-pending-submit
+// (US-3 S2) in one pass — they all share the set's one deadline — records one
+// audit entry per resolved header, then performs exactly ONE persist and ONE
+// card emission for the whole batch. When every question in the set is
+// default-safe and now resolved with no client submission landed, the server
+// auto-submit (US-3 S3) takes the terminal path instead: terminal persist,
+// terminal emission, resume dispatch.
+func (r *Registry) fireDefaultSafeSet(cardID string) {
 	r.mu.Lock()
 	set, ok := r.entries[cardID]
 	if !ok || set.Status != StatusPending {
 		r.mu.Unlock()
 		return
 	}
-	q := questionByHeader(set.Questions, header)
-	if q == nil || !q.DefaultSafe {
-		r.mu.Unlock()
-		return
-	}
-	if _, done := set.AutoResolved[header]; done {
-		r.mu.Unlock()
-		return
-	}
 	if set.AutoResolved == nil {
 		set.AutoResolved = make(map[string]time.Time)
 	}
-	set.AutoResolved[header] = r.now().UTC()
-	label := q.Recommended
+	now := r.now().UTC()
+	type autoResolution struct{ header, label string }
+	var resolved []autoResolution
+	for i := range set.Questions {
+		q := &set.Questions[i]
+		if !q.DefaultSafe {
+			continue
+		}
+		if _, done := set.AutoResolved[q.Header]; done {
+			continue
+		}
+		set.AutoResolved[q.Header] = now
+		resolved = append(resolved, autoResolution{header: q.Header, label: q.Recommended})
+	}
+	if len(resolved) == 0 {
+		// Everything already resolved (e.g. a re-arm raced a client action)
+		// — nothing to persist or emit.
+		r.mu.Unlock()
+		return
+	}
 	sessionID := set.TranscriptSessionID
 
 	// Server auto-submit condition: every question default-safe AND resolved.
@@ -516,14 +538,16 @@ func (r *Registry) fireDefaultSafe(cardID, header string) {
 		set.Answers = buildAllDefaultAnswers(set.Questions)
 		consumed = set.Clone()
 		r.removeLocked(set)
-	} else {
-		consumed = nil
 	}
 	snapshot := set.Clone()
 	r.mu.Unlock()
 
 	if r.audit != nil {
-		r.audit.RecordAutoDefault(cardID, sessionID, header, label)
+		// Audit stays per question — each auto-default is its own auditable
+		// resolution (spec §4 STRIDE note) even though they land in one batch.
+		for _, res := range resolved {
+			r.audit.RecordAutoDefault(cardID, sessionID, res.header, res.label)
+		}
 	}
 
 	if serverSubmit {
@@ -536,14 +560,15 @@ func (r *Registry) fireDefaultSafe(cardID, header string) {
 		}
 		return
 	}
-	// Non-terminal state change: persist the resolved-pending-submit mark so
-	// a restart re-derives it instead of re-arming a fired timer.
+	// Non-terminal state change: persist the resolved-pending-submit marks so
+	// a restart re-derives them instead of re-arming a fired timer.
 	if err := r.persist(snapshot); err != nil {
 		slog.Warn("askuser: failed to persist auto-default resolution",
 			"card_id", cardID, "session_id", sessionID, "error", err)
 	}
-	// Non-terminal state-change emission: the connected card marks this
-	// question resolved-pending-submit (auto badge) live.
+	// Non-terminal state-change emission: the connected card marks these
+	// questions resolved-pending-submit (auto badge) live — one frame for the
+	// whole batch.
 	r.sink.EmitCard(snapshot.Clone())
 }
 
