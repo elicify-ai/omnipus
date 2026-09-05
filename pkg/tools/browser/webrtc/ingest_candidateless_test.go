@@ -26,7 +26,8 @@ const (
 )
 
 func sdpWith(candidates ...string) string {
-	lines := []string{
+	lines := make([]string, 0, 8+len(candidates))
+	lines = append(lines,
 		"v=0",
 		"o=- 4611731400430051336 2 IN IP4 127.0.0.1",
 		"s=-",
@@ -35,7 +36,7 @@ func sdpWith(candidates ...string) string {
 		"c=IN IP4 0.0.0.0",
 		"a=ice-ufrag:abcd",
 		"a=ice-pwd:0123456789abcdef0123",
-	}
+	)
 	lines = append(lines, candidates...)
 	return strings.Join(lines, "\r\n") + "\r\n"
 }

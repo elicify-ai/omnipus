@@ -205,14 +205,14 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 	sendJSON := func(v any) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			return err
+		if derr := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); derr != nil {
+			return derr
 		}
 		return conn.WriteJSON(v)
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
-		s.logf("ingest-ws: set read deadline: %v", err)
+	if derr := conn.SetReadDeadline(time.Now().Add(15 * time.Second)); derr != nil {
+		s.logf("ingest-ws: set read deadline: %v", derr)
 		return
 	}
 	_, raw, err := conn.ReadMessage()

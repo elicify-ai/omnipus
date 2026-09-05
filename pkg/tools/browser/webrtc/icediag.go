@@ -107,32 +107,32 @@ type pionScopedLogger struct {
 	scope  string
 }
 
-func (l *pionScopedLogger) emit(level logging.LogLevel, levelName, format string, args ...any) {
+func (l *pionScopedLogger) emitf(level logging.LogLevel, levelName, format string, args ...any) {
 	if l.bridge.level < level || l.bridge.level == logging.LogLevelDisabled {
 		return
 	}
 	l.bridge.logf("pion/%s %s: %s", l.scope, levelName, fmt.Sprintf(format, args...))
 }
 
-func (l *pionScopedLogger) Trace(msg string) { l.emit(logging.LogLevelTrace, "TRACE", "%s", msg) }
+func (l *pionScopedLogger) Trace(msg string) { l.emitf(logging.LogLevelTrace, "TRACE", "%s", msg) }
 func (l *pionScopedLogger) Tracef(format string, args ...any) {
-	l.emit(logging.LogLevelTrace, "TRACE", format, args...)
+	l.emitf(logging.LogLevelTrace, "TRACE", format, args...)
 }
-func (l *pionScopedLogger) Debug(msg string) { l.emit(logging.LogLevelDebug, "DEBUG", "%s", msg) }
+func (l *pionScopedLogger) Debug(msg string) { l.emitf(logging.LogLevelDebug, "DEBUG", "%s", msg) }
 func (l *pionScopedLogger) Debugf(format string, args ...any) {
-	l.emit(logging.LogLevelDebug, "DEBUG", format, args...)
+	l.emitf(logging.LogLevelDebug, "DEBUG", format, args...)
 }
-func (l *pionScopedLogger) Info(msg string) { l.emit(logging.LogLevelInfo, "INFO", "%s", msg) }
+func (l *pionScopedLogger) Info(msg string) { l.emitf(logging.LogLevelInfo, "INFO", "%s", msg) }
 func (l *pionScopedLogger) Infof(format string, args ...any) {
-	l.emit(logging.LogLevelInfo, "INFO", format, args...)
+	l.emitf(logging.LogLevelInfo, "INFO", format, args...)
 }
-func (l *pionScopedLogger) Warn(msg string) { l.emit(logging.LogLevelWarn, "WARN", "%s", msg) }
+func (l *pionScopedLogger) Warn(msg string) { l.emitf(logging.LogLevelWarn, "WARN", "%s", msg) }
 func (l *pionScopedLogger) Warnf(format string, args ...any) {
-	l.emit(logging.LogLevelWarn, "WARN", format, args...)
+	l.emitf(logging.LogLevelWarn, "WARN", format, args...)
 }
-func (l *pionScopedLogger) Error(msg string) { l.emit(logging.LogLevelError, "ERROR", "%s", msg) }
+func (l *pionScopedLogger) Error(msg string) { l.emitf(logging.LogLevelError, "ERROR", "%s", msg) }
 func (l *pionScopedLogger) Errorf(format string, args ...any) {
-	l.emit(logging.LogLevelError, "ERROR", format, args...)
+	l.emitf(logging.LogLevelError, "ERROR", format, args...)
 }
 
 // ---------------------------------------------------------------------------
