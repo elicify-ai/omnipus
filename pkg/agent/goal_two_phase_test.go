@@ -585,6 +585,89 @@ func TestGoalTwoPhase_Clarification_MaxOneRound(t *testing.T) {
 	}
 }
 
+// Regression (US-3 S7): a clarification reply that trims to EMPTY — a
+// whitespace-only message, or an attachment-only message whose text content
+// is "" — still spends the episode's single question round. The resumed
+// compile keys on the PERSISTED question, not the answer text; before the
+// fix it keyed on answer != "", so the compiler could re-ask indefinitely
+// on empty replies (each new question re-armed the clarification record).
+func TestGoalTwoPhase_Clarification_EmptyReplyConsumesRound(t *testing.T) {
+	for name, content := range map[string]string{
+		"whitespace_only":            "   \n\t ",
+		"attachment_only_empty_text": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			al, agentInst, provider, store, sid, opts := twoPhaseHarness(t,
+				func(call int, _ []providers.Message) (*providers.LLMResponse, error) {
+					return questionJSON("And which branch?"), nil // asks every time
+				}, nil)
+
+			before := goalCompileFallbacksTotal()
+			setGoal(t, al, agentInst, opts, "improve the readme")
+			handled, echo := al.applyGoalPendingReply(context.Background(),
+				bus.InboundMessage{Content: content, UserInitiated: true}, agentInst, opts)
+			if !handled {
+				t.Fatal("the empty reply must still be intercepted as the clarification answer")
+			}
+			// The round is SPENT: the compiler's second question is out of
+			// budget → deterministic fallback, never a second question in chat.
+			if strings.Contains(echo, "And which branch?") {
+				t.Fatalf("a second clarifying question surfaced after an empty reply (round not consumed):\n%s", echo)
+			}
+			if got := goalCompileFallbacksTotal(); got != before+1 {
+				t.Fatalf("re-ask after the empty-reply resume must fall back (counter %d, want %d)", got, before+1)
+			}
+			after, _ := store.GetMeta(sid)
+			if after.GoalClarificationJSON != "" {
+				t.Fatal("the clarification record must clear — no second question round may be armed")
+			}
+			if after.GoalPendingJSON == "" {
+				t.Fatal("the fallback must still end pending+confirm")
+			}
+			if provider.callCount() != 2 {
+				t.Fatalf("want exactly 2 LLM calls (question + empty-answer resume), got %d", provider.callCount())
+			}
+		})
+	}
+}
+
+// Companion regression: an empty reply resumes the compile normally when the
+// compiler produces criteria — and the resume prompt states explicitly that
+// no textual answer arrived instead of rendering a blank answer line.
+func TestGoalTwoPhase_Clarification_EmptyReplyStillResumes(t *testing.T) {
+	al, agentInst, provider, store, sid, opts := twoPhaseHarness(t,
+		func(call int, _ []providers.Message) (*providers.LLMResponse, error) {
+			if call == 1 {
+				return questionJSON("Which repo do you mean?"), nil
+			}
+			return compileJSON("the README is rewritten"), nil
+		}, nil)
+
+	setGoal(t, al, agentInst, opts, "improve the readme")
+	handled, echo := al.applyGoalPendingReply(context.Background(),
+		bus.InboundMessage{Content: "  ", UserInitiated: true}, agentInst, opts)
+	if !handled {
+		t.Fatal("the empty reply must be intercepted")
+	}
+	if !strings.Contains(echo, "README is rewritten") {
+		t.Fatalf("the empty-answer resume must still produce the pending echo:\n%s", echo)
+	}
+	resumeText := ""
+	for _, m := range provider.messagesOfCall(2) {
+		resumeText += m.Content + "\n"
+	}
+	if !strings.Contains(resumeText, "sent no textual answer") {
+		t.Fatalf("the resume prompt must state the answer was empty, got:\n%s", resumeText)
+	}
+	after, _ := store.GetMeta(sid)
+	if after.GoalClarificationJSON != "" {
+		t.Fatal("the clarification record must clear once resumed")
+	}
+	if after.GoalPendingJSON == "" {
+		t.Fatal("the resume must end pending+confirm")
+	}
+}
+
 func TestGoalTwoPhase_Clarification_ResumeGetsOwnRepair(t *testing.T) {
 	al, agentInst, provider, store, sid, opts := twoPhaseHarness(t,
 		func(call int, _ []providers.Message) (*providers.LLMResponse, error) {

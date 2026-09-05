@@ -229,6 +229,12 @@ func buildGoalCompileMessages(prose, question, answer, repairReason string) []pr
 	usr.WriteString(prose)
 	usr.WriteString("\n")
 	if question != "" {
+		// An empty answer (whitespace-only or attachment-only reply) still
+		// resumes the compile — the single question round is spent either way
+		// — so tell the compiler explicitly rather than rendering a blank.
+		if answer == "" {
+			answer = "(the user sent no textual answer — compile from the goal statement alone)"
+		}
 		fmt.Fprintf(&usr, "\nYou previously asked: %s\nThe user answered: %s\n"+
 			"Compile the criteria now — do not ask another question.\n", question, answer)
 	}
@@ -375,9 +381,17 @@ func (al *AgentLoop) compileGoalIntentLLM(
 			return fallback("compile output rejected: " + perr.Error())
 		}
 		if parsed.ClarifyingQuestion != "" {
-			if answer != "" || repairReason != "" {
+			if question != "" || repairReason != "" {
 				// Max ONE question round per episode (US-3 S7): a question from
-				// the resumed compile — or from a repair call — is out of budget.
+				// the resumed compile — or from a repair call — is out of
+				// budget. The resumed state is detected by the PERSISTED
+				// question, never by the answer text: a reply that trims to
+				// empty (whitespace-only, or an attachment-only message whose
+				// content is "") still spends the episode's single round. The
+				// resume compile proceeds with the empty answer; if the
+				// compiler asks again, it lands here and falls back
+				// deterministically. Keying on answer != "" instead let the
+				// compiler re-ask indefinitely on empty replies.
 				return fallback("compiler asked a question outside its single question round")
 			}
 			return llmGoalCompileOutcome{ClarifyingQuestion: parsed.ClarifyingQuestion}
