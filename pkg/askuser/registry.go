@@ -78,6 +78,10 @@ type Registry struct {
 	byRouting map[string]string      // routing_session_key → card_id
 	bySession map[string]string      // transcript_session_id → card_id
 	timers    map[string][]*time.Timer
+	// timerWG tracks in-flight timer callbacks so Quiesce (gateway
+	// shutdown, tests) can wait for their persists to finish rather than
+	// racing a directory teardown or process exit.
+	timerWG sync.WaitGroup
 
 	maxPending       int
 	defaultSafeDelay time.Duration
@@ -415,7 +419,9 @@ func (r *Registry) armTimers(set *PendingSet) {
 		}
 		header := q.Header
 		cardID := set.CardID
+		r.timerWG.Add(1)
 		timers = append(timers, time.AfterFunc(delay, func() {
+			defer r.timerWG.Done()
 			r.fireDefaultSafe(cardID, header)
 		}))
 	}
@@ -432,8 +438,18 @@ func (r *Registry) stopTimers(cardID string) {
 	delete(r.timers, cardID)
 	r.mu.Unlock()
 	for _, t := range timers {
-		t.Stop()
+		if t.Stop() {
+			// Callback will never run; release its WaitGroup slot.
+			r.timerWG.Done()
+		}
 	}
+}
+
+// Quiesce blocks until every in-flight default-safe timer callback (and its
+// persist/resume work) has completed. Timers already stopped are not waited
+// on. Intended for gateway shutdown and test teardown.
+func (r *Registry) Quiesce() {
+	r.timerWG.Wait()
 }
 
 // fireDefaultSafe marks one default-safe question resolved-pending-submit

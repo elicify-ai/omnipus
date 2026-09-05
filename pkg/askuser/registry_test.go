@@ -152,6 +152,7 @@ func TestCreatePending_PersistsAndEmits(t *testing.T) {
 	resume := &fakeResume{}
 	sink := &fakeSink{}
 	reg := NewRegistry(store, resume, Options{Sink: sink})
+	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
@@ -184,6 +185,7 @@ func TestCreatePending_OnePerRoutingSession(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
+	t.Cleanup(reg.Quiesce)
 
 	if err := reg.CreatePending(testSet(sid)); err != nil {
 		t.Fatalf("first CreatePending: %v", err)
@@ -199,6 +201,7 @@ func TestCreatePending_GlobalCapAcrossSessions(t *testing.T) {
 	sid1 := newOwnerSession(t, store)
 	sid2 := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{MaxPending: 1})
+	t.Cleanup(reg.Quiesce)
 
 	if err := reg.CreatePending(testSet(sid1)); err != nil {
 		t.Fatalf("first CreatePending: %v", err)
@@ -221,6 +224,7 @@ func TestCreatePending_DelegatedChildRejected(t *testing.T) {
 		t.Fatalf("SetMeta(ParentSessionID): %v", err)
 	}
 	reg := NewRegistry(store, &fakeResume{}, Options{})
+	t.Cleanup(reg.Quiesce)
 	if err := reg.CreatePending(testSet(child.ID)); !errors.Is(err, ErrDelegatedChild) {
 		t.Fatalf("want ErrDelegatedChild, got %v", err)
 	}
@@ -230,6 +234,7 @@ func TestCreatePending_InvalidQuestionsRejected(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
+	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	set.Questions[0].Options = set.Questions[0].Options[:1]
 	if err := reg.CreatePending(set); err == nil {
@@ -244,6 +249,7 @@ func TestSubmit_ValidatedAndResumes(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
@@ -310,6 +316,7 @@ func TestSubmit_ValidationRejectsWithoutConsuming(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
@@ -357,6 +364,7 @@ func TestSubmit_OwnershipAndSessionChecks(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
+	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	set.Owner = "alice"
 	if err := reg.CreatePending(set); err != nil {
@@ -383,6 +391,7 @@ func TestCancelByUser_ResumesCancelledWithoutAnswers(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
@@ -407,6 +416,7 @@ func TestCancelOnSessionStop_NoResumeDispatched(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
@@ -440,6 +450,7 @@ func TestCancelOnSessionStop_MatchesRoutingKey(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
+	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
@@ -458,6 +469,7 @@ func TestTimer_AllDefaultSafe_ServerAutoSubmitsWithAudit(t *testing.T) {
 	resume := &fakeResume{}
 	audit := &fakeAudit{}
 	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 20 * time.Millisecond, Audit: audit})
+	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
@@ -504,6 +516,7 @@ func TestTimer_MixedSet_ResolvesPendingSubmitButNeverServerSubmits(t *testing.T)
 	resume := &fakeResume{}
 	audit := &fakeAudit{}
 	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 20 * time.Millisecond, Audit: audit})
+	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
@@ -556,6 +569,7 @@ func TestTimer_RaceWithClientSubmit_ExactlyOneWins(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 10 * time.Millisecond})
+	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
@@ -623,6 +637,7 @@ func TestRearmSession_NoopWithoutPersistedSet(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
+	t.Cleanup(reg.Quiesce)
 	if err := reg.RearmSession(sid); err != nil {
 		t.Fatalf("RearmSession on clean session: %v", err)
 	}
