@@ -43,7 +43,9 @@ describe('GoalEchoCard', () => {
   })
 
   // US-6 S1: pending goal with 2 prose + 1 marker check → 3 rows, text
-  // first, verbatim command chip on the check row only.
+  // first, verbatim command chip on the check row only. Rendered by the
+  // SHARED CriteriaBreakdown (D5.4) — the chip format asserted here is the
+  // shared formatVerifiesVia contract, identical on every surface.
   it('itemizes the criteria breakdown plain-language-first with a verifies-via chip on technical rows', () => {
     const frame = makeGoal({
       criteria: [
@@ -58,20 +60,21 @@ describe('GoalEchoCard', () => {
     })
     render(<GoalEchoCard frame={frame} />)
 
-    const rows = screen.getAllByTestId('goal-echo-criterion')
+    // The shared criteria list mounts inside the goal-echo criteria section.
+    expect(screen.getByTestId('goal-echo-criteria')).toBeInTheDocument()
+    const rows = screen.getAllByRole('listitem')
     expect(rows).toHaveLength(3)
     expect(rows[0]).toHaveTextContent('the release notes are written')
     expect(rows[1]).toHaveTextContent('the changelog covers every user-facing change')
     expect(rows[2]).toHaveTextContent('the test suite passes')
 
-    // Exactly ONE chip — the check row's — carrying the command VERBATIM.
-    const chips = screen.getAllByTestId('goal-echo-verifies-via')
-    expect(chips).toHaveLength(1)
-    expect(chips[0]).toHaveTextContent('go test ./...')
-    expect(chips[0]).toHaveTextContent('expected exit 0')
+    // Exactly ONE chip — the check row's — carrying the command VERBATIM in
+    // the shared "command -> exit N" format.
+    expect(screen.getAllByText('verifies via:')).toHaveLength(1)
+    expect(screen.getByText('go test ./... -> exit 0')).toBeInTheDocument()
   })
 
-  it('renders a behavior payload as a verifies-via chip (tool + counts)', () => {
+  it('renders a behavior payload as a verifies-via chip (tool + counts, shared format)', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({
@@ -82,9 +85,8 @@ describe('GoalEchoCard', () => {
       ],
     })
     render(<GoalEchoCard frame={frame} />)
-    const chip = screen.getByTestId('goal-echo-verifies-via')
-    expect(chip).toHaveTextContent('search_web')
-    expect(chip).toHaveTextContent('at least 3 times')
+    expect(screen.getByText('verifies via:')).toBeInTheDocument()
+    expect(screen.getByText('search_web x3+')).toBeInTheDocument()
   })
 
   // US-6 S4 (negative): `[kind]` classification tokens are not user-facing.

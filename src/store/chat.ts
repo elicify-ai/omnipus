@@ -28,6 +28,7 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
+import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import {
@@ -5376,21 +5377,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
         case 'session_state': {
           useToolApprovalStore.getState().reconcileWithSessionState(frame)
           // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
-          // AskUserQuestion cards on every reconnect snapshot — hydrate each
-          // snapshot card into its session bucket, and clear any LOCALLY
-          // pending card the snapshot no longer knows (it resolved while we
-          // were disconnected; the terminal frame was missed).
+          // AskUserQuestion cards on every reconnect snapshot. The
+          // hydrate/clear/race semantics live in the dedicated, unit-tested
+          // reconcilePendingAsks (mirrors the toolApproval
+          // reconcileWithSessionState pattern); this case only applies the
+          // computed per-session changes.
           const stateFrame = frame as SessionStateFrame
-          const snapshotCards = stateFrame.pending_asks ?? []
-          const snapshotIds = new Set(snapshotCards.map((c) => c.card_id))
-          for (const card of snapshotCards) {
-            withBucket(card.session_id, () => ({ pendingAsk: card }))
-          }
-          for (const [sid, bucket] of Object.entries(get().sessionsById)) {
-            const local = bucket.pendingAsk
-            if (local && local.status === 'pending' && !snapshotIds.has(local.card_id)) {
-              withBucket(sid, () => ({ pendingAsk: null }))
-            }
+          const askChanges = reconcilePendingAsks(
+            stateFrame.pending_asks ?? [],
+            get().sessionsById,
+          )
+          for (const [sid, card] of Object.entries(askChanges)) {
+            withBucket(sid, () => ({ pendingAsk: card }))
           }
           break
         }

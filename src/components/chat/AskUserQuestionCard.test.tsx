@@ -181,6 +181,85 @@ describe('AskUserQuestionCard — pending card', () => {
     }
   })
 
+  // Stale-closure regression: the grace interval used to be keyed on
+  // `allAnswered` and captured that render's drafts — once all questions were
+  // first answered, a LATER edit changed the drafts but not the interval's
+  // closure, so the grace timer submitted the discarded pre-edit answer.
+  it('grace auto-submit sends the EDITED answer when one is changed after all were answered', () => {
+    vi.useFakeTimers()
+    try {
+      render(<AskUserQuestionCard card={makeCard()} />)
+      // Answer both questions (auto-advance between them).
+      fireEvent.click(screen.getAllByTestId('ask-user-option')[0]) // Scope: Only unanswered
+      act(() => {
+        vi.advanceTimersByTime(300)
+      })
+      fireEvent.click(screen.getAllByTestId('ask-user-option')[0]) // Sending: Draft only
+      act(() => {
+        vi.advanceTimersByTime(300)
+      })
+      expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('2 / 2 answered')
+
+      // EDIT: go back to the first question and pick the OTHER option.
+      fireEvent.click(screen.getByTestId('ask-user-tab-0'))
+      fireEvent.click(screen.getAllByTestId('ask-user-option')[1]) // All customer email
+
+      // Let the grace window expire with no further interaction.
+      act(() => {
+        vi.advanceTimersByTime(ASK_GRACE_MS + 6000)
+      })
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+      expect(sendSpy).toHaveBeenCalledWith({
+        card_id: 'ask_1',
+        session_id: 's1',
+        answers: [
+          { header: 'Scope', selected: ['All customer email'] },
+          { header: 'Sending', selected: ['Draft only'] },
+        ],
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Same stale-closure family, free-text flavor: typing a free-text answer
+  // over an earlier option selection must be what the grace timer submits.
+  it('grace auto-submit sends free text typed AFTER all questions were answered', () => {
+    vi.useFakeTimers()
+    try {
+      render(<AskUserQuestionCard card={makeCard()} />)
+      fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
+      act(() => {
+        vi.advanceTimersByTime(300)
+      })
+      fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
+      act(() => {
+        vi.advanceTimersByTime(300)
+      })
+
+      // EDIT the second question's answer into free text.
+      fireEvent.click(screen.getByTestId('ask-user-tab-1'))
+      fireEvent.change(screen.getByTestId('ask-user-free-text'), {
+        target: { value: 'draft, but flag urgent ones' },
+      })
+
+      act(() => {
+        vi.advanceTimersByTime(ASK_GRACE_MS + 6000)
+      })
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+      expect(sendSpy).toHaveBeenCalledWith({
+        card_id: 'ask_1',
+        session_id: 's1',
+        answers: [
+          { header: 'Scope', selected: ['Only unanswered'] },
+          { header: 'Sending', free_text: 'draft, but flag urgent ones' },
+        ],
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders hostile markdown context INERT through the sanitized chat pipeline', () => {
     const hostile =
       'Look: <img src=x onerror="window.__pwned=1"> and <script>window.__pwned=2</script> **bold ok**'
