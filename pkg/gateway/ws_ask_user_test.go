@@ -9,6 +9,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -108,6 +109,33 @@ func TestToAskUserCard_TerminalCarriesAnswers(t *testing.T) {
 	require.NotNil(t, card.Answers[1].FreeText)
 	assert.Equal(t, "something else", *card.Answers[1].FreeText)
 	assert.Equal(t, "Deploy where?", card.Answers[1].Question, "question-text echo (o-R2-1) preserved")
+}
+
+// broadcastAskUserCard fans out via the shared broadcastRaw helper: every
+// connected client receives the ask_user_question frame; a client with a full
+// send buffer drops it (counted, never blocking) while the others still
+// receive theirs — the exact behavior of the pre-extraction inline loop.
+func TestBroadcastAskUserCard_FanOutAndDropCounter(t *testing.T) {
+	wcOK := &wsConn{sendCh: make(chan []byte, 4)}
+	wcFull := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading → drop
+	h := &WSHandler{sessions: map[string]*wsConn{"ok": wcOK, "full": wcFull}}
+
+	h.broadcastAskUserCard(toAskUserCard(askSetFixture(), 30*time.Minute))
+
+	select {
+	case raw := <-wcOK.sendCh:
+		var frame map[string]any
+		require.NoError(t, json.Unmarshal(raw, &frame))
+		assert.Equal(t, "ask_user_question", frame["type"])
+		card, ok := frame["card"].(map[string]any)
+		require.True(t, ok, "frame must carry the card object")
+		assert.Equal(t, "ask_1", card["card_id"])
+	default:
+		t.Fatal("connected client with buffer room never received the frame")
+	}
+	assert.Equal(t, int32(1), wcFull.droppedFrames.Load(),
+		"full-buffer client must count exactly one dropped frame")
+	assert.Equal(t, int32(0), wcOK.droppedFrames.Load())
 }
 
 // The resume origin heuristic: a human submission/cancel is user-initiated;

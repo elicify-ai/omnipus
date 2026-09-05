@@ -133,21 +133,8 @@ func (h *WSHandler) broadcastAskUserCard(card generated.AskUserQuestionCard) {
 		slog.Error("ws: marshal ask_user_question", "error", err)
 		return
 	}
-	h.mu.Lock()
-	conns := make([]*wsConn, 0, len(h.sessions))
-	for _, wc := range h.sessions {
-		conns = append(conns, wc)
-	}
-	h.mu.Unlock()
-	for _, wc := range conns {
-		select {
-		case wc.sendCh <- raw:
-		default:
-			slog.Warn("ws: ask_user_question dropped — send buffer full",
-				"card_id", card.CardId)
-			wc.droppedFrames.Add(1)
-		}
-	}
+	h.broadcastRaw(raw, "ws: ask_user_question dropped — send buffer full",
+		"card_id", card.CardId)
 }
 
 // askUserCardSink adapts the registry's CardSink seam onto the WS broadcast.

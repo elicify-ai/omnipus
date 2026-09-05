@@ -65,25 +65,11 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		return
 	}
 
-	h.mu.Lock()
-	conns := make([]*wsConn, 0, len(h.sessions))
-	for _, wc := range h.sessions {
-		conns = append(conns, wc)
-	}
-	h.mu.Unlock()
-
-	for _, wc := range conns {
-		// FR-073 scoping is moot under the single-user model — every connected
-		// client is the one account, so every connection receives every
-		// approval broadcast unconditionally (role-based scoping removed).
-		select {
-		case wc.sendCh <- raw:
-		default:
-			slog.Warn("ws: tool_approval_required dropped — send buffer full",
-				"approval_id", entry.ApprovalID)
-			wc.droppedFrames.Add(1)
-		}
-	}
+	// FR-073 scoping is moot under the single-user model — every connected
+	// client is the one account, so every connection receives every approval
+	// broadcast unconditionally (role-based scoping removed).
+	h.broadcastRaw(raw, "ws: tool_approval_required dropped — send buffer full",
+		"approval_id", entry.ApprovalID)
 }
 
 // emitSessionState sends the session_state one-shot frame to a single WS connection

@@ -172,6 +172,8 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	TaskID       string           `json:"task_id,omitempty"`
 	PlanID       string           `json:"plan_id,omitempty"`
 	PerCriterion []map[string]any `json:"per_criterion,omitempty"`
+	// AskUserQuestionFrame decoder slot (spec v3 §0.6 replay reconstruction).
+	Card map[string]any `json:"card,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
@@ -2719,7 +2721,12 @@ func (h *WSHandler) handleAttachSession(
 		// agent.AgentLoop.IsSubTurnActiveForSpawnCall's doc comment.
 		isSpanActive = h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
-	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive)
+	// askuserquestion-tool-spec v3 §0.6: hand replay the session's terminal
+	// (answered/cancelled) AskUserQuestion record, if any, so the collapsed
+	// card is reconstructed on cold history load and the §0.2 resume message
+	// never renders as a raw JSON bubble — see streamReplay's terminalAsk doc.
+	terminalAsk := loadTerminalAskRecord(store, attachID)
+	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive, terminalAsk)
 
 	durationMS := time.Since(replayStart).Milliseconds()
 
@@ -2967,6 +2974,30 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 		return
 	}
 	sendRawFrameBytes(wc, frameType, data)
+}
+
+// broadcastRaw fans one pre-marshaled frame out to every connected WS client
+// (single-user model — every connection is the one account, so no per-account
+// scoping). Best-effort: a connection whose send buffer is full drops the
+// frame (logged with the caller-supplied message/attrs, counted on
+// wc.droppedFrames) and must recover from the next reconnect snapshot.
+// Shared by broadcastAskUserCard and broadcastToolApprovalRequired, which
+// each keep their own frame construction and drop-log identity.
+func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...any) {
+	h.mu.Lock()
+	conns := make([]*wsConn, 0, len(h.sessions))
+	for _, wc := range h.sessions {
+		conns = append(conns, wc)
+	}
+	h.mu.Unlock()
+	for _, wc := range conns {
+		select {
+		case wc.sendCh <- raw:
+		default:
+			slog.Warn(dropLogMsg, dropLogAttrs...)
+			wc.droppedFrames.Add(1)
+		}
+	}
 }
 
 // sendRawFrameBytes routes pre-marshaled frame bytes to the connection's send channel.
