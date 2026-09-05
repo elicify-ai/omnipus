@@ -41,21 +41,17 @@ States (o-R2-2 adopted): **selected** (client-only, unsubmitted) → **resolved-
 ### US-4 (P1) — Rich context
 Raw markdown/media-ref context; SPA-sanitized render (chat pipeline); display-only. Hostile-markdown inertness is TESTED (m-R2-3). *(FR-7)*
 
-### US-5 (P1) — Text channels (v1.1; mechanism specified; deferral flagged §9.1)
-1. **v1.1 mechanism (verified reachable):** the pre-turn seam (`handleCommand` path, `loop.go:7758` — runs for every bus inbound incl. channels) consumes an inbound message as the current question's answer when the routing key has a pending set. **Semantic flip acknowledged (M-R2-4):** on channels, v1.1 changes what a typed message means while pending (it becomes the answer); on the SPA it never does (see US-6 S6).
-2. Sequential delivery ("2 of 5: …" + numbered options + "(recommended)" + reply guidance).
-3. Parsing: in-range number → option; exact whole-message "cancel" (case-insensitive, trimmed; `IsCancelCommand` precedent, `cancelparse.go:29`) → cancels the set (no answers); else free text ("cancel" as literal free text: unreachable on channels — documented; use the app).
-4. **Timers × sequencing (M-R2-7):** default-safe questions auto-resolve at **card-render + 30:00 on every surface, even if not yet delivered on the channel** — surface-independent terminal behavior; when the sequence reaches (or skips past) a resolved question the channel gets "resolved automatically: <label>". **Auto-resolutions are submissions participating in first-valid-wins.** Restart re-sends the current question (known, accepted re-delivery — m-R2-8) with its timer continuing from the ORIGINAL card-render-relative schedule.
-5. Context on channels: text truncated to 500 chars; media omitted ("details in the app").
-6. Both-surfaces sessions: first valid submission wins (auto-resolutions included); the loser surface gets "already answered".
+### US-5 (P1) — Text channels: the tool is BLOCKED there — permanent non-goal (operator ruling, interview #5, 2026-09-05; supersedes v2's v1.1 plan and resolves the §9.1 sign-off)
+1. On any non-web-origin session the tool errors immediately (`no_human_surface`-class error naming the reason), and the agent asks its question **conversationally, in plain language** — ordinary chat, no machinery. This is the operator's chosen simplification: no sequential delivery, no reply parsing, no channel degradation subsystem, ever.
+2. Consequences: the pre-turn answer seam, per-question channel clocks, both-surfaces races, and channel `/cancel`-as-card-cancel are all deleted from scope (the r2 findings M-R2-7 and parts of M-R2-4 dissolve with them). A session live on both the SPA and a channel is answerable via the SPA card only; channel messages during a pending set are ordinary turns (US-6 S6).
 
 ### US-6 (P1) — Lifecycle, liveness, inbound-while-pending
 1. **Restart:** session-meta persistence + reconnect-snapshot hydration (`SessionStateFrame` precedent verified, `websocket.go:704-706`); timers re-arm; the resume path needs nothing alive to "survive". *(FR-9)*
 2. **Session Stop / channel `/cancel`:** cancels the set, collapses the card, unlocks the composer.
 3. **One set per routing session**; second call → tool error.
-4. **Liveness, defined on origin/binding — NOT connection state (M-R2-3):** answerable ⇔ the session's origin surface is the SPA (always answerable — a disconnected client's card hydrates on reconnect; parking makes waiting free) OR (v1.1+) the session is bound to a text channel. `no_human_surface` fires for: `AutoDenyAsk` contexts (scheduled/headless; ctx plumbing verified `base.go:123-152`, `loop.go:11278`; #659 status recorded: the inheritance CODE landed — `subturn.go:1428-1452`, ADR-075 FR-032 — the ISSUE remains open for its browser-tool remnant), and — **in v1 — channel-origin sessions** (C-R2-2): they get `no_human_surface` immediately and the calling agent uses ADR-074 D4b's sanctioned plain-chat-message fallback; never a silent park a channel user can't see or answer. *(FR-12)*
+4. **Liveness, defined on origin — NOT connection state (M-R2-3):** answerable ⇔ the session's origin surface is the SPA (always answerable — a disconnected client's card hydrates on reconnect; parking makes waiting free). `no_human_surface` fires for: `AutoDenyAsk` contexts (scheduled/headless; ctx plumbing verified `base.go:123-152`, `loop.go:11278`; #659 status recorded: the inheritance CODE landed — `subturn.go:1428-1452`, ADR-075 FR-032 — the ISSUE remains open for its browser-tool remnant), and **every channel-origin session — permanently** (US-5 ruling): the agent asks conversationally instead; never a silent park a channel user can't see or answer. *(FR-12)*
 5. Delegated-child calls rejected (owner-only).
-6. **Ordinary inbound while pending, v1 (M-R2-4):** a plain message (second SPA client, stale tab) runs as a NORMAL turn; the pending set and card SURVIVE it untouched; that turn's own `AskUserQuestion` call errors (one-per-session); no server rejection notice (chat simply continues). v1.1 changes this on channels only, per US-5 S1.
+6. **Ordinary inbound while pending, v1 (M-R2-4):** a plain message (second SPA client, stale tab) runs as a NORMAL turn; the pending set and card SURVIVE it untouched; that turn's own `AskUserQuestion` call errors (one-per-session); no server rejection notice (chat simply continues). Channel messages are likewise ordinary turns — permanently (US-5).
 
 ### US-7 (P1) — Registration, policy, visibility (M-R2-6 corrected)
 1. **Constraint #6 seeding, all three sites enumerated:** (a) the tool joins `allStaticToolNames` (`core.go:625` region); (b) every agent's `denyAllThenOverride` override map gets an explicit entry — **allow** for every human-facing agent (core roster, subagent tier, customs' default allowlist), **deny for Judge and PlanSupervisor** (they can never be session owners; an advertised always-erroring tool violates their deliberately minimal seeds, `core.go:578-580`); (c) the global `sandbox.tool_policies` ceiling gains its literal entry. The "never harden asking into an ask-gate" rationale applies to the human-facing agents' allow.
@@ -76,7 +72,7 @@ As v2, plus: the pending registry carries a global cap across sessions (DoS line
 
 ## 5. Edge cases
 
-EC-1 cancel discards selections (uniform). EC-2 → superseded by US-3 states + client-fired grace. EC-3 last-interaction-wins. EC-4 out-of-range number → free text. EC-5 channel silence → per US-5 S4. EC-6 headless → `no_human_surface`. EC-7 two-client race → first valid wins. EC-8 stale card id → rejected. EC-9 delegated child → owner-only rejection. EC-10 (new) channel-origin session in v1 → `no_human_surface` + chat fallback (never a silent park). EC-11 (new) plain inbound during pending (v1) → normal turn, card survives.
+EC-1 cancel discards selections (uniform). EC-2 → superseded by US-3 states + client-fired grace. EC-3 last-interaction-wins. EC-4 out-of-range number → free text. EC-5 struck (channel timers deleted with US-5's mechanism). EC-6 headless → `no_human_surface`. EC-7 two-client race → first valid wins. EC-8 stale card id → rejected. EC-9 delegated child → owner-only rejection. EC-10 channel-origin session → blocked tool + conversational ask, permanently (never a silent park). EC-11 (new) plain inbound during pending (v1) → normal turn, card survives.
 
 ## 6. Test plan
 
@@ -91,8 +87,8 @@ EC-1 cancel discards selections (uniform). EC-2 → superseded by US-3 states + 
 | 7 | Session Stop + channel `/cancel` + **card Cancel button** (m-R2-2) all cancel correctly | Integration |
 | 8 | Contracts: frame enums both directions, copy-set sync, inbound zod, snapshot field | Contract |
 | 9 | Card component: tabs/advance/badge/underline/countdown/collapsed record from the registry record incl. history reload (§0.6) + **hostile-markdown context renders inert** (m-R2-3) | Component |
-| 10 | (v1.1) Channel: pre-turn seam consumption, parsing, surface-independent timer terminals, resolved-automatically messages, restart re-delivery, both-surfaces race | Integration |
-| 11 | Liveness: AutoDenyAsk; **v1 channel-origin → no_human_surface + fallback (EC-10)**; SPA disconnected-waits | Integration |
+| 10 | Channel-origin session → immediate blocked-tool error + agent asks conversationally (US-5); channel messages during an SPA-pending set stay ordinary turns | Integration |
+| 11 | Liveness: AutoDenyAsk; **channel-origin → blocked + conversational ask (EC-10)**; SPA disconnected-waits | Integration |
 | 12 | E2E: goal clarifying question through the card, stubbed LLM; delegated-child compile falls back to message_parent (o-R2-3) | E2E |
 | 13 | Submission validation + races: ownership, membership, arity, first-wins incl. auto-resolution contender, stale-card | Integration |
 | 14 | **Policy seeding (3 sites; Judge/PlanSupervisor deny), visibility classification, cross-session approval z-order** (m-R2-4) | Unit+Component |
@@ -109,16 +105,16 @@ EC-1 cancel discards selections (uniform). EC-2 → superseded by US-3 states + 
 | FR-5 | Free text semantics | US-2 | 2 |
 | FR-6 | Server validation + first-valid-wins incl. auto-resolutions | US-5 S6, §3 | 13 |
 | FR-7 | Raw context, sanitized render, inert hostile input | US-4 | 8,9 |
-| FR-8 | v1.1 channel mechanism | US-5 | 10 |
+| FR-8 | Channels: tool blocked, conversational fallback (permanent) | US-5, EC-10 | 10 |
 | FR-9 | Restart lifecycle | US-6 S1 | 6 |
 | FR-10 | Approved visuals + record reconstruction | US-1 S2/S3, §0.6 | 9 |
 | FR-11 | Seeding (3 sites, deny for system agents), visibility, coexistence | US-7 | 14 |
-| FR-12 | Liveness by origin/binding; v1 channel fallback | US-6 S4, EC-10 | 11 |
+| FR-12 | Liveness by origin; channels permanently blocked | US-6 S4, EC-10 | 11 |
 
 ## 8. Open items
 1. Liveness predicate's concrete interface (the `policyApproverAdapter`-style injection — implementation detail; behavior is now fully specified).
 2. Mock v3: multi-select rows; also replace the mock's emoji glyphs with Phosphor icons at implementation (m-2/m-R2 carryover).
-3. Whether the v1.1 pre-turn seam and the goal pending-confirm taxonomy share one seam (both are pre-turn pending-state consumers).
+3. (Struck — the channel seam was deleted with US-5's ruling; the goal pending-confirm taxonomy stands alone.)
 
 ## 9. Operator sign-off register
-**9.1 (OPEN — M-R2-8): the v1/v1.1 channel phasing.** ADR-074 D4b's plain-text channel degradation is a fixed ruling with no phasing stated. This spec ships SPA-only in v1, with channel-origin sessions getting the D4b-sanctioned plain-chat fallback until v1.1 delivers the specified sequential mechanism. This phasing needs the operator's explicit yes/no; everything else in this spec stands regardless of the answer.
+**9.1 (RESOLVED — interview #5, 2026-09-05):** the operator superseded the channel-degradation ruling entirely: the tool is web-only and BLOCKED on other channels, where the agent asks conversationally in plain language; no channel mechanism is ever built. ADR-074 D4b carries the amended ruling. Also updates EC-10 to the permanent rule and deletes the v1.1 scope. No open sign-offs remain.
