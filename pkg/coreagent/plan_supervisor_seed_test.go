@@ -220,8 +220,10 @@ func TestSeed_PlanSupervisorSkillAllowlist_ExplicitNonNil(t *testing.T) {
 	ps := findSeeded(t, cfg, string(coreagent.IDPlanSupervisor))
 	require.NotNil(t, ps.Skills,
 		"PlanSupervisor's skill allowlist must be EXPLICIT — nil means unrestricted, i.e. every skill")
-	assert.Equal(t, []string{"plan"}, ps.Skills,
-		"PlanSupervisor is granted exactly the plan skill (the re-planning playbook its rubric derives from)")
+	assert.Equal(t, []string{"plan", "define-done"}, ps.Skills,
+		"PlanSupervisor is granted exactly these two skills — plan (the re-planning playbook its "+
+			"rubric derives from) and define-done (the ADR-074 D4 criteria-authoring quality bar); "+
+			"an explicit amendment of plan-supervisor-spec FR-007/N3's original \"exactly one\"")
 }
 
 // TestSeed_PlanSupervisorSkillAllowlist_ReEnforced verifies the allowlist is
@@ -230,13 +232,20 @@ func TestSeed_PlanSupervisorSkillAllowlist_ExplicitNonNil(t *testing.T) {
 // stricter than the core-agent loop, which preserves an operator's skill
 // edits, because for a System Agent the allowlist is a role invariant.
 func TestSeed_PlanSupervisorSkillAllowlist_ReEnforced(t *testing.T) {
+	// ADR-074 D4 note: the enforced allowlist is now exactly the PAIR
+	// {plan, define-done} — the "widened with an extra skill" case below
+	// legalizes exactly this shape for exactly these two names, and any
+	// OTHER widening (a third skill, a substitution, a narrowing back to
+	// one) must still be reverted to the pair on the next boot.
 	for _, tc := range []struct {
 		name   string
 		tamper []string
 	}{
 		{"cleared to nil (would resolve UNRESTRICTED)", nil},
-		{"widened with an extra skill", []string{"plan", "skill-authoring"}},
+		{"widened with an extra skill", []string{"plan", "define-done", "skill-authoring"}},
 		{"replaced entirely", []string{"daily-briefing"}},
+		{"narrowed back to plan alone", []string{"plan"}},
+		{"reordered pair rewritten to canonical order", []string{"define-done", "plan"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{}
@@ -249,7 +258,7 @@ func TestSeed_PlanSupervisorSkillAllowlist_ReEnforced(t *testing.T) {
 			require.True(t, coreagent.SeedConfig(cfg), "re-enforcement must report modified=true after tamper")
 
 			ps := findSeeded(t, cfg, string(coreagent.IDPlanSupervisor))
-			assert.Equal(t, []string{"plan"}, ps.Skills,
+			assert.Equal(t, []string{"plan", "define-done"}, ps.Skills,
 				"the seeded allowlist must be restored exactly")
 		})
 	}
