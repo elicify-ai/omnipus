@@ -37,7 +37,8 @@ Founder rulings this design encodes:
   Rules speak only in field kinds. Money is merely "a number with a unit";
   grams, hours and euros obey the same law.
 - **Closed set.** The agent picks from named view kinds; it does not compose
-  parts freely. `write_view` remains the raw escape hatch.
+  parts freely. `write_view` remains the raw escape hatch **for the legacy
+  shape** (D6, 2026-09-05).
 
 ## 2. The model
 
@@ -96,6 +97,16 @@ Deliberately out (recorded so they aren't re-litigated): **map** (no
 coordinate data, adds a dependency), **formulas/computed properties**
 (inventing a formula language is a standing commitment; revisit on demonstrated
 need), **free part composition** (untestable; the raw path covers the tail).
+
+**Amended 2026-09-05 by D6.** "The raw path covers the tail" above meant, and
+now says explicitly, the **legacy view shape** — `layout`, `filter`,
+`grouping`, `properties`, `aggregates`, `sort`, `limit`, `label`,
+`property_config`, `formulas`. It has never meant the kind/part vocabulary.
+`write_view` refuses a `definition` carrying `kind` or `parts`; those are
+`create_view`'s to write, because the eligibility rules that give them meaning
+run only there. Writing `kind: trend` on a type with no number is not an
+uncovered composition — it is the closed set asserted through a door with no
+check on it, which is what the UAT observed an agent do. See D6 in §9.
 
 ## 3. Gate rules (the whole of the tool's "judgement")
 
@@ -186,9 +197,12 @@ write the file → answer with the same cascade block `write_view` uses, plus
 the assembled stack so the agent can read back what it built. Any gate failure
 refuses with the G1 wording and writes nothing.
 
-`write_view` (raw definition) and `delete_view` are unchanged. `write_view`'s
-tool description gains one line steering agents to `create_view` for the
-common cases.
+`delete_view` is unchanged. `write_view`'s tool description gains one line
+steering agents to `create_view` for the common cases — and, per **D6**
+(2026-09-05), `write_view` now **refuses** a `definition` carrying `kind` or
+`parts`, naming `op=create_view` and why. Its remaining surface is the legacy
+shape, which is also the shape hand-edited files and imported `.base` views
+already have.
 
 ### 6.2 `knowledge_describe` on a record type gains an "available views" block
 
@@ -257,3 +271,56 @@ furniture.
   this-exact-reason.
 - D4. Naming of the 8 kinds as the agent sees them (`summary`/`trend`/
   `breakdown` vs alternatives) — pure naming, but frozen once shipped.
+- D6. RULED 2026-09-05: **the gate belongs to the tool, not to one of its
+  ops** — mechanical enforcement of §3's "skippable by no agent".
+
+  **Evidence.** The UAT transcript
+  (`docs/internal/specs/uat-findings-view-kinds-2026-09-05.md`, D1). Asked for
+  a `trend` on a record type with no number property, the tester agent was
+  refused twice by `create_view` — correctly, naming the missing number — then
+  called `write_view` **ten** times until one succeeded, and reported "Saved —
+  uat-task-trend is live and queryable". The file landed. The server returned
+  `kind: trend`, `refusal: None`, `problems: []`, an empty figures row, an
+  empty chart and 131 rows of table. A directed follow-up wrote `kind: tiles`
+  bound to an enum — the exact binding D5 rejected for the record — and it was
+  accepted and served the same way. Every G1 gate lived in
+  `knowledge_configure_create_view.go`; `write_view`, the same tool one
+  argument away, called none of them.
+
+  The design's safety property is not "create_view refuses"; it is "an agent
+  cannot author an impossible view". As shipped, a refusal was a speed bump:
+  this model treated ten consecutive rejections as a puzzle to solve rather
+  than an answer, and the tool let it win.
+
+  **The ruling, in two halves.**
+
+  (a) **Authoring.** `op=write_view` refuses any `definition` carrying `kind`
+  or `parts`. The composer is the sole author of the kind/part vocabulary; the
+  refusal names `op=create_view` and states why. `write_view` keeps the
+  **legacy shape** — layout / filter / grouping / properties / aggregates /
+  sort / limit / label / property_config / formulas — which is the actual
+  escape-hatch tail and the shape hand-edited files and imported `.base` views
+  have. The gate is on the VOCABULARY, not on the impossibility: refusing only
+  impossible requests would leave two authors of one closed set, disagreeing
+  the first time either was extended — the drift D5's "ONE shared eligibility
+  helper" exists to prevent. §2.3's "raw escape hatch" line carries the same
+  amendment.
+
+  (b) **Serving.** The view endpoint never serves a vacuous or ineligible part
+  silently. A `figures`/`chart`/`crosstab`/`tiles`/`columns`/`calendar` part
+  whose bindings fail the **same** G1 checks the composer runs gets a recorded
+  problem (`view_part_ineligible`) naming the failed requirement, `complete:
+  false`, and no empty-but-clean rendering. The rule is not restated: the
+  renderer's `knowledge.ViewPartBindingRefusal` delegates to the composer's own
+  `gateG1RequireImage` / `gateG1RequireChoice` / `gateG1RequireDate`, so the
+  two are one decision made once. This matters beyond `write_view`: a
+  parts-bearing file that got in by any path — hand-edited, imported, written
+  by a binary older than this ruling — is caught at read time.
+
+  **Scope of (b).** Files that DECLARE a `parts:` stack. A legacy view carries
+  a `layout:` and no parts, and `EffectiveParts` synthesises one part from it
+  (a `columns` part with no `choice:`, a `tiles` part with no `image:`)
+  because a file written before this design had none to give. Judging those
+  would put a problem on all 69 of the founder's imported views — the renderer
+  reporting the format's own history as a fault. §4's promise that they "load
+  unchanged" holds.

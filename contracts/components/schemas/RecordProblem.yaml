@@ -60,6 +60,7 @@ properties:
       - stale_cursor
       - unknown_view
       - unknown_record_type
+      - view_part_ineligible
     description: >
       Machine-readable cause, so a caller can branch without parsing prose.
       "missing_schema_version" — a schema file lacking schema_version; no
@@ -181,6 +182,18 @@ properties:
       with the views in scope listed.
       "unknown_record_type" — a record type the schema set does not declare,
       refused with the declared types listed (FR-024).
+      "view_part_ineligible" — a saved view declares a part whose BINDINGS do
+      not satisfy what that part requires: a `figures` or `chart` part with no
+      number, a `chart` whose `date` names something the record type does not
+      declare as a date, a `tiles` part bound to a property that is not
+      image-capable, a `columns` part bound to something that is not a small
+      enum. The part draws NOTHING, and this is the renderer saying so
+      (view-kinds-design-2026-09-03 D6). The composer (op=create_view) refuses
+      to write such a part; this code exists because a parts-bearing file can
+      reach the renderer by other routes — a hand-edited file, an import, or a
+      binary written before D6 closed op=write_view — and a part that computes
+      nothing because its bindings are absent must never be served as an empty
+      but clean rendering.
     example: "type_mismatch"
   reason:
     type: string

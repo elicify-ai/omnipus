@@ -407,15 +407,11 @@ func (t *ConfigureTool) Parameters() map[string]any {
 					"required, and per-type: label, values, to, inverse, unit}). " +
 					configurePropertyTypeSentence + " There is no built-in vocabulary; every " +
 					"type name, property name and enum value is this vault's own. " +
-					"write_view: the raw escape hatch. " + ConfigureWriteViewSteerLine + " " +
-					"write_view may also set `kind` (one of the eight create_view kind names, " +
-					"provenance only) and `parts` directly — an ordered list of " +
-					"{part, number, unit, date, image, choice, aggregate, grouping, subtotals, " +
-					"properties} objects, the same shape create_view itself assembles (part is " +
-					"one of table/list/tiles/columns/calendar/figures/chart/crosstab) — for a " +
-					"render stack the eight named kinds do not produce; the SAME rules apply " +
-					"(a number's unit pairing, once declared, is never overridden to a combined " +
-					"total). An OPTIONAL type (the record type " +
+					"write_view: the raw escape hatch for the LEGACY view shape. " +
+					ConfigureWriteViewSteerLine + " It does NOT accept `kind` or `parts` — " +
+					"those are op=create_view's vocabulary and are refused here (design D6), " +
+					"because the eligibility rules that give them meaning run only in the " +
+					"composer. An OPTIONAL type (the record type " +
 					"queried; omit it for a view that spans every note in scope), one optional " +
 					"`filter` tree of {all|any|not} over leaves of {property, op, value} where " +
 					configureOperatorSentence + " and optional label, grouping ({property, " +
@@ -697,6 +693,73 @@ func (t *ConfigureTool) execDeleteRecordType(target mutationTarget, args map[str
 // write_view / delete_view
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// D6 — the kind/part vocabulary has ONE author
+//
+// design §3: "All six [gates] live in the composer and renderer — testable
+// once, skippable by no agent." The 2026-09-05 UAT proved that was a property
+// of ONE OP: every G1 gate lives in knowledge_configure_create_view.go, and
+// write_view — the same tool, one argument away, in front of the same agent in
+// the same turn — called none of them. Asked for a `trend` on a record type
+// with no number, the tester agent was refused twice by create_view and then
+// called write_view TEN times until one succeeded; the file landed, and the
+// server served `kind: trend` with an empty figures row, an empty chart and
+// `problems: []`. A directed follow-up wrote `kind: tiles` bound to an enum —
+// the exact binding D5 rejected for the record — and it was accepted and
+// served the same way.
+//
+// The distinction D6 draws, and why it is not "close the escape hatch":
+//
+//   - A part stack the eight kinds do not produce is what the escape hatch is
+//     FOR, and D6 does not touch it — except that such a stack must now be a
+//     LEGACY-shaped view (layout / filter / grouping / properties /
+//     aggregates), which is also the shape every hand-edited file and every
+//     imported .base view already has.
+//   - `kind: trend` on a type with no number, or `kind: tiles` on a vault
+//     where D5 says tiles cannot exist, is NOT an uncovered composition. It is
+//     the same closed set the design defines, asserted through a door with no
+//     check on it. `kind` was documented here as "provenance only" and then
+//     echoed back by the server as the view's kind — provenance for a
+//     composition that never happened.
+//
+// So the gate is on the VOCABULARY, not on the impossibility. Refusing only
+// impossible requests would leave two authors of one closed set, disagreeing
+// the first time either was extended — the drift D5's "ONE shared eligibility
+// helper" ruling exists to prevent.
+const (
+	writeViewKindKey  = "kind"
+	writeViewPartsKey = "parts"
+)
+
+// writeViewComposerVocabularyRefusal returns the refusal for a write_view
+// definition carrying the composer's own keys, or "" when the definition is
+// the legacy shape write_view still owns.
+func writeViewComposerVocabularyRefusal(defMap map[string]any) string {
+	var found []string
+	if _, ok := defMap[writeViewKindKey]; ok {
+		found = append(found, "`"+writeViewKindKey+"`")
+	}
+	if _, ok := defMap[writeViewPartsKey]; ok {
+		found = append(found, "`"+writeViewPartsKey+"`")
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return "definition carries " + strings.Join(found, " and ") +
+		", which op=create_view writes and this op does not. The eight view kinds and " +
+		"the part stacks they assemble are the composer's vocabulary, and the eligibility " +
+		"rules that give them meaning run only there — a trend needs a number tracked over " +
+		"a date, tiles needs an image-capable property, a board needs a small enum. Written " +
+		"here they would be asserted with nothing checking them, which is how a `trend` over " +
+		"a type with no number gets saved and then served as an empty chart with no problem " +
+		"reported. Call op=create_view with kind= and the bindings it names " +
+		"(knowledge_describe on the record type lists which kinds this type supports, and " +
+		"why the others are not offered). write_view remains the raw escape hatch for the " +
+		"LEGACY view shape — layout, filter, grouping, properties, aggregates, sort, limit, " +
+		"label, property_config, formulas — the shape hand-edited files and imported .base " +
+		"views already have."
+}
+
 func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any) *tools.ToolResult {
 	root := target.collection.Root()
 	viewName := strings.TrimSpace(stringArg(args["view"]))
@@ -712,6 +775,11 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	defMap, derr := definitionMap(args["definition"])
 	if derr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+derr.Error())
+	}
+	// D6 (design §9, ratified 2026-09-05): the kind/part vocabulary belongs to
+	// op=create_view, and to no other door. See writeViewComposerVocabularyRefusal.
+	if refusal := writeViewComposerVocabularyRefusal(defMap); refusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+refusal)
 	}
 	if existingName, ok := defMap["name"]; ok {
 		if s, _ := existingName.(string); strings.TrimSpace(s) != "" && strings.TrimSpace(s) != viewName {

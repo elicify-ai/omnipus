@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
@@ -255,7 +256,11 @@ type viewResultBuilder struct {
 	// it cannot be read off the file).
 	formulas         *records.FormulaSet
 	formulasResolved bool
-	out              *gen.ViewResult
+	// declaredParts records whether the part stack came from the FILE's own
+	// `parts:` key rather than being synthesised from a legacy `layout:`.
+	// D6's read-time G1 gate applies only to the former — see partBindingGate.
+	declaredParts bool
+	out           *gen.ViewResult
 }
 
 func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) gen.ViewResult {
@@ -308,13 +313,14 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) g
 	}
 
 	b := &viewResultBuilder{
-		ctx:        ctx,
-		env:        env,
-		view:       v,
-		rowByPath:  map[string]*gen.VaultFindRow{},
-		groupCache: map[string][]gen.VaultFindGroup{},
-		parts:      parts,
-		out:        &out,
+		ctx:           ctx,
+		env:           env,
+		view:          v,
+		rowByPath:     map[string]*gen.VaultFindRow{},
+		groupCache:    map[string][]gen.VaultFindGroup{},
+		parts:         parts,
+		declaredParts: v.Def.Parts != nil && len(*v.Def.Parts) > 0,
+		out:           &out,
 	}
 	b.sel = b.buildSelect(parts)
 
@@ -1429,10 +1435,67 @@ func viewExcludedFields(ex viewExcluded, unitProps []string) (*int, *string, *[]
 	return &n, &reason, &all
 }
 
+// ---------------------------------------------------------------------------
+// D6 — G1 ON THE READ PATH
+//
+// design §3: all six gates live "in the composer AND the renderer". The
+// renderer had G2, G3 and G4; G1 was only ever in the composer, and the
+// 2026-09-05 UAT served a `kind: trend` whose figures part named no number and
+// whose chart could not plot, as HTTP 200 with `refusal: None` and
+// `problems: []` — an empty figures row, an empty chart, and 131 rows of table
+// underneath them. Nothing anywhere said the view had not been drawn.
+//
+// The rule is NOT restated here. partBindingGate calls
+// knowledge.ViewPartBindingRefusal, which delegates to the very gate functions
+// op=create_view runs (gateG1RequireImage → the D5 switch ImageEligible,
+// gateG1RequireChoice → boardEnumEligible, gateG1RequireDate), so "the
+// composer would have refused to write this" and "the renderer refuses to draw
+// it" are one decision made once.
+//
+// SCOPE: files that DECLARE a `parts:` stack. A legacy view carries a `layout:`
+// and no parts, and EffectiveParts synthesises one part from it — a `columns`
+// part with no `choice:`, a `tiles` part with no `image:` — because a file
+// written before the design existed had none to give. Judging those by D6's
+// rule would put a problem on all 69 of the founder's imported views, which
+// would be the renderer reporting the format's own history as a fault. §4's
+// promise is that they "load unchanged", and they do.
+func (b *viewResultBuilder) partBindingGate(src gen.ViewPart) bool {
+	if !b.declaredParts {
+		return true
+	}
+	var schema *records.Schema
+	if b.view.Def.Type != nil {
+		if sc, ok := b.env.Schemas.Get(*b.view.Def.Type); ok {
+			schema = sc
+		}
+	}
+	reason, fix := knowledge.ViewPartBindingRefusal(src, schema)
+	if reason == "" {
+		return true
+	}
+	f := fix
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code:    gen.ViewPartIneligible,
+		Reason:  reason,
+		Fix:     &f,
+		Records: []string{},
+	})
+	b.out.Complete = false
+	return false
+}
+
 func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
 	p := gen.ViewResultPart{
 		Part:   gen.ViewResultPartPart(string(src.Part)),
 		Source: src,
+	}
+
+	// A part whose bindings cannot satisfy it is REPORTED and then left
+	// undrawn — never computed into an empty-but-clean rendering. The part
+	// still appears in the stack, because deleting it from the answer would
+	// hide the fact that the view file asks for it.
+	if !b.partBindingGate(src) {
+		return p
 	}
 
 	switch src.Part {

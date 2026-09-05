@@ -365,7 +365,8 @@ type RecordProblem = {
     | "orphan_row"
     | "stale_cursor"
     | "unknown_view"
-    | "unknown_record_type";
+    | "unknown_record_type"
+    | "view_part_ineligible";
   reason: string;
   records: Array<string>;
   property?: string | undefined;
@@ -4181,6 +4182,7 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "stale_cursor",
     "unknown_view",
     "unknown_record_type",
+    "view_part_ineligible",
   ]),
   reason: z.string().min(1),
   records: z.array(z.string().min(1)),

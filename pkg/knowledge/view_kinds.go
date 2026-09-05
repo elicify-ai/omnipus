@@ -407,9 +407,173 @@ func buildCreateViewDescriptionFragment() string {
 // steering agents to create_view for the common cases." Wire it into
 // knowledge_configure.go's write_view description alongside
 // ConfigureCreateViewDescriptionFragment.
+//
+// AMENDED 2026-09-05 by D6 (design §9). The line used to end "write_view
+// remains the raw escape hatch for anything create_view's closed set does not
+// cover", and that sentence was read — by a real agent, in the UAT — as
+// licence to assert the closed set itself through the raw door. The escape
+// hatch covers the LEGACY SHAPE (layout / filter / grouping / properties /
+// aggregates), not the kind/part vocabulary; §2.3's "raw escape hatch" line
+// carries the same amendment.
 const ConfigureWriteViewSteerLine = "For a table/list/tiles/board/calendar/" +
-	"summary/trend/breakdown, prefer op=create_view over hand-writing a " +
-	"`definition` here — it validates the fields against this record type's " +
-	"declared properties and refuses naming exactly what is missing, rather " +
-	"than writing a view that fails once queried. write_view remains the raw " +
-	"escape hatch for anything create_view's closed set does not cover."
+	"summary/trend/breakdown, use op=create_view — it is the ONLY op that " +
+	"writes `kind` and `parts`, it validates the fields against this record " +
+	"type's declared properties, and it refuses naming exactly what is " +
+	"missing rather than writing a view that fails once queried. write_view " +
+	"remains the raw escape hatch for the LEGACY view shape (layout, filter, " +
+	"grouping, properties, aggregates, sort, limit, label) — the shape " +
+	"hand-edited files and imported .base views have; it refuses a " +
+	"`definition` carrying `kind` or `parts`."
+
+// ---------------------------------------------------------------------------
+// D6, the RENDERER's half of G1 — a part whose bindings cannot satisfy it is
+// refused out loud, never drawn empty and clean.
+//
+// design §3 puts all six gates "in the composer AND the renderer". The
+// composer's half has been there since create_view landed. The renderer had
+// only G2/G3/G4; G1 — "a kind is offered only when the collection has the
+// properties it requires" — was nowhere on the read path, and the 2026-09-05
+// UAT is what that cost:
+//
+//	kind: trend
+//	parts:
+//	  - {part: figures, aggregate: count}            # no `number:` at all
+//	  - {part: chart, aggregate: count, date: completed}
+//	  - {part: table, properties: [...]}
+//
+// served as HTTP 200, `refusal: None`, `problems: []` — an empty figures row,
+// an empty chart, 131 rows of table. D6 closes op=write_view so no agent can
+// author that again, but a parts-bearing file reaches the renderer by other
+// routes too: a hand-edited file, a .base import, a binary written before D6.
+// Those must be caught at READ time, which is here.
+//
+// THE RULES ARE NOT RESTATED. Every check below delegates to the very function
+// the composer's own gate calls — gateG1RequireImage (which is itself the one
+// caller of the D5 switch ImageEligible), gateG1RequireChoice (boardEnumEligible
+// / maxBoardEnumValues), gateG1RequireDate — so a part the composer would have
+// refused to write is the same part the renderer refuses to draw, by
+// construction rather than by two comparisons that happen to agree today.
+//
+// WHAT IS DELIBERATELY NOT CHECKED HERE: whether a present `number` binding is
+// arithmetic. That is G4, and the renderer already enforces it, per property
+// and once per result, in rest_knowledge_view.go's permittedToTotal — which
+// names the authority the type was read from. Repeating it here would report
+// one fault twice under two codes.
+
+// viewPartBinding reads an optional binding key, treating whitespace as
+// absent — a `number: ""` in a hand-edited file binds nothing.
+func viewPartBinding(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(*p)
+}
+
+// viewPartComposerFix is the one remedy every part-binding refusal names: the
+// op that would have refused this at write time instead of read time.
+const viewPartComposerFix = "re-author this view with knowledge_configure " +
+	"op=create_view — it composes the part stack for the kind you name and " +
+	"refuses at WRITE time, naming the missing property, rather than leaving " +
+	"a part that draws nothing; or correct the binding in the view file itself"
+
+// ViewPartBindingRefusal reports why one part of a saved view cannot draw what
+// its part promises, or "" when its bindings satisfy the SAME G1 requirements
+// op=create_view enforces at authoring time.
+//
+// sc is the schema of the view's declared record type, or nil for an untyped
+// view (FR-018b), which no single schema speaks for. With no schema only the
+// PRESENCE of a binding can be judged — except for tiles, whose eligibility
+// (D5) is a property of the records layer's type set and not of any one
+// record type, so it is answerable either way.
+func ViewPartBindingRefusal(part generated.ViewPart, sc *records.Schema) (reason, fix string) {
+	refuse := func(what string) (string, string) {
+		return fmt.Sprintf("the %s part of this view draws nothing: %s", part.Part, what), viewPartComposerFix
+	}
+
+	switch part.Part {
+	case generated.ViewPartPartFigures:
+		if viewPartBinding(part.Number) == "" {
+			return refuse(figuresMissingNumberReason(sc))
+		}
+
+	case generated.ViewPartPartChart:
+		if viewPartBinding(part.Number) == "" {
+			return refuse(figuresMissingNumberReason(sc))
+		}
+		if sc == nil {
+			if viewPartBinding(part.Date) == "" {
+				return refuse("a chart plots a number over time and this one names no `date`")
+			}
+			return "", ""
+		}
+		if _, refusal := gateG1RequireDate(sc, ViewKindTrend, viewPartBinding(part.Date)); refusal != "" {
+			return refuse(refusal)
+		}
+
+	case generated.ViewPartPartCrosstab:
+		// The grouping half of a crosstab's requirement is checked by the
+		// renderer itself (it applies the view-level grouping fallback first,
+		// which this function cannot see); only the number is judged here.
+		if viewPartBinding(part.Number) == "" {
+			return refuse(figuresMissingNumberReason(sc))
+		}
+
+	case generated.ViewPartPartTiles:
+		// D5: no property type in records.PropertyTypes is image-capable, so
+		// this refuses for every vault today — which is exactly what
+		// knowledge_describe already tells the agent, and exactly what
+		// create_view already refuses. It is the one check that does not need
+		// a schema to reach its answer, but gateG1RequireImage wants one to
+		// scan, so the schema-less case answers with D5's own wording.
+		if sc == nil {
+			return refuse(fmt.Sprintf("kind=tiles: %s", imageIneligibleReason))
+		}
+		if _, refusal := gateG1RequireImage(sc, viewPartBinding(part.Image)); refusal != "" {
+			return refuse(refusal)
+		}
+
+	case generated.ViewPartPartColumns:
+		// A board's columns come from a small enum. A legacy `layout: board`
+		// view carries no `choice:` at all and is NOT judged here — see
+		// the explicit-stack gate in rest_knowledge_view.go, which is what
+		// decides whether this function is consulted for a given view.
+		if sc == nil {
+			if viewPartBinding(part.Choice) == "" {
+				return refuse("a board's columns come from an enum property and this one names no `choice`")
+			}
+			return "", ""
+		}
+		if _, refusal := gateG1RequireChoice(sc, viewPartBinding(part.Choice)); refusal != "" {
+			return refuse(refusal)
+		}
+
+	case generated.ViewPartPartCalendar:
+		if sc == nil {
+			if viewPartBinding(part.Date) == "" {
+				return refuse("a calendar places records on a month grid and this one names no `date`")
+			}
+			return "", ""
+		}
+		if _, refusal := gateG1RequireDate(sc, ViewKindCalendar, viewPartBinding(part.Date)); refusal != "" {
+			return refuse(refusal)
+		}
+	}
+	return "", ""
+}
+
+// figuresMissingNumberReason states the absent-number fault and, where a
+// schema is in hand, names the properties that WOULD satisfy it — G1's "lists
+// candidate properties if any near-miss exists", read out of the same
+// declaration-order scan knowledge_describe's availability block uses.
+func figuresMissingNumberReason(sc *records.Schema) string {
+	const base = "it names no `number` to total"
+	if sc == nil {
+		return base
+	}
+	cands := propertyNamesOfTypes(sc, records.TypeInteger, records.TypeDecimal)
+	if len(cands) == 0 {
+		return fmt.Sprintf("%s, and record type %q declares no number property at all — "+
+			"this kind of part cannot be built on this record type", base, sc.Type)
+	}
+	return fmt.Sprintf("%s; record type %q declares: %s", base, sc.Type, strings.Join(cands, ", "))
+}
