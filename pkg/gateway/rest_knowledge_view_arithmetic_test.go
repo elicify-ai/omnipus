@@ -110,6 +110,37 @@ func findAggregateValue(t *testing.T, api *restAPI, ws, colID, recordType, op, p
 	return resp.Totals[0].Value
 }
 
+// findAggregateValueInUnit is findAggregateValue for a number the record type
+// pairs with a companion unit. Under G2/D7 such a summary answers ONCE PER
+// UNIT VALUE, so "the total" is not a single row of the engine's answer and
+// asking for one would be asking for the combined figure back.
+func findAggregateValueInUnit(t *testing.T, api *restAPI, ws, colID, recordType, op, property, unit string) string {
+	t.Helper()
+	col, inScope := api.resolveScopedCollection(ws, colID)
+	require.True(t, inScope)
+
+	env, closeEnv, err := vaultprops.OpenFindEnv(context.Background(), api.homePath, col)
+	defer closeEnv()
+	require.NoError(t, err)
+
+	prop := property
+	aggs := []gen.VaultFindAggregate{{Op: gen.VaultFindAggregateOp(op), Property: &prop}}
+	rt := recordType
+	resp, err := knowledgefind.Find(context.Background(), env.Deps,
+		gen.VaultFindRequest{Type: &rt, Aggregate: &aggs})
+	require.NoError(t, err)
+	require.False(t, resp.Refused, "the engine must be able to answer %s(%s): %+v", op, property, resp.Problems)
+	for _, tot := range resp.Totals {
+		if tot.Unit != nil && *tot.Unit == unit {
+			require.False(t, tot.Refused != nil && *tot.Refused,
+				"the engine refused its own summary for %s", unit)
+			return tot.Value
+		}
+	}
+	t.Fatalf("the engine returned no %s total in %s: %+v", op, unit, resp.Totals)
+	return ""
+}
+
 // TestKnowledgeViewArithmetic_AverageRoundsTheSameWayAsKnowledgeFind is 6b.
 // The expected value is derived from the SPEC, not from either implementation:
 // FR-152 names round-half-even, and knowledgefind's own total says so in its
