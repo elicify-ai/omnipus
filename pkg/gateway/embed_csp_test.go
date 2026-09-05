@@ -328,3 +328,120 @@ func TestSpaEmbed_PdfJsPrefixMatchesTheBuild(t *testing.T) {
 	assert.Equal(t, string(m[1]), pdfJSAssetPathPrefix,
 		"embed.go's 404 branch must guard the prefix the build actually emits under")
 }
+
+// --- the PDF.js worker's own policy (audited 2026-09-05) -------------------
+//
+// A dedicated worker loaded from a same-origin URL takes its Content-Security-
+// Policy from ITS OWN response, not from the document that created it. That is
+// what made the defect this block guards possible: the SPA handler served
+// /pdfjs/pdf.worker.min.mjs with `script-src 'self'`, and `script-src 'self'`
+// refuses WebAssembly.instantiate — so the pdfjs/wasm/ modules vite.config.ts
+// deliberately ships (and fails the build without) could not compile. qcms has
+// no JavaScript fallback, so every ICC and DeviceCMYK colour rendered with the
+// crude device conversion, silently, in every released build.
+//
+// Measured in a real browser by tests/e2e/csp-assumptions.spec.ts test A2b,
+// which reads the verdict INSIDE the worker's realm. These tests pin the server
+// side of that fix so it cannot be undone by an edit that compiles.
+
+// TestSpaCsp_PdfWorkerCarriesTheWasmPolicy is the fix, asserted end to end
+// through the real handler.
+//
+// The second half is the point and is not decoration: the SHELL must still
+// carry the unwidened policy. A "simplification" that moves 'wasm-unsafe-eval'
+// onto spaContentSecurityPolicy would satisfy the first assertion perfectly
+// while re-permitting WebAssembly on the main thread — which is precisely what
+// the Shiki entry in embed.go tells the next reader not to do.
+func TestSpaCsp_PdfWorkerCarriesTheWasmPolicy(t *testing.T) {
+	t.Run("the worker script is served with 'wasm-unsafe-eval'", func(t *testing.T) {
+		rec := spaResponse(t, "/"+pdfJSWorkerPath)
+		require.Equal(t, http.StatusOK, rec.Code,
+			"the worker must actually be embedded, or this asserts headers on a 404")
+
+		policies := rec.Header().Values("Content-Security-Policy")
+		require.Len(t, policies, 1,
+			"still exactly one header: two are INTERSECTED, which would silently strip the "+
+				"very allowance this response exists to carry")
+		assert.Contains(t, policies[0], "script-src 'self' 'wasm-unsafe-eval';",
+			"PDF.js's qcms/jbig2/openjpeg modules cannot compile without it, and qcms has no "+
+				"JavaScript fallback — the symptom is silently wrong colour, not an error")
+	})
+
+	t.Run("every other SPA response keeps the unwidened policy", func(t *testing.T) {
+		for _, target := range []string{"/", "/library", "/assets", "/" + pdfJSAssetPathPrefix + "wasm/qcms_bg.wasm"} {
+			rec := spaResponse(t, target)
+			assert.NotContains(t, rec.Header().Get("Content-Security-Policy"), "wasm-unsafe-eval",
+				"%s must NOT be able to compile WebAssembly: the allowance is scoped to the "+
+					"PDF.js worker realm, which is what keeps Shiki's pure-JavaScript engine a "+
+					"policy requirement rather than a convention", target)
+		}
+	})
+}
+
+// TestSpaCsp_WasmPolicyDiffersByExactlyTheKeyword pins that the two strings
+// cannot drift apart.
+//
+// The worker policy is DERIVED from the shell policy, so a future directive
+// added to the shell reaches the worker automatically. This test states the
+// other half of that contract: the derivation adds one token and changes
+// nothing else. Without it, a hand-edited second literal could quietly widen or
+// narrow some unrelated directive for the worker alone.
+func TestSpaCsp_WasmPolicyDiffersByExactlyTheKeyword(t *testing.T) {
+	require.NotEqual(t, spaContentSecurityPolicy, spaPdfWorkerContentSecurityPolicy,
+		"the derivation produced an identical string — strings.Replace matched nothing, and "+
+			"the worker would silently keep the policy that broke it")
+	assert.Equal(t,
+		spaContentSecurityPolicy,
+		strings.Replace(spaPdfWorkerContentSecurityPolicy, " 'wasm-unsafe-eval'", "", 1),
+		"the worker policy must be the shell policy plus 'wasm-unsafe-eval' and nothing else")
+}
+
+// TestSpaCsp_WasmKeywordIsNotUnsafeEval is a fact about CSP that this fix rests
+// on, asserted rather than believed.
+//
+// 'wasm-unsafe-eval' permits WebAssembly compilation and nothing else; it does
+// not imply 'unsafe-eval', and eval/new Function stay refused. The directive
+// floor's own check is a SUBSTRING test for "'unsafe-eval'", so the two
+// keywords being distinguishable by it is load-bearing: if they were not, this
+// fix would have silently disabled the floor's eval guard for the worker.
+func TestSpaCsp_WasmKeywordIsNotUnsafeEval(t *testing.T) {
+	assert.NotContains(t, "'wasm-unsafe-eval'", "'unsafe-eval'",
+		"the floor checker distinguishes the two by substring; if this ever became true, "+
+			"spaCSPFloorViolations would stop catching a real 'unsafe-eval'")
+
+	assert.Empty(t, spaCSPFloorViolations(spaPdfWorkerContentSecurityPolicy),
+		"the worker's policy must still pass MV-25's directive floor in full")
+
+	// The control: the floor still rejects the real thing on the worker policy.
+	assert.NotEmpty(t,
+		spaCSPFloorViolations(strings.Replace(
+			spaPdfWorkerContentSecurityPolicy, "'wasm-unsafe-eval'", "'unsafe-eval'", 1)),
+		"a checker that accepts 'unsafe-eval' here would make the assertion above vacuous")
+}
+
+// TestSpaCsp_PdfWorkerPathIsTheOneVitePublishes ties the Go constant to the
+// build, for the same reason TestSpaEmbed_PdfJsPrefixMatchesTheBuild does.
+//
+// The worker's filename lives in three places with no shared source: the vite
+// plugin that copies it, the SPA's `new Worker(...)` call, and this handler's
+// policy branch. A rename in the first two would leave the branch guarding a
+// path nothing is served under — the worker would silently drop back to
+// `script-src 'self'` and ICC colour would silently regress, with no compile
+// error and no other test failing.
+func TestSpaCsp_PdfWorkerPathIsTheOneVitePublishes(t *testing.T) {
+	raw, err := os.ReadFile("../../vite.config.ts")
+	require.NoError(t, err, "vite.config.ts must be readable — it is this test's oracle")
+
+	re := regexp.MustCompile("PDFJS_WORKER_FILE\\s*=\\s*`\\$\\{PDFJS_ASSET_PREFIX\\}([^`]+)`")
+	m := re.FindSubmatch(raw)
+	require.Len(t, m, 2,
+		"PDFJS_WORKER_FILE not found in vite.config.ts; a missing oracle is not a pass")
+
+	assert.Equal(t, pdfJSAssetPathPrefix+string(m[1]), pdfJSWorkerPath,
+		"the policy branch must name the worker file the build actually emits")
+
+	spa, err := os.ReadFile("../../src/components/library/preview/LibraryPdfPreview.tsx")
+	require.NoError(t, err, "the PDF viewer must be readable — it is this test's second oracle")
+	assert.Contains(t, string(spa), "pdf.worker.min.mjs",
+		"the SPA must still construct its worker from the file this policy branch covers")
+}

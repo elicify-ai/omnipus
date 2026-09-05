@@ -33,22 +33,73 @@ import (
 // a flag. TestSpaCsp_DirectiveFloor asserts this and the rest of MV-25's floor
 // with a checker it also proves can fail.
 //
-// UNLIKE §10.3, THIS STRING IS NOT MEASURED. §10.7 says so itself: it is a
-// proposal, frozen only after a headed run in Chromium, Firefox and Safari with
-// zero violations while exercising initial load, the WebSocket, a Mermaid
-// diagram, a highlighted code block and a PDF. Its assumptions, each with the
-// symptom if wrong:
+// THIS STRING WAS SHIPPED UNMEASURED, AND IS NOW MEASURED — but not yet
+// FROZEN. §10.7's freeze condition is a headed run in Chromium, Firefox AND
+// Safari with zero violations while exercising initial load, the WebSocket, a
+// Mermaid diagram, a highlighted code block and a PDF. What exists is
+// tests/e2e/csp-assumptions.spec.ts, which drives every journey below against
+// the real embedded build on CHROMIUM ONLY, with the browser's own
+// securitypolicyviolation events AND the console as its two oracles, and a
+// positive control (test A0) proving both channels fire. Engines genuinely
+// differ on CSP, so Firefox and WebKit remain outstanding, and the audit report
+// (docs/internal/architecture/csp-audit-2026-09-05.md) says so rather than
+// claiming the freeze.
 //
-//	no inline bootstrap script          → white screen at boot
+// Each assumption, with the symptom if wrong and the verdict when driven:
+//
+//	no inline bootstrap script          → white screen at boot.
+//	                                      MEASURED 2026-09-05 (Chromium 151,
+//	                                      test A1): HOLDS. The built index.html
+//	                                      carries no inline script; the shell
+//	                                      mounts with zero script-src violations,
+//	                                      while A0 proves an inline script IS
+//	                                      refused and IS reported under the same
+//	                                      policy.
 //	worker-src covers the built PDF.js
 //	  worker URL                        → PDF.js does NOT fail; it falls back to
 //	                                      parsing on the main thread, which
 //	                                      FR-019c forbids, with a console warning
 //	                                      as the only symptom (test 96 asserts the
-//	                                      THREAD, not the configuration)
+//	                                      THREAD, not the configuration).
+//	                                      MEASURED 2026-09-05 (test A2): HOLDS —
+//	                                      a real PDF renders and Playwright's own
+//	                                      CDP view of live workers contains
+//	                                      /pdfjs/pdf.worker.min.mjs.
+//	the worker realm can run what the
+//	  build ships it                    → NOT ON THE ORIGINAL LIST, and the
+//	                                      defect this audit found. MEASURED FALSE
+//	                                      2026-09-05 (test A2b): the worker took
+//	                                      `script-src 'self'` from its own
+//	                                      response, so pdfjs/wasm/ was shipped and
+//	                                      unusable and every ICC/DeviceCMYK colour
+//	                                      was silently wrong. Fixed by
+//	                                      spaPdfWorkerContentSecurityPolicy below
+//	                                      — read its comment before touching
+//	                                      either string.
 //	Tailwind and Radix need inline
-//	  styles                            → broken layout
-//	same-origin WebSocket matches 'self'→ the live connection silently fails
+//	  styles                            → broken layout.
+//	                                      MEASURED 2026-09-05 (test A3, plus a
+//	                                      necessity probe that rewrote the header
+//	                                      to `style-src 'self'` and re-ran the
+//	                                      same journey): HOLDS, and the allowance
+//	                                      is load-bearing — Settings alone then
+//	                                      reported 13 style-src-attr violations,
+//	                                      12 of them from DOMPurify re-applying
+//	                                      sanitised style= attributes. Note the
+//	                                      violations are all ATTRIBUTES: zero
+//	                                      inline <style> elements exist, so
+//	                                      narrowing to
+//	                                      `style-src-elem 'self'` +
+//	                                      `style-src-attr 'unsafe-inline'` is a
+//	                                      real tightening opportunity, left
+//	                                      undone because it needs its own sweep
+//	                                      of every screen.
+//	same-origin WebSocket matches 'self'→ the live connection silently fails.
+//	                                      MEASURED 2026-09-05 (test A4): HOLDS —
+//	                                      ws://<host>/api/v1/chat/ws both opens on
+//	                                      its own at boot and reaches OPEN when
+//	                                      constructed directly, with zero
+//	                                      connect-src violations.
 //	Shiki needs no WebAssembly          → MEASURED FALSE, 2026-09-05, and the
 //	                                      symptom was worse than predicted.
 //	                                      Shiki's DEFAULT engine is Oniguruma
@@ -74,8 +125,37 @@ import (
 //	                                      assumption is true again by
 //	                                      construction rather than by hope. Do
 //	                                      not "fix" a future Shiki regression by
-//	                                      adding 'wasm-unsafe-eval' here.
-//	nothing embeds the SPA              → any embedding surface goes blank
+//	                                      adding 'wasm-unsafe-eval' here. That
+//	                                      instruction is unchanged and still
+//	                                      binding: the WebAssembly allowance the
+//	                                      PDF.js defect earned is scoped to the
+//	                                      PDF.js WORKER's response and never
+//	                                      reaches this string, which is what keeps
+//	                                      it enforceable. RE-VERIFIED 2026-09-05
+//	                                      (test A5): a `js` code block renders its
+//	                                      text with zero WebAssembly console
+//	                                      hits.
+//	nothing embeds the SPA              → any embedding surface goes blank.
+//	                                      MEASURED 2026-09-05 (test A6): HOLDS,
+//	                                      with a caveat worth reading. The
+//	                                      control itself works — a same-origin
+//	                                      page framing "/" is refused, console
+//	                                      naming frame-ancestors 'none'. But the
+//	                                      app's ONLY embedding surface, the
+//	                                      Library's sandboxed HTML frame, does not
+//	                                      mount in a production build at all:
+//	                                      LibraryPreviewPane.tsx's
+//	                                      PREVIEW_TOKEN_MINTER is null, so the
+//	                                      pane renders "Preview unavailable" and
+//	                                      the DOM contains zero iframes. So this
+//	                                      assumption is true today for a reason
+//	                                      unrelated to the policy. When that
+//	                                      minter lands, its frame's src is the
+//	                                      ISOLATED preview endpoint (§10.3's
+//	                                      policy, a different handler) rather than
+//	                                      anything this handler serves — extend
+//	                                      A6 to prove that rather than assuming
+//	                                      it.
 const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; " +
@@ -92,6 +172,113 @@ const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	// "capture/encoder/ICE" error frame, with nothing anywhere naming CSP.
 	"connect-src 'self' stun: turn: turns:; frame-src 'self'; object-src 'none'; base-uri 'none'; " +
 	"form-action 'self'; frame-ancestors 'none'"
+
+// pdfJSWorkerPath is the ONE embedded file whose response carries
+// spaPdfWorkerContentSecurityPolicy instead of spaContentSecurityPolicy.
+//
+// It must stay in step with vite.config.ts's PDFJS_WORKER_FILE and with
+// LibraryPdfPreview.tsx's `new Worker(...)` URL.
+// TestSpaCsp_PdfWorkerPathIsTheOneVitePublishes reads the TypeScript and
+// compares, because a rename on either side would silently move the worker back
+// under the document policy and restore the defect below with no other symptom.
+const pdfJSWorkerPath = pdfJSAssetPathPrefix + "pdf.worker.min.mjs"
+
+// spaPdfWorkerContentSecurityPolicy is spaContentSecurityPolicy with
+// 'wasm-unsafe-eval' added to script-src, and it is served on exactly one
+// path: the PDF.js parsing worker.
+//
+// WHY THIS EXISTS — MEASURED 2026-09-05, Chromium 151, against the real
+// embedded build (tests/e2e/csp-assumptions.spec.ts, test A2b).
+//
+// A dedicated worker loaded from a same-origin URL takes its policy from ITS
+// OWN response headers, not from the document that created it. The SPA handler
+// serves the worker script, so the worker realm was running under
+// `script-src 'self'` — and `script-src 'self'` refuses
+// WebAssembly.instantiate. Read directly inside the worker's realm, the verdict
+// was:
+//
+//	CompileError: WebAssembly.instantiate(): Compiling or instantiating
+//	WebAssembly module violates the following Content Security policy
+//	directive because 'unsafe-eval' is not an allowed source of script in the
+//	following Content Security Policy directive: "script-src 'self'".
+//
+// That is a direct contradiction inside our own build. vite.config.ts SHIPS
+// `pdfjs/wasm/` deliberately and FAILS the build if it is missing, because
+// (its words) "wasm/ missing -> a scanned PDF (JPEG 2000 / JBIG2) loses images"
+// and "iccs/ missing -> colour profiles are ignored". The policy then refused to
+// let any of it compile. The assets were shipped and unusable.
+//
+// THE USER-VISIBLE SYMPTOM, and why it never surfaced. PDF.js 6.2.108 ships a
+// JavaScript fallback for two of the three modules — `jbig2_nowasm_fallback.js`
+// and `openjpeg_nowasm_fallback.js` — reached through a same-origin dynamic
+// import that `script-src 'self'` permits, so scanned images still decoded, on
+// the slow path, after a wasted fetch-compile-throw. `qcms_bg.wasm` has NO
+// fallback file. `IccColorSpace.isUsable` compiles it, catches the CompileError,
+// `warn()`s once, and MEMOISES false. From then on every `/ICCBased` colour
+// space and every DeviceCMYK colour in every document silently used the crude
+// device conversion instead of the profile. Nothing was blank and nothing
+// errored — the colours were just wrong, in every released build, with one
+// console warning as the only trace:
+//
+//	Warning: ICCBased color space: "CompileError: WebAssembly.Module(): …
+//	violates … "script-src 'self'"."
+//
+// WHY THE LIBRARY WAS NOT RECONFIGURED INSTEAD. That is this file's standing
+// rule and it was tried first. PDF.js exposes exactly one knob here,
+// `useWasm: false`. Setting it makes `IccColorSpace.isUsable` return false
+// WITHOUT attempting the compile — identical wrong colours, minus the one
+// warning that made the defect findable at all. It hides the symptom rather
+// than fixing the cause. qcms is shipped only as WebAssembly; there is no
+// pure-JavaScript qcms to switch to, so the Shiki move (FR-019a's move, and
+// markdown-shared.tsx's) has no analogue here.
+//
+// WHY THIS IS NOT A WIDENING OF THE DOCUMENT'S POLICY. Two separate narrowings:
+//
+//  1. SCOPE. Only the worker script's response carries this string. The SPA
+//     shell, every chunk, every other asset and the ws-parser worker keep
+//     spaContentSecurityPolicy unchanged, byte for byte — so the main thread
+//     still cannot compile WebAssembly, and Shiki's pure-JavaScript engine stays
+//     a requirement enforced by the policy rather than by convention. Do NOT
+//     "simplify" this by moving 'wasm-unsafe-eval' onto the shell policy: that
+//     silently re-permits the exact thing the Shiki entry above tells you not to
+//     re-permit.
+//  2. KEYWORD. 'wasm-unsafe-eval' is not 'unsafe-eval' and does not imply it.
+//     It permits WebAssembly compilation and NOTHING else — `eval`,
+//     `new Function` and string-to-code timers stay refused in the worker too.
+//     The NON-NEGOTIABLE above is about 'unsafe-eval', and it is untouched;
+//     spaCSPFloorViolations' substring check distinguishes the two, and
+//     TestSpaCsp_WasmKeywordIsNotUnsafeEval pins that it does.
+//
+// RESIDUAL RISK, stated rather than waved past. The worker parses hostile PDFs
+// and can now compile WebAssembly. The bytes it compiles come from three
+// same-origin URLs this build publishes (`qcms_bg.wasm`, `jbig2.wasm`,
+// `openjpeg.wasm`); a document cannot introduce its own module, because nothing
+// in the parser compiles bytes taken from the PDF. A worker has no DOM, no
+// cookie access and no ambient authority, and it already runs the full
+// JavaScript decoders over the same input. The marginal capability is
+// "compile three files we shipped".
+var spaPdfWorkerContentSecurityPolicy = withWasmCompilation(spaContentSecurityPolicy)
+
+// withWasmCompilation returns policy with 'wasm-unsafe-eval' added to its
+// script-src.
+//
+// It PANICS rather than returning the input unchanged when the expected
+// directive is absent. A strings.Replace that matches nothing is the silent
+// failure this whole audit exists to stop: the gateway would boot, serve a
+// worker policy identical to the document's, and A2b would be the only thing
+// that noticed — at which point the panic is strictly better, because it is at
+// init, on every platform, with the reason attached.
+func withWasmCompilation(policy string) string {
+	const from = "script-src 'self';"
+	const to = "script-src 'self' 'wasm-unsafe-eval';"
+	if !strings.Contains(policy, from) {
+		panic("gateway: the SPA policy no longer contains " + from + " — the PDF.js worker's " +
+			"WebAssembly allowance cannot be derived from it, and PDF.js's ICC/DeviceCMYK " +
+			"colour handling would silently regress. Update withWasmCompilation together " +
+			"with spaContentSecurityPolicy.")
+	}
+	return strings.Replace(policy, from, to, 1)
+}
 
 // pdfJSAssetPathPrefix is the SPA-relative prefix PDF.js's runtime assets and
 // worker are served from (FR-018a, FR-018b).
@@ -137,6 +324,15 @@ func newSPAHandler() http.Handler {
 
 		// Check if the file exists in the embedded FS
 		cleanPath := strings.TrimPrefix(path, "/")
+
+		// The PDF.js worker, and ONLY the PDF.js worker, is served with the
+		// WebAssembly-capable variant. A worker's realm takes its policy from
+		// its own response, so this is what governs PDF.js's qcms/jbig2/openjpeg
+		// modules — see spaPdfWorkerContentSecurityPolicy for the measurement.
+		// Still exactly one header: Set replaces, never appends.
+		if cleanPath == pdfJSWorkerPath {
+			w.Header().Set(headerContentSecurityPolicy, spaPdfWorkerContentSecurityPolicy)
+		}
 		if _, err := fs.Stat(sub, cleanPath); err == nil {
 			switch {
 			case cleanPath == "index.html" || cleanPath == "":
