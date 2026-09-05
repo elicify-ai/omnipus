@@ -22,6 +22,7 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import * as api from '@/lib/api'
 
 // ── Router mock ───────────────────────────────────────────────────────────────
@@ -126,6 +127,10 @@ describe('ChatControls — Open browser launcher', () => {
   beforeEach(() => {
     act(() => {
       useUiStore.setState({ browserPanel: null, toasts: [] })
+      // Explicit, not incidental: every case in this block asserts the exact
+      // workspace argument the launcher sends, so the "no workspace" cases
+      // must start from a real null rather than whatever a prior test left.
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
     })
     vi.mocked(api.createSession).mockReset()
   })
@@ -185,13 +190,50 @@ describe('ChatControls — Open browser launcher', () => {
     fireEvent.click(btn)
 
     await vi.waitFor(() => {
-      expect(api.createSession).toHaveBeenCalledWith('mia')
+      expect(api.createSession).toHaveBeenCalledWith('mia', undefined)
     })
     await vi.waitFor(() => {
       expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess_new', agentId: 'mia' })
     })
     expect(useSessionStore.getState().activeSessionId).toBe('sess_new')
     // No error toast — this is the success path.
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
+  })
+
+  // U2. The launcher's session is the ONE the live browser panel then attaches
+  // against, and the gateway decides which workspace's browser — and whose
+  // live logins — that panel shows by reading the workspace off this session's
+  // own meta, server-side (ADR-072 FR-016/FR-017). Creating it with agent_id
+  // alone left the panel nothing to read: an agent on more than one
+  // workspace's team was refused and told to "open this panel from a chat that
+  // belongs to the workspace you mean" — from inside exactly such a chat. The
+  // route named the workspace and the store held it; it just never travelled
+  // with the create. Asserting the argument, not the eventual refusal, is
+  // deliberate: this is the only place in the SPA that can carry it.
+  it('creates that session in the workspace the chat belongs to', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'mia' })
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws_alpha' })
+    })
+    vi.mocked(api.createSession).mockResolvedValue({
+      id: 'sess_new',
+      agent_id: 'mia',
+      title: 'New chat',
+      type: 'chat',
+      created_at: '2026-07-11T00:00:00Z',
+      updated_at: '2026-07-11T00:00:00Z',
+      message_count: 0,
+      total_tokens: 0,
+      total_cost: 0,
+    })
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+
+    fireEvent.click(btn)
+
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('mia', 'ws_alpha')
+    })
     expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
   })
 

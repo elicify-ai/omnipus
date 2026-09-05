@@ -36,15 +36,20 @@ import (
 )
 
 // G1 / CRIT-002 (the headline): a manager reload (Release + new manager
-// AttachSharedChrome + Register for the SAME agentID) must re-adopt the SAME
-// browser context — same BrowserContextID, same Chrome PID, KillCount==0, AND
-// the cookie a tab set BEFORE the reload is still readable AFTER it (login
-// survives a Settings save). Also guards CRIT-003 (no manager path disposes the
-// context).
+// AttachSharedChrome + Register for the SAME key) must land on the SAME live
+// Chrome — same PID, KillCount==0 — AND the cookie a tab set BEFORE the
+// reload must still be readable AFTER it (login survives a Settings save).
+//
+// The context-id half of this assertion is GONE with ADR-072 FR-031, which
+// deleted CDP browser contexts. What persists a login across a reload is now
+// the workspace's own --user-data-dir profile directory on disk (FR-043),
+// which is strictly stronger: the old CDP context was in-memory and did not
+// survive a Chrome restart at all. The cookie assertion below is therefore
+// the load-bearing one and is unchanged.
 func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(func() { coord.Shutdown() })
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -53,17 +58,14 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-a"))
 
 	// First registration + session: set a cookie in agent-a's browser context.
-	_, ctxID1, err := coord.Register(context.Background(), "agent-a", mgrA)
+	_, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register 1: %v", err)
 	}
-	if ctxID1 == "" {
-		t.Fatal("expected a non-empty browser context id")
-	}
-	tabCtx, err := mgrA.Session(defaultSessionID)
+	tabCtx, err := mgrA.Session(testSessionID)
 	if err != nil {
 		t.Fatalf("Session 1: %v", err)
 	}
@@ -86,7 +88,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	}
 
 	// Reload: Release drops only the manager's connection (CRIT-002/C1). The
-	// coordinator-owned browser context survives for the next Register.
+	// Chrome process and its profile directory survive for the next Register.
 	coord.Release("agent-a")
 	if coord.KillCount() != 0 {
 		t.Fatalf("Release must not kill Chrome; KillCount=%d", coord.KillCount())
@@ -94,16 +96,12 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 
 	// A NEW manager for the same agent re-registers (mirrors loop.go's reload).
 	mgrA2 := newTestManager(t, cfg)
-	mgrA2.AttachSharedChrome(coord, "agent-a")
-	_, ctxID2, err := coord.Register(context.Background(), "agent-a", mgrA2)
-	if err != nil {
-		t.Fatalf("Register 2: %v", err)
+	mgrA2.AttachSharedChrome(coord, browserTestKey("agent-a"))
+	if _, rerr := coord.Register(context.Background(), "agent-a", mgrA2); rerr != nil {
+		t.Fatalf("Register 2: %v", rerr)
 	}
 
-	// CRIT-002 assertions: same context id, same pid, no kill.
-	if ctxID1 != ctxID2 {
-		t.Fatalf("CRIT-002 VIOLATION: browser context id changed across reload: %q → %q", ctxID1, ctxID2)
-	}
+	// CRIT-002 assertions: same pid, no kill.
 	if coord.PID() != pid1 {
 		t.Fatalf("CRIT-002 VIOLATION: Chrome pid changed across reload: %d → %d", pid1, coord.PID())
 	}
@@ -113,7 +111,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 
 	// The cookie set before the reload must still be present in the re-adopted
 	// context — login/localStorage survives a Settings save.
-	tabCtx2, err := mgrA2.Session(defaultSessionID)
+	tabCtx2, err := mgrA2.Session(testSessionID)
 	if err != nil {
 		t.Fatalf("Session 2: %v", err)
 	}
@@ -149,17 +147,17 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 func TestCoordinator_CrashRecovery(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(func() { coord.Shutdown() })
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-a"))
 
-	_, ctxID1, err := coord.Register(context.Background(), "agent-a", mgrA)
+	_, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register 1: %v", err)
 	}
-	if _, sessErr := mgrA.Session(defaultSessionID); sessErr != nil {
+	if _, sessErr := mgrA.Session(testSessionID); sessErr != nil {
 		t.Fatalf("Session 1: %v", sessErr)
 	}
 	pid1 := coord.PID()
@@ -198,71 +196,17 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 		t.Fatalf("crash recovery did not produce a fresh pid; still %d", pid1)
 	}
 
-	// CRIT-001: all per-agent contexts are gone with the dead process.
-	if coord.contextCount() != 0 {
-		t.Fatalf("CRIT-001 VIOLATION: expected contextCount==0 after crash (fresh-empty); got %d", coord.contextCount())
-	}
-
-	// Register again → a NEW browser context id (not the stale dead one).
-	_, ctxID2, err := coord.Register(context.Background(), "agent-a", mgrA)
-	if err != nil {
+	// Register again → the relaunched Chrome, reachable through a fresh root
+	// context. There is no context id to compare any more (ADR-072 FR-031
+	// deleted CDP browser contexts); what makes recovery observable is the
+	// fresh pid asserted above plus the usable session asserted below.
+	if _, err := coord.Register(context.Background(), "agent-a", mgrA); err != nil {
 		t.Fatalf("Register after crash: %v", err)
-	}
-	if ctxID2 == "" {
-		t.Fatal("expected a non-empty fresh browser context id after crash")
-	}
-	if ctxID1 == ctxID2 {
-		t.Fatalf(
-			"CRIT-001 VIOLATION: post-crash Register returned the STALE context id %q (expected a fresh one)",
-			ctxID2,
-		)
 	}
 
 	// The relaunched Chrome is usable.
-	if _, err := mgrA.Session(defaultSessionID); err != nil {
+	if _, err := mgrA.Session(testSessionID); err != nil {
 		t.Fatalf("Session after crash recovery: %v", err)
-	}
-}
-
-// G4 / I-1/W3/C1: TryOpenTab atomically checks + RESERVES a slot (live tabs +
-// in-flight reservations) so concurrent openers at the boundary see exactly one
-// winner. Pure unit test over the coordinator's in-memory budget — no Chrome.
-func TestCoordinator_TabBudgetDenial(t *testing.T) {
-	home := t.TempDir()
-	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
-		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
-	}
-	coord := NewBrowserCoordinator(home, cfg, 1) // maxTotalTabs=1
-
-	// First opener at the boundary: allowed + reserves the one slot.
-	ok, reason := coord.TryOpenTab("agent-a")
-	if !ok {
-		t.Fatalf("first TryOpenTab should succeed; got reason=%q", reason)
-	}
-	if reason != "" {
-		t.Fatalf("first TryOpenTab reason should be empty; got %q", reason)
-	}
-
-	// Second concurrent opener: denied — the reservation from the first counts.
-	ok, reason = coord.TryOpenTab("agent-b")
-	if ok {
-		t.Fatal("second TryOpenTab should be denied (budget=1, 1 reservation in flight)")
-	}
-	if reason == "" || !strings.Contains(reason, "budget") {
-		t.Fatalf("denied TryOpenTab reason should mention budget; got %q", reason)
-	}
-
-	// ReleaseTab returns the slot → the next opener succeeds. This proves
-	// ReleaseTab is no longer a no-op (the I-1 fix) and that the reservation
-	// counter is decremented.
-	coord.ReleaseTab("agent-a")
-	ok, reason = coord.TryOpenTab("agent-c")
-	if !ok {
-		t.Fatalf("TryOpenTab after ReleaseTab should succeed; got reason=%q", reason)
 	}
 }
 
@@ -278,10 +222,9 @@ func TestCoordinator_LaunchLock_LiveOwnerRejected(t *testing.T) {
 		Enabled:     true,
 		Headless:    true,
 		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
 		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
 	}
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 
 	if err := os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
 		t.Fatalf("mkdir profile dir: %v", err)

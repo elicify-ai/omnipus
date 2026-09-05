@@ -62,6 +62,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	"github.com/gorilla/websocket"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -426,19 +428,13 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		// WebRTCStunServer left "" — host-only ICE (ADR-047 D3 / wave-plan
 		// decision 7), matching the task's explicit requirement.
-		// ADR-048 condition 3 (CaptureVideoCapability): the config-literal
-		// test harness bypasses config.DefaultConfig()'s CaptureSharedContext
-		// default (true), so it must be set explicitly here or the gate
-		// ladder now reports not_capable before ever reaching this test's
-		// faked capture-session machinery.
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	// Plant a fake, non-functional "chrome" binary at the exact path
 	// ClassifyVideoCapability/findInstalledBuild look for, so the capability
@@ -479,7 +475,11 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	t.Cleanup(func() { close(pumpStop) })
 
 	fakeStarter := browser.EncoderStarter(
-		func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
+		func(
+			_ context.Context,
+			_ *browser.BrowserManager,
+			_, tokenHex, ingestURL, stunServer string,
+		) (context.Context, context.CancelFunc, error) {
 			encMu.Lock()
 			encState.starterCalls++
 			encState.mintedToken = tokenHex
@@ -510,7 +510,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	// ensureCaptureSession wires up in production — no production code was
 	// changed to make this observable.
 	var dcFramesObserved atomic.Int32
-	realSink := handler.webrtcInputSink(mgr, al.GetConfig())
+	realSink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
 		realSink(viewerID, raw)
 		dcFramesObserved.Add(1)

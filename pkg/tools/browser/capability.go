@@ -245,12 +245,18 @@ func videoAndAudio() VideoCapability {
 // with the ADR-048 condition-3 checks the base classifier cannot see on its
 // own: the gateway-owned capture extension must actually be seeded
 // (ExtensionDir set — capture_session.go's defaultEncoderStarter fails
-// immediately without it, "no ExtensionDir configured") and shared-default-
-// context capture must be enabled (coordinator.go's
-// CaptureSharedContextEnabled — without it the agent's own tab never lives
-// in the one context the extension's tabCapture can actually reach, so a
-// capture attempt is certain to fail even on an otherwise video-capable
-// Chrome build — see ADR-048's "visibility is not capturability" finding).
+// immediately without it, "no ExtensionDir configured") and this manager must
+// be attached to the workspace's Chrome at all — either to a coordinator
+// directly or to the pool that resolves one (attachedToSharedChrome) — because
+// the encoder page and the tab it captures have to live in the same Chrome.
+//
+// The former third check — tools.browser.capture_shared_context — is gone
+// with ADR-072 FR-031. Every session now bootstraps into Chrome's DEFAULT
+// browser context unconditionally, because that is the only context
+// chrome.tabCapture can reach ("visibility is not capturability", ADR-048);
+// isolation moved down to one Chrome PROCESS and one profile directory per
+// workspace, which capture is indifferent to. There is no longer a
+// configuration under which the extension cannot see the tab.
 // Both gaps degrade the classification to not-capable with an explicit
 // operator Reason — this is the enforcement point for ADR-048 condition 3:
 // "the capability classifier must not advertise Capable=true when capture
@@ -270,11 +276,18 @@ func (m *BrowserManager) CaptureVideoCapability() VideoCapability {
 			"capture extension not seeded (ExtensionDir unset — check gateway boot logs for a captureext seed failure)",
 		)
 	}
-	coord := m.Coordinator()
-	if coord == nil || !coord.CaptureSharedContextEnabled() {
+	// Attachment, NOT "Chrome is already running" — see
+	// attachedToSharedChrome (manager.go). A pool-attached manager whose
+	// Chrome has not been launched yet is capable: the very first thing
+	// defaultEncoderStarter does is mgr.Session(), which launches it and
+	// populates m.coordinator, and that starter keeps its own hard nil-check
+	// on Coordinator() for the case where the launch fails. A launch failure
+	// belongs on the "error" branch with a real reason, not behind a static
+	// not_capable that tells the operator their host cannot do video.
+	if !m.attachedToSharedChrome() {
 		return notCapable(
-			"shared default-context capture is disabled (tools.browser.capture_shared_context=false) — " +
-				"required for the capture extension to reach the agent's tab, see ADR-048",
+			"no shared-Chrome coordinator or browser pool attached — WebRTC capture drives the workspace's own Chrome, " +
+				"which this manager is not connected to",
 		)
 	}
 	return base

@@ -90,6 +90,28 @@ var allowlistedRawFSFilesBrowser = map[string]string{
 	"coordinator_lock_other.go": "the non-Unix (O_EXCL-based) variant of the " +
 		"same CRIT-001 single-launch lock helpers as coordinator_lock_unix.go " +
 		"— same lockPath() (cfg.ProfileDir) origin, same justification.",
+	"pool.go": "the ADR-072 per-workspace BrowserPool (not a Tool) — the " +
+		"multi-workspace successor to coordinator.go and inheriting its " +
+		"justification exactly. Every raw call here targets one of two " +
+		"system-computed roots and nothing else: the workspace's profile " +
+		"directory under profileRoot() (MkdirAll on launch, RemoveAll only " +
+		"in DeleteProfile), and the per-key ownership marker " +
+		"$OMNIPUS_HOME/browser/ws-<id>.pid (markerPathFor / ReconcileMarkers), " +
+		"the same category as coordinator.go's shared-chrome.pid. Both are " +
+		"derived from homeDir plus BrowsingKey.ProfileSegment(), which is " +
+		"\"ws-\" + a system-minted workspace id — never a caller-supplied " +
+		"\"path\" tool argument — and ProfileDirFor additionally refuses any " +
+		"segment that is not a single clean path element. ResolvePath resolves " +
+		"a per-turn agent WorkDir; these are process-wide browser-lifecycle " +
+		"paths with no per-turn confinement decision to enforce.",
+	"trim.go": "ADR-072 FR-072..074 profile cache trimming (not a Tool). Its " +
+		"RemoveAll targets are computed by trimAllowListPaths as " +
+		"<profile dir> joined with entries from the fixed trimAllowList " +
+		"literal (Default/Cache, Default/Code Cache, …); its ReadDir calls " +
+		"enumerate that same profile dir and profileRoot(). Nothing here " +
+		"reads a caller-supplied \"path\" tool argument, and the allow-list " +
+		"is a compile-time constant, so the set of deletable paths cannot " +
+		"widen at runtime. Same profile-directory category as manager.go.",
 }
 
 // bannedOSFuncs is the FR-034 banned-call list for the "os" package

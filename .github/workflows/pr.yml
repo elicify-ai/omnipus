@@ -408,7 +408,7 @@ jobs:
     # test matrix for a reason unrelated to the code under review — the
     # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier]
+    needs: [changes, fast-tier, setup]
     if: success() && needs.changes.outputs.code == 'true'
     env:
       CGO_ENABLED: "0"
@@ -444,6 +444,58 @@ jobs:
           echo "::error::No Chrome binary under a name skipIfNoBrowser probes" >&2
           echo "PATH candidates present: $(command -v chrome || true)" >&2
           exit 1
+
+      - name: "G-2 gate: chrome.tabCapture against a SECOND Chrome process"
+        # ADR-072 / browser-workspace-ownership-spec FR-045, SC-012a.
+        #
+        # This is a MEASUREMENT GATE, not coverage. It answers one yes/no
+        # question the per-workspace browser pool's whole design rests on:
+        # ADR-048 proved chrome.tabCapture cannot capture a tab in a
+        # CDP-CREATED browser context; the pool claims a tab in a SEPARATE
+        # Chrome PROCESS's own default context does not inherit that
+        # restriction. If this step goes red, the pool design is wrong and
+        # must be revisited — it is not a flake to retry.
+        #
+        # Its OWN step with its OWN -run filter, deliberately NOT folded into
+        # the whole-package step below: that step asserts `passes >= 180`, a
+        # floor a single-test invocation trips by construction. (The spike
+        # also runs inside that whole-package step, as any package test does;
+        # this step is what makes its verdict individually visible and
+        # individually blocking.)
+        #
+        # The test itself uses requireBrowserOrFail
+        # (pkg/tools/browser/browser_e2e_test.go), which t.Fatal's exactly
+        # where skipIfNoBrowser would t.Skip — a missing browser reads RED
+        # here, not green. The assertions below are the second half of the
+        # same rule: `go test` exits 0 when everything skips, and a `-run`
+        # regex that matches nothing also exits 0. A gate that did not run
+        # has answered nothing, so "exited 0" is never accepted as the
+        # verdict on its own.
+        run: |
+          set -euo pipefail
+          go test -v -tags goolm,stdjson -count=1 -timeout 600s \
+            -run '^TestSpike_CaptureAgainstSecondChrome$' \
+            ./pkg/tools/browser 2>&1 | tee /tmp/g2-second-chrome.log
+
+          if grep -q 'no tests to run' /tmp/g2-second-chrome.log; then
+            echo "::error::G-2: the -run filter matched no test — TestSpike_CaptureAgainstSecondChrome was renamed or removed. The gate did not run." >&2
+            exit 1
+          fi
+
+          skips=$(grep -c -- '--- SKIP' /tmp/g2-second-chrome.log || true)
+          if [ "$skips" -ne 0 ]; then
+            echo "::error::G-2: the gate SKIPPED ($skips skip(s)). A skipped gate is a FAILED gate — it proves nothing about chrome.tabCapture against a second Chrome." >&2
+            grep -- '--- SKIP' /tmp/g2-second-chrome.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -c -- '--- PASS' /tmp/g2-second-chrome.log || true)
+          if [ "$passes" -ne 1 ]; then
+            echo "::error::G-2: expected exactly one '--- PASS' line, got $passes. The gate's result is not what this step asserts on." >&2
+            exit 1
+          fi
+
+          echo "G-2 PASS: chrome.tabCapture reached a tab in a SECOND Chrome process's default browser context."
 
       - name: Run pkg/tools/browser real-Chrome tests
         # Assert the tests RAN — do not just assert the process exited 0.
@@ -482,6 +534,38 @@ jobs:
             echo "::error::Only $passes tests passed; expected >=180 real-Chrome-capable tests. Coverage has silently shrunk." >&2
             exit 1
           fi
+
+      # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
+      # gitignored, so the package does not COMPILE without a built SPA. This
+      # job ran Go tests against pkg/gateway without ever building one, and
+      # failed at "pattern all:spa: no matching files found" -> "[setup failed]"
+      # -- a compile error wearing a test failure's clothes. Pre-existing: the
+      # same job fails identically on release/v0.1.1.
+      #
+      # Same three steps every other Go-testing job here already uses
+      # (cgo-gate, lint, vuln_check), so there is one way to provision the SPA
+      # rather than two.
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
+      - name: Build SPA for the gateway embed
+        run: |
+          set -euo pipefail
+          npm run build
+          rm -rf pkg/gateway/spa
+          cp -r dist/spa pkg/gateway/spa
+          # Fail loudly here rather than 200 lines later inside `go test`.
+          test -d pkg/gateway/spa/assets || { echo "::error::SPA sync failed: pkg/gateway/spa/assets missing" >&2; exit 1; }
 
       - name: Run pkg/gateway real-Chrome tests
         # Same skip-detection + pass-floor pattern as the pkg/tools/browser
@@ -1256,7 +1340,15 @@ jobs:
         # narrowly.
         run: |
           set +e
-          out=$(go test -tags goolm,stdjson -count=1 ./... 2>&1)
+          # -timeout 30m: go test's DEFAULT is 10 minutes PER PACKAGE, and
+          # pkg/agent has been measured at 752s (12.5 min) on a developer
+          # machine under load. A package that exceeds it fails with
+          # "panic: test timed out after 10m0s" -- a timeout, not an assertion,
+          # and one that looks nothing like the failure it actually is. The
+          # other workflows here already pass -timeout explicitly
+          # (cross-platform.yml, and pr.yml's own e2e steps at 600s/900s/300s);
+          # this step was the one that inherited the default.
+          out=$(go test -tags goolm,stdjson -count=1 -timeout 30m ./... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -2029,12 +2121,30 @@ jobs:
         # divergent one.
         run: |
           set -euo pipefail
-          jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
-            | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
+          # -sf DISCARDS the server's answer: on any non-2xx, curl exits 22
+          # having printed nothing, so the step fails with no reason anywhere in
+          # the log. Every E2E shard has been failing here on this branch and on
+          # release/v0.1.1 alike, and the log says only that a step failed.
+          # A silent failure in the diagnostic path is the worst kind.
+          #
+          # Capture status and body instead, and print the body on failure. The
+          # key is registered with add-mask, so it stays masked in whatever the
+          # server echoes back.
+          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
+            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+            | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
+                -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
-                -d @- \
-                > /dev/null
+                -d @-)
+          if [ "$body" != "200" ] && [ "$body" != "204" ]; then
+            echo "::error::onboarding/complete returned HTTP $body" >&2
+            echo "--- response body ---" >&2
+            head -c 2000 /tmp/onboard-body.txt >&2 || true
+            echo >&2
+            echo "--- gateway log tail ---" >&2
+            tail -40 "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log" 2>/dev/null >&2 || echo "(no gateway log at ${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log)" >&2
+            exit 1
+          fi
         # OPENROUTER_API_KEY_CI comes from "Resolve shard LLM key" (per-shard, via $GITHUB_ENV).
 
       # T0.4: Preflight — fail fast if OPENROUTER_API_KEY_CI is unset.

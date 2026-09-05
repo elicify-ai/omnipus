@@ -48,6 +48,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	"github.com/gorilla/websocket"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/stretchr/testify/require"
@@ -99,14 +101,13 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 		cfg.Gateway.Port = port
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	// Plant a fake, non-functional "chrome" binary so the capability gate in
 	// handleWebRTCOffer reports Capable=true — it is NEVER executed: capture
@@ -134,7 +135,11 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	t.Cleanup(func() { close(pumpStop) })
 
 	fakeStarter := browser.EncoderStarter(
-		func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, _ string) (context.Context, context.CancelFunc, error) {
+		func(
+			_ context.Context,
+			_ *browser.BrowserManager,
+			_, tokenHex, ingestURL, _ string,
+		) (context.Context, context.CancelFunc, error) {
 			enc, startErr := startE2EFakeEncoder(ingestURL, tokenHex)
 			if startErr != nil {
 				return nil, nil, fmt.Errorf("qa fake encoder: %w", startErr)
@@ -150,7 +155,7 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	// traveled through webrtcInputSink -> browserInputFrameToLiveInput ->
 	// mgr.Live().Input, exactly like TestWebRTCEndToEndInProcess's
 	// dcFramesObserved counter, just with the raw bytes retained.
-	realSink := handler.webrtcInputSink(mgr, al.GetConfig())
+	realSink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
 		realSink(viewerID, raw)
 		if dcRecorder != nil {

@@ -164,6 +164,18 @@ func DefaultConfig() *Config {
 			LogLevel:  "warn",
 		},
 		Sandbox: OmnipusSandboxConfig{
+			// browser_evaluate is ON by default (ADR D1.9b ruling 2). It is a
+			// standard browser capability, and gating it behind a config flag
+			// an operator had to discover meant the tool was registered,
+			// advertised to the model, allowed by policy — and then refused at
+			// execution with a message about a setting nobody had heard of.
+			//
+			// This is a SEED, i.e. install-time DATA an operator can edit in
+			// their own config.json, not a fallback branch in the binary. Which
+			// agents may call the tool is answered separately by tool policy;
+			// this is the runtime kill switch.
+			BrowserEvaluateEnabled: boolPtr(true),
+
 			// Read+execute-only toolchain directories. Seeded as install-time
 			// DATA (an operator can edit or empty it in config.json), not a
 			// fallback branch in the binary. loadConfig unmarshals the
@@ -292,6 +304,37 @@ func DefaultConfig() *Config {
 				"browser_switch_tab": "allow",
 				"browser_close_tab":  "allow",
 				"browser_open_tab":   "allow",
+				// ADR-072 D2 — the interaction verbs and the accessibility
+				// snapshot. This is the CEILING, not a grant: it closes policy
+				// coverage for every agent (validation is OR-based across the
+				// global and per-agent maps) while the per-agent seeds in
+				// pkg/coreagent/core.go decide who actually holds them. Mia
+				// and Ava name no browser tool, so denyAllThenOverride leaves
+				// them at an explicit agent-level deny, which beats this allow
+				// under most-restrictive-wins.
+				//
+				// These entries and the per-agent maps are ONE COMMIT with
+				// allStaticToolNames — see that literal's comment for why
+				// "before" is not a safe order either.
+				"browser_select_option": "allow",
+				"browser_press_key":     "allow",
+				"browser_hover":         "allow",
+				"browser_snapshot":      "allow",
+				// ADR-072 D2 FR-035 — the dialog recovery verb. Ceiling, not
+				// a grant, exactly like the four above it: it closes coverage
+				// for every agent while the per-agent seeds decide who holds
+				// it. Allow rather than ask, because a tool that un-wedges a
+				// blocked tab is useless if reaching it needs an approval the
+				// wedged turn may have nobody to ask for.
+				"browser_handle_dialog": "allow",
+				// FR-021 — ask, and it is the only browser verb that is.
+				// Attaching a host file to a page on the operator's signed-in
+				// session is the one browser action that moves their data
+				// outward, so it is consent-gated at the ceiling as well as
+				// per agent. IDWorker inherits this value through
+				// tightenGlobalCeiling's sparse map, which is intended and
+				// recorded rather than discovered.
+				"browser_upload_file": "ask",
 
 				// --- Sysagent management tools ---
 				"create_workspace":    "allow",
@@ -632,8 +675,10 @@ func DefaultConfig() *Config {
 				},
 			},
 			// Browser automation is a standard built-in tool — enabled by default
-			// like exec/web/cron. Headless on by default for server use;
-			// browser_evaluate stays opt-in (EvaluateEnabled=false) per SEC-04/SEC-06.
+			// like exec/web/cron. Headless on by default for server use.
+			// browser_evaluate is seeded ON via sandbox.browser_evaluate_enabled
+			// (the single switch; the former tools.browser.evaluate_enabled twin
+			// is deleted) and gated per agent by tool policy.
 			Browser: BrowserToolConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
@@ -668,14 +713,6 @@ func DefaultConfig() *Config {
 				// package Chrome + emits WARN-BROWSER-007). Operators with a
 				// deliberate custom Chrome opt in with true.
 				TrustPathChrome: false,
-				// ADR-048 condition 1/Option A: default TRUE — WebRTC capture
-				// requires the agent's session to share Chrome's default
-				// browser context (see CaptureSharedContext's doc comment on
-				// BrowserToolConfig for the full isolation warning). Operators
-				// who need real cross-agent cookie isolation can set this
-				// false; the JPEG browser_screencast fallback keeps working
-				// either way.
-				CaptureSharedContext: true,
 				// Launch the shared Chrome during boot rather than on the
 				// first browser tool call. Default TRUE: the lazy cold start
 				// is expensive (ADR-042: ~30-60s on a fresh install) and

@@ -10,10 +10,82 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// ====================== FR-068: the live memory gate ======================
+//
+// Agent admission and the browser pool are ONE mechanism. They read the same
+// accessor (config.MemoryPressureHigh), compare against the same threshold
+// (config.memoryPressureRatioThreshold — there is exactly one, and nothing
+// here defines a second), and carry the same reason code
+// (config.ReasonMemoryPressure) when they refuse.
+//
+// What they do NOT share is the RESPONSE, and that difference is deliberate
+// (FR-075). The browser pool refuses to GROW: it will not start a second
+// Chrome. Agent admission also refuses to grow, but from a floor of two —
+// because an agent turn is the product, and a host that cannot report its
+// own memory must still be able to run one. Refusing to RUN on an
+// unmeasurable host would make every Windows and gVisor deployment useless
+// for the sake of a reading nobody can take.
+
+// unmeasurableHostAgentFloor is how many concurrent agent turns are admitted
+// on a host whose memory cannot be measured, or one already above the
+// pressure threshold.
+//
+// TWO, not one and not zero. One would serialize the whole gateway on a
+// Windows box; zero would make it refuse to work at all. Two lets a user's
+// turn run while a background task or a delegated child runs alongside it,
+// which is the smallest number at which the product is still recognisably
+// itself. The third concurrent turn is refused, naming memory — refuse to
+// GROW, never refuse to RUN.
+//
+// This is NOT a per-agent memory budget in disguise. It is a count, chosen
+// for what it preserves, and nothing multiplies it by a byte figure.
+const unmeasurableHostAgentFloor = 2
+
+// memoryAdmissionCap reports the cap the live memory mechanism imposes on
+// concurrent agent turns right now, and whether it imposes one at all.
+//
+// It is the ONLY memory-derived input to admission, and it reads
+// config.MemoryPressureHigh — the same accessor and threshold the browser
+// pool reads. There is no per-agent byte cost anywhere in this path; the old
+// availableRAM/3.5-MB-per-agent formula is deleted, not relocated.
+//
+//   - measured, headroom available  -> (0, false): memory imposes no cap and
+//     the operator's configured value (or the physical backstop) governs.
+//   - measured, above the threshold -> (floor, true): refuse to grow.
+//   - not measurable at all         -> (floor, true): refuse to grow.
+//
+// The last two collapse to the same answer on purpose. "I know this host is
+// short of memory" and "I cannot tell whether this host is short of memory"
+// are the same instruction to an admission gate: do not add load.
+func memoryAdmissionCap() (int, bool) {
+	high, ok := config.MemoryPressureHigh()
+	if !ok || high {
+		return unmeasurableHostAgentFloor, true
+	}
+	return 0, false
+}
+
+// applyMemoryCap folds the live memory cap into a configured cap, returning
+// the cap to enforce and whether MEMORY is the binding constraint (which is
+// what decides whether a refusal names memory).
+//
+// Memory can only ever LOWER the cap. An operator who configured 1 gets 1 on
+// a healthy host and 1 on an unmeasurable one; the floor is a ceiling for
+// the memory mechanism, never a floor that raises an operator's explicit
+// choice above what they asked for.
+func applyMemoryCap(configured int) (effective int, memoryBinding bool) {
+	memCap, imposed := memoryAdmissionCap()
+	if !imposed || memCap >= configured {
+		return configured, false
+	}
+	return memCap, true
+}
 
 // AdmissionController is a soft-cap gate for concurrent session workers.
 //
@@ -80,8 +152,18 @@ func newAdmissionControllerWithResolver(resolveCap func() int) *AdmissionControl
 	}
 }
 
-// effectiveCap returns the cap to enforce right now: resolveCap()'s current
-// value when set and positive, otherwise the fixed softCap.
+// effectiveCap returns the CONFIGURED cap to enforce right now:
+// resolveCap()'s current value when set and positive, otherwise the fixed
+// softCap.
+//
+// It deliberately does NOT fold in the live memory gate. SoftCap() reports
+// this value to tests and observability, and "the cap you configured" and
+// "what memory will let you have this second" are two different facts: a
+// panel or a log line that showed the second under the name of the first
+// would make an operator think their setting had been silently lowered,
+// which is the ADR-037 anti-pattern this project bans. The memory gate is
+// applied where it is ACTED on — inside TryAdmitWithReason — and it names
+// itself when it refuses.
 func (a *AdmissionController) effectiveCap() int {
 	if a.resolveCap != nil {
 		if c := a.resolveCap(); c > 0 {
@@ -89,6 +171,13 @@ func (a *AdmissionController) effectiveCap() int {
 		}
 	}
 	return a.softCap
+}
+
+// admissionCapWithReason is the cap actually enforced on an admission
+// decision: the configured cap, lowered by the live memory gate when memory
+// is the tighter constraint, plus whether memory is what is binding.
+func (a *AdmissionController) admissionCapWithReason() (int, bool) {
+	return applyMemoryCap(a.effectiveCap())
 }
 
 // TryAdmit atomically claims a slot for scope. Returns (true, release) when
@@ -102,16 +191,34 @@ func (a *AdmissionController) effectiveCap() int {
 // Returns (false, nil) when the effective cap (see effectiveCap) is reached
 // and scope is a new scope.
 func (a *AdmissionController) TryAdmit(scope string) (bool, func()) {
+	ok, _, release := a.TryAdmitWithReason(scope)
+	return ok, release
+}
+
+// TryAdmitWithReason is TryAdmit plus the reason a refusal happened.
+//
+// reason is "" on success and on a refusal caused by the operator's own
+// configured cap; it is config.ReasonMemoryPressure when the live memory
+// gate is what refused. Callers that surface a refusal to a model or an
+// operator MUST use this form — "the cap is reached" and "this machine is
+// out of memory" send a caller to two completely different remedies, and
+// only one of them exists on an unmeasurable host (there is no cap to raise).
+func (a *AdmissionController) TryAdmitWithReason(scope string) (bool, string, func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if _, alreadyActive := a.activeScopes[scope]; alreadyActive {
 		// Existing scope — follow-up turn, always admitted, no new slot consumed.
-		return true, func() {}
+		return true, "", func() {}
 	}
 
-	if len(a.activeScopes) >= a.effectiveCap() {
-		return false, nil
+	limit, memoryBinding := a.admissionCapWithReason()
+	if len(a.activeScopes) >= limit {
+		if memoryBinding {
+			logMemoryAdmissionRefusalOnce(limit)
+			return false, config.ReasonMemoryPressure, nil
+		}
+		return false, "", nil
 	}
 
 	a.activeScopes[scope] = struct{}{}
@@ -120,7 +227,7 @@ func (a *AdmissionController) TryAdmit(scope string) (bool, func()) {
 		delete(a.activeScopes, scope)
 		a.mu.Unlock()
 	}
-	return true, release
+	return true, "", release
 }
 
 // ActiveScopes returns the current count of active scopes (worker goroutines
@@ -214,7 +321,15 @@ func ResolveRootDelegationCap(cfg *config.Config) (int, error) {
 		return 0, fmt.Errorf("resolve root-delegation cap: %w (configured value %d)", ErrRootDelegationCapMisconfigured, v)
 	}
 	if v == 0 {
-		return cfg.Performance.EffectiveMaxParallelAgents(), nil
+		// The second return value (capped) is deliberately discarded here:
+		// this resolver's contract is "a number to gate against", and the
+		// unset case's number IS the physical backstop. Whether that number
+		// came from an operator or from the backstop changes what a UI should
+		// SAY about it, not what this gate should enforce — and the live
+		// memory gate (applyMemoryCap) is what actually bounds admission long
+		// before a backstop-sized cap is approached.
+		n, _ := cfg.Performance.EffectiveMaxParallelAgents()
+		return n, nil
 	}
 	return v, nil
 }
@@ -283,17 +398,41 @@ func (r *RootDelegationAdmission) effectiveCap() int {
 	return r.cap
 }
 
+// admissionCapWithReason is the cap actually enforced on an admission
+// decision: the configured cap lowered by the live memory gate, plus whether
+// memory is what is binding (FR-068 — the same accessor, the same threshold
+// and the same reason code the browser pool uses). Cap() keeps reporting the
+// CONFIGURED value, for the reason spelled out on
+// AdmissionController.effectiveCap.
+func (r *RootDelegationAdmission) admissionCapWithReason() (int, bool) {
+	return applyMemoryCap(r.effectiveCap())
+}
+
 // TryAdmit atomically claims a root-delegation slot. Returns (true, release)
 // when admitted; release MUST be called (typically via defer, or on the
 // delegated child's terminal state) when the slot is no longer needed.
 // Returns (false, nil) IMMEDIATELY — never blocking — when the cap is
 // already reached (BDD-75/FR-069: refuse, don't queue).
 func (r *RootDelegationAdmission) TryAdmit() (bool, func()) {
+	ok, _, release := r.TryAdmitWithReason()
+	return ok, release
+}
+
+// TryAdmitWithReason is TryAdmit plus the reason a refusal happened: "" for
+// the operator's own configured cap, config.ReasonMemoryPressure when the
+// live memory gate refused. See AdmissionController.TryAdmitWithReason for
+// why the two must not be reported as one thing.
+func (r *RootDelegationAdmission) TryAdmitWithReason() (bool, string, func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.active >= r.effectiveCap() {
-		return false, nil
+	limit, memoryBinding := r.admissionCapWithReason()
+	if r.active >= limit {
+		if memoryBinding {
+			logMemoryAdmissionRefusalOnce(limit)
+			return false, config.ReasonMemoryPressure, nil
+		}
+		return false, "", nil
 	}
 	r.active++
 	released := false
@@ -306,7 +445,7 @@ func (r *RootDelegationAdmission) TryAdmit() (bool, func()) {
 		released = true
 		r.active--
 	}
-	return true, release
+	return true, "", release
 }
 
 // Active returns the current number of admitted, not-yet-released root
@@ -338,6 +477,55 @@ func RefuseRootDelegation(maxCap int, delegatingAgentID, targetAgentID string) *
 	return tools.ErrorResult(fmt.Sprintf(
 		"delegate: refusing to start a new root-level delegation — the concurrent root-delegation cap (%d) has been reached; retry once an in-flight root delegation completes",
 		maxCap))
+}
+
+// RefuseRootDelegationForMemory is the FR-068a refusal: the live memory gate,
+// not a configured cap, is what stopped this delegation.
+//
+// It names MEMORY and names a remedy that EXISTS. It deliberately does not
+// mention a cap or advise raising one, because on the host this fires on
+// there may be no cap to raise: an unmeasurable host holds at
+// unmeasurableHostAgentFloor no matter what performance.max_parallel_agents
+// says, and telling an operator to raise a number that will not move the
+// behaviour is worse than saying nothing. It carries
+// config.ReasonMemoryPressure, the same code the browser pool's refusals
+// carry, so one grep finds every memory refusal in the process.
+func RefuseRootDelegationForMemory(delegatingAgentID, targetAgentID string) *tools.ToolResult {
+	slog.Error("delegate: refusing root-level delegation — the host is under memory pressure or its memory cannot be measured",
+		"reason", config.ReasonMemoryPressure,
+		"concurrent_floor", unmeasurableHostAgentFloor,
+		"delegating_agent_id", delegatingAgentID,
+		"target_agent_id", targetAgentID)
+	return tools.ErrorResult(
+		"delegate: refusing to start a new root-level delegation — this host is short of memory, or its available memory cannot be measured at all (no memory reader exists for Windows, and a Linux host with an unreadable /proc/meminfo reports the same). Work already in flight is unaffected; retry once an in-flight delegation completes, or run this on a host with more free memory.")
+}
+
+// lastMemoryAdmissionRefusalLogged makes the memory refusal's operator-facing
+// WARN a LOG-ONCE, matching the browser pool's discipline for the same
+// condition. The condition is static for long stretches — an unmeasurable
+// host stays unmeasurable — and this path is hit on every admission check, so
+// an unthrottled line would bury the log it is meant to make diagnosable. It
+// is the same trade-off, and the same shape, as shouldLogExplicitCeilingWarn
+// in pkg/config.
+var lastMemoryAdmissionRefusalLogged atomic.Bool
+
+// logMemoryAdmissionRefusalOnce emits exactly one WARN per process for the
+// memory-bound admission condition. Exactly one, not one per refusal: a test
+// that fails on zero lines AND on one-per-call is what holds this honest.
+func logMemoryAdmissionRefusalOnce(effectiveCap int) {
+	if lastMemoryAdmissionRefusalLogged.Swap(true) {
+		return
+	}
+	slog.Warn("agent admission is bound by memory, not by configuration — concurrent agent turns are held at a floor while this host is under memory pressure or its memory cannot be measured",
+		"reason", config.ReasonMemoryPressure,
+		"effective_concurrent_cap", effectiveCap)
+}
+
+// resetMemoryAdmissionRefusalLogForTest clears the log-once latch. Tests
+// only: the latch is process-global by design, so a test asserting the
+// once-ness must be able to start from a known state.
+func resetMemoryAdmissionRefusalLogForTest() {
+	lastMemoryAdmissionRefusalLogged.Store(false)
 }
 
 // ====================== ADR-057 W17 wiring: the live dispatch site ======================
@@ -413,8 +601,11 @@ func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg t
 		// governed exclusively by its concurrencySem (FR-070).
 		return s.inner.SpawnSubTurn(ctx, cfg)
 	}
-	ok, release := s.gate.TryAdmit()
+	ok, reason, release := s.gate.TryAdmitWithReason()
 	if !ok {
+		if reason == config.ReasonMemoryPressure {
+			return RefuseRootDelegationForMemory(s.delegatingAgentID, cfg.TargetAgentID), nil
+		}
 		return RefuseRootDelegation(s.gate.Cap(), s.delegatingAgentID, cfg.TargetAgentID), nil
 	}
 	defer release()

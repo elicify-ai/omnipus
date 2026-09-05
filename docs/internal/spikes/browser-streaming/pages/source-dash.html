@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>MSE spike source (dash.js)</title>
+<body style="margin:0;background:#111;color:#eee;font:13px monospace">
+<video id="v" autoplay muted playsinline style="width:1280px;height:720px;background:#000"></video>
+<div id="log"></div>
+<script src="dash.all.min.js"></script>
+<script>
+  var MPD = new URLSearchParams(location.search).get('mpd')
+    || 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd';
+  var v = document.getElementById('v');
+  var p = dashjs.MediaPlayer().create();
+  p.initialize(v, MPD, true);
+  // force ABR churn so we exercise representation switching
+  // ?cap=<kbps> caps the video rendition. Used only to make the bandwidth
+  // measurement comparable to a 3.6 Mbps re-encode; uncapped is the default.
+  var cap = new URLSearchParams(location.search).get('cap');
+  var s = { streaming: { abr: { autoSwitchBitrate: { video: true, audio: true } } } };
+  if (cap) s.streaming.abr.maxBitrate = { video: Number(cap) };
+  p.updateSettings(s);
+  window.__player = p;
+  p.on('qualityChangeRendered', function (e) {
+    document.getElementById('log').textContent += '\nswitch ' + e.mediaType + ' -> ' + e.newQuality;
+  });
+</script>
+</body>

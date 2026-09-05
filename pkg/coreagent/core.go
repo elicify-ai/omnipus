@@ -392,6 +392,34 @@ var allStaticToolNames = []string{
 	"browser_get_text", "browser_wait", "browser_evaluate",
 	// Browser tab-management tools (ADR-041 D3).
 	"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
+	// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+	//
+	// THIS BLOCK AND THE POLICY MAPS BELOW ARE ONE COMMIT, NOT AN ORDERING.
+	// validateOverrideKeys PANICS on an override key absent from this literal,
+	// so the per-agent maps cannot precede it — and this literal must not
+	// precede THEM either: denyAllThenOverride stamps an explicit deny for
+	// every name here that an agent does not override, which COMPLETES policy
+	// coverage and therefore suppresses the one WARN
+	// RepairIncompleteToolPolicyCoverage would have logged. Landing this line
+	// alone ships tools that are registered, listed in the catalog, and refuse
+	// every call on every agent, with no signal anywhere. See the capability
+	// spec §2.5.
+	//
+	// browser_upload_file's NAME is here while its REGISTRATION is held by
+	// FR-029 (issue #659). Held means unregistered, not unseeded: the catalog
+	// drift test compares this literal against the metadata catalog, and a
+	// seeded name with no registration is inert.
+	"browser_select_option", "browser_press_key", "browser_hover",
+	"browser_snapshot", "browser_upload_file",
+	// ADR-072 D2 Stream C — the dialog recovery verb. Same one-commit rule as
+	// the block above, and the same reason: this name landing alone would make
+	// denyAllThenOverride stamp an explicit deny on every seeded agent, which
+	// COMPLETES coverage and suppresses the single WARN the repair pass would
+	// otherwise log. The result would be a registered recovery verb that
+	// refuses on every agent, on a green build, with no diagnostic anywhere —
+	// and the tool whose entire job is to un-wedge a tab is the worst possible
+	// one to ship silently inert.
+	"browser_handle_dialog",
 
 	// Sysagent management tools.
 	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
@@ -773,9 +801,38 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				// ADR-041 D3 — tab-management, same allow as the rest of the
 				// interactive/visual browsing surface above.
 				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
+				// ADR-072 D2 (FR-024) — parity with Jim and Ray on the new
+				// interaction verbs and the accessibility snapshot. None of
+				// the five is arbitrary-code-adjacent, which is the property
+				// the existing ten-allow/one-deny carve-out actually turns on:
+				// browser_evaluate stays denied here for the same reason it
+				// always was.
+				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+				// ADR-072 D2 FR-035/A-12 — allow for every browser-capable
+				// agent. A dialog wedges the tab for whoever hits it, so the
+				// verb that clears it has to be held by everyone who can open
+				// one. The dangerous half is guarded at the ARGUMENT, not
+				// here: `accept` defaults to false, and accepting is refused
+				// on a run with nobody to approve it. A tool policy cannot see
+				// an argument, so it cannot make that distinction.
+				"browser_handle_dialog",
 			} {
 				overrides[b] = allow
 			}
+			// FR-021: browser_upload_file is ASK for every agent that HOLDS
+			// the browser surface, delegation-tier workers included. A
+			// per-agent deny here was proposed and overruled by the operator;
+			// what answers the "nobody to approve an unattended ask" concern
+			// is FR-029 — the tool is not registered at all until #659 lands —
+			// not a tighter seed on this agent.
+			overrides["browser_upload_file"] = ask
+			// FR-030: the file:// refusal now points the agent at serve_web,
+			// and a pointer to a tool this agent resolves DENY for is #242's
+			// dead end relocated one failed tool call further away. This agent
+			// already holds write access within its confinement, so the
+			// marginal capability is serving an already-writable file over the
+			// existing token-authenticated preview route.
+			overrides["serve_web"] = allow
 			// Structural floor (CLAUDE.md constraint 6): every agent needs
 			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
 			// seeded here as real data rather than the retired compositor.go
@@ -809,9 +866,38 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				// ADR-041 D3 — tab-management, same allow as the rest of the
 				// interactive/visual browsing surface above.
 				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
+				// ADR-072 D2 (FR-024) — parity with Jim and Ray on the new
+				// interaction verbs and the accessibility snapshot. None of
+				// the five is arbitrary-code-adjacent, which is the property
+				// the existing ten-allow/one-deny carve-out actually turns on:
+				// browser_evaluate stays denied here for the same reason it
+				// always was.
+				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+				// ADR-072 D2 FR-035/A-12 — allow for every browser-capable
+				// agent. A dialog wedges the tab for whoever hits it, so the
+				// verb that clears it has to be held by everyone who can open
+				// one. The dangerous half is guarded at the ARGUMENT, not
+				// here: `accept` defaults to false, and accepting is refused
+				// on a run with nobody to approve it. A tool policy cannot see
+				// an argument, so it cannot make that distinction.
+				"browser_handle_dialog",
 			} {
 				overrides[b] = allow
 			}
+			// FR-021: browser_upload_file is ASK for every agent that HOLDS
+			// the browser surface, delegation-tier workers included. A
+			// per-agent deny here was proposed and overruled by the operator;
+			// what answers the "nobody to approve an unattended ask" concern
+			// is FR-029 — the tool is not registered at all until #659 lands —
+			// not a tighter seed on this agent.
+			overrides["browser_upload_file"] = ask
+			// FR-030: the file:// refusal now points the agent at serve_web,
+			// and a pointer to a tool this agent resolves DENY for is #242's
+			// dead end relocated one failed tool call further away. This agent
+			// already holds write access within its confinement, so the
+			// marginal capability is serving an already-writable file over the
+			// existing token-authenticated preview route.
+			overrides["serve_web"] = allow
 			// Structural floor (CLAUDE.md constraint 6): every agent needs
 			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
 			// seeded here as real data rather than the retired compositor.go
@@ -974,6 +1060,28 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_switch_tab": allow,
 			"browser_close_tab":  allow,
 			"browser_open_tab":   allow,
+			// ADR-072 D2 — the interaction verbs and the accessibility
+			// snapshot. Same allow as the rest of Ray's browsing surface, and
+			// for the same reason browser_evaluate above is NOT: none of these
+			// five runs arbitrary code.
+			"browser_select_option": allow,
+			"browser_press_key":     allow,
+			"browser_hover":         allow,
+			"browser_snapshot":      allow,
+			// ADR-072 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+			// the note on the delegation-tier seeds above: the consequential
+			// half (`accept:true`) is an argument-level guard, not a policy
+			// value, because policy cannot see arguments.
+			"browser_handle_dialog": allow,
+			// FR-021 — ask, not deny. Attaching a file to a page on the
+			// operator's signed-in session is the one browser verb that hands
+			// their data outward, so it is consent-gated on every agent that
+			// holds the browser surface.
+			"browser_upload_file": ask,
+			// FR-030 — the file:// refusal now names serve_web, so Ray must be
+			// able to reach it; a pointer to a tool he resolves deny for is
+			// #242's dead end one failed call further away.
+			"serve_web": allow,
 			// Local sources + writing up research results.
 			"read_file":      allow,
 			"list_directory": allow,
@@ -1127,6 +1235,22 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_switch_tab": allow,
 			"browser_close_tab":  allow,
 			"browser_open_tab":   allow,
+			// ADR-072 D2 — the interaction verbs and the accessibility
+			// snapshot, same allow as the rest of Jim's browser surface.
+			"browser_select_option": allow,
+			"browser_press_key":     allow,
+			"browser_hover":         allow,
+			"browser_snapshot":      allow,
+			// ADR-072 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+			// the note on the delegation-tier seeds above: the consequential
+			// half (`accept:true`) is an argument-level guard, not a policy
+			// value, because policy cannot see arguments.
+			"browser_handle_dialog": allow,
+			// FR-021 — ask even for Jim, who holds every other browser grant
+			// including browser_evaluate. Attaching a file is the one verb
+			// that hands the operator's data OUT of the machine, and the
+			// consent gate is on the direction of travel, not on the agent.
+			"browser_upload_file": ask,
 			// Delete / remove operations are consent-gated (ask) — standing rule.
 			"delete_task":              ask,
 			"delete_task_in_workspace": ask,

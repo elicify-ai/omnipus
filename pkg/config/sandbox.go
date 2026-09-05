@@ -227,12 +227,31 @@ type OmnipusSandboxConfig struct {
 	// proceeds (operator opt-out).
 	PathGuardAuditFailClosed *bool `json:"path_guard_audit_fail_closed,omitempty"`
 
-	// BrowserEvaluateEnabled gates browser.evaluate (arbitrary JS execution).
-	// Defaults to false (deny-by-default per SEC-04/SEC-06). Must be explicitly
-	// opted in by the operator. Mirrors Tools.Browser.EvaluateEnabled but
-	// lives here so it can be managed alongside other sandbox-level controls
-	// without touching the Tools subtree.
-	BrowserEvaluateEnabled bool `json:"browser_evaluate_enabled,omitempty"`
+	// BrowserEvaluateEnabled gates browser_evaluate (arbitrary in-page JS).
+	//
+	// SEEDED TRUE by DefaultConfig(), so a fresh install has the tool working.
+	// Which agents may call it is a POLICY question, answered by the tool
+	// policy — Jim holds the only agent-level grant; Mia and Ava resolve deny —
+	// and this flag is the separate RUNTIME kill switch an operator can throw
+	// without touching any agent's policy.
+	//
+	// A POINTER, deliberately, and this is the whole reason the type changed.
+	// As a plain `bool` with `omitempty`, an operator's explicitly-set false was
+	// DROPPED on every SaveConfig: the zero value and "not set" are the same
+	// JSON, so the kill switch silently reverted to the seeded true on the next
+	// config write. nil now means "not set" and resolves to false via
+	// ResolveBool; an explicit false is persisted and survives the round trip.
+	//
+	// The pointer shape is borrowed from PathGuardAuditFailClosed above FOR ITS
+	// SHAPE ONLY. That field resolves nil -> TRUE (fail closed). This one
+	// resolves nil -> FALSE: a construction that skips DefaultConfig() (a test
+	// harness, an embedder, a hand-written config fragment) must not silently
+	// turn arbitrary in-page JavaScript ON. The default lives in the SEED,
+	// which is data an operator can edit, never in the resolution.
+	//
+	// Note what this JavaScript runs against, under ADR D1.10: a browser
+	// holding the operator's live logins.
+	BrowserEvaluateEnabled *bool `json:"browser_evaluate_enabled,omitempty"`
 
 	// Mode selects how the sandbox enforces policy at boot.
 	// Valid values: SandboxModeEnforce (default on capable kernels),

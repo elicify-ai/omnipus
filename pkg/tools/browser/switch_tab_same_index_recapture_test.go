@@ -133,17 +133,17 @@ func (a *activeCtxTracker) moved(cur context.Context) bool {
 // already reset past the setup traffic.
 func newThreeTabManagerWithCapture(t *testing.T) (*BrowserManager, *recaptureLedger) {
 	t.Helper()
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	cs, ledger := attachTestCaptureSession(t, m)
 	installFakeLiveRecaptureBridge(m, cs)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		_, err = m.OpenTab(DefaultSessionID)
+		_, err = m.OpenTab(testSessionID)
 		require.NoError(t, err)
 	}
-	_, activeIdx, err := m.ListTabs(DefaultSessionID)
+	_, activeIdx, err := m.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Equal(t, 2, activeIdx, "setup expects the last-opened tab to be active")
 
@@ -171,7 +171,7 @@ func eventuallyCount(t *testing.T, ledger *recaptureLedger, want int, msg string
 func TestSwitchTab_SameIndexStillTriggersExactlyOneRecapture(t *testing.T) {
 	m, ledger := newThreeTabManagerWithCapture(t)
 
-	_, err := m.SwitchTab(DefaultSessionID, 2) // already active
+	_, err := m.SwitchTab(testSessionID, 2) // already active
 	require.NoError(t, err)
 
 	eventuallyCount(t, ledger, 1,
@@ -186,7 +186,7 @@ func TestSwitchTab_SameIndexStillTriggersExactlyOneRecapture(t *testing.T) {
 func TestSwitchTab_DifferentIndexDoesNotDoubleFireRecapture(t *testing.T) {
 	m, ledger := newThreeTabManagerWithCapture(t)
 
-	_, err := m.SwitchTab(DefaultSessionID, 0) // a real move
+	_, err := m.SwitchTab(testSessionID, 0) // a real move
 	require.NoError(t, err)
 
 	eventuallyCount(t, ledger, 1,
@@ -211,7 +211,7 @@ func TestSwitchTab_MixedSequenceProducesOneRecapturePerSwitch(t *testing.T) {
 
 	order := []int{2, 0, 0, 1, 1, 1, 2} // starts on tab 2: same, move, same, move, same, same, move
 	for step, idx := range order {
-		_, err := m.SwitchTab(DefaultSessionID, idx)
+		_, err := m.SwitchTab(testSessionID, idx)
 		require.NoError(t, err)
 		eventuallyCount(t, ledger, step+1,
 			fmt.Sprintf("switch #%d (to tab %d) owes exactly one recapture", step+1, idx))
@@ -222,12 +222,12 @@ func TestSwitchTab_MixedSequenceProducesOneRecapturePerSwitch(t *testing.T) {
 // new call is safe on the overwhelmingly common path where nobody is watching
 // the browser panel at all.
 func TestSwitchTab_SameIndexRecaptureIsANoOpWithoutCaptureSession(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
-	_, err := m.Session(DefaultSessionID)
+	m := newTestManagerWithFakeTabs(t)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		_, serr := m.SwitchTab(DefaultSessionID, 0)
+		_, serr := m.SwitchTab(testSessionID, 0)
 		require.NoError(t, serr)
 	})
 	require.Nil(t, m.CaptureSession(), "no capture session should have been created as a side effect")
@@ -356,22 +356,22 @@ func TestRecaptureForTabChange_IsANoOpAfterStop(t *testing.T) {
 // WebRTC recapture — so if Chrome is never told, the encoder's
 // chrome.tabs.query({active:true}) answer and ours agree only by luck.
 func TestAdoptTarget_ActivatesAdoptedTabInChrome(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
-	_, err := m.Session(DefaultSessionID)
+	m, rec := newManagerWithRecordedActivation(t)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	rec.mu.Lock()
 	rec.ctxs, rec.treatment = nil, nil // discard first-tab setup
 	rec.mu.Unlock()
 
-	result, err := m.adoptTarget(DefaultSessionID, target.ID("adopted-1"))
+	result, err := m.adoptTarget(testSessionID, target.ID("adopted-1"))
 	require.NoError(t, err)
 	require.NotNil(t, result.Adopted, "setup expects the adoption to succeed")
 
 	activations := rec.calls()
 	require.Len(t, activations, 1, "adopting a tab must tell Chrome that tab is now active")
 
-	adoptedCtx, err := m.Session(DefaultSessionID)
+	adoptedCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	assert.True(t, activations[0] == adoptedCtx,
 		"the activated context must be the ADOPTED tab's — the same one Session() now resolves")
@@ -385,9 +385,9 @@ func TestAdoptTarget_ActivatesAdoptedTabInChrome(t *testing.T) {
 // destroyed and Chrome's active-tab answer at that instant is a fallback of
 // its own choosing.
 func TestCreateFirstTab_ActivatesFirstTabInChrome(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	ctx, err := m.Session(DefaultSessionID) // creates the browsing context's first tab
+	ctx, err := m.Session(testSessionID) // creates the browsing context's first tab
 	require.NoError(t, err)
 
 	activations := rec.calls()
@@ -399,20 +399,20 @@ func TestCreateFirstTab_ActivatesFirstTabInChrome(t *testing.T) {
 // TestCloseLastTab_ActivatesReplacementInChrome is the same guarantee through
 // the path that actually motivates it.
 func TestCloseLastTab_ActivatesReplacementInChrome(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
-	_, err := m.Session(DefaultSessionID)
+	m, rec := newManagerWithRecordedActivation(t)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	rec.mu.Lock()
 	rec.ctxs, rec.treatment = nil, nil
 	rec.mu.Unlock()
 
-	tabs, activeIdx, err := m.CloseTab(DefaultSessionID, 0)
+	tabs, activeIdx, err := m.CloseTab(testSessionID, 0)
 	require.NoError(t, err)
 	require.Len(t, tabs, 1, "closing the last tab must leave a replacement (ADR-041 D3)")
 	require.Equal(t, 0, activeIdx)
 
-	replacementCtx, err := m.Session(DefaultSessionID)
+	replacementCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	activations := rec.calls()
 	require.NotEmpty(t, activations, "the replacement tab must be activated in Chrome")
@@ -444,8 +444,8 @@ func flakyTabFactory(failures int32) (func(context.Context, target.ID) (*tabEntr
 // the life of the browsing context — which is precisely how Chrome and the
 // model end up with different active tabs.
 func TestAdoptTarget_RetriesAfterTransientFailure(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
-	_, err := m.Session(DefaultSessionID)
+	m := newTestManagerWithFakeTabs(t)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	flaky, attempts := flakyTabFactory(2) // fail twice, succeed on the third
@@ -454,9 +454,9 @@ func TestAdoptTarget_RetriesAfterTransientFailure(t *testing.T) {
 	m.adoptRetryBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	m.mu.Unlock()
 
-	m.adoptTargetWithRetry(DefaultSessionID, target.ID("flaky-1"))
+	m.adoptTargetWithRetry(testSessionID, target.ID("flaky-1"))
 
-	tabs, _, err := m.ListTabs(DefaultSessionID)
+	tabs, _, err := m.ListTabs(testSessionID)
 	require.NoError(t, err)
 	assert.Len(t, tabs, 2, "the tab must be adopted once the transient failure clears")
 	assert.Equal(t, int32(3), atomic.LoadInt32(attempts), "two failures then one success")
@@ -467,8 +467,8 @@ func TestAdoptTarget_RetriesAfterTransientFailure(t *testing.T) {
 // trip) leak per advert-opened tab, on the same saturated transport that
 // caused the failure.
 func TestAdoptTarget_RetryIsBounded(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
-	_, err := m.Session(DefaultSessionID)
+	m := newTestManagerWithFakeTabs(t)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	alwaysFails, attempts := flakyTabFactory(1 << 30)
@@ -480,7 +480,7 @@ func TestAdoptTarget_RetryIsBounded(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		m.adoptTargetWithRetry(DefaultSessionID, target.ID("gone-1"))
+		m.adoptTargetWithRetry(testSessionID, target.ID("gone-1"))
 		close(done)
 	}()
 	select {
@@ -491,7 +491,7 @@ func TestAdoptTarget_RetryIsBounded(t *testing.T) {
 
 	assert.Equal(t, int32(len(backoff)+1), atomic.LoadInt32(attempts),
 		"exactly one initial attempt plus one per backoff step")
-	tabs, _, err := m.ListTabs(DefaultSessionID)
+	tabs, _, err := m.ListTabs(testSessionID)
 	require.NoError(t, err)
 	assert.Len(t, tabs, 1, "nothing should have been adopted")
 }
@@ -501,22 +501,22 @@ func TestAdoptTarget_RetryIsBounded(t *testing.T) {
 // Testing adoptTargetWithRetry directly would pass even if handleTargetEvent
 // still called the bare, one-shot adoptTarget — which is the bug.
 func TestHandleTargetEvent_UsesRetryingAdoption(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
-	_, err := m.Session(DefaultSessionID)
+	m := newTestManagerWithFakeTabs(t)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
-	tabs, _, err := m.ListTabs(DefaultSessionID)
+	tabs, _, err := m.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs, 1)
 
 	m.mu.Lock()
-	openerID := m.sessions[DefaultSessionID].tabs[0].targetID
+	openerID := m.sessions[testSessionID].tabs[0].targetID
 	flaky, _ := flakyTabFactory(1) // one transient failure, then success
 	m.createTabFn = flaky
 	m.adoptRetryBackoff = []time.Duration{5 * time.Millisecond, 5 * time.Millisecond}
 	m.mu.Unlock()
 
-	m.handleTargetEvent(DefaultSessionID, &target.EventTargetCreated{
+	m.handleTargetEvent(testSessionID, &target.EventTargetCreated{
 		TargetInfo: &target.Info{
 			TargetID: target.ID("popup-1"),
 			Type:     "page",
@@ -525,7 +525,7 @@ func TestHandleTargetEvent_UsesRetryingAdoption(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		got, _, lerr := m.ListTabs(DefaultSessionID)
+		got, _, lerr := m.ListTabs(testSessionID)
 		return lerr == nil && len(got) == 2
 	}, 3*time.Second, 5*time.Millisecond,
 		"a target whose first adoption attempt failed must still end up adopted — "+

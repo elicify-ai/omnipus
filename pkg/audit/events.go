@@ -177,6 +177,68 @@ const (
 	// reaped orphan turn actually terminated.
 	EventTurnOrphanTimeout = "turn.orphan_timeout"
 
+	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
+	// into existence: the first turn to resolve a browser for a given
+	// BrowsingKey established it (ADR-072 FR-027). Fires exactly ONCE per
+	// browser instance, not once per agent and not once per turn. Fields:
+	// {workspace_id, browsing_key}; the establishing agent is Entry.AgentID
+	// and the turn's transcript session is Entry.SessionID.
+	//
+	// NAME SHAPE, deliberately: underscores only, no dots. FR-058 requires
+	// ^[a-z_]+$ of every name this change introduces. The AuditEntry contract
+	// itself was widened to ^[a-z_.]+$ by issue #667, so a dotted name would
+	// also be legal on the wire — but a name that satisfies BOTH the spec and
+	// the contract needs no adjudication between them. Do not "tidy" these two
+	// into the dotted browser.* family without reopening FR-058.
+	EventBrowserInstanceCreated = "browser_instance_created"
+
+	// EventBrowserAction — INFO. ONE event per WRITE-CLASS browser tool call:
+	// the seven controlledResult-gated tools (browser_navigate, browser_click,
+	// browser_type, browser_evaluate, browser_switch_tab, browser_close_tab,
+	// browser_open_tab). Read-only calls (browser_list_tabs,
+	// browser_screenshot, browser_get_text, browser_wait) are NOT recorded per
+	// call. Fields: {workspace_id, browsing_key, tab_owner, host}; the acting
+	// agent is Entry.AgentID and the tool is Entry.Tool.
+	//
+	// PER ACTION, NOT PER FIRST USE. ADR D2.11 rejects first-use-only auditing
+	// by name: an event on first use of a context an agent did not establish
+	// fires once per agent per workspace and says nothing about the tenth
+	// action, or about which agent made the purchase. That matters more now
+	// that every agent on a workspace drives the operator's live logins.
+	//
+	// Same name-shape rule as EventBrowserInstanceCreated above.
+	EventBrowserAction = "browser_action"
+
+	// EventBrowserUploadFile — INFO (Decision=allow) or WARN (Decision=deny).
+	// ONE event per browser_upload_file invocation, allowed OR denied (D2
+	// FR-031). The denied half is the load-bearing half: a trail that records
+	// only the successes cannot answer "did this agent try to hand a file it
+	// was not allowed to reach to a page on the operator's logged-in session?",
+	// which is the whole question the event exists for.
+	//
+	// Fields: {workspace_id, browsing_key, tab_owner, resolved_path,
+	// page_origin, fs_op: "write", fs_op_reason, reason?, detail?}; the acting
+	// agent is Entry.AgentID and Entry.Tool is "browser_upload_file".
+	// resolved_path is the path AFTER ResolvePath, because an unresolved
+	// relative path is not something an operator can act on.
+	//
+	// Same name-shape rule as EventBrowserInstanceCreated above: underscores,
+	// never dots.
+	EventBrowserUploadFile = "browser_upload_file"
+
+	// EventBrowserSnapshot — INFO. ONE metadata-only event per
+	// browser_snapshot capture (D2 FR-028). METADATA ONLY, and that is a
+	// requirement rather than an economy: browser_snapshot renders field
+	// VALUES by operator ruling, so an audit row carrying the captured text
+	// would copy every password and card number the page held into a file
+	// whose whole purpose is to be kept and read later.
+	//
+	// Fields: {workspace_id, browsing_key, tab_owner, page_origin, node_count,
+	// output_bytes, value_nodes_emitted, truncated}. Never the values.
+	//
+	// Same name-shape rule as EventBrowserInstanceCreated above.
+	EventBrowserSnapshot = "browser_snapshot"
+
 	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
 	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive
 	// control of an agent's live browser (ADR-038 D6). Decision=allow means

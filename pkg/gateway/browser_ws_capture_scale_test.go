@@ -32,6 +32,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -130,8 +133,8 @@ func TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording(t *testi
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -139,7 +142,7 @@ func TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording(t *testi
 	require.NoError(t, err)
 
 	wc := newTestBrowserWSConn()
-	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp"}
+	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp", panelSessionID: mgr.PanelTabSetID("sess-clamp")}
 	// White-box: install the attachment directly (bypassing the full offer
 	// handshake, irrelevant to what this test targets) so handleViewport's
 	// direct att.capture.SetCaptureScale call path is exercised.
@@ -190,8 +193,8 @@ func TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording(t *testing.T
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -199,7 +202,7 @@ func TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording(t *testing.T
 	require.NoError(t, err)
 
 	wc := newTestBrowserWSConn()
-	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-low"}
+	state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-low", panelSessionID: mgr.PanelTabSetID("sess-clamp-low")}
 	state.webrtc = &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}
 	viewerID := "viewer-clamp-low"
 
@@ -262,8 +265,8 @@ func TestBrowserWS_HandleViewport_ScaleClampBoundaries(t *testing.T) {
 
 			defaultAgent := al.GetRegistry().GetDefaultAgent()
 			require.NotNil(t, defaultAgent)
-			mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-			require.True(t, ok)
+			mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+			require.Equal(t, agent.BrowserResolveOK, outcome)
 
 			relay := &fakeRelay{}
 			var calls int32
@@ -271,7 +274,11 @@ func TestBrowserWS_HandleViewport_ScaleClampBoundaries(t *testing.T) {
 			require.NoError(t, err)
 
 			wc := newTestBrowserWSConn()
-			state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-boundary-" + tc.name}
+			state := &browserConnState{
+				mgr:            mgr,
+				sessionID:      "sess-clamp-boundary-" + tc.name,
+				panelSessionID: mgr.PanelTabSetID("sess-clamp-boundary-" + tc.name),
+			}
 			state.webrtc = &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}
 			viewerID := "viewer-clamp-boundary-" + tc.name
 
@@ -343,15 +350,15 @@ func TestBrowserWS_ApplyColdStartRecapture_AppliesRememberedScale(t *testing.T) 
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
 	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 
-	state := &browserConnState{mgr: mgr, sessionID: "sess-cold-start"}
+	state := &browserConnState{mgr: mgr, sessionID: "sess-cold-start", panelSessionID: mgr.PanelTabSetID("sess-cold-start")}
 	require.Nil(t, state.webrtc, "precondition: no attachment exists yet — this is the exact cold-open window F2 covers")
 
 	// Simulate handleViewport having already run BEFORE any WebRTC
@@ -388,15 +395,19 @@ func TestBrowserWS_ApplyColdStartRecapture_NoPendingScale_LeavesDefault(t *testi
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32
 	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 
-	state := &browserConnState{mgr: mgr, sessionID: "sess-cold-start-none"}
+	state := &browserConnState{
+		mgr:            mgr,
+		sessionID:      "sess-cold-start-none",
+		panelSessionID: mgr.PanelTabSetID("sess-cold-start-none"),
+	}
 	require.Equal(t, float64(0), state.pendingViewportScale(), "precondition: sentinel zero value, nothing remembered")
 
 	handler.applyColdStartRecapture(state, cs)
@@ -436,8 +447,8 @@ func TestCaptureIngest_Recapture_AlwaysSendsCaptureScale(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	relay := &fakeRelay{}
 	var calls int32

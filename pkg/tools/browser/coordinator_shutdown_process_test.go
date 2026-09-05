@@ -35,10 +35,10 @@ func processAlive(pid int) bool {
 func TestCoordinator_Shutdown_KillsTheRealChromeProcess(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	mgr := newTestManager(t, cfg)
-	mgr.AttachSharedChrome(coord, "agent-a")
-	if _, _, err := coord.Register(context.Background(), "agent-a", mgr); err != nil {
+	mgr.AttachSharedChrome(coord, browserTestKey("agent-a"))
+	if _, err := coord.Register(context.Background(), "agent-a", mgr); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

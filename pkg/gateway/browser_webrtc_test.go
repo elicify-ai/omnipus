@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 
@@ -115,7 +117,7 @@ func (f *fakeRelay) closeCount() int {
 // fakeEncoderStarter never touches real chromedp — it just counts
 // invocations and either returns a bare cancelable context or startErr.
 func fakeEncoderStarter(callCount *int32, startErr error) browser.EncoderStarter {
-	return func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+	return func(context.Context, *browser.BrowserManager, string, string, string, string) (context.Context, context.CancelFunc, error) {
 		atomic.AddInt32(callCount, 1)
 		if startErr != nil {
 			return nil, nil, startErr
@@ -137,6 +139,9 @@ type webrtcStateFrameDecoder struct { // not-wire-format: decode-only test asser
 	HasAudio  *bool  `json:"has_audio,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// ReasonDetail is the free-text cause that accompanies the closed
+	// `reason` enum (UAT case 16) — see browser_webrtc_reason_detail_test.go.
+	ReasonDetail string `json:"reason_detail,omitempty"`
 }
 
 // newTestBrowserWSConn builds a bare browserWSConn with no real
@@ -286,8 +291,8 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	// No full-Chrome build installed under mgr.InstallRoot() in this test's
 	// tmp dir — CaptureVideoCapability must report not_capable. Asserted via
 	// CaptureVideoCapability (the ADR-048 condition-3-aware gate), NOT the
@@ -360,19 +365,13 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		// ADR-048 condition 3 (CaptureVideoCapability): the config-literal
-		// test harness bypasses config.DefaultConfig()'s CaptureSharedContext
-		// default (true) — set explicitly so the gate ladder reaches the
-		// "start" branch this test actually exercises instead of stopping at
-		// not_capable.
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	installRoot := mgr.InstallRoot()
 	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")
@@ -895,14 +894,13 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	// Capability gate must pass so the ladder reaches the fence.
 	installRoot := mgr.InstallRoot()
@@ -978,14 +976,13 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	installRoot := mgr.InstallRoot()
 	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")

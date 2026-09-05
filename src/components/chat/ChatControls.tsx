@@ -91,7 +91,24 @@ export function ChatControls({ className }: ChatControlsProps) {
     if (creatingBrowserSession) return
     setCreatingBrowserSession(true)
     try {
-      const created = await createSession(activeAgentId)
+      // U2: the workspace this chat belongs to travels WITH the create.
+      //
+      // The panel about to open resolves which workspace's browser — and whose
+      // live logins — it shows by reading the workspace off this very session's
+      // meta, server-side (ADR-072 FR-016/FR-017); nothing on the attach frame
+      // carries it, deliberately, so a client cannot ask to drive a workspace's
+      // browser just by saying so. Creating the session with agent_id alone
+      // therefore handed the panel a session that named no workspace, and an
+      // agent on more than one workspace's team was refused as ambiguous —
+      // advised to "open this panel from a chat that belongs to the workspace
+      // you mean", which is exactly where the click came from. The workspace
+      // was in the route and in this store the whole time; it just never made
+      // the trip.
+      //
+      // `undefined` on the global/inbox chat is correct and stays correct: no
+      // workspace is not the same as a default one, and the refusal is right
+      // when there is genuinely nothing to disambiguate on.
+      const created = await createSession(activeAgentId, activeWorkspaceId ?? undefined)
       setActiveSession(created.id, created.agent_id, null)
       useUiStore.getState().openBrowserPanel(created.id, created.agent_id)
     } catch (err) {

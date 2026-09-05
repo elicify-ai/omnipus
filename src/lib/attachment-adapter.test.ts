@@ -147,9 +147,31 @@ describe('omnipusAttachmentAdapter', () => {
     const pending = await omnipusAttachmentAdapter.add({ file: mkFile('x.docx', DOCX) })
     await omnipusAttachmentAdapter.send(pending)
 
-    expect(api.createSession).toHaveBeenCalledWith('jim')
+    expect(api.createSession).toHaveBeenCalledWith('jim', undefined)
     expect(api.uploadFiles).toHaveBeenCalledWith('sess_new', [pending.file], undefined)
     expect(useSessionStore.getState().activeSessionId).toBe('sess_new')
+  })
+
+  // U2, second entry point. This adapter is the OTHER place in the SPA that
+  // mints a session from a workspace chat, and the session it mints becomes
+  // the active one — so a user who attaches a file and then opens the live
+  // browser panel before sending anything hands that panel a session naming no
+  // workspace, and a multi-workspace agent is refused as ambiguous. Same root
+  // cause as the "Open browser" launcher's own create, same fix: the workspace
+  // travels with the create rather than waiting for the first message to stamp
+  // it (ADR-072 FR-017 reads it off the session's meta, server-side).
+  it('send() creates that session inside the workspace the chat belongs to', async () => {
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: 'jim', activeAgentType: null })
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-alpha' })
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_ws', agent_id: 'jim' } as never)
+    vi.mocked(api.uploadFiles).mockResolvedValue({
+      files: [{ name: 'x.docx', path: 'uploads/sess_ws/x.docx', size: 1, content_type: DOCX, ref: 'media://n' }],
+    } as never)
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('x.docx', DOCX) })
+    await omnipusAttachmentAdapter.send(pending)
+
+    expect(api.createSession).toHaveBeenCalledWith('jim', 'ws-alpha')
   })
 
   it('remove() drops a stashed ref', async () => {

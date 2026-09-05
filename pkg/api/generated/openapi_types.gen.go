@@ -7667,7 +7667,8 @@ type AuditEntry struct {
 	// Details Event-specific metadata. Structure varies by event type.
 	Details *map[string]interface{} `json:"details,omitempty"`
 
-	// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+	// Event Event type identifier. Two naming families coexist and BOTH are legal: the original flat names (tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical names that every newer event uses (skill.call, onboarding.admin_created, turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …). Custom values are permitted for extensibility — must match ^[a-z_.]+$ (lowercase letters, underscores and dots only).
+	// The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
 	Event string `json:"event"`
 
 	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
@@ -7726,7 +7727,8 @@ type AuditLogResponse struct {
 		// Details Event-specific metadata. Structure varies by event type.
 		Details *map[string]interface{} `json:"details,omitempty"`
 
-		// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+		// Event Event type identifier. Two naming families coexist and BOTH are legal: the original flat names (tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical names that every newer event uses (skill.call, onboarding.admin_created, turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …). Custom values are permitted for extensibility — must match ^[a-z_.]+$ (lowercase letters, underscores and dots only).
+		// The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
 		Event string `json:"event"`
 
 		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
@@ -7817,10 +7819,10 @@ type BearerToken = string
 
 // BrowserInspectRequest Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
 type BrowserInspectRequest struct {
-	// AgentId Agent whose BrowserManager owns the live tab.
+	// AgentId The agent to resolve the browsing context from. This is the ONLY input that selects a browser on this endpoint, and the browser it selects belongs to the agent's workspace, not to the agent (ADR-072 FR-001).
 	AgentId string `json:"agent_id"`
 
-	// SessionId Browser session id (context/correlation; the live tab is the agent's default).
+	// SessionId A BROWSER session id, carried for context/correlation and logging only. Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id this is NOT a chat session id and it gains no workspace semantics under ADR-072: browser_inspect resolves the browsing context from agent_id ALONE, so an agent that belongs to more than one workspace is REFUSED here (ADR-072 FR-033) rather than borrowing whichever workspace the live panel happened to resolve.
 	SessionId string `json:"session_id"`
 
 	// X Device (CSS) x of the point to inspect.
@@ -10535,13 +10537,16 @@ type PendingRestartEntry struct {
 	PersistedValue interface{} `json:"persisted_value"`
 }
 
-// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04).
+// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Concurrency is bounded by LIVE available memory at the moment of admission, not by a number precomputed at startup.
 type PerformanceSettings struct {
-	// EffectiveMaxParallelAgents The resolved value actually in use (after applying the auto-detect memory-based heuristic or env-var override). Always present in responses; absent in requests.
+	// EffectiveMaxParallelAgents The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
 	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
 
-	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. 0 (on the wire, surfaced here as the resolved effective value — see effective_max_parallel_agents) means "use the auto-detected default", sized from available memory (availableMemory / ~3.5 MB per agent), floored so a small box still functions. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor applies). A configured value is bounded only by a documented PHYSICAL OS-thread-safety ceiling (around 2000) when left on auto-detect; an explicit value above that ceiling is still honored in full, with a server-side warning logged rather than the value being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
+	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+
+	// MaxParallelAgentsConfigured Whether max_parallel_agents was actually set by an operator, in config.json or via the OMNIPUS_MAX_PARALLEL_AGENTS env var. false means nothing is configured and concurrency is bounded by live available memory; effective_max_parallel_agents then carries the physical backstop, which is not a number to show an operator as a recommendation. This field exists because the two cases are otherwise indistinguishable on the wire — max_parallel_agents substitutes the effective value whenever the configured value is below the schema floor, so an unconfigured host looks exactly like an explicitly configured one. Always present in responses; absent in requests.
+	MaxParallelAgentsConfigured *bool `json:"max_parallel_agents_configured,omitempty"`
 
 	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
@@ -12439,6 +12444,11 @@ type SessionCreateRequest struct {
 
 	// Type Session type. Defaults to "chat" when omitted.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
+
+	// WorkspaceId The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
+	// Stamped straight onto the new session's meta, so a session created for a workspace chat carries its workspace from birth rather than from its first message. That gap is what ADR-072 FR-017 tripped over: the live browser panel reads the workspace off the attaching chat session's own meta, server-side, and the SPA's "Open browser" launcher creates its session here — with no workspace — before any message has been sent. An agent on more than one workspace's team was therefore refused (FR-033) and told to open the panel from a chat belonging to the workspace it meant, which is exactly where the click had come from.
+	// Must name a workspace that exists (400 otherwise). Membership is NOT checked here: the value is a preference, and every consumer that grants access on it re-checks membership itself — browser.ResolveBrowsingKeyForAgent honours it only when the agent really is on that workspace's team.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SessionCreateRequestType Session type. Defaults to "chat" when omitted.

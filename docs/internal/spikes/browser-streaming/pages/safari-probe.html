@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8"><title>Safari MSE codec probe</title>
+<body style="margin:0;padding:16px;background:#111;color:#eee;font:13px ui-monospace,monospace">
+<h3 style="font-family:system-ui">Safari MSE codec probe — self-reporting</h3>
+<pre id="log" style="white-space:pre-wrap"></pre>
+<script>
+const log = m => { document.getElementById('log').textContent += m + '\n'; };
+const MIMES = [
+  'video/mp4; codecs="av01.0.01M.08"',
+  'video/mp4; codecs="av01.0.05M.08"',
+  'video/webm; codecs="vp9"',
+  'video/webm; codecs="vp09.00.10.08"',
+  'video/mp4; codecs="vp09.00.10.08"',
+  'video/mp4; codecs="avc1.42E01E"',
+  'video/mp4; codecs="avc1.640028"',
+  'video/mp4; codecs="hvc1.1.6.L93.B0"',
+  'audio/webm; codecs="opus"',
+  'audio/mp4; codecs="mp4a.40.2"',
+  'audio/mp4; codecs="opus"',
+];
+const out = { name: 'safari-probe', ua: navigator.userAgent, ts: new Date().toISOString(),
+  hasMSE: typeof MediaSource !== 'undefined',
+  hasManagedMSE: typeof ManagedMediaSource !== 'undefined',
+  isTypeSupported: {}, canPlayType: {} };
+const vid = document.createElement('video');
+for (const m of MIMES) {
+  let s = null; try { s = MediaSource.isTypeSupported(m); } catch (e) { s = 'ERR:' + e.message; }
+  out.isTypeSupported[m] = s;
+  out.canPlayType[m] = vid.canPlayType(m);
+  log(`${s === true ? 'YES' : 'no '}  isTypeSupported  canPlayType=${(vid.canPlayType(m)||'""').padEnd(11)}  ${m}`);
+}
+log('\nUA: ' + navigator.userAgent);
+fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(out) })
+  .then(() => log('\nreported OK -- you can close this tab'))
+  .catch(e => log('\nreport FAILED: ' + e.message));
+</script>

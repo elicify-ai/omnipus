@@ -590,6 +590,7 @@ export interface BrowserWebRTCStateFrame {
   session_id?: string;
   available: boolean;
   reason?: "disabled" | "not_capable" | "lite_build" | "error" | "multi_agent_capture_denied" | "ingest_timeout";
+  reason_detail?: string;
   has_audio?: boolean;
   active?: boolean;
   ice_servers?: Array<{

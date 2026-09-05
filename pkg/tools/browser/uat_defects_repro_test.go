@@ -38,13 +38,13 @@ import (
 func newUATReproManager(t *testing.T, agentID string) (*BrowserManager, *BrowserCoordinator) {
 	t.Helper()
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, security.NewSSRFChecker(nil), true, home, false)
+	mgr, err := registerToolsForTest(t, registry, cfg, security.NewSSRFChecker(nil), true, home, false)
 	require.NoError(t, err)
-	mgr.AttachSharedChrome(coord, agentID)
+	mgr.AttachSharedChrome(coord, browserTestKey(agentID))
 	return mgr, coord
 }
 
@@ -61,7 +61,7 @@ func decodeToolJSON(t *testing.T, res *tools.ToolResult) map[string]any {
 // "browser_open_tab reports success:true while killing the whole browser
 // session." Opens a tab via the real tool, then proves the session is still
 // alive by driving browser_navigate-equivalent chromedp calls through
-// mgr.Session(defaultSessionID) and calling browser_list_tabs again — exactly
+// mgr.Session(testSessionID) and calling browser_list_tabs again — exactly
 // what the UAT's "subsequent calls to other browser tools" symptom checks.
 func TestRepro_Defect1_OpenTab_SessionSurvives(t *testing.T) {
 	skipIfNoBrowser(t)
@@ -70,11 +70,11 @@ func TestRepro_Defect1_OpenTab_SessionSurvives(t *testing.T) {
 	// Establish tab 0 first (mirrors a real chat session's first browser_*
 	// call, e.g. browser_navigate) so OpenTab hits the "append" branch, not
 	// the lazy-create branch.
-	firstCtx, err := mgr.Session(defaultSessionID)
+	firstCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(firstCtx, chromedp.Navigate("about:blank")))
 
-	openTool := &OpenTabTool{mgr: mgr}
+	openTool := &OpenTabTool{res: newFixedResolver(mgr)}
 	res := openTool.Execute(context.Background(), map[string]any{})
 	out := decodeToolJSON(t, res)
 	require.Equal(t, true, out["success"], "browser_open_tab must report success:true only when it really succeeded")
@@ -83,13 +83,13 @@ func TestRepro_Defect1_OpenTab_SessionSurvives(t *testing.T) {
 	// Defect 1 claims the WHOLE session dies as a side effect. Prove or
 	// refute it the same way a subsequent agent tool call would: resolve the
 	// session again and drive real CDP through it.
-	sessCtx, err := mgr.Session(defaultSessionID)
+	sessCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err, "browser session must still resolve after browser_open_tab")
 	var title string
 	err = chromedp.Run(sessCtx, chromedp.Navigate("about:blank"), chromedp.Title(&title))
 	require.NoError(t, err, "a subsequent browser tool call must still work after browser_open_tab — this is Defect 1's exact symptom")
 
-	listTool := &ListTabsTool{mgr: mgr}
+	listTool := &ListTabsTool{res: newFixedResolver(mgr)}
 	res2 := listTool.Execute(context.Background(), map[string]any{})
 	out2 := decodeToolJSON(t, res2)
 	require.Equal(t, true, out2["browser_started"])
@@ -107,24 +107,24 @@ func TestRepro_Defect2_SwitchAndClose_NoActiveSessionOrMismatch(t *testing.T) {
 	mgr, _ := newUATReproManager(t, "agent-defect2")
 
 	// Tab 0: about:blank (title "").
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate("about:blank")))
 
 	// Tab 1: opened via the real tool, given a DISTINCT, identifiable page so
 	// a content mismatch after switching is unambiguous.
-	openTool := &OpenTabTool{mgr: mgr}
+	openTool := &OpenTabTool{res: newFixedResolver(mgr)}
 	openRes := openTool.Execute(context.Background(), map[string]any{})
 	openOut := decodeToolJSON(t, openRes)
 	require.Equal(t, true, openOut["success"])
 
-	tab1Ctx, err := mgr.Session(defaultSessionID) // now resolves the NEW active tab (tab 1)
+	tab1Ctx, err := mgr.Session(testSessionID) // now resolves the NEW active tab (tab 1)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab1Ctx,
 		chromedp.Navigate("data:text/html,<title>TAB-ONE-MARKER</title><h1>tab one</h1>")))
 
 	// Switch back to tab 0 via the real LLM-facing tool.
-	switchTool := &SwitchTabTool{mgr: mgr}
+	switchTool := &SwitchTabTool{res: newFixedResolver(mgr)}
 	switchRes := switchTool.Execute(context.Background(), map[string]any{"index": float64(0)})
 	require.False(t, switchRes.IsError, "browser_switch_tab reported an error (possible 'no active session'): %s", switchRes.ForLLM)
 	switchOut := decodeToolJSON(t, switchRes)
@@ -134,7 +134,7 @@ func TestRepro_Defect2_SwitchAndClose_NoActiveSessionOrMismatch(t *testing.T) {
 
 	// The manager's own Session() must now resolve tab 0's real content too —
 	// not just the tool's self-reported title/url.
-	activeCtx, err := mgr.Session(defaultSessionID)
+	activeCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err, "no active session after browser_switch_tab — reproduces Defect 2")
 	var liveTitle string
 	require.NoError(t, chromedp.Run(activeCtx, chromedp.Title(&liveTitle)))
@@ -142,14 +142,14 @@ func TestRepro_Defect2_SwitchAndClose_NoActiveSessionOrMismatch(t *testing.T) {
 		"content-mismatch defect: Session() still resolves tab 1's context after switching to tab 0")
 
 	// Close tab 1 (the non-active tab) via the real LLM-facing tool.
-	closeTool := &CloseTabTool{mgr: mgr}
+	closeTool := &CloseTabTool{res: newFixedResolver(mgr)}
 	closeRes := closeTool.Execute(context.Background(), map[string]any{"index": float64(1)})
 	require.False(t, closeRes.IsError, "browser_close_tab reported an error (possible 'no active session'): %s", closeRes.ForLLM)
 	closeOut := decodeToolJSON(t, closeRes)
 	t.Logf("browser_close_tab(1) result: %+v", closeOut)
 
 	// Session must still resolve after the close.
-	_, err = mgr.Session(defaultSessionID)
+	_, err = mgr.Session(testSessionID)
 	require.NoError(t, err, "no active session after browser_close_tab — reproduces Defect 2")
 }
 
@@ -161,11 +161,11 @@ func TestRepro_Defect2_CloseLastTab_ReplacementBehavior(t *testing.T) {
 	skipIfNoBrowser(t)
 	mgr, _ := newUATReproManager(t, "agent-defect2-lasttab")
 
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate("about:blank")))
 
-	closeTool := &CloseTabTool{mgr: mgr}
+	closeTool := &CloseTabTool{res: newFixedResolver(mgr)}
 	res := closeTool.Execute(context.Background(), map[string]any{"index": float64(0)})
 	require.False(t, res.IsError, "browser_close_tab(last tab) errored: %s", res.ForLLM)
 	out := decodeToolJSON(t, res)
@@ -179,7 +179,7 @@ func TestRepro_Defect2_CloseLastTab_ReplacementBehavior(t *testing.T) {
 	require.Len(t, tabsList, 1, "expected exactly one fresh blank replacement tab")
 
 	// And the manager must still consider a session resolvable afterward.
-	_, err = mgr.Session(defaultSessionID)
+	_, err = mgr.Session(testSessionID)
 	require.NoError(t, err, "no active session after closing the last remaining tab")
 }
 
@@ -194,7 +194,7 @@ func TestRepro_Defect1And2_WithLiveViewerAttached(t *testing.T) {
 	skipIfNoBrowser(t)
 	mgr, _ := newUATReproManager(t, "agent-liveview")
 
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate("about:blank")))
 
@@ -203,7 +203,7 @@ func TestRepro_Defect1And2_WithLiveViewerAttached(t *testing.T) {
 	var tabsSnapshots [][]Tab
 
 	controlledByOther, err := mgr.Live().Attach(
-		defaultSessionID, "viewer-uat",
+		testSessionID, "viewer-uat",
 		func(msg string) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -221,26 +221,26 @@ func TestRepro_Defect1And2_WithLiveViewerAttached(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, controlledByOther)
-	defer mgr.Live().Detach(defaultSessionID, "viewer-uat")
+	defer mgr.Live().Detach(testSessionID, "viewer-uat")
 
 	// A plain (non-control-taking) viewer must NOT block the agent's own tab
 	// tools via controlledResult — only an explicit TakeControl would.
-	openTool := &OpenTabTool{mgr: mgr}
+	openTool := &OpenTabTool{res: newFixedResolver(mgr)}
 	openRes := openTool.Execute(context.Background(), map[string]any{})
 	require.False(t, openRes.IsError, "browser_open_tab errored with a live viewer attached: %s", openRes.ForLLM)
 	openOut := decodeToolJSON(t, openRes)
 	require.Equal(t, true, openOut["success"])
 
-	newTabCtx, err := mgr.Session(defaultSessionID)
+	newTabCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(newTabCtx,
 		chromedp.Navigate("data:text/html,<title>TAB-ONE-MARKER</title>")))
 
-	switchTool := &SwitchTabTool{mgr: mgr}
+	switchTool := &SwitchTabTool{res: newFixedResolver(mgr)}
 	switchRes := switchTool.Execute(context.Background(), map[string]any{"index": float64(0)})
 	require.False(t, switchRes.IsError, "browser_switch_tab errored with a live viewer attached: %s", switchRes.ForLLM)
 
-	closeTool := &CloseTabTool{mgr: mgr}
+	closeTool := &CloseTabTool{res: newFixedResolver(mgr)}
 	closeRes := closeTool.Execute(context.Background(), map[string]any{"index": float64(1)})
 	require.False(t, closeRes.IsError, "browser_close_tab errored with a live viewer attached: %s", closeRes.ForLLM)
 
@@ -271,6 +271,6 @@ func TestRepro_Defect1And2_WithLiveViewerAttached(t *testing.T) {
 		require.True(t, foundActive, "onTabs snapshot #%d has no active tab: %+v", i, snap)
 	}
 
-	_, err = mgr.Session(defaultSessionID)
+	_, err = mgr.Session(testSessionID)
 	require.NoError(t, err, "no active session after tab ops with a live viewer attached")
 }

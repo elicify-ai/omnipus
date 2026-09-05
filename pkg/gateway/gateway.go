@@ -28,7 +28,6 @@ import (
 	"regexp"
 	"runtime"
 	runtimedebug "runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2322,11 +2321,34 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// resolution/download is retried lazily at first real use, exactly the
 	// pre-existing behavior — so it is logged at WARN, never returned as a
 	// boot error.
-	for _, browserMgr := range agentLoop.BrowserManagers() {
-		// Go 1.22+ loop semantics: browserMgr is per-iteration already, no
-		// shadow copy needed before capturing it in the goroutine below.
+	// FR-016c: ONE preprovision for the whole install, driven by the pool
+	// rather than by a range over BrowserManagers().
+	//
+	// The old loop was silently a no-op under the pool. It ranged over the
+	// managers that exist at boot, and under a lazy pool that slice is EMPTY —
+	// so the download this block exists to start never started, and every
+	// fresh install paid the 30-60 s Chrome-for-Testing fetch on a user's
+	// first click instead. A loop that iterates nothing looks exactly like a
+	// loop that had nothing to do.
+	//
+	// There is one managed-Chromium install for every workspace
+	// (InstallRootForProfileDir is key-independent by construction, FR-037a),
+	// so this resolves it once with zero live keys.
+	if pool := agentLoop.BrowserPool(); pool != nil {
+		// FR-072 triggers 2 and 3, both off the boot path so neither delays it.
+		//
+		// Trigger 2 (boot): sweep every profile on disk that has no live
+		// Chrome. This is what reaches profiles closed by a run that crashed,
+		// or by a gateway that never got to run its post-close trim.
+		//
+		// Trigger 3 (schedule): a SEPARATE, much slower ticker than the
+		// one-minute reaper sweep, and deliberately not folded into it — the
+		// reaper does a map scan, this walks directories. It is not the
+		// primary trigger either; pool.Close(k) returning is, and that fires
+		// within milliseconds with no interval to wait for.
+		go runBrowserCacheTrimSchedule(ctx, pool)
 		go func() {
-			path, ppErr := browserMgr.Preprovision(ctx)
+			path, ppErr := pool.Preprovision(ctx)
 			if ppErr != nil {
 				// logger (not slog): slog writes to fd 2, which boot's
 				// initPanicFile redirects to gateway_panic.log — operators
@@ -2337,131 +2359,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				return
 			}
 			if path != "" {
-				logger.InfoCF("browser", "preprovision resolved",
-					map[string]any{"exec_path": path})
+				logger.InfoCF("browser", "preprovision resolved", map[string]any{"exec_path": path})
 			}
 		}()
-	}
-
-	// Boot-time browser WARM-UP (distinct from Preprovision above):
-	// Preprovision only RESOLVES (and, on a fresh install, downloads) a
-	// Chromium binary — it never launches the process. Chrome launch, the
-	// agent's first tab, and the CDP capture-extension load stayed entirely
-	// lazy, deferred to an agent's first browser tool call
-	// (BrowserManager.ensureStarted, reached via Session()/createFirstTab()).
-	// That lazy path is the unbounded cold start ADR-042 recorded at 30-60s
-	// historically — long enough to blow past the browser WS handler's 60s
-	// read deadline and tear down the connection. Kick the actual launch off
-	// here too so the shared Chrome is already up (process live, CDP pipe
-	// dialed, capture extension loaded if configured — see
-	// BrowserCoordinator.WarmUp) by the time any agent's first interaction
-	// needs it.
-	//
-	// Only ONE shared, gateway-scoped Chrome exists regardless of agent
-	// count (coordinator.go's whole design) — this warms that ONE instance,
-	// found via the first browser manager whose Coordinator() is non-nil (in
-	// coordinator mode every agent's manager is attached to the exact same
-	// *browser.BrowserCoordinator, so any one of them resolves it). A
-	// per-agent Chrome pool is explicitly out of scope — tracked separately
-	// as issue #570.
-	//
-	// Respects tools.browser.cdp_url: in remote-CDP mode there is nothing to
-	// warm (an operator-managed Chromium elsewhere; launching a local Chrome
-	// here would be wrong and wasteful), so this is skipped entirely when
-	// cdp_url is set. tools.browser.enabled (default true — browser tools
-	// are a standard built-in like exec/web/cron) additionally gates it so a
-	// deployment that has explicitly disabled browser tooling doesn't pay
-	// for it either.
-	//
-	// Operator opt-out: `tools.browser.warm_at_boot`
-	// (config.BrowserToolConfig.WarmAtBoot, env
-	// OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT), default true — following the same
-	// "default true" pattern as LiveViewEnabled/WebRTCEnabled/
-	// CaptureSharedContext. Setting it false keeps browser tools fully
-	// available and simply defers the Chrome launch to first use; it does
-	// not disable the browser.
-	//
-	// Skippable via OMNIPUS_SKIP_BROWSER_PREPROVISION=1 — the same escape
-	// hatch an integration test harness needs whenever it wants a fully
-	// browser-inert boot (no launch attempt of any kind, eager or lazy):
-	// without it, a harness that configures a real/valid exec_path for a
-	// browser-tool test would otherwise have this warm-up race a test's
-	// t.TempDir() cleanup exactly like the historical Preprovision-download
-	// flake this mirrors the escape hatch for.
-	//
-	// Best-effort + non-blocking, matching the Preprovision loop's own
-	// contract exactly: boot must not stall or fail on a browser problem
-	// (CLAUDE.md graceful degradation, Hard Constraint #4). A bare `go
-	// func(){}()`, not joined by anything — gateway shutdown does not wait
-	// for it, so it cannot delay RunContext's return. ctx is the gateway's
-	// own shutdown-aware context (canceled when the gateway is asked to
-	// stop); WarmUp's underlying ensureLaunched/exec-path resolution honors
-	// it for cancellation during resolution, and BrowserCoordinator.Shutdown
-	// (invoked from the gateway's own Close path, not from here) remains the
-	// sole process-kill path regardless of whether this warm-up finished.
-	// browserWarmUpEnabled/findSharedBrowserCoordinator are extracted (rather
-	// than inlined here) so the exact decision logic gateway.RunContext acts
-	// on is unit-testable without booting a full gateway.
-	if browserWarmUpEnabled(cfg) {
-		sharedBrowserCoordinator := findSharedBrowserCoordinator(agentLoop.BrowserManagers())
-		if sharedBrowserCoordinator == nil {
-			// Do NOT fall through silently. Warm-up being enabled but finding
-			// nothing to warm is otherwise indistinguishable from "warm-up is
-			// off" and from "warm-up is still running" — an operator who set
-			// warm_at_boot and then sees a slow first interaction would have
-			// no way to tell which of the three happened.
-			logger.InfoCF(
-				"browser",
-				"boot-time Chrome warm-up enabled but no shared browser coordinator was found — nothing to warm; Chrome will launch lazily at first browser tool use",
-				nil,
-			)
-		} else {
-			go func() {
-				// Boot must never die on a browser problem (Hard Constraint #4).
-				// The error path is already best-effort, but an unexpected PANIC
-				// in the warm-up chain would take the whole gateway process down
-				// with it — turning an optional latency optimisation into a boot
-				// crash. Contain it and fall back to the lazy path.
-				// Both failure paths below ALSO emit an audit event, not just a
-				// log line. Every other browser-lifecycle failure in this
-				// codebase is auditable (EventBrowserWebRTCStreamStartFailed,
-				// EventBrowserWebRTCIngestAuthRejected,
-				// EventBrowserWebRTCViewerOfferFailed); warm-up was log-only, so
-				// an operator reconstructing "did Chrome come up at boot?" from
-				// the audit trail found nothing — silence indistinguishable from
-				// "warm-up disabled" and from "warm-up succeeded". Success stays
-				// log-only: the audit trail records the exceptional outcome, not
-				// the routine one.
-				defer func() {
-					if r := recover(); r != nil {
-						logger.WarnCF(
-							"browser",
-							"boot-time Chrome warm-up panicked — recovered; will launch lazily at first browser tool use",
-							map[string]any{"panic": fmt.Sprintf("%v", r)},
-						)
-						audit.Emit(
-							context.Background(), agentLoop.AuditLogger(),
-							audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
-							map[string]any{"reason": "panic", "error": fmt.Sprintf("%v", r)},
-						)
-					}
-				}()
-				if warmErr := sharedBrowserCoordinator.WarmUp(ctx); warmErr != nil {
-					logger.WarnCF(
-						"browser",
-						"boot-time Chrome warm-up failed — will launch lazily at first browser tool use",
-						map[string]any{"error": warmErr.Error()},
-					)
-					audit.Emit(
-						context.Background(), agentLoop.AuditLogger(),
-						audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
-						map[string]any{"reason": "error", "error": warmErr.Error()},
-					)
-					return
-				}
-				logger.InfoCF("browser", "shared Chrome warmed up at boot", nil)
-			}()
-		}
 	}
 
 	// B1.2(d): wire the per-thread restrict-failure audit emitter into the
@@ -2728,7 +2628,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// WS. Step 0 (the Chrome PROCESS) still runs earlier, where it has nothing
 	// to wait for. Returns immediately; nothing joins it, and nothing it does
 	// can fail boot.
-	startBrowserWarmBoot(ctx, cfg, agentLoop, runningServices.browserWS)
+	startBrowserWarmBoot(ctx, cfg, homePath, agentLoop, runningServices.browserWS)
 
 	// Surface sandbox state on /health via the existing degraded/check
 	// infrastructure. Registering a RegisterCheck puts the {mode, backend,
@@ -3423,62 +3323,90 @@ func warmCaptureIdleTimeout(cfg *config.Config) time.Duration {
 	return time.Duration(cfg.Tools.Browser.WarmCaptureIdleSec) * time.Second
 }
 
-// pickWarmBrowserManager chooses the ONE agent whose tab (and, optionally,
-// capture) gets warmed at boot. Returns nil when no candidate exists.
+// pickWarmBrowserManager chooses the ONE browser whose tab (and, optionally,
+// capture) gets warmed at boot: the browser of the workspace the DEFAULT agent
+// resolves to (ADR-072 FR-016b). It returns (nil, reason) when there is
+// nothing to warm — reason is a short operator-facing sentence, and the caller
+// logs it exactly once at INFO.
 //
 // Why one and not all: each warmed tab is a renderer process (74-268MB RSS
 // measured on the UAT box, coordinator.go), and a warmed capture is a
-// continuously encoding video pipeline of which the shared Chrome can only
-// usefully serve ONE at a time anyway (ADR-048 condition 2 — handleWebRTCOffer
-// denies a second ACTIVELY-VIEWED capture). Warming every agent would multiply
-// the cost by the roster size to save time on exactly one panel.
+// continuously encoding video pipeline of which one host can only usefully
+// serve ONE at a time anyway (ADR-048 condition 2 — handleWebRTCOffer still
+// denies a second ACTIVELY-VIEWED capture, now across workspaces). Under
+// FR-001 a manager is a WORKSPACE's browser, so warming every manager would
+// multiply a whole Chrome process and profile by the workspace count to save
+// time on exactly one panel.
 //
-// Selection is DETERMINISTIC — the default agent
-// (agents.defaults.default_agent_id, the single source of truth per ADR-054
-// D6.4 and the agent a fresh install's user actually opens), else the
-// lexicographically-first agent id that has a browser manager. Sorting matters:
-// AgentLoop.BrowserManagers() ranges a map, so without it the warmed agent
-// would differ between two boots of the SAME install — and, worse, between a
-// macOS and a Linux host, which is precisely the platform-divergent behaviour
-// this project forbids.
-func pickWarmBrowserManager(cfg *config.Config, mgrs []*browser.BrowserManager) *browser.BrowserManager {
-	byID := make(map[string]*browser.BrowserManager, len(mgrs))
-	ids := make([]string, 0, len(mgrs))
+// Why the DEFAULT AGENT'S RESOLVED WORKSPACE, and no fallback:
+//
+//   - Selection used to compare agents.defaults.default_agent_id against
+//     mgr.AgentID(). After FR-001 that accessor returns the manager's BROWSING
+//     KEY ("ws:<id>"), so the comparison could never match again and every
+//     boot silently took the lexicographic branch instead. This is the fix for
+//     that, and it is why the four selection tests in browser_warmboot_test.go
+//     had to change with it.
+//   - The old lexicographic fallback is GONE. It was a tie-break over
+//     workspaces, and picking one would mean starting a Chrome against one
+//     workspace's profile — one particular set of live logins — because it
+//     sorted first, with nobody watching and nobody asked. That is the same
+//     implicit choice FR-033 refuses at every other resolution point, and a
+//     latency optimisation is the weakest possible reason to make it. When the
+//     default agent resolves to no workspace we warm NOTHING and say so; the
+//     lazy path is a complete fallback and costs one panel one cold open.
+//
+// Determinism is therefore trivial rather than sorted: there is only ever one
+// candidate key, so two boots of the same install — and a macOS and a Linux
+// host of it — warm the same browser or none.
+func pickWarmBrowserManager(
+	cfg *config.Config, home string, mgrs []*browser.BrowserManager,
+) (*browser.BrowserManager, string) {
+	byKey := make(map[string]*browser.BrowserManager, len(mgrs))
 	for _, mgr := range mgrs {
 		if mgr == nil {
 			continue
 		}
 		// Two hard requirements, both of which a candidate in the normal
 		// coordinator-mode gateway always satisfies:
-		//   - a real agent id, because the capture session is keyed by it
-		//     (ensureCaptureSession/the capture registry) and an empty key is
-		//     not an agent;
+		//   - a real browsing key, because that is what names the browser to
+		//     warm and the zero key is not a browser;
 		//   - an attached coordinator, so warming drives the ONE shared
 		//     Chrome. A manager with no coordinator falls back to the legacy
 		//     one-Chrome-per-manager managed mode (manager.go's ensureStarted),
 		//     which would have boot spawn a SECOND Chrome process — the exact
 		//     opposite of a cheap warm-up. WebRTC capture requires the
 		//     coordinator anyway (defaultEncoderStarter refuses without one).
-		id := strings.TrimSpace(mgr.AgentID())
-		if id == "" || mgr.Coordinator() == nil {
+		key := mgr.BrowsingKey()
+		if key.IsZero() || mgr.Coordinator() == nil {
 			continue
 		}
-		if _, dup := byID[id]; dup {
+		if _, dup := byKey[key.String()]; dup {
 			continue
 		}
-		byID[id] = mgr
-		ids = append(ids, id)
+		byKey[key.String()] = mgr
 	}
-	if len(ids) == 0 {
-		return nil
+	if len(byKey) == 0 {
+		return nil, "no workspace has a browser manager yet"
 	}
-	if def := strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID); def != "" {
-		if mgr, ok := byID[def]; ok {
-			return mgr
-		}
+
+	def := strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID)
+	if def == "" {
+		return nil, "no default agent is set (agents.defaults.default_agent_id), " +
+			"so there is no one workspace to warm"
 	}
-	sort.Strings(ids)
-	return byID[ids[0]]
+	key, err := browser.ResolveBrowsingKeyForAgent(home, def, "")
+	if err != nil {
+		return nil, fmt.Sprintf(
+			"the default agent %q is not on exactly one workspace's team, so it resolves to no "+
+				"single browser to warm", def)
+	}
+	mgr, ok := byKey[key.String()]
+	if !ok {
+		return nil, fmt.Sprintf(
+			"the default agent %q resolves to workspace %q, which has no browser manager yet",
+			def, key.WorkspaceID())
+	}
+	return mgr, ""
 }
 
 // waitForGatewayListener blocks until this gateway's own HTTP listener accepts
@@ -3619,6 +3547,7 @@ func watchWarmCaptureIdle(ctx context.Context, cs warmCaptureHandle, idle time.D
 func startBrowserWarmBoot(
 	ctx context.Context,
 	cfg *config.Config,
+	homePath string,
 	agentLoop *agent.AgentLoop,
 	h *BrowserWSHandler,
 ) {
@@ -3630,14 +3559,20 @@ func startBrowserWarmBoot(
 	if !wantTab && !wantCapture {
 		return
 	}
-	mgr := pickWarmBrowserManager(cfg, agentLoop.BrowserManagers())
+	mgr, skipReason := pickWarmBrowserManager(cfg, homePath, agentLoop.BrowserManagers())
 	if mgr == nil {
 		// Say so rather than falling through silently — "enabled but nothing
 		// to warm" is otherwise indistinguishable from "disabled" and from
 		// "still running", the same three-way ambiguity the process warm-up's
 		// own no-coordinator branch calls out.
+		//
+		// ONE line, at INFO (FR-016b). Nothing is wrong here: skipping the
+		// warm-up costs the first panel open a cold start and nothing else,
+		// and a WARN would tell an operator to fix a configuration that may be
+		// exactly what they intended.
 		logger.InfoCF("browser",
-			"boot-time browser tab/capture warm-up enabled but no agent has a browser manager — nothing to warm",
+			"boot-time browser tab/capture warm-up enabled but skipped — "+skipReason+
+				"; the first panel open will build the browser lazily",
 			nil)
 		return
 	}
@@ -3670,14 +3605,19 @@ func startBrowserWarmBoot(
 			return
 		}
 
-		// Step 1 — the tab. mgr.Session(browser.DefaultSessionID) is the SAME
-		// call the live panel, the capture's tab resolution and every browser_*
-		// tool make, so this warms the tab they will actually use rather than
-		// parking a stray extra one in the shared Chrome (which the encoder's
-		// fallback tab resolution could then bind to by mistake).
+		// Step 1 — the tab. mgr.Session(mgr.OperatorSessionID()) is the SAME
+		// call the live panel and the capture's tab resolution make, so this
+		// warms the tab they will actually use rather than parking a stray
+		// extra one in the shared Chrome (which the encoder's fallback tab
+		// resolution could then bind to by mistake).
+		//
+		// It is the WORKSPACE-OWNED tab set, not an agent's: under ADR-072
+		// FR-080 a browser_* tool addresses its own SESSION's tabs, which do
+		// not exist until that session browses and cannot be warmed at boot.
+		// The panel's tabs can be, and are.
 		if wantTab {
 			started := time.Now()
-			if _, err := mgr.Session(browser.DefaultSessionID); err != nil {
+			if _, err := mgr.Session(mgr.OperatorSessionID()); err != nil {
 				logger.WarnCF("browser",
 					"boot-time browser tab warm-up failed — the first panel open will build the tab lazily",
 					map[string]any{"agent_id": agentID, "error": err.Error()})
@@ -3709,8 +3649,14 @@ func startBrowserWarmBoot(
 		// for the same agent (ADR-048 condition 2 / the fence's own TOCTOU
 		// rationale). Released before Start, which does CDP work — never hold
 		// a process-wide mutex across that.
+		//
+		// The empty panel tab set id is deliberate (issue #671): boot-time
+		// warm-up has no viewer and no chat to resolve against, so the capture
+		// binds to the operator's workspace-owned set — the same set step 1
+		// above just warmed, and the same one this path has always used. A
+		// real viewer's offer resolves its own.
 		h.captureFenceMu.Lock()
-		cs, err := h.ensureCaptureSession(mgr, agentID, cfg)
+		cs, err := h.ensureCaptureSession(mgr, agentID, "", cfg)
 		h.captureFenceMu.Unlock()
 		if err != nil {
 			logger.WarnCF("browser", "boot-time capture warm-up: could not create the capture session",
@@ -5447,6 +5393,27 @@ func setupAndStartServices(
 						"count", len(reaped), "session_ids", reaped)
 				}
 			}
+			// FR-040/FR-040a: whole-Chrome idle close, AFTER the per-tab loop
+			// above and inside the same per-tick recover().
+			//
+			// The order is load-bearing, not stylistic. The per-tab reaper is
+			// what brings a browser to zero tabs in the first place; running
+			// the whole-Chrome close first would always find tabs still open
+			// and could never close anything. A sweep that can never close
+			// anything is precisely the silent no-op FR-061 forbids — it
+			// would log nothing, fail nothing, and leak a ~182 MB Chrome per
+			// workspace forever.
+			//
+			// What survives a close: the profile directory on disk (so the
+			// workspace is still logged in) and every *BrowserManager (so the
+			// next tool call quietly relaunches instead of erroring). What
+			// goes: the pool entry and the Chrome process.
+			if pool := a.BrowserPool(); pool != nil {
+				if closed := pool.CloseIdle(time.Now()); len(closed) > 0 {
+					slog.Info("browser-reaper: closed idle workspace browsers (profiles kept)",
+						"count", len(closed), "browsing_keys", closed)
+				}
+			}
 		}
 		for {
 			select {
@@ -6320,4 +6287,104 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 		"remote_channels", channels,
 		"flagged_agents", flagged,
 	)
+}
+
+// browserCacheTrimReconcileEvery bounds how long a LIVE change to
+// tools.browser.cache_trim_interval waits before the sweep schedule follows it.
+//
+// The schedule used to be a time.Ticker built once, at boot, from
+// pool.CacheTrimInterval(). A Settings save reached the POOL (loop.go's reload
+// pass calls BrowserPool.ApplyRuntimeConfig, which updates the interval) and
+// stopped there: the ticker had already been armed and never re-read it. An
+// operator lowering the interval because their disk was filling saw the setting
+// accepted, saw the new value read back, and got the old hourly sweep — the
+// ADR-037 "reports success and changes nothing" anti-pattern this project bans,
+// and one that docs/configuration.md contradicted in writing.
+//
+// It is a RECONCILE BOUND, not the sweep period: the loop below wakes at most
+// this often purely to re-read the configured interval, and sweeps only when the
+// interval has genuinely elapsed since the last sweep. Fifteen seconds is chosen
+// to be far below any plausible trim interval (the default is an hour) while
+// costing one timer wakeup and two clock reads per quarter-minute. A var, not a
+// const, so a test can drive the reconcile without sleeping for real time.
+var browserCacheTrimReconcileEvery = 15 * time.Second
+
+// minBrowserCacheTrimInterval floors the effective sweep period. The pool
+// already substitutes its own default for a zero or negative interval, so this
+// only guards against a future pool that stops doing so turning the loop below
+// into a spin. A one-second floor is not a policy about how often to trim; it is
+// the smallest gap at which "wake, compare, sweep" is still a schedule.
+const minBrowserCacheTrimInterval = time.Second
+
+// browserCacheTrimScheduler is the narrow slice of *browser.BrowserPool the
+// scheduled cache trim needs. Declared so the schedule can be tested against a
+// fake whose interval an operator's config.json really drives, without a Chrome,
+// a pool, or a profile directory anywhere in the test.
+type browserCacheTrimScheduler interface {
+	TrimAllEligible() []browser.TrimResult
+	CacheTrimInterval() time.Duration
+}
+
+// runBrowserCacheTrimSchedule is ADR-072 FR-072 triggers 2 and 3: the boot sweep
+// of every profile with no live Chrome, then the recurring sweep.
+//
+// The interval is re-read from the pool on EVERY round rather than captured
+// once, which is what makes tools.browser.cache_trim_interval a live setting.
+// Lowering it takes effect within browserCacheTrimReconcileEvery, including when
+// the new interval has ALREADY elapsed since the last sweep — the next
+// reconcile finds the sweep overdue and runs it immediately, rather than serving
+// out the remainder of the old, longer wait.
+//
+// Returns when ctx is done (the gateway's own shutdown-aware context).
+func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimScheduler) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
+		}
+	}()
+	if results := pool.TrimAllEligible(); len(results) > 0 {
+		slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
+			"profiles", len(results))
+	}
+
+	last := time.Now()
+	for {
+		interval := pool.CacheTrimInterval()
+		if interval < minBrowserCacheTrimInterval {
+			interval = minBrowserCacheTrimInterval
+		}
+		due := last.Add(interval)
+		wait := time.Until(due)
+		if wait > browserCacheTrimReconcileEvery {
+			wait = browserCacheTrimReconcileEvery
+		}
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if time.Now().Before(due) {
+			// Woke to reconcile, not to sweep. Round again and re-read the
+			// interval — this is the branch a lowered setting arrives through.
+			continue
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("browser-trim: scheduled trim panicked; paused until the next tick",
+						"panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			if results := pool.TrimAllEligible(); len(results) > 0 {
+				slog.Info("browser-trim: trimmed closed workspace browser caches",
+					"profiles", len(results))
+			}
+		}()
+		last = time.Now()
+	}
 }

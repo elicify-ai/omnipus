@@ -1302,11 +1302,63 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		sessionType = session.SessionTypeChat
 	}
 
+	// The chat's own workspace, when the caller is in one. Validated BEFORE
+	// the session is minted so a bad id costs nothing on disk.
+	//
+	// U2: this field exists because the SPA's "Open browser" launcher creates
+	// its session here, and the live browser panel resolves which workspace's
+	// browser (and whose live logins) to show by reading the workspace off the
+	// attaching chat session's own meta, server-side (ADR-072 FR-016/FR-017).
+	// Before this, the launcher sent agent_id and nothing else, so the session
+	// it handed the panel named no workspace at all; an agent on more than one
+	// workspace's team was refused under FR-033 and advised to "open this panel
+	// from a chat that belongs to the workspace you mean" — which is precisely
+	// where the click had come from. The route named the workspace; the session
+	// simply never carried it.
+	//
+	// Membership is deliberately NOT checked here. This is a preference, not a
+	// grant: browser.ResolveBrowsingKeyForAgent honours it only when the agent
+	// really is on that workspace's team and otherwise falls through to the
+	// plain membership ladder, so stamping a workspace the agent is not on
+	// cannot open that workspace's browser. What IS checked is existence — a
+	// session stamped with a workspace that is not there would be a binding
+	// nothing can ever resolve, and silently keeping it would reproduce the
+	// same "refused with no explanation" shape from the other direction.
+	workspaceID := ""
+	if req.WorkspaceId != nil {
+		workspaceID = strings.TrimSpace(*req.WorkspaceId)
+	}
+	if workspaceID != "" {
+		if err := validateEntityID(workspaceID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+			return
+		}
+		if _, wsErr := readWorkspaceFile(a.homePath, workspaceID); wsErr != nil {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("workspace %q not found", workspaceID))
+			return
+		}
+	}
+
 	meta, err := store.NewSession(sessionType, "webchat", agentID)
 	if err != nil {
 		slog.Error("rest: create session", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
 		return
+	}
+	if workspaceID != "" {
+		wsCopy := workspaceID
+		if setErr := store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
+			// Not fatal to the create — the session exists and is usable as a
+			// chat. But it is fatal to the binding, and a panel that then
+			// refuses would look like the original bug, so say so loudly
+			// rather than returning a session that quietly lost its workspace.
+			slog.Warn("rest: create session: could not stamp workspace",
+				"session_id", meta.ID, "workspace_id", workspaceID, "error", setErr)
+		} else if refreshed, getErr := store.GetMeta(meta.ID); getErr == nil && refreshed != nil {
+			// Return what was actually persisted, so the caller's own
+			// workspace_id echo is the stamp and not the request.
+			meta = refreshed
+		}
 	}
 	jsonCreated(w, unifiedMetaToGenSession(meta))
 }

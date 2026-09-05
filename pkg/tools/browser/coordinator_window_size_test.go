@@ -4,103 +4,101 @@ package browser
 // (fix/uat-v0.1.1-defects): the live-browser panel rendered at an
 // inconsistent size across sessions — sometimes filling the panel,
 // sometimes shrinking to a small letterboxed rectangle — because the
-// per-agent OS window BrowserCoordinator.Register creates via
-// target.CreateTarget(...).WithNewWindow(true) had no explicit
-// Width/Height, so it fell back to Chrome's own version/platform-dependent
-// new-window default instead of the screencast's fixed cap (live.go's
-// agentWindowWidth/agentWindowHeight, 1280x720). That size was then
-// cached for the agent's whole lifetime (c.contexts), so which size an
-// agent got depended only on "which agent/session happened to create its
-// window first" — no visible trigger from the user's perspective.
+// OS window an agent's tab lived in had no explicit size, so it fell back
+// to Chrome's own version/platform-dependent new-window default instead of
+// the screencast's fixed cap (live.go's agentWindowWidth/agentWindowHeight).
+// Which size an agent got depended only on "which agent/session happened to
+// create its window first" — no visible trigger from the user's perspective.
 //
-// Two tests cover this, and BOTH launch a real Chrome (#615 finding: the
-// first test's doc comment previously claimed otherwise — see its own
-// updated comment below):
+// WHERE THE PIN LIVES NOW, and why this file was rewritten. D17 originally
+// fixed a SECOND window-creation path: BrowserCoordinator.Register built each
+// agent its own CDP browser context plus that context's own window via
+// target.CreateTarget(...).WithNewWindow(true), and the launch-time
+// --window-size flag only ever sizes the FIRST window Chrome opens at process
+// start. So Register had to pass Width/Height itself, and the revert-proof
+// test captured those outgoing CreateTargetParams through a
+// createTargetParamsForTest seam in coordinator.go.
 //
-//   - TestCoordinator_Register_CreateTargetParams_PinsWindowSize
-//     is the REVERT-PROOF unit test: it uses the createTargetParamsForTest
-//     seam (coordinator.go) to capture the actual outgoing
-//     target.CreateTargetParams and assert Width/Height are set. This is
-//     necessary (not just convenient): on the Chrome build this fix shipped
-//     from, headless new-window sizing already happens to DEFAULT to
-//     1280x720 with no Width/Height set at all, so a live-Chrome
-//     window-bounds assertion cannot by itself distinguish fixed from
-//     unfixed code — see the sibling test below.
-//   - TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize is a
-//     live-Chrome smoke test (needs a real Chrome, forces two separate
-//     agent windows) verifying the ACTUAL resulting behavior via the real
-//     CDP Browser.getWindowForTarget call — one of the two verification
-//     methods the RCA named. It passes both before and after this fix in
-//     this environment (see its own doc comment), so it is not itself
-//     revert-proof, but it is real end-to-end evidence the fix does not
-//     break window creation and that 1280x720 is what agents actually get.
+// ADR-072 FR-031 deleted the per-agent CDP browser context — every session now
+// bootstraps into Chrome's DEFAULT context, and isolation moved down to one
+// Chrome process and one --user-data-dir per workspace. The per-agent window,
+// the CreateTarget call and the seam went with it. Tabs are now created only by
+// chromedp.NewContext (manager.go's bootstrapBrowserCtx/createTab), and Chrome
+// sizes those from --window-size, which in headless is also the virtual screen
+// a window can never exceed.
+//
+// That leaves exactly ONE place the size is set — the launch flag — and one
+// invariant worth guarding: that flag and live.go's agentWindowWidth/Height
+// must stay in lockstep. Both files say so in prose; nothing enforced it. The
+// old unit test could not be repointed at Register (there is nothing there to
+// observe any more), so it is replaced by a test of the surviving mechanism.
+//
+// Two tests cover this:
+//
+//   - TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize is the
+//     REVERT-PROOF unit test: hermetic, no Chrome, no network. It reads the
+//     real launch flags and asserts --window-size is present exactly once and
+//     carries exactly agentWindowWidth,agentWindowHeight. It fails if either
+//     number is changed without the other, and if the flag is dropped.
+//   - TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize is the
+//     live-Chrome end-to-end test (needs a real Chrome, drives two separate
+//     agents) verifying the ACTUAL resulting behavior via the real CDP
+//     Browser.getWindowForTarget call — one of the two verification methods
+//     the RCA named. It is the evidence that the launch flag really does reach
+//     every agent's window now that no second creation path exists.
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/chromedp/cdproto/browser"
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
-// TestCoordinator_Register_CreateTargetParams_PinsWindowSize is
-// the REVERT-PROOF test for D17. It hooks createTargetParamsForTest
-// (coordinator.go) to capture the target.CreateTargetParams Register
-// builds for the per-agent window, before it is sent over CDP. Pre-fix,
-// CreateTarget's Width/Height fields are simply never set (zero value), so
-// this assertion fails deterministically regardless of what any particular
-// Chrome build/platform happens to default an unset size to.
+// TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize is the REVERT-PROOF
+// test for D17 after ADR-072 FR-031.
 //
-// #615 correction: despite this doc comment previously claiming "no live
-// Chrome, no network, fully hermetic", it is NOT hermetic — coord.Register
-// (coordinator.go) unconditionally calls c.ensureLaunched(ctx) (a real
-// Chrome launch) before ever reaching the createTargetParamsForTest hook,
-// and this test asserts Register returns no error. It was found running
-// completely UNGATED (no testing.Short(), no skipIfNoBrowser) — unlike every
-// other real-Chrome test in this package — meaning it could trigger an
-// undeclared Chrome-for-Testing download in any CI gate that reached it.
-func TestCoordinator_Register_CreateTargetParams_PinsWindowSize(t *testing.T) {
-	skipIfNoBrowser(t)
-	var captured []*target.CreateTargetParams
-	prev := createTargetParamsForTest
-	createTargetParamsForTest = func(p *target.CreateTargetParams) {
-		captured = append(captured, p)
-	}
-	t.Cleanup(func() { createTargetParamsForTest = prev })
+// It is deliberately an assertion about the launch flags rather than about a
+// running Chrome: on the Chrome builds this project runs against, headless
+// new-window sizing already happens to land on plausible values with no flag
+// at all, so a live window-bounds assertion cannot by itself distinguish
+// pinned from unpinned code (that is the sibling test's documented limitation
+// too). Reading the flag the launcher actually passes can.
+//
+// It fails on all three ways the pin can regress: the flag deleted, the flag's
+// numbers edited away from the screencast cap, or agentWindowWidth/Height
+// bumped in live.go without the flag following (the 2026-08-03 1280x720 ->
+// 2560x1440 change had to touch both files by hand).
+func TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize(t *testing.T) {
+	const flagPrefix = "--window-size="
 
-	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
-	t.Cleanup(coord.Shutdown)
-
-	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-params-a")
-	mgrB := newTestManager(t, cfg)
-	mgrB.AttachSharedChrome(coord, "agent-params-b")
-
-	if _, _, err := coord.Register(context.Background(), "agent-params-a", mgrA); err != nil {
-		t.Fatalf("Register A: %v", err)
-	}
-	if _, _, err := coord.Register(context.Background(), "agent-params-b", mgrB); err != nil {
-		t.Fatalf("Register B: %v", err)
-	}
-
-	if len(captured) != 2 {
-		t.Fatalf("expected 2 captured CreateTargetParams (one per agent), got %d", len(captured))
-	}
-	for i, p := range captured {
-		if !p.NewWindow {
-			t.Errorf(
-				"captured params[%d]: NewWindow = false, want true (precondition for Width/Height per cdproto doc comment)",
-				i,
-			)
+	var found []string
+	for _, arg := range chromeHardeningBaseFlags() {
+		if strings.HasPrefix(arg, flagPrefix) {
+			found = append(found, arg)
 		}
-		if p.Width != agentWindowWidth {
-			t.Errorf("captured params[%d]: Width = %d, want %d (D17 regression)", i, p.Width, agentWindowWidth)
-		}
-		if p.Height != agentWindowHeight {
-			t.Errorf("captured params[%d]: Height = %d, want %d (D17 regression)", i, p.Height, agentWindowHeight)
-		}
+	}
+
+	if len(found) != 1 {
+		t.Fatalf(
+			"chromeHardeningBaseFlags(): found %d %s flags %q, want exactly 1 "+
+				"(D17 regression — window size is pinned ONLY here now that "+
+				"ADR-072 FR-031 removed the per-agent CreateTarget path)",
+			len(found), flagPrefix, found,
+		)
+	}
+
+	want := fmt.Sprintf("%s%d,%d", flagPrefix, agentWindowWidth, agentWindowHeight)
+	if found[0] != want {
+		t.Errorf(
+			"chromeHardeningBaseFlags(): window-size flag = %q, want %q "+
+				"(D17 regression — exec_resolver.go's --window-size and live.go's "+
+				"agentWindowWidth/agentWindowHeight must stay in lockstep: the flag "+
+				"is headless Chrome's virtual SCREEN, and a window can never exceed it)",
+			found[0], want,
+		)
 	}
 }
 
@@ -147,13 +145,13 @@ func windowBoundsForSession(t *testing.T, tabCtx context.Context) *browser.Bound
 func TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize(t *testing.T) {
 	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(coord.Shutdown)
 
 	mgrA := newTestManager(t, cfg)
-	mgrA.AttachSharedChrome(coord, "agent-window-a")
+	mgrA.AttachSharedChrome(coord, browserTestKey("agent-window-a"))
 	mgrB := newTestManager(t, cfg)
-	mgrB.AttachSharedChrome(coord, "agent-window-b")
+	mgrB.AttachSharedChrome(coord, browserTestKey("agent-window-b"))
 
 	// Session (not a bare Register call) is what every real browser tool
 	// call goes through: it drives ensureStarted -> coordinator.Register ->

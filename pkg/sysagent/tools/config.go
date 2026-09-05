@@ -435,8 +435,9 @@ var blockedConfigKeys = []blockedConfigKey{
 	{
 		Key: "tools.browser",
 		Reason: "exec_path and cdp_url make the gateway launch or attach to a chosen binary, " +
-			"profile_dir points the browser profile anywhere, and evaluate_enabled turns on " +
-			"arbitrary in-page JavaScript",
+			"and profile_dir points the browser profile anywhere " +
+			"(arbitrary in-page JavaScript is governed separately by sandbox.browser_evaluate_enabled, " +
+			"which the sandbox subtree blocks)",
 		ReadOKReason: "browser paths and endpoints. Reads are open post-ADR-062, so the filesystem layout it discloses is already visible",
 	},
 	{

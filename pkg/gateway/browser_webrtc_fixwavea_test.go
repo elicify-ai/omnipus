@@ -11,6 +11,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -63,7 +66,6 @@ func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.CaptureSharedContext = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
 	})
@@ -71,8 +73,8 @@ func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	require.True(t, mgr.CaptureVideoCapability().Capable,
 		"capability gate must report Capable=true via the exec_path filename heuristic, so the ladder reaches "+
 			"Start()/HandleViewerOffer instead of stopping earlier at not_capable")
@@ -164,7 +166,6 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.CaptureSharedContext = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
 	})
@@ -172,8 +173,8 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	require.True(t, mgr.CaptureVideoCapability().Capable)
 
 	offerBlock := make(chan struct{})
@@ -290,14 +291,13 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	installRoot := mgr.InstallRoot()
 	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")
@@ -339,7 +339,20 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 		return nil
 	}, func() {})
 	handler.captures.set("other-agent-slow-stop", otherCS)
-	t.Cleanup(otherCS.Stop) // idempotent; harmless if Stop() already ran
+	// Release BEFORE stopping, in one cleanup, rather than relying on two.
+	//
+	// t.Cleanup is LIFO, and releaseStop was registered ABOVE this line — so a
+	// bare t.Cleanup(otherCS.Stop) runs FIRST, blocks on the <-blockStop its
+	// own BindIngest performs, and releaseStop never gets to run. That is a
+	// deadlock, and it presents as the whole package hanging: CI reported
+	// "panic: test timed out after 30m0s" with this test at 29m47s.
+	//
+	// Doing both here makes the order explicit instead of a consequence of
+	// which line came first, so moving either registration cannot resurrect it.
+	t.Cleanup(func() {
+		releaseStop()  // unblock the ingest write Stop() is about to make
+		otherCS.Stop() // idempotent; harmless if Stop() already ran
+	})
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState

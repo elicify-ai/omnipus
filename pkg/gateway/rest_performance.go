@@ -52,6 +52,15 @@ const wireMaxParallelAgentsMinimum = 1
 // is surfaced exactly as configured — never silently overridden — matching
 // this project's ban on the ADR-037 silent-clamping anti-pattern.
 //
+// THIS SUBSTITUTION IS WHY max_parallel_agents_configured EXISTS (FR-069).
+// Because an unconfigured host echoes the resolved effective value here, its
+// payload is byte-identical in this field to a host where an operator typed
+// that same number in. A client reading only these two integers cannot tell
+// "the operator chose 2000" from "nothing is configured and 2000 is the
+// physical backstop" — and rendering the second as a recommendation is
+// exactly the defect FR-069 names. The boolean carries the distinction the
+// integers cannot.
+//
 // Shared by getPerformance and putPerformance so both return the identical
 // shape: before this helper existed, putPerformance skipped this floor
 // entirely and echoed the raw on-disk 0 straight onto the wire (MAJOR-3,
@@ -68,15 +77,16 @@ func wireMaxParallelAgents(configured, effective int) int {
 
 func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	cfg := a.agentLoop.GetConfig()
-	effective := cfg.Performance.EffectiveMaxParallelAgents()
+	effective, capped := cfg.Performance.EffectiveMaxParallelAgents()
 	configured := wireMaxParallelAgents(cfg.Performance.MaxParallelAgents, effective)
 	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
 	// true (default) = load tools on demand; false = all tools every message.
 	toolsOnDemand := cfg.Tools.Manifest.Compressed
 	jsonOK(w, gen.PerformanceSettings{
-		MaxParallelAgents:          &configured,
-		EffectiveMaxParallelAgents: &effective,
-		ToolsOnDemand:              &toolsOnDemand,
+		MaxParallelAgents:           &configured,
+		EffectiveMaxParallelAgents:  &effective,
+		MaxParallelAgentsConfigured: &capped,
+		ToolsOnDemand:               &toolsOnDemand,
 	})
 }
 
@@ -142,16 +152,18 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	te := agent.GetTaskExecutor(a.agentLoop)
 	if te != nil {
 		newCfg := a.agentLoop.GetConfig()
-		te.ResizeDispatchSema(newCfg.Performance.EffectiveMaxParallelAgents())
+		newEffective, _ := newCfg.Performance.EffectiveMaxParallelAgents()
+		te.ResizeDispatchSema(newEffective)
 	}
 
 	newCfg := a.agentLoop.GetConfig()
-	effective := newCfg.Performance.EffectiveMaxParallelAgents()
+	effective, capped := newCfg.Performance.EffectiveMaxParallelAgents()
 	configured := wireMaxParallelAgents(newCfg.Performance.MaxParallelAgents, effective)
 	toolsOnDemand := newCfg.Tools.Manifest.Compressed
 	jsonOK(w, gen.PerformanceSettings{
-		MaxParallelAgents:          &configured,
-		EffectiveMaxParallelAgents: &effective,
-		ToolsOnDemand:              &toolsOnDemand,
+		MaxParallelAgents:           &configured,
+		EffectiveMaxParallelAgents:  &effective,
+		MaxParallelAgentsConfigured: &capped,
+		ToolsOnDemand:               &toolsOnDemand,
 	})
 }

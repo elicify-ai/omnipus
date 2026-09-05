@@ -1,9 +1,14 @@
 package browser
 
-// coordinator.go implements ADR-043 / spec "Stream A": the BrowserCoordinator
-// owns the ONE gateway-scoped shared Chrome process + every agent's CDP browser
-// context. Per-agent BrowserManagers connect to it via a remote allocator and
-// re-adopt a coordinator-owned browser context non-owningly.
+// coordinator.go implements ADR-043 / spec "Stream A": a BrowserCoordinator
+// owns ONE Chrome process and the pipe root context every tab in it descends
+// from. There is one coordinator PER WORKSPACE, not one per gateway (ADR-072
+// FR-037: BrowserPool keys them by BrowsingKey and hands each its own
+// --user-data-dir), and it owns no CDP browser contexts at all — those were
+// retired by FR-031; see the HISTORICAL paragraph below before reading any
+// "browser context" in this file as a live object. The BrowserManagers of
+// every agent on that workspace share this one coordinator, connecting as
+// chromedp CHILD contexts of its root, not through a remote allocator.
 //
 // CRIT-001 (live-browser-video-streaming / ADR-044 §6.0.3, ported into this
 // branch by the WebRTC build's W1-A task): CDP now flows over Chromium's
@@ -25,40 +30,30 @@ package browser
 //     c.first==false child contexts without needing chromedp's
 //     RemoteAllocator special-case.
 //
-// PARTIALLY changed from the pre-pipe design (WebRTC build W1-A): Register
-// still keeps this branch's per-agent ISOLATION MODEL — one dedicated,
-// coordinator-owned browser context per agent, not the archive's shared
-// "encoder tab in the DEFAULT browser context" scheme — but the CDP call
-// that creates each context switched from chromedp.WithNewBrowserContext()
-// to a raw CDP CreateBrowserContext + CreateTarget(WithNewWindow(true))
-// pair. Verified against real Chrome (149 over this branch's pipe launch;
-// the archive independently records the same finding on 151):
-// WithNewBrowserContext()'s internal CreateTarget call omits WithNewWindow,
-// which fails "-32000 no browser is open" against a brand-new, zero-window
-// browser context on full-Chrome new-headless. WithNewWindow(true) fixes
-// that one CDP call; it is NOT the archive's WithBackground(true) foreground-
-// steal workaround (irrelevant here — no encoder tab exists in this
-// coordinator). See Register's doc comment for the full rationale, and
-// RemoveAgent's for the disposal consequence (chromedp's implicit
-// browserContextOwner auto-dispose no longer fires; disposal is explicit via
-// disposeBrowserContextRaw).
+// HISTORICAL, and deliberately not re-implementable: this coordinator used to
+// give every agent its OWN CDP browser context, created over raw CDP with
+// its own window. ADR-072
+// FR-031 deleted that whole mechanism. Every session now bootstraps into
+// Chrome's DEFAULT context, because that is the only context
+// chrome.tabCapture can reach, and isolation moved DOWN a level: one Chrome
+// process and one --user-data-dir profile directory per workspace (FR-037),
+// enforced by the operating system and surviving a restart. See Register's
+// doc comment; no_residual_test.go's TestNoCDPBrowserContextIsEverCreated
+// keeps the mechanism from returning through a merge.
 //
 // Load-bearing invariants (grill C1 / spec §3 Stream A):
-//   - CRIT-002/C1: a manager reload (any Settings save) must NOT kill Chrome and
-//     must NOT dispose the agent's browser context. The coordinator owns both.
-//   - CRIT-003: the agent's owning browser context is created ONLY on the
-//     coordinator's own long-lived chromedp context (which lives on the
-//     *AgentLoop and therefore survives ReloadProviderAndConfig). No manager
-//     path ever creates one; managers only re-adopt via
-//     WithExistingBrowserContext (non-owning, no auto-dispose).
+//   - CRIT-002/C1: a manager reload (any Settings save) must NOT kill Chrome.
+//     What makes a login survive is the workspace's profile directory on disk.
 //   - FR-008/R3: the Chrome process is killed exactly once, only by Shutdown
 //     (gateway Close). Release + reload never touch the process.
 //
 // Locking discipline (ADR-038 / spec round-2 MAJ-007): Register/Release/
-// RemoveAgent/TryOpenTab/ReleaseTab/PID take c.mu for bookkeeping only; Register
-// (and the crash-relaunch path) RELEASE c.mu across the blocking Chrome launch +
-// CDP context-create, mirroring manager.go ensureStarted's unlock/relock pattern —
-// never hold c.mu across a CDP/exec call.
+// RemoveAgent/PID take c.mu for bookkeeping only; Register
+// (and the crash-relaunch path) RELEASE c.mu across the blocking Chrome
+// launch, mirroring manager.go ensureStarted's unlock/relock pattern — never
+// hold c.mu across a CDP/exec call. (The "+ CDP context-create" this line used
+// to name went away with FR-031; the launch alone is what must not be held
+// across, and a Chrome-for-Testing download makes it seconds.)
 
 import (
 	"context"
@@ -69,7 +64,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -77,7 +71,6 @@ import (
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/extensions"
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -92,49 +85,31 @@ import (
 // treated as stale (removable), never silently driven.
 const ownershipMarkerOwner = "omnipus"
 
-// agentBrowserContext is a coordinator-owned CDP browser context for one agent
-// (spec D2). The owning chromedp context (ctx/cancel) lives on the
-// COORDINATOR, created via raw CDP (target.CreateBrowserContext +
-// CreateTarget WithNewWindow(true) — see Register's doc comment for why, not
-// chromedp.WithNewBrowserContext()), so chromedp's own browserContextOwner
-// flag is NEVER set for these and cancel() alone does not dispose the CDP
-// browser context — RemoveAgent/disposeBrowserContextRaw do that explicitly.
-// The manager only ever sees the BrowserContextID and re-adopts it
-// non-owningly.
-type agentBrowserContext struct {
-	browserCtxID cdp.BrowserContextID
-	ctx          context.Context
-	cancel       context.CancelFunc
-}
-
-// BrowserCoordinator owns the single shared Chrome process and every agent's
-// browser context for one gateway (ADR-043 D1/D4). It lives on *AgentLoop (not
-// per-agent), so it survives ReloadProviderAndConfig — which is the whole basis
-// of CRIT-002 (reload preserves the Chrome process + each agent's context).
+// BrowserCoordinator owns ONE Chrome process — one workspace's (ADR-072
+// FR-037), reached through BrowserPool, which builds and keys these by
+// BrowsingKey. It owns no per-agent browser contexts: FR-031 retired them, and
+// what partitions one workspace's logins from another's is now the profile
+// DIRECTORY on disk that this Chrome was launched with.
+//
+// A coordinator outlives ReloadProviderAndConfig, which is the whole basis of
+// CRIT-002: a Settings save must not log anybody out. Note the mechanism has
+// changed even though the guarantee has not — a login now survives a reload
+// because it is in a --user-data-dir on disk, where it also survives a
+// restart, not because an in-memory CDP context was kept alive.
 type BrowserCoordinator struct {
 	homeDir string // $OMNIPUS_HOME; ownership marker + profile dir root
 	cfg     BrowserConfig
 
-	// maxTotalTabs is the global cross-agent tab budget (spec D7). <=0 means
-	// UNLIMITED — the default as of the "remove the global cap" change: Chrome
-	// itself has no fixed tab maximum, and the real bound is host RAM, not a
-	// counter (measured 74-268MB RSS per renderer on the UAT box). A positive
-	// value opts back into a hard ceiling for operators who want one.
-	// TryOpenTab short-circuits (no budget arithmetic at all) when this is
-	// <=0 — see defaultTotalTabs' removal comment below for why unlimited is
-	// safe now. Mutable under c.mu — SetMaxTotalTabs/ApplyRuntimeConfig update
-	// it on reload so a config change to max_total_tabs takes effect without a
-	// gateway restart, in EITHER direction (capped -> unlimited included).
-	maxTotalTabs int
-	// reservedTabs counts in-flight tab RESERVATIONS (I-1/W3/C1): each
-	// TryOpenTab that passes the budget check increments this BEFORE the
-	// opener's createTab actually opens the tab, so N concurrent openers at
-	// the boundary see exactly one winner instead of all passing the
-	// check-then-act race. Decremented by ReleaseTab (on close) and by the
-	// OpenTab-failure return path (when reserve succeeded but the open itself
-	// failed). totalOpenTabsLocked()+reservedTabs is the true live+in-flight
-	// count TryOpenTab must gate on.
-	reservedTabs int
+	// key is the BrowsingKey this coordinator's Chrome belongs to (ADR-072
+	// FR-037). It is what makes the ownership marker per-key —
+	// <homeDir>/browser/ws-<id>.pid — instead of one shared-chrome.pid that,
+	// with N Chromes running, could only ever name one of them and would
+	// therefore be a marker pointing at the wrong process most of the time.
+	//
+	// The zero key is legitimate: direct/test construction via
+	// NewBrowserCoordinator, which keeps the historical single-Chrome marker
+	// name. Production always goes through newKeyedCoordinator.
+	key BrowsingKey
 
 	// execPath holds the exec-path resolution caches, reused from the manager
 	// (resolveBrowserExecPath). Resolved once per process; a successful
@@ -175,12 +150,7 @@ type BrowserCoordinator struct {
 	// package sets cfg.ExtensionDir/ExtensionID today.
 	loadedExtensionID string
 
-	// Per-agent owning browser contexts. Survive manager reload (Release only
-	// drops the manager ref, not this entry). Cleared on crash (CRIT-001:
-	// contexts are in-memory, lost on process restart) and on Shutdown.
-	contexts map[string]*agentBrowserContext
-
-	// Registered managers — for totalOpenTabsLocked (sum OpenTabCount) and crash
+	// Registered managers — for crash
 	// notification (invalidateConnection on each). The manager ref is dropped
 	// on Release; the context entry above intentionally is NOT.
 	managers map[string]*BrowserManager
@@ -192,325 +162,142 @@ type BrowserCoordinator struct {
 	// shutdown flag prevents new launches / crash-relaunch racing with a
 	// Shutdown in progress.
 	shutdown bool
-
-	// captureSharedContext is the ADR-048 condition-1 config knob
-	// (tools.browser.capture_shared_context, default true) promoted from the
-	// former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT-only experimental flag.
-	// Set via SetCaptureSharedContext (the gateway's agent-loop seed wiring
-	// calls it on every fresh-seed and reload pass); read by Register (which
-	// browsing context an agent's session bootstraps into) and by
-	// CaptureSharedContextEnabled (capability.go's CaptureVideoCapability
-	// ADR-048 condition-3 check). The env var is still honored as an
-	// explicit override layered on top — see captureSharedContextResolved —
-	// for tests and operators who need to force a value without touching
-	// config.json.
-	captureSharedContext bool
 }
 
 // NewBrowserCoordinator constructs a coordinator. homeDir is $OMNIPUS_HOME (the
 // ownership marker lands at <homeDir>/browser/shared-chrome.pid; the profile
-// dir comes from cfg.ProfileDir). maxTotalTabs is the global tab budget: <=0
-// means UNLIMITED (the default — see the removed-cap rationale below);
-// a positive value opts back into a hard ceiling. Negative input normalizes
-// to 0 rather than being rejected.
-// startPageURL mirrors BrowserManager.StartPageURL for the coordinator's own
-// target-creation path, which builds targets from c.cfg rather than through a
-// manager. Same fallback: about:blank when nothing is configured.
-func (c *BrowserCoordinator) startPageURL() string {
-	if u := strings.TrimSpace(c.cfg.StartPageURL); u != "" {
-		return u
-	}
-	return BlankPageURL
+// dir comes from cfg.ProfileDir). There is no tab budget parameter: ADR-072
+// D1.5a deleted every tab counter, and live memory is the only limit.
+// (startPageURL is gone with ADR-072 FR-031. It existed for the coordinator's
+// OWN target-creation path — the per-agent window Register used to open in a
+// CDP browser context. The coordinator creates no targets any more; every tab
+// is created by a manager, which has its own StartPageURL.)
+
+// newKeyedCoordinator is production's constructor: a coordinator that knows
+// which workspace's browser it owns, so its ownership marker names that
+// workspace. cfg.ProfileDir must ALREADY be the key's own profile directory —
+// pool.configFor does that substitution, and it is the single change that
+// gives the workspace its own --user-data-dir, launch lock, Chrome HOME/XDG
+// dirs and cookie jar.
+func newKeyedCoordinator(homeDir string, cfg BrowserConfig, key BrowsingKey) *BrowserCoordinator {
+	c := NewBrowserCoordinator(homeDir, cfg)
+	c.key = key
+	return c
 }
 
-func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) *BrowserCoordinator {
-	if maxTotalTabs < 0 {
-		maxTotalTabs = 0
-	}
+func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinator {
 	c := &BrowserCoordinator{
 		homeDir:      homeDir,
 		cfg:          cfg,
-		maxTotalTabs: maxTotalTabs,
-		contexts:     make(map[string]*agentBrowserContext),
 		managers:     make(map[string]*BrowserManager),
 		pipeLauncher: launchManagedPipe,
 	}
 	c.launchDone = sync.NewCond(&c.mu)
-	// Surface the effective budget at construction. The default changed from a
-	// hard 30 to UNLIMITED, and max_total_tabs was never seeded into anyone's
-	// config.json — it only ever existed as a runtime fallback — so an
-	// upgrading operator gets the new behavior with no config diff and no
-	// other signal. One line at boot is what makes that visible instead of
-	// silent. Also states the real bound, since "unlimited" is only true of the
-	// counter: RAM is the limit, at 74-268MB RSS per renderer as measured.
-	if maxTotalTabs <= 0 {
-		logger.InfoCF("browser", "global tab budget: UNLIMITED (tools.browser.max_total_tabs unset or <=0)",
-			map[string]any{
-				"max_total_tabs":   "unlimited",
-				"per_agent_cap":    cfg.MaxTabs,
-				"idle_ttl":         cfg.IdleTTL.String(),
-				"real_bound":       "host RAM — idle reaping does not bound tabs kept actively in use",
-				"set_a_ceiling_by": "tools.browser.max_total_tabs > 0",
-			})
-	} else {
-		logger.InfoCF("browser", "global tab budget: capped by operator config",
-			map[string]any{"max_total_tabs": maxTotalTabs, "per_agent_cap": cfg.MaxTabs})
-	}
+	// ADR-072 D1.5a/FR-059: there is no tab budget to report. Every counter —
+	// the global one and the per-agent one — is deleted, and the only limit is
+	// live memory, enforced at each tab open by the manager's own gate. An
+	// operator reading this line used to be told a number to raise; there is no
+	// number now, and telling them one that no longer exists is worse than
+	// telling them nothing.
+	logger.InfoCF("browser", "browser tab count is bounded by live memory, not by a configured cap",
+		map[string]any{
+			"idle_ttl":   cfg.IdleTTL.String(),
+			"real_bound": "host RAM — idle reaping does not bound tabs kept actively in use",
+		})
 	return c
 }
 
-// There is no defaultTotalTabs constant anymore. Spec D7 originally seeded a
-// global cross-agent budget of 30, sized from the measured ~91 MB Chrome
-// baseline + a blended per-tab average to keep total browsing RSS under
-// ~2.5 GB on a typical 8 GB+ host — but that number was a proxy for a memory
-// guard, not a correctness guard (ADR-043: the coordinator owns ONE shared
-// Chrome; managers are per agent), and Chrome itself has no fixed tab
-// maximum. The operator directive is to behave like Chrome: unlimited tabs
-// cross-agent, bounded only by host RAM (measured 74-268MB RSS per renderer
-// on the UAT box), while keeping the PER-AGENT courtesy cap (BrowserConfig.
-// MaxTabs, default 5, enforced in manager.go — untouched by this change).
-// This is safe alongside a companion change (same wave, manager.go) that
-// drops the idle-context reaper from a 30-minute sweep to a 5-minute,
-// PER-TAB TTL: steady-state tab count (and therefore RSS) stays low without a
-// global ceiling to fall back on. The two changes are load-bearing together
-// — do not remove the global cap without also keeping the tighter reaper.
-// See maxTotalTabs' field doc and TryOpenTab for the enforcement
-// side; NewBrowserCoordinator/SetMaxTotalTabs for how <=0 now means
-// unlimited instead of falling back to a hardcoded number.
+// HISTORICAL NOTE — there is no tab counter of any kind here any more.
+// Spec D7 originally seeded a global cross-agent budget of 30, sized from the
+// measured ~91 MB Chrome baseline + a blended per-tab average. That number was
+// a proxy for a memory guard, not a correctness guard, and ADR-072 D1.5a
+// replaced the whole family — the global budget, the per-agent courtesy cap and
+// the in-flight reservation bookkeeping — with a live-memory gate at each tab
+// open (FR-059, FR-060). Do not reintroduce a counter here: a cap an operator
+// can raise is a number that has to be right on every host, and the reason it
+// was removed is that no single number ever was.
 
-// Register associates mgr with the coordinator and returns the coordinator's
-// SHARED root chromedp context (rootCtx) + the agent's STABLE browser-context
-// id. CRIT-001: the manager builds its allocCtx directly from rootCtx and
-// drives the shared Chrome through chromedp CHILD contexts of it (one CDP
-// pipe, multiplexed) — there is no RemoteAllocator dial anymore (the pipe has
-// no ws:// URL and is private to this OS process). THE COORDINATOR
-// CREATES+OWNS the context: it is created on the coordinator's own long-lived
-// chromedp context (which survives reload because ReloadProviderAndConfig
-// reuses the same *AgentLoop) via raw CDP CreateBrowserContext +
-// CreateTarget(WithNewWindow(true)) — see the "create the agent's owning
-// browser context" block below for why not chromedp.WithNewBrowserContext().
-// The manager re-adopts it non-owningly via WithExistingBrowserContext(id) —
-// INVARIANT CRIT-003: no manager path ever creates a browser context itself
-// (that would auto-dispose on the manager's reload-time cancel, destroying
-// cookies every Settings save).
+// Register associates mgr with this coordinator's Chrome and returns its
+// SHARED root chromedp context (rootCtx). The manager builds its allocCtx
+// directly from rootCtx and drives Chrome through chromedp CHILD contexts of
+// it (one CDP pipe, multiplexed) — there is no RemoteAllocator dial (the pipe
+// has no ws:// URL and is private to this OS process).
 //
-// Launches Chrome if none is live. The blocking launch + CDP context-create
-// run with c.mu RELEASED (ADR-038 no-lock-across-blocking-call; the launch can
-// shell out to resolve the binary, download Chrome-for-Testing, or block on the
-// CDP handshake for seconds). Concurrent Register callers serialize on the
-// single-flight launch (c.launching / c.launchDone); the winner launches, the
-// losers wait and then observe c.launched.
+// EVERY session bootstraps into Chrome's DEFAULT browser context. There is no
+// per-agent CDP browser context anymore: ADR-072 FR-031 retired
+// tools.browser.capture_shared_context and the whole CDP-browser-context
+// mechanism with it. Isolation is now a property of the PROCESS — one Chrome
+// and one --user-data-dir profile directory per BrowsingKey (FR-037), which
+// is a stronger boundary than a CDP context ever was and, unlike a CDP
+// context, survives a restart and can actually be captured.
 //
-// createTargetParamsForTest, when non-nil, is invoked with the fully-built
-// target.CreateTargetParams for the per-agent window right before it is
-// sent over CDP (D17 test seam — see the call site inside Register). Nil
-// in production; tests restore it via t.Cleanup, matching this package's
-// other for-test seams (e.g. package_chrome.go's packageChromeRootForTest).
-var createTargetParamsForTest func(*target.CreateTargetParams)
-
+// WHY the CDP-context mechanism had to go rather than merely being defaulted
+// off: chrome.tabCapture (the ADR-047 D2 capture mechanism) hard-fails with
+// "Invalid tab specified." for ANY tab living in a CDP-created browser
+// context — those contexts are independent off-the-record profiles outside
+// the extension's include_incognito reach, even with Extensions.loadUnpacked's
+// enableInIncognito granted (verified against real Chrome 150; the extension
+// can SEE the tabs via chrome.tabs.query but cannot capture them). So the
+// config knob only ever had one usable setting, and a knob with one usable
+// setting is a trap for whoever flips it.
+//
+// Launches Chrome if none is live. The blocking launch runs with c.mu
+// RELEASED (ADR-038 no-lock-across-blocking-call). Concurrent Register
+// callers serialize on the single-flight launch (c.launching / c.launchDone);
+// the winner launches, the losers wait and then observe c.launched.
+//
+// Register creates NO CDP target. It used to: alongside the per-agent browser
+// context it also opened that context's own window, and a createTargetParamsForTest
+// seam here let a test capture the outgoing target.CreateTargetParams and assert
+// the D17 window-size pin. FR-031 deleted the context, the window and the
+// CreateTarget call with it, which left the seam wired to nothing — a hook a
+// test could still install and still be called back on exactly zero times, i.e.
+// a green-looking observation of an absence. It is deleted rather than kept
+// "in case": window size is now pinned at LAUNCH (--window-size,
+// chromeHardeningBaseFlags in exec_resolver.go) and guarded there by
+// TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize.
 func (c *BrowserCoordinator) Register(
 	ctx context.Context,
 	agentID string,
 	mgr *BrowserManager,
-) (rootCtx context.Context, browserCtxID cdp.BrowserContextID, err error) {
+) (rootCtx context.Context, err error) {
 	if agentID == "" {
-		return nil, "", fmt.Errorf("browser: coordinator.Register requires a non-empty agentID")
+		return nil, fmt.Errorf("browser: coordinator.Register requires a non-empty agentID")
 	}
 	if mgr == nil {
-		return nil, "", fmt.Errorf("browser: coordinator.Register requires a non-nil manager")
+		return nil, fmt.Errorf("browser: coordinator.Register requires a non-nil manager")
 	}
 
 	// Ensure Chrome is live (single-flight; releases c.mu across the launch).
 	if err := c.ensureLaunched(ctx); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	// ADR-048 condition 1 (promoted from the former, env-only
-	// OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT experimental flag to the
-	// first-class tools.browser.capture_shared_context config knob, default
-	// true): skip the per-agent CDP browser context and let the agent's
-	// manager bootstrap its session in the DEFAULT browser context (empty
-	// browserCtxID → the manager's bootstrapBrowserCtx omits
-	// WithExistingBrowserContext, exactly like the dedicated-Chrome managed
-	// mode). WHY: chrome.tabCapture (the ADR-047 D2 capture mechanism)
-	// hard-fails with "Invalid tab specified." for ANY tab living in a
-	// CDP-created browser context — those contexts are independent
-	// off-the-record profiles outside the extension's include_incognito
-	// reach, even with Extensions.loadUnpacked's enableInIncognito granted
-	// (verified against real Chrome 150; the extension can SEE the tabs via
-	// chrome.tabs.query but cannot capture them). This REVERSES the ADR-043
-	// per-agent-context isolation model for every agent registered while
-	// enabled (config field doc comment carries the full isolation
-	// warning) — trading per-agent cookie/storage isolation for a
-	// capturable agent tab. Costs while enabled: no CRIT-002 context
-	// persistence across reload, and all agents share the default context's
-	// cookie partition.
-	if c.captureSharedContextResolved() {
-		c.mu.Lock()
-		c.managers[agentID] = mgr
-		rootCtx = c.rootCtx
-		c.mu.Unlock()
-		logger.WarnCF(
-			"browser",
-			"coordinator: shared default-context capture mode is ON (tools.browser.capture_shared_context) — per-agent browser-context isolation is OFF",
-			map[string]any{"agent_id": agentID},
-		)
-		return rootCtx, "", nil
-	}
-
-	// Re-use an existing context for this agent if one already exists (reload
-	// case: Release dropped only the manager ref, the context survived). This
-	// is the CRIT-002 persistence: the SAME browserCtxID is returned across a
-	// reload, so cookies/localStorage/login survive a Settings save.
-	//
-	// LOW-1: c.managers[agentID] is installed BEFORE the context-create (which
-	// can fail) rather than after. This is deliberate: the reload re-adopt
-	// early-return path below MUST install the new manager so TotalOpenTabs +
-	// Release find it, and that path never creates a context. A failed
-	// context-create on the fresh-agent path leaves a manager with no context
-	// in the map, but that is harmless — a fresh manager has OpenTabCount()==0
-	// (so it doesn't inflate the budget) and Release's dropConnection on a
-	// never-started manager is a no-op.
 	c.mu.Lock()
 	c.managers[agentID] = mgr
 	rootCtx = c.rootCtx
-	if ac, ok := c.contexts[agentID]; ok && ac != nil {
-		bid := ac.browserCtxID
-		c.mu.Unlock()
-		return rootCtx, bid, nil
-	}
 	c.mu.Unlock()
-
-	// Create the agent's owning browser context ON THE COORDINATOR'S root
-	// context — via RAW CDP (target.CreateBrowserContext + target.CreateTarget
-	// WithNewWindow(true)) rather than chromedp.WithNewBrowserContext().
-	//
-	// WHY (WebRTC build W1-A finding, verified against real Chrome 149 over
-	// cdppipe — the SAME underlying CDP behavior the archive branch's
-	// coordinator.go documents hitting on Chrome 151): chromedp's
-	// WithNewBrowserContext() internally issues
-	// target.CreateTarget("about:blank").WithBrowserContextID(bid) WITHOUT
-	// WithNewWindow(true) (chromedp v0.15.1 chromedp.go:375-378). A freshly
-	// created browser context has NO window yet, and on full-Chrome
-	// --headless (new headless) over the CDP pipe that CreateTarget call
-	// fails verbatim with "Failed to open new tab - no browser is open
-	// (-32000)" — reproduced directly against this coordinator's real launch
-	// path before this fix landed. WithNewWindow(true) gives the new context
-	// its own window, which fixes it. This is a narrow, targeted fix for that
-	// one CDP call — NOT the archive's broader "encoder-tab-in-default-
-	// context" redesign (which additionally used WithBackground(true) to
-	// avoid stealing an encoder tab's foreground slot; there is no encoder
-	// tab in this coordinator, so that flag is deliberately omitted).
-	//
-	// Consequence: chromedp's own browserContextOwner auto-dispose-on-cancel
-	// (set only inside its WithNewBrowserContext path, chromedp.go:367-373)
-	// does NOT fire for a context built this way — ac.cancel() alone would
-	// only close the tab, not the whole browser context/cookie partition.
-	// RemoveAgent below therefore disposes explicitly via
-	// disposeBrowserContextRaw (see its doc comment).
-	rc := chromedp.FromContext(rootCtx)
-	if rc == nil || rc.Browser == nil {
-		return nil, "", fmt.Errorf("browser: coordinator: shared Chrome not ready while registering agent %q", agentID)
+	if rootCtx == nil {
+		return nil, fmt.Errorf("browser: coordinator: Chrome not ready while registering %q", agentID)
 	}
-	bid, bcErr := target.CreateBrowserContext().Do(cdp.WithExecutor(rootCtx, rc.Browser))
-	if bcErr != nil {
-		return nil, "", fmt.Errorf(
-			"browser: coordinator: failed to create browser context for agent %q: %w",
-			agentID,
-			bcErr,
-		)
-	}
-	// D17: pin the new window's size to the screencast cap (live.go) instead
-	// of leaving it at Chrome's version/platform-dependent new-window
-	// default. Without this, --window-size=1280,720
-	// (chromeHardeningBaseFlags, exec_resolver.go) only ever sizes the
-	// FIRST window Chrome opens at process start; every subsequent
-	// per-agent window created here (one per Register call) got whatever
-	// size Chrome picked on its own, then that size was cached for the
-	// agent's whole lifetime (c.contexts, below) — reproduced in the field
-	// as a live-browser panel that sometimes filled the panel and sometimes
-	// shrank to a ~320x155 letterboxed rectangle, with no visible trigger
-	// (just "which agent/session got created first"). WithWidth/WithHeight
-	// requires newWindow:true (CreateTargetParams doc comment), already
-	// satisfied by WithNewWindow(true) below — purely additive, keeps
-	// window size and the screencast's own cap in lockstep so there is no
-	// separate magic-number size to drift out of sync.
-	// Start page rather than about:blank (see BrowserManager.StartPageURL):
-	// a blank void reads as "the panel is broken", which is precisely the
-	// confusion this surface does not need. Falls back to about:blank when no
-	// start page is configured, preserving the historical behavior exactly.
-	ctParams := target.CreateTarget(c.startPageURL()).
-		WithBrowserContextID(bid).
-		WithNewWindow(true).
-		WithWidth(agentWindowWidth).
-		WithHeight(agentWindowHeight)
-	// createTargetParamsForTest (D17 test seam, nil in production) lets
-	// tests assert the Width/Height pinning directly on the outgoing CDP
-	// params, without depending on any particular Chrome build/platform's
-	// new-window default actually differing when the fields are absent —
-	// on the Chrome build this fix shipped from, headless new-window sizing
-	// already happened to default to 1280x720, so a live-Chrome
-	// window-bounds assertion alone could not distinguish fixed from
-	// unfixed code. See TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap.
-	if createTargetParamsForTest != nil {
-		createTargetParamsForTest(ctParams)
-	}
-	tid, ctErr := ctParams.Do(cdp.WithExecutor(rootCtx, rc.Browser))
-	if ctErr != nil {
-		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
-		return nil, "", fmt.Errorf("browser: coordinator: failed to open first tab for agent %q: %w", agentID, ctErr)
-	}
-	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithTargetID(tid))
-	if err := chromedp.Run(agentCtx); err != nil {
-		agentCancel()
-		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
-		return nil, "", fmt.Errorf(
-			"browser: coordinator: failed to attach browser context for agent %q: %w",
-			agentID,
-			err,
-		)
-	}
-
-	c.mu.Lock()
-	// A crash between the unlock above and now could have cleared c.contexts;
-	// either way we install the freshly-created (live) context. If a concurrent
-	// Register for the same agent raced, keep the first-installed one and cancel
-	// the redundant duplicate to avoid leaking a context.
-	if existing, ok := c.contexts[agentID]; ok && existing != nil {
-		c.mu.Unlock()
-		agentCancel()                   // discard our redundant context (closes its tab)...
-		c.disposeBrowserContextRaw(bid) // ...and its browser context/partition (no auto-dispose — see above)
-		return rootCtx, existing.browserCtxID, nil
-	}
-	c.contexts[agentID] = &agentBrowserContext{
-		browserCtxID: bid,
-		ctx:          agentCtx,
-		cancel:       agentCancel,
-	}
-	c.mu.Unlock()
-
-	logger.InfoCF("browser", "coordinator: created browser context for agent", map[string]any{
-		"agent_id":       agentID,
-		"browser_ctx_id": string(bid),
-		"total_contexts": c.contextCount(),
-		"total_managers": c.managerCount(),
-	})
-	return rootCtx, bid, nil
+	return rootCtx, nil
 }
 
-// Release drops an agent's manager ref on reload. Does NOT kill Chrome and does
-// NOT dispose the agent's browser context (the coordinator owns it; it persists
-// keyed by agentID so the next Register re-adopts it — cookies/localStorage/
-// login survive a Settings save). Open TABS may be lost on reload (the manager
-// drops its remote-allocator connection; targets are connection-scoped and
-// agents reopen them). Returns the remaining registered-manager count.
+// Release drops an agent's manager ref on reload. Does NOT kill Chrome, and
+// has nothing to dispose Chrome-side: there is no per-agent browser context
+// any more (FR-031). Cookies, localStorage and logins survive a Settings save
+// because they live in this workspace's profile directory on disk, not because
+// anything in this process is being preserved for the next Register. Open TABS
+// may still be lost on reload (the manager drops its connection; targets are
+// connection-scoped and agents reopen them). Returns the remaining
+// registered-manager count.
 //
 // D4 invariant 3 (W1/C2/F-INFO-3): the reload path in pkg/agent/loop.go calls
 // this — NOT manager.Shutdown() — so the coordinator's managers map is cleaned
 // on every Settings save. Release internally calls the registered manager's
 // dropConnection (connection-only teardown = Shutdown in coordinator mode,
-// which never kills Chrome or disposes the context), making Release a full
-// substitute for the old prior.Shutdown() reload call.
+// which never kills Chrome), making Release a full substitute for the old
+// prior.Shutdown() reload call.
 func (c *BrowserCoordinator) Release(agentID string) int {
 	c.mu.Lock()
 	mgr := c.managers[agentID]
@@ -533,75 +320,29 @@ func (c *BrowserCoordinator) Release(agentID string) int {
 	return remaining
 }
 
-// RemoveAgent disposes a REMOVED agent's browser context + drops its manager
-// ref (W4). Unlike Release (reload — the context is preserved for re-adoption),
-// RemoveAgent frees that agent's cookie/localStorage partition. Called by
+// RemoveAgent drops a REMOVED agent's manager ref (W4). Called by
 // registerSharedTools for agentIDs present in the coordinator's map but no
 // longer in cfg.Agents. Safe to call for an agentID that was never registered
 // (no-op).
+//
+// It no longer disposes anything Chrome-side: ADR-072 FR-031 retired the
+// per-agent CDP browser context, and the cookie/storage partition an agent
+// can reach is now the WORKSPACE's profile directory, which outlives any one
+// agent by design. The partition is freed when the workspace is deleted
+// (FR-043a's DeleteProfile), not when a roster changes.
 func (c *BrowserCoordinator) RemoveAgent(agentID string) {
 	c.mu.Lock()
 	mgr := c.managers[agentID]
 	delete(c.managers, agentID)
-	ac := c.contexts[agentID]
-	delete(c.contexts, agentID)
 	stopping := c.shutdown
 	c.mu.Unlock()
 
 	if mgr != nil && !stopping {
 		mgr.dropConnection()
 	}
-	if ac != nil && !stopping {
-		// Cancel first (closes the agent's tab / releases chromedp's
-		// bookkeeping goroutines for this context), then explicitly dispose
-		// the browser context via raw CDP. This is the difference from
-		// Release: a truly-removed agent's partition is freed, not preserved.
-		//
-		// NOT chromedp's implicit browserContextOwner auto-dispose-on-cancel:
-		// Register (W1-A) creates this context via raw CDP
-		// (target.CreateBrowserContext + CreateTarget WithNewWindow(true), a
-		// -32000 workaround — see Register's doc comment), not
-		// chromedp.WithNewBrowserContext(), so that chromedp-internal flag is
-		// never set and cancel() alone would leak the partition.
-		if ac.cancel != nil {
-			ac.cancel()
-		}
-		c.disposeBrowserContextRaw(ac.browserCtxID)
-	}
-	logger.InfoCF("browser", "coordinator: removed agent (context disposed)", map[string]any{
+	logger.InfoCF("browser", "coordinator: removed agent", map[string]any{
 		"agent_id": agentID,
 	})
-}
-
-// disposeBrowserContextRaw explicitly disposes a browser context via raw CDP
-// (target.DisposeBrowserContext). Required because Register (W1-A) creates
-// each agent's browser context via raw CDP rather than
-// chromedp.WithNewBrowserContext() (see Register's doc comment for why), so
-// chromedp's own browserContextOwner auto-dispose-on-cancel never fires for
-// these contexts — ac.cancel() alone only closes the tab, not the whole
-// context/cookie partition. Runs with c.mu NOT held. A no-op (best-effort
-// WARN log on failure) when the shared Chrome is no longer live or bid is
-// empty — nothing to dispose once the process is gone.
-func (c *BrowserCoordinator) disposeBrowserContextRaw(bid cdp.BrowserContextID) {
-	if bid == "" {
-		return
-	}
-	c.mu.Lock()
-	rootCtx := c.rootCtx
-	c.mu.Unlock()
-	if rootCtx == nil {
-		return
-	}
-	rc := chromedp.FromContext(rootCtx)
-	if rc == nil || rc.Browser == nil {
-		return
-	}
-	if err := target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser)); err != nil {
-		logger.WarnCF("browser", "coordinator: failed to dispose browser context", map[string]any{
-			"browser_ctx_id": string(bid),
-			"error":          err.Error(),
-		})
-	}
 }
 
 // RegisteredAgents returns a snapshot of agentIDs currently in the coordinator's
@@ -620,44 +361,14 @@ func (c *BrowserCoordinator) RegisteredAgents() []string {
 	return out
 }
 
-// SetMaxTotalTabs updates the global tab budget at runtime (MED-1). Cheap and
-// live: TryOpenTab reads c.maxTotalTabs under c.mu on every open, so a reload
-// that changes tools.browser.max_total_tabs takes effect immediately — no
-// gateway restart needed. n<=0 means UNLIMITED (the default — matches
-// NewBrowserCoordinator's constructor semantics), so a reload can move the
-// budget in EITHER direction: capping down to a positive ceiling, or back up
-// to unlimited by unsetting/zeroing tools.browser.max_total_tabs. Negative
-// input normalizes to 0 (unlimited) rather than being rejected. This
-// intentionally no longer special-cases n<=0 as "ignore the update" — under
-// the old always-30-if-unset semantics that guard prevented an accidental
-// zero from silently blocking every open; under the new semantics 0 is a
-// valid, deliberate target state, not an accident.
-func (c *BrowserCoordinator) SetMaxTotalTabs(n int) {
-	if n < 0 {
-		n = 0
-	}
-	c.mu.Lock()
-	old := c.maxTotalTabs
-	c.maxTotalTabs = n
-	c.mu.Unlock()
-	if old != n {
-		logger.InfoCF("browser", "coordinator: max_total_tabs updated on reload", map[string]any{
-			"old": old,
-			"new": n,
-		})
-	}
-}
-
 // ApplyRuntimeConfig applies the runtime-cheap portions of an updated
 // BrowserConfig to a coordinator that survived a reload (MED-1).
-// max_total_tabs is a live policy (TryOpenTab reads it under c.mu) and is
-// applied immediately via SetMaxTotalTabs. headless/exec_path/profile_dir are
+// headless/exec_path/profile_dir are
 // launch-time properties of the ALREADY-RUNNING Chrome and cannot take effect
 // without restarting the gateway; changes to them are warn-logged as "applies
 // after gateway restart" so an operator is not silently misled. CRIT-002 stays
 // intact: the coordinator itself is never rebuilt on reload.
-func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTotalTabs int) {
-	c.SetMaxTotalTabs(newMaxTotalTabs)
+func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig) {
 	c.mu.Lock()
 	oldCfg := c.cfg
 	c.mu.Unlock()
@@ -710,124 +421,10 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 	c.mu.Unlock()
 }
 
-// captureSharedContextResolved returns the effective ADR-048
-// capture_shared_context value: the OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
-// env var, if set to a non-empty string, is an explicit override ("1" ->
-// true, anything else -> false) — kept for tests and operators who need to
-// force a value without touching config.json; otherwise the configured
-// c.captureSharedContext field (set via SetCaptureSharedContext) applies.
-// Both Register (actual context-placement decision) and
-// CaptureSharedContextEnabled (capability classification) call this so the
-// two can never disagree about which mode is actually in effect.
-func (c *BrowserCoordinator) captureSharedContextResolved() bool {
-	if envOverride := os.Getenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT"); envOverride != "" {
-		return envOverride == "1"
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.captureSharedContext
-}
-
-// SetCaptureSharedContext updates the ADR-048 shared-default-context capture
-// mode (config field: tools.browser.capture_shared_context). Called by the
-// gateway's agent-loop seed wiring on every fresh-seed and reload pass so the
-// coordinator's decision is always driven by config, never a bare
-// os.Getenv. A flip after an agent has already registered does not
-// retroactively move that agent's session between browser contexts —
-// Register only decides context placement once, at that agent's first
-// registration — but it DOES take effect for any agent that registers
-// afterward (new agent, or a coordinator that hasn't seen this agentID
-// yet), so unlike headless/exec_path/profile_dir this is not purely
-// restart-only and is not warn-logged as such.
-func (c *BrowserCoordinator) SetCaptureSharedContext(v bool) {
-	c.mu.Lock()
-	old := c.captureSharedContext
-	c.captureSharedContext = v
-	c.mu.Unlock()
-	if old != v {
-		logger.InfoCF("browser", "coordinator: tools.browser.capture_shared_context updated", map[string]any{
-			"old": old,
-			"new": v,
-		})
-	}
-}
-
-// CaptureSharedContextEnabled reports the effective ADR-048
-// capture_shared_context value — the capability classifier
-// (capability.go's CaptureVideoCapability, ADR-048 condition 3) reads this
-// to decide whether WebRTC capture can possibly succeed for an agent
-// attached to this coordinator.
-func (c *BrowserCoordinator) CaptureSharedContextEnabled() bool {
-	return c.captureSharedContextResolved()
-}
-
-// TryOpenTab atomically checks the global tab budget AND reserves a slot under
-// ONE coordinator lock — so concurrent openers at the boundary see exactly one
-// winner (I-1/W3/C1, spec round-2 MAJ-007). It counts live tabs
-// (totalOpenTabsLocked — the sum of every registered manager's OpenTabCount)
-// PLUS in-flight reservations (c.reservedTabs — slots held by openers between
-// this reserve and their createTab completing). Returns (allowed, reason). The
-// per-agent manager still enforces its own MaxTabs courtesy cap (default 5,
-// LEFT ALONE by this change — only the cross-agent budget below is affected).
-// The caller MUST return the slot via ReleaseTab when the open SUCCEEDS, or
-// via the manager's releaseGlobalTab when the open FAILS after reserve
-// succeeded — in BOTH the capped and unlimited paths below, so the
-// reserve/release pairing never drifts regardless of mode.
-//
-// c.maxTotalTabs<=0 means UNLIMITED (the default): short-circuit before any
-// budget arithmetic — no totalOpenTabsLocked() sum, no comparison — and just
-// reserve+allow. See maxTotalTabs' field doc / the removed defaultTotalTabs
-// comment above for why an unbounded cross-agent count is safe now (paired
-// with the tightened per-tab idle reaper).
-func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.maxTotalTabs <= 0 {
-		c.reservedTabs++
-		return true, ""
-	}
-	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
-		return false, fmt.Sprintf(
-			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
-			c.maxTotalTabs,
-		)
-	}
-	c.reservedTabs++
-	return true, ""
-}
-
-// ReleaseTab returns a reserved global-tab slot when an agent closes a tab
-// (decrements c.reservedTabs). Each successful TryOpenTab reserved one slot;
-// the matching return is: ReleaseTab on a successful open+later close, OR the
-// OpenTab-failure return path (manager.releaseGlobalTab) when the open itself
-// failed after the reserve. A close that forgets to call ReleaseTab would leak
-// a reservation (the coordinator grows conservative, never permissive); the
-// OpenTab-failure path forgetting to return its reservation would do the same.
-func (c *BrowserCoordinator) ReleaseTab(agentID string) {
-	c.mu.Lock()
-	if c.reservedTabs > 0 {
-		c.reservedTabs--
-	}
-	c.mu.Unlock()
-}
-
-// totalOpenTabsLocked sums open tabs across all registered managers'
-// OpenTabCount (spec round-1 MAJ-001). Used by TryOpenTab's budget check (which
-// adds c.reservedTabs for the live+in-flight count). Must be called with c.mu
-// held.
-func (c *BrowserCoordinator) totalOpenTabsLocked() int {
-	n := 0
-	for _, mgr := range c.managers {
-		if mgr != nil {
-			n += mgr.OpenTabCount()
-		}
-	}
-	return n
-}
-
-// RootContext returns the coordinator's SHARED, session-independent root
-// chromedp context (the same rootCtx Register returns) — the context every
-// agent's browser context is a CHILD of, over the one multiplexed CDP pipe.
+// RootContext returns this coordinator's session-independent root chromedp
+// context (the same rootCtx Register returns) — the context every TAB in this
+// workspace's Chrome is a CHILD of, over the one multiplexed CDP pipe. It is
+// shared by every agent on the workspace, and by nothing outside it.
 // Used by callers that only hold a *BrowserManager (not the coordinator
 // itself).
 //
@@ -944,37 +541,24 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	// racing-goroutine trick is needed.
 	callCtx, cancel := boundedCallContext(ctx, loadExtensionDefaultTimeout)
 	defer cancel()
-	// WithEnableInIncognito(true) (WebRTC build W2-A, corrected per ADR-048):
-	// every per-agent browser context this coordinator creates is a raw CDP
-	// target.CreateBrowserContext — which cdproto's own doc comment
-	// describes as "similar to an incognito profile" — never the DEFAULT
-	// browser context Extensions.loadUnpacked otherwise scopes to. Without
-	// this flag the extension is confined to the default context and
-	// cannot even SEE (chrome.tabs.query) a tab living in a per-agent CDP
-	// context, let alone capture one.
+	// WithEnableInIncognito(true) is RETAINED after ADR-072 FR-031 deleted the
+	// per-agent CDP contexts it was originally added for. It is now harmless
+	// rather than load-bearing: every tab lives in the default context, which
+	// Extensions.loadUnpacked already scopes to. Dropping the flag is a
+	// separate, testable change and not one to make blind — it would need a
+	// real-Chrome run to confirm nothing else relied on it.
 	//
-	// This flag grants VISIBILITY only, not capturability: with it,
-	// encoder.js's chrome.tabs.query resolves an agent's tab even when that
-	// tab lives in its own CDP-created context — but ADR-048 proved (real
-	// Chrome 150) that chrome.tabCapture still CANNOT capture a tab living
-	// in a CDP-created browser context at all ("Invalid tab specified."),
-	// regardless of this flag. Separately, the encoder PAGE itself cannot
-	// even be HOSTED inside a CDP-created context (chrome-extension://
-	// navigation there fails net::ERR_BLOCKED_BY_CLIENT) — which is why
-	// capture_session.go's defaultEncoderStarter creates the encoder target
-	// in the coordinator's DEFAULT context, never inside any agent's own
-	// context/window.
+	// It remains useful for one reason: it is what lets the extension's
+	// chrome.tabs.query resolve the RIGHT tab among whichever tabs live in
+	// the workspace's Chrome.
 	//
-	// Net effect: this flag alone does not make capture work. Capture only
-	// succeeds when the AGENT's own session also shares the default context
-	// — tools.browser.capture_shared_context (ADR-048 condition 1, see
-	// Register's doc comment above and BrowserCoordinator.
-	// CaptureSharedContextEnabled) — at which point tabCapture is
-	// operating on a tab that is ALSO in the default context, sidestepping
-	// the CDP-context capture restriction entirely. enableInIncognito
-	// remains useful even then: it is what lets the extension's
-	// chrome.tabs.query resolve the RIGHT tab (the attached agent's) among
-	// whichever tabs currently live in the default context.
+	// The finding it was originally added for is worth keeping written down,
+	// because it is the reason the CDP-context design is gone (ADR-048,
+	// verified against real Chrome 150): chrome.tabCapture cannot capture a
+	// tab living in a CDP-created browser context at all ("Invalid tab
+	// specified."), regardless of this flag, and the encoder PAGE itself
+	// cannot even be HOSTED inside one (chrome-extension:// navigation there
+	// fails net::ERR_BLOCKED_BY_CLIENT). Visibility is not capturability.
 	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(callCtx, rc.Browser))
 	if err != nil {
 		// Name the bound when it was OURS that fired. A bare "context deadline
@@ -1039,19 +623,6 @@ func (c *BrowserCoordinator) Shutdown() {
 		return
 	}
 	c.shutdown = true
-	// Cancel every agent's owning context (closes its tab / releases
-	// chromedp's bookkeeping goroutines). No explicit
-	// target.disposeBrowserContext CDP round-trip here (unlike RemoveAgent):
-	// the pipe allocator is about to be killed below (rootCancel + the
-	// process SIGKILL), which destroys every browser context along with the
-	// whole Chrome process — an explicit per-context dispose call would be a
-	// wasted CDP round-trip against a process already on its way down.
-	for id, ac := range c.contexts {
-		if ac != nil && ac.cancel != nil {
-			ac.cancel()
-		}
-		delete(c.contexts, id)
-	}
 	rootCancel := c.rootCancel
 	lockFile := c.lockFile
 	c.rootCancel = nil
@@ -1081,11 +652,11 @@ func (c *BrowserCoordinator) Shutdown() {
 	)
 }
 
-// WarmUp ensures the shared Chrome process is launched and ready (CDP pipe
-// live, and — when tools.browser.* configured an ExtensionDir/ExtensionID —
-// the capture extension loaded, via launchChrome's existing best-effort
-// auto-load) WITHOUT registering any agent or creating a per-agent browser
-// context. This is the gateway's boot-time warm-up hook: instead of leaving
+// WarmUp ensures this workspace's Chrome process is launched and ready (CDP
+// pipe live, and — when tools.browser.* configured an ExtensionDir/ExtensionID
+// — the capture extension loaded, via launchChrome's existing best-effort
+// auto-load) WITHOUT registering any agent. This is the warm-up hook: instead
+// of leaving
 // Chrome launch, first tab, and extension load entirely lazy until an
 // agent's first browser tool call (the unbounded cold start recorded at
 // 30-60s historically), the gateway calls this once at boot so the first
@@ -1096,24 +667,23 @@ func (c *BrowserCoordinator) Shutdown() {
 // Register serializes on the same c.launching/c.launchDone latch — whichever
 // wins launches, the other observes c.launched), idempotent (a no-op once
 // Chrome is already live), and panic-safe (ensureLaunched's own deferred
-// cleanup). A per-agent Chrome pool (one Chrome per agent) is explicitly out
-// of scope here — tracked separately as issue #570; this warms only the ONE
-// shared, gateway-scoped Chrome this file documents (D1/D4).
+// cleanup).
+//
+// SCOPE, and this line has been WRONG since FR-037 landed: it used to say a
+// Chrome pool was out of scope and deferred to issue #570. There IS a pool now
+// — BrowserPool, one Chrome per WORKSPACE — and it is what constructs this
+// coordinator. What WarmUp warms is therefore one workspace's browser, the one
+// this coordinator owns, and never all of them; the pool decides which keys are
+// worth warming and its memory gate decides whether they may start at all.
 func (c *BrowserCoordinator) WarmUp(ctx context.Context) error {
 	return c.ensureLaunched(ctx)
 }
 
 // --- internals ------------------------------------------------------------
 
-// contextCount / managerCount are best-effort diagnostic reads for logging.
-// Callers may call them WITHOUT holding c.mu (they take it themselves); they
-// MUST NOT be called while the caller holds c.mu (would deadlock).
-func (c *BrowserCoordinator) contextCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.contexts)
-}
-
+// managerCount is a best-effort diagnostic read for logging. Callers may call
+// it WITHOUT holding c.mu (it takes it itself); they MUST NOT call it while
+// holding c.mu (would deadlock).
 func (c *BrowserCoordinator) managerCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1344,9 +914,19 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 // the shared Chrome's LostConnection channel; when the transport drops (process
 // exited / killed), it marks Chrome dead, resets every connector manager so its
 // next ensureStarted re-asks the coordinator, and proactively relaunches so
-// coordinator.PID() is a fresh live pid within the recovery bound T (CRIT-001:
-// recovery is into FRESH empty contexts — prior per-agent cookies/login are lost
-// by definition since CDP contexts are in-memory).
+// coordinator.PID() is a fresh live pid within the recovery bound T.
+//
+// WHAT SURVIVES A CRASH RELAUNCH — corrected, because the previous sentence
+// here said the opposite and said it confidently. It read "recovery is into
+// FRESH empty contexts — prior per-agent cookies/login are lost by definition
+// since CDP contexts are in-memory", which was true only while a session lived
+// in an in-memory CDP browser context. FR-031 retired those and FR-037 gave
+// each workspace a --user-data-dir on disk, so the relaunched Chrome reopens
+// the SAME profile and its cookies and logins are still there. Open TABS are
+// still lost (targets die with the process and agents reopen them), and that
+// is the whole of what is lost. An operator reading the old sentence would
+// have expected every workspace to be logged out by a browser crash and would
+// have been wrong about the one thing this design exists to protect.
 //
 // HIGH-1/N2: this blocks until chromedp closes LostConnection on transport
 // drop. There is no fallback if it doesn't — chromedp's allocator goroutine
@@ -1369,11 +949,6 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	c.rootCancel = nil
 	c.lockFile = nil
 	c.cmd = nil
-	// CRIT-001: all agent contexts are gone with the process. Clear them so the
-	// next Register creates FRESH empty contexts (not stale, dead ids).
-	for id := range c.contexts {
-		delete(c.contexts, id)
-	}
 	managersCopy := make([]*BrowserManager, 0, len(c.managers))
 	for _, m := range c.managers {
 		managersCopy = append(managersCopy, m)
@@ -1419,10 +994,17 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	}
 }
 
+// launchLockFileName is the single-launch lockfile's name inside a profile
+// directory. Because each key has its OWN profile directory (FR-037), one
+// filename yields one lock per key with no per-key naming logic — which is
+// also why the reconciliation path in pool.go can compute a key's lock path
+// from its profile directory alone.
+const launchLockFileName = "chrome.lock"
+
 // lockPath is the single-launch lockfile (CRIT-001). It lives in the profile
-// dir so it shares the shared Chrome's directory lifecycle.
+// dir, so it is per-KEY for exactly as long as the profile dir is.
 func (c *BrowserCoordinator) lockPath() string {
-	return filepath.Join(c.cfg.ProfileDir, "shared-chrome.lock")
+	return filepath.Join(c.cfg.ProfileDir, launchLockFileName)
 }
 
 // takeLaunchLock acquires the exclusive shared-Chrome single-launch lock
@@ -1524,8 +1106,15 @@ type ownershipMarker struct {
 	Created int64  `json:"created_unix"`
 }
 
+// markerPath is where this coordinator records its Chrome's pid. Per key when
+// it has one (ADR-072 FR-042), and the historical shared name when it does not
+// — the latter reachable only from direct/test construction.
 func (c *BrowserCoordinator) markerPath() string {
-	return filepath.Join(c.homeDir, "browser", "shared-chrome.pid")
+	name := "shared-chrome.pid"
+	if !c.key.IsZero() {
+		name = c.key.ProfileSegment() + ".pid"
+	}
+	return filepath.Join(c.homeDir, "browser", name)
 }
 
 func (c *BrowserCoordinator) writeOwnershipMarker(pid int, product string) error {
@@ -1550,7 +1139,15 @@ func (c *BrowserCoordinator) writeOwnershipMarker(pid int, product string) error
 }
 
 func (c *BrowserCoordinator) readOwnershipMarker() (pid int, owner string, err error) {
-	data, rerr := os.ReadFile(c.markerPath())
+	return readOwnershipMarkerAt(c.markerPath())
+}
+
+// readOwnershipMarkerAt reads a marker by PATH rather than by coordinator, so
+// boot reconciliation (pool.go's ReconcileMarkers) can inspect markers left by
+// a PREVIOUS run — for keys that have no coordinator in this process yet, and
+// may never get one.
+func readOwnershipMarkerAt(path string) (pid int, owner string, err error) {
+	data, rerr := os.ReadFile(path)
 	if rerr != nil {
 		return 0, "", rerr
 	}

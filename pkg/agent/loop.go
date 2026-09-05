@@ -249,35 +249,57 @@ type AgentLoop struct {
 	// receive this instance so the allow_internal policy is honored uniformly.
 	ssrfChecker *security.SSRFChecker
 
-	// browserMgrs holds one BrowserManager per agent (US-4/US-6/US-7; ADR-038
-	// D4). Populated in registerSharedTools, keyed by agentID; guarded by mu
-	// (the same lock the old single al.browserMgr field used). Every entry's
-	// connection is torn down in AgentLoop.Close() — AND, per ADR-038 finding
-	// #2 + ADR-043, whenever registerSharedTools replaces an existing agentID's
-	// entry on hot-reload (see the Release/Shutdown call at that site). In
-	// ADR-043 shared-Chrome mode (the normal gateway case) that teardown is
-	// coordinator.Release(agentID) — it drops only the manager's WS connection
-	// (CRIT-002/C1: does NOT kill Chrome, does NOT dispose the browser
-	// context, which survives for the new manager to re-adopt). The Chrome
-	// process itself is killed solely by coordinator.Shutdown() in Close().
-	// In the no-coordinator test/legacy path the old manager IS its own Chrome
-	// owner, so manager.Shutdown() (which cancels the chromedp allocator
-	// context) is the real process kill there. Dropping the Go
-	// *BrowserManager reference alone never kills anything — the allocator
-	// context is parented on context.Background(), not on the reference — so
-	// the explicit Release/Shutdown on reload is what prevents a per-reload
-	// Chromium leak in that legacy path. registerSharedTools re-runs on every
-	// ReloadProviderAndConfig (any Settings save).
+	// browserMgrs holds one BrowserManager per BROWSING KEY — one browser, one
+	// Chrome, one profile directory, one workspace (ADR-072 FR-001). The map
+	// key is browser.BrowsingKey.String() ("ws:<workspaceID>"), NOT an agent id.
+	// Guarded by mu.
 	//
-	// Before ADR-038 D4 this was a single `browserMgr *browser.BrowserManager`
-	// field, overwritten (with the prior value Shutdown()'d) on every agent
-	// processed by registerSharedTools's per-agent loop — so only the LAST
-	// agent registered ended up with a live manager; every earlier agent's
-	// browser tools silently operated on an already-Shutdown() manager. Do
-	// NOT reintroduce a single shared field — the gateway's live-view WS
-	// handler (pkg/gateway/browser_ws.go) needs a specific agent's manager,
-	// not "whichever agent registered last."
+	// ⚠️ THE KEY CHANGED, AND THE OLD KEY IS THE BUG. This map used to be keyed
+	// by agentID (ADR-038 D4), which made "which browser am I driving" a
+	// property of whichever agent happened to be on the chat. ADR-072 §1.1
+	// records the consequence: an operator browses in the live panel, switches
+	// the chat from Mia to Jim, and Jim reports zero tabs — the tab was in
+	// Mia's browser. Under the browsing key every agent on a workspace shares
+	// ONE browser, and whose tabs are whose inside it is a separate, explicit
+	// dimension (browser.TabOwner, FR-080) rather than an accident of the map.
+	//
+	// Do NOT re-key this by agent, and do NOT reintroduce a single shared
+	// field: the gateway's live-view WS handler needs a SPECIFIC browser, and
+	// a process-wide singleton would put two workspaces' logins in one cookie
+	// jar.
+	//
+	// Every entry's connection is torn down in AgentLoop.Close(), and whenever
+	// registerSharedTools replaces an existing key's entry on hot-reload (see
+	// the Release/Shutdown call at that site). In ADR-043 shared-Chrome mode
+	// that teardown is coordinator.Release(key) — it drops only the manager's
+	// WS connection (CRIT-002/C1: does NOT kill Chrome, does NOT dispose the
+	// browser context, which survives for the new manager to re-adopt). The
+	// Chrome process itself is killed solely by coordinator.Shutdown() in
+	// Close(). In the no-coordinator test/legacy path the old manager IS its
+	// own Chrome owner, so manager.Shutdown() (which cancels the chromedp
+	// allocator context) is the real process kill there. Dropping the Go
+	// *BrowserManager reference alone never kills anything — the allocator
+	// context is parented on context.Background(), not on the reference.
 	browserMgrs map[string]*browser.BrowserManager
+
+	// browserRegisteredAgents records which agents actually got browser tools
+	// on the last registerSharedTools pass. It is the ONLY thing that can
+	// distinguish BrowserResolveNotRegistered ("this agent has no browser
+	// tools") from BrowserResolveNoWorkspace ("it has them, but this turn is
+	// not rooted in a workspace") now that managers are created lazily per key
+	// rather than eagerly per agent — before ADR-072, absence from browserMgrs
+	// meant both, and browser_inspect.go reported the former for both.
+	// Guarded by mu.
+	browserRegisteredAgents map[string]bool
+
+	// browserFactory mints a BrowserManager for a browsing key, carrying the
+	// CURRENT reload's BrowserConfig and SSRF checker. Set by
+	// registerSharedTools on every pass; read by BrowserManagerForKey, which
+	// is what creates a manager for a key no agent was registered under (rung
+	// 1 of ResolveBrowsingKey accepts an explicit turn workspace_id, which need
+	// not match any agent's CoreTeam membership). nil until the first
+	// registration pass. Guarded by mu.
+	browserFactory func(key browser.BrowsingKey) (*browser.BrowserManager, error)
 
 	// browserCoordinator (ADR-043) is the gateway-scoped owner of the ONE
 	// shared Chrome + every agent's browser context. Constructed once and
@@ -285,6 +307,13 @@ type AgentLoop struct {
 	// so the coordinator — and the per-agent contexts it owns — survive a
 	// Settings save). nil only in tests that construct managers directly.
 	browserCoordinator *browser.BrowserCoordinator
+	// browserPool (ADR-072 FR-037) owns ONE Chrome per workspace, each with
+	// its own profile directory. It supersedes browserCoordinator as the
+	// thing managers attach to; the coordinator field survives only for the
+	// direct/test path and for shutdown symmetry. Constructed once and reused
+	// across hot-reload, for the same reason the coordinator was: a Settings
+	// save must not log every workspace out.
+	browserPool *browser.BrowserPool
 	// homePath is $OMNIPUS_HOME (the parent of the workspace path), handed to
 	// NewBrowserCoordinator, which builds the ownership-marker path
 	// (<homePath>/browser/shared-chrome.pid) from it.
@@ -892,6 +921,7 @@ func NewAgentLoop(
 		pendingSearchPromotions: make(map[string]map[string]int),
 		bucketTurnCounter:       make(map[string]int),
 		browserMgrs:             make(map[string]*browser.BrowserManager),
+		browserRegisteredAgents: make(map[string]bool),
 	}
 	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
 	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
@@ -901,7 +931,8 @@ func NewAgentLoop(
 	// this must be resolved fresh on every check rather than cached once
 	// here at construction time.
 	al.admission = newAdmissionControllerWithResolver(func() int {
-		return al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		return n
 	})
 	// ADR-057 W17, same live-resolution treatment: root-level delegate()
 	// fan-out must never drift from the central authority either. On
@@ -914,7 +945,8 @@ func NewAgentLoop(
 			return resolvedCap
 		}
 		if liveCfg != nil {
-			return liveCfg.Performance.EffectiveMaxParallelAgents()
+			n, _ := liveCfg.Performance.EffectiveMaxParallelAgents()
+			return n
 		}
 		return 1
 	})
@@ -1760,6 +1792,15 @@ func registerSharedTools(
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
+	// FR-026b. Browser managers are per BROWSING KEY, and N agents commonly
+	// share one workspace — so the per-agent loop below must do the
+	// create/Release/Shutdown cycle exactly ONCE per key, not once per agent.
+	// Without this set, five agents on one workspace would tear down and
+	// rebuild the same browser five times on every Settings save, and the
+	// fifth pass would Release a manager the fourth had just installed.
+	seenBrowserKeys := make(map[string]bool)
+	liveBrowserKeys := make(map[string]bool)
+
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok {
@@ -1975,10 +2016,11 @@ func registerSharedTools(
 			// (pkg/gateway/gateway.go), which shares its SkillInstaller/
 			// SkillsLoader with this same skill engine. A prior version of
 			// this block registered a second, competing ScopeGeneral
-			// implementation here, constructed against agent.Workspace — a
-			// root that predates ADR-046 FR-009's move to a single global
-			// skills directory and that install_skill above no longer
-			// targets. Do not reintroduce it.
+			// implementation here, constructed against the agent's own
+			// per-agent workspace root (the field ADR-057 FR-001/FR-002
+			// renamed to .Home) — a root that predates ADR-046 FR-009's move
+			// to a single global skills directory and that install_skill
+			// above no longer targets. Do not reintroduce it.
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -2335,9 +2377,12 @@ func registerSharedTools(
 				if cfg.Tools.Browser.PageTimeoutSec > 0 {
 					browserCfg.PageTimeout = time.Duration(cfg.Tools.Browser.PageTimeoutSec) * time.Second
 				}
-				if cfg.Tools.Browser.MaxTabs > 0 {
-					browserCfg.MaxTabs = cfg.Tools.Browser.MaxTabs
-				}
+				// FR-023a: the lease wait is CLAMPED against page_timeout at
+				// load AND here on every reload — EffectiveLeaseWaitSec is the
+				// one function that does both, so the two can never disagree.
+				browserCfg.LeaseWait = time.Duration(
+					cfg.Tools.Browser.EffectiveLeaseWaitSec(),
+				) * time.Second
 				if cfg.Tools.Browser.ProfileDir != "" {
 					browserCfg.ProfileDir = cfg.Tools.Browser.ProfileDir
 				}
@@ -2352,6 +2397,21 @@ func registerSharedTools(
 				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
 					browserCfg.IdleTTL = 0
 				}
+				// ADR-072 FR-040a / FR-072: the whole-browser idle window and
+				// the closed-profile cache-trim schedule. Both are documented
+				// operator keys, and both were unreachable until this line —
+				// the value was parsed into nothing and the pool silently ran
+				// its built-in constants, so an operator who changed the number
+				// saw exactly what one who had not saw. Assigned
+				// UNCONDITIONALLY (0 means "unset", which is what the pool's
+				// own default fallback expects) and on the reload pass as well
+				// as the fresh-seed one, so a Settings save takes effect
+				// without a restart. Zero and negative both mean "use the
+				// default" — there is no value that switches idle close off
+				// (FR-061). Regression coverage:
+				// pkg/tools/browser/pool_ttl_config_reachability_test.go.
+				browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()
+				browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()
 				// Start page: an operator override wins; otherwise default to
 				// the gateway's own served start page so a fresh tab lands
 				// somewhere branded and legible instead of about:blank (a blank
@@ -2445,14 +2505,23 @@ func registerSharedTools(
 					browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
 				}
 
-				// browser.evaluate registration: always register the tool so the
-				// LLM sees it in its tool list. The live safety floor (deny by
-				// default, SEC-04/SEC-06) is the tool's own executeEnabled gate —
-				// BrowserEvaluateEnabled=true is the required explicit operator
-				// opt-in for the tool to actually execute. (#438: the
+				// browser_evaluate registration: the tool is ALWAYS registered,
+				// on every agent, regardless of this flag — registration has
+				// never been conditional. What the flag gates is EXECUTION, at
+				// EvaluateTool.Execute.
+				//
+				// sandbox.browser_evaluate_enabled is now SEEDED TRUE
+				// (ADR D1.9b ruling 2), so on a fresh install the tool works and
+				// which agents may call it is decided by tool policy. This
+				// remains the operator's runtime kill switch.
+				//
+				// nil resolves to FALSE, not true: a construction that skips
+				// DefaultConfig() must not silently turn arbitrary in-page
+				// JavaScript on. The default lives in the seed, which is data,
+				// never in this resolution. (#438: the
 				// pkg/policy.builtinToolPolicies entry is advisory; that path is
 				// test-only, not a live dispatch gate.)
-				evaluateEnabled := cfg.Sandbox.BrowserEvaluateEnabled
+				evaluateEnabled := config.ResolveBool(cfg.Sandbox.BrowserEvaluateEnabled, false)
 				// ADR-043: ensure the gateway-scoped shared-Chrome coordinator
 				// exists (constructed once; reused across hot-reload so the
 				// per-agent browser contexts it owns — and thus agents' login
@@ -2461,148 +2530,98 @@ func registerSharedTools(
 				// ensureStarted takes the CDPURL branch first.
 				//
 				// MED-1: on a RELOAD (coordinator already exists), apply the
-				// runtime-cheap config deltas. max_total_tabs is a live policy
-				// (TryOpenTab reads it under c.mu) and takes effect immediately;
+				// runtime-cheap config deltas.
 				// headless/exec_path/profile_dir are launch-time properties of
 				// the already-running Chrome and cannot hot-apply —
 				// ApplyRuntimeConfig warn-logs those so an operator isn't
 				// silently misled. CRIT-002 stays intact: the coordinator is
 				// never rebuilt on reload.
 				al.mu.Lock()
-				if al.browserCoordinator == nil {
-					al.browserCoordinator = browser.NewBrowserCoordinator(
-						al.homePath,
-						browserCfg,
-						cfg.Tools.Browser.MaxTotalTabs,
-					)
+				if al.browserPool == nil {
+					al.browserPool = browser.NewBrowserPool(al.homePath, browserCfg)
+					// FR-042a: before this gateway launches anything, settle
+					// what a PREVIOUS run left behind — stale markers cleared,
+					// orphaned Chromes terminated, keys another live gateway
+					// still owns refused. Discriminated by the launch lock, not
+					// by the marker's pid; see ReconcileMarkers for why that
+					// distinction is what stops one gateway killing another's
+					// browser.
+					if refused := al.browserPool.ReconcileMarkers(); len(refused) > 0 {
+						logger.WarnCF("agent", "another gateway owns some workspaces' browsers — this one will not start them",
+							map[string]any{"workspaces": refused})
+					}
 				} else {
-					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
+					al.browserPool.ApplyRuntimeConfig(browserCfg)
 				}
-				// ADR-048 condition 1: thread tools.browser.capture_shared_context
-				// through to the coordinator on every fresh-seed AND reload pass —
-				// SetCaptureSharedContext (not NewBrowserCoordinator's constructor
-				// args) so this stays a single call site regardless of which
-				// branch above ran.
-				al.browserCoordinator.SetCaptureSharedContext(cfg.Tools.Browser.CaptureSharedContext)
-				coordinator := al.browserCoordinator
+				// FR-034: push tools.browser.actionability_gate into the
+				// actionability gate's single chokepoint. It runs on the
+				// fresh-seed pass AND on every config reload — the revert
+				// switch takes effect without a restart, which is the whole
+				// reason it exists.
+				browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)
+				// ADR-072 D2 FR-027: browser_snapshot renders field VALUES by
+				// operator ruling, so its rendered outline is run through the
+				// credential replacer before it is returned. Wired at this
+				// call site, and for the same reason as the line above: it
+				// runs on the fresh-seed pass AND on every config reload, so a
+				// secret the operator registers after boot is covered without
+				// a restart. Defence in depth, not the control that makes the
+				// tool safe — it substitutes registered credential plaintexts
+				// and does nothing for arbitrary form values.
+				browser.SetSensitiveDataReplacer(cfg.SensitiveDataReplacer())
+				pool := al.browserPool
 				al.mu.Unlock()
 				// fs-workspace: browser tools (browser_screenshot) get agent.Home +
 				// RestrictToWorkspace so screenshot paths resolve through the same
 				// workspace root as the other file tools (FR-009).
-				mgr, regErr := browser.RegisterTools(
-					agent.Tools, browserCfg, browserSSRF, evaluateEnabled,
+				// FR-002a: the tools take a RESOLVER, not a manager. The
+				// browser a tool drives is now a property of the TURN
+				// (ResolveBrowsingKey + BrowserManagerForKey), never of
+				// whichever agent it was registered under — which is the
+				// reported defect ADR-072 §1.1 records.
+				if regErr := browser.RegisterTools(
+					agent.Tools, al.browserResolver(), evaluateEnabled,
 					agent.Home, cfg.Agents.Defaults.RestrictToWorkspace,
-				)
-				if regErr == nil {
-					mgr.AttachSharedChrome(coordinator, agentID)
-				}
-				if regErr != nil {
-					logger.ErrorCF("agent", "Failed to register browser tools — "+
-						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
-						map[string]any{"error": regErr.Error()})
+				); regErr != nil {
+					logger.ErrorCF("agent", "Failed to register browser tools",
+						map[string]any{"error": regErr.Error(), "agent_id": agentID})
 				} else {
-					// ADR-038 D4/finding #2 + ADR-043: store per-agent, keyed by
-					// agentID. registerSharedTools re-runs on every hot reload
-					// (ReloadProviderAndConfig, any Settings save). When it
-					// does, the PRIOR manager for this SAME agentID must be
-					// torn down before installing the new one.
-					//
-					// W1/C2/F-INFO-3 (D4 invariant 3): in ADR-043 shared-Chrome
-					// mode the teardown goes through the COORDINATOR's Release,
-					// not a bare manager.Shutdown(). Release drops the old
-					// manager's ref from the coordinator's bookkeeping (so
-					// TotalOpenTabs stops counting its tabs) AND calls its
-					// dropConnection (= Shutdown in coordinator mode = close
-					// the WS connection + detach tabs) — WITHOUT killing Chrome
-					// or disposing the agent's browser context (CRIT-002/C1:
-					// the coordinator owns both; the context persists so the
-					// next Register re-adopts it and login survives the save).
-					// In the no-coordinator test/legacy path (coordinator==nil)
-					// the old manager IS its own Chrome owner, so Shutdown() it
-					// directly (the pre-ADR-043 behavior — only
-					// BrowserManager.Shutdown, which cancels the chromedp
-					// allocator context, kills the subprocess; dropping the Go
-					// reference does nothing). Release is a full substitute for
-					// the prior.Shutdown() reload call it replaces: the
-					// registered manager is guaranteed to be the same object as
-					// `prior` (Register is the only c.managers writer, and a
-					// manager registers itself under its own agentID), so
-					// Release's internal dropConnection reaches `prior` exactly.
-					// An unregistered prior (no browser tool used since the last
-					// reload) has started==false in coordinator mode, so there
-					// is no local state to clean — Release's no-op for an absent
-					// c.managers entry is correct.
-					//
-					// A viewer attached to the OLD manager's live view is not
-					// silently orphaned: the connection teardown cancels every
-					// session's chromedp context, which
-					// LiveView.watchForUnexpectedDeath (pkg/tools/browser/live.go,
-					// also finding #2) detects and reports to any attached
-					// viewer as a browser_status(error) frame, so the SPA can
-					// re-attach — which resolves the NEW manager via
-					// BrowserManagerForAgent. Teardown for ALL entries still
-					// also happens, unconditionally, in Close().
-					//
-					// BOTH calls below run whenever a coordinator exists,
-					// rather than the coordinator branch being a substitute
-					// for prior.Shutdown() as an earlier version of this fix
-					// assumed: an agent configured with an explicit
-					// tools.browser.cdp_url NEVER calls coordinator.Register
-					// in the first place (ensureStarted's CDPURL branch
-					// returns before ever consulting m.coordinator — see
-					// AttachSharedChrome's doc comment), so `prior` in that
-					// mode is absent from the coordinator's c.managers map
-					// and coord.Release(agentID) is a silent no-op for it —
-					// dropConnection never reaches it, Started() never flips
-					// false, and its remote-allocator connection leaks on
-					// every reload (caught by
-					// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager,
-					// which pins CDPURL specifically to exercise this path).
-					// prior.Shutdown() is safe to call unconditionally
-					// alongside coord.Release: it is idempotent (Shutdown /
-					// dropConnection share the same reset logic) and, per
-					// Shutdown's own doc comment, a no-op on Chrome/context
-					// in coordinator mode (m.allocCancel is the no-op stub
-					// ensureStarted installs there) — so CRIT-002 (Chrome +
-					// context survive a reload) is unaffected. coord.Release
-					// still runs whenever coord != nil so the coordinator's
-					// OWN bookkeeping (c.managers entry, tab-budget counts)
-					// stays correct for managers that WERE actually
-					// registered with it.
 					al.mu.Lock()
-					prior := al.browserMgrs[agentID]
-					coord := al.browserCoordinator
-					al.browserMgrs[agentID] = mgr
-					al.mu.Unlock()
-					if coord != nil {
-						// CRIT-002 path: connection-only teardown, Chrome +
-						// browser context survive for the new manager to
-						// re-adopt.
-						coord.Release(agentID)
+					al.browserRegisteredAgents[agentID] = true
+					// The factory carries THIS reload's config + SSRF checker,
+					// so a lazily-created manager gets the operator's current
+					// security state rather than boot-time state.
+					cfgSnapshot := browserCfg
+					ssrfSnapshot := browserSSRF
+					al.browserFactory = func(key browser.BrowsingKey) (*browser.BrowserManager, error) {
+						m, err := browser.NewBrowserManager(cfgSnapshot, ssrfSnapshot)
+						if err != nil {
+							return nil, err
+						}
+						m.AttachPool(pool, key)
+						return m, nil
 					}
-					if prior != nil {
-						// Always Shutdown the replaced manager, even when a
-						// coordinator exists: a remote-CDP manager (cdp_url
-						// set) never attaches to the coordinator, so Release
-						// above is a no-op for it and its allocator would
-						// leak on every hot reload. Shutdown is idempotent
-						// and connection-only for a coordinator-attached
-						// manager (CRIT-002: it must NOT kill the shared
-						// Chrome — TestManager_Shutdown_DropsConnectionNotProcess),
-						// and kills the manager's own Chrome in the
-						// no-coordinator legacy path.
-						prior.Shutdown()
-						// B2c(i): invalidate the retired manager's own
-						// exec-path cache at the same reload trigger the
-						// coordinator's ApplyRuntimeConfig (above,
-						// al.browserCoordinator.ApplyRuntimeConfig) responds
-						// to — see BrowserManager.InvalidateExecPathCache's
-						// doc comment for why this is currently a no-op
-						// against the freshly-replaced `mgr` (a new instance
-						// already starts with an empty cache) but closes the
-						// gap against `prior` and any future refactor that
-						// stops replacing the whole manager on reload.
-						prior.InvalidateExecPathCache()
+					factory := al.browserFactory
+					al.mu.Unlock()
+
+					// FR-026b: one register/release cycle per BROWSING KEY per
+					// reload, not per agent. N agents on one workspace resolve
+					// to ONE key, and doing this per agent would tear the same
+					// browser down and back up N times per Settings save.
+					key, keyErr := browser.ResolveBrowsingKeyForAgent(omnipusHome(), agentID, "")
+					switch {
+					case keyErr != nil:
+						// No workspace (or an ambiguous membership, FR-033).
+						// The tools stay registered and each call reports
+						// ErrNoBrowsingContext by name — never a shared browser.
+						logger.DebugCF("agent", "no browser for this agent yet — it is not rooted in one workspace",
+							map[string]any{"agent_id": agentID, "reason": keyErr.Error()})
+					case seenBrowserKeys[key.String()]:
+						liveBrowserKeys[key.String()] = true
+					default:
+						seenBrowserKeys[key.String()] = true
+						liveBrowserKeys[key.String()] = true
+						al.rewireBrowserManagerForKey(key, factory)
 					}
 				}
 			}
@@ -2998,39 +3017,57 @@ func registerSharedTools(
 		}
 	}
 
-	// W4 (agent-removal doesn't dispose context): a REMOVED agent is skipped by
-	// the per-agent loop above, so its BrowserManager stays in al.browserMgrs
-	// and — worse — its coordinator-owned browser context (cookie/localStorage
-	// partition) leaks forever in c.contexts. Diff the registered set against
-	// the current config: any agentID still in al.browserMgrs but no longer in
-	// the registry has been removed — dispose its context via
+	// FR-026a. A workspace whose last agent was removed (or whose team moved
+	// off it) leaves a BrowserManager in al.browserMgrs and — worse — a
+	// coordinator-owned browser context (cookie/localStorage partition)
+	// leaking forever in c.contexts. Diff the LIVE BROWSING KEYS this pass
+	// resolved against what the map holds, and dispose the difference via
 	// coordinator.RemoveAgent (which cancels the OWNING chromedp context so
 	// chromedp runs Target.disposeBrowserContext, unlike reload-Release which
-	// preserves it) and drop it from al.browserMgrs. Distinguishes a reload
-	// (agent still present → Release preserves the context) from a removal
-	// (agent gone → RemoveAgent frees the partition).
+	// preserves it).
+	//
+	// ⚠️ The liveness predicate is the set of live BROWSING KEYS, never
+	// registry.ListAgentIDs(). This diff used to compare the map against agent
+	// ids, which was correct only while the map WAS keyed by agent id: run
+	// unchanged against a key-keyed map it matches nothing, so every browser
+	// looks removed and every workspace's Chrome context is disposed on the
+	// first Settings save — logins gone, silently, with a cheerful INFO line
+	// per workspace saying it removed a manager for a "deleted agent".
+	al.mu.Lock()
+	pool := al.browserPool
+	var removedKeys []string
+	for k := range al.browserMgrs {
+		if !liveBrowserKeys[k] {
+			removedKeys = append(removedKeys, k)
+			delete(al.browserMgrs, k)
+		}
+	}
 	registeredAgentIDs := registry.ListAgentIDs()
 	stillPresent := make(map[string]bool, len(registeredAgentIDs))
 	for _, id := range registeredAgentIDs {
 		stillPresent[id] = true
 	}
-	al.mu.Lock()
-	coord := al.browserCoordinator
-	var removedAgentIDs []string
-	for id := range al.browserMgrs {
+	for id := range al.browserRegisteredAgents {
 		if !stillPresent[id] {
-			removedAgentIDs = append(removedAgentIDs, id)
-			delete(al.browserMgrs, id)
+			delete(al.browserRegisteredAgents, id)
 		}
 	}
 	al.mu.Unlock()
-	for _, id := range removedAgentIDs {
-		if coord != nil {
-			coord.RemoveAgent(id)
+	for _, k := range removedKeys {
+		// FR-026's roster-change half: a workspace that no longer has a single
+		// browser-policy-allowed agent on its CoreTeam gets its Chrome CLOSED.
+		//
+		// Closed, not deleted. The workspace still exists and its user still
+		// expects to be logged in when an agent is added back, so the profile
+		// directory stays on disk (FR-043a: workspace DELETION is the only
+		// trigger that removes it, and that path lives in the REST handler).
+		if pool != nil {
+			if key, kerr := browser.ParseBrowsingKeyString(k); kerr == nil {
+				pool.Close(key)
+			}
 		}
-		logger.InfoCF("agent", "removed browser manager for deleted agent", map[string]any{
-			"agent_id": id,
-		})
+		logger.InfoCF("agent", "closed the browser for a workspace no live agent is rooted in (its profile is kept)",
+			map[string]any{"browsing_key": k})
 	}
 }
 
@@ -4135,16 +4172,16 @@ func (al *AgentLoop) Close() {
 	// own context; a double-cancel is a no-op.
 	al.stopSessionWorkers()
 
-	// Drop every agent's browser-manager connection (ADR-038 D4). In ADR-043
+	// Drop every browser's manager connection (one per browsing key). In ADR-043
 	// shared-Chrome mode this closes each manager's WS connection + detaches
 	// its tabs but does NOT kill the Chrome process — that is the coordinator's
 	// job, done by coordinator.Shutdown() immediately below (the SOLE process-
 	// kill path, MIN-008/FR-008). In the no-coordinator test/legacy path each
 	// manager IS its own Chrome owner, so manager.Shutdown() kills its Chrome.
 	al.mu.Lock()
-	for agentID, mgr := range al.browserMgrs {
+	for key, mgr := range al.browserMgrs {
 		mgr.Shutdown()
-		delete(al.browserMgrs, agentID)
+		delete(al.browserMgrs, key)
 	}
 	al.mu.Unlock()
 
@@ -4153,6 +4190,10 @@ func (al *AgentLoop) Close() {
 	// longer cancels an ExecAllocator in coordinator mode). This is the SOLE
 	// process-kill path — disposes every agent's browser context + kills Chrome
 	// (MIN-008 / FR-008: Close() is the only kill).
+	if al.browserPool != nil {
+		al.browserPool.Shutdown()
+		al.browserPool = nil
+	}
 	if al.browserCoordinator != nil {
 		al.browserCoordinator.Shutdown()
 		al.browserCoordinator = nil
@@ -5063,18 +5104,206 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
-// BrowserManagerForAgent returns agentID's BrowserManager (ADR-038 D4),
-// thread-safe. Returns (nil, false) when the agent has no browser manager —
-// either browser tools failed to register for it (see the ErrorCF log in
-// registerSharedTools) or agentID is unknown. The gateway's live-view WS
-// handler (pkg/gateway/browser_ws.go) is the primary caller: it resolves the
-// manager for the attached agent, then calls .Session(sessionID) on it to
-// reach the same chromedp context that agent's browser_* tools drive.
-func (al *AgentLoop) BrowserManagerForAgent(agentID string) (*browser.BrowserManager, bool) {
+// BrowserResolveOutcome is a closed enum naming WHY a browser could not be
+// resolved. "not registered" and "no workspace" are DIFFERENT operator-facing
+// problems and were indistinguishable before ADR-072 — browser_inspect.go
+// reported the former for both, so an operator whose agent simply was not on a
+// workspace team was told browser tools had failed to register.
+//
+// There is deliberately NO BrowserResolvePoolFull: ADR-072 D1.5a deleted every
+// counter, so the panel never has a capacity reason to render.
+type BrowserResolveOutcome int
+
+const (
+	BrowserResolveOK BrowserResolveOutcome = iota
+	// BrowserResolveNoWorkspace is browser.ErrNoBrowsingContext: this agent is
+	// not rooted in a workspace, so it has no browser of its own.
+	BrowserResolveNoWorkspace
+	// BrowserResolveAmbiguous is FR-033: more than one candidate workspace and
+	// no preference supplied. The browser REFUSES rather than tie-breaking,
+	// because choosing would silently pick which set of live logins to act with.
+	BrowserResolveAmbiguous
+	// BrowserResolveNotRegistered means browser tools genuinely are not
+	// registered for this agent.
+	BrowserResolveNotRegistered
+	// BrowserResolveLaunchFailed means the browser is addressable but could not
+	// be created (config or SSRF wiring failure).
+	BrowserResolveLaunchFailed
+)
+
+// BrowserManagerForKey returns (creating on first use) the manager that owns
+// key's browser. Exactly one manager and one Chrome per key, process-wide —
+// FR-001. There is no cap: ADR-072 D1.5a made live memory the only limit, and
+// it is enforced at each tab open inside the manager (FR-060).
+func (al *AgentLoop) BrowserManagerForKey(
+	_ context.Context, key browser.BrowsingKey,
+) (*browser.BrowserManager, error) {
+	if key.IsZero() {
+		return nil, browser.ErrNoBrowsingContext
+	}
+	al.mu.Lock()
+	if mgr, ok := al.browserMgrs[key.String()]; ok && mgr != nil {
+		al.mu.Unlock()
+		return mgr, nil
+	}
+	factory := al.browserFactory
+	al.mu.Unlock()
+	if factory == nil {
+		return nil, fmt.Errorf("browser: browser tools are not registered on this gateway")
+	}
+	mgr, err := factory(key)
+	if err != nil {
+		return nil, err
+	}
+	// Re-check under the lock: two turns on one workspace can reach here
+	// concurrently, and the loser must DISCARD its manager rather than install
+	// a second Chrome for the same key.
+	al.mu.Lock()
+	if existing, ok := al.browserMgrs[key.String()]; ok && existing != nil {
+		al.mu.Unlock()
+		mgr.Shutdown()
+		return existing, nil
+	}
+	al.browserMgrs[key.String()] = mgr
+	al.mu.Unlock()
+	return mgr, nil
+}
+
+// rewireBrowserManagerForKey installs a freshly-configured manager for key,
+// tearing down the one it replaces. Called once per key per reload (FR-026b).
+//
+// The teardown discipline is ADR-043's, unchanged, with agentID replaced by the
+// browsing key: coordinator.Release drops the old manager's connection and
+// bookkeeping WITHOUT killing Chrome or disposing the browser context (CRIT-002
+// — the context persists so the new manager re-adopts it and login survives the
+// save), and prior.Shutdown() additionally covers the explicit-cdp_url manager
+// that never registered with the coordinator at all and would otherwise leak
+// its allocator on every reload.
+func (al *AgentLoop) rewireBrowserManagerForKey(
+	key browser.BrowsingKey,
+	factory func(browser.BrowsingKey) (*browser.BrowserManager, error),
+) {
+	if factory == nil {
+		return
+	}
+	mgr, err := factory(key)
+	if err != nil {
+		logger.ErrorCF("agent", "Failed to create the browser for this workspace — "+
+			"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
+			map[string]any{"error": err.Error(), "browsing_key": key.String()})
+		return
+	}
+	al.mu.Lock()
+	prior := al.browserMgrs[key.String()]
+	pool := al.browserPool
+	al.browserMgrs[key.String()] = mgr
+	al.mu.Unlock()
+	if pool != nil {
+		// Reload: drop the OLD manager's registration only. The Chrome
+		// process and its profile directory survive, which is what makes a
+		// Settings save cost nobody their login (FR-043).
+		pool.Release(key, prior)
+	}
+	if prior != nil {
+		prior.Shutdown()
+		prior.InvalidateExecPathCache()
+	}
+}
+
+// BrowserPool returns the per-workspace browser pool (ADR-072 FR-037), or nil
+// before the first registration pass has built it. The gateway needs it for
+// boot preprovision (FR-016c), for the one-minute sweep's whole-Chrome idle
+// close (FR-040a) and for workspace-deletion disposal (FR-026).
+func (al *AgentLoop) BrowserPool() *browser.BrowserPool {
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	return al.browserPool
+}
+
+// browserResolver returns the browser.ManagerResolver every browser tool
+// resolves its manager through, per Execute (FR-002a).
+func (al *AgentLoop) browserResolver() browser.ManagerResolver {
+	return &agentLoopBrowserResolver{al: al}
+}
+
+// agentLoopBrowserResolver implements browser.ManagerResolver over
+// ResolveBrowsingKey + BrowserManagerForKey. The interface is declared in
+// pkg/tools/browser and implemented here because the import direction forbids
+// the reverse.
+type agentLoopBrowserResolver struct{ al *AgentLoop }
+
+func (r *agentLoopBrowserResolver) ManagerFor(
+	ctx context.Context,
+) (*browser.BrowserManager, browser.BrowsingKey, browser.TabOwner, error) {
+	// omnipusHome(), not al.homePath: workspace membership is resolved from
+	// $OMNIPUS_HOME everywhere else in this package (wireWorkingDirInjectors,
+	// resolveTurnWorkDirOrRefuse), and the browser must not disagree with the
+	// work dir about which workspace a turn is rooted in. al.homePath is the
+	// coordinator's ownership-marker root, which is a different question.
+	key, err := browser.ResolveBrowsingKey(ctx, omnipusHome())
+	if err != nil {
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
+	}
+	// FR-080: the tab set is the SESSION's, keyed on transcriptSessionID and
+	// never on routingSessionID (which a whole delegation subtree shares, so it
+	// would merge every descendant's tabs into the root's). An empty transcript
+	// session is a NAMED FAILURE, never a fall-through to the operator's
+	// workspace-owned set.
+	//
+	// This is the turn's HOME tab set, which is not always the set the call
+	// ACTS on. An agent reaches the operator's workspace-owned tabs by acting
+	// on one browser_list_tabs showed it (FR-070 — implicit acquisition, no
+	// tool, no policy entry, no wire field), and pkg/tools/browser's
+	// resolveTurn resolves that: it is a property of the call, not of the turn,
+	// so there is nothing for this resolver to decide. Do NOT "fix" this to
+	// return TabOwnerWorkspace() under any condition — a transcript-less or
+	// misrouted turn silently landing on the operator's tabs is the implicit
+	// merge ErrNoTabOwner exists to prevent.
+	owner, err := browser.TabOwnerSession(tools.ToolTranscriptSessionID(ctx))
+	if err != nil {
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
+	}
+	mgr, err := r.al.BrowserManagerForKey(ctx, key)
+	if err != nil {
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
+	}
+	return mgr, key, owner, nil
+}
+
+// BrowserManagerForAgent is RETAINED for the gateway. It resolves
+// agentID -> BrowsingKey server-side using preferredWorkspaceID (from the
+// attaching chat session's meta, FR-017) and delegates to BrowserManagerForKey.
+//
+// The second return distinguishes the failure reasons the panel must show
+// differently (FR-008a) — it is NOT a bare bool, because "browser tools are not
+// registered for this agent" and "this agent is not on a workspace team" need
+// different operator advice and used to render identically.
+func (al *AgentLoop) BrowserManagerForAgent(
+	ctx context.Context, agentID, preferredWorkspaceID string,
+) (*browser.BrowserManager, BrowserResolveOutcome) {
 	al.mu.RLock()
-	defer al.mu.RUnlock()
-	mgr, ok := al.browserMgrs[agentID]
-	return mgr, ok
+	registered := al.browserRegisteredAgents[agentID]
+	al.mu.RUnlock()
+	if !registered {
+		return nil, BrowserResolveNotRegistered
+	}
+	key, err := browser.ResolveBrowsingKeyForAgent(omnipusHome(), agentID, preferredWorkspaceID)
+	if err != nil {
+		// ResolveBrowsingKeyForAgent reports both "no workspace" and FR-033's
+		// ambiguous multi-membership as ErrNoBrowsingContext (they are the same
+		// answer to the agent: this turn has no browser of its own). The panel
+		// wants them apart, and the only thing that separates them is whether
+		// more than one workspace claims the agent.
+		if ids, _ := workspace.FindAllForAgent(omnipusHome(), agentID); len(ids) > 1 {
+			return nil, BrowserResolveAmbiguous
+		}
+		return nil, BrowserResolveNoWorkspace
+	}
+	mgr, err := al.BrowserManagerForKey(ctx, key)
+	if err != nil {
+		return nil, BrowserResolveLaunchFailed
+	}
+	return mgr, BrowserResolveOK
 }
 
 // BrowserManagers returns a defensive-copy snapshot of every BrowserManager
@@ -11046,6 +11275,14 @@ turnLoop:
 			// the correlation anchor a spawned child sub-turn's transcript
 			// entries will carry back as ParentSpawnCallID.
 			execCtx = tools.WithToolCallID(execCtx, tc.ID)
+			// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
+			// The loop already uses it to auto-deny `ask`-policy calls; a
+			// tool that must refuse one ARGUMENT rather than the whole call
+			// (browser_handle_dialog{accept:true}) has no other way to know
+			// whether anyone is there to approve. Deliberately the same
+			// field, not a second discriminator: two independently-computed
+			// answers to "is anyone there" would eventually disagree.
+			execCtx = tools.WithAutoDenyAsk(execCtx, ts.opts.AutoDenyAsk)
 			toolResult := ts.agent.Tools.ExecuteWithContext(
 				execCtx,
 				toolName,

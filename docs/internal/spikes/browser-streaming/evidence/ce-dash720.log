@@ -1,0 +1,27 @@
+
+=== chromium / run=dash720 ===
+  supported   : [["video/mp4;codecs=\"avc1.640015\"",true],["audio/mp4;codecs=\"mp4a.40.5\"",true]]
+  appended    : 49 appends, 17288805 bytes
+  firstErr    : none
+  video       : 768x432  readyState=4  err=null
+  playback    : wall=8.03s media=0s rate=0
+  framesDecoded=0  audioBytesDecoded=0  audioMaxRms=0
+
+=== firefox / run=dash720 ===
+  supported   : [["video/mp4;codecs=\"avc1.640015\"",true],["audio/mp4;codecs=\"mp4a.40.5\"",true]]
+  appended    : 49 appends, 17288805 bytes
+  firstErr    : none
+  video       : 768x432  readyState=4  err=null
+  playback    : wall=8.21s media=8.15s rate=0.992
+  framesDecoded=245  audioBytesDecoded=0  audioMaxRms=0.03445
+
+=== webkit / run=dash720 ===
+  supported   : [["video/mp4;codecs=\"avc1.640015\"",true],["audio/mp4;codecs=\"mp4a.40.5\"",true]]
+  appended    : 49 appends, 17288805 bytes
+  firstErr    : none
+  video       : 768x432  readyState=4  err=null
+  playback    : wall=8.05s media=7.79s rate=0.967
+  framesDecoded=281  audioBytesDecoded=0  audioMaxRms=0
+
+-> out/dash720/crossengine.json
+EXIT=0

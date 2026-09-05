@@ -93,11 +93,11 @@ func trackedTabFactory(tracker *cancelTracker) func(context.Context, target.ID) 
 }
 
 // newEdgeManager builds a fake-tab manager with a controllable clock, a
-// generous MaxTabs (these tests open several tabs across several sessions),
+// no tab cap at all (these tests open several tabs across several sessions),
 // and per-target cancel tracking.
 func newEdgeManager(t *testing.T, ttl time.Duration, tracker *cancelTracker) (*BrowserManager, *time.Time) {
 	t.Helper()
-	m := newTestManagerWithFakeTabs(t, 32)
+	m := newTestManagerWithFakeTabs(t)
 	m.createTabFn = trackedTabFactory(tracker)
 	m.cfg.IdleTTL = ttl
 	clock := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
@@ -160,7 +160,7 @@ func TestReapIdleSessions_PartialTabIdle_OnlyIdleTabsClosed(t *testing.T) {
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 3)
+	tabs := openTabs(t, m, testSessionID, 3)
 	idleT0, freshT1, idleT2 := tabs[0], tabs[1], tabs[2]
 
 	base := *clock
@@ -168,7 +168,7 @@ func TestReapIdleSessions_PartialTabIdle_OnlyIdleTabsClosed(t *testing.T) {
 	setTabActivity(m, idleT2, base)
 
 	m.mu.Lock()
-	browserCtx := m.sessions[DefaultSessionID].browserCtx
+	browserCtx := m.sessions[testSessionID].browserCtx
 	m.mu.Unlock()
 
 	*clock = clock.Add(6 * time.Minute) // past the 5-minute TTL for T0/T2
@@ -182,7 +182,7 @@ func TestReapIdleSessions_PartialTabIdle_OnlyIdleTabsClosed(t *testing.T) {
 	assert.Zero(t, tracker.count(freshT1.targetID), "the fresh tab must never be closed")
 
 	m.mu.Lock()
-	se, ok := m.sessions[DefaultSessionID]
+	se, ok := m.sessions[testSessionID]
 	m.mu.Unlock()
 	require.True(t, ok, "session must still be present")
 	require.Len(t, se.tabs, 1, "only the fresh tab must remain")
@@ -215,14 +215,14 @@ func TestReapIdleSessions_TTLBoundary_ExactlyAtVsOneNanosecondPast(t *testing.T)
 			tracker := newCancelTracker()
 			m, clock := newEdgeManager(t, ttl, tracker)
 
-			tabs := openTabs(t, m, DefaultSessionID, 1)
+			tabs := openTabs(t, m, testSessionID, 1)
 			setTabActivity(m, tabs[0], *clock)
 
 			*clock = clock.Add(tc.idleFor)
 			reaped := m.ReapIdleSessions()
 
 			if tc.wantReaped {
-				assert.Equal(t, []string{DefaultSessionID}, reaped)
+				assert.Equal(t, []string{testSessionID}, reaped)
 			} else {
 				assert.Empty(t, reaped)
 			}
@@ -239,13 +239,16 @@ func TestReapIdleSessions_ViewerProtectsEveryTabEvenAfterHours(t *testing.T) {
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 3)
+	tabs := openTabs(t, m, testSessionID, 3)
 	for _, tb := range tabs {
 		setTabActivity(m, tb, *clock)
 	}
-	m.ViewerAttached(DefaultSessionID)
+	m.ViewerAttached(testSessionID)
 
 	*clock = clock.Add(6 * time.Hour)
+	// FR-052: a viewer pins only while it keeps proving it is there. Six
+	// hours of a real panel is six hours of pongs; see viewer_heartbeat_test.go.
+	m.ViewerHeartbeat(testSessionID)
 	reaped := m.ReapIdleSessions()
 
 	assert.Empty(t, reaped)
@@ -253,7 +256,7 @@ func TestReapIdleSessions_ViewerProtectsEveryTabEvenAfterHours(t *testing.T) {
 		assert.Zero(t, tracker.count(tb.targetID), "no tab may be closed while a viewer is attached, however idle")
 	}
 	m.mu.Lock()
-	se, ok := m.sessions[DefaultSessionID]
+	se, ok := m.sessions[testSessionID]
 	m.mu.Unlock()
 	require.True(t, ok, "the viewed session must still exist")
 	assert.Len(t, se.tabs, 3)
@@ -288,14 +291,15 @@ func TestReapIdleSessions_ViewerDetach_RestartsIdleClockFromDetachMoment(t *test
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, ttl, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 1)
+	tabs := openTabs(t, m, testSessionID, 1)
 	setTabActivity(m, tabs[0], *clock)
-	m.ViewerAttached(DefaultSessionID)
+	m.ViewerAttached(testSessionID)
 
 	*clock = clock.Add(3 * time.Hour) // deep past TTL while "protected"
+	m.ViewerHeartbeat(testSessionID)  // FR-052: still a live panel, not a phantom
 	require.Empty(t, m.ReapIdleSessions(), "must stay protected while the viewer is attached")
 
-	m.ViewerDetached(DefaultSessionID)
+	m.ViewerDetached(testSessionID)
 	detachedAt := *clock
 
 	// One nanosecond short of a full TTL since the detach: must still survive
@@ -308,7 +312,7 @@ func TestReapIdleSessions_ViewerDetach_RestartsIdleClockFromDetachMoment(t *test
 	// One nanosecond past a full TTL since the detach: now reapable.
 	*clock = detachedAt.Add(ttl + time.Nanosecond)
 	reaped := m.ReapIdleSessions()
-	assert.Equal(t, []string{DefaultSessionID}, reaped,
+	assert.Equal(t, []string{testSessionID}, reaped,
 		"once a full TTL has elapsed since the last viewer left, the tab must be reaped")
 }
 
@@ -343,6 +347,7 @@ func TestReapIdleSessions_MultipleSessions_OnlyFullyIdleSessionsReturned(t *test
 	*clock = clock.Add(6 * time.Minute) // past the 5-minute TTL
 	setTabActivity(m, bTabs[0], *clock) // B: freshly touched right at sweep time
 	setTabActivity(m, dTabs[1], *clock) // D's second tab: freshly touched
+	m.ViewerHeartbeat("session-c")      // FR-052: C's viewer is live, not a phantom
 
 	reaped := m.ReapIdleSessions()
 
@@ -386,13 +391,13 @@ func TestReapIdleSessions_ActiveIdxFollowsSameTab_RemovalPosition(t *testing.T) 
 			tracker := newCancelTracker()
 			m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-			tabs := openTabs(t, m, DefaultSessionID, 3)
+			tabs := openTabs(t, m, testSessionID, 3)
 			base := *clock
 			for _, tb := range tabs {
 				setTabActivity(m, tb, base) // everyone starts equally "idle-eligible"
 			}
 
-			_, err := m.SwitchTab(DefaultSessionID, tc.activeCreation)
+			_, err := m.SwitchTab(testSessionID, tc.activeCreation)
 			require.NoError(t, err)
 			wantTargetID := tabs[tc.activeCreation].targetID
 
@@ -408,7 +413,7 @@ func TestReapIdleSessions_ActiveIdxFollowsSameTab_RemovalPosition(t *testing.T) 
 			assert.Equal(t, 1, tracker.count(tabs[tc.idleCreation].targetID))
 
 			m.mu.Lock()
-			se, ok := m.sessions[DefaultSessionID]
+			se, ok := m.sessions[testSessionID]
 			m.mu.Unlock()
 			require.True(t, ok)
 			require.True(t, se.activeIdx >= 0 && se.activeIdx < len(se.tabs),
@@ -429,13 +434,13 @@ func TestReapIdleSessions_ActiveTabItselfReaped_ActiveIdxStaysCoherent(t *testin
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 3)
+	tabs := openTabs(t, m, testSessionID, 3)
 	base := *clock
 	setTabActivity(m, tabs[0], base)
 	setTabActivity(m, tabs[1], base) // this one goes idle AND is active
 	setTabActivity(m, tabs[2], base)
 
-	_, err := m.SwitchTab(DefaultSessionID, 1)
+	_, err := m.SwitchTab(testSessionID, 1)
 	require.NoError(t, err)
 
 	*clock = clock.Add(6 * time.Minute)
@@ -447,7 +452,7 @@ func TestReapIdleSessions_ActiveTabItselfReaped_ActiveIdxStaysCoherent(t *testin
 	assert.Equal(t, 1, tracker.count(tabs[1].targetID), "the idle active tab must still be closed")
 
 	m.mu.Lock()
-	se, ok := m.sessions[DefaultSessionID]
+	se, ok := m.sessions[testSessionID]
 	m.mu.Unlock()
 	require.True(t, ok)
 	require.Len(t, se.tabs, 2)
@@ -516,12 +521,12 @@ func TestReapIdleSessions_Idempotent_SecondSweepIsNoOp(t *testing.T) {
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 1)
+	tabs := openTabs(t, m, testSessionID, 1)
 	setTabActivity(m, tabs[0], *clock)
 	*clock = clock.Add(6 * time.Minute)
 
 	first := m.ReapIdleSessions()
-	require.Equal(t, []string{DefaultSessionID}, first)
+	require.Equal(t, []string{testSessionID}, first)
 
 	second := m.ReapIdleSessions()
 	assert.Empty(t, second, "a second sweep with nothing left to judge must be a pure no-op")
@@ -537,7 +542,7 @@ func TestReapIdleSessions_Idempotent_SurvivingTabsUnaffectedBySecondSweep(t *tes
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 2)
+	tabs := openTabs(t, m, testSessionID, 2)
 	setTabActivity(m, tabs[0], *clock)
 	*clock = clock.Add(6 * time.Minute)
 	setTabActivity(m, tabs[1], *clock) // fresh exactly at sweep time
@@ -598,7 +603,7 @@ func TestReapIdleSessions_ExternallyDeadContext_StillSweptWithoutPanic(t *testin
 		}, nil
 	}
 
-	tabs := openTabs(t, m, DefaultSessionID, 1)
+	tabs := openTabs(t, m, testSessionID, 1)
 	require.NoError(t, tabs[0].ctx.Err(), "sanity: the context starts alive")
 
 	killUnderlyingContext() // simulate an external death — never touches tabEntry.cancel
@@ -614,7 +619,7 @@ func TestReapIdleSessions_ExternallyDeadContext_StillSweptWithoutPanic(t *testin
 
 	var reaped []string
 	require.NotPanics(t, func() { reaped = m.ReapIdleSessions() })
-	assert.Equal(t, []string{DefaultSessionID}, reaped,
+	assert.Equal(t, []string{testSessionID}, reaped,
 		"an externally-dead but still-idle tab must still be swept and its session closed")
 	assert.Equal(t, 1, tracker.count(tabs[0].targetID),
 		"the reaper must still call the tab's own cancel exactly once to release its resources")
@@ -631,17 +636,17 @@ func TestReapIdleSessions_FullClosure_CallsBrowserCancel(t *testing.T) {
 	tracker := newCancelTracker()
 	m, clock := newEdgeManager(t, 5*time.Minute, tracker)
 
-	tabs := openTabs(t, m, DefaultSessionID, 1)
+	tabs := openTabs(t, m, testSessionID, 1)
 	setTabActivity(m, tabs[0], *clock)
 
 	m.mu.Lock()
-	browserCtx := m.sessions[DefaultSessionID].browserCtx
+	browserCtx := m.sessions[testSessionID].browserCtx
 	m.mu.Unlock()
 	require.NoError(t, browserCtx.Err(), "sanity: browsing context must start out alive")
 
 	*clock = clock.Add(6 * time.Minute)
 	reaped := m.ReapIdleSessions()
-	require.Equal(t, []string{DefaultSessionID}, reaped)
+	require.Equal(t, []string{testSessionID}, reaped)
 
 	assert.Error(t, browserCtx.Err(),
 		"rule 3: emptying a session's last tab must call browserCancel")

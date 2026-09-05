@@ -47,32 +47,15 @@ func capGetText(text string) string {
 // tool's work (e.g. the subsequent chromedp.Text call).
 const getTextWaitTimeout = 8 * time.Second
 
-// DefaultSessionID is the session used by all browser tools. Sequential tool
-// calls (navigate → click → get_text) operate on the same Chromium tab.
-//
-// Exported (ADR-038 finding #1) so the gateway's live-view WS handler
-// (pkg/gateway/browser_ws.go) can bind the live view to this SAME tab
-// instead of a session keyed by the client-supplied (chat) session id. Before
-// this fix, browser_attach{session_id: <chat session uuid>} caused
-// BrowserManager.Session to lazily create a brand-new, blank tab distinct
-// from the one the agent's tools drive — the live view showed a different
-// tab than the agent controlled, and "take control" locked a session the
-// tools never checked. The client's session_id is still accepted on the wire
-// for context/logging (see BrowserAttachFrame), but the gateway must always
-// resolve/attach/control DefaultSessionID, never the raw client value.
-const DefaultSessionID = "default"
-
-// defaultSessionID is a package-private alias retained so every existing
-// call site inside this package (which predates the export) keeps working
-// unchanged. New code — inside or outside this package — should prefer
-// DefaultSessionID directly.
-const defaultSessionID = DefaultSessionID
-
 // --- browser_navigate (US-5) ---
 
 type NavigateTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
+	res ManagerResolver
 }
 
 func (t *NavigateTool) Name() string                 { return "browser_navigate" }
@@ -116,20 +99,48 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if rawURL == "" {
 		return tools.ErrorResult("browser_navigate: 'url' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	if err := t.mgr.ValidateURL(ctx, rawURL); err != nil {
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), targetHostForTool(rawURL))
+
+	if err := mgr.ValidateURL(ctx, rawURL); err != nil {
 		return tools.ErrorResult(err.Error())
 	}
 
-	sessionCtx, err := t.mgr.Session(defaultSessionID)
+	sessionCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_navigate: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	hops := watchRedirectHops(tabCtx)
@@ -141,10 +152,49 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		chromedp.Title(&title),
 	)
 	if err != nil {
+		// FR-013: an onbeforeunload confirm raised DURING the load wedges
+		// before navigate has a tab handle to hand anyone, so this is where
+		// that case surfaces.
+		//
+		// The gate is PendingDialogOn, not dialogAwareTimeout's own wider
+		// predicate, and the difference is a security one.
+		//
+		// dialogAwareTimeout fires on ANY CDP timeout with no recorded dialog
+		// -- deliberately wide, and correct for the tools it was written for
+		// (click, type, get_text ... act on a page that is already loaded).
+		// A page-load timeout on browser_navigate is that shape too, so
+		// calling it here swallowed EVERY failed load: it returned the hedged
+		// "may have an open dialog" message and never reached the abandon
+		// below, leaving the tab parked on the target. That is precisely the
+		// SSRF-by-timing window abandonTabAfterFailedLoad was written to
+		// close, reopened by a message-quality change. Red and unreported on
+		// the wave-4 baseline 569685265; regression coverage is
+		// TestNavigate_FailedLoad_DoesNotStrandTheTabOnTheTarget and
+		// TestExecute_Navigate_PostRedirectSSRF. browser_open_tab's own
+		// page-load path never had this -- it calls dialogAwareTimeout only
+		// on tab CREATION failure (tabs.go) -- which is why its twin test
+		// passed throughout.
+		//
+		// A RECORDED dialog is the one case that still returns early, because
+		// it is the one case the abandon cannot help with: the dialog blocks
+		// the renderer, so about:blank would sit there until its own budget
+		// expired, and naming the dialog is a better answer than a warning
+		// that the tab could not be steered away.
+		//
+		// The suspected (unrecorded) case now falls through, and loses
+		// nothing: if the about:blank lands there was no blocking dialog and
+		// the suspicion was a false positive; if it does NOT land, the
+		// message says the tab could not be steered away, which is both the
+		// stronger warning and the same conclusion.
+		if mgr.PendingDialogOn(sid) != nil {
+			if routed, ok := dialogAwareTimeout(mgr, sid, "browser_navigate", err); ok {
+				return tools.ErrorResult(routed.Error())
+			}
+		}
 		// SECURITY (2026-08-13): a failed load must not leave the tab
 		// PARKED on the target -- see abandonTabAfterFailedLoad.
 		return tools.ErrorResult(abandonTabAfterFailedLoad(
-			ctx, t.mgr, sessionCtx, "browser_navigate", rawURL, hops, err,
+			ctx, mgr, sessionCtx, "browser_navigate", rawURL, hops, err,
 		))
 	}
 
@@ -161,7 +211,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// internally, so a public URL could redirect to a private IP (e.g.
 	// 169.254.169.254). Validate the final URL and kill the page if blocked.
 	if finalURL != rawURL {
-		if err := t.mgr.ValidateURL(ctx, finalURL); err != nil {
+		if err := mgr.ValidateURL(ctx, finalURL); err != nil {
 			// Navigate away from the blocked page to prevent data exfiltration
 			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
 			return tools.ErrorResult(fmt.Sprintf(
@@ -184,7 +234,11 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 type ClickTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
+	res ManagerResolver
 }
 
 func (t *ClickTool) Name() string                 { return "browser_click" }
@@ -202,7 +256,11 @@ func (t *ClickTool) Description() string {
 		"target=\"_blank\" link or one that calls window.open may open a NEW tab and switch to it — " +
 		"subsequent browser_* calls then act on that new tab, not the page you clicked from; check this " +
 		"result's opened_new_tab/new_tab_index/note fields, or call browser_list_tabs, to confirm what's " +
-		"active. If a human is currently controlling the browser via the live view, this call defers " +
+		"active. " + roleNameLocatorHelp +
+		"If the click cannot be made the error names which of four conditions was unmet — visible, " +
+		"stable, enabled or hit-testable — and, when something is covering the element, what that " +
+		"something is. " +
+		"If a human is currently controlling the browser via the live view, this call defers " +
 		"instead of clicking — the result is {\"deferred\": true, \"reason\": ...} instead of a click " +
 		"outcome; wait for them to release control and retry."
 }
@@ -210,7 +268,7 @@ func (t *ClickTool) Description() string {
 func (t *ClickTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector of the element to click, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -219,45 +277,91 @@ func (t *ClickTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector",
 			},
-		},
+		}),
 	}
 }
 
 func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
-	if selector == "" && text == "" {
+	loc, lerr := parseLocatorArgs("browser_click", args, true)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfActiveTab(mgr, sid))
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_click: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// The ORIGINAL user-facing locator — never the internal marker selector
-	// resolveActionSelector may produce — for error messages and the echoed
+	// resolveTarget may produce — for error messages and the echoed
 	// success payload (7-reviewer finding #6).
-	displayTarget := displayLocator(selector, text)
+	displayTarget := displayLocator(loc)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_click", selector, text, t.mgr.PageTimeout())
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_click", loc, mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	err = chromedp.Run(
-		tabCtx,
-		chromedp.WaitVisible(target, chromedp.ByQuery),
-		chromedp.Click(target, chromedp.ByQuery),
-	)
+	// The actionability gate REPLACES the bare chromedp.WaitVisible that used
+	// to sit here. When a click cannot land, the agent now learns which of
+	// four conditions was unmet — and, when something is covering the
+	// element, what that something is — instead of "context deadline
+	// exceeded", which is true of every possible cause at once.
+	gate, gerr := waitActionableOutcome(tabCtx, "browser_click", target, displayTarget, mgr.PageTimeout())
+	if gerr != nil {
+		return tools.ErrorResult(scrubMarkerFromError(gerr, target, displayTarget).Error())
+	}
+
+	err = chromedp.Run(tabCtx, chromedp.Click(target, chromedp.ByQuery))
 	if err != nil {
+		// FR-037: chromedp re-checks visibility itself after the gate, and
+		// when a single-page app re-renders in that window its own wait
+		// polls to the deadline and returns a BARE timeout. Translate it —
+		// the element passed the gate and then stopped being visible, which
+		// is a different and far more useful thing to be told.
+		if translated, ok := postGateErr(err, "browser_click", displayTarget); ok {
+			return tools.ErrorResult(translated.Error())
+		}
 		// Explicitly NAME displayTarget in the outer message — never rely
 		// solely on scrubMarkerFromError finding (and replacing) an
 		// occurrence of the marker inside err's own text, since some
@@ -268,6 +372,11 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		// remains defense in depth for the failure modes that DO embed the
 		// marker (e.g. chromedp's "could not find node with given
 		// selector" DOM errors).
+		// FR-013: a wedged tab times out here. Say so, and name the verb
+		// that clears it, instead of returning a deadline.
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_click", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_click: element %q not found or not clickable: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -281,7 +390,21 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if echoSelector == "" {
 		echoSelector = text
 	}
+	if echoSelector == "" {
+		echoSelector = displayTarget
+	}
 	result := map[string]any{"success": true, "selector": echoSelector}
+	// Never silent: a hit test that could not be PERFORMED (a closed shadow
+	// root, a cross-origin frame) passes the gate, and saying so is what
+	// stops it looking like a check that succeeded.
+	if gate.HitTest == hitTestIndeterminate {
+		result["hit_test"] = hitTestIndeterminate
+	}
+
+	// Advisory only (FR-013): a later timeout on this tab can then say
+	// "stopped answering after a click", which is strictly more useful than
+	// "stopped answering". Nothing branches on it.
+	mgr.NoteActivation(sid, "a click")
 
 	// ADR-041 D2: a click on a target="_blank" link or an element that calls
 	// window.open may have spawned a new browser tab. Reconcile
@@ -292,7 +415,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// of continuing to act on the (now-background) opener page. This is
 	// what fixes the headline ADR-041 failure: a Cal.com-style booking
 	// button that opens its flow in a new tab.
-	if outcome, rerr := t.mgr.ReconcileTabs(defaultSessionID); rerr != nil {
+	if outcome, rerr := mgr.ReconcileTabs(sid); rerr != nil {
 		logger.WarnCF("browser", "browser_click: tab reconcile failed", map[string]any{"error": rerr.Error()})
 	} else {
 		applyReconcileOutcome(result, outcome)
@@ -303,7 +426,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 
 // applyReconcileOutcome maps a BrowserManager.ReconcileOutcome onto
 // browser_click's result map (ADR-041 fix F2 — the ADR headline bug
-// re-created: a click that spawns a new tab beyond MaxTabs, or whose CDP
+// re-created: a click that spawns a new tab the memory gate refuses, or whose CDP
 // attach fails, used to surface as a plain success with no signal). Factored
 // out of ClickTool.Execute so the mapping logic is unit-testable without a
 // live Chromium/CDP connection (see tabs_test.go's
@@ -344,9 +467,15 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 			lead = "the click also opened another new tab, but"
 		}
 		switch outcome.Reason {
-		case tabAdoptReasonMaxTabs:
-			notes = append(notes, lead+" the maximum concurrent tabs limit was reached, so it could not "+
-				"be adopted. Close a tab with browser_close_tab and retry, or tell the user a tab could "+
+		case tabAdoptReasonMemoryPressure:
+			// FR-063. The text names MEMORY and a remedy that exists, and
+			// names NO limit and NO config key — there is no cap to raise any
+			// more (ADR-072 D1.5a), so telling the model to raise one sends it
+			// looking for a setting this build does not have. Without this arm
+			// the refusal falls to the default "it could not be adopted" text
+			// and the model retries the same open in a loop.
+			notes = append(notes, lead+" this machine is low on memory, so it could not be adopted. "+
+				"Close a tab with browser_close_tab and retry, or tell the user a tab could "+
 				"not be opened.")
 		case tabAdoptReasonAttachFailed:
 			notes = append(notes, lead+" attaching to it failed — it may not be usable. Call "+
@@ -365,7 +494,11 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 
 type TypeTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
+	res ManagerResolver
 }
 
 func (t *TypeTool) Name() string                 { return "browser_type" }
@@ -390,7 +523,8 @@ func (t *TypeTool) Description() string {
 		"same browser session and you want to continue typing where they left off rather than erase it. " +
 		"This tool does NOT press Enter or submit the form — click the submit button separately. The " +
 		"result does not echo the field's resulting value; use browser_get_text to verify it when it " +
-		"matters. If a human is currently controlling the browser via the live view, this call defers " +
+		"matters. " + roleNameLocatorHelp +
+		"If a human is currently controlling the browser via the live view, this call defers " +
 		"instead of typing — the result is {\"deferred\": true, \"reason\": ...} instead of a type " +
 		"outcome; wait for them to release control and retry."
 }
@@ -398,7 +532,7 @@ func (t *TypeTool) Description() string {
 func (t *TypeTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector of the input element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -411,40 +545,86 @@ func (t *TypeTool) Parameters() map[string]any {
 				"type": "boolean",
 				"description": "If true, clear the field's existing value before typing (replace mode). If " +
 					"false (the default), the text is APPENDED to whatever the field already contains — this " +
-					"preserves existing behavior and anything a human or another turn already typed into a " +
-					"shared browser session. Default: false.",
+					"preserves existing behavior and anything a human or another turn already typed into " +
+					"the browser this workspace's agents share. Default: false.",
 			},
-		},
-		"required": []string{"selector", "text"},
+		}),
+		// `selector` is no longer the only way to name the field — role+name
+		// works too — so only the value being typed is unconditionally
+		// required. A call with neither locator is still rejected, by name,
+		// in Execute.
+		"required": []string{"text"},
 	}
 }
 
 func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
 	clearField, _ := args["clear"].(bool)
-	if selector == "" {
+	// textIsLocator is FALSE here: browser_type's `text` is the value typed
+	// into the element, never a way to find it.
+	loc, lerr := parseLocatorArgs("browser_type", args, false)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfActiveTab(mgr, sid))
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// browser_type has no separate "locate by visible text" PARAMETER (its
-	// `text` arg is already the value to type) — only the pseudo-selector
-	// route applies here. See resolvePseudoOnlySelector's doc comment.
-	target, cleanup, rerr := resolvePseudoOnlySelector(tabCtx, "browser_type", selector, t.mgr.PageTimeout())
+	// `text` arg is already the value to type) — the CSS/pseudo-selector
+	// route and role+name are what it accepts. See the per-tool locator
+	// matrix in target.go.
+	displayTarget := displayLocator(loc)
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_type", loc, mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
+	}
+
+	// The gate REPLACES the chromedp.WaitVisible that used to lead the
+	// action list below. The clear-then-SendKeys sequence runs strictly
+	// after it.
+	if gerr := waitActionable(tabCtx, "browser_type", target, displayTarget, mgr.PageTimeout()); gerr != nil {
+		return tools.ErrorResult(scrubMarkerFromError(gerr, target, displayTarget).Error())
 	}
 
 	// clearField (the "clear" arg) lets the caller choose between the
@@ -458,7 +638,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// for native input events (including React's synthetic-event system)
 	// observe the same incremental typing they would from a human clearing
 	// the field and retyping.
-	actions := []chromedp.Action{chromedp.WaitVisible(target, chromedp.ByQuery)}
+	var actions []chromedp.Action
 	if clearField {
 		actions = append(actions, chromedp.SetValue(target, "", chromedp.ByQuery))
 	}
@@ -466,16 +646,25 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 	err = chromedp.Run(tabCtx, actions...)
 	if err != nil {
-		// browser_type's only locator is `selector` (its `text` arg is the
-		// VALUE typed, never a locator). Explicitly NAME it in the outer
-		// message rather than relying solely on scrubMarkerFromError finding
-		// an occurrence inside err's own text — some chromedp failure modes
-		// (a bare context-deadline timeout) don't embed the selector at all
+		// FR-037, same window as browser_click's: an element that passed
+		// the gate and then vanished must not come back as a bare timeout.
+		if translated, ok := postGateErr(err, "browser_type", displayTarget); ok {
+			return tools.ErrorResult(translated.Error())
+		}
+		// Explicitly NAME the locator in the outer message rather than
+		// relying solely on scrubMarkerFromError finding an occurrence
+		// inside err's own text — some chromedp failure modes (a bare
+		// context-deadline timeout) don't embed the selector at all
 		// (7-reviewer finding #6).
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_type", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(
-			fmt.Sprintf("browser_type: element %q: %s", selector, scrubMarkerFromError(err, target, selector)),
+			fmt.Sprintf("browser_type: element %q: %s", displayTarget, scrubMarkerFromError(err, target, displayTarget)),
 		)
 	}
+
+	mgr.NoteActivation(sid, "typing")
 
 	return jsonResult(map[string]any{"success": true, "cleared": clearField})
 }
@@ -484,8 +673,12 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 type ScreenshotTool struct {
 	tools.BaseTool
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
 
-	mgr *BrowserManager
+	res ManagerResolver
 	// agentHome is the agent's fixed home directory (ADR-046's
 	// fspolicy.EffectiveFSPolicy agentHome argument). When the turn carries a
 	// TurnWorkspaceDir (the agent is a member of that turn's Workspace),
@@ -514,12 +707,26 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 }
 
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// Wait for the page to finish rendering before capturing.
@@ -562,6 +769,9 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 		}),
 	)
 	if err != nil {
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_screenshot", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
@@ -615,7 +825,11 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 
 type GetTextTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
+	res ManagerResolver
 }
 
 func (t *GetTextTool) Name() string                 { return "browser_get_text" }
@@ -629,14 +843,14 @@ func (t *GetTextTool) Description() string {
 		"match by visible text. Alternatively (or additionally), pass `text` to target an element by its " +
 		"visible label directly (case-insensitive substring match); when both are given, text is matched " +
 		"only among elements inside selector. Provide selector OR text (or both). To read the entire " +
-		"page's text, use a selector like \"body\" or \"html\". Output is capped at 64,000 characters " +
-		"(truncated with a marker beyond that)."
+		"page's text, use a selector like \"body\" or \"html\". " + roleNameLocatorHelp +
+		"Output is capped at 64,000 characters (truncated with a marker beyond that)."
 }
 
 func (t *GetTextTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector of the element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -645,31 +859,50 @@ func (t *GetTextTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector",
 			},
-		},
+		}),
 	}
 }
 
 func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	selector, _ := args["selector"].(string)
-	text, _ := args["text"].(string)
-	if selector == "" && text == "" {
+	loc, lerr := parseLocatorArgs("browser_get_text", args, true)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// The ORIGINAL user-facing locator — never the internal marker selector
-	// resolveActionSelector may produce — for error messages (7-reviewer
-	// finding #6).
-	displayTarget := displayLocator(selector, text)
+	// resolveTarget may produce — for error messages (7-reviewer finding #6).
+	displayTarget := displayLocator(loc)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_get_text", selector, text, getTextWaitTimeout)
+	// READ-ONLY tool: it resolves through the same seam as every other, but
+	// it deliberately does NOT run the actionability gate. Reading the text
+	// of an element that is disabled, or behind a cookie banner, is a
+	// perfectly reasonable thing to want.
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_get_text", loc, getTextWaitTimeout)
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
@@ -690,6 +923,9 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		// (bare context-deadline timeouts) don't embed the selector in their
 		// own error text, so scrubMarkerFromError alone can't guarantee the
 		// locator appears in the message.
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_get_text", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element %q not found: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -697,6 +933,9 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	var resultText string
 	err = chromedp.Run(tabCtx, chromedp.Text(target, &resultText, chromedp.ByQuery))
 	if err != nil {
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_get_text", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element %q not found: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -710,7 +949,11 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 
 type WaitTool struct {
 	tools.BaseTool
-	mgr *BrowserManager
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
+	res ManagerResolver
 }
 
 func (t *WaitTool) Name() string                 { return "browser_wait" }
@@ -726,13 +969,14 @@ func (t *WaitTool) Description() string {
 		"(exact) — to match by visible text. Alternatively (or additionally), pass `text` to wait for an " +
 		"element with the given visible text directly (case-insensitive substring match); when both are " +
 		"given, text is matched only among elements inside selector. Provide selector OR text (or both). " +
+		roleNameLocatorHelp +
 		"Waits up to 8 seconds by default; pass `timeout_ms` (100-60000) to use a different budget."
 }
 
 func (t *WaitTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": withRoleNameParams(map[string]any{
 			"selector": map[string]any{
 				"type":        "string",
 				"description": "CSS selector to wait for, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
@@ -745,14 +989,16 @@ func (t *WaitTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "How long to wait for the element to become visible, in milliseconds (100-60000). Default: 8000 (8 seconds).",
 			},
-		},
+		}),
 	}
 }
 
 func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	selector, _ := args["selector"].(string)
-	text, _ := args["text"].(string)
-	if selector == "" && text == "" {
+	loc, lerr := parseLocatorArgs("browser_wait", args, true)
+	if lerr != nil {
+		return tools.ErrorResult(lerr.Error())
+	}
+	if loc.empty() {
 		return tools.ErrorResult("browser_wait: 'selector' parameter is required")
 	}
 
@@ -773,12 +1019,26 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		waitTimeout = time.Duration(ms) * time.Millisecond
 	}
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_wait: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	// Used for the timeout error message below: prefer echoing the CSS
@@ -787,9 +1047,11 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// rather than an opaque internal marker selector (7-reviewer finding #6
 	// — now the shared displayLocator helper, mirrored consistently across
 	// click/type/get_text/wait, since this is where that pattern started).
-	displayTarget := displayLocator(selector, text)
+	displayTarget := displayLocator(loc)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_wait", selector, text, waitTimeout)
+	// browser_wait's contract IS visibility, so its own WaitVisible below
+	// stays: the actionability gate is for tools that ACT.
+	target, cleanup, rerr := resolveTarget(tabCtx, "browser_wait", loc, waitTimeout)
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
@@ -810,6 +1072,9 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	err = chromedp.Run(waitCtx, chromedp.WaitVisible(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_wait", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s",
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
@@ -818,14 +1083,20 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 }
 
 // --- browser_evaluate (US-5) ---
-// Denied by default in deny-by-default policy mode (SEC-04/SEC-06).
+// Which agents may call it is decided by TOOL POLICY (Jim holds the only
+// agent-level grant; Mia and Ava resolve deny). Whether it runs AT ALL on this
+// installation is decided by sandbox.browser_evaluate_enabled, which is now
+// SEEDED TRUE (ADR D1.9b ruling 2).
 
 // EvaluateTool executes arbitrary JavaScript in the browser page context.
-// It is always registered in the tool catalog so the LLM always sees the tool.
+// It is always registered in the tool catalog so the LLM always sees the tool —
+// registration has never been conditional on any flag.
 //
 // The LIVE enforcement gate is executeEnabled (set at construction from
-// cfg.Sandbox.BrowserEvaluateEnabled): Execute returns a deny error unless the
-// operator explicitly opted in. This single gate enforces SEC-04 / SEC-06.
+// cfg.Sandbox.BrowserEvaluateEnabled, which resolves nil -> false). It is the
+// operator's runtime kill switch, distinct from the per-agent tool policy: a
+// policy denial removes the tool from an agent's manifest entirely, while this
+// gate refuses at execution with a message naming the setting.
 //
 // (#438, #70): a pkg/policy declarative mirror of this deny-by-default intent
 // used to exist but was dead code (no live tool-dispatch caller) and was
@@ -833,7 +1104,11 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 // at runtime, and always was.
 type EvaluateTool struct {
 	tools.BaseTool
-	mgr            *BrowserManager
+	// browserAudit is FR-027's audit sink, populated by the tool registry
+	// through the auditLoggerAware contract (pkg/tools/registry.go) — no
+	// RegisterTools parameter, no caller change. See audit.go.
+	browserAudit
+	res            ManagerResolver
 	executeEnabled bool
 }
 
@@ -842,9 +1117,11 @@ func (t *EvaluateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *EvaluateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *EvaluateTool) Description() string {
 	return "Execute JavaScript in the active tab's page context (run scripts, read/manipulate the DOM). " +
-		"Off by default at RUNTIME regardless of your tool policy — the operator must set " +
-		"sandbox.browser_evaluate_enabled=true in config for this to work even when your policy allows it. " +
-		"A policy of allow does not mean this tool is usable; check the tool result for the runtime-disabled error. " +
+		"Enabled by default on a standard installation. An operator can still turn it off for the whole " +
+		"installation by setting sandbox.browser_evaluate_enabled=false; if they have, this tool returns a " +
+		"result whose error names that setting explicitly, which is how you tell an installation-wide " +
+		"disable apart from your own tool policy denying you (a policy denial removes the tool from your " +
+		"list entirely, so you would not be reading this). " +
 		"The result's `result` field holds your expression's JSON-serialized value; a genuine JavaScript " +
 		"null and a non-serializable value (a DOM node, function, or circular reference) BOTH come back as " +
 		"result: null — the only way to tell them apart is a `note` field present ONLY on the " +
@@ -876,21 +1153,52 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if js == "" {
 		return tools.ErrorResult("browser_evaluate: 'js' parameter is required")
 	}
-	if result := controlledResult(t.mgr, t.Name()); result != nil {
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
+	if failure != nil {
+		return failure
+	}
+	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
+	// stays so until Execute returns. The pool reads this before evicting or
+	// idle-closing, so that killing a Chrome never turns a running call into
+	// an inexplicable error inside somebody's turn. Every browser tool
+	// increments it — read-only ones too, because a screenshot that returns
+	// "connection lost" mid-turn is no less confusing for having been
+	// read-only. The defer is what makes a panicking or cancelled call
+	// release; a leaked count is a browser that can never be reclaimed.
+	defer mgr.EnterCall()()
+	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
+	// scope, controlledResult decides whether a human outranks this call, and
+	// only then is the write lease taken on the resolved (key, owner) pair.
+	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
 		return result
 	}
+	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
+	if deferred != nil {
+		return deferred
+	}
+	defer release()
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	// FR-027, per action. Recorded AFTER both gates (a deferred call never
+	// acted, so it is not an action) and BEFORE the CDP work (the trail must
+	// keep the attempt even when the action panics, times out or is
+	// cancelled). See recordBrowserAction's doc comment for the ordering
+	// contract and targetHostForTool for how "target host" is derived.
+	t.recordBrowserAction(ctx, key, owner, t.Name(), hostOfActiveTab(mgr, sid))
+
+	tabCtx, err := mgr.Session(sid)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
 	var raw []byte
 	err = chromedp.Run(tabCtx, chromedp.Evaluate(js, &raw))
 	if err != nil {
+		if routed, ok := dialogAwareTimeout(mgr, sid, "browser_evaluate", err); ok {
+			return tools.ErrorResult(routed.Error())
+		}
 		return tools.ErrorResult(fmt.Sprintf("browser_evaluate: %s", err))
 	}
 
@@ -959,8 +1267,16 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 // success-shaped no-op. The body is now JSON: {"deferred": true, "reason":
 // "..."}, so a caller can check for the "deferred" key the same way it would
 // check any other tool's result shape.
-func controlledResult(mgr *BrowserManager, toolName string) *tools.ToolResult {
-	if !mgr.Live().IsControlled(defaultSessionID) {
+func controlledResult(mgr *BrowserManager, key BrowsingKey, owner TabOwner, toolName string) *tools.ToolResult {
+	// FR-002c. This asked the live registry about a hardcoded shared session id
+	// until ADR-072 D1
+	// re-keyed the live-view registry. Left on the constant it would match
+	// nothing and return false FOREVER — an intact, populated human-control
+	// lock that is never consulted, with no error, no log line and every lease
+	// test still green. It MUST ask about the (BrowsingKey, TabOwner) pair the
+	// call has already resolved, which is the same string the live panel takes
+	// control of (BrowserManager.OperatorSessionID for the operator's own tabs).
+	if !mgr.Live().IsControlled(sessionKey(key, owner)) {
 		return nil
 	}
 	reason := "a human is currently controlling this browser via the live view — " +

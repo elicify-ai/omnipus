@@ -614,6 +614,13 @@ export function BrowserLiveView({
   // the panel's primary error state (see `displayError` below). `null` =
   // no failure reported (yet).
   const [webrtcError, setWebrtcError] = useState<string | null>(null)
+  // UAT case 16 — the gateway's free-text cause for THIS failure
+  // (browser_webrtc_state.reason_detail), held alongside the closed `reason`
+  // enum in `webrtcError`. Kept as separate state rather than pre-joined into
+  // one string so the two stay independently inspectable (and so a reason
+  // arriving with no detail can never leave a stale detail from a previous,
+  // unrelated failure glued to it — every `applyWebrtcFailure` sets BOTH).
+  const [webrtcErrorDetail, setWebrtcErrorDetail] = useState<string | null>(null)
   const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
   // True once the `<video>` sink has decoded its first real frame
   // (`onLoadedMetadata` — the point `videoWidth`/`videoHeight` become
@@ -755,7 +762,9 @@ export function BrowserLiveView({
   const attached = mediaStream !== null
 
   const isControlling = statusState === 'controlling'
-  const webrtcErrorMessage = webrtcError ? translateWebRTCFallbackReason(webrtcError) : null
+  const webrtcErrorMessage = webrtcError
+    ? translateWebRTCFallbackReason(webrtcError, webrtcErrorDetail ?? undefined)
+    : null
   // Unified error surface: a transport-level error always wins; then a
   // WebRTC failure (there is nothing left to fall back to, so this is
   // terminal until the user retries or a fresh attempt succeeds); then the
@@ -1085,6 +1094,7 @@ export function BrowserLiveView({
     machine.onStream((stream) => {
       setWebrtcStream(stream)
       setWebrtcError(null) // recovered
+      setWebrtcErrorDetail(null)
     })
     machine.onInputChannelOpen(() => {
       inputChannelOpenRef.current = true
@@ -1108,12 +1118,23 @@ export function BrowserLiveView({
     // Factored out (fix-wave, external review F1, 2026-08-13) so the SAME
     // reset-and-report logic can also run from `onWebRTCState` below for the
     // gap that callback covers on its own — see that handler's doc comment.
-    const applyWebrtcFailure = (reason: string) => {
-      console.warn('[browser-live] WebRTC failed:', reason)
+    const applyWebrtcFailure = (reason: string, detail?: string) => {
+      // Logged as ONE argument when there is no gateway cause, not with a
+      // trailing empty string: a console line reading `failed: ice-failed ""`
+      // is noise, and the arity is what the sibling suites assert on.
+      if (detail === undefined) {
+        console.warn('[browser-live] WebRTC failed:', reason)
+      } else {
+        console.warn('[browser-live] WebRTC failed:', reason, detail)
+      }
       setWebrtcStream(null)
       setWebrtcHasAudio(false)
       setVideoReady(false)
       setWebrtcError(reason)
+      // Always written, never conditionally skipped: a fresh failure with no
+      // detail must CLEAR the previous one's, or the panel would attribute an
+      // old cause to a new failure.
+      setWebrtcErrorDetail(detail ?? null)
       inputChannelOpenRef.current = false
     }
     machine.onFallback(applyWebrtcFailure)
@@ -1233,7 +1254,7 @@ export function BrowserLiveView({
         // the exact same reset-and-report logic `onFallback` uses above, so
         // this can never drift into different copy for the identical signal.
         if (machine.state !== 'offering' && machine.state !== 'connected') {
-          applyWebrtcFailure(f.reason ?? 'unavailable')
+          applyWebrtcFailure(f.reason ?? 'unavailable', f.reason_detail)
         }
       },
       onError: (message) => setConnError(message),
@@ -2518,6 +2539,7 @@ export function BrowserLiveView({
   // comment) and a real retry attempt must reset both, not just one.
   const retryWebRTC = () => {
     setWebrtcError(null)
+    setWebrtcErrorDetail(null)
     setFirstFrameTimedOut(false)
     setFirstFrameDeadlineNonce((n) => n + 1)
     webrtcRef.current?.stop()

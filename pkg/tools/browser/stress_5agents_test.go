@@ -1,13 +1,30 @@
 package browser
 
-// SC-002 stress test (spec §11): 5 agents browse concurrently against the ONE
-// shared Chrome, each in its own browser context, each rendering its OWN page —
-// the headline acceptance for ADR-043. Drives real Chrome via the coordinator
-// (no LLM/agent-loop needed), so it runs anywhere a managed Chrome can launch.
+// SC-002 stress test (spec §11), REWRITTEN for ADR-072 D1.
 //
-// Proves: (1) one Chrome for 5 agents (single PID); (2) 5 distinct isolated
-// contexts (no cross-agent page bleed); (3) all 5 concurrent navigations
-// succeed; (4) total browsing RSS under the documented cap.
+// The old scenario was five agents each in their own CDP browser context
+// inside one Chrome — five implicit per-agent jars. That is no longer a
+// scenario the product has: FR-031 deleted CDP browser contexts, and
+// ownership is per WORKSPACE. So this file now covers the two scenarios that
+// replaced it:
+//
+//	TestFiveAgents_ConcurrentStress  five agents on ONE workspace, sharing
+//	                                 that workspace's single Chrome. This is
+//	                                 the new NORMAL case, and what it proves
+//	                                 is CONTENTION being survivable: five
+//	                                 concurrent navigations, five correct
+//	                                 pages, one top-level Chrome process.
+//	TestFiveWorkspaces_Isolation     five workspaces, admitted or refused by
+//	                                 the memory gate (there is no cap), each
+//	                                 with its OWN Chrome and its own
+//	                                 --user-data-dir. Lives in
+//	                                 pool_lifecycle_integration_test.go
+//	                                 alongside the rest of the pool's
+//	                                 real-Chrome coverage.
+//
+// Note what is NOT asserted here any more: distinct browser context ids.
+// There are none, and the isolation claim they used to stand in for is now
+// made — and proved — one level down, between PROCESSES.
 
 import (
 	"context"
@@ -282,12 +299,12 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	})
 
 	cfg, home := newCoordinatorTestConfig(t)
-	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord := NewBrowserCoordinator(home, cfg)
 	t.Cleanup(func() { coord.Shutdown() })
+	sharedKey := browserTestKey("ws-contention")
 
 	type result struct {
 		agentID string
-		ctxID   string
 		body    string
 		err     error
 	}
@@ -298,13 +315,15 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	for i := 0; i < numAgents; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		mgr := newTestManager(t, cfg)
-		mgr.AttachSharedChrome(coord, agentID)
+		// ONE workspace key for all five agents — that is the point of the
+		// rewrite. Keying per agent would be the retired D1.9a shape.
+		mgr.AttachSharedChrome(coord, sharedKey)
 
 		wg.Add(1)
 		go func(i int, agentID string, mgr *BrowserManager) {
 			defer wg.Done()
 			<-start
-			tabCtx, err := mgr.Session(defaultSessionID)
+			tabCtx, err := mgr.Session(testSessionID)
 			if err != nil {
 				results[i] = result{agentID: agentID, err: fmt.Errorf("Session: %w", err)}
 				return
@@ -321,7 +340,7 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 				results[i] = result{agentID: agentID, err: fmt.Errorf("navigate/read: %w", err)}
 				return
 			}
-			results[i] = result{agentID: agentID, ctxID: string(mgr.browserCtxID), body: body}
+			results[i] = result{agentID: agentID, body: body}
 		}(i, agentID, mgr)
 	}
 	close(start)
@@ -332,7 +351,6 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 		t.Fatal("expected a single live shared Chrome pid after 5 agents browsed")
 	}
 
-	seenCtx := map[string]bool{}
 	for i, r := range results {
 		if r.err != nil {
 			t.Errorf("agent-%d failed: %v", i, r.err)
@@ -340,23 +358,16 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 		}
 		want := fmt.Sprintf("AGENT-%d-MARKER", i)
 		if !strings.Contains(r.body, want) {
-			t.Errorf("agent-%d cross-context bleed: body=%q (want %q) — isolation broken", i, r.body, want)
+			t.Errorf(
+				"agent-%d read the wrong page under contention: body=%q (want %q) — "+
+					"five agents sharing one workspace's Chrome must still each land on their own tab",
+				i, r.body, want,
+			)
 		}
-		if r.ctxID == "" {
-			t.Errorf("agent-%d has empty browser context id", i)
-		} else {
-			seenCtx[r.ctxID] = true
-		}
-	}
-	if len(seenCtx) != numAgents {
-		t.Errorf("expected %d distinct browser contexts; got %d", numAgents, len(seenCtx))
-	}
-	if coord.contextCount() != numAgents {
-		t.Errorf("coordinator contextCount=%d, want %d", coord.contextCount(), numAgents)
 	}
 
 	rssMB := chromeTreeRSSKB(t, coord) / 1024
-	t.Logf("5-agent concurrent stress: 1 Chrome pid=%d, %d contexts, tree RSS=%d MB", pid, coord.contextCount(), rssMB)
+	t.Logf("5-agent single-workspace contention: 1 Chrome pid=%d, tree RSS=%d MB", pid, rssMB)
 	// G8: five isolated Chrome contexts on GH ubuntu-latest with the
 	// action-installed Google Chrome measured 4311 MB (2026-08-16) — just
 	// over the 4 GB ceiling that replaced the original 6 GB sanity cap.
@@ -366,10 +377,10 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 		t.Errorf("5-agent browsing RSS %d MB exceeds the 6 GB documented cap", rssMB)
 	}
 
-	// G8: assert exactly ONE top-level Chromium browser process (either
-	// installable build — see countTopLevelChromeProcesses) — the headline
-	// "one Chrome for N agents" acceptance. A second top-level process would
-	// mean a coordinator leak (two Chrome instances).
+	// G8, re-scoped: exactly ONE top-level Chromium browser process for five
+	// agents on ONE workspace. Under ADR-072 "one Chrome" is a per-workspace
+	// claim, not a per-gateway one — a second top-level process HERE would
+	// mean a leak, whereas five workspaces are SUPPOSED to have five.
 	topLevel := countTopLevelChromeProcesses(cfg.ExecPath)
 	t.Logf("top-level chrome/chrome-headless-shell processes: %d", topLevel)
 	if topLevel != 1 {

@@ -10,9 +10,9 @@
 // tools.GeneralBuiltinMetadata):
 //   - Instances returned here are NEVER Execute()d. The per-agent registry
 //     (pkg/agent/loop.go → browser.RegisterTools) remains the sole execution
-//     source, with a live *BrowserManager. The central catalog only calls
+//     source, with a live ManagerResolver. The central catalog only calls
 //     Name(), Description(), and Category().
-//   - Instances are constructed with a nil *BrowserManager. This is safe because
+//   - Instances are constructed with a nil ManagerResolver. This is safe because
 //     every browser tool's Name()/Description()/Category() is a static string
 //     (no mgr dereference). Execute() is never called on these instances.
 //   - browser_evaluate is constructed with executeEnabled=false (the metadata
@@ -32,7 +32,7 @@ import "github.com/elicify-ai/omnipus/pkg/tools"
 // BuiltinRegistry.
 //
 // The returned tools MUST NOT be Execute()d. All instances carry a nil
-// *BrowserManager — safe for metadata only.
+// ManagerResolver — safe for metadata only.
 func BrowserBuiltinMetadata() []tools.Tool {
 	return []tools.Tool{
 		&NavigateTool{},
@@ -47,5 +47,29 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&SwitchTabTool{},
 		&CloseTabTool{},
 		&OpenTabTool{},
+		// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+		//
+		// THESE ENTRIES ARE ATOMIC WITH THE POLICY SEED, not merely adjacent
+		// to it: TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// compares this catalog against coreagent's allStaticToolNames, and a
+		// registered tool whose policy is unseeded does NOT abort boot — it
+		// resolves a silent deny on every agent. See allStaticToolNames'
+		// comment in pkg/coreagent/core.go.
+		&SelectOptionTool{},
+		&PressKeyTool{},
+		&HoverTool{},
+		&SnapshotTool{},
+		// ADR-072 D2 Stream C — the dialog recovery verb. Its Name,
+		// Description and Category are static strings with no mgr
+		// dereference, per this file's binding invariant: these instances
+		// carry a nil *BrowserManager and are never Execute()d.
+		&HandleDialogTool{},
+		// browser_upload_file appears HERE while it is deliberately absent
+		// from RegisterTools (FR-029, issue #659). That asymmetry is the
+		// point: "held" means unregistered, not unseeded. The name must be in
+		// this catalog and in allStaticToolNames or the drift test fails; it
+		// must NOT be in the registry or an agent can call a tool whose
+		// unattended-approval story is not finished.
+		&UploadFileTool{},
 	}
 }

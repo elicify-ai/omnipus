@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { MagnifyingGlass, Plus, Star } from '@phosphor-icons/react'
+import { MagnifyingGlass, Plus, Star, Warning } from '@phosphor-icons/react'
 import {
   Popover,
   PopoverContent,
@@ -24,6 +24,32 @@ interface AddAgentPickerProps {
  * [+ Add agent] — a popover picker of global agents not yet on the workspace
  * team. Selecting one adds a node (= team membership). Searchable; shows the
  * agent avatar, name, and role so the choice is unambiguous.
+ *
+ * ADR-072 FR-047 — the elevation-of-privilege disclosure lives HERE, above the
+ * candidate list, and not anywhere else.
+ *
+ * Adding an agent to a workspace team is not only an organisational act. Under
+ * ADR-072 a browser belongs to the workspace: one Chrome, one profile, one
+ * cookie jar, shared by everyone on the team. So the moment an agent joins, it
+ * can drive every site that workspace is already signed in to — the operator's
+ * own live sessions, not a fresh logged-out browser. Since D1.10 that reach
+ * extends to unattended work: a scheduled or heartbeat turn inherits the same
+ * logins with nobody watching.
+ *
+ * Placement is the requirement, not decoration. This flow has no confirmation
+ * step — clicking a candidate calls onAdd immediately — so the click on a
+ * candidate IS the confirm action, and the disclosure has to be on screen
+ * before it. That rules out the three cheaper places it could have gone:
+ *
+ *   - a tooltip on the [+ Add agent] button (needs a hover the operator has no
+ *     reason to perform, and does not exist at all on touch),
+ *   - a toast after the add (the privilege is already granted by then),
+ *   - release notes (explicitly not sufficient — FR-047).
+ *
+ * Rendering it inside the picker rather than in WorkspaceTeamTab is also what
+ * makes it survive: the tab renders AddAgentPicker in TWO places (the header
+ * and the empty-team state), and a disclosure attached to only one of them
+ * would be a hole in exactly the flow a first-time operator takes.
  */
 export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps) {
   const [open, setOpen] = useState(false)
@@ -66,6 +92,21 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
         align="end"
         className="w-72 border-[var(--color-border)] bg-[var(--color-surface-1)] p-0"
       >
+        {/* FR-047. First thing in the popover, above the search and the
+            candidates — see the component doc comment for why it is here and
+            not in a tooltip, a toast, or the release notes. */}
+        <div
+          role="note"
+          data-testid="team-add-agent-disclosure"
+          className="flex items-start gap-2 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-2.5 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+        >
+          <Warning size={13} weight="fill" className="mt-px shrink-0" aria-hidden="true" />
+          <span>
+            An agent you add here can use this workspace&rsquo;s browser, which stays signed in to
+            every site you have logged into on it. It can act as whoever this workspace is signed
+            in as &mdash; including on scheduled and background turns nobody is watching.
+          </span>
+        </div>
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-2">
           <MagnifyingGlass size={14} className="text-[var(--color-muted)]" />
           <input tabIndex={0}

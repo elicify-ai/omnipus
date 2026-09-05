@@ -74,7 +74,21 @@ Registered by `pkg/tools/browser/register.go:39-49`. All seven are namespaced un
 | `browser.screenshot` | Capture a PNG screenshot. | `pkg/tools/browser/tools.go:209`. |
 | `browser.get_text` | Extract text content from the current page. | `pkg/tools/browser/tools.go:285`. |
 | `browser.wait` | Wait for a selector / timeout. | `pkg/tools/browser/tools.go:338`. |
-| `browser.evaluate` | Execute arbitrary JavaScript in the page context. | `pkg/tools/browser/tools.go:397`. Gated by `sandbox.browser_evaluate_enabled` (default `false`); registration is skipped when the flag is off. |
+| `browser.evaluate` | Execute arbitrary JavaScript in the page context. | `pkg/tools/browser/tools.go::EvaluateTool`. Gated by `sandbox.browser_evaluate_enabled`, **seeded `true`**. **Registration is NOT skipped when the flag is off** — the tool is always registered and always visible to the model; the gate is at `EvaluateTool.Execute`, which returns an error naming the setting. (This row previously claimed registration was skipped. That was never true, independently of the default changing.) |
+
+#### Browser configuration keys
+
+Configured under `tools.browser` in `config.json`. Every one also accepts an
+environment variable, fully qualified — the `OMNIPUS_TOOLS_BROWSER_` prefix is
+written out in full in the struct tag rather than inherited, because an
+inherited prefix is applied twice and the variable then silently never takes
+effect.
+
+| Key | Env var | Default | What it does |
+|---|---|---|---|
+| `page_timeout` | `OMNIPUS_TOOLS_BROWSER_PAGE_TIMEOUT` | `30` (seconds) | How long a single page operation may take. |
+| `lease_wait` | `OMNIPUS_TOOLS_BROWSER_LEASE_WAIT` | `2` (seconds) | How long a browser tool call waits for the single-driver lease before declaring contention and refusing. **Clamped to at most half of `page_timeout`, at load and on every reload.** Waiting longer than that lets a call spend its whole budget queueing and then fail with a page-timeout error that points at the page rather than at contention. If your configured value is lowered you get a warning naming both keys and both values — the clamp is never silent. |
+| `actionability_gate` | `OMNIPUS_TOOLS_BROWSER_ACTIONABILITY_GATE` | `full` | How thoroughly an interaction waits for an element to be genuinely actionable. `full` checks attached, visible, stable, receiving pointer events and not obscured; `visible_only` is the older, weaker check (attached and visible). **This is a temporary revert switch, not a tuning knob** — it exists so a site that regresses under the stricter gate can be unblocked while the regression is diagnosed, and it is expected to be removed once the full gate has soaked. |
 
 ### Skills
 

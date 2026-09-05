@@ -65,7 +65,6 @@ func TestCheckBuildIntegrity(t *testing.T) {
 func TestCheckBrowserVideoCapability_WebRTCDisabled(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Browser.WebRTCEnabled = false
-	cfg.Tools.Browser.CaptureSharedContext = true
 
 	warnings := checkBrowserVideoCapability(cfg)
 
@@ -88,7 +87,6 @@ func TestCheckBrowserVideoCapability_LiteBuild(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Tools.Browser.WebRTCEnabled = true
-	cfg.Tools.Browser.CaptureSharedContext = true
 
 	warnings := checkBrowserVideoCapability(cfg)
 
@@ -98,31 +96,11 @@ func TestCheckBrowserVideoCapability_LiteBuild(t *testing.T) {
 	assert.Contains(t, warnings[0].message, "BUILD")
 }
 
-// TestCheckBrowserVideoCapability_CaptureSharedContextDisabled covers
-// WARN-BROWSER-004: warns when capture_shared_context=false, the ADR-048
-// precondition doctor can verify from config alone (unlike ExtensionDir
-// seeding, which only a live BrowserManager knows about and which doctor
-// must never construct).
-func TestCheckBrowserVideoCapability_CaptureSharedContextDisabled(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapabilityWithExec only ever classifies capable on linux; skipping on " + runtime.GOOS)
-	}
-
-	origAvailable := webrtc.Available
-	webrtc.Available = true
-	t.Cleanup(func() { webrtc.Available = origAvailable })
-
-	cfg := &config.Config{}
-	cfg.Tools.Browser.WebRTCEnabled = true
-	cfg.Tools.Browser.CaptureSharedContext = false
-	cfg.Tools.Browser.ExecPath = "/usr/bin/google-chrome-stable"
-
-	warnings := checkBrowserVideoCapability(cfg)
-
-	require.Len(t, warnings, 1)
-	assert.Equal(t, "WARN-BROWSER-004", warnings[0].code)
-	assert.Contains(t, warnings[0].message, "capture_shared_context=true")
-}
+// TestCheckBrowserVideoCapability_CaptureSharedContextDisabled is DELETED
+// with ADR-072 FR-031. It asserted WARN-BROWSER-004, which warned that
+// tools.browser.capture_shared_context was false. That key no longer exists
+// and the warning it produced can no longer be true, so the test could only
+// ever have been kept green by reintroducing the defect it described.
 
 // TestCheckBrowserVideoCapability_NotCapable_IncludesReason covers
 // WARN-BROWSER-003: warns when the base classifier reports not-capable, and
@@ -139,7 +117,6 @@ func TestCheckBrowserVideoCapability_NotCapable_IncludesReason(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Tools.Browser.WebRTCEnabled = true
-	cfg.Tools.Browser.CaptureSharedContext = true
 	cfg.Tools.Browser.ProfileDir = profileDir
 	cfg.Tools.Browser.ExecPath = ""
 
@@ -173,7 +150,6 @@ func TestCheckBrowserVideoCapability_Capable(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Tools.Browser.WebRTCEnabled = true
-	cfg.Tools.Browser.CaptureSharedContext = true
 	// A non-empty, non-headless-shell-named override is enough for
 	// ClassifyVideoCapabilityWithExec to classify capable on linux — it
 	// trusts the operator's override on basename alone, no stat/probe.

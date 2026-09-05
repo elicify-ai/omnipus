@@ -37,7 +37,7 @@ import (
 // newFixWaveHandlerWithAudit mirrors newBrowserWSHandlerWithAudit
 // (browser_ws_test.go) but accepts a mutate func, the way
 // newBrowserWSTestHandler does — this file's tests need both audit
-// visibility AND per-test config control (ExecPath, CaptureSharedContext).
+// visibility AND per-test config control (ExecPath, ProfileDir).
 func newFixWaveHandlerWithAudit(
 	t *testing.T,
 	mutate func(cfg *config.Config),
@@ -109,7 +109,6 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
 	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.CaptureSharedContext = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
 	})
@@ -117,8 +116,8 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	require.True(t, mgr.CaptureVideoCapability().Capable,
 		"capability gate must report Capable=true via the exec_path filename heuristic, so the ladder reaches Start()")
 
@@ -161,7 +160,7 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	require.Nil(t, mgr.CaptureSession(),
 		"a failed Start() must not leave a stale CaptureSession registered on the manager")
 
-	cs2, err := handler.ensureCaptureSession(mgr, defaultAgent.ID, al.GetConfig())
+	cs2, err := handler.ensureCaptureSession(mgr, defaultAgent.ID, "", al.GetConfig())
 	require.NoError(t, err)
 	t.Cleanup(cs2.Stop)
 	require.NotNil(t, cs2, "ensureCaptureSession after the cleared failure must construct a genuinely fresh session")
@@ -191,10 +190,60 @@ func webrtcCapableGateMutate(t *testing.T) func(cfg *config.Config) {
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
 	return func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.CaptureSharedContext = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
 	}
+}
+
+// TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate is the
+// gateway-level guard for the ADR-072 FR-037 pool cutover — the same
+// regression pkg/tools/browser's TestCaptureVideoCapability_
+// PoolAttachedCountsAsAttached pins one layer down, asserted here on the
+// function production actually calls.
+//
+// Every manager the gateway ever sees comes from pkg/agent/loop.go's
+// browserFactory, which calls AttachPool — and AttachPool deliberately leaves
+// m.coordinator nil until the pool has launched Chrome. When the ADR-048
+// attachment check still read m.coordinator directly, every such manager
+// classified not_capable until something else happened to start a browser,
+// which is what turned eleven WebRTC tests in this package from their real
+// "error" outcomes into "not_capable" on CI, and what silently skipped the
+// boot capture warm-up for an operator running warm_capture_at_boot with
+// warm_tab_at_boot off.
+//
+// Deliberately NOT gated on runtime.GOOS: the eleven tests it backstops all
+// skip off linux, which is exactly why this regression reached CI unseen from
+// a Mac. The gate here is the host's own base video classification — if this
+// machine cannot classify video-capable at all there is nothing to assert,
+// and that is stated rather than assumed.
+func TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate(t *testing.T) {
+	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	t.Cleanup(handler.Wait)
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
+
+	if !mgr.VideoCapability().Capable {
+		t.Skipf("host cannot classify video-capable at all (%s) — nothing for the ADR-048 attachment check to gate",
+			mgr.VideoCapability().Reason)
+	}
+	if !webrtc.Available {
+		t.Skip("lite build: webrtcUnavailableReason short-circuits before the capability gate")
+	}
+
+	// The load-bearing precondition: no Chrome has been launched, so the
+	// coordinator cache is empty and only the pool attachment can carry the
+	// verdict. Without it this test would pass for the wrong reason on a host
+	// that happened to start a browser.
+	require.Nil(t, mgr.Coordinator(),
+		"test setup: nothing in this test may launch Chrome — the pool attachment is what is under test")
+
+	require.True(t, mgr.CaptureVideoCapability().Capable,
+		"a pool-attached manager must classify capture-capable before its Chrome is launched (reason=%q)",
+		mgr.CaptureVideoCapability().Reason)
+	require.Equal(t, "", webrtcUnavailableReason(al.GetConfig(), mgr),
+		"the gate ladder must let a pool-attached manager through, so a launch failure surfaces as \"error\" and not \"not_capable\"")
 }
 
 // newHandleWebRTCOfferWithFakeCapture pre-seeds mgr's CaptureSession with a
@@ -212,8 +261,8 @@ func newHandleWebRTCOfferWithFakeCapture(
 	relay *fakeRelay,
 ) webrtcStateFrameDecoder {
 	t.Helper()
-	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	var calls int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&calls, nil), nil)
@@ -512,7 +561,7 @@ func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 	handler.registerWebRTCViewerConn("viewer-nonbenign", wc, "sess-nonbenign")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-nonbenign") })
 
-	sink := handler.webrtcInputSink(mgr, al.GetConfig())
+	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	x, y := 1.0, 2.0
 	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move", X: &x, Y: &y}
 	raw, err := json.Marshal(inputFrame)
@@ -576,7 +625,7 @@ func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 
 	// viewerA holds control — standing in for a second panel, a pop-out, or an
 	// automation session that never detached.
-	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewerA"),
+	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewerA"),
 		"TakeControl for the first-ever controller of a session must succeed")
 
 	handler, al := newBrowserWSTestHandler(t, nil)
@@ -590,7 +639,7 @@ func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 	handler.registerWebRTCViewerConn("viewerB", wcB, "sess-arb")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerB") })
 
-	sink := handler.webrtcInputSink(mgr, al.GetConfig())
+	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move"}
 	raw, err := json.Marshal(inputFrame)
 	require.NoError(t, err)
@@ -632,13 +681,25 @@ func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 // reason differently.
 func TestWebrtcUnavailableReason_GateLadder(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
-		cfg.Tools.Browser.ProfileDir = t.TempDir() // guaranteed not_capable: no chrome installed here
+		// Nested one level below t.TempDir(), like every other browser test in
+		// this package — NOT the bare t.TempDir() this used to be.
+		// InstallRootForProfileDir is grandparent(profileDir)/chromium, so a
+		// bare t.TempDir() ("$TMPDIR/TestX/001") resolves the managed-Chrome
+		// install root to "$TMPDIR/chromium" — a machine-wide path OUTSIDE
+		// the test's own tree. On any host where an earlier run left a real
+		// Chrome-for-Testing download there (reproduced on a dev Mac
+		// 2026-09-03), the base classifier reports Capable=true and this
+		// subtest's whole premise is false; it only kept passing because the
+		// ADR-048 coordinator check happened to reject the manager for an
+		// unrelated reason. Nesting puts the install root at
+		// "$TMPDIR/TestX/chromium", which t.TempDir() guarantees is empty.
+		cfg.Tools.Browser.ProfileDir = filepath.Join(t.TempDir(), "browser-profile")
 	})
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	t.Run("disabled", func(t *testing.T) {
 		cfg := al.GetConfig()
@@ -679,8 +740,8 @@ func TestWebrtcUnavailableReason_AgreesAcrossBothCallers(t *testing.T) {
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	cfg := al.GetConfig()
 
 	directReason := webrtcUnavailableReason(cfg, mgr)

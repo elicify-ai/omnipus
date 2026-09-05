@@ -32,7 +32,7 @@ The gateway applies sandbox config exactly once, at boot. There is no hot-reload
     "max_concurrent_dev_servers": 4,
     "max_concurrent_builds": 2,
     "dev_server_port_range": [18000, 18999],
-    "browser_evaluate_enabled": false,
+    "browser_evaluate_enabled": true,
     "skill_trust": "warn_unverified",
     "prompt_injection_level": "medium",
     "audit_log": true
@@ -53,7 +53,7 @@ Field reference (defaults applied by the boot validator when the field is omitte
 | `max_concurrent_dev_servers` | `4` | Tier 3 `web_serve` dev-mode cap across all agents (`pkg/config/sandbox.go:233`). |
 | `max_concurrent_builds` | `2` | Tier 2 `build_static` cap (`pkg/config/sandbox.go:237`). |
 | `dev_server_port_range` | `[18000, 18999]` | Inclusive port range for Tier 3 (`web_serve` dev-mode) dev servers only. `bash` (ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into it) has no port-exposure capability — that capability was dropped, not ported, when `workspace_shell_bg` was merged (ADR-036 §3.1). Also feeds the Landlock bind/connect allow-list on ABI v4+. |
-| `browser_evaluate_enabled` | `false` | Gates `browser.evaluate` (arbitrary JS execution). |
+| `browser_evaluate_enabled` | `true` (seeded) | Installation-wide switch for `browser_evaluate` (arbitrary in-page JavaScript). **Seeded `true` on a fresh install**; which agents may call the tool is a separate question answered by each agent's tool policy (Jim holds the only agent-level grant on a fresh install). Setting it to `false` is an operator opt-out: the tool stays registered and visible to the model, but refuses at execution with a message naming this setting. **The only way to turn it off is to hand-edit `config.json` and restart** — neither Settings → Security nor the sandbox-config API can express this key. Note what the JavaScript runs against: a browser holding your live logins. |
 
 Note: there is no `experimental.workspace_shell_enabled` feature flag. `bash` (ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into it) is registered for every agent regardless of sandbox mode and is governed exclusively by each agent's explicit tool-policy entry (CLAUDE.md hard constraint 6) — set the `bash` policy to `deny` or `ask` per agent to restrict it, there is no global gate to flip.
 

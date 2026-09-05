@@ -203,13 +203,19 @@ func tokenFromMarkerSelector(marker string) string {
 // originally introduced locally; now shared by every text-resolving tool for
 // consistency: prefer `selector` when given (it is the more specific of the
 // two when both are present — `text` is then merely scoping context already
-// implied by a successful resolution), falling back to `text` only when
-// selector is empty.
-func displayLocator(selector, text string) string {
-	if selector != "" {
-		return selector
+// implied by a successful resolution), falling back to `text`, and finally to
+// the role+name rendering when neither is set.
+// Role+name is rendered as the agent wrote it (role=button name="Submit"),
+// so an error about an element found that way names it that way and not by
+// some CSS string the agent never typed.
+func displayLocator(loc Locator) string {
+	if loc.Selector != "" {
+		return loc.Selector
 	}
-	return text
+	if loc.Text != "" {
+		return loc.Text
+	}
+	return displayRoleName(loc)
 }
 
 // scrubMarkerFromError replaces any literal occurrence of the internal

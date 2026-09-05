@@ -332,7 +332,7 @@ func TestClassifyVideoCapabilityWithExec_Table(t *testing.T) {
 // seeded extension still must NOT report Capable=true when the coordinator's
 // shared-default-context capture mode is disabled — capture is certain to
 // fail (chrome.tabCapture cannot reach a tab in a CDP-created context).
-func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
+func TestCaptureVideoCapability_RequiresCoordinatorAttached(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
@@ -346,24 +346,77 @@ func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
 	mgr.cfg.ExtensionDir = t.TempDir()
 	seedBuildBinary(t, mgr.InstallRoot(), "131.0.6778.108", platform, fullChromeBuild())
 
-	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
-	// captureSharedContext left at its zero-value (false/disabled) — no
-	// SetCaptureSharedContext(true) call.
-	mgr.AttachSharedChrome(coord, "agent-cap-test")
-
+	// No AttachSharedChrome yet: this manager drives no Chrome that the
+	// encoder page could share, so capture cannot succeed and the classifier
+	// must say so rather than advertising Capable=true.
 	got := mgr.CaptureVideoCapability()
 	if got.Capable {
-		t.Fatalf("CaptureVideoCapability = Capable=true with shared-context capture disabled, want not-capable")
+		t.Fatalf("CaptureVideoCapability = Capable=true with no coordinator attached, want not-capable")
 	}
 	if got.Reason == "" {
 		t.Fatal("expected a non-empty operator-facing Reason")
 	}
 
-	coord.SetCaptureSharedContext(true)
+	mgr.AttachSharedChrome(
+		NewBrowserCoordinator(t.TempDir(), BrowserConfig{}),
+		browserTestKey("agent-cap-test"),
+	)
 	got = mgr.CaptureVideoCapability()
 	if !got.Capable {
 		t.Fatalf(
-			"CaptureVideoCapability = Capable=false after enabling shared-context capture, want true (reason=%q)",
+			"CaptureVideoCapability = Capable=false once a coordinator is attached, want true (reason=%q)",
+			got.Reason,
+		)
+	}
+}
+
+// TestCaptureVideoCapability_PoolAttachedCountsAsAttached is the regression
+// guard for the ADR-072 FR-037 pool cutover.
+//
+// AttachSharedChrome pins a coordinator at attach time; AttachPool — which is
+// production's ONLY path (pkg/agent/loop.go's browserFactory) — deliberately
+// does not, because which Chrome the manager drives is resolved on every
+// ensureStarted. A capability check that read m.coordinator directly therefore
+// stopped asking "is this manager attached to the workspace's Chrome" and
+// started asking "has that Chrome been launched yet", so every pool-attached
+// manager classified not_capable until something else happened to start it —
+// which is what silently disabled the boot-time capture warm-up for an
+// operator running warm_capture_at_boot with warm_tab_at_boot off, and what
+// made eleven pkg/gateway WebRTC tests report "not_capable" where they expect
+// the real "error" outcome.
+//
+// The load-bearing assertion is the Coordinator()==nil check: it proves the
+// Capable=true verdict came from the ATTACHMENT and not from a Chrome having
+// been launched behind the test's back.
+func TestCaptureVideoCapability_PoolAttachedCountsAsAttached(t *testing.T) {
+	if _, err := cftPlatform(); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	withCapabilitySeams(t, "linux")
+
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Fatalf("cftPlatform: %v", err)
+	}
+	mgr := newCapabilityTestManager(t)
+	mgr.cfg.ExtensionDir = t.TempDir()
+	seedBuildBinary(t, mgr.InstallRoot(), "131.0.6778.108", platform, fullChromeBuild())
+
+	if got := mgr.CaptureVideoCapability(); got.Capable {
+		t.Fatal("test setup: an unattached manager must classify not-capable")
+	}
+
+	pool := NewBrowserPool(t.TempDir(), BrowserConfig{})
+	t.Cleanup(pool.Shutdown)
+	mgr.AttachPool(pool, browserTestKey("agent-pool-cap-test"))
+
+	if mgr.Coordinator() != nil {
+		t.Fatal("AttachPool must NOT pin a coordinator — the whole point is that the pool resolves one per ensureStarted")
+	}
+	got := mgr.CaptureVideoCapability()
+	if !got.Capable {
+		t.Fatalf(
+			"CaptureVideoCapability = Capable=false for a pool-attached manager, want true (reason=%q)",
 			got.Reason,
 		)
 	}

@@ -67,7 +67,7 @@ func (c *chainRecorder) count(ev string) int {
 // — otherwise the recapture resolves the old tab and the stream silently never
 // moves, which is exactly the shipped bug.
 func TestSwitchTab_ActivationPrecedesTabsChangedNotification(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	rec := &chainRecorder{}
 
 	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
@@ -84,16 +84,16 @@ func TestSwitchTab_ActivationPrecedesTabsChangedNotification(t *testing.T) {
 		_ = activeIdx
 	})
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	rec.mu.Lock()
 	rec.events = nil // discard setup noise
 	rec.mu.Unlock()
 
-	_, err = m.SwitchTab(DefaultSessionID, 0)
+	_, err = m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
 
 	got := rec.snapshot()
@@ -108,7 +108,7 @@ func TestSwitchTab_ActivationPrecedesTabsChangedNotification(t *testing.T) {
 // switch, which is how the live session ended up three-way desynced (tab strip,
 // URL bar, and pixels all disagreeing).
 func TestSwitchTab_EverySwitchActivatesAndNotifies(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	rec := &chainRecorder{}
 
 	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
@@ -119,10 +119,10 @@ func TestSwitchTab_EverySwitchActivatesAndNotifies(t *testing.T) {
 	}
 	m.SetTabsChangedFunc(func(string, []Tab, int) { rec.add("notify") })
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		_, err = m.OpenTab(DefaultSessionID)
+		_, err = m.OpenTab(testSessionID)
 		require.NoError(t, err)
 	}
 
@@ -132,7 +132,7 @@ func TestSwitchTab_EverySwitchActivatesAndNotifies(t *testing.T) {
 
 	order := []int{2, 0, 1, 0, 2}
 	for _, idx := range order {
-		_, err := m.SwitchTab(DefaultSessionID, idx)
+		_, err := m.SwitchTab(testSessionID, idx)
 		require.NoError(t, err)
 	}
 
@@ -148,7 +148,7 @@ func TestSwitchTab_EverySwitchActivatesAndNotifies(t *testing.T) {
 // panel activates one tab while the capture binds another — the desync in a
 // different disguise.
 func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 
 	// Capture the activated context via a slice rather than assigning a
 	// context.Context into a captured variable — the latter trips fatcontext
@@ -166,9 +166,9 @@ func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 		return nil
 	}
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	// Discard setup activations: OpenTab foregrounds the tab it opens too
@@ -177,13 +177,13 @@ func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 	activatedCtxs = activatedCtxs[:0]
 	mu.Unlock()
 
-	_, err = m.SwitchTab(DefaultSessionID, 1)
+	_, err = m.SwitchTab(testSessionID, 1)
 	require.NoError(t, err)
 
 	// Session() is the oracle the live/capture paths use to resolve "the
 	// active tab" (ADR-041 D1) — the activation must have targeted that exact
 	// context.
-	resolved, err := m.Session(DefaultSessionID)
+	resolved, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	mu.Lock()
@@ -198,7 +198,7 @@ func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 // registry relies on to decide whether the active tab actually changed
 // (onTabsChanged's activeTabChanged signal, which gates the recapture).
 func TestSwitchTab_TabsChangedReceivesNewActiveIndex(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 
 	var mu sync.Mutex
 	var gotIdx []int
@@ -212,18 +212,18 @@ func TestSwitchTab_TabsChangedReceivesNewActiveIndex(t *testing.T) {
 		}
 	})
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	mu.Lock()
 	gotIdx, gotActiveFlags = nil, nil
 	mu.Unlock()
 
-	_, err = m.SwitchTab(DefaultSessionID, 1)
+	_, err = m.SwitchTab(testSessionID, 1)
 	require.NoError(t, err)
 
 	mu.Lock()
@@ -238,14 +238,14 @@ func TestSwitchTab_TabsChangedReceivesNewActiveIndex(t *testing.T) {
 // browsing context must not stall unrelated manager work, or one wedged tab
 // takes the whole browser subsystem down with it.
 func TestSwitchTab_SlowActivationDoesNotBlockOtherSessions(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 
 	release := make(chan struct{})
 	entered := make(chan struct{}, 1)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	// Installed AFTER setup, deliberately: OpenTab drives the same focus seam
@@ -264,7 +264,7 @@ func TestSwitchTab_SlowActivationDoesNotBlockOtherSessions(t *testing.T) {
 	switched := make(chan struct{})
 	go func() {
 		defer close(switched)
-		_, _ = m.SwitchTab(DefaultSessionID, 1)
+		_, _ = m.SwitchTab(testSessionID, 1)
 	}()
 
 	select {
@@ -279,7 +279,7 @@ func TestSwitchTab_SlowActivationDoesNotBlockOtherSessions(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _, _ = m.ListTabs(DefaultSessionID)
+		_, _, _ = m.ListTabs(testSessionID)
 	}()
 
 	select {

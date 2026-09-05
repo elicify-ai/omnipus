@@ -1831,7 +1831,11 @@ export const SessionPage: z.ZodType<SessionPage> = z.object({
   partial_errors: z.array(z.string()).optional(),
 });
 export const SessionCreateRequest = z
-  .object({ agent_id: z.string(), type: z.enum(["chat", "task", "channel"]) })
+  .object({
+    agent_id: z.string(),
+    type: z.enum(["chat", "task", "channel"]),
+    workspace_id: z.string().max(128),
+  })
   .partial();
 export const Attachment: z.ZodType<Attachment> = z.object({
   type: z.enum(["image", "audio", "video", "file"]),
@@ -2486,7 +2490,7 @@ export const SandboxStatus = z
 export const AuditEntry: z.ZodType<AuditEntry> = z
   .object({
     timestamp: z.string().datetime({ offset: true }),
-    event: z.string().regex(/^[a-z_]+$/),
+    event: z.string().regex(/^[a-z_.]+$/),
     decision: z.enum(["allow", "deny", "error"]).optional(),
     agent_id: z.string().optional(),
     session_id: z.string().optional(),
@@ -2536,6 +2540,7 @@ export const PerformanceSettings = z
   .object({
     max_parallel_agents: z.number().int().gte(1),
     effective_max_parallel_agents: z.number().int().gte(1),
+    max_parallel_agents_configured: z.boolean(),
     tools_on_demand: z.boolean(),
   })
   .partial();
@@ -11257,6 +11262,7 @@ export const BrowserWebRTCStateFrame = z
     session_id: z.string().max(128).optional(),
     available: z.boolean(),
     reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied", "ingest_timeout"]).optional(),
+    reason_detail: z.string().max(512).optional(),
     has_audio: z.boolean().optional(),
     active: z.boolean().optional(),
     ice_servers: z.array(z

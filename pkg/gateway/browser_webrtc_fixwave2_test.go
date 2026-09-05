@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,14 +76,13 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	// Capability gate must pass so the ladder actually reaches
 	// h.captureFenceMu.Lock() instead of returning earlier at "not_capable".
@@ -164,14 +165,13 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	installRoot := mgr.InstallRoot()
 	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")
@@ -183,7 +183,9 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	releaseStart := make(chan struct{})
 	t.Cleanup(func() { close(releaseStart) })
 	starter := browser.EncoderStarter(
-		func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+		func(
+			context.Context, *browser.BrowserManager, string, string, string, string,
+		) (context.Context, context.CancelFunc, error) {
 			close(startCalled)
 			<-releaseStart
 			ctx, cancel := context.WithCancel(context.Background())
@@ -533,7 +535,7 @@ func TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField(t *testing.T)
 	handler.registerWebRTCViewerConn("viewer-oversized-text", wc, "sess-oversized-text")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-oversized-text") })
 
-	sink := handler.webrtcInputSink(mgr, al.GetConfig())
+	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
 
 	oversized := generated.BrowserInputFrame{
 		Type: "browser_input",

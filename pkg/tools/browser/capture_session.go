@@ -2,24 +2,36 @@ package browser
 
 // capture_session.go implements the ADR-047 / wave-plan W2-A per-agent WebRTC
 // capture session: it owns the gateway-owned encoder page's lifecycle (the
-// capture extension's chrome-extension://<id>/encoder.html target, created in
-// the DEFAULT browser context — Chrome refuses extension pages inside
-// CDP-created contexts, see defaultEncoderStarter — resolving the agent's tab
-// via encoder.js's chrome.tabs.query. Fix-wave comment correction: an
-// earlier version of this paragraph attributed that resolution to the
-// extension being loaded enableInIncognito, but ADR-048 established
-// (real Chrome 150) that enableInIncognito only grants the extension
-// VISIBILITY into per-agent CDP-created contexts' tabs, never CAPTURABILITY
-// of them — see coordinator.go's LoadExtension doc comment. The actual
-// mechanism that lets encoder.js resolve the RIGHT tab is
-// tools.browser.capture_shared_context (ADR-048 condition 1): when enabled,
-// the agent's OWN session is also bootstrapped into this SAME default
-// context the encoder page lives in, so chrome.tabs.query and
-// chrome.tabCapture both operate on a tab that is genuinely in-context, no
-// cross-context visibility trick required) plus the Pion SFU relay Session that backs it. One CaptureSession exists per agent
-// (BrowserManager.capture), created lazily on the first WebRTC-capable
-// viewer offer and torn down on last-viewer-detach (after a grace period) or
-// on browser death (live.go's watchForUnexpectedDeath) or manager Shutdown.
+// capture extension's chrome-extension://<id>/encoder.html target), plus the
+// Pion SFU relay Session that backs it. One CaptureSession exists per agent
+// (BrowserManager.capture), created lazily on the first WebRTC-capable viewer
+// offer and torn down on last-viewer-detach (after a grace period) or on
+// browser death (live.go's watchForUnexpectedDeath) or manager Shutdown.
+//
+// WHY encoder.js can resolve the tab it is asked to capture, stated for the
+// world this code now lives in: every browsing session and the encoder page
+// alike live in the browser's ONE default context, so chrome.tabs.query and
+// chrome.tabCapture both operate on tabs that are genuinely in-context. There
+// is nothing to arrange and no setting to get right.
+//
+// That used not to be true, and the history is kept because it is the reason
+// the encoder page is created the way it is rather than a footnote. Sessions
+// were once placed in per-agent CDP-CREATED browser contexts, and against
+// those Chrome refuses to host chrome-extension:// pages at all
+// (net::ERR_BLOCKED_BY_CLIENT) and chrome.tabCapture answers "Invalid tab
+// specified." for any tab inside one — enableInIncognito grants the extension
+// VISIBILITY of such tabs and never CAPTURABILITY (ADR-048, verified against
+// real Chrome 150). A tools.browser.capture_shared_context knob chose between
+// the two placements.
+//
+// ADR-072 FR-031 retired CDP browser contexts and that knob outright. DO NOT
+// read the paragraph above as a live mechanism: there is no CDP-created
+// context to avoid, no capture_shared_context to enable, and no cross-context
+// visibility trick in play. Isolation moved down a level — one Chrome PROCESS
+// and one --user-data-dir per workspace (FR-037) — where it is enforced by the
+// OS, survives a restart, and does not cost the operator video.
+// TestNoCDPBrowserContextIsEverCreated guards the identifiers; it cannot guard
+// prose, which is why this paragraph is explicit instead of merely deleted.
 //
 // Package boundary discipline (mirrors pkg/tools/browser/webrtc's own rule):
 // this file does NOT import pkg/api/generated or pkg/audit. The gateway
@@ -245,7 +257,14 @@ type viewerRegistration struct {
 // Exported purely as a test-injection seam (mirrors this package's existing
 // createTabFn/pipeLauncher/listTargets testability pattern) — production code
 // always uses defaultEncoderStarter.
-type EncoderStarter func(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL, stunServer string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
+//
+// panelSessionID (issue #671) is the manager-level tab set the LIVE PANEL
+// resolved for this capture — the encoder page must be raised alongside
+// THAT set's tab, not the operator's workspace-owned one, or the video
+// shows a different tab from the one the panel's clicks drive. Empty means
+// "no panel context" and falls back to the operator's set, which is what
+// every fake starter in the tests passes.
+type EncoderStarter func(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
 
 // CaptureSession owns one agent's WebRTC capture stream end to end: the
 // encoder-page CDP target, the minted ingest capability token, the Pion SFU
@@ -271,6 +290,18 @@ type CaptureSession struct {
 	// (production), empty for NewCaptureSessionWithDeps callers (tests) unless
 	// they choose to care about it.
 	stunServer string
+	// panelSessionID is the manager-level tab set the live panel resolved for
+	// this capture (issue #671), fixed at construction. Empty means "no panel
+	// context": panelTabSet() then falls back to the operator's
+	// workspace-owned set, which is exactly the pre-#671 behaviour and what
+	// every NewCaptureSessionWithDeps caller gets.
+	//
+	// Fixed rather than mutable on purpose. One capture serves one browser
+	// (EnsureCaptureSession memoizes per browsing key), so the first offer's
+	// resolution is the one the encoder page is built against; letting a later
+	// viewer re-point it would move the video out from under the viewers
+	// already watching it.
+	panelSessionID string
 
 	mu sync.Mutex
 	// startOnce/startErr collapse concurrent Start() callers into exactly one
@@ -357,10 +388,12 @@ type CaptureSession struct {
 }
 
 // NewCaptureSession constructs a production CaptureSession: mgr is the
-// agent's BrowserManager (its own browser context is where the encoder page
-// will be created — see defaultEncoderStarter, which loads the extension via
-// mgr.Coordinator()'s own BrowserConfig.ExtensionDir, set once at gateway
-// boot), cfg is the Pion relay's ICE config (wave-plan item 7:
+// agent's BrowserManager — NOT because the encoder page is created in a
+// context of its own (it is not; there is one default context per browser
+// since FR-031), but because mgr is how this reaches the workspace's
+// coordinator, whose BrowserConfig.ExtensionDir defaultEncoderStarter loads
+// the capture extension from, set once at gateway boot. cfg is the Pion
+// relay's ICE config (wave-plan item 7:
 // Tools.Browser.WebRTCStunServer), sink receives every "input" data-channel
 // message from every viewer (the gateway builds this — see
 // browser_webrtc.go's webrtcInputSink — so this package never needs
@@ -368,6 +401,7 @@ type CaptureSession struct {
 func NewCaptureSession(
 	mgr *BrowserManager,
 	agentID string,
+	panelSessionID string,
 	cfg webrtc.Config,
 	sink webrtc.InputSink,
 	logf func(string, ...any),
@@ -379,6 +413,7 @@ func NewCaptureSession(
 	relay := webrtc.NewSession(cfg, sink, logf)
 	cs := newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf)
 	cs.stunServer = cfg.StunServer
+	cs.panelSessionID = panelSessionID
 	return cs, nil
 }
 
@@ -491,14 +526,31 @@ type captureInjectPayload struct {
 	StunServer string `json:"stunServer,omitempty"`
 }
 
+// panelTabSet reports the manager-level tab set this capture is bound to
+// (issue #671): the id the live panel resolved, or — when this session was
+// built without one (every NewCaptureSessionWithDeps caller, and any path with
+// no panel context) — the operator's workspace-owned set, which is the
+// pre-#671 behaviour.
+//
+// Returns "" for a session with neither, i.e. a nil-manager test construction:
+// callers treat that as "no tab set to act on" rather than substituting one.
+func (cs *CaptureSession) panelTabSet() string {
+	if cs.panelSessionID != "" {
+		return cs.panelSessionID
+	}
+	if cs.mgr == nil {
+		return ""
+	}
+	return cs.mgr.OperatorSessionID()
+}
+
 // defaultEncoderStarter is the production EncoderStarter: it ensures the
-// agent's default browsing session exists (so there is a tab to capture),
-// ensures the capture extension is loaded into the shared Chrome, creates an
-// UNTRACKED CDP target in the DEFAULT browser context (see the step-3 comment
-// below for why it cannot live in the agent's own CDP context; deliberately
-// NOT via mgr.OpenTab, which would register the target in the agent's
-// visible tab strip/MaxTabs budget — the encoder page is a gateway-internal
-// target the agent/user never see), injects window.__omnipusCapture BEFORE
+// tab set the live panel resolved exists (so there is a tab to capture),
+// ensures the capture extension is loaded into this workspace's Chrome,
+// creates an UNTRACKED CDP target — deliberately NOT via mgr.OpenTab, which
+// would register it in the visible tab strip; the encoder page is a
+// gateway-internal target the agent and the user never see — injects
+// window.__omnipusCapture BEFORE
 // navigating (Page.addScriptToEvaluateOnNewDocument runs before any of the
 // target document's own scripts, per its CDP doc comment), then navigates to
 // chrome-extension://<captureext.ExtensionID>/encoder.html. stunServer (may
@@ -506,20 +558,36 @@ type captureInjectPayload struct {
 func defaultEncoderStarter(
 	ctx context.Context,
 	mgr *BrowserManager,
-	tokenHex, ingestURL, stunServer string,
+	panelSessionID, tokenHex, ingestURL, stunServer string,
 ) (context.Context, context.CancelFunc, error) {
 	if mgr == nil {
 		return nil, nil, fmt.Errorf("capture session: no browser manager")
 	}
 
-	// 1. Ensure the agent's default tab/browsing context exists — the
-	// encoder page must share ITS window (see coordinator.go's
-	// LoadExtension / this file's top-of-file doc comment for why).
-	if _, err := mgr.Session(DefaultSessionID); err != nil {
+	// 1. Ensure the tab set being watched exists — the encoder page must share
+	// ITS window (see this file's top-of-file doc comment for why).
+	//
+	// panelSessionID is what the live panel resolved for this viewer (issue
+	// #671): the watched chat's own tab set, or the operator's workspace-owned
+	// one. Passing the operator's unconditionally is the bug — with an empty
+	// operator set THIS call was what lazily created the blank /browser-start
+	// tab the video then showed, while the agent browsed in the chat's set.
+	// Empty falls back to the operator's set, the behaviour every caller
+	// without panel context had before.
+	//
+	// Either way it is a real (key, owner) tab set, never a hardcoded default
+	// session: that identity was deleted by FR-002b, and
+	// TestNoResidualDefaultSessionID exists to keep it deleted.
+	if panelSessionID == "" {
+		panelSessionID = mgr.OperatorSessionID()
+	}
+	if _, err := mgr.Session(panelSessionID); err != nil {
 		return nil, nil, fmt.Errorf("capture session: ensure agent browsing context: %w", err)
 	}
 
-	// 2. Ensure the capture extension is loaded into the shared Chrome.
+	// 2. Ensure the capture extension is loaded into THIS WORKSPACE'S Chrome.
+	// There is one per workspace now (FR-037), not one shared by the gateway,
+	// so the extension is loaded per browser and not once per process.
 	coord := mgr.Coordinator()
 	if coord == nil {
 		return nil, nil, fmt.Errorf(
@@ -532,29 +600,30 @@ func defaultEncoderStarter(
 		}
 	}
 
-	// 3. Create the encoder target in the DEFAULT browser context (a child of
-	// the coordinator's pipe rootCtx), NOT the agent's per-agent context.
-	// W3 e2e finding (verified against real Chrome 150): Chrome refuses to
-	// load chrome-extension:// pages inside CDP-created browser contexts —
-	// the navigation fails with net::ERR_BLOCKED_BY_CLIENT even when the
-	// extension was loaded with enableInIncognito:true. That flag grants the
-	// extension VISIBILITY of the CDP contexts' tabs (chrome.tabs.query sees
-	// them) — it does NOT permit hosting extension pages inside them, AND
-	// (ADR-048, a separate and more fundamental restriction) it does NOT
-	// make those tabs capturable: chrome.tabCapture still fails "Invalid tab
-	// specified." for any tab living in a CDP-created context, regardless of
-	// this flag. So the encoder page lives in the default context and
-	// resolves the agent's tab via encoder.js's tab-selection query
-	// (chrome.tabs.query sees whichever tabs are in the default context) —
-	// which only finds the agent's OWN tab there when
-	// tools.browser.capture_shared_context is enabled (ADR-048 condition 1,
-	// coordinator.go's Register) and the agent's session was therefore
-	// bootstrapped into this SAME default context, not an isolated
-	// per-agent one. Like the previous
-	// same-context design, the target is deliberately created WITHOUT
-	// mgr.OpenTab so it never appears in the agent's visible tab
-	// strip/MaxTabs budget (and the default context isn't an agent context
-	// anyway).
+	// 3. Create the encoder target as a child of the coordinator's pipe
+	// rootCtx — i.e. in this workspace's browser, alongside every tab that
+	// browser holds. There is exactly one browser context here (FR-031), so
+	// "which context" is no longer a decision this code makes; encoder.js's
+	// tab-selection query and chrome.tabCapture both see the workspace's own
+	// tabs because there is nowhere else for them to be.
+	//
+	// The target is still created WITHOUT mgr.OpenTab, and that part is a
+	// live decision rather than history: OpenTab would register the encoder
+	// page in the visible tab strip, and it is a gateway-internal page the
+	// agent and the user must never see or be able to drive.
+	//
+	// Why the encoder page is not simply put wherever is convenient — the
+	// constraint that shaped this, kept because it is the reason the code
+	// looks like this and not because it still binds: against the retired
+	// per-agent CDP-created contexts, Chrome refused to load
+	// chrome-extension:// pages at all (net::ERR_BLOCKED_BY_CLIENT, even with
+	// enableInIncognito:true), and chrome.tabCapture answered "Invalid tab
+	// specified." for any tab inside one (ADR-048, real Chrome 150). Both
+	// findings are what make a per-workspace Chrome PROCESS the right
+	// isolation boundary and a CDP context the wrong one. Do not reintroduce
+	// a CDP context to "isolate" anything here: it would break capture and
+	// nothing else, which is a failure that shows up only on a machine with a
+	// real browser.
 	rootCtx := coord.rootContext()
 	if rootCtx == nil {
 		return nil, nil, fmt.Errorf("capture session: shared Chrome is not live (no root context for the encoder page)")
@@ -626,6 +695,7 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 		tabCtx, tabCancel, startErr := cs.startEncoder(
 			ctx,
 			cs.mgr,
+			cs.panelTabSet(),
 			hex.EncodeToString(cs.token),
 			ingestURL,
 			cs.stunServer,
@@ -657,9 +727,11 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 		// lives in its own freshly-created window, which is the last-focused
 		// window at resolution time — the active-tab query then finds only
 		// the (filtered-out) extension page and falls back to "first
-		// non-extension tab", i.e. the OLDEST tab in the shared Chrome. With
-		// one agent that is coincidentally correct; with a second agent's
-		// session present the fallback binds the WRONG agent's tab. Bringing
+		// non-extension tab", i.e. the OLDEST tab in THIS WORKSPACE'S Chrome.
+		// With one agent that is coincidentally correct; and since FR-037 put
+		// every agent on a workspace into that one browser, a second agent on
+		// the same workspace is the ordinary case, not the exotic one — the
+		// fallback then binds the WRONG agent's tab. Bringing
 		// the REQUESTING agent's active tab to front here — after the
 		// encoder-target creation (the last window-focus-stealing step) and
 		// strictly before the encoder resolves its target (which happens only
@@ -685,7 +757,8 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 // bringToFrontTimeout bounds the ENTIRE bringAgentTabToFront effort —
 // session resolution AND the tab-focus action together, not just the
 // chromedp.Run half. cs.mgr.Session() takes no context parameter, so the
-// first call for an agent whose shared Chrome has never launched yet blocks
+// first call for an agent whose WORKSPACE'S Chrome has never launched yet
+// blocks
 // for as long as that launch takes: up to cdppipe's CDP-liveness-probe dial
 // timeout (~20s, cdppipe.defaultDialTimeout) if the resolved Chromium binary
 // is slow, broken, or unreachable. An earlier version of this function only
@@ -704,8 +777,8 @@ const bringToFrontTimeout = 5 * time.Second
 // is not left watching a ~0.5fps stream while it waits.
 const foregroundReassertDelay = 6 * time.Second
 
-// bringAgentTabToFront focuses this agent's current active tab (Page.
-// bringToFront on the DefaultSessionID session's active-tab context) so
+// bringAgentTabToFront focuses the active tab of the tab set this capture is
+// bound to (Page.bringToFront on panelTabSet()'s active-tab context) so
 // encoder.js's active-in-last-focused-window tab resolution binds THIS
 // agent's tab — see the call site in Start for the full rationale.
 // Best-effort by design: on any failure OR timeout the capture proceeds with
@@ -724,7 +797,19 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tabCtx, err := cs.mgr.Session(DefaultSessionID)
+		sid := cs.panelTabSet()
+		// Focus the tab that EXISTS; never manufacture one as a side effect of
+		// focusing. By the time this runs on the real path the encoder starter
+		// has already ensured the workspace-owned browsing context (step 1 of
+		// defaultEncoderStarter), so a missing context here means the capture is
+		// running against a manager that has none — and lazily creating one
+		// would open a tab nobody asked for, on a code path whose whole
+		// contract is best-effort.
+		if !cs.mgr.sessionExists(sid) {
+			cs.logf("capture[%s]: bring agent tab to front: no browsing context to focus", cs.agentID)
+			return
+		}
+		tabCtx, err := cs.mgr.Session(sid)
 		if err != nil {
 			cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
 			return
@@ -733,8 +818,7 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 		// while on a cold shared-Chrome launch — long enough for THIS
 		// capture session to have been superseded/Stop()'d by a newer one in
 		// the meantime (e.g. another agent's offer won the ADR-048
-		// condition-2 fence, see config.go's CaptureSharedContext doc
-		// comment). Re-check before stealing window focus: a late-firing
+		// condition-2 fence). Re-check before stealing window focus: a late-firing
 		// BringToFront from an already-stopped session would steal focus
 		// from whichever agent's tab is now legitimately active, for a
 		// capture that is dead either way.

@@ -1,0 +1,177 @@
+<!doctype html><meta charset="utf-8"><title>Safari MSE replay (self-reporting)</title>
+<body style="margin:0;background:#111;color:#eee;font:12px ui-monospace,monospace">
+<div style="padding:8px 12px;font:600 14px system-ui">Real-Safari replay — results POST themselves back to the server</div>
+<video id="v" autoplay playsinline muted style="width:640px;height:360px;background:#000"></video>
+<div style="padding:8px 12px"><button id="unmute" style="font:13px system-ui;padding:6px 12px">Run unmuted audio check (optional)</button>
+<span id="state" style="margin-left:12px;color:#8f8"></span></div>
+<pre id="log" style="white-space:pre-wrap;padding:0 12px"></pre>
+<script>
+// Replays a recorded appendBuffer log into THIS browser's MediaSource and POSTs
+// its own measurements to /report. Built for real Safari, which cannot be driven
+// by safaridriver here (Allow Remote Automation is off, deliberately).
+const Q = new URLSearchParams(location.search);
+const RUN = Q.get('run') || 'yt-vp9';
+const log = m => { document.getElementById('log').textContent += m + '\n'; console.log(m); };
+const setState = m => document.getElementById('state').textContent = m;
+const R = { name: 'safari-replay-' + RUN, run: RUN, ua: navigator.userAgent, ts: new Date().toISOString() };
+
+function post(tag) {
+  R.stage = tag;
+  return fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(R) }).then(() => log('[reported: ' + tag + ']')).catch(e => log('report failed ' + e.message));
+}
+
+// play() never settles on an element that can never get data (the AV1 case),
+// so every await that can stall is bounded.
+const withTimeout = (p, ms, what) => Promise.race([
+  Promise.resolve(p).then(() => 'ok', e => { throw e; }),
+  new Promise(r => setTimeout(() => r('timeout:' + what), ms)),
+]);
+// Nothing may keep the page from reporting: post whatever we have after 90s.
+setTimeout(() => { if (!R.stage) { R.watchdog = true; post('watchdog'); } }, 90000);
+
+const wait = sb => sb.updating
+  ? new Promise(r => { const d = () => r(); sb.addEventListener('updateend', d, { once: true });
+      setTimeout(() => { sb.removeEventListener('updateend', d); r('timeout'); }, 15000); })
+  : Promise.resolve();
+
+let v, ms;
+
+(async () => {
+ try {
+  const man = await (await fetch(`/out/${RUN}/manifest.json`)).json();
+  const evs = man.events;
+  v = document.getElementById('v');
+
+  const mimes = new Map();
+  for (const e of evs) if (e.ev === 'addSourceBuffer') mimes.set(e.sb, e.mime);
+  R.recordedMimes = [...mimes];
+  R.isTypeSupported = [...mimes].map(([i, m]) => [m, MediaSource.isTypeSupported(m)]);
+  R.isTypeSupported.forEach(([m, s]) => log(`isTypeSupported(${m}) = ${s}`));
+  R.sourceRecordingBytes = man.totalBytes;
+  R.sourceRecordingAppends = man.totalAppends;
+
+  ms = new MediaSource();
+  v.src = URL.createObjectURL(ms);
+  await new Promise(r => ms.addEventListener('sourceopen', r, { once: true }));
+  log('sourceopen');
+
+  const sbs = new Map();
+  let appended = 0, bytes = 0, firstErr = null;
+  const t0 = performance.now();
+  const plan = evs.filter(e => ['addSourceBuffer','append','remove','changeType','prop','duration'].includes(e.ev));
+  for (const e of plan) {
+    try {
+      if (e.ev === 'addSourceBuffer') {
+        sbs.set(e.sb, ms.addSourceBuffer(e.mime));
+        log(`addSourceBuffer OK: ${e.mime}`);
+      } else if (e.ev === 'changeType') {
+        const sb = sbs.get(e.sb); if (sb) { await wait(sb); sb.changeType(e.mime); }
+      } else if (e.ev === 'prop') {
+        const sb = sbs.get(e.sb); if (sb) { await wait(sb); try { sb[e.prop] = e.value; } catch (x) {} }
+      } else if (e.ev === 'duration') {
+        if (isFinite(e.value)) { try { ms.duration = e.value; } catch (x) {} }
+      } else if (e.ev === 'remove') {
+        const sb = sbs.get(e.sb);
+        if (sb && isFinite(e.start) && isFinite(e.end) && e.end > e.start) { await wait(sb); sb.remove(e.start, e.end); await wait(sb); }
+      } else if (e.ev === 'append') {
+        const sb = sbs.get(e.sb);
+        if (!sb || !e.file) continue;
+        const buf = await (await fetch(`/out/${RUN}/${e.file}`)).arrayBuffer();
+        await wait(sb);
+        if (e.tsOffset != null && isFinite(e.tsOffset) && sb.timestampOffset !== e.tsOffset) { try { sb.timestampOffset = e.tsOffset; } catch (x) {} }
+        sb.appendBuffer(buf);
+        await wait(sb);
+        appended++; bytes += buf.byteLength;
+        if (appended % 100 === 0) setState(`appended ${appended}…`);
+      }
+    } catch (x) {
+      firstErr = `${e.ev} id=${e.id || ''} sb=${e.sb || ''} mime=${e.mime || ''}: ${x.name}: ${x.message}`;
+      log('FAIL ' + firstErr); break;
+    }
+  }
+  R.replayMs = Math.round(performance.now() - t0);
+  R.appendsAccepted = appended; R.bytesAccepted = bytes; R.firstErr = firstErr;
+  log(`replay: ${appended} appends, ${bytes} bytes, ${R.replayMs}ms, firstErr=${firstErr}`);
+  try { if (ms.readyState === 'open') ms.endOfStream(); } catch (x) {}
+
+  // ---- muted playback measurement (Safari permits muted autoplay) ----
+  const bstart = v.buffered.length ? v.buffered.start(0) : 0;
+  const seekTo = bstart + 1;
+  await new Promise(r => { v.addEventListener('seeked', r, { once: true }); v.currentTime = seekTo; setTimeout(r, 4000); });
+  log(`seeked to ${v.currentTime.toFixed(3)}`);
+  try { const pr = await withTimeout(v.play(), 5000, 'play'); if (pr === 'timeout:play') { log('play() did not settle in 5s'); R.playStalled = true; } } catch (x) { log('play() rejected: ' + x.message); R.playRejected = x.message; }
+
+  const q0 = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : 0;
+  const a0 = v.webkitAudioDecodedByteCount || 0;
+  const ct0 = v.currentTime, w0 = performance.now();
+  const trace = [];
+  for (let i = 0; i < 32; i++) {                      // ~8 s at 250 ms
+    await new Promise(r => setTimeout(r, 250));
+    trace.push({ w: +((performance.now() - w0) / 1000).toFixed(2), ct: +v.currentTime.toFixed(3),
+      f: v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : null,
+      ab: v.webkitAudioDecodedByteCount, p: v.paused, rs: v.readyState });
+    setState(`playing… ct=${v.currentTime.toFixed(2)}`);
+  }
+  const wallEl = (performance.now() - w0) / 1000, mediaEl = v.currentTime - ct0;
+  const buf = []; for (let i = 0; i < v.buffered.length; i++) buf.push([+v.buffered.start(i).toFixed(2), +v.buffered.end(i).toFixed(2)]);
+
+  Object.assign(R, {
+    videoWidth: v.videoWidth, videoHeight: v.videoHeight, readyState: v.readyState,
+    startedAt: +ct0.toFixed(3), currentTime: +v.currentTime.toFixed(3), paused: v.paused,
+    duration: v.duration, wallElapsed: +wallEl.toFixed(2), mediaElapsed: +mediaEl.toFixed(2),
+    playbackRate: +(wallEl > 0 ? mediaEl / wallEl : 0).toFixed(3),
+    framesDecoded: (v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : 0) - q0,
+    audioBytesDecoded: (v.webkitAudioDecodedByteCount || 0) - a0,
+    audioDecodedBytesTotal: v.webkitAudioDecodedByteCount,
+    videoDecodedBytesTotal: v.webkitVideoDecodedByteCount,
+    droppedVideoFrames: v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().droppedVideoFrames : null,
+    buffered: buf, error: v.error ? (v.error.code + ':' + v.error.message) : null,
+    muted: v.muted, trace,
+  });
+  log(`PLAYBACK wall=${wallEl.toFixed(2)}s media=${mediaEl.toFixed(2)}s rate=${R.playbackRate} ${v.videoWidth}x${v.videoHeight} frames=${R.framesDecoded} audioBytes=${R.audioBytesDecoded}`);
+  log(JSON.stringify(R, null, 1));
+  setState('done — results posted');
+  await post('muted-auto');
+ } catch (e) {
+  R.fatal = e.stack || String(e); log('FATAL ' + R.fatal); await post('fatal');
+ }
+})();
+
+// Optional: user-gesture unmuted run, to prove audio actually renders.
+let unmuteRan = false;
+const runUnmuted = async () => {
+  if (unmuteRan) return; unmuteRan = true;
+  try {
+    setState('unmuted audio check…');
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ac.createMediaElementSource(v);
+    const an = ac.createAnalyser(); an.fftSize = 2048;
+    src.connect(an); an.connect(ac.destination);
+    await ac.resume();
+    v.muted = false; v.volume = 1;
+    v.currentTime = (v.buffered.length ? v.buffered.start(0) : 0) + 1;
+    await v.play();
+    const d = new Float32Array(an.fftSize); let maxRms = 0;
+    const a0 = v.webkitAudioDecodedByteCount || 0, ct0 = v.currentTime, w0 = performance.now();
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      an.getFloatTimeDomainData(d);
+      let s = 0; for (const x of d) s += x * x;
+      maxRms = Math.max(maxRms, Math.sqrt(s / d.length));
+    }
+    R.unmuted = { audioMaxRms: +maxRms.toFixed(5), audioContextState: ac.state,
+      audioBytesDecoded: (v.webkitAudioDecodedByteCount || 0) - a0,
+      mediaElapsed: +(v.currentTime - ct0).toFixed(2),
+      wallElapsed: +((performance.now() - w0) / 1000).toFixed(2) };
+    log('UNMUTED ' + JSON.stringify(R.unmuted));
+    setState('unmuted check done — posted');
+    await post('unmuted');
+  } catch (e) { log('unmute check failed: ' + e.message); R.unmutedErr = String(e); await post('unmuted-err'); }
+};
+// Any user gesture will do -- Safari needs one to permit audible playback, and
+// we cannot drive a specific button without automation permissions.
+document.getElementById('unmute').addEventListener('click', runUnmuted);
+document.addEventListener('click', runUnmuted);
+document.addEventListener('keydown', runUnmuted);
+</script>

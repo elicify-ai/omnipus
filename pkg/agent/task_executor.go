@@ -244,12 +244,23 @@ const evidenceGateMaxConsecutiveRejections = 2
 // newTaskExecutor creates a TaskExecutor over the unified task store.
 func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 	// Resolve from the central authority. When al.cfg is nil (test seams
-	// only — production always supplies a config), fall back to the SAME
-	// auto-detect a zero-valued PerformanceConfig produces rather than a
-	// magic number, so there is exactly one formula in the codebase.
-	capacity := config.PerformanceConfig{}.EffectiveMaxParallelAgents()
+	// only — production always supplies a config), fall back to what a
+	// zero-valued PerformanceConfig resolves to rather than a magic number,
+	// so there is exactly one resolution path in the codebase.
+	//
+	// The capped=false case yields the physical OS-thread backstop, and that
+	// is the RIGHT value for a semaphore capacity even though it is the wrong
+	// value to show an operator: this semaphore is not the admission control.
+	// Admission is gated live on memory (see applyMemoryCap in admission.go),
+	// which refuses long before two thousand dispatches are in flight; the
+	// semaphore's job is only to never be the thing that deadlocks the
+	// process. A bare 0 here would do exactly that — every dispatch would
+	// block forever on a zero-capacity semaphore — which is why
+	// EffectiveMaxParallelAgents returns a two-valued answer instead of a 0
+	// sentinel.
+	capacity, _ := config.PerformanceConfig{}.EffectiveMaxParallelAgents()
 	if al.cfg != nil {
-		if eff := al.cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 {
+		if eff, _ := al.cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 {
 			capacity = eff
 		}
 	}
@@ -2843,7 +2854,10 @@ func (te *TaskExecutor) syncDispatchCapacity() {
 	if cfg == nil {
 		return
 	}
-	if eff := cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 && eff != te.dispatchSema.Cap() {
+	// Same reasoning as newTaskExecutor: the capped flag is discarded because
+	// this is a semaphore capacity, not a figure shown to anyone, and the
+	// live memory gate on the admission path is what actually bounds work.
+	if eff, _ := cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 && eff != te.dispatchSema.Cap() {
 		te.dispatchSema.Resize(eff)
 	}
 }

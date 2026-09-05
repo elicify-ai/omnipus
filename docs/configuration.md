@@ -807,6 +807,137 @@ Omnipus supports cron-style scheduled tasks via the `cron` tool. The agent can s
 
 Scheduled tasks persist across restarts and are stored in `~/.omnipus/workspace/cron/`.
 
+### Agent Concurrency and Memory
+
+```json
+{
+  "performance": {
+    "max_parallel_agents": 0
+  }
+}
+```
+
+**There is no longer a computed default for `performance.max_parallel_agents`.**
+Earlier versions divided the machine's available memory by an assumed per-agent
+cost (~3.5 MB) to pick a number once, at startup. That number was one of two
+memory mechanisms in the process — the browser tooling sized itself from the
+same host's *live* headroom, so the two disagreed about the same machine, each
+defensibly.
+
+Concurrency is now bounded by **live available memory at the moment each agent
+turn is admitted**. `0` (the default) means *not configured*, not *auto-detect*:
+nothing computes a cap for you, and the memory gate refuses to grow when the
+host is short. Set a positive value to impose an explicit cap of your own; an
+explicit value is always honoured exactly as configured and is never silently
+lowered.
+
+Settings → Performance shows **"automatic — bounded by available memory"** when
+nothing is configured, rather than an integer. The integer the API reports
+alongside it in that state is a physical OS-thread safety backstop, not a
+recommendation, and the UI deliberately does not show it.
+
+#### When memory cannot be measured
+
+Some hosts cannot report their available memory at all. Concurrency then holds
+at a floor of **two** concurrent agent turns and the third is refused, naming
+memory. The system refuses to *grow*, never to *run* — a host that cannot
+measure itself can still do work.
+
+Two different situations produce this, and they are not the same:
+
+| Situation | Status |
+| --- | --- |
+| **Linux with an unreadable `/proc/meminfo`** — gVisor, a distroless image with no procfs mount, a hardened seccomp profile | **Supported deployment.** It works, at the floor. This is a consequence of a deployment choice, documented here so it is expected rather than surprising. |
+| **Windows** | **Degraded — unsupported.** No memory reader exists for Windows in this codebase. It is not a deployment choice you can undo, and no amount of physical RAM on the machine will raise the floor. Browser support on Windows is degraded-unsupported for the same reason. |
+
+On either, set `performance.max_parallel_agents` explicitly to get the
+concurrency you want — an explicit value is never overridden by any memory
+reading.
+
+#### Running in a container
+
+If Omnipus is running inside a container with **no memory limit set**, it logs
+one warning at startup: it is sizing against the *node's* memory, not the
+container's share. On a large Kubernetes node this means it sees far more
+headroom than it actually has and can be OOM-killed. Set
+`resources.limits.memory` (Kubernetes) or `--memory` (Docker) and the limit is
+picked up automatically, with no configuration change here. Startup is never
+refused over this.
+
+Container detection uses `KUBERNETES_SERVICE_HOST`, `/.dockerenv`, and the
+container runtime named in `/proc/self/cgroup`. **One case escapes all three:** a
+cgroup-v2 pod in its own cgroup namespace, with service links disabled and no
+`/.dockerenv`, looks identical to a bare-metal host from the inside. Set
+`OMNIPUS_CONTAINERIZED=1` to declare it — that is the only coverage for that
+shape, and without it the warning above will not fire even though the condition
+applies.
+
+### The Browser
+
+Each workspace has its own browser: a separate Chrome process with its own
+profile directory on disk, holding its own cookies and its own logins. A
+workspace cannot see or use another workspace's. Agents on one workspace share
+that workspace's browser, which is what lets them hand work to each other.
+
+All three keys below are **whole seconds, written as a number** — `900`, not
+`"15m"`. A duration string here is a config file that will not load at all.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `tools.browser.idle_ttl` | `300` (5 minutes) | How long one TAB may sit with nobody watching it and no tool touching it before it is closed. A negative value turns per-tab reaping off. |
+| `tools.browser.idle_close_ttl` | `900` (15 minutes) | How long a whole BROWSER may sit with no tabs, nobody watching and nothing running before the Chrome process itself is closed. The profile stays on disk, so the workspace is still signed in next time. There is no way to switch this off: `0` and any negative value both mean "use the default", never "never close". |
+| `tools.browser.cache_trim_interval` | `3600` (1 hour) | How often closed profiles are swept for disposable browser cache. See the warning below — this is a sweep frequency, not a size limit. |
+
+Both of the last two take effect when you save settings; the gateway does not
+need a restart. Changing `idle_close_ttl` does not disturb a browser that is
+already open — it changes how long the next idle one is given. A change to
+`cache_trim_interval` is picked up by the running sweep within about fifteen
+seconds, including when you shorten it below the time already elapsed since the
+last sweep — in that case the next sweep runs almost immediately rather than
+waiting out the old, longer interval.
+
+**Who gets a workspace's browser.** Every agent on a workspace's team shares
+that workspace's browser, and therefore the logins and cookies it holds. Team
+membership is re-checked every time a browser is resolved, not recorded once
+when a chat starts: remove an agent from a workspace's team and it loses that
+workspace's browser immediately, in conversations that were already open. If it
+is on exactly one other workspace's team, its browser tools and the live browser
+panel both move to that one; if it is on none, both refuse with a message saying
+so. A chat that was opened in a workspace is a preference, never a grant — it
+picks between the workspaces an agent is on and can never reach one it is not
+on.
+
+**How many browsers can run at once.** There is no setting for this, and there
+is deliberately none to raise. A browser starts only if the machine has room
+for it, measured at the moment it starts. When it does not, the least recently
+used workspace's browser is closed to make room — that workspace stays signed
+in and its browser comes back the next time an agent uses it. If nothing can be
+freed, the request is refused with a message naming memory. Any message that
+told you to raise a limit would be sending you after a setting that does not
+exist.
+
+**`cache_trim_interval` does not bound how large a profile gets.** Nothing is
+ever trimmed while a browser is running — trimming a running browser's cache
+would mean closing a browser somebody is using — so a workspace that is driven
+continuously, with no idle gap, keeps growing its cache for as long as it is
+driven, whatever this interval is set to. The gateway logs this once at
+startup. If disk is your binding constraint, the thing that actually reclaims
+space is a workspace's browser going idle, not this interval.
+
+**What the trim removes, and what it never touches.** It removes only what
+Chrome wrote as a performance cache and can fetch or rebuild: the HTTP cache,
+compiled JavaScript, shader and WebGPU caches, downloaded hint models. It never
+touches cookies, saved passwords, Local Storage, Session Storage, IndexedDB, a
+site's own Cache Storage, or your profile settings. It works from a fixed list
+of what may go, not a list of what must stay, so a future Chrome version that
+adds a directory nobody here has classified is left alone.
+
+**Windows is degraded and unsupported for the browser.** This codebase has no
+way to read available memory on Windows, and the browser will not start a
+second instance without one. The floor is one browser, whatever the machine's
+physical RAM. This is a gap that is declared rather than worked around; see the
+`Known limitations` section of the changelog.
+
 ### Advanced Topics
 
 | Topic | Description |

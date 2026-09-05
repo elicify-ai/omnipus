@@ -1,0 +1,27 @@
+
+=== chromium / run=yt ===
+  supported   : [["audio/webm; codecs=\"opus\"",true],["video/mp4; codecs=\"av01.0.01M.08\"",true]]
+  appended    : 450 appends, 3156941 bytes
+  firstErr    : none
+  video       : 640x360  readyState=4  err=null
+  playback    : wall=8.04s media=0s rate=0
+  framesDecoded=0  audioBytesDecoded=0  audioMaxRms=0
+
+=== firefox / run=yt ===
+  supported   : [["audio/webm; codecs=\"opus\"",true],["video/mp4; codecs=\"av01.0.01M.08\"",true]]
+  appended    : 450 appends, 3156941 bytes
+  firstErr    : none
+  video       : 640x360  readyState=4  err=null
+  playback    : wall=8.14s media=8.12s rate=0.997
+  framesDecoded=243  audioBytesDecoded=0  audioMaxRms=0.05799
+
+=== webkit / run=yt ===
+  supported   : [["audio/webm; codecs=\"opus\"",true],["video/mp4; codecs=\"av01.0.01M.08\"",false]]
+  appended    : 0 appends, 0 bytes
+  firstErr    : addSourceBuffer id= sb=2: NotSupportedError: The operation is not supported.
+  video       : 0x0  readyState=0  err=null
+  playback    : wall=8.06s media=0s rate=0
+  framesDecoded=0  audioBytesDecoded=0  audioMaxRms=0
+
+-> out/yt/crossengine.json
+EXIT=0

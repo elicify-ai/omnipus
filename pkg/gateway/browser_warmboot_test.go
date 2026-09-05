@@ -16,6 +16,9 @@ package gateway
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -119,7 +122,44 @@ func TestWarmCaptureIdleTimeout_NonPositiveMeansNeverStop(t *testing.T) {
 
 // --- agent selection --------------------------------------------------------
 
-func newWarmTestManager(t *testing.T, coord *browser.BrowserCoordinator, agentID string) *browser.BrowserManager {
+// warmTestHome returns a throwaway $OMNIPUS_HOME for one test, with a
+// workspaces/ directory ready to receive seed files. Kept separate from
+// browser_testkey_test.go's process-wide shared home: these tests resolve the
+// DEFAULT AGENT's workspace out of the same home they seed, so each needs its
+// own membership graph rather than a shared one every test appends to.
+func warmTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "workspaces"), 0o755); err != nil {
+		t.Fatalf("warmTestHome: %v", err)
+	}
+	return home
+}
+
+// warmTestWorkspace seeds one workspace under home whose CoreTeam is members,
+// and returns the BrowsingKey it resolves to. Minting the key through the real
+// resolver (rather than a literal) is what makes the manager's key and the
+// selection path's key the same string by construction.
+func warmTestWorkspace(t *testing.T, home, workspaceID string, members ...string) browser.BrowsingKey {
+	t.Helper()
+	body := `{"id":"` + workspaceID + `","core_team":["` + strings.Join(members, `","`) + `"]}`
+	path := filepath.Join(home, "workspaces", workspaceID+".json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("warmTestWorkspace(%q): %v", workspaceID, err)
+	}
+	key, err := browser.ResolveBrowsingKeyForAgent(home, members[0], workspaceID)
+	if err != nil {
+		t.Fatalf("warmTestWorkspace(%q): resolve: %v", workspaceID, err)
+	}
+	return key
+}
+
+// newWarmTestManagerForKey builds a manager attached to coord under key. A nil
+// coord leaves the manager coordinator-less, which pickWarmBrowserManager must
+// refuse to warm.
+func newWarmTestManagerForKey(
+	t *testing.T, coord *browser.BrowserCoordinator, key browser.BrowsingKey,
+) *browser.BrowserManager {
 	t.Helper()
 	cfg, err := browser.DefaultConfig()
 	if err != nil {
@@ -131,18 +171,18 @@ func newWarmTestManager(t *testing.T, coord *browser.BrowserCoordinator, agentID
 		t.Fatalf("browser.NewBrowserManager: %v", err)
 	}
 	if coord != nil {
-		mgr.AttachSharedChrome(coord, agentID)
+		mgr.AttachSharedChrome(coord, key)
 	}
 	return mgr
 }
 
-// warmedAgentID names the picked manager in a failure message. *BrowserManager
-// has no useful String(), so a bare %v dumps its entire internal struct.
-func warmedAgentID(mgr *browser.BrowserManager) string {
+// warmedKey names the picked manager in a failure message. *BrowserManager has
+// no useful String(), so a bare %v dumps its entire internal struct.
+func warmedKey(mgr *browser.BrowserManager) string {
 	if mgr == nil {
 		return "<none>"
 	}
-	return mgr.AgentID()
+	return mgr.BrowsingKey().String()
 }
 
 func newWarmTestCoordinator(t *testing.T) *browser.BrowserCoordinator {
@@ -151,88 +191,199 @@ func newWarmTestCoordinator(t *testing.T) *browser.BrowserCoordinator {
 	if err != nil {
 		t.Fatalf("browser.DefaultConfig: %v", err)
 	}
-	return browser.NewBrowserCoordinator(t.TempDir(), cfg, 5)
+	return browser.NewBrowserCoordinator(t.TempDir(), cfg)
 }
 
+// TestPickWarmBrowserManager_PrefersTheDefaultAgent — migrated to ADR-072
+// FR-016b. "The default agent's manager" is no longer a thing that exists: a
+// manager is a WORKSPACE's browser, so the selection is the default agent's
+// RESOLVED workspace. Mia is on beta; alpha and gamma belong to other people.
 func TestPickWarmBrowserManager_PrefersTheDefaultAgent(t *testing.T) {
+	home := warmTestHome(t)
 	coord := newWarmTestCoordinator(t)
+	keyAlpha := warmTestWorkspace(t, home, "warmalpha", "ava")
+	keyBeta := warmTestWorkspace(t, home, "warmbeta", "mia")
+	keyGamma := warmTestWorkspace(t, home, "warmgamma", "jim")
 	mgrs := []*browser.BrowserManager{
-		newWarmTestManager(t, coord, "ava"),
-		newWarmTestManager(t, coord, "mia"),
-		newWarmTestManager(t, coord, "jim"),
+		newWarmTestManagerForKey(t, coord, keyAlpha),
+		newWarmTestManagerForKey(t, coord, keyBeta),
+		newWarmTestManagerForKey(t, coord, keyGamma),
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.DefaultAgentID = "mia"
 
-	got := pickWarmBrowserManager(cfg, mgrs)
-	if got == nil || got.AgentID() != "mia" {
-		t.Fatalf("expected the DEFAULT agent's manager to be warmed, got %q", warmedAgentID(got))
+	got, reason := pickWarmBrowserManager(cfg, home, mgrs)
+	if reason != "" {
+		t.Fatalf("expected a pick, got skip reason %q", reason)
+	}
+	if got == nil || got.BrowsingKey() != keyBeta {
+		t.Fatalf("expected the DEFAULT agent's WORKSPACE browser (%s) to be warmed, got %q",
+			keyBeta.String(), warmedKey(got))
+	}
+	// Not the sorted-first one. warmalpha sorts before warmbeta, so a
+	// selection that quietly fell back to a lexicographic pick would land on
+	// alpha and this assertion is what catches it.
+	if got.BrowsingKey() == keyAlpha {
+		t.Fatal("warmed the sorted-first workspace, not the default agent's")
 	}
 }
 
-// TestPickWarmBrowserManager_DeterministicWithoutADefault: BrowserManagers()
-// ranges a map, so an unsorted pick would warm a different agent on each boot
-// — and could differ between a macOS and a Linux host of the same install,
-// which is the platform-divergent behaviour this project forbids. Repeat it
-// enough times that map-order luck cannot pass.
+// TestPickWarmBrowserManager_DeterministicWithoutADefault — migrated. There is
+// no lexicographic fallback any more: with no default agent there is no ONE
+// workspace to warm, and choosing one would start a Chrome against one
+// particular set of live logins because its id sorted first, unasked. The
+// requirement the old name carried — that two boots of one install never
+// disagree — is now trivially satisfied, and is still asserted by repetition
+// so a future map-order-dependent pick cannot pass by luck.
 func TestPickWarmBrowserManager_DeterministicWithoutADefault(t *testing.T) {
+	home := warmTestHome(t)
 	coord := newWarmTestCoordinator(t)
 	mgrs := []*browser.BrowserManager{
-		newWarmTestManager(t, coord, "zed"),
-		newWarmTestManager(t, coord, "ava"),
-		newWarmTestManager(t, coord, "mia"),
+		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmzed", "zed")),
+		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmava", "ava")),
+		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmmia", "mia")),
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.DefaultAgentID = ""
 
 	for i := 0; i < 25; i++ {
-		got := pickWarmBrowserManager(cfg, mgrs)
-		if got == nil || got.AgentID() != "ava" {
-			t.Fatalf("iteration %d: expected the lexicographically-first agent (ava), got %q", i, warmedAgentID(got))
+		got, reason := pickWarmBrowserManager(cfg, home, mgrs)
+		if got != nil {
+			t.Fatalf("iteration %d: warmed %q with no default agent — a tie-break over workspaces "+
+				"picks whose logins to start a browser against", i, warmedKey(got))
+		}
+		if !strings.Contains(reason, "no default agent") {
+			t.Fatalf("iteration %d: skip reason %q must name the missing default agent", i, reason)
 		}
 	}
 }
 
-// TestPickWarmBrowserManager_UnknownDefaultFallsBack — a default_agent_id that
-// has no browser manager (browser tools not registered for it) must not leave
-// the install with a cold first open; fall back to the deterministic pick.
+// TestPickWarmBrowserManager_UnknownDefaultFallsBack — migrated, and the name
+// now describes the opposite outcome deliberately. A default_agent_id that
+// resolves to no workspace (or to more than one) leaves NOTHING to warm: the
+// old fallback would have warmed some other workspace's browser instead, which
+// is a worse answer than a cold first open. The install still works; the first
+// panel open builds the browser lazily.
 func TestPickWarmBrowserManager_UnknownDefaultFallsBack(t *testing.T) {
+	home := warmTestHome(t)
 	coord := newWarmTestCoordinator(t)
 	mgrs := []*browser.BrowserManager{
-		newWarmTestManager(t, coord, "mia"),
-		newWarmTestManager(t, coord, "ava"),
+		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmone", "mia")),
+		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmtwo", "ava")),
 	}
+
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.DefaultAgentID = "nobody"
+	got, reason := pickWarmBrowserManager(cfg, home, mgrs)
+	if got != nil {
+		t.Fatalf("a default agent on no workspace must warm nothing, got %q", warmedKey(got))
+	}
+	if !strings.Contains(reason, "nobody") || !strings.Contains(reason, "workspace") {
+		t.Fatalf("skip reason %q must name the agent and say it resolves to no single workspace", reason)
+	}
 
-	got := pickWarmBrowserManager(cfg, mgrs)
-	if got == nil || got.AgentID() != "ava" {
-		t.Fatalf("expected a fallback to the lexicographically-first agent, got %q", warmedAgentID(got))
+	// An AMBIGUOUS default agent — on both workspaces — is the same answer for
+	// the same reason (FR-033): warming one would silently choose which set of
+	// live logins boot opens a browser against.
+	warmTestWorkspace(t, home, "warmone", "mia", "roam")
+	warmTestWorkspace(t, home, "warmtwo", "ava", "roam")
+	cfg.Agents.Defaults.DefaultAgentID = "roam"
+	got, reason = pickWarmBrowserManager(cfg, home, mgrs)
+	if got != nil {
+		t.Fatalf("a default agent on TWO workspaces must warm nothing, got %q", warmedKey(got))
+	}
+	if !strings.Contains(reason, "roam") {
+		t.Fatalf("skip reason %q must name the ambiguous default agent", reason)
 	}
 }
 
 // TestPickWarmBrowserManager_SkipsUnwarmableManagers: a manager with no
 // coordinator would launch its OWN second Chrome (legacy managed mode) if
-// warmed, and one with no agent id cannot key a capture session. Neither is a
-// candidate — and a nil entry must not panic.
+// warmed, and one with a zero browsing key names no browser at all. Neither is
+// a candidate — and a nil entry must not panic.
 func TestPickWarmBrowserManager_SkipsUnwarmableManagers(t *testing.T) {
+	home := warmTestHome(t)
 	coord := newWarmTestCoordinator(t)
-	noCoordinator := newWarmTestManager(t, nil, "")
-	noAgentID := newWarmTestManager(t, coord, "")
-	good := newWarmTestManager(t, coord, "ray")
+	keyRay := warmTestWorkspace(t, home, "warmray", "ray")
+	keyOrphan := warmTestWorkspace(t, home, "warmorphan", "orphan")
 
-	got := pickWarmBrowserManager(config.DefaultConfig(),
-		[]*browser.BrowserManager{nil, noCoordinator, noAgentID, good})
-	if got == nil || got.AgentID() != "ray" {
-		t.Fatalf("expected the only warmable manager (ray), got %q", warmedAgentID(got))
+	noCoordinator := newWarmTestManagerForKey(t, nil, keyOrphan)
+	noKey := newWarmTestManagerForKey(t, coord, browser.BrowsingKey{})
+	good := newWarmTestManagerForKey(t, coord, keyRay)
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.DefaultAgentID = "ray"
+
+	got, reason := pickWarmBrowserManager(cfg, home,
+		[]*browser.BrowserManager{nil, noCoordinator, noKey, good})
+	if got == nil || got.BrowsingKey() != keyRay {
+		t.Fatalf("expected the only warmable manager (%s), got %q (reason %q)",
+			keyRay.String(), warmedKey(got), reason)
 	}
 
-	if got := pickWarmBrowserManager(config.DefaultConfig(),
-		[]*browser.BrowserManager{nil, noCoordinator, noAgentID}); got != nil {
-		t.Fatalf("expected nil when nothing is warmable, got %q", warmedAgentID(got))
+	// The default agent is now the coordinator-less manager's own agent: even
+	// though a manager for its workspace EXISTS in the list, it is unwarmable,
+	// so the answer is still "nothing to warm" rather than a substitute.
+	cfg.Agents.Defaults.DefaultAgentID = "orphan"
+	if got, reason := pickWarmBrowserManager(cfg, home,
+		[]*browser.BrowserManager{nil, noCoordinator, noKey}); got != nil {
+		t.Fatalf("expected nil when nothing is warmable, got %q (reason %q)", warmedKey(got), reason)
 	}
-	if got := pickWarmBrowserManager(config.DefaultConfig(), nil); got != nil {
-		t.Fatalf("expected nil for an empty manager list, got %q", warmedAgentID(got))
+	if got, reason := pickWarmBrowserManager(cfg, home, nil); got != nil {
+		t.Fatalf("expected nil for an empty manager list, got %q (reason %q)", warmedKey(got), reason)
+	}
+	if _, reason := pickWarmBrowserManager(cfg, home, nil); !strings.Contains(reason, "no workspace") {
+		t.Fatalf("an empty manager list must say so, got %q", reason)
+	}
+}
+
+// Test 24 — TestPickWarmBrowser_UsesResolvedKey (ADR-072 FR-016b).
+//
+// This is the regression the migration above exists for, isolated. Selection
+// used to compare agents.defaults.default_agent_id against mgr.AgentID(). That
+// accessor now returns the manager's BROWSING KEY ("ws:<id>"), so the
+// comparison could never match a real agent id again — every boot silently
+// took the lexicographic branch and warmed whichever workspace sorted first.
+// Nothing failed, nothing logged; the wrong Chrome simply got warm.
+//
+// The distinguishing setup is the point: the default agent's id and its
+// workspace id are DIFFERENT strings, and a THIRD workspace sorts ahead of
+// both. An implementation that matched on the agent id, or fell back to a
+// sort, lands somewhere other than keyWanted.
+func TestPickWarmBrowser_UsesResolvedKey(t *testing.T) {
+	home := warmTestHome(t)
+	coord := newWarmTestCoordinator(t)
+
+	keyFirstBySort := warmTestWorkspace(t, home, "aaaadecoyworkspace", "decoy")
+	keyWanted := warmTestWorkspace(t, home, "zzzzrealworkspace", "mia")
+
+	mgrs := []*browser.BrowserManager{
+		newWarmTestManagerForKey(t, coord, keyFirstBySort),
+		newWarmTestManagerForKey(t, coord, keyWanted),
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
+
+	got, reason := pickWarmBrowserManager(cfg, home, mgrs)
+	if reason != "" {
+		t.Fatalf("expected a pick, got skip reason %q", reason)
+	}
+	if got == nil {
+		t.Fatal("expected the default agent's resolved workspace to be warmed, got nothing")
+	}
+	if got.BrowsingKey() != keyWanted {
+		t.Fatalf("warmed %q, want %q — selection must resolve the default agent to a WORKSPACE, "+
+			"not compare its id against a manager's key", warmedKey(got), keyWanted.String())
+	}
+	if got.BrowsingKey() == keyFirstBySort {
+		t.Fatal("warmed the sorted-first workspace: the lexicographic fallback is back")
+	}
+
+	// Exactly ONE instance is chosen — never N (FR-016b). A second call with
+	// the same inputs must return the same single manager, not accumulate.
+	again, _ := pickWarmBrowserManager(cfg, home, mgrs)
+	if again != got {
+		t.Fatal("selection must be stable: two boots of one install warm the same browser")
 	}
 }
 
@@ -382,10 +533,10 @@ func TestStartBrowserWarmBoot_NoOpsWhenThereIsNothingToWarm(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Browser.WarmTabAtBoot = false
 	cfg.Tools.Browser.WarmCaptureAtBoot = false
-	startBrowserWarmBoot(context.Background(), cfg, nil, nil) // nil agent loop: must not panic
+	startBrowserWarmBoot(context.Background(), cfg, t.TempDir(), nil, nil) // nil agent loop: must not panic
 
 	cfg = config.DefaultConfig()
-	startBrowserWarmBoot(context.Background(), cfg, nil, nil)
+	startBrowserWarmBoot(context.Background(), cfg, t.TempDir(), nil, nil)
 }
 
 // TestWaitForGatewayListener_ReportsAnUnreachableListener — the wait must give

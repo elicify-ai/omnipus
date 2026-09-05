@@ -1,0 +1,44 @@
+{
+ "chromium": {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36",
+  "support": {
+   "__hasMSE": true,
+   "__hasManaged": false,
+   "video/mp4;codecs=\"avc1.640015\"": true,
+   "audio/mp4;codecs=\"mp4a.40.5\"": true,
+   "video/mp4; codecs=\"av01.0.01M.08\"": true,
+   "audio/webm; codecs=\"opus\"": true,
+   "video/webm; codecs=\"vp9\"": true,
+   "video/webm; codecs=\"av01.0.01M.08\"": true,
+   "audio/mp4; codecs=\"opus\"": true
+  }
+ },
+ "firefox": {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
+  "support": {
+   "__hasMSE": true,
+   "__hasManaged": false,
+   "video/mp4;codecs=\"avc1.640015\"": true,
+   "audio/mp4;codecs=\"mp4a.40.5\"": true,
+   "video/mp4; codecs=\"av01.0.01M.08\"": true,
+   "audio/webm; codecs=\"opus\"": true,
+   "video/webm; codecs=\"vp9\"": true,
+   "video/webm; codecs=\"av01.0.01M.08\"": true,
+   "audio/mp4; codecs=\"opus\"": true
+  }
+ },
+ "webkit": {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+  "support": {
+   "__hasMSE": true,
+   "__hasManaged": true,
+   "video/mp4;codecs=\"avc1.640015\"": true,
+   "audio/mp4;codecs=\"mp4a.40.5\"": true,
+   "video/mp4; codecs=\"av01.0.01M.08\"": false,
+   "audio/webm; codecs=\"opus\"": true,
+   "video/webm; codecs=\"vp9\"": true,
+   "video/webm; codecs=\"av01.0.01M.08\"": false,
+   "audio/mp4; codecs=\"opus\"": false
+  }
+ }
+}
