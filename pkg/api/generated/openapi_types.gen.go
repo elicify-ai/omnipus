@@ -16354,6 +16354,13 @@ type ViewPropertyConfig struct {
 // G3 — a row whose unit is missing or unconfirmed is in `rows` (shown), excluded from every total, and counted in the owning part's excluded_count.
 // A view that cannot be answered arrives as a 200 with `refusal` set and empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own "NOT SERVABLE" line would state it — never as a transport error and never as a silent empty table.
 type ViewResult struct {
+	// Aggregates The view's own `aggregates:` results — the LEGACY, pre-part-stack summary key, which 69 saved views still use — carried through from the engine with the scope clause it computed them with (FR-125).
+	//
+	// They are SEPARATE from a part's `totals`, and the shapes differ because the guarantees differ. A part total is a ViewUnitTotal: reduced once per unit value, never across units (G2), because this endpoint does that reduction itself. These come from the engine's `aggregate`, which is unit-blind — so an entry over a number with a DECLARED companion unit is NOT surfaced here at all; it is refused, and the refusal is in `problems`. Only summaries that cannot cross a unit (count, empty, filled, unique) and numbers no record type pairs with a unit appear.
+	//
+	// Absent when the view declares no `aggregates`.
+	Aggregates *[]VaultFindTotal `json:"aggregates,omitempty"`
+
 	// Complete True only when the evaluation covered everything the view asked to cover — the same verdict, with the same workspace-scope exception, as VaultFindResponse.complete, from which it is carried.
 	Complete bool `json:"complete"`
 

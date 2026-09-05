@@ -532,6 +532,7 @@ type ViewResult = {
   rows_truncated?: boolean | undefined;
   complete: boolean;
   complete_reason?: string | undefined;
+  aggregates?: Array<VaultFindTotal> | undefined;
   problems: Array<RecordProblem>;
 };
 type ViewResultRefusal = {
@@ -624,6 +625,28 @@ type VaultFindJoin = {
   relation: string;
   target: string;
   cells: Array<VaultFindCell>;
+};
+type VaultFindTotal = {
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
+  label: string;
+  value: string;
+  scope: string;
+  refused?: boolean | undefined;
 };
 type ViewDef = {
   name: string;
@@ -769,28 +792,6 @@ type VaultFindSubgroup = {
   absent?: boolean | undefined;
   count: number;
   paths: Array<string>;
-};
-type VaultFindTotal = {
-  op:
-    | "count"
-    | "sum"
-    | "min"
-    | "max"
-    | "avg"
-    | "median"
-    | "stddev"
-    | "range"
-    | "earliest"
-    | "latest"
-    | "checked"
-    | "unchecked"
-    | "empty"
-    | "filled"
-    | "unique";
-  label: string;
-  value: string;
-  scope: string;
-  refused?: boolean | undefined;
 };
 type VaultFindAction = {
   label: string;
@@ -4086,6 +4087,29 @@ export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
   joins: z.array(VaultFindJoin),
   stale: z.boolean().optional(),
 });
+export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
+  label: z.string().min(1),
+  value: z.string(),
+  scope: z.string().min(1),
+  refused: z.boolean().optional(),
+});
 export const RecordProblem: z.ZodType<RecordProblem> = z.object({
   code: z.enum([
     "missing_schema_version",
@@ -4145,6 +4169,7 @@ export const ViewResult: z.ZodType<ViewResult> = z.object({
   rows_truncated: z.boolean().optional(),
   complete: z.boolean(),
   complete_reason: z.string().optional(),
+  aggregates: z.array(VaultFindTotal).optional(),
   problems: z.array(RecordProblem),
 });
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
@@ -4701,29 +4726,6 @@ export const VaultFindGroup: z.ZodType<VaultFindGroup> = z.object({
   count: z.number().int().gte(0),
   paths: z.array(z.string().min(1)),
   subgroups: z.array(VaultFindSubgroup).optional(),
-});
-export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
-  op: z.enum([
-    "count",
-    "sum",
-    "min",
-    "max",
-    "avg",
-    "median",
-    "stddev",
-    "range",
-    "earliest",
-    "latest",
-    "checked",
-    "unchecked",
-    "empty",
-    "filled",
-    "unique",
-  ]),
-  label: z.string().min(1),
-  value: z.string(),
-  scope: z.string().min(1),
-  refused: z.boolean().optional(),
 });
 export const VaultFindAction: z.ZodType<VaultFindAction> = z.object({
   label: z.string().min(1),

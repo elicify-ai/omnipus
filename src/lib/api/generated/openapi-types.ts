@@ -5536,6 +5536,14 @@ export interface components {
             complete: boolean;
             /** @description Why the verdict is what it is. Empty when `complete` is true. */
             complete_reason?: string;
+            /**
+             * @description The view's own `aggregates:` results — the LEGACY, pre-part-stack summary key, which 69 saved views still use — carried through from the engine with the scope clause it computed them with (FR-125).
+             *
+             *     They are SEPARATE from a part's `totals`, and the shapes differ because the guarantees differ. A part total is a ViewUnitTotal: reduced once per unit value, never across units (G2), because this endpoint does that reduction itself. These come from the engine's `aggregate`, which is unit-blind — so an entry over a number with a DECLARED companion unit is NOT surfaced here at all; it is refused, and the refusal is in `problems`. Only summaries that cannot cross a unit (count, empty, filled, unique) and numbers no record type pairs with a unit appear.
+             *
+             *     Absent when the view declares no `aggregates`.
+             */
+            aggregates?: components["schemas"]["VaultFindTotal"][];
             /** @description Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null. */
             problems: components["schemas"]["RecordProblem"][];
         };

@@ -226,6 +226,9 @@ type viewResultBuilder struct {
 	// refusedUnitStamps is the same dedupe for the unit-authority
 	// disagreement between a part's stamp and the schema's declaration.
 	refusedUnitStamps map[string]bool
+	// refusedLegacyAggs is the same dedupe for a legacy `aggregates:` entry
+	// withheld because the engine computes it across units.
+	refusedLegacyAggs map[string]bool
 	// formulas is the view's own computed properties, validated lazily and at
 	// most once (a formula's static type is inferred from its expression, so
 	// it cannot be read off the file).
@@ -438,6 +441,8 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		b.out.CompleteReason = &reason
 	}
 
+	b.collectLegacyAggregates(resp.Totals)
+
 	// The base call's groups come from the SAME evaluation as the rows, so a
 	// group's count and its members are one consistent snapshot by
 	// construction — the property groupsFor has to work for to obtain.
@@ -455,6 +460,125 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		}
 	}
 	return nil
+}
+
+// collectLegacyAggregates surfaces the view's own `aggregates:` results,
+// GATED.
+//
+// `aggregates` predates the part stack and 69 saved views still use it. The
+// bridge forwards it into the engine request and the engine computes it — and
+// this builder used to throw the answer away, so one saved view showed its
+// totals in knowledge_find and none at all in the base preview. A panel that
+// silently omits a number the chat will state teaches its reader that the view
+// has no totals, which is the confidently-wrong shape this whole surface
+// exists against.
+//
+// THE GATE IS G2, AND IT IS NEEDED BECAUSE THE SOURCE IS UNIT-BLIND. The
+// engine's `aggregate` has no idea PropertyDef.unit_property exists (the
+// deferred defect recorded in knowledgefind's unit_aggregate_g2_test.go), so
+// sum(amount) over SGD and EUR is a figure in no currency. Surfacing that raw
+// would import the very output every other total in this file refuses. So a
+// summary that COMBINES VALUES is dropped and refused by name whenever its
+// property declares a companion unit; summaries that count rows or distinct
+// values cross no units and pass through.
+//
+// G4 needs no gate here: the engine already refuses a summary a type does not
+// define (opDefinedForType) and marks the total refused rather than omitting
+// it, so a refused total is surfaced AS refused — which is the honest form of
+// the same answer.
+func (b *viewResultBuilder) collectLegacyAggregates(totals []gen.VaultFindTotal) {
+	if b.view.Def.Aggregates == nil || len(*b.view.Def.Aggregates) == 0 || len(totals) == 0 {
+		return
+	}
+	// The engine computes one total per requested aggregate, in request order,
+	// and the bridge builds that request from this same list in this same
+	// order — so position is the pairing. A length mismatch means that
+	// invariant no longer holds, and the honest response is to surface nothing
+	// rather than to attribute a number to the wrong property.
+	declared := *b.view.Def.Aggregates
+	if len(declared) != len(totals) {
+		fix := "re-request the view; if it persists, the view's `aggregates` and the engine's answer have diverged and the view needs re-saving"
+		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+			Code:    gen.AggregateRefused,
+			Reason:  "this view's `aggregates` could not be matched to the engine's answer, so none of them are shown rather than one being attributed to the wrong property",
+			Fix:     &fix,
+			Records: []string{},
+		})
+		b.out.Complete = false
+		return
+	}
+
+	out := make([]gen.VaultFindTotal, 0, len(totals))
+	for i, a := range declared {
+		if a.Property != nil && strings.TrimSpace(*a.Property) != "" &&
+			!viewAggregateCrossesNoUnits(string(a.Op)) {
+			prop := strings.TrimSpace(*a.Property)
+			if unitProp := b.anyDeclaredUnitFor(prop); unitProp != "" {
+				b.refuseLegacyUnitAggregate(prop, string(a.Op), unitProp)
+				continue
+			}
+		}
+		out = append(out, totals[i])
+	}
+	if len(out) > 0 {
+		b.out.Aggregates = &out
+	}
+}
+
+// viewAggregateCrossesNoUnits is the closed list of summaries whose answer is
+// a COUNT rather than a quantity. Counting rows, absences, presences or
+// distinct values says nothing about what the numbers are denominated in, so
+// no unit can be crossed. Everything else combines or selects values and is
+// gated.
+func viewAggregateCrossesNoUnits(op string) bool {
+	switch op {
+	case "count", "empty", "filled", "unique":
+		return true
+	default:
+		return false
+	}
+}
+
+// anyDeclaredUnitFor names the companion unit property declared for one
+// number, from the view's own record type when it has one and from every
+// in-scope type when it does not — the same reach the untyped G2 gate uses,
+// because the question is the same: could this total cross a unit?
+func (b *viewResultBuilder) anyDeclaredUnitFor(prop string) string {
+	if b.view.Def.Type != nil {
+		return b.unitPropertyOf(prop)
+	}
+	for _, t := range b.env.Schemas.Types() {
+		sc, ok := b.env.Schemas.Get(t)
+		if !ok || sc == nil {
+			continue
+		}
+		if p, found := sc.Property(prop); found && p != nil && p.UnitProperty != "" {
+			return p.UnitProperty
+		}
+	}
+	return ""
+}
+
+// refuseLegacyUnitAggregate records the G2 refusal for one legacy aggregate,
+// once per property per result.
+func (b *viewResultBuilder) refuseLegacyUnitAggregate(prop, op, unitProp string) {
+	if b.refusedLegacyAggs == nil {
+		b.refusedLegacyAggs = map[string]bool{}
+	}
+	if b.refusedLegacyAggs[prop] {
+		return
+	}
+	b.refusedLegacyAggs[prop] = true
+	fix := fmt.Sprintf("replace the view's `aggregates` entry with a part that totals %q — a `figures` part reduces once per %s value (G2), which the legacy key cannot",
+		prop, unitProp)
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("this view's legacy `aggregates` asks for %s of %q, and %q carries the companion unit %q — that summary is computed across every unit at once, which is the combined figure G2 forbids, so it is not shown; the rows themselves are still shown",
+			op, prop, prop, unitProp),
+		Fix:     &fix,
+		Records: []string{},
+	})
+	b.out.Complete = false
 }
 
 // viewResponseEpoch reads the properties-index generation an evaluation ran
