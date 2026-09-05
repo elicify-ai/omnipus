@@ -922,10 +922,48 @@ test.describe('UAT Group C — the live browser panel', () => {
     await page.keyboard.press('Escape');
     await expect(chip).not.toHaveText(/You're driving/, { timeout: 20_000 });
 
+    // A <video> ELEMENT is not a PICTURE. openLivePanel's verdict only means
+    // the WebRTC sink attached; `videoWidth` stays 0 until a frame actually
+    // DECODES, and the panel then shows "Waiting for the first frame…" over a
+    // black rectangle. Every pixel measurement below reduces to
+    // `canvas.width = v.videoWidth || 1` — a 1x1 transparent canvas — so with
+    // no decoded frame `sampleRegion` returns the SAME number forever and
+    // `agentTyped` is mathematically forced to false. The case then fails with
+    // "the agent narrated an action it did not perform" about an agent that
+    // performed it perfectly, and the real fault (no video ever arrived) is
+    // never named.
+    //
+    // Observed exactly so, 4/4, in CI run 33943602552 (job 101248089931):
+    // every failure screenshot shows "Waiting for the first frame…" while the
+    // chat shows `browser.type input[name="username"] — "OMNIPUSUAT"  Done`,
+    // and the gateway log carries `viewer-14 PLI send failed: the DTLS
+    // transport has not started yet` x5 followed by `ingest connection
+    // failed — cleared; a fresh capture is required`.
+    //
+    // No video is a real defect, but it is a defect of the LIVE VIEW, not of
+    // the handover this case is about — so it is reported as BLOCKED, with the
+    // reason, rather than charged to the agent.
     const media = await video.evaluate((el) => {
       const v = el as HTMLVideoElement;
-      return { width: v.videoWidth, height: v.videoHeight };
+      const q = (v as HTMLVideoElement & {
+        getVideoPlaybackQuality?: () => { totalVideoFrames: number };
+      }).getVideoPlaybackQuality?.();
+      return { width: v.videoWidth, height: v.videoHeight, frames: q?.totalVideoFrames ?? 0 };
     });
+    await note(
+      testInfo,
+      'capture-before-handover',
+      `decoded ${media.frames} frame(s); media ${media.width}x${media.height}`,
+    );
+    if (media.width === 0 || media.height === 0 || media.frames === 0) {
+      const panelText = (await browserLivePanel(page).innerText().catch(() => '')).trim();
+      throw new Error(
+        'BLOCKED: the live panel never decoded a single frame, so nothing this case measures ' +
+          'could ever change — this is a live-view/capture failure, not a handover failure. ' +
+          `media=${media.width}x${media.height}, decodedFrames=${media.frames}, ` +
+          `panel said: ${JSON.stringify(panelText.slice(0, 300))}`,
+      );
+    }
     const field = await rectOnPage(page, `${HEROKU}/login`, media, '#username');
     const emptyField = await sampleRegion(video, field);
 
