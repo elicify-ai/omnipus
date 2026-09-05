@@ -345,6 +345,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           <div className="px-2 pt-1.5">
             <input
               type="text"
+              tabIndex={0}
               value={draftFor(q.header).freeText}
               onChange={(e) => typeFreeText(q, e.target.value)}
               placeholder="Something else — type your own answer…"

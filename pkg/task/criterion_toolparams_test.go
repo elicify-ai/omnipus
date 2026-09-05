@@ -95,12 +95,18 @@ func TestBehaviorCriterionParamSchema_Shape(t *testing.T) {
 		}
 	}
 	for _, field := range []string{"min_count", "max_count"} {
-		fs := props[field].(map[string]any)
+		fs, fsOK := props[field].(map[string]any)
+		if !fsOK {
+			t.Fatalf("%s is not an object: %T", field, props[field])
+		}
 		if fs["type"] != "integer" || fs["minimum"] != 0 {
 			t.Fatalf("%s must be an integer with minimum 0, got %v", field, fs)
 		}
 	}
-	scope := props["scope"].(map[string]any)
+	scope, scopeOK := props["scope"].(map[string]any)
+	if !scopeOK {
+		t.Fatalf("scope is not an object: %T", props["scope"])
+	}
 	enum, ok := scope["enum"].([]string)
 	if !ok || len(enum) != 2 || enum[0] != "attempt" || enum[1] != "task_session" {
 		t.Fatalf("scope enum = %v, want [attempt task_session]", scope["enum"])

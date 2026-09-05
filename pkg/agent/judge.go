@@ -1058,13 +1058,13 @@ const maxEvidenceQuoteRunes = 500
 // Distinct from task_completion_signal.go's truncateRunes, which APPENDS a
 // truncation note — a quote must stay verbatim evidence, so nothing is ever
 // appended here.
-func truncateEvidenceQuote(s string, max int) string {
-	if max <= 0 {
+func truncateEvidenceQuote(s string, limit int) string {
+	if limit <= 0 {
 		return ""
 	}
 	n := 0
 	for i := range s {
-		if n == max {
+		if n == limit {
 			return s[:i]
 		}
 		n++

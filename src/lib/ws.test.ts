@@ -790,6 +790,8 @@ describe('ClientFrameTypes — contract test', () => {
       'browser_detach',
       // ADR-047 — WebRTC live-view signaling (viewer→gateway SDP offer).
       'browser_webrtc_offer',
+      // ADR-074 D4b — AskUserQuestion card submission (answer | cancel).
+      'ask_user_answer',
     ])
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })

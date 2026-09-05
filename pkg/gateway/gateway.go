@@ -4736,17 +4736,17 @@ func setupAndStartServices(
 		// snapshot sees it. Runs in a goroutine — meta reads only, and a
 		// pending set is inert until a client answers or a timer fires.
 		go func() {
-			metas, err := sharedStore.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+			metas, listErr := sharedStore.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
 				return m.PendingAskJSON != ""
 			})
-			if err != nil {
-				slog.Warn("gateway: askuser boot rearm sweep failed", "error", err)
+			if listErr != nil {
+				slog.Warn("gateway: askuser boot rearm sweep failed", "error", listErr)
 				return
 			}
 			for _, m := range metas {
-				if err := askReg.RearmSession(m.ID); err != nil {
+				if rearmErr := askReg.RearmSession(m.ID); rearmErr != nil {
 					slog.Warn("gateway: askuser rearm failed",
-						"session_id", m.ID, "error", err)
+						"session_id", m.ID, "error", rearmErr)
 				}
 			}
 		}()
