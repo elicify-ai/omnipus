@@ -80,27 +80,25 @@ function RefusalState({ refusal }: { refusal: NonNullable<ViewResult['refusal']>
   )
 }
 
-/** Zero rows: the outcome in plain words, then what was looked for. */
-function EmptyState({ result, filterText }: { result: ViewResult; filterText?: string | undefined }) {
+/** Zero rows: the outcome in plain words, then what the view was looking for.
+ *
+ *  It used to quote the `filters:` block the SPA had parsed out of the .base
+ *  file. That parser is gone (findings #3 and #7 — it could not reproduce the
+ *  importer's slugs and mistook nested keys for view names), and quoting a
+ *  filter nobody re-read would mean re-introducing it for a caption. The view
+ *  itself answers the same question honestly: what type it draws, and that
+ *  nothing matched. */
+function EmptyState({ result }: { result: ViewResult }) {
   return (
     <div className="flex flex-col gap-1.5 px-4 py-8" data-testid="view-empty">
       <p className="text-[13px] text-[var(--color-secondary)]">
         {result.complete ? 'Nothing matches this view.' : 'Nothing to show yet.'}
       </p>
-      {filterText !== undefined && filterText !== '' ? (
-        <div className="text-[11px] leading-relaxed text-[var(--color-muted)]">
-          <p>What was looked for:</p>
-          <pre className="mt-1 max-w-full overflow-x-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5 font-mono text-[11px]">
-            {filterText}
-          </pre>
-        </div>
-      ) : (
-        <p className="text-[11px] text-[var(--color-muted)]">
-          {result.type !== undefined && result.type !== ''
-            ? `This view shows every ${result.type} record its filter admits; none matched.`
-            : 'This view declares no filter the preview can show; the collection simply has no matching records.'}
-        </p>
-      )}
+      <p className="text-[11px] text-[var(--color-muted)]">
+        {result.type !== undefined && result.type !== ''
+          ? `This view shows every ${result.type} record its filter admits; none matched.`
+          : 'This view declares no filter the preview can show; the collection simply has no matching records.'}
+      </p>
       {!result.complete && result.complete_reason !== undefined && result.complete_reason !== '' && (
         <p className="text-[11px] text-[var(--color-warning)]" data-testid="view-empty-incomplete">
           {result.complete_reason}
@@ -112,18 +110,14 @@ function EmptyState({ result, filterText }: { result: ViewResult; filterText?: s
 
 export function ViewPartsRenderer({
   result,
-  filterText,
   resolveImageUrl,
 }: {
   result: ViewResult
-  /** Raw filter text from the .base file, for the empty state's "what was
-   *  looked for" line. */
-  filterText?: string | undefined
   /** Vault-relative image path → servable URL, for the tiles part. */
   resolveImageUrl?: (vaultPath: string) => string | undefined
 }) {
   if (result.refusal !== undefined) return <RefusalState refusal={result.refusal} />
-  if (result.rows.length === 0) return <EmptyState result={result} filterText={filterText} />
+  if (result.rows.length === 0) return <EmptyState result={result} />
 
   return (
     <div className="flex flex-col" data-testid="view-parts">

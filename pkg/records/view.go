@@ -182,7 +182,18 @@ type ViewRejection struct {
 	// the second leaves an operator hunting for the first.
 	Paths []string
 	// Name is the declared view name where one was readable.
-	Name   string
+	Name string
+	// Source is the view's own `source:` — the vault-relative path of the
+	// `.base` file it was imported from — where the file was readable enough
+	// to hold one. Empty for an authored view, and empty for a file so broken
+	// that no key could be read out of it at all.
+	//
+	// IT IS HERE SO A REJECTION CAN BE ATTRIBUTED. A caller listing the views
+	// that came from one base file must be able to say "and 2 more could not
+	// be loaded" — and a rejected view is exactly the one whose parsed Def
+	// nobody has. Without this the count would have to be guessed from the
+	// filename spelling, which is the importer's convenience, not an index.
+	Source string
 	Code   ViewRejectionCode
 	Reason string
 }
@@ -504,9 +515,10 @@ func loadViewPaths(paths []string, schemas *SchemaSet) (*ViewSet, *ViewLoadRepor
 			}
 			sort.Strings(allPaths)
 			report.Rejections = append(report.Rejections, ViewRejection{
-				Paths: allPaths,
-				Name:  n,
-				Code:  RejectViewDuplicateName,
+				Paths:  allPaths,
+				Name:   n,
+				Source: commonDeclaredSource(group),
+				Code:   RejectViewDuplicateName,
 				Reason: fmt.Sprintf(
 					"view %q is declared in %d files (%s); all of them are rejected because there is no basis for preferring one — delete or rename all but one",
 					n, len(group), strings.Join(allPaths, " and ")),
@@ -516,6 +528,7 @@ func loadViewPaths(paths []string, schemas *SchemaSet) (*ViewSet, *ViewLoadRepor
 		v := group[0]
 		if schemas != nil {
 			if rej := ValidateViewAgainstSchemas(v, schemas); rej != nil {
+				rej.Source = viewDeclaredSource(v)
 				report.Rejections = append(report.Rejections, *rej)
 				continue
 			}
@@ -532,6 +545,41 @@ func loadViewPaths(paths []string, schemas *SchemaSet) (*ViewSet, *ViewLoadRepor
 	return set, report, nil
 }
 
+// viewDeclaredSource is a loaded view's own `source:`, or "" when it declares
+// none. One spelling of the nil-check, so a caller attributing views to a base
+// file never writes its own.
+func viewDeclaredSource(v *SavedView) string {
+	if v == nil || v.Def.Source == nil {
+		return ""
+	}
+	return strings.TrimSpace(*v.Def.Source)
+}
+
+// DeclaredSource is the vault-relative path of the `.base` file this view was
+// imported from, or "" for a view somebody authored directly.
+func (v *SavedView) DeclaredSource() string { return viewDeclaredSource(v) }
+
+// commonDeclaredSource is the source every member of a rejected group agrees
+// on, or "" when they do not all agree.
+//
+// A duplicate-name conflict rejects SEVERAL files at once, and attributing the
+// group to one member's base would let a caller counting "views from this base
+// that failed to load" count a file that came from somewhere else. Where the
+// members disagree the group is attributed to no base, which under-counts
+// rather than mis-attributes — the direction that cannot mislead.
+func commonDeclaredSource(group []*SavedView) string {
+	if len(group) == 0 {
+		return ""
+	}
+	first := viewDeclaredSource(group[0])
+	for _, v := range group[1:] {
+		if viewDeclaredSource(v) != first {
+			return ""
+		}
+	}
+	return first
+}
+
 // ParseView parses one view file's bytes. It returns either a view or a
 // rejection, never both and never a bare error — every refusal carries a code
 // and a path so a report can be assembled from it.
@@ -541,10 +589,16 @@ func loadViewPaths(paths []string, schemas *SchemaSet) (*ViewSet, *ViewLoadRepor
 // and a caller may legitimately not have them (a format check during an
 // import, for instance).
 func ParseView(path string, data []byte) (*SavedView, *ViewRejection) {
+	// Read out of the generic value below, and captured by the closure rather
+	// than passed to it, so every rejection raised AFTER the file was read as
+	// a mapping carries the base it came from — including the ones raised
+	// before the strict decode produces a Def anybody could ask.
+	var declaredSource string
 	reject := func(code ViewRejectionCode, name, format string, args ...any) *ViewRejection {
 		return &ViewRejection{
 			Paths:  []string{path},
 			Name:   name,
+			Source: declaredSource,
 			Code:   code,
 			Reason: fmt.Sprintf(format, args...),
 		}
@@ -578,6 +632,8 @@ func ParseView(path string, data []byte) (*SavedView, *ViewRejection) {
 	// name the view even when the strict decode is about to fail.
 	declaredName, _ := top["name"].(string)
 	declaredName = strings.TrimSpace(declaredName)
+	rawSource, _ := top["source"].(string)
+	declaredSource = strings.TrimSpace(rawSource)
 
 	jsonBytes, err := json.Marshal(raw)
 	if err != nil {

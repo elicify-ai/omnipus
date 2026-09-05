@@ -197,8 +197,10 @@ import {
   KnowledgeOutline as KnowledgeOutlineSchema,
   KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
   // view-kinds-design-2026-09-03 §7 — the evaluated saved-view result the
-  // Library's .base surface draws (contract-first #8).
+  // Library's .base surface draws, and the list of views one .base owns
+  // (contract-first #8).
   ViewResult as ViewResultSchema,
+  KnowledgeBaseViews as KnowledgeBaseViewsSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -483,6 +485,7 @@ import type {
   KnowledgeGraphResponse,
   // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
   ViewResult,
+  KnowledgeBaseViews,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -4275,6 +4278,34 @@ export function fetchKnowledgeViewResult(
     `/library/${encodeURIComponent(workspaceId)}/knowledge/view?${qs}`,
     signal ? { signal } : undefined,
     ViewResultSchema as ZodType<ViewResult>,
+  )
+}
+
+/**
+ * The saved views one `.base` file owns
+ * (GET /library/{workspace_id}/knowledge/base-views).
+ *
+ * THE SERVER'S SLUGS ARE THE ONLY ADDRESSES. Import is one-shot: a `.base`'s
+ * views were translated into saved view files and the source is never read
+ * again. The SPA used to re-derive each slug by parsing the `.base` itself,
+ * which could not reproduce the importer's collision counter — two view names
+ * that kebab alike collapsed onto one slug and the second tab rendered the
+ * first view's rows. Every `name` returned here comes from the saved view
+ * file and must be passed VERBATIM to fetchKnowledgeViewResult.
+ *
+ * The answer also carries the enclosing collection, so a caller needs no
+ * ancestor walk of its own to learn where the views run.
+ */
+export function fetchKnowledgeBaseViews(
+  workspaceId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeBaseViews> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<KnowledgeBaseViews>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/base-views?${qs}`,
+    signal ? { signal } : undefined,
+    KnowledgeBaseViewsSchema as ZodType<KnowledgeBaseViews>,
   )
 }
 

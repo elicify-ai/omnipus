@@ -40,19 +40,39 @@ export function rowsByPath(rows: VaultFindRow[]): Map<string, VaultFindRow> {
 }
 
 /**
- * Whether ONE row is excluded from totals under G3: the part's numbers declare
- * a companion unit property and this row's value for it is missing.
+ * Whether ONE row is excluded from every total of this part under G3.
  *
- * Render-only detection — it decides where the warn mark goes, never what any
- * total is (the server already excluded the row from every figure it sent).
- * Returns false when the part declares no unit binding, so no mark can appear
- * on a surface where "excluded" is not a concept.
+ * Membership of the server's own list — render-only, deciding where the warn
+ * mark goes and never what any total is.
  */
 export function rowExcludedFromTotals(row: VaultFindRow, part: ViewResultPart): boolean {
-  const unitProperty = part.source.unit
-  if (unitProperty === undefined || unitProperty === '') return false
-  if ((part.excluded_count ?? 0) === 0) return false
-  return cellValue(row, unitProperty).trim() === ''
+  return (part.excluded_paths ?? []).includes(row.path)
+}
+
+/**
+ * The unit property this part's numbers are paired with, as the SERVER
+ * resolved it — `unit_property` on the part (figures, chart, crosstab), else
+ * the one its own totals were keyed by (a grouped table's subtotals).
+ *
+ * A part's `source.unit` is the composer's STAMP: what was written when the
+ * view was authored, which a later edit to the record type can leave stale.
+ * The server refuses a total outright when stamp and schema disagree, so
+ * wherever it has spoken the answer is here; the stamp is the last resort,
+ * used only for a part that totals nothing at all and therefore has no
+ * resolved answer to report.
+ */
+export function partUnitProperty(part: ViewResultPart): string | undefined {
+  if (part.unit_property !== undefined && part.unit_property !== '') return part.unit_property
+  for (const t of part.totals ?? []) {
+    if (t.unit_property !== undefined && t.unit_property !== '') return t.unit_property
+  }
+  for (const g of part.groups ?? []) {
+    for (const s of g.subtotals) {
+      if (s.unit_property !== undefined && s.unit_property !== '') return s.unit_property
+    }
+  }
+  const stamped = part.source.unit
+  return stamped === undefined || stamped === '' ? undefined : stamped
 }
 
 /**

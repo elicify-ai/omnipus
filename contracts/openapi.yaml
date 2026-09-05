@@ -225,6 +225,10 @@ components:
       $ref: ./components/schemas/KnowledgeGraphEdge.yaml
     KnowledgeGraphSkip:
       $ref: ./components/schemas/KnowledgeGraphSkip.yaml
+    KnowledgeBaseViews:
+      $ref: ./components/schemas/KnowledgeBaseViews.yaml
+    KnowledgeBaseView:
+      $ref: ./components/schemas/KnowledgeBaseView.yaml
     KnowledgeOutline:
       $ref: ./components/schemas/KnowledgeOutline.yaml
     KnowledgeOutlineHeading:
@@ -8131,6 +8135,68 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/KnowledgeOutline'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/base-views:
+    get:
+      operationId: getKnowledgeBaseViews
+      summary: The saved views imported from one .base file
+      description: >
+        Lists the saved views whose `source` names the given `.base` file,
+        with the slug each one is actually addressed by, its display label,
+        its kind, and whether it can be served at all — plus the enclosing
+        collection, so a caller can evaluate any of them without a second
+        lookup.
+
+
+        THE SLUG IS THE SERVER'S TO GIVE. Import is one-shot (FR-102) and the
+        importer's SlugRegistry appends a collision counter that nothing
+        outside it can reconstruct, so a client that re-derived slugs by
+        parsing the `.base` file mapped two colliding view names onto one
+        slug and rendered the first view's rows under the second view's name.
+        Every `name` here is read from the saved view file itself and must be
+        passed VERBATIM to GET .../knowledge/view.
+
+
+        A `.base` outside any knowledge base answers 200 with
+        is_knowledge_base=false and no views: nothing imported it, so it has
+        no views to run, which is a stated answer rather than an error. View
+        files that name this base but failed to load are counted in
+        unloadable_count rather than silently reducing the list.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the .base file.
+        example: "notes/vault/CRM/Invoices.base"
+      responses:
+        '200':
+          description: The views imported from that base file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBaseViews'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

@@ -2829,6 +2829,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/knowledge/base-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved views imported from one .base file
+         * @description Lists the saved views whose `source` names the given `.base` file, with the slug each one is actually addressed by, its display label, its kind, and whether it can be served at all — plus the enclosing collection, so a caller can evaluate any of them without a second lookup.
+         *
+         *     THE SLUG IS THE SERVER'S TO GIVE. Import is one-shot (FR-102) and the importer's SlugRegistry appends a collision counter that nothing outside it can reconstruct, so a client that re-derived slugs by parsing the `.base` file mapped two colliding view names onto one slug and rendered the first view's rows under the second view's name. Every `name` here is read from the saved view file itself and must be passed VERBATIM to GET .../knowledge/view.
+         *
+         *     A `.base` outside any knowledge base answers 200 with is_knowledge_base=false and no views: nothing imported it, so it has no views to run, which is a stated answer rather than an error. View files that name this base but failed to load are counted in unloadable_count rather than silently reducing the list.
+         */
+        get: operations["getKnowledgeBaseViews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/knowledge/view": {
         parameters: {
             query?: never;
@@ -4496,6 +4520,82 @@ export interface components {
              * @example symbolic link to /home/dan/other-vault — not followed
              */
             detail?: string;
+        };
+        /**
+         * KnowledgeBaseViews
+         * @description The saved views that belong to one `.base` file, plus everything needed to evaluate them — the answer to "open this base as its views" (view-kinds-design-2026-09-03 §7).
+         *     WHY THIS ENDPOINT EXISTS. Nothing listed which saved views came from which source file, so the SPA read the `.base` file itself and re-derived each view's slug by mirroring the importer's slugger. Two things that cost: the importer's collision COUNTER cannot be mirrored (two view names that kebab alike collapsed onto one slug, and the second tab rendered the first view's rows), and a hand-rolled YAML walk mistook a nested `name:` key for the view's own name (a valid view then answered `unknown_view`). Both are re-derivations of a fact the server already holds: every imported view file records the `source` it came from, its own `name`, and its `label`. This endpoint reports them, and the client re-derives nothing.
+         *     MATCHING IS ON `source`, NOT ON THE FILENAME. A view's `source` is the vault-relative path of the `.base` it was imported from, written by the importer; the slug's spelling is a convenience, not an index.
+         */
+        KnowledgeBaseViews: {
+            /**
+             * @description The workspace-relative path that was asked about, echoed back, so a cached answer can never be shown against the wrong file.
+             * @example notes/vault/CRM/Invoices.base
+             */
+            base_path: string;
+            /**
+             * @description Whether the file sits inside a knowledge base at all. False means its views have nowhere to run — nothing imported them, and there is no collection to evaluate them against — and `views` is then empty. This is a stated answer, not an error: an ordinary `.base` file sitting outside a vault is an ordinary file.
+             * @example true
+             */
+            is_knowledge_base: boolean;
+            /**
+             * @description The enclosing collection, to be passed as `collection_id` when evaluating one of these views. Absent exactly when `is_knowledge_base` is false. Opaque — never parse a path out of it.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id?: string;
+            /**
+             * @description Workspace-relative path of that collection's root, forward-slash separated, matching KnowledgeBaseInfo.root_path. The SPA joins it with a vault-relative attachment path to build a download URL. Absent exactly when `is_knowledge_base` is false.
+             * @example notes/vault
+             */
+            collection_root?: string;
+            /**
+             * @description The vault-relative path the views were matched on — the value an imported view carries in its own `source` field. Present exactly when `is_knowledge_base` is true. Reported so a base with zero views can be diagnosed without guessing what was looked for.
+             * @example CRM/Invoices.base
+             */
+            source?: string;
+            /** @description The views imported from this base, in the collection's own load order (filename order, so it is stable across runs). Always present — an empty array is the honest answer for a `.base` nothing imported, and the caller must render it as such rather than as a blank. */
+            views: components["schemas"]["KnowledgeBaseView"][];
+            /**
+             * @description How many view files name this base as their `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the schema no longer declares. They cannot appear in `views` because they have no usable name to address, so they are counted here instead, and the caller says "N views could not be loaded" rather than quietly showing fewer tabs than the base has views.
+             *
+             *     A file so broken that its own `source` key is unreadable cannot be attributed to any base and is counted against none.
+             * @example 1
+             */
+            unloadable_count: number;
+        };
+        /**
+         * KnowledgeBaseView
+         * @description One saved view that was imported from a given `.base` file, as the server knows it (view-kinds-design-2026-09-03 §7).
+         *     THE SERVER'S SLUG IS THE ONLY ADDRESS. Import is one-shot (FR-102): a `.base` file's views were translated into `<vault>/.omnipus-vault/views/<slug>.yaml` and the source file is never read again on the query path. The importer's own SlugRegistry (pkg/vaultimport/util.go) derives that slug — kebab(base stem) + "--" + kebab(view name), plus a numeric suffix when two view names kebab to the same string — and the suffix is a COUNTER over everything already handed out, which nothing outside the importer can reconstruct. A client that re-derived the slug by parsing the `.base` file therefore mapped two colliding view names onto ONE slug: the second tab silently rendered the first view's rows under the second view's name. `name` here is read from the saved view file itself, so there is nothing left to re-derive.
+         */
+        KnowledgeBaseView: {
+            /**
+             * @description The saved view's own name — the authoritative slug, to be passed VERBATIM as the `view` query parameter of GET /library/{workspace_id}/knowledge/view. Never reconstructed by a client.
+             * @example invoices--outstanding
+             */
+            name: string;
+            /**
+             * @description What to show a reader: the view's declared `label` when it has one, otherwise its `name`. Resolved server-side (records.SavedView's DisplayLabel) so no two consumers can invent different fallbacks.
+             * @example Outstanding
+             */
+            label: string;
+            /**
+             * @description The view kind that authored this view (design §2.3), when the file declares one. Provenance — nothing renders from it.
+             * @example summary
+             */
+            kind?: string;
+            /**
+             * @description True when the view loaded but CANNOT be served — it is stored `disabled` (FR-105), or its filter cannot be carried into the query grammar. Absent or false means it can be evaluated normally.
+             *
+             *     Reported rather than hidden: a view the vault declares and this surface silently omits is indistinguishable from a view that was never imported, and the operator's fix differs completely between the two.
+             * @example true
+             */
+            unservable?: boolean;
+            /**
+             * @description Why it cannot be served, in the operator's own vocabulary, together with the remedy — records.ViewServeRefusal's Reason and Remedy. Present exactly when `unservable` is true.
+             * @example the view is stored disabled because an expression in its filter could not be translated — write the filter directly to run it
+             */
+            unservable_reason?: string;
         };
         /**
          * KnowledgeOutline
@@ -19610,6 +19710,40 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    getKnowledgeBaseViews: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the .base file.
+                 * @example notes/vault/CRM/Invoices.base
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The views imported from that base file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseViews"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getKnowledgeViewResult: {
         parameters: {
             query: {
@@ -20234,6 +20368,8 @@ export type KnowledgeGraphResponse = components["schemas"]["KnowledgeGraphRespon
 export type KnowledgeGraphNode = components["schemas"]["KnowledgeGraphNode"];
 export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdge"];
 export type KnowledgeGraphSkip = components["schemas"]["KnowledgeGraphSkip"];
+export type KnowledgeBaseViews = components["schemas"]["KnowledgeBaseViews"];
+export type KnowledgeBaseView = components["schemas"]["KnowledgeBaseView"];
 export type KnowledgeOutline = components["schemas"]["KnowledgeOutline"];
 export type KnowledgeOutlineHeading = components["schemas"]["KnowledgeOutlineHeading"];
 export type KnowledgeConflictError = components["schemas"]["KnowledgeConflictError"];
