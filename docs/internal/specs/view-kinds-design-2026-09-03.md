@@ -324,3 +324,110 @@ furniture.
   would put a problem on all 69 of the founder's imported views — the renderer
   reporting the format's own history as a fault. §4's promise that they "load
   unchanged" holds.
+
+- D7. RULED 2026-09-05: **G2 belongs to the ENGINE, not to the surfaces that
+  read it** — `knowledge_find` totals a number-with-unit once per unit value,
+  and the view endpoint stops compensating for the fact that it did not.
+
+  **Evidence.** A deliberately-skipped failing test,
+  `pkg/records/knowledgefind/unit_aggregate_g2_test.go`, written when the
+  renderer half of G2 landed and kept rather than deleted so the defect stayed
+  visible. Un-skipped on 2026-09-05, its observed red was:
+
+  ```
+  --- FAIL: TestFind_SumDoesNotCrossUnits_G2
+      sum(amount) answered "300.50" — 100.50 SGD + 200.00 EUR is a figure in
+      no currency; G2 admits no combined total
+  ```
+
+  `aggregate` reduced a column with no idea `PropertyDef.unit_property`
+  existed. The gate lived in the composer and in the view renderer; the tool an
+  agent calls directly had none. The interim protection was a wall around one
+  door in a building with two: the view endpoint refused to route a view total
+  through the engine at all, which left the gap reachable through
+  `knowledge_find` itself and through a saved view's legacy `aggregates:` key.
+
+  The skip named four questions the engine could not answer on its own. All
+  four are ruled here.
+
+  **D7.1 — The answer format: one total per unit value.** `VaultFindTotal`
+  gains optional `unit` and `unit_property`, the same two fields with the same
+  meanings `ViewUnitTotal` already carries (contract-first, Constraint #8). ONE
+  requested aggregate yields **N totals**, one per distinct unit value, each
+  with its own value, its own scope and its own unit. No field anywhere can
+  hold a combined figure. A number with **no** companion unit still yields
+  exactly one entry with `unit` absent — unchanged in shape, value and rendered
+  bytes, because existing agents read that line.
+
+  Which summaries are split is the **closed list already written for the view
+  endpoint**, moved into the engine and delegated to from there
+  (`knowledgefind.AggregateCrossesNoUnits`): `count`, `empty`, `filled` and
+  `unique` answer with a COUNT, which is dimensionless and crosses no unit;
+  every other summary either combines values (`sum`, `avg`, `median`,
+  `stddev`, `range`) or selects one as representative (`min`, `max`,
+  `earliest`, `latest`), and both answer in the unit's own domain.
+
+  Rendered, in the compact text the model reads — **one line per total**, the
+  unit printed with the figure:
+
+  ```
+  TOTALS: sum(amount) = 150.00 SGD over 2 of 5 evaluated rows (5 shown); 1 row(s) carry no amount and are not included; in SGD only — one total per unit value, never combined across units (G2); 1 row excluded from every total (G3), still shown: 1 row has no confirmed currency value
+  TOTALS: sum(amount) = 200.00 EUR over 1 of 5 evaluated rows (5 shown); …
+  ```
+
+  The lines are deliberately NOT merged into one per-property sentence.
+  Merging would make the renderer decide which half of each scope clause is
+  shared between units, and a scope re-derived by a later layer is precisely
+  what FR-125 forbids.
+
+  **D7.2 — The memory bound, re-stated for N partitions.** B3 (FR-151) bounds
+  what a population-class summary HOLDS. Partitioning does not make a value
+  cost more, so the **single column budget is shared across every partition of
+  one aggregate** rather than handed out per partition: the stated guarantee is
+  re-stated for N partitions, not multiplied by unit cardinality. The buffer is
+  therefore the caller's (`reduceAggregateSet` declares it; `scanColumn` takes
+  it), and `columnBufferMaxValues` became a `var` for the same reason
+  `maxViewResultRows` is one — the two designs are indistinguishable below the
+  bound, so proving the shared one needs a corpus that crosses the bound in
+  total while no single partition does.
+
+  The **number of partitions** gets its own separate bound,
+  `unitPartitionMax = 64`, which **refuses rather than degrading**. A unit
+  column with more than 64 distinct values is not a unit column, and 64 totals
+  already exceed what the 4 kB response budget can render or a reader can use.
+  Past it the answer is a refused total naming the bound and the remedy — never
+  a truncated list of totals, which would look complete.
+
+  **D7.3 — The untyped case: refuse, mirroring the view endpoint exactly.** A
+  query naming no `type` refuses to total any property **any** in-scope schema
+  pairs with a companion unit; the rows are still shown and the refusal names
+  the declaring types and the fix. A property no schema pairs with a unit keeps
+  its unit-less total — with no declaration there are no units to cross
+  (declared, never inferred, §5). The **reason** is one implementation
+  (`knowledgefind.UntypedUnitTotalReason`) called by both surfaces; the
+  **remedy** is deliberately per-surface, because declaring `type:` in a view
+  file and adding `type=` to a request are different acts on different
+  artefacts and one sentence fitting both would name neither.
+
+  **D7.4 — The scope clause is emitted per unit.** Each per-unit total carries
+  FR-125's clause over **its own** row subset with the **whole** evaluated set
+  as the denominator (`over 2 of 5 evaluated rows (5 shown)`), followed by the
+  G2 statement and the G3 exclusion count. The exclusion is repeated on every
+  unit's line rather than stated once at the end: a reader who lifts one line
+  out of the answer must lift the caveat with it.
+
+  **G4 was probed, not assumed, and needed no change.** `parse()` already
+  refuses a summary the property's declared type does not define (FR-155 /
+  `opDefinedForType`), so `sum` over a text column holding "1200" and "3400"
+  never reaches the reducer — 4,600 is unreachable at this layer, and an
+  undeclared name in an untyped query resolves in the text domain by rule and
+  meets the same gate. A regression test now says so, because the gate lives in
+  a different file from the rule it serves.
+
+  **Consequence for the view endpoint (b).** The interim compensation is
+  **removed**, not kept as defence in depth. Now that the engine answers per
+  unit, dropping a legacy `aggregates:` total would hide a CORRECT figure
+  behind a refusal saying it could not be computed — the same "panel that omits
+  a number the chat will state" failure that made the endpoint surface those
+  totals in the first place. Its position-pairing invariant went with it: one
+  declared aggregate is no longer one total.

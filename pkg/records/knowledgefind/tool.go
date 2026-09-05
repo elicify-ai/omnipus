@@ -294,7 +294,11 @@ func Parameters() map[string]any {
 				},
 				"description": "Totals over the full evaluated set, never the page shown. Each states its own scope. " +
 					"An op is scoped to the property's DOMAIN — a summary the type does not define is refused " +
-					"naming the ones it does, never answered with a zero.",
+					"naming the ones it does, never answered with a zero. " +
+					"A number the record type pairs with a companion unit (a currency, a measure) is totalled ONCE PER " +
+					"UNIT VALUE and never across units, so ONE aggregate can answer with SEVERAL totals, each naming its " +
+					"unit; rows whose unit is missing or ambiguous are shown, excluded from every total and counted. " +
+					"Totalling such a number without `type` is refused, because no single record type can resolve the unit.",
 			},
 			"explain": map[string]any{
 				"type":        "boolean",

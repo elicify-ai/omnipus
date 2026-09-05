@@ -66,6 +66,18 @@ func (q *query) renderProperties() []*records.Property {
 	for _, a := range q.aggregates {
 		if a.property != "" {
 			add(a.property)
+			// AND ITS COMPANION UNIT (G2/D7). A summary over a number the
+			// record type pairs with a unit is reduced once per unit value, so
+			// the unit has to be DECODED or every row would read as "no
+			// confirmed unit" and the whole total would be refused — a correct
+			// answer lost to a column nobody asked to see. It is added to this
+			// list rather than to a second one for the reason the doc comment
+			// gives: this list IS the decode list, and a value decoded through
+			// any other path would be a second read of the vault that could
+			// disagree with the rows on screen.
+			if a.prop != nil && a.prop.UnitProperty != "" {
+				add(a.prop.UnitProperty)
+			}
 		}
 	}
 	return out

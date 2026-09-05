@@ -121,32 +121,14 @@ func (e *viewExcluded) add(other viewExcluded) {
 
 // viewResultExcludedReason writes the G3 footer line for one scope, naming
 // each cause with its OWN count.
+//
+// The wording is the ENGINE'S, delegated to rather than restated: the find
+// tool answers the same question about the same rows in the same vault
+// (knowledgefind's per-unit totals, D7), and two spellings of one G3 sentence
+// would drift the first time either was improved — which is exactly how the
+// "3 rows has" defect reached a UAT.
 func viewResultExcludedReason(missing, ambiguous int, unitProps []string) string {
-	prop := strings.Join(unitProps, "/")
-	// rowsVerbOf pairs the noun with its verb, so the plural branch cannot
-	// drift from the singular one again (UAT finding D4: "3 rows has").
-	rowsVerbOf := func(n int, singular, plural string) string {
-		if n == 1 {
-			return "1 row " + singular
-		}
-		return fmt.Sprintf("%d rows %s", n, plural)
-	}
-	rowsOf := func(n int) string {
-		if n == 1 {
-			return "1 row"
-		}
-		return fmt.Sprintf("%d rows", n)
-	}
-	var causes []string
-	if missing > 0 {
-		causes = append(causes, fmt.Sprintf("%s no confirmed %s value", rowsVerbOf(missing, "has", "have"), prop))
-	}
-	if ambiguous > 0 {
-		causes = append(causes, fmt.Sprintf("%s more than one %s value, so which one its number is in is not confirmed",
-			rowsVerbOf(ambiguous, "records", "record"), prop))
-	}
-	return fmt.Sprintf("%s excluded from every total (G3), still shown: %s",
-		rowsOf(missing+ambiguous), strings.Join(causes, "; "))
+	return knowledgefind.ExcludedFromUnitTotalsReason(missing, ambiguous, unitProps)
 }
 
 func (a *restAPI) handleKnowledgeViewResult(w http.ResponseWriter, r *http.Request, workspaceID string) {
@@ -256,9 +238,6 @@ type viewResultBuilder struct {
 	// refusedUnitStamps is the same dedupe for the unit-authority
 	// disagreement between a part's stamp and the schema's declaration.
 	refusedUnitStamps map[string]bool
-	// refusedLegacyAggs is the same dedupe for a legacy `aggregates:` entry
-	// withheld because the engine computes it across units.
-	refusedLegacyAggs map[string]bool
 	// formulas is the view's own computed properties, validated lazily and at
 	// most once (a formula's static type is inferred from its expression, so
 	// it cannot be read off the file).
@@ -497,8 +476,7 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 	return nil
 }
 
-// collectLegacyAggregates surfaces the view's own `aggregates:` results,
-// GATED.
+// collectLegacyAggregates surfaces the view's own `aggregates:` results.
 //
 // `aggregates` predates the part stack and 69 saved views still use it. The
 // bridge forwards it into the engine request and the engine computes it — and
@@ -508,30 +486,37 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 // has no totals, which is the confidently-wrong shape this whole surface
 // exists against.
 //
-// THE GATE IS G2, AND IT IS NEEDED BECAUSE THE SOURCE IS UNIT-BLIND. The
-// engine's `aggregate` has no idea PropertyDef.unit_property exists (the
-// deferred defect recorded in knowledgefind's unit_aggregate_g2_test.go), so
-// sum(amount) over SGD and EUR is a figure in no currency. Surfacing that raw
-// would import the very output every other total in this file refuses. So a
-// summary that COMBINES VALUES is dropped and refused by name whenever its
-// property declares a companion unit; summaries that count rows or distinct
-// values cross no units and pass through.
+// THE G2 GATE THAT USED TO LIVE HERE IS GONE, BECAUSE THE SOURCE IS NO LONGER
+// UNIT-BLIND. Until D7 (2026-09-05) the engine's `aggregate` had no idea
+// PropertyDef.unit_property existed, so sum(amount) over SGD and EUR was a
+// figure in no currency; surfacing it raw would have imported the very output
+// every other total in this file refuses, and the compensation was to DROP
+// such a total and refuse it by name. The engine now partitions by unit value
+// itself and answers one total per unit, so that compensation would do the
+// opposite of its purpose: it would drop CORRECT per-unit figures and tell the
+// reader they could not be computed. Keeping a wall around a door that no
+// longer exists is not defence in depth; it is a panel that omits numbers the
+// chat states, which is the finding this function was written for.
 //
-// G4 needs no gate here: the engine already refuses a summary a type does not
-// define (opDefinedForType) and marks the total refused rather than omitting
-// it, so a refused total is surfaced AS refused — which is the honest form of
-// the same answer.
+// G4 needs no gate either: the engine refuses a summary a type does not define
+// (opDefinedForType) and marks the total refused rather than omitting it, so a
+// refused total is surfaced AS refused — the honest form of the same answer.
 func (b *viewResultBuilder) collectLegacyAggregates(totals []gen.VaultFindTotal) {
 	if b.view.Def.Aggregates == nil || len(*b.view.Def.Aggregates) == 0 || len(totals) == 0 {
 		return
 	}
-	// The engine computes one total per requested aggregate, in request order,
-	// and the bridge builds that request from this same list in this same
-	// order — so position is the pairing. A length mismatch means that
-	// invariant no longer holds, and the honest response is to surface nothing
-	// rather than to attribute a number to the wrong property.
+	// ONE DECLARED AGGREGATE IS NO LONGER ONE TOTAL. Under G2 a unit-carrying
+	// number answers with one total PER UNIT VALUE, so the engine returns at
+	// least one total per declared aggregate and often more — position is no
+	// longer the pairing, and nothing here needs it to be: every total is
+	// surfaced, unmodified, exactly as knowledge_find states it.
+	//
+	// FEWER totals than declared aggregates still means the two have diverged
+	// (the engine answers every aggregate, refusing in place rather than
+	// omitting), and the honest response to that is to surface nothing rather
+	// than to attribute a number to the wrong property.
 	declared := *b.view.Def.Aggregates
-	if len(declared) != len(totals) {
+	if len(totals) < len(declared) {
 		fix := "re-request the view; if it persists, the view's `aggregates` and the engine's answer have diverged and the view needs re-saving"
 		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
 			Code:    gen.AggregateRefused,
@@ -543,77 +528,8 @@ func (b *viewResultBuilder) collectLegacyAggregates(totals []gen.VaultFindTotal)
 		return
 	}
 
-	out := make([]gen.VaultFindTotal, 0, len(totals))
-	for i, a := range declared {
-		if a.Property != nil && strings.TrimSpace(*a.Property) != "" &&
-			!viewAggregateCrossesNoUnits(string(a.Op)) {
-			prop := strings.TrimSpace(*a.Property)
-			if unitProp := b.anyDeclaredUnitFor(prop); unitProp != "" {
-				b.refuseLegacyUnitAggregate(prop, string(a.Op), unitProp)
-				continue
-			}
-		}
-		out = append(out, totals[i])
-	}
-	if len(out) > 0 {
-		b.out.Aggregates = &out
-	}
-}
-
-// viewAggregateCrossesNoUnits is the closed list of summaries whose answer is
-// a COUNT rather than a quantity. Counting rows, absences, presences or
-// distinct values says nothing about what the numbers are denominated in, so
-// no unit can be crossed. Everything else combines or selects values and is
-// gated.
-func viewAggregateCrossesNoUnits(op string) bool {
-	switch op {
-	case "count", "empty", "filled", "unique":
-		return true
-	default:
-		return false
-	}
-}
-
-// anyDeclaredUnitFor names the companion unit property declared for one
-// number, from the view's own record type when it has one and from every
-// in-scope type when it does not — the same reach the untyped G2 gate uses,
-// because the question is the same: could this total cross a unit?
-func (b *viewResultBuilder) anyDeclaredUnitFor(prop string) string {
-	if b.view.Def.Type != nil {
-		return b.unitPropertyOf(prop)
-	}
-	for _, t := range b.env.Schemas.Types() {
-		sc, ok := b.env.Schemas.Get(t)
-		if !ok || sc == nil {
-			continue
-		}
-		if p, found := sc.Property(prop); found && p != nil && p.UnitProperty != "" {
-			return p.UnitProperty
-		}
-	}
-	return ""
-}
-
-// refuseLegacyUnitAggregate records the G2 refusal for one legacy aggregate,
-// once per property per result.
-func (b *viewResultBuilder) refuseLegacyUnitAggregate(prop, op, unitProp string) {
-	if b.refusedLegacyAggs == nil {
-		b.refusedLegacyAggs = map[string]bool{}
-	}
-	if b.refusedLegacyAggs[prop] {
-		return
-	}
-	b.refusedLegacyAggs[prop] = true
-	fix := fmt.Sprintf("replace the view's `aggregates` entry with a part that totals %q — a `figures` part reduces once per %s value (G2), which the legacy key cannot",
-		prop, unitProp)
-	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
-		Code: gen.AggregateRefused,
-		Reason: fmt.Sprintf("this view's legacy `aggregates` asks for %s of %q, and %q carries the companion unit %q — that summary is computed across every unit at once, which is the combined figure G2 forbids, so it is not shown; the rows themselves are still shown",
-			op, prop, prop, unitProp),
-		Fix:     &fix,
-		Records: []string{},
-	})
-	b.out.Complete = false
+	out := append([]gen.VaultFindTotal(nil), totals...)
+	b.out.Aggregates = &out
 }
 
 // viewResponseEpoch reads the properties-index generation an evaluation ran
@@ -1165,19 +1081,12 @@ func (b *viewResultBuilder) unitStampAgrees(src gen.ViewPart, numberProp, resolv
 
 // typesDeclaringUnitFor lists, sorted, every record type in scope whose
 // schema declares numberProp with a companion unit property.
+//
+// It is the engine's own function — the untyped G2 gate here and the untyped
+// G2 gate in knowledge_find ask literally the same question of the same schema
+// set, and D7 requires one answer, not two implementations that agree today.
 func (b *viewResultBuilder) typesDeclaringUnitFor(numberProp string) []string {
-	var out []string
-	for _, t := range b.env.Schemas.Types() {
-		sc, ok := b.env.Schemas.Get(t)
-		if !ok {
-			continue
-		}
-		if p, found := sc.Property(numberProp); found && p != nil && p.UnitProperty != "" {
-			out = append(out, t)
-		}
-	}
-	sort.Strings(out)
-	return out
+	return knowledgefind.TypesDeclaringUnitFor(b.env.Schemas, numberProp)
 }
 
 // refuseUntypedUnitTotal records the G2 refusal for one property, ONCE per
@@ -1191,11 +1100,15 @@ func (b *viewResultBuilder) refuseUntypedUnitTotal(numberProp string, declaring 
 		return
 	}
 	b.refusedUnitProps[numberProp] = true
+	// The REASON is the engine's (knowledgefind.UntypedUnitTotalReason): one
+	// rule, one explanation, whichever surface refuses. The FIX is this
+	// endpoint's own, deliberately — declaring `type:` in a view file and
+	// adding `type=` to a request are different acts on different artefacts,
+	// and a remedy that fitted both would name neither.
 	fix := fmt.Sprintf("declare `type:` on the view so %q resolves its companion unit and totals once per unit value, or total a property no record type pairs with a unit", numberProp)
 	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
-		Code: gen.AggregateRefused,
-		Reason: fmt.Sprintf("no total of %q: this view declares no `type`, and record type %s declares %q with a companion unit — a total that cannot resolve units would add across them (G2); the rows themselves are still shown",
-			numberProp, strings.Join(declaring, "/"), numberProp),
+		Code:    gen.AggregateRefused,
+		Reason:  fmt.Sprintf("no total of %q: %s", numberProp, knowledgefind.UntypedUnitTotalReason("view", numberProp, declaring)),
 		Fix:     &fix,
 		Records: []string{},
 	})
