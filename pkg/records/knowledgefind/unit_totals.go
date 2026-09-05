@@ -239,16 +239,22 @@ func unitOf(s survivor, unitProp string) (display string, outcome unitOutcome) {
 	}
 }
 
-// hasNumberValue reports whether a row contributes anything to a column
-// reduction at all. A row that does NOT is counted by scanColumn's own
-// withoutValue/nonConforming counters, which is why it is carried into every
-// partition rather than dropped (see unitSplit.parts).
-func hasNumberValue(s survivor, prop string) bool {
+// rowCountsAsHavingTheProperty is scanColumn's OWN per-row rule, asked here so
+// the split and the scan cannot disagree about what a row is.
+//
+// It is deliberately NOT "has at least one value": R-3 says an empty list IS a
+// value, and scanColumn counts such a row as withValue while it contributes
+// nothing to the reduction. A partitioner that used the value count instead
+// would carry those rows into EVERY partition, and each partition's scan would
+// then count the same row as present — one row appearing in the numerator of
+// every unit's scope clause. The numbers would stay right and the sentence
+// beside them would not.
+func rowCountsAsHavingTheProperty(s survivor, prop string) bool {
 	pv, ok := s.values[prop]
 	if !ok || pv.State == records.StateAbsent || pv.State == records.StateNonConforming {
 		return false
 	}
-	return len(pv.Values) > 0
+	return true
 }
 
 type unitPartition struct {
@@ -289,7 +295,7 @@ func partitionByUnit(rows []survivor, numberProp, unitProp string) unitSplit {
 		carried []survivor
 	)
 	for _, s := range rows {
-		if !hasNumberValue(s, numberProp) {
+		if !rowCountsAsHavingTheProperty(s, numberProp) {
 			carried = append(carried, s)
 			continue
 		}
