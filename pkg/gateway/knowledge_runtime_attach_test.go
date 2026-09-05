@@ -69,9 +69,9 @@ func kraDropVaultIn(t *testing.T, home, wsID, name string, files map[string]stri
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
 	}
-	real, err := filepath.EvalSymlinks(root)
+	resolved, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err)
-	return real
+	return resolved
 }
 
 // ---------------------------------------------------------------------------
