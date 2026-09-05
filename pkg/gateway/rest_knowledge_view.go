@@ -79,14 +79,44 @@ var maxViewResultRows = 2000
 // previously ten full re-evaluations of the whole query per request.
 var viewResultFind = knowledgefind.Find
 
-// viewResultExcludedReason writes the G3 footer line for one scope.
-func viewResultExcludedReason(n int, unitProps []string) string {
-	rows := "rows have"
-	if n == 1 {
-		rows = "row has"
+// viewExcluded is one scope's G3 exclusions, SPLIT BY CAUSE.
+//
+// A row with NO unit and a row with TWO are both rightly excluded — neither
+// has confirmed which unit its number is in — but they are excluded for
+// opposite reasons with opposite fixes: fill one in, or pick one of two.
+// Reporting both as "no confirmed currency value" told an operator to supply a
+// value that was already there twice, which is a footer that costs more than
+// it explains.
+type viewExcluded struct {
+	missing   []string
+	ambiguous []string
+}
+
+func (e *viewExcluded) add(other viewExcluded) {
+	e.missing = append(e.missing, other.missing...)
+	e.ambiguous = append(e.ambiguous, other.ambiguous...)
+}
+
+// viewResultExcludedReason writes the G3 footer line for one scope, naming
+// each cause with its OWN count.
+func viewResultExcludedReason(missing, ambiguous int, unitProps []string) string {
+	prop := strings.Join(unitProps, "/")
+	rowsOf := func(n int) string {
+		if n == 1 {
+			return "1 row"
+		}
+		return fmt.Sprintf("%d rows", n)
 	}
-	return fmt.Sprintf("%d %s no confirmed %s value and are excluded from every total (G3); the rows themselves are still shown",
-		n, rows, strings.Join(unitProps, "/"))
+	var causes []string
+	if missing > 0 {
+		causes = append(causes, fmt.Sprintf("%s has no confirmed %s value", rowsOf(missing), prop))
+	}
+	if ambiguous > 0 {
+		causes = append(causes, fmt.Sprintf("%s records more than one %s value, so which one its number is in is not confirmed",
+			rowsOf(ambiguous), prop))
+	}
+	return fmt.Sprintf("%s excluded from every total (G3), still shown: %s",
+		rowsOf(missing+ambiguous), strings.Join(causes, "; "))
 }
 
 func (a *restAPI) handleKnowledgeViewResult(w http.ResponseWriter, r *http.Request, workspaceID string) {
@@ -654,17 +684,30 @@ func viewNumberValues(cell string) []records.Decimal {
 	return out
 }
 
-// viewUnitValue reads a row's unit cell. ok=false is G3's trigger: the unit
-// is ABSENT, UNREADABLE, or MULTI-VALUED (a row carrying two units for one
-// number has not confirmed which one the number is in).
-func viewUnitValue(cell string) (string, bool) {
+// viewUnitOutcome is what reading one row's unit cell settled.
+type viewUnitOutcome int
+
+const (
+	// viewUnitConfirmed: exactly one readable unit value.
+	viewUnitConfirmed viewUnitOutcome = iota
+	// viewUnitMissing: no value at all, or one that could not be read.
+	viewUnitMissing
+	// viewUnitAmbiguous: MORE THAN ONE value. The row has a unit — it has two
+	// — and the number is in one of them, unknowably.
+	viewUnitAmbiguous
+)
+
+// viewUnitValue reads a row's unit cell and says WHICH of G3's two triggers
+// fired, because the two have different fixes and a footer that merges them
+// helps with neither.
+func viewUnitValue(cell string) (string, viewUnitOutcome) {
 	if cell == "" || cell == "(unreadable)" {
-		return "", false
+		return "", viewUnitMissing
 	}
 	if strings.Contains(cell, ", ") {
-		return "", false
+		return "", viewUnitAmbiguous
 	}
-	return cell, true
+	return cell, viewUnitConfirmed
 }
 
 // unitPropertyOf resolves the DECLARED companion unit of a number property —
@@ -1043,7 +1086,7 @@ func (a *viewUnitAccum) add(d records.Decimal) {
 // no total.
 func (b *viewResultBuilder) aggregateViewRows(
 	rows []*gen.VaultFindRow, numberProp, unitProp string, op gen.ViewPartAggregate,
-) (totals []gen.ViewUnitTotal, excludedPaths []string) {
+) (totals []gen.ViewUnitTotal, excluded viewExcluded) {
 	accums := map[string]*viewUnitAccum{}
 	var order []string
 	for _, row := range rows {
@@ -1056,9 +1099,13 @@ func (b *viewResultBuilder) aggregateViewRows(
 		}
 		unitKey := ""
 		if unitProp != "" {
-			u, ok := viewUnitValue(viewCellValue(row, unitProp))
-			if !ok {
-				excludedPaths = append(excludedPaths, row.Path)
+			u, outcome := viewUnitValue(viewCellValue(row, unitProp))
+			switch outcome {
+			case viewUnitMissing:
+				excluded.missing = append(excluded.missing, row.Path)
+				continue
+			case viewUnitAmbiguous:
+				excluded.ambiguous = append(excluded.ambiguous, row.Path)
 				continue
 			}
 			unitKey = u
@@ -1102,7 +1149,7 @@ func (b *viewResultBuilder) aggregateViewRows(
 		}
 		totals = append(totals, t)
 	}
-	return totals, excludedPaths
+	return totals, excluded
 }
 
 func renderViewAggregate(acc *viewUnitAccum, op gen.ViewPartAggregate) (string, bool) {
@@ -1128,8 +1175,17 @@ func renderViewAggregate(acc *viewUnitAccum, op gen.ViewPartAggregate) (string, 
 	}
 }
 
-// renderViewAverage renders sum/count in exact rational arithmetic, rounded
-// half-up at two digits past the sum's own scale — never through a float.
+// renderViewAverage renders sum/count in exact rational arithmetic — never
+// through a float — at the column's own scale plus two (FR-152), rounded HALF
+// TO EVEN by knowledgefind's own exported rule.
+//
+// The rule is BORROWED rather than reimplemented, and that is the whole point
+// of the change that put it here. This function used to round half UP while
+// knowledge_find rounded half to even and said "round-half-even" in its own
+// label: one column, one set of records, two answers, and the only reader who
+// could catch it is one who thought to compare a chat answer against a panel.
+// One rule needs one implementation, or the two drift again the next time
+// either is touched.
 func renderViewAverage(sum records.Decimal, count int) string {
 	num := new(big.Int).Set(sum.Unscaled())
 	den := big.NewInt(int64(count))
@@ -1140,21 +1196,7 @@ func renderViewAverage(sum records.Decimal, count int) string {
 		num.Mul(num, viewPow10(int64(-scale)))
 		scale = 0
 	}
-	outScale := scale + 2
-	r := new(big.Rat).SetFrac(num, den)
-	m := new(big.Int).Mul(r.Num(), viewPow10(int64(outScale)))
-	q, rem := new(big.Int).QuoRem(m, r.Denom(), new(big.Int))
-	if rem.Sign() != 0 {
-		twice := new(big.Int).Abs(new(big.Int).Lsh(rem, 1))
-		if twice.Cmp(r.Denom()) >= 0 {
-			if r.Sign() >= 0 {
-				q.Add(q, big.NewInt(1))
-			} else {
-				q.Sub(q, big.NewInt(1))
-			}
-		}
-	}
-	return records.NewDecimal(q, outScale).String()
+	return knowledgefind.RoundHalfEven(new(big.Rat).SetFrac(num, den), scale+2)
 }
 
 func viewPow10(n int64) *big.Int {
@@ -1214,23 +1256,32 @@ func (b *viewResultBuilder) resolveColumns(src gen.ViewPart) *[]string {
 // to say "1 row excluded" and unable to say which one. The three travel
 // together, from one deduplicated set, so the list can never disagree with the
 // count beside it.
-func viewExcludedFields(paths []string, unitProps []string) (*int, *string, *[]string) {
+func viewExcludedFields(ex viewExcluded, unitProps []string) (*int, *string, *[]string) {
 	seen := map[string]struct{}{}
-	unique := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if _, dup := seen[p]; dup {
-			continue
+	dedupe := func(paths []string) []string {
+		out := make([]string, 0, len(paths))
+		for _, p := range paths {
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
 		}
-		seen[p] = struct{}{}
-		unique = append(unique, p)
+		return out
 	}
-	n := len(unique)
+	// Missing is deduplicated FIRST, so a row that is somehow reported under
+	// both causes is counted once, under the cause with the simpler fix.
+	missing := dedupe(ex.missing)
+	ambiguous := dedupe(ex.ambiguous)
+
+	n := len(missing) + len(ambiguous)
 	if n == 0 {
 		return nil, nil, nil
 	}
-	sort.Strings(unique)
-	reason := viewResultExcludedReason(n, unitProps)
-	return &n, &reason, &unique
+	all := append(append(make([]string, 0, n), missing...), ambiguous...)
+	sort.Strings(all)
+	reason := viewResultExcludedReason(len(missing), len(ambiguous), unitProps)
+	return &n, &reason, &all
 }
 
 func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
@@ -1285,7 +1336,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 				}
 				if len(subtotalProps) > 0 && !b.truncated {
 					rows := b.rowsFor(g.Paths)
-					excluded := make([]string, 0, len(rows))
+					var excluded viewExcluded
 					var unitProps []string
 					for i, prop := range subtotalProps {
 						unitProp, permitted := b.unitPropertyForTotals(src, prop)
@@ -1294,7 +1345,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 						}
 						totals, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
 						rg.Subtotals = append(rg.Subtotals, totals...)
-						excluded = append(excluded, ex...)
+						excluded.add(ex)
 						if unitProp != "" {
 							unitProps = append(unitProps, unitProp)
 						}
@@ -1310,7 +1361,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 	if len(subtotalProps) > 0 && !b.truncated {
 		rows := b.allRows()
 		totals := make([]gen.ViewUnitTotal, 0, len(subtotalProps))
-		excluded := make([]string, 0, len(rows))
+		var excluded viewExcluded
 		var unitProps []string
 		for i, prop := range subtotalProps {
 			unitProp, permitted := b.unitPropertyForTotals(src, prop)
@@ -1319,7 +1370,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 			}
 			ts, ex := b.aggregateViewRows(rows, prop, unitProp, subtotalOps[i])
 			totals = append(totals, ts...)
-			excluded = append(excluded, ex...)
+			excluded.add(ex)
 			if unitProp != "" {
 				unitProps = append(unitProps, unitProp)
 			}
@@ -1400,7 +1451,7 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 	}
 	pointsByUnit := map[string][]gen.ViewResultPoint{}
 	var unitOrder []string
-	var excluded []string
+	var excluded viewExcluded
 	for _, g := range groups {
 		if g.Absent != nil && *g.Absent {
 			// An undated row has no x position; it stays in `rows` and simply
@@ -1409,7 +1460,7 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 			continue
 		}
 		totals, ex := b.aggregateViewRows(b.rowsFor(g.Paths), numberProp, unitProp, op)
-		excluded = append(excluded, ex...)
+		excluded.add(ex)
 		for _, t := range totals {
 			unitKey := ""
 			if t.Unit != nil {
@@ -1442,17 +1493,26 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 	if src.Number == nil || b.truncated {
 		return
 	}
-	if src.Grouping == nil || len(*src.Grouping) < 2 {
-		fix := "give the crosstab part two grouping keys through knowledge_configure"
+	// THE VIEW-LEVEL FALLBACK IS THE RENDERER'S TO APPLY. EffectiveParts
+	// deliberately does not copy a view's own `grouping:` down into a part
+	// that declares none — its comment says so — and this builder read
+	// src.Grouping directly, so a perfectly legal view that declared both keys
+	// at the top level and a bare `- part: crosstab` beneath refused with
+	// "needs two grouping keys" while the keys sat one level up in the same
+	// file. effectiveGrouping is the inheritance rule every other part already
+	// goes through.
+	grouping := b.effectiveGrouping(src)
+	if len(grouping) < 2 {
+		fix := "give the crosstab part two grouping keys through knowledge_configure, or declare them on the view so every part inherits them"
 		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
 			Code:    gen.AggregateRefused,
-			Reason:  "a crosstab part needs two grouping keys, and this one declares fewer",
+			Reason:  "a crosstab part needs two grouping keys, and neither it nor its view declares two",
 			Fix:     &fix,
 			Records: []string{},
 		})
 		return
 	}
-	grouping := (*src.Grouping)[:2]
+	grouping = grouping[:2]
 	numberProp := *src.Number
 	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
@@ -1480,7 +1540,7 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 		Cells:          []gen.ViewResultCrosstabCell{},
 	}
 	colSeen := map[string]bool{}
-	var excluded []string
+	var excluded viewExcluded
 	for _, g := range groups {
 		ct.RowKeys = append(ct.RowKeys, g.Key)
 		if g.Subgroups == nil {
@@ -1492,7 +1552,7 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 				ct.ColumnKeys = append(ct.ColumnKeys, sg.Key)
 			}
 			totals, ex := b.aggregateViewRows(b.rowsFor(sg.Paths), numberProp, unitProp, op)
-			excluded = append(excluded, ex...)
+			excluded.add(ex)
 			for _, t := range totals {
 				cell := gen.ViewResultCrosstabCell{
 					Row:    g.Key,

@@ -719,6 +719,23 @@ func pow10big(n int64) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(n), nil)
 }
 
+// RoundHalfEven is FR-152's rounding rule, exported so there is exactly ONE
+// implementation of it in the codebase.
+//
+// The gateway's view renderer computes its own averages — it reduces the
+// engine's rendered cells per unit value (G2), which the engine's unit-blind
+// `aggregate` cannot do for it — and it wrote its own rounding to do so, HALF
+// UP. FR-152 says half to even, and knowledge_find's own total says so in its
+// label. The same column, the same records, two answers, and the only place a
+// reader could notice is the one they would least think to check.
+//
+// It returns the number UNGROUPED (no thousands separators): the wire types
+// this feeds carry exact decimal text, and the engine's own reader-facing
+// grouping is applied by its caller, not here.
+func RoundHalfEven(v *big.Rat, scale int32) string {
+	return renderRounded(v, scale)
+}
+
 // renderRounded renders an exact rational at `scale` decimal places, rounding
 // half to EVEN.
 //
