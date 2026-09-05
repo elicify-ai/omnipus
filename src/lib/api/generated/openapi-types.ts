@@ -5569,6 +5569,19 @@ export interface components {
              * @example 2 rows have no confirmed currency value and are excluded from every total
              */
             excluded_reason?: string;
+            /**
+             * @description The companion unit property this part's `number` binding RESOLVED to, from the record type's own declaration (design section 5). Absent when the number declares no companion unit, or when the part totals nothing.
+             *
+             *     THE SCHEMA IS THE AUTHORITY AND THIS IS ITS ANSWER. A part's own `unit:` key records what the composer stamped when the view was written; it is provenance, and a record type edited afterwards can leave it stale. The server resolves the unit from the schema, refuses the total outright when the two disagree (naming both sides), and states the resolved answer here — so no consumer ever re-derives a unit from `source.unit` and no two consumers can derive different ones.
+             * @example currency
+             */
+            unit_property?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
             /** @description Chart parts only: the precomputed series, one per unit value (G2), points aggregated per date bucket server-side. */
             series?: components["schemas"]["ViewResultSeries"][];
             /** @description Crosstab parts only: the precomputed grid. */
@@ -5607,6 +5620,12 @@ export interface components {
              * @example 1 row has no confirmed currency value and is excluded from every subtotal
              */
             excluded_reason?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
         };
         /**
          * ViewUnitTotal
@@ -5627,6 +5646,13 @@ export interface components {
              * @example SGD
              */
             unit?: string;
+            /**
+             * @description The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+             *
+             *     It travels WITH the unit value rather than beside it, one level up, because a unit and the property it was read from are one fact: a renderer that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with, and the schema it would need in order to stop guessing is not something the SPA has.
+             * @example currency
+             */
+            unit_property?: string;
             /**
              * @description The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
              * @example 12480.00
@@ -5697,6 +5723,12 @@ export interface components {
             excluded_count?: number;
             /** @description Why those rows were excluded, ready to render. */
             excluded_reason?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
         };
         /**
          * ViewResultCrosstabCell

@@ -555,6 +555,8 @@ type ViewResultPart = {
   totals?: Array<ViewUnitTotal> | undefined;
   excluded_count?: number | undefined;
   excluded_reason?: string | undefined;
+  unit_property?: string | undefined;
+  excluded_paths?: Array<string> | undefined;
   series?: Array<ViewResultSeries> | undefined;
   crosstab?: ViewResultCrosstab | undefined;
 };
@@ -566,11 +568,13 @@ type ViewResultGroup = {
   subtotals: Array<ViewUnitTotal>;
   excluded_count?: number | undefined;
   excluded_reason?: string | undefined;
+  excluded_paths?: Array<string> | undefined;
 };
 type ViewUnitTotal = {
   property: string;
   op: ViewPartAggregate;
   unit?: string | undefined;
+  unit_property?: string | undefined;
   value: string;
   count: number;
 };
@@ -591,6 +595,7 @@ type ViewResultCrosstab = {
   cells: Array<ViewResultCrosstabCell>;
   excluded_count?: number | undefined;
   excluded_reason?: string | undefined;
+  excluded_paths?: Array<string> | undefined;
 };
 type ViewResultCrosstabCell = {
   row: string;
@@ -3996,6 +4001,7 @@ export const ViewUnitTotal: z.ZodType<ViewUnitTotal> = z.object({
   property: z.string().min(1),
   op: ViewPartAggregate,
   unit: z.string().optional(),
+  unit_property: z.string().optional(),
   value: z.string(),
   count: z.number().int(),
 });
@@ -4007,6 +4013,7 @@ export const ViewResultGroup: z.ZodType<ViewResultGroup> = z.object({
   subtotals: z.array(ViewUnitTotal),
   excluded_count: z.number().int().optional(),
   excluded_reason: z.string().optional(),
+  excluded_paths: z.array(z.string().min(1)).optional(),
 });
 export const ViewResultPoint: z.ZodType<ViewResultPoint> = z.object({
   key: z.string(),
@@ -4033,6 +4040,7 @@ export const ViewResultCrosstab: z.ZodType<ViewResultCrosstab> = z.object({
   cells: z.array(ViewResultCrosstabCell),
   excluded_count: z.number().int().optional(),
   excluded_reason: z.string().optional(),
+  excluded_paths: z.array(z.string().min(1)).optional(),
 });
 export const ViewResultPart: z.ZodType<ViewResultPart> = z.object({
   part: z.enum([
@@ -4051,6 +4059,8 @@ export const ViewResultPart: z.ZodType<ViewResultPart> = z.object({
   totals: z.array(ViewUnitTotal).optional(),
   excluded_count: z.number().int().optional(),
   excluded_reason: z.string().optional(),
+  unit_property: z.string().optional(),
+  excluded_paths: z.array(z.string().min(1)).optional(),
   series: z.array(ViewResultSeries).optional(),
   crosstab: ViewResultCrosstab.optional(),
 });

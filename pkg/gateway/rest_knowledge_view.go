@@ -174,6 +174,9 @@ type viewResultBuilder struct {
 	// refusedG4Props is the same dedupe for G4 — a property refused as
 	// non-arithmetic says so once, not once per part, group and cell.
 	refusedG4Props map[string]bool
+	// refusedUnitStamps is the same dedupe for the unit-authority
+	// disagreement between a part's stamp and the schema's declaration.
+	refusedUnitStamps map[string]bool
 	// formulas is the view's own computed properties, validated lazily and at
 	// most once (a formula's static type is inferred from its expression, so
 	// it cannot be read off the file).
@@ -727,7 +730,25 @@ func (b *viewResultBuilder) permittedToTotal(numberProp string) bool {
 // pairs with a unit — the rows stay shown, the refusal names the fix. A
 // property no schema pairs with a unit keeps its unit-less total: with no
 // declaration there are no units to cross (declared, never inferred).
-func (b *viewResultBuilder) unitPropertyForTotals(numberProp string) (unitProp string, ok bool) {
+//
+// IT ALSO RECONCILES THE TWO READERS OF A UNIT, which is the second defect it
+// was widened for. The part on disk carries the unit the COMPOSER stamped
+// (ViewPart.unit) and the schema carries the unit the RECORD TYPE declares,
+// and nothing rewrites a view when a record type changes. Deleting
+// `unit_property` from the type while keeping the `currency` property left the
+// part still saying `unit: currency` and this endpoint resolving none — one
+// combined SGD+EUR+unit-less figure, no refusal, and a view file that still
+// read as unit-aware to anyone inspecting it.
+//
+// The rule: THE SCHEMA IS THE AUTHORITY (design §5 — declared, never
+// inferred), and a DISAGREEMENT NEVER PASSES SILENTLY. Where the part's stamp
+// and the schema's declaration differ — including the schema resolving none
+// while the part stamps one — the total is refused, naming BOTH sides, because
+// picking either would total under a rule one of the two files does not
+// describe and the operator would not know which file to edit. A part with no
+// stamp of its own simply takes the schema's answer, which then reaches the
+// wire (ViewResultPart.unit_property) so nothing downstream re-derives it.
+func (b *viewResultBuilder) unitPropertyForTotals(src gen.ViewPart, numberProp string) (unitProp string, ok bool) {
 	// G4 RUNS FIRST, because it decides whether the column is arithmetic at
 	// all — asking which unit a paragraph of prose is denominated in is a
 	// question that only makes sense after that.
@@ -735,14 +756,75 @@ func (b *viewResultBuilder) unitPropertyForTotals(numberProp string) (unitProp s
 		return "", false
 	}
 	if b.view.Def.Type != nil {
-		return b.unitPropertyOf(numberProp), true
+		resolved := b.unitPropertyOf(numberProp)
+		if !b.unitStampAgrees(src, numberProp, resolved) {
+			return "", false
+		}
+		return resolved, true
 	}
-	declaring := b.typesDeclaringUnitFor(numberProp)
-	if len(declaring) == 0 {
-		return "", true
+	// The untyped G2 refusal is tried BEFORE the stamp check, because it is
+	// the more specific diagnosis of the same situation: "this view declares
+	// no type, so no schema can resolve the unit" tells the operator what to
+	// do, where "the part stamps currency and nothing resolves it" would send
+	// them to edit a view file that is not the problem.
+	if declaring := b.typesDeclaringUnitFor(numberProp); len(declaring) > 0 {
+		b.refuseUntypedUnitTotal(numberProp, declaring)
+		return "", false
 	}
-	b.refuseUntypedUnitTotal(numberProp, declaring)
-	return "", false
+	if !b.unitStampAgrees(src, numberProp, "") {
+		return "", false
+	}
+	return "", true
+}
+
+// unitStampAgrees is the reconciliation. false means the two authorities
+// disagree, the refusal has been recorded (once per property per result), and
+// the caller computes nothing.
+//
+// A part's `unit:` key belongs to its `number:` binding. A part that names a
+// number and stamps a unit is talking about THAT number, so a subtotal over
+// some OTHER property is not governed by the stamp; a part that stamps a unit
+// and names no number is talking about whatever it totals.
+func (b *viewResultBuilder) unitStampAgrees(src gen.ViewPart, numberProp, resolved string) bool {
+	if src.Unit == nil {
+		return true
+	}
+	if src.Number != nil && *src.Number != numberProp {
+		return true
+	}
+	stamped := strings.TrimSpace(*src.Unit)
+	if stamped == "" || stamped == resolved {
+		return true
+	}
+
+	if b.refusedUnitStamps == nil {
+		b.refusedUnitStamps = map[string]bool{}
+	}
+	if b.refusedUnitStamps[numberProp] {
+		return false
+	}
+	b.refusedUnitStamps[numberProp] = true
+
+	owner := "no record type in scope"
+	if b.view.Def.Type != nil {
+		owner = "record type " + *b.view.Def.Type
+	}
+	schemaSide := fmt.Sprintf("declares it with the companion unit %q", resolved)
+	fix := fmt.Sprintf("re-point the part's `unit:` at %q, or declare `unit_property: %s` on the number", resolved, stamped)
+	if resolved == "" {
+		schemaSide = "declares it with no companion unit"
+		fix = fmt.Sprintf("declare `unit_property: %s` on %q in the record type, or drop the part's `unit:` key so the number totals unit-less",
+			stamped, numberProp)
+	}
+	b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+		Code: gen.AggregateRefused,
+		Reason: fmt.Sprintf("no total of %q: this part is stamped `unit: %s`, but %s %s — the two disagree, and a unit is DECLARED, never inferred (design §5), so neither reading may be picked silently; the rows themselves are still shown",
+			numberProp, stamped, owner, schemaSide),
+		Fix:     &fix,
+		Records: []string{},
+	})
+	b.out.Complete = false
+	return false
 }
 
 // typesDeclaringUnitFor lists, sorted, every record type in scope whose
@@ -876,6 +958,13 @@ func (b *viewResultBuilder) aggregateViewRows(
 		if unitProp != "" {
 			u := unitKey
 			t.Unit = &u
+			// The unit value and the property it was READ FROM travel
+			// together: a consumer that acquired "SGD" without knowing it came
+			// from `currency` would have to guess which column to pair the
+			// figure with, and the schema it would need to stop guessing is
+			// not something the SPA has.
+			up := unitProp
+			t.UnitProperty = &up
 		}
 		totals = append(totals, t)
 	}
@@ -982,18 +1071,32 @@ func (b *viewResultBuilder) resolveColumns(src gen.ViewPart) *[]string {
 	return nil
 }
 
-// setExcluded stamps a scope's G3 counter from the union of excluded rows.
-func viewExcludedFields(paths []string, unitProps []string) (*int, *string) {
+// viewExcludedFields stamps a scope's G3 fields from the union of excluded
+// rows: the count, the reason, and THE ROWS THEMSELVES.
+//
+// The paths are returned because the count alone was not enough. The unit a
+// row is excluded for is resolved from the RECORD TYPE, which the SPA cannot
+// read, so a part carrying no `unit:` stamp of its own left the renderer able
+// to say "1 row excluded" and unable to say which one. The three travel
+// together, from one deduplicated set, so the list can never disagree with the
+// count beside it.
+func viewExcludedFields(paths []string, unitProps []string) (*int, *string, *[]string) {
 	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(paths))
 	for _, p := range paths {
+		if _, dup := seen[p]; dup {
+			continue
+		}
 		seen[p] = struct{}{}
+		unique = append(unique, p)
 	}
-	n := len(seen)
+	n := len(unique)
 	if n == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
+	sort.Strings(unique)
 	reason := viewResultExcludedReason(n, unitProps)
-	return &n, &reason
+	return &n, &reason, &unique
 }
 
 func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
@@ -1046,7 +1149,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 					excluded := make([]string, 0, len(rows))
 					var unitProps []string
 					for i, prop := range subtotalProps {
-						unitProp, permitted := b.unitPropertyForTotals(prop)
+						unitProp, permitted := b.unitPropertyForTotals(src, prop)
 						if !permitted {
 							continue
 						}
@@ -1057,7 +1160,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 							unitProps = append(unitProps, unitProp)
 						}
 					}
-					rg.ExcludedCount, rg.ExcludedReason = viewExcludedFields(excluded, unitProps)
+					rg.ExcludedCount, rg.ExcludedReason, rg.ExcludedPaths = viewExcludedFields(excluded, unitProps)
 				}
 				resultGroups = append(resultGroups, rg)
 			}
@@ -1071,7 +1174,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 		excluded := make([]string, 0, len(rows))
 		var unitProps []string
 		for i, prop := range subtotalProps {
-			unitProp, permitted := b.unitPropertyForTotals(prop)
+			unitProp, permitted := b.unitPropertyForTotals(src, prop)
 			if !permitted {
 				continue
 			}
@@ -1083,7 +1186,7 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 			}
 		}
 		p.Totals = &totals
-		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, unitProps)
+		p.ExcludedCount, p.ExcludedReason, p.ExcludedPaths = viewExcludedFields(excluded, unitProps)
 	}
 }
 
@@ -1110,7 +1213,7 @@ func (b *viewResultBuilder) buildFiguresPartData(p *gen.ViewResultPart, src gen.
 		return
 	}
 	numberProp := *src.Number
-	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
 		// The part still answers an EMPTY totals list — the SPA's explicit
 		// "no figures" state — while the refusal problem says why.
@@ -1118,10 +1221,18 @@ func (b *viewResultBuilder) buildFiguresPartData(p *gen.ViewResultPart, src gen.
 		p.Totals = &totals
 		return
 	}
+	// THE RESOLVED UNIT, ON THE WIRE. The SPA cannot read the record type, so
+	// without this it would have to fall back on `source.unit` — the stamp the
+	// composer wrote, which a later schema edit can leave stale, and which is
+	// exactly the second authority this gate exists to eliminate.
+	if unitProp != "" {
+		up := unitProp
+		p.UnitProperty = &up
+	}
 	totals, excluded := b.aggregateViewRows(b.allRows(), numberProp, unitProp, viewPartAggregateOf(src))
 	p.Totals = &totals
 	if unitProp != "" {
-		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+		p.ExcludedCount, p.ExcludedReason, p.ExcludedPaths = viewExcludedFields(excluded, []string{unitProp})
 	}
 }
 
@@ -1130,9 +1241,17 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 		return
 	}
 	numberProp, dateProp := *src.Number, *src.Date
-	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
 		return
+	}
+	// THE RESOLVED UNIT, ON THE WIRE. The SPA cannot read the record type, so
+	// without this it would have to fall back on `source.unit` — the stamp the
+	// composer wrote, which a later schema edit can leave stale, and which is
+	// exactly the second authority this gate exists to eliminate.
+	if unitProp != "" {
+		up := unitProp
+		p.UnitProperty = &up
 	}
 	op := viewPartAggregateOf(src)
 
@@ -1176,7 +1295,7 @@ func (b *viewResultBuilder) buildChartPartData(p *gen.ViewResultPart, src gen.Vi
 	}
 	p.Series = &series
 	if unitProp != "" {
-		p.ExcludedCount, p.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+		p.ExcludedCount, p.ExcludedReason, p.ExcludedPaths = viewExcludedFields(excluded, []string{unitProp})
 	}
 }
 
@@ -1196,9 +1315,17 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 	}
 	grouping := (*src.Grouping)[:2]
 	numberProp := *src.Number
-	unitProp, permitted := b.unitPropertyForTotals(numberProp)
+	unitProp, permitted := b.unitPropertyForTotals(src, numberProp)
 	if !permitted {
 		return
+	}
+	// THE RESOLVED UNIT, ON THE WIRE. The SPA cannot read the record type, so
+	// without this it would have to fall back on `source.unit` — the stamp the
+	// composer wrote, which a later schema edit can leave stale, and which is
+	// exactly the second authority this gate exists to eliminate.
+	if unitProp != "" {
+		up := unitProp
+		p.UnitProperty = &up
 	}
 	op := viewPartAggregateOf(src)
 
@@ -1240,7 +1367,7 @@ func (b *viewResultBuilder) buildCrosstabPartData(p *gen.ViewResultPart, src gen
 		}
 	}
 	if unitProp != "" {
-		ct.ExcludedCount, ct.ExcludedReason = viewExcludedFields(excluded, []string{unitProp})
+		ct.ExcludedCount, ct.ExcludedReason, ct.ExcludedPaths = viewExcludedFields(excluded, []string{unitProp})
 	}
 	p.Crosstab = &ct
 }

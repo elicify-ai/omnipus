@@ -94,6 +94,39 @@ properties:
       Why those rows were excluded, ready to render as the G3 footer line.
       Present exactly when excluded_count is present and greater than zero.
     example: "2 rows have no confirmed currency value and are excluded from every total"
+  unit_property:
+    type: string
+    description: >
+      The companion unit property this part's `number` binding RESOLVED to,
+      from the record type's own declaration (design section 5). Absent when
+      the number declares no companion unit, or when the part totals nothing.
+
+
+      THE SCHEMA IS THE AUTHORITY AND THIS IS ITS ANSWER. A part's own `unit:`
+      key records what the composer stamped when the view was written; it is
+      provenance, and a record type edited afterwards can leave it stale. The
+      server resolves the unit from the schema, refuses the total outright when
+      the two disagree (naming both sides), and states the resolved answer
+      here — so no consumer ever re-derives a unit from `source.unit` and no
+      two consumers can derive different ones.
+    example: currency
+  excluded_paths:
+    type: array
+    description: >
+      The excluded rows BY PATH, so a renderer can MARK them rather than only
+      count them. Present exactly when excluded_count is present.
+
+
+      The count alone was not enough. The unit a row is excluded for is
+      resolved from the RECORD TYPE (design section 5: declared, never
+      inferred), which the SPA cannot read — so a part carrying no `unit:`
+      stamp of its own left the renderer able to say "1 row excluded" and
+      unable to say which one. Naming the rows here is what makes the answer
+      self-sufficient: nothing downstream re-derives the exclusion, and the
+      list can never disagree with the count beside it.
+    items:
+      type: string
+      minLength: 1
   series:
     type: array
     description: >
