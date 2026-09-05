@@ -612,7 +612,9 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.Empty(
 		t,
 		stunServer,
-		"EncoderStarter must receive the configured stunServer verbatim (this test leaves WebRTCStunServer empty — host-only ICE)",
+		"EncoderStarter must receive an EMPTY stunServer: the encoder page is the gateway's own "+
+			"headless Chrome dialling ws://127.0.0.1, so tools.browser.webrtc_stun_server governs "+
+			"the VIEWER leg only (NewCaptureSession pins this to \"\" — see the measured cost there)",
 	)
 
 	e2eSetAnswer := func(pc *pion.PeerConnection, sdp string) {

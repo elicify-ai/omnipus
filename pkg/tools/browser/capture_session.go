@@ -412,7 +412,18 @@ func NewCaptureSession(
 	}
 	relay := webrtc.NewSession(cfg, sink, logf)
 	cs := newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf)
-	cs.stunServer = cfg.StunServer
+	// The encoder page gets NO STUN server, whatever the operator configured.
+	// tools.browser.webrtc_stun_server governs the VIEWER leg, which is the
+	// only leg with a real network between its peers; the encoder page is this
+	// gateway's own headless Chrome dialling ws://127.0.0.1, so a
+	// server-reflexive candidate on that leg can never be part of a usable
+	// pair. Measured cost of asking for one anyway, in a Linux container whose
+	// STUN server was unreachable: encoder.js's waitIceGatheringComplete sat
+	// out its full 10s timeout and shipped the offer late, which together with
+	// the relay's own 5s STUN gather took time-to-first-frame from ~1s to
+	// ~17.5s. encoder.js reads "" as its explicit host-candidates-only mode
+	// (resolveIceServers's tri-state), which is exactly what this leg wants.
+	cs.stunServer = ""
 	cs.panelSessionID = panelSessionID
 	return cs, nil
 }
@@ -515,15 +526,28 @@ func (cs *CaptureSession) onIngestLost() {
 // sense (it never round-trips through pkg/gateway's REST/WS surface — it is
 // injected directly into a CDP-driven page via
 // Page.addScriptToEvaluateOnNewDocument), so a package-local struct here is
-// correct, not a lint violation. StunServer (fix-wave LOW finding) carries
-// the configured tools.browser.webrtc_stun_server value through to the
-// encoder's own browser-side RTCPeerConnection config — omitted entirely
-// (not an empty string) when unset, matching token/ingestUrl's always-
-// present shape only where a value actually exists.
+// correct, not a lint violation.
+//
+// StunServer carries the STUN policy for the encoder's own browser-side
+// RTCPeerConnection. It MUST NOT be `omitempty`, and that is not a style
+// preference — encoder.js's resolveIceServers reads this field as a
+// TRI-state:
+//
+//	"stun:…" present -> use that server
+//	""      present  -> host candidates only, no STUN at all
+//	key ABSENT       -> back-compat fallback to Google's public STUN server
+//
+// `omitempty` erases the difference between the middle case and the last
+// one, so an explicit "no STUN" was silently delivered to the page as "use
+// stun.l.google.com". Measured 2026-09-05 with the repro harness: with
+// omitempty in place, an encoder configured for host-only ICE still offered
+// server-reflexive candidates from a public STUN server it had been told not
+// to use. Emitting the empty string is what makes the middle case reachable
+// at all.
 type captureInjectPayload struct {
 	Token      string `json:"token"`
 	IngestURL  string `json:"ingestUrl"`
-	StunServer string `json:"stunServer,omitempty"`
+	StunServer string `json:"stunServer"`
 }
 
 // panelTabSet reports the manager-level tab set this capture is bound to

@@ -49,6 +49,11 @@ package browser
 //	OMNIPUS_WEBRTC_REPRO_LOAD=8     CPU burner goroutines run for the whole
 //	                                measurement, to reproduce the loaded-CI
 //	                                condition (hypothesis (c)).
+//	OMNIPUS_WEBRTC_REPRO_RECAPTURE=1 fire a recapture the moment the first
+//	                                ingest offer is answered, modelling the
+//	                                recapture storm the incident's own
+//	                                "[ingest-15]" prefix records (hypothesis
+//	                                (e), see reproIngestServer).
 //	OMNIPUS_WEBRTC_REPRO_MAXFAIL=0  fail the test above this many failures.
 //	                                Default 0 is a real gate: on a healthy
 //	                                machine the correct rate IS zero.
@@ -140,13 +145,40 @@ type reproErrorFrame struct {
 type reproIngestServer struct {
 	mu      sync.Mutex
 	current *CaptureSession
+	offers  int
 	logf    func(string, ...any)
+
+	// recaptureAfterFirstOffer arms hypothesis (e): fire a recapture the
+	// instant the FIRST ingest offer of a cycle has been answered.
+	//
+	// This models what the CI incident's own log says was happening. Its
+	// prefixes were "[ingest-15]" and "[viewer-14]" -- fifteen ingest
+	// connections on one session, i.e. a recapture storm, not a first
+	// connect. A recapture makes encoder.js run runCaptureAndOfferOnce, whose
+	// FIRST act is teardownCapture() -> currentPC.close(): it destroys the
+	// PeerConnection whose offer the gateway has just installed as
+	// s.ingestPC. If the replacement offer is then slow or never arrives (a
+	// cold tabCapture is budgeted at up to 20s), the gateway is left holding
+	// a connection whose peer no longer exists -- and the ONLY signal it ever
+	// gets is ICE reaching `failed` roughly 30s later, which is exactly the
+	// line the incident logged.
+	recaptureAfterFirstOffer bool
 }
 
 func (s *reproIngestServer) setSession(cs *CaptureSession) {
 	s.mu.Lock()
 	s.current = cs
+	s.offers = 0
 	s.mu.Unlock()
+}
+
+// noteOffer counts offers within the current cycle and reports whether this
+// one should trigger the armed recapture.
+func (s *reproIngestServer) noteOffer() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offers++
+	return s.recaptureAfterFirstOffer && s.offers == 1
 }
 
 func (s *reproIngestServer) lookup(token string) *CaptureSession {
@@ -241,9 +273,14 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 				_ = sendJSON(reproErrorFrame{Type: "error", Message: err.Error()})
 				return
 			}
+			trigger := s.noteOffer()
 			if err := sendJSON(reproAnswerFrame{Type: "browser_capture_answer", SDP: answer}); err != nil {
 				s.logf("ingest-ws: send answer: %v", err)
 				return
+			}
+			if trigger {
+				s.logf("ingest-ws: firing a recapture immediately after the first answer (hypothesis (e))")
+				go cs.Recapture()
 			}
 		case "browser_capture_control":
 			if probe.Action == "ping" {
@@ -398,7 +435,13 @@ func TestWebRTCIngestStartupRepro(t *testing.T) {
 		return out
 	}
 
-	ingest := &reproIngestServer{logf: logf}
+	ingest := &reproIngestServer{
+		logf:                     logf,
+		recaptureAfterFirstOffer: os.Getenv("OMNIPUS_WEBRTC_REPRO_RECAPTURE") == "1",
+	}
+	if ingest.recaptureAfterFirstOffer {
+		t.Logf("repro config: recapture-after-first-offer ARMED (hypothesis (e))")
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/browser/capture-ingest", ingest.handle)
 	srv := httptest.NewServer(mux)

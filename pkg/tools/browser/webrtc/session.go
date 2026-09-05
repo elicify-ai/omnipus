@@ -411,7 +411,28 @@ func (s *Session) buildPeerConnection(api *webrtc.API, viewerLeg bool) (*webrtc.
 	// CreateOffer then fails outright -- no offer, no nameable ICE failure.
 	// One predicate, used by both sites, is what keeps that from happening.
 	hostedViewer := viewerLeg && hostedViewerLeg(s.cfg)
-	if s.cfg.StunServer != "" && !hostedViewer {
+	// STUN is a VIEWER-leg setting only. The ingest leg is this gateway
+	// talking to its OWN headless Chrome over ws://127.0.0.1 -- the two peers
+	// are on the same host by construction, so a server-reflexive candidate
+	// there describes a NAT mapping neither of them will ever traverse.
+	//
+	// It was not merely useless, it was expensive (measured 2026-09-05, the
+	// harness in pkg/tools/browser/webrtc_ingest_repro_test.go):
+	//
+	//   - reachable STUN: gathering 124ms, connected at +131ms, and the srflx
+	//     candidate was NEVER the selected pair in any of ~35 successful
+	//     connections across macOS and Linux -- every one chose host/host.
+	//   - unroutable STUN: gathering 5008ms, exactly pion's
+	//     defaultSTUNGatherTimeout, and because this leg is non-trickle the
+	//     ANSWER is withheld for the whole of it. End to end, time to first
+	//     video frame in a Linux container went from ~1s to ~17.5s: 5s here
+	//     plus 10s in encoder.js's own waitIceGatheringComplete timeout.
+	//
+	// A CI runner or a hardened container that cannot reach a public STUN
+	// server is exactly the environment where the live panel is least able to
+	// afford 15 seconds of its 30s budget, and it buys a candidate that has
+	// never once been used.
+	if s.cfg.StunServer != "" && viewerLeg && !hostedViewer {
 		config.ICEServers = []webrtc.ICEServer{{URLs: []string{s.cfg.StunServer}}}
 	}
 	pc, err := api.NewPeerConnection(config)

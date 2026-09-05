@@ -91,6 +91,49 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		return "", fmt.Errorf("webrtc: session closed")
 	}
 
+	// ice-diag: full candidate/timing/selected-pair instrumentation, on the
+	// SUCCESS path as well as the failure path -- see icediag.go's header for
+	// why a failure's candidate set is uninterpretable without a success's.
+	// Created BEFORE the PeerConnection so the offer can be described (and
+	// rejected) without building one; every method takes the pc explicitly.
+	diag := newICEDiag(prefix, "ingest", s.logf)
+
+	// Log what the ENCODER offered before anything else happens, and
+	// unconditionally. This is the one dump that must not wait for an outcome:
+	// whether Chrome offered usable candidates at all has to be answerable for
+	// the runs that SUCCEEDED too, or an intermittent failure can never be
+	// told apart from a constant condition.
+	diag.noteRemoteOffer(sdpOffer)
+
+	// Refuse an offer that carries no candidate this agent could ever check
+	// against. REPRODUCED 2026-09-05 in a Linux container with no non-loopback
+	// interface (docker --network none): Chrome does not gather loopback host
+	// candidates, so with no other interface and no reachable STUN server its
+	// offer contained zero a=candidate lines -- 6082 bytes of perfectly valid
+	// SDP describing a connection that could not exist.
+	//
+	// The gateway used to ANSWER that offer and install it as the live ingest
+	// connection. Pion then sat in `checking`, logging "Failed to ping without
+	// candidate pairs" at a WARN level nothing was listening to, and reported
+	// the only thing an operator ever saw -- "ICE connection state -> failed"
+	// -- exactly 30s later (pion's disconnectedTimeout 5s + failedTimeout 25s).
+	// Thirty seconds of a black panel and a spinner, for a fact that was fully
+	// determined the instant the offer arrived.
+	//
+	// Rejecting is safe here specifically because this leg is NON-TRICKLE
+	// (wave-plan decision 6): encoder.js waits for its gathering to complete,
+	// or 10s, before sending, so every candidate it will ever have is already
+	// in this SDP. A trickle peer would legitimately offer none up front, and
+	// this check would be wrong for one.
+	//
+	// The error travels back as an ErrorFrame, which closes the ingest WS and
+	// engages encoder.js's existing reconnect backoff -- its documented
+	// recovery path -- so a genuinely unconfigurable environment retries with
+	// backoff and a NAMED reason instead of silently burning 30s per attempt.
+	if usableRemoteCandidateCount(sdpOffer) == 0 {
+		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, ErrOfferHasNoUsableCandidates)
+	}
+
 	pc, err := s.buildPeerConnection(s.api, false) // loopback encoder leg: no public rewrite, no shared mux
 	if err != nil {
 		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
@@ -115,10 +158,6 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		}
 	}()
 
-	// ice-diag: full candidate/timing/selected-pair instrumentation, on the
-	// SUCCESS path as well as the failure path -- see icediag.go's header for
-	// why a failure's candidate set is uninterpretable without a success's.
-	diag := newICEDiag(prefix, "ingest", s.logf)
 	pc.OnICECandidate(diag.noteLocalCandidate)
 	pc.OnICEGatheringStateChange(diag.noteGatheringState)
 
@@ -150,12 +189,6 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	})
 
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
-	// Log what the ENCODER offered before applying it, unconditionally. This
-	// is the only dump that must not wait for an outcome: whether Chrome
-	// obfuscated its host candidates as mDNS ".local" names has to be
-	// answerable for the runs that SUCCEEDED too, or an intermittent failure
-	// can never be told apart from a constant condition.
-	diag.noteRemoteOffer(sdpOffer)
 	if err = pc.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("webrtc: ingest %s: set remote description: %w", prefix, err)
 	}

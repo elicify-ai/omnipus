@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -342,4 +343,60 @@ func sdpCandidateLines(sdp string) []string {
 		out = append(out, "candidate:"+attr)
 	}
 	return out
+}
+
+// ErrOfferHasNoUsableCandidates is returned by HandleIngestOffer for an offer
+// that carries no ICE candidate the agent could ever check against.
+//
+// A sentinel rather than a bare fmt.Errorf so the gateway (and tests) can
+// recognise this specific, fully-determined-at-arrival condition and say
+// something true about it, instead of reporting the generic negotiation
+// failure that every other malformed offer produces.
+var ErrOfferHasNoUsableCandidates = errors.New(
+	"the encoder offered no usable ICE candidate — its Chrome found no non-loopback network " +
+		"interface to gather one from (and no STUN server it could reach); this connection could " +
+		"never have been established, so it is refused now rather than after ICE's 30s timeout")
+
+// usableRemoteCandidateCount counts the candidates in an SDP that this agent
+// could actually mount a connectivity check against.
+//
+// "Usable" excludes TCP candidates whose tcptype is `active`, and that
+// exclusion is not a judgement call -- it mirrors pion/ice's own behaviour
+// exactly (agent.go's addRemoteCandidate: "Ignoring remote candidate with
+// tcpType active", because an active candidate only ever DIALS, it never
+// listens, so pairing one with our own candidate is meaningless). Chrome sends
+// one alongside its UDP candidates on every offer, so counting raw a=candidate
+// lines would report an offer as usable on the strength of the one candidate
+// pion is guaranteed to throw away.
+func usableRemoteCandidateCount(sdp string) int {
+	n := 0
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimSpace(line)
+		attr, ok := strings.CutPrefix(line, "a=candidate:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(attr)
+		// RFC 5245 §15.1: <foundation> <component> <transport> <priority>
+		// <connection-address> <port> typ <type> [extensions...]
+		if len(fields) < 8 || fields[6] != "typ" {
+			continue
+		}
+		if strings.EqualFold(fields[2], "tcp") && hasTCPTypeActive(fields[8:]) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// hasTCPTypeActive reports whether an SDP candidate's trailing extension
+// attributes (name/value pairs) declare tcptype active.
+func hasTCPTypeActive(ext []string) bool {
+	for i := 0; i+1 < len(ext); i += 2 {
+		if strings.EqualFold(ext[i], "tcptype") && strings.EqualFold(ext[i+1], "active") {
+			return true
+		}
+	}
+	return false
 }
