@@ -256,16 +256,25 @@ func DefaultConfig() *Config {
 				// the exact friction ADR-068 §4 exists to remove. As always,
 				// raising the ceiling grants the tool to nobody by itself; the
 				// per-agent seeds in pkg/coreagent/core.go decide who has it.
-				"list_mounts":         "allow",
-				"search_web":          "allow",
-				"fetch_url":           "allow",
-				"send_message":        "allow",
-				"switch_agent":        "allow",
-				"send_file":           "allow",
-				"find_skills":         "allow",
-				"install_skill":       "allow",
-				"delegate":            "allow",
-				"message_parent":      "allow",
+				"list_mounts":    "allow",
+				"search_web":     "allow",
+				"fetch_url":      "allow",
+				"send_message":   "allow",
+				"switch_agent":   "allow",
+				"send_file":      "allow",
+				"find_skills":    "allow",
+				"install_skill":  "allow",
+				"delegate":       "allow",
+				"message_parent": "allow",
+				// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b):
+				// the owner-session structured clarification card. Ceiling
+				// "allow" — asking the user is the safety-increasing
+				// direction, and an approval gate on asking a question would
+				// be absurd (spec US-7 S1: never "harden" this into an
+				// ask-gate). Per-agent seeds decide who holds it: every
+				// human-facing agent allow; Judge/PlanSupervisor explicit deny
+				// via their denyAllThenOverride stamps.
+				"AskUserQuestion":     "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",
 				"update_task":         "allow",

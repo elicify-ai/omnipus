@@ -374,6 +374,15 @@ var allStaticToolNames = []string{
 	// entry for it.
 	"Skill",
 	"delegate", "message_parent",
+	// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b): the
+	// owner-session structured clarification card. Seeded ALLOW for every
+	// human-facing agent (core roster, subagent tier, customs' default
+	// allowlist) — asking the user is the safety-increasing direction, and an
+	// `ask`-gate on asking (approval to ask a question) is absurd; do not
+	// "harden" it later. Judge and PlanSupervisor resolve explicit DENY via
+	// their denyAllThenOverride stamps (they can never be session owners; an
+	// advertised always-erroring tool violates their minimal seeds).
+	"AskUserQuestion",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
@@ -735,6 +744,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		overrides := map[string]config.ToolPolicy{
 			// Every leaf reports its result back.
 			"send_message": allow,
+			// AskUserQuestion (spec US-7 S1): allow for the whole human-facing
+			// subagent tier. The tool's own owner-session gate rejects any
+			// call from a DELEGATED run of these agents toward
+			// message_parent(question:true); the seed keeps the tool usable
+			// whenever one of them runs as a session owner.
+			"AskUserQuestion": allow,
 			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
 			// "ask" (never absent, never deny) for the three plan-execution
 			// tools — an operator-approval prompt gates any attempted use.
@@ -921,6 +936,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// "system.*" glob, so every former-system tool fell through to allow.
 		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
+			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+			// the user structured clarification questions.
+			"AskUserQuestion": allow,
 			// Agent lifecycle — her core job. Delete is consent-gated (ask).
 			"create_agent": allow,
 			"update_agent": allow,
@@ -984,6 +1002,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// it — matching her persona, which already refuses shell/browser.
 		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
+			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+			// the user structured clarification questions.
+			"AskUserQuestion": allow,
 			// Converse / route.
 			"send_message": allow,
 			"switch_agent": allow,
@@ -1044,6 +1065,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// task/agent management — he researches and reports, he doesn't build or run.
 		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
+			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+			// the user structured clarification questions.
+			"AskUserQuestion": allow,
 			// Web research.
 			"search_web": allow,
 			"fetch_url":  allow,
@@ -1151,6 +1175,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// former-system tool fell through to allow.
 		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
+			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+			// the user structured clarification questions.
+			"AskUserQuestion": allow,
 			// File operations — read, write, and navigate the workspace.
 			"read_file":      allow,
 			"write_file":     allow,
@@ -2289,6 +2316,10 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			Policies: denyAllThenOverride(map[string]config.ToolPolicy{
+				// AskUserQuestion (spec US-7 S1): customs' default allowlist
+				// carries it — every human-facing agent may ask the user
+				// structured clarification questions; never `ask`-gate asking.
+				"AskUserQuestion": allow,
 				// Conservative initial allow-list: read-only filesystem +
 				// persistent memory. Everything else — bash included — stays
 				// denied until the operator opts in.
