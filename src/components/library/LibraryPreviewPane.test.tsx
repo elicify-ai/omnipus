@@ -39,6 +39,10 @@ vi.mock('mermaid', () => ({ default: { initialize, render: renderFn } }))
 
 vi.mock('react-shiki', () => ({
   ShikiHighlighter: ({ children }: { children?: React.ReactNode }) => <pre data-testid="shiki">{children}</pre>,
+  // markdown-shared.tsx passes Shiki its pure-JS regex engine (the SPA's CSP
+  // refuses the WebAssembly default); the module is mocked here, so this only
+  // has to exist.
+  createJavaScriptRegexEngine: () => ({}),
 }))
 
 vi.mock('@uiw/react-codemirror', () => ({

@@ -31,6 +31,10 @@ import { BasePreview } from './BasePreview'
 
 vi.mock('react-shiki', () => ({
   ShikiHighlighter: ({ children }: { children?: React.ReactNode }) => <pre data-testid="shiki">{children}</pre>,
+  // markdown-shared.tsx passes Shiki its pure-JS regex engine (the SPA's CSP
+  // refuses the WebAssembly default); the module is mocked here, so this only
+  // has to exist.
+  createJavaScriptRegexEngine: () => ({}),
 }))
 
 function makeClient() {

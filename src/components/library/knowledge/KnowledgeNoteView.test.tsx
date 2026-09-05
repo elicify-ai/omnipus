@@ -33,6 +33,10 @@ vi.mock('@/components/chat/mermaid-renderer', () => ({
 }))
 vi.mock('react-shiki', () => ({
   ShikiHighlighter: ({ children }: { children?: React.ReactNode }) => <pre data-testid="shiki">{children}</pre>,
+  // markdown-shared.tsx passes Shiki its pure-JS regex engine (the SPA's CSP
+  // refuses the WebAssembly default); the module is mocked here, so this only
+  // has to exist.
+  createJavaScriptRegexEngine: () => ({}),
 }))
 vi.mock('@/components/chat/ChatImage', () => ({
   ChatImage: ({ src, alt }: { src: string; alt?: string }) => <img data-testid="chat-image" src={src} alt={alt} />,

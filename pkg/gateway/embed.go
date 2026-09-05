@@ -49,7 +49,32 @@ import (
 //	Tailwind and Radix need inline
 //	  styles                            → broken layout
 //	same-origin WebSocket matches 'self'→ the live connection silently fails
-//	Shiki needs no WebAssembly          → code blocks stop highlighting
+//	Shiki needs no WebAssembly          → MEASURED FALSE, 2026-09-05, and the
+//	                                      symptom was worse than predicted.
+//	                                      Shiki's DEFAULT engine is Oniguruma
+//	                                      compiled to WebAssembly, and
+//	                                      `script-src 'self'` refuses
+//	                                      WebAssembly.instantiate without
+//	                                      'wasm-unsafe-eval'. react-shiki
+//	                                      catches the CompileError and renders
+//	                                      NOTHING — an empty box, no plain-text
+//	                                      fallback — for EVERY language,
+//	                                      including 'text'. So code blocks did
+//	                                      not "stop highlighting"; the code
+//	                                      disappeared. Found through the .base
+//	                                      "View raw" pane (view-kinds UAT D2),
+//	                                      but it was never a .base problem.
+//	                                      RESOLVED THE WAY THIS COMMENT SAYS TO
+//	                                      resolve it — the library is
+//	                                      reconfigured, not the policy widened:
+//	                                      markdown-shared.tsx now passes Shiki's
+//	                                      pure-JavaScript regex engine
+//	                                      (createJavaScriptRegexEngine, the same
+//	                                      move FR-019a made for PDF.js), so the
+//	                                      assumption is true again by
+//	                                      construction rather than by hope. Do
+//	                                      not "fix" a future Shiki regression by
+//	                                      adding 'wasm-unsafe-eval' here.
 //	nothing embeds the SPA              → any embedding surface goes blank
 const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " +
