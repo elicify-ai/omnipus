@@ -757,6 +757,76 @@ func (kl *KnowledgeLifecycle) AttachAllMounts() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// D3 — THE SWEEP IS NOT ONLY A BOOT EVENT
+//
+// docs/internal/design/knowledge-index-freshness.md §2 is the ratified rule:
+//
+//	The watcher is an optimisation. It is never the source of truth.
+//
+// Correctness rests on the sweep. But attachWorkspaceScope had exactly one
+// caller — AttachAllMounts — and AttachAllMounts had exactly one caller,
+// startKnowledgeLifecycle at boot. So the freshness design's "startup sweep:
+// anything missed while stopped ... the floor" was the ONLY floor, and a
+// collection that appeared while the gateway was up fell straight through it.
+//
+// The 2026-09-05 UAT measured what that costs. A vault dropped into a running
+// workspace was DETECTED by the library API (is_knowledge_base: true, a
+// display_name, a collection_id) and then never indexed: every view answered
+// `index_unavailable` — "the properties index is not open, so no record can be
+// read" — for 120 s of polling with no recovery, with a remedy ("re-open the
+// vault") naming no action the product offers. On disk the collection had
+// bleve/ and index_format.json, which a query-time knowledge.OpenIndex creates
+// merely by opening, and NO manifest.json and NO properties.db, both of which
+// only reconcile writes — and reconcile is reachable only through an attach.
+// Restarting the gateway fixed it every time, which is the shape of a missing
+// sweep and not of a broken index.
+//
+// The two entry points below let the request path re-establish the floor.
+// Both are safe to call as often as a handler likes: every attach funnels into
+// acquire, which hard-no-ops for a key already mapped to the same root, so
+// reconcile and startServices still run exactly once per collection root.
+
+// AttachWorkspace re-runs one workspace's scope sweep — the same sweep boot
+// runs for every workspace — so a workspace that did not exist at boot, or
+// whose scope has widened since, is attached without a restart.
+//
+// It is nil-receiver-safe, matching AttachMountAsync / AttachCollectionAsync /
+// RevokeMount, so a handler may write a.knowledgeLifecycle().AttachWorkspace(id)
+// unconditionally.
+//
+// COST: one bounded directory walk (knowledge.ResolveScope, ScopeMaxDirs) on
+// the calling goroutine, then asynchronous attaches. It never blocks on
+// indexing, so it is safe on a request path — but it is not free, which is why
+// the read path uses EnsureCollectionAttached below instead, and this is
+// reserved for the moments a workspace record itself changes.
+func (kl *KnowledgeLifecycle) AttachWorkspace(workspaceID string) {
+	if kl == nil {
+		return
+	}
+	kl.attachWorkspaceScope(workspaceID)
+}
+
+// EnsureCollectionAttached attaches ONE already-resolved in-scope collection if
+// nothing holds it open yet, and does nothing at all otherwise.
+//
+// This is the read path's entry point. A caller that has just resolved a
+// collection out of knowledge.ResolveScope has already paid for the directory
+// walk, so re-running the whole sweep would be a second walk for an answer it
+// is holding; and the common case — a collection attached at boot, addressed a
+// thousand times — costs one map lookup under kl.mu and returns.
+//
+// It is nil-receiver-safe for the same reason AttachWorkspace is.
+func (kl *KnowledgeLifecycle) EnsureCollectionAttached(workspaceID string, col knowledge.ScopedCollection) {
+	if kl == nil || col.Root == "" {
+		return
+	}
+	if kl.HoldersFor(col.Root) > 0 {
+		return
+	}
+	kl.attachResolvedCollection(workspaceID, col, kl.resolvedWorkDir(workspaceID))
+}
+
 // attachWorkspaceScope resolves one workspace's knowledge.ResolveScope and
 // attaches every collection it names.
 func (kl *KnowledgeLifecycle) attachWorkspaceScope(workspaceID string) {

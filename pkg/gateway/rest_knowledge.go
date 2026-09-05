@@ -215,6 +215,14 @@ func (a *restAPI) resolveScopedCollection(workspaceID, collectionID string) (kno
 	}
 	for _, c := range knowledge.ResolveScope(a.homePath, workspaceID).Collections() {
 		if knowledgeCollectionID(c.Root) == collectionID {
+			// D3: a collection that is IN SCOPE but was never attached — it
+			// appeared after the boot sweep — is attached here, at the moment
+			// the product first agrees it exists. Without this, every endpoint
+			// below answers `index_unavailable` indefinitely while telling the
+			// caller to "re-open the vault", which is not an action the
+			// product offers. It is a no-op (one map lookup) for the
+			// overwhelmingly common case of a collection attached at boot.
+			a.knowledgeLifecycle().EnsureCollectionAttached(workspaceID, c)
 			return c, true
 		}
 	}
@@ -231,6 +239,11 @@ func (a *restAPI) collectionContaining(workspaceID, absPath string) (knowledge.S
 	}
 	for _, c := range knowledge.ResolveScope(a.homePath, workspaceID).Collections() {
 		if realPath == c.Root || strings.HasPrefix(realPath, c.Root+string(filepath.Separator)) {
+			// D3, same reason as resolveScopedCollection: the outline endpoint
+			// tells a client whether search and backlinks are on offer for
+			// this file, and an unattached collection would say yes to a
+			// search that cannot answer.
+			a.knowledgeLifecycle().EnsureCollectionAttached(workspaceID, c)
 			return c, true
 		}
 	}
@@ -327,6 +340,25 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 	}
 	id := knowledgeCollectionID(realRoot)
 	info.CollectionId = &id
+
+	// D3 — THIS IS THE MOMENT THE VAULT BECOMES VISIBLE AT RUNTIME.
+	//
+	// This handler is what the Library asks before it offers anything, and
+	// what the UAT's own setup script polled. Throughout the 120 s of nothing
+	// happening it answered is_knowledge_base: true with a collection_id, for
+	// a collection whose index was never opened. Saying "yes, this is a
+	// knowledge base, here is its id" while nothing is arranging for it to be
+	// readable is precisely the silence the freshness design's sweep exists to
+	// prevent, so the sweep runs here — scoped to this one workspace, and a
+	// no-op when the collection is already attached.
+	//
+	// The full workspace sweep (rather than EnsureCollectionAttached on one
+	// resolved collection) is deliberate: this path resolved the collection by
+	// PATH, not out of knowledge.ResolveScope, so it does not know whether the
+	// folder it just described is even in scope. AttachWorkspace answers that
+	// from the one authority, and picks up any sibling collection that arrived
+	// in the same copy.
+	a.knowledgeLifecycle().AttachWorkspace(workspaceID)
 
 	// The marker document. ErrNoMarker is the ORDINARY case for a folder
 	// detected through .obsidian/ alone — not an error, and not a downgrade of

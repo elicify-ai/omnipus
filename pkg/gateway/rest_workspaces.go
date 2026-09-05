@@ -886,6 +886,14 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	// D3: a workspace created while the gateway is running was never named by
+	// the boot sweep, so nothing has ever resolved its scope. Sweeping it here
+	// means a mount or vault that arrives with it is attached without a
+	// restart. A brand-new workspace's work tree is materialised lazily, so
+	// this usually resolves an empty scope and does nothing — that is correct,
+	// and the read-path sweep in rest_knowledge.go is what catches the vault
+	// when it lands.
+	a.knowledgeLifecycle().AttachWorkspace(ws.ID)
 	wire := workspaceToWire(a.homePath, ws, 0)
 	if a.auditor != nil {
 		if err := a.auditor.Log(
