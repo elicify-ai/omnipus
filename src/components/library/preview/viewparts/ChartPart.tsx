@@ -6,9 +6,20 @@
 // a coordinate plane. A single-point series draws as a bar (a line needs two
 // points to be one); everything else is a polyline.
 //
-// Scale note: the y-axis spans 0 → max across all series so two units'
-// series share one honest frame; each series keeps its own color and its
-// unit in the legend, and they are never merged.
+// Scale note (code-review finding #8): the domain is the real min/max across
+// every series, NEVER clamped to [0, max] — that clamp used to make a
+// negative point map below the viewBox (invisible), give a single negative
+// bar a NEGATIVE SVG height, and collapse an all-negative series onto the
+// zero gridline by dividing by a zero denominator. Zero is always folded
+// into the domain (`Math.min(0, dataMin)` / `Math.max(0, dataMax)`) so a
+// normal all-positive series keeps its familiar 0-baseline unchanged, and so
+// every bar/point always has a real zero to anchor on. A flat series (every
+// point equal — most commonly all-zero) is padded by ±1 so the scale never
+// divides by zero; the point still draws at its true value, at mid-height.
+// A THIRD gridline (zero) is drawn only when zero sits STRICTLY inside the
+// domain (both a positive and a negative point exist) — when zero is one of
+// the domain's own edges (all-positive or all-negative data) the existing
+// top/bottom axis labels already state it.
 
 import type { ViewResultPart, ViewResultSeries } from '@/lib/api/generated/openapi-types'
 import { formatNumberText } from './viewResultData'
@@ -36,7 +47,7 @@ function numeric(v: string): number {
 export function ChartPart({ part }: { part: ViewResultPart }) {
   const series: ViewResultSeries[] = part.series ?? []
   const allKeys = [...new Set(series.flatMap((s) => s.points.map((p) => p.key)))].sort()
-  const maxValue = Math.max(0, ...series.flatMap((s) => s.points.map((p) => numeric(p.value))))
+  const allValues = series.flatMap((s) => s.points.map((p) => numeric(p.value)))
 
   if (allKeys.length === 0) {
     return (
@@ -46,11 +57,28 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
     )
   }
 
+  const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0
+  const dataMax = allValues.length > 0 ? Math.max(...allValues) : 0
+  const domainMin0 = Math.min(0, dataMin)
+  const domainMax0 = Math.max(0, dataMax)
+  // A flat series (every value equal, most commonly all-zero) would divide
+  // by a zero span — pad it symmetrically so it draws at its true value.
+  const flat = domainMin0 === domainMax0
+  const domainMin = flat ? domainMin0 - 1 : domainMin0
+  const domainMax = flat ? domainMax0 + 1 : domainMax0
+  const span = domainMax - domainMin
+
   const plotW = WIDTH - PAD.left - PAD.right
   const plotH = HEIGHT - PAD.top - PAD.bottom
   const x = (key: string) =>
     PAD.left + (allKeys.length === 1 ? plotW / 2 : (allKeys.indexOf(key) / (allKeys.length - 1)) * plotW)
-  const y = (v: number) => PAD.top + plotH - (maxValue === 0 ? 0 : (v / maxValue) * plotH)
+  const y = (v: number) => PAD.top + plotH - ((v - domainMin) / span) * plotH
+  // Zero is always inside [domainMin, domainMax] by construction, so every
+  // bar/point can anchor on a real zero baseline instead of always the
+  // plot's bottom edge (the bug that gave a negative single-point bar a
+  // negative SVG height).
+  const yZero = y(0)
+  const zeroIsInterior = domainMin < 0 && domainMax > 0
 
   return (
     <div className="flex flex-col" data-testid="viewpart-chart">
@@ -61,15 +89,40 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
           role="img"
           aria-label="Chart of the view's series"
         >
-          {/* Frame + gridline at zero and max */}
+          {/* Frame + gridlines at the domain's own edges. */}
           <line x1={PAD.left} y1={PAD.top + plotH} x2={WIDTH - PAD.right} y2={PAD.top + plotH} stroke="var(--color-border)" />
           <line x1={PAD.left} y1={PAD.top} x2={WIDTH - PAD.right} y2={PAD.top} stroke="var(--color-border)" strokeDasharray="2 4" />
+          {/* A third zero line only when zero is NOT already one of the edges
+              above (i.e. the series has both a positive and a negative
+              point) — otherwise the edge label below already states it. */}
+          {zeroIsInterior && (
+            <line
+              x1={PAD.left}
+              y1={yZero}
+              x2={WIDTH - PAD.right}
+              y2={yZero}
+              stroke="var(--color-border)"
+              data-testid="viewpart-chart-zero-line"
+            />
+          )}
           <text x={PAD.left - 6} y={PAD.top + 4} textAnchor="end" fontSize="9" fill="var(--color-muted)">
-            {formatNumberText(String(maxValue))}
+            {formatNumberText(String(domainMax))}
           </text>
           <text x={PAD.left - 6} y={PAD.top + plotH + 4} textAnchor="end" fontSize="9" fill="var(--color-muted)">
-            0
+            {formatNumberText(String(domainMin))}
           </text>
+          {zeroIsInterior && (
+            <text
+              x={PAD.left - 6}
+              y={yZero + 3}
+              textAnchor="end"
+              fontSize="9"
+              fill="var(--color-muted)"
+              data-testid="viewpart-chart-zero-label"
+            >
+              0
+            </text>
+          )}
           <text x={PAD.left} y={HEIGHT - 8} textAnchor="start" fontSize="9" fill="var(--color-muted)">
             {allKeys[0]}
           </text>
@@ -84,13 +137,19 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
               const p = s.points[0]
               if (p === undefined) return null
               const barW = 18
+              const yValue = y(numeric(p.value))
+              // Anchored on zero, not always the plot's bottom edge: a
+              // negative value now extends DOWN from zero, never producing
+              // a negative SVG height.
+              const top = Math.min(yValue, yZero)
+              const height = Math.abs(yValue - yZero)
               return (
                 <rect
                   key={s.unit ?? `series-${si}`}
                   x={x(p.key) - barW / 2 + si * (barW + 2) - ((series.length - 1) * (barW + 2)) / 2}
-                  y={y(numeric(p.value))}
+                  y={top}
                   width={barW}
-                  height={PAD.top + plotH - y(numeric(p.value))}
+                  height={height}
                   fill={color}
                   data-testid="viewpart-chart-bar"
                 />

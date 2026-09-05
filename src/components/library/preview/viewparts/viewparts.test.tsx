@@ -340,6 +340,121 @@ describe('ChartPart', () => {
     render(<ChartPart part={{ part: 'chart', source: { part: 'chart' }, series: [] }} />)
     expect(screen.getByTestId('viewpart-chart').textContent).toContain('series is empty')
   })
+
+  // code-review finding #8 — the domain used to be Math.max(0, …), which
+  // silently discards every negative point: it maps below the 180px viewBox
+  // (invisible), gives a single negative bar a NEGATIVE height, and an
+  // all-negative series divides by a zero denominator and collapses onto the
+  // "0" gridline. The fix widens the domain to the real min/max (never
+  // clamped) and always keeps zero inside it, so a bar/line/point can always
+  // anchor on a real zero baseline. PAD = {top:12,bottom:24}, HEIGHT=180 →
+  // plotH=144, plot spans y=12 (top) to y=156 (bottom) — every y below is
+  // hand-computed from that geometry, not read off the implementation.
+  const PLOT_TOP = 12
+  const PLOT_BOTTOM = 156
+
+  function pointsOf(el: Element): Array<[number, number]> {
+    const raw = el.getAttribute('points') ?? ''
+    return raw
+      .trim()
+      .split(/\s+/)
+      .filter((s) => s !== '')
+      .map((pair) => {
+        const [px, py] = pair.split(',').map(Number)
+        return [px ?? NaN, py ?? NaN]
+      })
+  }
+
+  it('a mixed positive/negative series draws a zero line strictly inside the domain, with both signs visible', () => {
+    const part: ViewResultPart = {
+      part: 'chart',
+      source: { part: 'chart', number: 'amount', date: 'due_date' },
+      series: [
+        {
+          points: [
+            { key: '2026-05-01', value: '500', count: 1 },
+            { key: '2026-06-01', value: '-300', count: 1 },
+          ],
+        },
+      ],
+    }
+    render(<ChartPart part={part} />)
+    // domain = [min(0,-300), max(0,500)] = [-300, 500], span 800.
+    // y(500) = 156 - (800/800)*144 = 12 (top); y(-300) = 156 - 0 = 156 (bottom).
+    const [p1, p2] = pointsOf(screen.getByTestId('viewpart-chart-line'))
+    expect(p1?.[1]).toBeCloseTo(PLOT_TOP)
+    expect(p2?.[1]).toBeCloseTo(PLOT_BOTTOM)
+    // Zero sits strictly inside [-300, 500] → y(0) = 156 - (300/800)*144 = 102.
+    const zeroLine = screen.getByTestId('viewpart-chart-zero-line')
+    expect(Number(zeroLine.getAttribute('y1'))).toBeCloseTo(102)
+    expect(Number(zeroLine.getAttribute('y2'))).toBeCloseTo(102)
+  })
+
+  it('an all-negative series uses the full plot height instead of collapsing onto the zero gridline', () => {
+    const part: ViewResultPart = {
+      part: 'chart',
+      source: { part: 'chart', number: 'amount', date: 'due_date' },
+      series: [
+        {
+          points: [
+            { key: '2026-05-01', value: '-100', count: 1 },
+            { key: '2026-05-08', value: '-300', count: 1 },
+            { key: '2026-05-15', value: '-50', count: 1 },
+          ],
+        },
+      ],
+    }
+    render(<ChartPart part={part} />)
+    // domain = [min(0,-300), max(0,-50)] = [-300, 0], span 300 — the OLD
+    // Math.max(0, …) domain would have been maxValue=0, dividing by zero and
+    // pinning every point to the bottom edge (156). The fix must use the
+    // full plot height instead.
+    const pts = pointsOf(screen.getByTestId('viewpart-chart-line'))
+    expect(pts).toHaveLength(3)
+    // y(-100) = 156 - (200/300)*144 = 60; y(-300) = 156 (bottom); y(-50) = 36.
+    expect(pts[0]?.[1]).toBeCloseTo(60)
+    expect(pts[1]?.[1]).toBeCloseTo(PLOT_BOTTOM)
+    expect(pts[2]?.[1]).toBeCloseTo(36)
+    // Zero is the domain's own MAX here (an edge, not an interior point) —
+    // already stated by the top axis label, so no separate zero line is owed.
+    expect(screen.queryByTestId('viewpart-chart-zero-line')).not.toBeInTheDocument()
+  })
+
+  it('an all-zero series draws at mid-height, not collapsed onto the bottom edge', () => {
+    const part: ViewResultPart = {
+      part: 'chart',
+      source: { part: 'chart', number: 'amount', date: 'due_date' },
+      series: [
+        {
+          points: [
+            { key: '2026-05-01', value: '0', count: 1 },
+            { key: '2026-05-08', value: '0.00', count: 1 },
+          ],
+        },
+      ],
+    }
+    render(<ChartPart part={part} />)
+    // Flat domain [0,0] is padded to [-1,1] so the scale never divides by
+    // zero: y(0) = 156 - ((0+1)/2)*144 = 84 — the exact vertical MIDPOINT of
+    // the plot (12..156), never the old bottom-edge collapse at 156.
+    const pts = pointsOf(screen.getByTestId('viewpart-chart-line'))
+    for (const [, py] of pts) expect(py).toBeCloseTo(84)
+  })
+
+  it('a single negative point draws as a bar with a non-negative SVG height, anchored on zero', () => {
+    const part: ViewResultPart = {
+      part: 'chart',
+      source: { part: 'chart', number: 'amount', date: 'due_date' },
+      series: [{ points: [{ key: '2026-05-01', value: '-300', count: 1 }] }],
+    }
+    render(<ChartPart part={part} />)
+    const bar = screen.getByTestId('viewpart-chart-bar')
+    const height = Number(bar.getAttribute('height'))
+    const y = Number(bar.getAttribute('y'))
+    expect(height).toBeGreaterThan(0)
+    expect(y).toBeGreaterThanOrEqual(PLOT_TOP)
+    expect(y + height).toBeLessThanOrEqual(PLOT_BOTTOM + 0.001)
+  })
 })
 
 // ── crosstab ────────────────────────────────────────────────────────────────
