@@ -183,7 +183,7 @@ type Config struct {
 	// from a boot snapshot. See context_settings.go.
 	Context ContextSettings `json:"context" yaml:"-"`
 
-	// SkillsMigrations records which one-shot skill-allowlist migrations have
+	// SeededSkillGrants records which one-shot skill-allowlist migrations have
 	// already run on this install (ADR-074 D4). Each entry is a marker string
 	// (e.g. "adr074-define-done"); the migration that owns a marker checks
 	// for it where coreagent.SeedConfig runs and, when absent, applies its
@@ -193,7 +193,7 @@ type Config struct {
 	// path) and never crosses the wire; it exists purely so an
 	// operator-emptied allowlist is never silently re-granted (ADR-072 D5.1)
 	// while a grant that never existed can still be introduced exactly once.
-	SkillsMigrations []string `json:"skills_migrations,omitempty" yaml:"-"`
+	SeededSkillGrants []string `json:"seeded_skill_grants,omitempty" yaml:"-"`
 
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).

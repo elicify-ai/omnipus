@@ -1929,7 +1929,7 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 	return nil
 }
 
-// persistSkillsMigrations durably records config.skills_migrations (the
+// persistSeededSkillGrants durably records config.seeded_skill_grants (the
 // ADR-074 D4 one-shot migration markers coreagent.SeedConfig checks) into
 // config.json's raw JSON map, preserving every other key exactly as-is — the
 // same read-modify-write convention as persistFreshInstallDefaultAgentID
@@ -1944,7 +1944,7 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 // in-memory value the file is left completely untouched (no write, no mtime
 // churn), making the second boot a byte-level no-op (judgment-first spec
 // test 16).
-func persistSkillsMigrations(configPath string, markers []string) error {
+func persistSeededSkillGrants(configPath string, markers []string) error {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -1954,7 +1954,7 @@ func persistSkillsMigrations(configPath string, markers []string) error {
 		return fmt.Errorf("parse config: %w", unmarshalErr)
 	}
 	// Skip the write entirely when the on-disk value already matches.
-	if existing, ok := m["skills_migrations"].([]any); ok && len(existing) == len(markers) {
+	if existing, ok := m["seeded_skill_grants"].([]any); ok && len(existing) == len(markers) {
 		same := true
 		for i := range markers {
 			if s, isStr := existing[i].(string); !isStr || s != markers[i] {
@@ -1966,7 +1966,7 @@ func persistSkillsMigrations(configPath string, markers []string) error {
 			return nil
 		}
 	}
-	m["skills_migrations"] = markers
+	m["seeded_skill_grants"] = markers
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serialize config: %w", err)
@@ -2194,9 +2194,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// runs again next boot — not a boot-time fatal. The helper skips the
 	// write entirely when the on-disk key already matches, so a settled
 	// install's boot performs no config.json write here at all.
-	if len(cfg.SkillsMigrations) > 0 {
-		if persistErr := persistSkillsMigrations(configPath, cfg.SkillsMigrations); persistErr != nil {
-			slog.Warn("gateway: could not persist skills_migrations to config.json; "+
+	if len(cfg.SeededSkillGrants) > 0 {
+		if persistErr := persistSeededSkillGrants(configPath, cfg.SeededSkillGrants); persistErr != nil {
+			slog.Warn("gateway: could not persist seeded_skill_grants to config.json; "+
 				"the additive skills migration will be re-checked on the next boot",
 				"error", persistErr)
 		}

@@ -2119,7 +2119,7 @@ func SeedConfig(cfg *config.Config) bool {
 }
 
 // SkillsMigrationDefineDone is the ADR-074 D4 marker recorded in
-// config.skills_migrations once the one-shot define-done allowlist migration
+// config.seeded_skill_grants once the one-shot define-done allowlist migration
 // has run on an install. Exported so pkg/gateway can persist the marker into
 // config.json after SeedConfig (SeedConfig itself is a pure config-struct
 // mutation with zero filesystem side effects — see its doc comment).
@@ -2153,7 +2153,7 @@ const SkillsMigrationDefineDone = "adr074-define-done"
 // Returns true when it modified cfg (it always does when the marker was
 // absent, because writing the marker is itself a modification).
 func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
-	for _, marker := range cfg.SkillsMigrations {
+	for _, marker := range cfg.SeededSkillGrants {
 		if marker == SkillsMigrationDefineDone {
 			return false
 		}
@@ -2187,7 +2187,7 @@ func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
 			a.Skills = append(a.Skills, skillDefineDone)
 		}
 	}
-	cfg.SkillsMigrations = append(cfg.SkillsMigrations, SkillsMigrationDefineDone)
+	cfg.SeededSkillGrants = append(cfg.SeededSkillGrants, SkillsMigrationDefineDone)
 	return true
 }
 

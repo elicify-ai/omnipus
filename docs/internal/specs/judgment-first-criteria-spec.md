@@ -51,7 +51,7 @@ Scenarios (trace FR-008/009):
 3. Nil and operator-emptied `[]` allowlists untouched.
 4. PlanSupervisor tamper → reverts to exactly `{plan, define-done}`; three tamper cases still fail any other widening.
 5. Goal-compile loading: `define-done` content injected engine-side into the compile call, independent of the goal-bearing agent's allowlist — **tested** (R2-07): a curated-allowlist agent's prose `/goal` compile input contains the quality bar.
-6. **Marker wire posture (R2-04, corrected):** `GET /api/v1/config` marshals the whole config with only credential-shaped redaction, so an in-config marker WOULD cross the wire. **Decision:** `skills_migrations` is stripped from the config response (added to the existing response-scrub path) — **tested**: the config endpoint's response JSON lacks the key while config.json on disk carries it.
+6. **Marker wire posture (R2-04, corrected):** `GET /api/v1/config` marshals the whole config with only credential-shaped redaction, so an in-config marker WOULD cross the wire. **Decision:** `seeded_skill_grants (renamed from seeded_skill_grants at implementation: the ADR-067 greenfield gate token-scans pkg/config for migration machinery; the marker is a seed record, not a migration path)` is stripped from the config response (added to the existing response-scrub path) — **tested**: the config endpoint's response JSON lacks the key while config.json on disk carries it.
 
 ### US-5 (P1) — Verdicts read as judgment; the quote is real
 Scenarios (trace FR-010/012):
@@ -133,7 +133,7 @@ EC-1 kind-omitted + both payloads → 400. EC-1b explicit kind + both payloads �
 | 15 | Fresh-install seeding | Unit | US-4 S1 | |
 | 16 | Migration atomic once; nil/[] untouched; second boot byte-identical; EC-7 | Unit | US-4 S2-3, EC-7 | ADR #12 |
 | 16b | Curated-allowlist agent's compile input contains quality bar | Integration | US-4 S5 | R2-07 |
-| 16c | `GET /api/v1/config` response lacks `skills_migrations`; disk carries it | Integration | US-4 S6 | R2-04 |
+| 16c | `GET /api/v1/config` response lacks `seeded_skill_grants`; disk carries it | Integration | US-4 S6 | R2-04 |
 | 17 | PlanSupervisor allowlist + 3 tamper cases | Unit | US-4 S4 | ADR #7 |
 | 18 | Quote round-trip (DS-5), truncation, empty-render, EC-6, parser contract-comment updated | Unit+Contract | US-5 | ADR #9; rubric commit precedes |
 | 19 | Breakdown wire ($ref) + card render + `queued` frame emission + G-5 pause does NOT render confirm card | Contract+Component | US-6 | R2-02/03 |

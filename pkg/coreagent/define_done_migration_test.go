@@ -24,7 +24,7 @@ import (
 
 // marshalSeedState serializes everything the seed/migration can touch — the
 // roster (json:"-" on Agents.List keeps it out of Config's own marshal) plus
-// the whole Config struct (which carries skills_migrations) — so byte-level
+// the whole Config struct (which carries seeded_skill_grants) — so byte-level
 // comparison sees appends AND the marker.
 func marshalSeedState(t *testing.T, cfg *config.Config) []byte {
 	t.Helper()
@@ -62,7 +62,7 @@ func TestSeedConfig_FreshInstall_DefineDoneEverywhere(t *testing.T) {
 	// PlanSupervisor: exactly the pair, canonical order.
 	assert.Equal(t, []string{"plan", "define-done"}, byID[string(coreagent.IDPlanSupervisor)])
 	// Marker recorded in the same pass.
-	assert.Contains(t, cfg.SkillsMigrations, coreagent.SkillsMigrationDefineDone,
+	assert.Contains(t, cfg.SeededSkillGrants, coreagent.SkillsMigrationDefineDone,
 		"the migration marker must be recorded on a fresh install too")
 }
 
@@ -100,7 +100,7 @@ func TestDefineDoneMigration_ExistingInstall(t *testing.T) {
 		"a nil (unrestricted) allowlist stays nil — unrestricted already resolves every skill")
 	assert.Equal(t, []string{"summarize"}, byID["custom-agent"],
 		"user-created agents with curated allowlists are NOT mutated by the migration")
-	assert.Contains(t, cfg.SkillsMigrations, coreagent.SkillsMigrationDefineDone,
+	assert.Contains(t, cfg.SeededSkillGrants, coreagent.SkillsMigrationDefineDone,
 		"marker and appends must land in the SAME SeedConfig pass")
 
 	// Second boot: byte-level no-op (marker present → migration skipped;
@@ -142,7 +142,7 @@ func TestDefineDoneMigration_AppendHappensExactlyOnce(t *testing.T) {
 func TestDefineDoneMigration_PostMarkerNewCoreAgent(t *testing.T) {
 	cfg := &config.Config{}
 	// Marker already present; jim missing from the roster list entirely.
-	cfg.SkillsMigrations = []string{coreagent.SkillsMigrationDefineDone}
+	cfg.SeededSkillGrants = []string{coreagent.SkillsMigrationDefineDone}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Name: "Mia", Skills: []string{"summarize", "daily-briefing", "define-done"}},
 	}

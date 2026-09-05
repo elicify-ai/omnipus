@@ -4258,11 +4258,11 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 // keys that are internal-only bookkeeping: they stay on disk but must never
 // cross the wire. Current entries:
 //
-//   - skills_migrations (judgment-first spec US-4 S6 / R2-04): records which
+//   - seeded_skill_grants (judgment-first spec US-4 S6 / R2-04): records which
 //     one-shot allowlist migrations have run on THIS install (ADR-074 D4) —
 //     an implementation detail of the boot seed, not operator-facing config.
 var wireExcludedConfigFields = []string{
-	"skills_migrations",
+	"seeded_skill_grants",
 }
 
 // sanitizeConfigForWire strips every wireExcludedConfigFields key from a
