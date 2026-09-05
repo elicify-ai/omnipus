@@ -5,6 +5,12 @@
 //
 // The fetch boundary is the injected loaders (the KnowledgeNoteView test-seam
 // convention); no module mock, no network.
+//
+// react-shiki is mocked at its own module boundary, the same convention
+// LibraryPreviewPane.test.tsx and KnowledgeNoteView.test.tsx already use —
+// this file is about OUR wiring (the raw-view escape hatch mounts the real
+// edit path and shows the real content), not about re-verifying Shiki's own
+// syntax highlighting.
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -12,6 +18,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { KnowledgeBaseInfo, ViewResult } from '@/lib/api/generated/openapi-types'
 import type { LibraryEntry } from '@/lib/api'
 import { BasePreview } from './BasePreview'
+
+vi.mock('react-shiki', () => ({
+  ShikiHighlighter: ({ children }: { children?: React.ReactNode }) => <pre data-testid="shiki">{children}</pre>,
+}))
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -158,5 +168,64 @@ describe('BasePreview — tabs over the base file views', () => {
     })
     const msg = await screen.findByTestId('base-preview-no-views')
     expect(msg.textContent).toContain('declares no views')
+    // No `views:` key at all — "declares no views" is an honest answer, so
+    // there is nothing more to escape to than the raw file itself.
+    expect(screen.getByTestId('base-preview-view-raw')).toBeInTheDocument()
+    expect(screen.getByTestId('base-preview-download')).toBeInTheDocument()
+  })
+
+  // code-review finding #9 — a flow-style-YAML `views: [{name: All}]` block
+  // is real (the file is not empty), but the indentation-walk parser
+  // (baseViewNames.ts) cannot read that shape and reports zero views. Before
+  // the fix this rendered "declares no views" (false — the file DOES declare
+  // one) with no way to see or edit the raw file. The message must say
+  // parsing failed, not that the file is empty, and BasePreview must offer
+  // an escape hatch (view-kinds-design-2026-09-03 §7: "not a download and
+  // not raw YAML" is the happy path, not a dead end when parsing fails).
+  describe('the parser-failure dead end (flow-style YAML the parser cannot read)', () => {
+    const FLOW_STYLE_CONTENT = 'views: [{name: All}]\n'
+
+    it('states that the views could not be parsed, never that the file declares none', async () => {
+      renderBase({
+        loadContent: vi
+          .fn()
+          .mockResolvedValue({ content: FLOW_STYLE_CONTENT, is_text: true, too_large: false }),
+      })
+      const msg = await screen.findByTestId('base-preview-no-views')
+      expect(msg.textContent).toContain('could not be parsed')
+      expect(msg.textContent).not.toContain('declares no views')
+    })
+
+    it('offers a raw-view escape hatch that shows the actual file content', async () => {
+      renderBase({
+        loadContent: vi
+          .fn()
+          .mockResolvedValue({ content: FLOW_STYLE_CONTENT, is_text: true, too_large: false }),
+      })
+      await screen.findByTestId('base-preview-no-views')
+      const viewRawButton = screen.getByTestId('base-preview-view-raw')
+      fireEvent.click(viewRawButton)
+      const shiki = await screen.findByTestId('shiki')
+      expect(shiki.textContent).toContain('views: [{name: All}]')
+    })
+
+    it('offers a working Download action', async () => {
+      const clickSpy = vi.fn()
+      const originalCreateElement = document.createElement.bind(document)
+      vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+        const el = originalCreateElement(tag)
+        if (tag === 'a') el.addEventListener('click', clickSpy)
+        return el
+      })
+      renderBase({
+        loadContent: vi
+          .fn()
+          .mockResolvedValue({ content: FLOW_STYLE_CONTENT, is_text: true, too_large: false }),
+      })
+      await screen.findByTestId('base-preview-no-views')
+      fireEvent.click(screen.getByTestId('base-preview-download'))
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+      vi.restoreAllMocks()
+    })
   })
 })
