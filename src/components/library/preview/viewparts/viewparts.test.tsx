@@ -607,16 +607,11 @@ describe('ViewPartsRenderer — refusal state', () => {
 })
 
 describe('ViewPartsRenderer — empty state', () => {
-  it('leads with the plain-words outcome and shows the filter, never a bare blank', () => {
-    render(
-      <ViewPartsRenderer
-        result={makeResult({ rows: [], complete: true })}
-        filterText={'and:\n  - status != "paid"'}
-      />,
-    )
+  it('leads with the plain-words outcome and names what the view draws, never a bare blank', () => {
+    render(<ViewPartsRenderer result={makeResult({ rows: [], complete: true, type: 'invoice' })} />)
     const empty = screen.getByTestId('view-empty')
     expect(empty.textContent).toContain('Nothing matches this view.')
-    expect(empty.textContent).toContain('status != "paid"')
+    expect(empty.textContent).toContain('every invoice record')
   })
 
   it('distinguishes an incomplete empty from a true empty', () => {
