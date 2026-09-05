@@ -555,6 +555,13 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	if result == nil || opts.IsTaskRun || opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
 		return
 	}
+	// askuserquestion-tool-spec §0.7 (M-R2-5): TurnEndStatusParked is NOT a
+	// natural turn stop — a parked clarification/compile turn (AskUserQuestion,
+	// or any future ParksTurn tool) never advances the goal round, invokes the
+	// Judge, or re-dispatches. The gate lives here, at the function's entry.
+	if result.status == TurnEndStatusParked {
+		return
+	}
 	// review r2 RV3: origin-gate the hook itself, not just IsTaskRun. /goal and
 	// /loop can coexist on one session; a /loop/cron/heartbeat/async turn
 	// (ProcessScheduled, loop.go, IsTaskRun=false) has UserInitiated=false and

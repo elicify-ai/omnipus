@@ -136,6 +136,13 @@ func GeneralBuiltinMetadata() []Tool {
 	// see it, mirroring delegate's registration exactly. ---
 	out = append(out, NewMessageParentTool(nil, nil))
 
+	// --- AskUserQuestion (CategoryCommunication) — askuserquestion-tool-spec
+	// v3 / ADR-074 D4b: the owner-session structured clarification tool.
+	// Metadata-only instance (nil registry fn; never Execute()d here) so the
+	// central registry and the Constraint #6 tool-policy-coverage universe
+	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
+	out = append(out, NewAskUserQuestionTool(nil))
+
 	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))
 	out = append(out, NewTaskCreateTool(nil))
