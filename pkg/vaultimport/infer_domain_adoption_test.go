@@ -24,10 +24,11 @@ import (
 func adoptionFixture(t *testing.T, observedValues []string) (map[string][]InferredProperty, []NoteRecord) {
 	t.Helper()
 	dir := t.TempDir()
-	notes := []NoteRecord{
+	notes := make([]NoteRecord, 0, 2+len(observedValues))
+	notes = append(notes,
 		noteOnDisk(t, dir, "b1.md", "---\ntype: beta\nname: B1\n---\n\nbody\n"),
 		noteOnDisk(t, dir, "b2.md", "---\ntype: beta\nname: B2\n---\n\nbody\n"),
-	}
+	)
 	for i, v := range observedValues {
 		notes = append(notes, noteOnDisk(t, dir, fmt.Sprintf("a%d.md", i),
 			fmt.Sprintf("---\ntype: alpha\nstage: %s\n---\n\nbody\n", v)))
@@ -180,10 +181,6 @@ func TestAdoptObservedDomains_DeclinesAVocabularyTooLargeToBeClosed(t *testing.T
 // base file, as data beats another type's data.
 func TestAdoptObservedDomains_NeverOverridesTheTypesOwnData(t *testing.T) {
 	dir := t.TempDir()
-	notes := []NoteRecord{
-		noteOnDisk(t, dir, "a1.md", "---\ntype: alpha\nstage: draft\n---\n\nbody\n"),
-		noteOnDisk(t, dir, "a2.md", "---\ntype: alpha\nstage: review\n---\n\nbody\n"),
-	}
 	// SEVEN DISTINCT PROSE VALUES, and the count is load-bearing exactly as it
 	// is in the placeholder test next door. Two prose values are still a small
 	// enough set to be read as an ENUM, and an earlier draft of this test used
@@ -192,6 +189,9 @@ func TestAdoptObservedDomains_NeverOverridesTheTypesOwnData(t *testing.T) {
 	// passed with the containment clause deleted. Seven lands on text, where
 	// an adoption is visible as a type change, and the values are compared as
 	// well so a vocabulary swap cannot hide inside a matching type.
+	//
+	// Declared ahead of notes so notes can be preallocated for its own 2
+	// fixed entries plus one per prose value appended in the loop below.
 	prose := []string{
 		"waiting on the bank to confirm the wire",
 		"blocked until the lease is countersigned",
@@ -201,6 +201,11 @@ func TestAdoptObservedDomains_NeverOverridesTheTypesOwnData(t *testing.T) {
 		"queued behind the Q3 close",
 		"open — no owner assigned yet",
 	}
+	notes := make([]NoteRecord, 0, 2+len(prose))
+	notes = append(notes,
+		noteOnDisk(t, dir, "a1.md", "---\ntype: alpha\nstage: draft\n---\n\nbody\n"),
+		noteOnDisk(t, dir, "a2.md", "---\ntype: alpha\nstage: review\n---\n\nbody\n"),
+	)
 	for i, v := range prose {
 		notes = append(notes, noteOnDisk(t, dir, fmt.Sprintf("b%d.md", i),
 			fmt.Sprintf("---\ntype: beta\nstage: %s\n---\n\nbody\n", v)))
