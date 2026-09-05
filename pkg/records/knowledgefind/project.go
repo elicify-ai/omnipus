@@ -155,8 +155,15 @@ func group3String(s string) string {
 // partially-evaluated set is a wrong answer.
 func computeTotals(q *query, rows []survivor) []generated.VaultFindTotal {
 	out := make([]generated.VaultFindTotal, 0, len(q.aggregates))
+	shown := len(rows)
+	if shown > q.limit {
+		shown = q.limit
+	}
 	for _, a := range q.aggregates {
-		out = append(out, reduceAggregate(q, a, rows))
+		// ONE aggregate is no longer ONE total: a number the record type pairs
+		// with a companion unit reduces once per unit value and never across
+		// them (G2/D7). unit_totals.go owns that split; this stays a loop.
+		out = append(out, reduceAggregateSet(q, a, rows, shown)...)
 	}
 	return out
 }

@@ -6529,6 +6529,8 @@ export interface components {
          * @description One computed total, WITH THE SCOPE IT COVERS (spec FR-125, FR-125a).
          *     `scope` is not decoration and it is not optional. A total that does not say what it covers is a bare number, and a bare number over a partially-evaluated set is the confidently-wrong answer this whole surface exists to remove. The scope clause is rendered in the SAME SENTENCE as the value, so a reader cannot acquire the number without the qualification.
          *     The value is computed over the FULL EVALUATED SET, never over the rendered page. Those two counts genuinely differ whenever the byte budget elides rows, and a design where they cannot differ is a design whose test for this cannot fail.
+         *     ONE TOTAL PER UNIT VALUE (view-kinds-design-2026-09-03 §3 G2, D7). A number property the record type pairs with a companion unit (PropertyDef.unit_property) is reduced ONCE PER DISTINCT UNIT VALUE and NEVER across units, so ONE requested aggregate yields N of these — one per unit, each carrying its own `unit`, its own count and its own scope clause. No field anywhere can hold a combined figure: 100.50 SGD + 200.00 EUR is a number in no currency, stated with the same confidence as a correct one.
+         *     A number with NO companion unit still yields exactly ONE entry with `unit` absent, unchanged in shape and value from before D7. The two cases are told apart by the FIELD'S PRESENCE, never by a sentinel — an empty string is a legitimate unit value.
          */
         VaultFindTotal: {
             /**
@@ -6552,6 +6554,20 @@ export interface components {
              * @example over 14 of 14 evaluated rows (12 shown)
              */
             scope: string;
+            /**
+             * @description The unit value this total covers (e.g. "SGD"). ABSENT when the reduced property declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped, which is exactly when several of these share one `label`.
+             *
+             *     The same field, with the same meaning, as ViewUnitTotal.unit: one rule (G2), one vocabulary, whichever surface answers.
+             * @example SGD
+             */
+            unit?: string;
+            /**
+             * @description The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+             *
+             *     It travels WITH the unit value because the two are one fact: a reader that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with.
+             * @example currency
+             */
+            unit_property?: string;
             /**
              * @description True when no total could be returned — over a refused candidate set, or over a property whose values could not all be read. A refused total is PRESENT and marked, never omitted: an absent total reads as "there was nothing to add up".
              * @example false

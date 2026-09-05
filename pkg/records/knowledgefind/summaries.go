@@ -128,11 +128,20 @@ func isPopulationOp(op string) bool { return op == opMedian || op == opUnique }
 // the point of a bound that aborts is that the memory is never allocated, which
 // a post-hoc check cannot deliver.
 const (
-	// columnBufferMaxValues is B3's value half.
-	columnBufferMaxValues = 100_000
 	// columnBufferMaxBytes is B3's byte half — whichever is reached first wins.
 	columnBufferMaxBytes = 8 << 20 // 8 MiB
 )
+
+// columnBufferMaxValues is B3's value half.
+//
+// It is a var, not a const, ONLY so a test can lower it. D7.2 rules that ONE
+// budget spans every per-unit partition of one aggregate rather than each
+// partition getting its own, and the difference between those two designs is
+// invisible below the bound — proving it needs a corpus that crosses the bound
+// in total while no single partition does, and a 100,001-value fixture would
+// make the proof too slow to run and therefore not run. Nothing in production
+// writes it.
+var columnBufferMaxValues = 100_000
 
 // columnBuffer counts what a population-class summary is ACTUALLY holding.
 //
@@ -274,12 +283,20 @@ type columnScan struct {
 // scanColumn walks the evaluated set once. A non-empty second return is B3
 // firing: the scan aborted, and FR-154 forbids returning anything computed from
 // what it had reached.
-func scanColumn(q *query, a aggregate, rows []survivor) (*columnScan, string) {
+//
+// THE BUFFER IS THE CALLER'S, and that is D7.2 (view-kinds-design §9). Since
+// G2 splits one aggregate into one scan PER UNIT VALUE, a buffer allocated here
+// would give each partition its own full budget and quietly multiply B3's
+// stated bound by the unit cardinality. B3 bounds memory HELD, and a value does
+// not become cheaper or dearer for being counted under a currency, so the ONE
+// budget spans every partition of one aggregate: the guarantee is re-stated for
+// N partitions without being weakened. reduceAggregateSet is where it is
+// declared; the number of partitions has its own separate bound there.
+func scanColumn(q *query, a aggregate, rows []survivor, buf *columnBuffer) (*columnScan, string) {
 	sc := &columnScan{ratSum: new(big.Rat), ratSumSq: new(big.Rat)}
 	if a.op == opUnique {
 		sc.unique = map[string]bool{}
 	}
-	var buf columnBuffer
 
 	for _, s := range rows {
 		pv, ok := s.values[a.property]
@@ -303,7 +320,7 @@ func scanColumn(q *query, a aggregate, rows []survivor) (*columnScan, string) {
 		for _, v := range pv.Values {
 			sc.count++
 			if isPopulationOp(a.op) {
-				if !sc.buffer(q, a.op, v, &buf) {
+				if !sc.buffer(q, a.op, v, buf) {
 					return nil, buf.refusal(a)
 				}
 				continue
@@ -457,21 +474,29 @@ func uniqueKey(q *query, v records.TypedValue) string {
 // THE REDUCTION
 // ---------------------------------------------------------------------------
 
-// reduceAggregate computes ONE summary over the FULL evaluated set.
+// reduceAggregate computes ONE summary over ONE row scope.
 //
 // The scope clause is built here, beside the number, for the reason FR-125
 // gives: a total whose scope is attached by a later layer is a total that will
 // eventually be rendered without one.
-func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFindTotal {
-	t := generated.VaultFindTotal{
-		Op:    generated.VaultFindTotalOp(a.op),
-		Label: a.label(),
+//
+// `rows` is the FULL evaluated set for a unit-less total and ONE UNIT'S subset
+// of it under G2, which is why the denominator arrives in `ts` rather than
+// being read off len(rows): a per-unit total reading "over 1 of 1 evaluated
+// rows" would be a true sentence about the wrong set. `ts.clauses()` appends
+// the unit and its G3 exclusions AFTER the standard clause, so a unit-less
+// total's scope is byte-identical to what it was before D7.
+func reduceAggregate(q *query, a aggregate, rows []survivor, ts totalScope, buf *columnBuffer) generated.VaultFindTotal {
+	t := newTotal(a)
+	if ts.unit != "" {
+		// The unit and the property it was read from travel WITH the number
+		// (G2/D7.1): a reader that acquired "100.50" and "SGD" separately would
+		// have to guess which column paired them, and a reader that acquired
+		// the figure alone has the cross-unit total back.
+		u, up := ts.unit, ts.unitProperty
+		t.Unit, t.UnitProperty = &u, &up
 	}
-	shown := len(rows)
-	if shown > q.limit {
-		shown = q.limit
-	}
-	wholeSet := fmt.Sprintf("over %d of %d evaluated rows (%d shown)", len(rows), len(rows), shown)
+	wholeSet := fmt.Sprintf("over %d of %d evaluated rows (%d shown)", ts.evaluated, ts.evaluated, ts.shown) + ts.clauses()
 
 	// `count` counts ROWS and takes no property, so it never scans a column.
 	if a.op == opCount {
@@ -486,7 +511,7 @@ func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFind
 		return rowStateTotal(t, a, rows, wholeSet)
 	}
 
-	sc, refusal := scanColumn(q, a, rows)
+	sc, refusal := scanColumn(q, a, rows, buf)
 	if refusal != "" {
 		// FR-154. The scan aborted, so there is no set to summarise — and a
 		// summary over what happened to fit is the confidently-wrong answer
@@ -494,7 +519,7 @@ func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFind
 		return refuseTotal(t, refusal)
 	}
 
-	scope := scopeClause(a, sc, len(rows), shown)
+	scope := scopeClause(a, sc, ts.evaluated, ts.shown) + ts.clauses()
 
 	switch a.op {
 	case opSum:
@@ -502,25 +527,25 @@ func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFind
 			return refuseTotal(t, sc.sumErr.Error())
 		}
 		if !sc.haveSum {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		t.Value = groupDigits(sc.sum.String())
 
 	case opMin, opEarliest:
 		if !sc.haveMin {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		t.Value = renderTyped(sc.minV)
 
 	case opMax, opLatest:
 		if !sc.haveMax {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		t.Value = renderTyped(sc.maxV)
 
 	case opRange:
 		if !sc.haveMin || !sc.haveMax {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		value, err := rangeValue(sc.minV, sc.maxV)
 		if err != nil {
@@ -530,7 +555,7 @@ func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFind
 
 	case opAvg:
 		if sc.count == 0 {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		mean := new(big.Rat).Quo(sc.ratSum, new(big.Rat).SetInt64(int64(sc.count)))
 		scale := declaredSummaryScale(a, sc)
@@ -539,7 +564,7 @@ func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFind
 
 	case opMedian:
 		if len(sc.values) == 0 {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		vals := sc.values
 		sort.SliceStable(vals, func(i, j int) bool {
@@ -562,7 +587,7 @@ func reduceAggregate(q *query, a aggregate, rows []survivor) generated.VaultFind
 
 	case opStddev:
 		if sc.count == 0 {
-			return refuseTotal(t, noValueReason(a, len(rows)))
+			return refuseTotal(t, noValueReason(a, ts.evaluated))
 		}
 		n := new(big.Rat).SetInt64(int64(sc.count))
 		mean := new(big.Rat).Quo(sc.ratSum, n)

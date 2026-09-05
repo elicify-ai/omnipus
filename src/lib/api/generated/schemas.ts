@@ -663,6 +663,8 @@ type VaultFindTotal = {
   label: string;
   value: string;
   scope: string;
+  unit?: string | undefined;
+  unit_property?: string | undefined;
   refused?: boolean | undefined;
 };
 type ViewDef = {
@@ -4141,6 +4143,8 @@ export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
   label: z.string().min(1),
   value: z.string(),
   scope: z.string().min(1),
+  unit: z.string().optional(),
+  unit_property: z.string().optional(),
   refused: z.boolean().optional(),
 });
 export const RecordProblem: z.ZodType<RecordProblem> = z.object({

@@ -223,17 +223,39 @@ func pad(s string, w int) string {
 }
 
 // writeTotals is FR-125: the scope travels in the same sentence as the number.
+//
+// ONE LINE PER TOTAL, which under G2 means one line per unit value — the unit
+// printed with the figure, never after the scope, because a number and its
+// currency read as one quantity or they read as two facts a reader may take
+// apart. The lines are not merged into a per-property sentence: merging would
+// make this renderer decide which half of each scope clause is shared, and a
+// scope re-derived by a later layer is the exact failure FR-125 forbids.
 func writeTotals(b *strings.Builder, r generated.VaultFindResponse) {
 	if len(r.Totals) == 0 {
 		return
 	}
 	b.WriteString("\n")
 	for _, t := range r.Totals {
+		unit := ""
+		if t.Unit != nil && *t.Unit != "" {
+			unit = *t.Unit
+		}
 		if t.Refused != nil && *t.Refused {
-			b.WriteString("TOTALS: " + t.Label + " — " + t.Scope + "\n")
+			// A refused total has no value to hang the unit on, so the LABEL
+			// carries it — otherwise two refusals of one property would be two
+			// identical lines saying nothing about which unit each was about.
+			label := t.Label
+			if unit != "" {
+				label += " in " + unit
+			}
+			b.WriteString("TOTALS: " + label + " — " + t.Scope + "\n")
 			continue
 		}
-		b.WriteString("TOTALS: " + t.Label + " = " + t.Value + " " + t.Scope + "\n")
+		value := t.Value
+		if unit != "" {
+			value += " " + unit
+		}
+		b.WriteString("TOTALS: " + t.Label + " = " + value + " " + t.Scope + "\n")
 	}
 }
 
