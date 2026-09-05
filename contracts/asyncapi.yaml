@@ -117,6 +117,10 @@ channels:
         $ref: '#/components/messages/JudgeVerdictFrame'
       ReplayErrorTypedFrame:
         $ref: '#/components/messages/ReplayErrorTypedFrame'
+      AskUserQuestionFrame:
+        $ref: '#/components/messages/AskUserQuestionFrame'
+      AskUserAnswerFrame:
+        $ref: '#/components/messages/AskUserAnswerFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -540,6 +544,28 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/GoalStatusFrame'
 
+  receiveAskUserQuestion:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      AskUserQuestion card push (askuserquestion-tool-spec v3): emitted at
+      park time, on default-safe auto-resolutions, and on terminal
+      transitions. Session-scoped via card.session_id.
+    messages:
+      - $ref: '#/channels/chat/messages/AskUserQuestionFrame'
+
+  sendAskUserAnswer:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      The SPA submits (or cancels) a pending AskUserQuestion card. The
+      gateway bridges it to askuser.Registry.Submit / CancelByUser
+      (server-validated, first-valid-wins).
+    messages:
+      - $ref: '#/channels/chat/messages/AskUserAnswerFrame'
+
   receiveLoopStatus:
     action: receive
     channel:
@@ -946,6 +972,20 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionStateFrame'
+    AskUserQuestionFrame:
+      name: AskUserQuestionFrame
+      title: ask_user_question
+      summary: AskUserQuestion card push (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AskUserQuestionFrame'
+    AskUserAnswerFrame:
+      name: AskUserAnswerFrame
+      title: ask_user_answer
+      summary: AskUserQuestion card submission or cancel (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AskUserAnswerFrame'
     SystemOverloadFrame:
       name: SystemOverloadFrame
       title: system_overload
@@ -1204,6 +1244,8 @@ components:
       - loop_status
       - plan_status
       - judge_verdict
+      - ask_user_question
+      - ask_user_answer
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -3089,6 +3131,223 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+    AskUserQuestionCard:
+      title: AskUserQuestionCard
+      description: >
+        One AskUserQuestion card (askuserquestion-tool-spec v3, ADR-074
+        D4b): the durable pending/terminal record of a parked question set,
+        as rendered by the SPA card. Carried by AskUserQuestionFrame (live
+        push) and SessionStateFrame.pending_asks (reconnect snapshot).
+        Canonical copy — keep in sync by hand with
+        components/schemas/AskUserQuestionCard.yaml (the inboundschemas copy
+        is machine-synced from that file by gen-contracts step 5).
+      type: object
+      required:
+        - card_id
+        - session_id
+        - agent_id
+        - status
+        - created_at
+        - questions
+      additionalProperties: false
+      properties:
+        card_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+          description: Transcript session id the set is parked on (session-scoped).
+        agent_id:
+          type: string
+          description: Agent that asked — names the card's "needs your input" header.
+        status:
+          type: string
+          enum:
+            - pending
+            - answered
+            - cancelled
+        created_at:
+          type: string
+          format: date-time
+        default_safe_at:
+          type: string
+          format: date-time
+          description: >
+            When the set carries at least one default_safe question: the
+            instant those questions auto-resolve to their recommendation
+            (created_at + the fixed 30 minutes). Drives the countdown line.
+        auto_resolved:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+          description: >
+            Headers of default_safe questions the server has already
+            resolved-pending-submit (US-3 S2) — reconnect hydration marks
+            them selected + auto.
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: object
+            required:
+              - header
+              - question
+              - options
+            additionalProperties: false
+            properties:
+              header:
+                type: string
+                minLength: 1
+                maxLength: 16
+              question:
+                type: string
+                minLength: 1
+                maxLength: 500
+              options:
+                type: array
+                minItems: 2
+                maxItems: 6
+                items:
+                  type: object
+                  required:
+                    - label
+                  additionalProperties: false
+                  properties:
+                    label:
+                      type: string
+                      minLength: 1
+                      maxLength: 80
+                    description:
+                      type: string
+                      maxLength: 200
+              multi_select:
+                type: boolean
+              recommended:
+                type: string
+                maxLength: 80
+                description: Label of the recommended option (badged, listed first, never pre-selected).
+              default_safe:
+                type: boolean
+              context:
+                type: string
+                maxLength: 4000
+                description: >
+                  Raw markdown, display-only — the SPA renders it through
+                  the sanitized chat markdown pipeline (hostile markdown
+                  must stay inert, spec US-4/FR-7).
+        answers:
+          type: array
+          maxItems: 10
+          description: >
+            Populated when status != pending — the collapsed record renders
+            from THIS record (spec §0.6), never by parsing the resume
+            message.
+          items:
+            type: object
+            required:
+              - header
+              - question
+              - auto_default
+            additionalProperties: false
+            properties:
+              header:
+                type: string
+                minLength: 1
+                maxLength: 16
+              question:
+                type: string
+                minLength: 1
+                maxLength: 500
+              selected:
+                type: array
+                items:
+                  type: string
+                  maxLength: 80
+                maxItems: 6
+              free_text:
+                type: string
+                maxLength: 2000
+              auto_default:
+                type: boolean
+    AskUserQuestionFrame:
+      title: AskUserQuestionFrame
+      description: >
+        Server → client (askuserquestion-tool-spec v3 §3). Live push of an
+        AskUserQuestion card: emitted at park time (status pending), on a
+        default-safe auto-resolution (auto_resolved grows), and on terminal
+        transitions (answered/cancelled — the SPA collapses the card and
+        unlocks the composer). Session-scoped (registered in
+        SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key).
+        Canonical copy — keep in sync by hand with
+        components/schemas/AskUserQuestionFrame.yaml.
+      type: object
+      required:
+        - type
+        - card
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: ask_user_question
+        card:
+          $ref: '#/components/schemas/AskUserQuestionCard'
+    AskUserAnswerFrame:
+      title: AskUserAnswerFrame
+      description: >
+        Client → server (askuserquestion-tool-spec v3 §3). The card's
+        submission: either a full answer set (every question answered
+        exactly once — server-validated by askuser.Registry.Submit,
+        first-valid-wins) or cancel:true (the Cancel affordance —
+        selections discarded, submission-free cancelled resume). Canonical
+        copy — keep in sync by hand with
+        components/schemas/AskUserAnswerFrame.yaml.
+      type: object
+      required:
+        - type
+        - card_id
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: ask_user_answer
+        card_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        cancel:
+          type: boolean
+          description: true = cancel the set (answers ignored/absent).
+        answers:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required:
+              - header
+            additionalProperties: false
+            properties:
+              header:
+                type: string
+                minLength: 1
+                maxLength: 16
+              selected:
+                type: array
+                items:
+                  type: string
+                  maxLength: 80
+                maxItems: 6
+              free_text:
+                type: string
+                maxLength: 2000
+              auto_default:
+                type: boolean
+                description: Client marks answers that were server-auto-resolved (origin marker, US-3 S3).
     SessionStatePendingApproval:
       title: SessionStatePendingApproval
       description: One pending approval entry in a SessionStateFrame.
@@ -3143,6 +3402,16 @@ components:
             $ref: '#/components/schemas/SessionStatePendingApproval'
           maxItems: 1000
           description: Always array, never null. Capped at 1000.
+        pending_asks:
+          type: array
+          items:
+            $ref: '#/components/schemas/AskUserQuestionCard'
+          maxItems: 64
+          description: >
+            askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every
+            PENDING AskUserQuestion card (global registry cap 64) so a
+            reconnecting SPA re-hydrates its card + composer lock. Optional
+            (older gateways omit it); absent/empty means no pending sets.
         emitted_at:
           type: string
           format: date-time
@@ -4111,6 +4380,94 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
+        criteria:
+          type: array
+          description: >
+            ADR-074 D5.2 / judgment-first FR-011 — compiled criteria
+            breakdown for the `queued` (pending-confirm) emission. Items
+            are a hand-synced INLINE duplicate of the canonical
+            components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI
+            does not resolve cross-file $ref for its own codegen — the
+            JudgeVerdictFrame/CriterionVerdict precedent); keep both in
+            sync by hand, never a third criteria shape.
+          items:
+            type: object
+            required:
+              - kind
+              - text
+              - author
+              - status
+            additionalProperties: false
+            properties:
+              id:
+                type: string
+              kind:
+                type: string
+                enum:
+                  - check
+                  - prose
+                  - behavior
+              text:
+                type: string
+                minLength: 1
+                maxLength: 1000
+              check:
+                type: object
+                required:
+                  - command
+                  - expected_exit_code
+                additionalProperties: false
+                properties:
+                  command:
+                    type: string
+                    minLength: 1
+                  expected_exit_code:
+                    type: integer
+                    minimum: 0
+                    maximum: 255
+              behavior:
+                type: object
+                required:
+                  - tool
+                additionalProperties: false
+                properties:
+                  tool:
+                    type: string
+                    minLength: 1
+                  min_count:
+                    type: integer
+                    minimum: 0
+                    default: 1
+                  max_count:
+                    type: integer
+                    minimum: 0
+                  scope:
+                    type: string
+                    enum:
+                      - attempt
+                      - task_session
+                    default: task_session
+              author:
+                type: object
+                required:
+                  - kind
+                  - id
+                additionalProperties: false
+                properties:
+                  kind:
+                    type: string
+                    enum:
+                      - agent
+                      - user
+                  id:
+                    type: string
+                    minLength: 1
+              status:
+                type: string
+                enum:
+                  - pending
+                  - met
+                  - unmet
 
     LoopStatusFrame:
       title: LoopStatusFrame
@@ -4273,6 +4630,9 @@ components:
                 type: boolean
               reason:
                 type: string
+              evidence_quote:
+                type: string
+                maxLength: 500
         model:
           type: string
         judged_at:

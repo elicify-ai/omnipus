@@ -37,9 +37,17 @@ export function CriteriaVerdictList({
     .filter((v) => v.scope === 'task')
     .reduce<JudgeVerdict | null>((latest, v) => (!latest || v.round > latest.round ? v : latest), null)
 
-  function reasonFor(criterionId: string | undefined): string | undefined {
+  function verdictFor(
+    criterionId: string | undefined,
+  ): JudgeVerdict['per_criterion'][number] | undefined {
+    // Explicit id-absence handling (ADR-074 D5.3): verdict entries key on
+    // `criterion_id` while `AcceptanceCriterion.id` is optional pre-persist.
+    // A criterion without a server-set id matches NO verdict entry — return
+    // undefined outright (no reason/quote lines render) instead of falling
+    // through to a blank-reason lookup. The server always sets ids on
+    // persist, so this only fires on unpersisted drafts.
     if (!criterionId || !latestVerdict) return undefined
-    return latestVerdict.per_criterion.find((cv) => cv.criterion_id === criterionId)?.reason
+    return latestVerdict.per_criterion.find((cv) => cv.criterion_id === criterionId)
   }
 
   function latestEvidenceFor(criterionId: string | undefined): EvidenceRecord | undefined {
@@ -60,7 +68,7 @@ export function CriteriaVerdictList({
       )}
       <ul className="space-y-1.5">
         {criteria.map((c) => {
-          const reason = reasonFor(c.id)
+          const verdict = verdictFor(c.id)
           const ev = latestEvidenceFor(c.id)
           const isExpanded = expandedId === c.id
           return (
@@ -69,8 +77,28 @@ export function CriteriaVerdictList({
                 <CriterionStatusIcon status={c.status} />
                 <div className="flex-1 min-w-0">
                   <p className="text-[var(--color-secondary)]">{c.text}</p>
-                  {reason && (
-                    <p className="text-[10px] text-[var(--color-muted)] whitespace-pre-wrap mt-0.5">{reason}</p>
+                  {verdict?.reason && (
+                    // ADR-074 D5.3: the judge's reason IS the verdict
+                    // statement — criterion-text size, no longer 10px muted.
+                    <p
+                      className="text-[var(--color-muted)] whitespace-pre-wrap mt-0.5"
+                      data-testid="verdict-reason"
+                    >
+                      {verdict.reason}
+                    </p>
+                  )}
+                  {verdict?.evidence_quote && (
+                    // ADR-074 D7: the grounding quote, rendered as INERT
+                    // quoted text (plain text node — never parsed as
+                    // markdown/HTML: it is verbatim UNTRUSTED content).
+                    // Renders ONLY when non-empty — fail-closed, pre-D7 and
+                    // old-soul verdicts carry none and show no line.
+                    <p
+                      className="border-l-2 border-[var(--color-border)] pl-2 mt-1 text-[var(--color-muted)] italic whitespace-pre-wrap"
+                      data-testid="verdict-evidence-quote"
+                    >
+                      {verdict.evidence_quote}
+                    </p>
                   )}
                 </div>
                 {ev && (

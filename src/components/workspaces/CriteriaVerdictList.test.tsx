@@ -121,6 +121,79 @@ describe('CriteriaVerdictList — per-criterion met/unmet + judge reason', () =>
     expect(screen.getByText('Check A')).toBeInTheDocument()
     expect(screen.getByText('Check B')).toBeInTheDocument()
   })
+
+  it('renders the reason at criterion-text size, not 10px muted (ADR-074 D5.3)', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'the verdict statement' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    const reason = screen.getByTestId('verdict-reason')
+    expect(reason).toHaveTextContent('the verdict statement')
+    // The old rendering forced 10px; criterion-text size means NO explicit
+    // font-size override below the list's text-xs.
+    expect(reason.className).not.toMatch(/text-\[10px\]/)
+  })
+
+  it('renders no reason line for an id-less criterion even when verdicts exist (explicit absence handling)', () => {
+    const criteria = [makeCriterion({ id: undefined, status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'someone else reason' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.queryByTestId('verdict-reason')).toBeNull()
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
+})
+
+describe('CriteriaVerdictList — evidence quote (ADR-074 D7 / US-5)', () => {
+  it('renders a non-empty evidence_quote as an inert quoted line under the reason', () => {
+    const hostile = '--- PASS: TestX <img src=x onerror="alert(1)"> **not markdown**'
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'met' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [
+          { criterion_id: 'crit-1', met: true, reason: 'tests pass', evidence_quote: hostile },
+        ],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    const quote = screen.getByTestId('verdict-evidence-quote')
+    // Inert: the hostile payload appears as literal TEXT — never parsed as
+    // HTML or markdown (no img element materializes).
+    expect(quote).toHaveTextContent('<img src=x onerror="alert(1)">')
+    expect(quote.querySelector('img')).toBeNull()
+    expect(quote.textContent).toContain('**not markdown**')
+  })
+
+  it('renders NO quote line when evidence_quote is absent (pre-D7 / old-soul verdicts)', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'fail-closed reason' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.getByTestId('verdict-reason')).toBeInTheDocument()
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
+
+  it('renders NO quote line when evidence_quote is the empty string (fail-closed verdicts)', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [
+          { criterion_id: 'crit-1', met: false, reason: 'nothing to quote', evidence_quote: '' },
+        ],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
 })
 
 describe('CriteriaVerdictList — evidence viewer expand (US-11 AS-4)', () => {

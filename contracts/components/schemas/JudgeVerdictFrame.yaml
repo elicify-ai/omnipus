@@ -82,6 +82,15 @@ properties:
           type: string
           description: The judge's rationale, fed forward as steering on the next attempt.
           example: "go test output shows 3 failing tests."
+        evidence_quote:
+          type: string
+          maxLength: 500
+          description: >
+            ADR-074 D7 — verbatim evidence excerpt grounding this verdict
+            (UNTRUSTED content; render inert). Optional and empty-safe:
+            absent on fail-closed and pre-D7 verdicts. Keep in sync with
+            CriterionVerdict.yaml and the inline asyncapi.yaml copy.
+          example: "--- PASS: TestPlanStore_CreatePersists (0.02s)"
     description: Per-criterion outcomes making up the overall verdict.
   model:
     type: string

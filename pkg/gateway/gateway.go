@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -4709,6 +4710,57 @@ func setupAndStartServices(
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
 	agentLoop.SetToolApprover(newPolicyApproverAdapter(approvalReg, wsHandler))
+
+	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
+	// D4b; W9b wiring): durable state lives in each owner session's
+	// UnifiedMeta (pending_ask), the in-process registry mirrors it with the
+	// global cap + default-safe timers, the card sink broadcasts
+	// ask_user_question WS frames, and the resume dispatcher publishes the
+	// §0.2 answers message back into the owner session's turn machinery.
+	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
+		askSink := &askUserCardSink{h: wsHandler}
+		askReg := askuser.NewRegistry(
+			sharedStore,
+			&askUserResumeDispatcher{msgBus: msgBus},
+			askuser.Options{
+				Sink:  askSink,
+				Audit: &askUserAuditSink{al: agentLoop},
+			},
+		)
+		askSink.delayFn = askReg.EffectiveDefaultSafeDelay
+		wsHandler.askUserReg = askReg
+		agentLoop.SetAskUserRegistry(askReg)
+		// Boot rearm sweep (US-6 S1/FR-9): re-hydrate every persisted pending
+		// set so its default-safe timers re-arm from the durable CreatedAt
+		// (already-elapsed timers fire near-immediately) and the reconnect
+		// snapshot sees it. Runs in a goroutine — meta reads only, and a
+		// pending set is inert until a client answers or a timer fires.
+		go func() {
+			metas, err := sharedStore.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+				return m.PendingAskJSON != ""
+			})
+			if err != nil {
+				slog.Warn("gateway: askuser boot rearm sweep failed", "error", err)
+				return
+			}
+			for _, m := range metas {
+				if err := askReg.RearmSession(m.ID); err != nil {
+					slog.Warn("gateway: askuser rearm failed",
+						"session_id", m.ID, "error", err)
+				}
+			}
+		}()
+		// Wait out in-flight timer callbacks on shutdown so a persist never
+		// races the process teardown (the Quiesce contract). Bound to the
+		// gateway's shutdown-aware ctx — a defer here would fire when
+		// setupAndStartServices RETURNS (still at boot), not at shutdown.
+		go func() {
+			<-ctx.Done()
+			askReg.Quiesce()
+		}()
+	} else {
+		slog.Warn("gateway: askuser registry NOT wired — no shared session store; AskUserQuestion will fail closed")
+	}
 
 	// Wire the filter-metrics recorder into pkg/tools so FilterToolsByPolicy
 	// can emit FR-039 omnipus_tool_filter_total counters. (C4)

@@ -1,0 +1,22 @@
+title: AskUserQuestionFrame
+description: >
+  Server → client (askuserquestion-tool-spec v3 §3, ADR-074 D4b). Live push
+  of an AskUserQuestion card: emitted at park time (status pending), on a
+  default-safe auto-resolution (auto_resolved grows), and on terminal
+  transitions (answered/cancelled — the SPA collapses the card and unlocks
+  the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES;
+  card.session_id is the routing key). Canonical copy lives inline in
+  contracts/asyncapi.yaml components.schemas — this file exists for the
+  Constraint #8 5-step process and the machine-synced inboundschemas copy;
+  the HAND-synced pair is {this file, the asyncapi inline copy}.
+type: object
+required:
+  - type
+  - card
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: ask_user_question
+  card:
+    $ref: ./AskUserQuestionCard.yaml

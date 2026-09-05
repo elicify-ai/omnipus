@@ -8483,6 +8483,9 @@ type CriterionVerdict struct {
 	// CriterionId ID of the AcceptanceCriterion this verdict judges.
 	CriterionId string `json:"criterion_id"`
 
+	// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+	EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
 	// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 	Met bool `json:"met"`
 
@@ -9620,6 +9623,9 @@ type JudgeVerdict struct {
 		// CriterionId ID of the AcceptanceCriterion this verdict judges.
 		CriterionId string `json:"criterion_id"`
 
+		// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
 		// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 		Met bool `json:"met"`
 
@@ -10284,6 +10290,9 @@ type Message struct {
 		PerCriterion []struct {
 			// CriterionId ID of the AcceptanceCriterion this verdict judges.
 			CriterionId string `json:"criterion_id"`
+
+			// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
 
 			// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 			Met bool `json:"met"`
@@ -12720,6 +12729,9 @@ type SessionDetail struct {
 			PerCriterion []struct {
 				// CriterionId ID of the AcceptanceCriterion this verdict judges.
 				CriterionId string `json:"criterion_id"`
+
+				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+				EvidenceQuote *string `json:"evidence_quote,omitempty"`
 
 				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 				Met bool `json:"met"`

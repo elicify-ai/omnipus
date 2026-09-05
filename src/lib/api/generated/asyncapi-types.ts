@@ -61,7 +61,9 @@ export type WsFrameType =
   | "goal_status"
   | "loop_status"
   | "plan_status"
-  | "judge_verdict";
+  | "judge_verdict"
+  | "ask_user_question"
+  | "ask_user_answer";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -409,6 +411,53 @@ export interface ToolApprovalRequiredFrame {
   producing_session_id?: string;
 }
 
+export interface AskUserQuestionCard {
+  card_id: string;
+  session_id: string;
+  agent_id: string;
+  status: "pending" | "answered" | "cancelled";
+  created_at: string;
+  default_safe_at?: string;
+  auto_resolved?: Array<string>;
+  questions: Array<{
+    header: string;
+    question: string;
+    options: Array<{
+      label: string;
+      description?: string;
+    }>;
+    multi_select?: boolean;
+    recommended?: string;
+    default_safe?: boolean;
+    context?: string;
+  }>;
+  answers?: Array<{
+    header: string;
+    question: string;
+    selected?: Array<string>;
+    free_text?: string;
+    auto_default: boolean;
+  }>;
+}
+
+export interface AskUserQuestionFrame {
+  type: "ask_user_question";
+  card: AskUserQuestionCard;
+}
+
+export interface AskUserAnswerFrame {
+  type: "ask_user_answer";
+  card_id: string;
+  session_id: string;
+  cancel?: boolean;
+  answers?: Array<{
+    header: string;
+    selected?: Array<string>;
+    free_text?: string;
+    auto_default?: boolean;
+  }>;
+}
+
 export interface SessionStatePendingApproval {
   approval_id: string;
   session_id: string;
@@ -421,6 +470,7 @@ export interface SessionStateFrame {
   type: "session_state";
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
+  pending_asks?: Array<AskUserQuestionCard>;
   emitted_at: string;
 }
 
@@ -638,6 +688,26 @@ export interface GoalStatusFrame {
   cap: number;
   state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
   producing_session_id?: string;
+  criteria?: Array<{
+    id?: string;
+    kind: "check" | "prose" | "behavior";
+    text: string;
+    check?: {
+      command: string;
+      expected_exit_code: number;
+    };
+    behavior?: {
+      tool: string;
+      min_count?: number;
+      max_count?: number;
+      scope?: "attempt" | "task_session";
+    };
+    author: {
+      kind: "agent" | "user";
+      id: string;
+    };
+    status: "pending" | "met" | "unmet";
+  }>;
 }
 
 export interface LoopStatusFrame {
@@ -672,6 +742,7 @@ export interface JudgeVerdictFrame {
     criterion_id: string;
     met: boolean;
     reason: string;
+    evidence_quote?: string;
   }>;
   model: string;
   judged_at: string;
@@ -715,6 +786,8 @@ export type WsFrame =
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | AskUserQuestionFrame
+  | AskUserAnswerFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame
@@ -756,6 +829,7 @@ export type ClientFrame =
   | DevicePairingResponseFrame
   | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
+  | AskUserAnswerFrame
   | BrowserAttachFrame
   | BrowserInputFrame
   | BrowserControlFrame
@@ -765,7 +839,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "ask_user_answer", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -790,6 +864,7 @@ export type ServerFrame =
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | AskUserQuestionFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame

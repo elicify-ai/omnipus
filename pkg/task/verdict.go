@@ -30,6 +30,16 @@ type CriterionVerdict struct {
 	Met bool `json:"met"`
 	// Reason is the judge's rationale for this criterion.
 	Reason string `json:"reason"`
+	// EvidenceQuote (ADR-074 D7) is the verbatim evidence excerpt the judge
+	// grounded this verdict in, copied out of the UNTRUSTED-DATA region of
+	// its input (diff/window/claim). Optional and empty-safe: empty on every
+	// fail-closed verdict, every pre-D7 persisted verdict, and installs whose
+	// Judge soul predates the quote-emitting rubric. Truncated rune-safe to
+	// 500 code points at the parser (pkg/agent/judge.go). UNTRUSTED CONTENT:
+	// any re-emission into another agent's prompt MUST wrap it in the same
+	// UNTRUSTED-DATA framing buildJudgeUserContent uses — never bare trusted
+	// text; the UI renders it as inert quoted text.
+	EvidenceQuote string `json:"evidence_quote,omitempty"`
 }
 
 // JudgeVerdict is the Judge System Agent's overall PASS/FAIL verdict for one

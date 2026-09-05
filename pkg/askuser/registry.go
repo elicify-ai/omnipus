@@ -243,6 +243,25 @@ func (r *Registry) PendingCount() int {
 	return len(r.entries)
 }
 
+// PendingAll returns a clone of every pending set, for the gateway's
+// session_state reconnect snapshot (spec US-6 S1/FR-9). Order is undefined.
+func (r *Registry) PendingAll() []*PendingSet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*PendingSet, 0, len(r.entries))
+	for _, s := range r.entries {
+		out = append(out, s.Clone())
+	}
+	return out
+}
+
+// EffectiveDefaultSafeDelay reports the configured default-safe timer delay
+// (the fixed 30 minutes in production; tests may shorten it) so the wire
+// card can carry the concrete default_safe_at instant.
+func (r *Registry) EffectiveDefaultSafeDelay() time.Duration {
+	return r.defaultSafeDelay
+}
+
 // Submit is the server-side submission path (§3), callable by the future
 // ask_user_answer frame handler and by tests. sessionID is the session the
 // submitting client is attached to; user is the authenticated username ("" =
@@ -283,6 +302,9 @@ func (r *Registry) Submit(cardID, sessionID, user string, answers []SubmittedAns
 
 	r.stopTimers(cardID)
 	r.persistTerminal(consumed)
+	// Terminal state-change emission (spec §3): the SPA collapses the card
+	// to the answered record and unlocks the composer on this frame.
+	r.sink.EmitCard(consumed.Clone())
 	return r.dispatchResume(consumed)
 }
 
@@ -322,6 +344,9 @@ func (r *Registry) CancelOnSessionStop(key string) bool {
 
 	r.stopTimers(consumed.CardID)
 	r.persistTerminal(consumed)
+	// Terminal state-change emission: collapse the card + unlock the
+	// composer on every connected client.
+	r.sink.EmitCard(consumed.Clone())
 	return true
 }
 
@@ -345,6 +370,9 @@ func (r *Registry) cancelCommon(cardID, sessionID string) (*PendingSet, error) {
 
 	r.stopTimers(cardID)
 	r.persistTerminal(consumed)
+	// Terminal state-change emission (spec §3): collapse to the cancelled
+	// record on every connected client.
+	r.sink.EmitCard(consumed.Clone())
 	return consumed, nil
 }
 
@@ -501,6 +529,7 @@ func (r *Registry) fireDefaultSafe(cardID, header string) {
 	if serverSubmit {
 		r.stopTimers(cardID)
 		r.persistTerminal(consumed)
+		r.sink.EmitCard(consumed.Clone())
 		if err := r.dispatchResume(consumed); err != nil {
 			slog.Warn("askuser: server auto-submit resume dispatch failed",
 				"card_id", cardID, "session_id", sessionID, "error", err)
@@ -513,6 +542,9 @@ func (r *Registry) fireDefaultSafe(cardID, header string) {
 		slog.Warn("askuser: failed to persist auto-default resolution",
 			"card_id", cardID, "session_id", sessionID, "error", err)
 	}
+	// Non-terminal state-change emission: the connected card marks this
+	// question resolved-pending-submit (auto badge) live.
+	r.sink.EmitCard(snapshot.Clone())
 }
 
 // buildAllDefaultAnswers builds the all-recommendation submission for the

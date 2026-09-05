@@ -33,8 +33,14 @@ const AskUserQuestionToolName = "AskUserQuestion"
 
 // webChannelName is the SPA session origin — the ONLY origin the card can
 // render on (US-5, operator ruling 2026-09-05: the tool is web-only and
-// permanently blocked on every other channel).
-const webChannelName = "web"
+// permanently blocked on every other channel). The value is "webchat":
+// that is the bus channel the gateway's WS/SSE chat handlers stamp on every
+// SPA turn (pkg/gateway/websocket.go's bus.InboundMessage{Channel:
+// "webchat"}), which is what ToolChannel(ctx) returns here via
+// registry.ExecuteWithContext(..., ts.channel, ...). The W9a draft used
+// "web", which no real turn ever carries — the gate would have blocked the
+// tool on the SPA itself (fixed in the W9b wire commit).
+const webChannelName = "webchat"
 
 // AskUserQuestionRegistry is the narrow registry seam the tool needs
 // (implemented by *askuser.Registry; the gateway wires the live instance).

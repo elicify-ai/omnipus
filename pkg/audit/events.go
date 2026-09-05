@@ -31,6 +31,13 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
+	// EventAskUserAutoDefault — INFO. An AskUserQuestion default-safe
+	// question auto-resolved to its recommended option after the fixed
+	// 30-minute timer (askuserquestion-tool-spec v3 US-3 S2; ADR-074 D4b).
+	// Emitted by the gateway's askuser AuditSink adapter; details carry
+	// card_id, session_id, question header and the chosen label.
+	EventAskUserAutoDefault = "askuser.auto_default"
+
 	// EventToolPolicyDenyAttempted — WARN. LLM emitted a tool_call for a tool
 	// whose effective policy is `deny`. Reachable only via stale model state
 	// (e.g. mid-turn policy change). Spec table; FR-079.

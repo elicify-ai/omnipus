@@ -34,6 +34,17 @@ properties:
       Snapshot of every pending tool approval. Always an array — never null.
       The server emits [] when no approvals are pending. Capped at 1000
       entries to bound server emit volume and SPA render cost.
+  pending_asks:
+    type: array
+    items:
+      $ref: AskUserQuestionCard.yaml
+    maxItems: 64
+    description: >
+      askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING
+      AskUserQuestion card (global registry cap 64) so a reconnecting SPA
+      re-hydrates its card + composer lock. Optional (older gateways omit
+      it); absent/empty means no pending sets. Keep in sync by hand with
+      contracts/asyncapi.yaml's inline SessionStateFrame.
   emitted_at:
     type: string
     format: date-time

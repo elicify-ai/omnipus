@@ -320,7 +320,9 @@ func (al *AgentLoop) applyGoalCompileOutcome(
 
 	// The pending state occupies the `queued` pill (ADR-074 D4a: compiled,
 	// awaiting user confirmation — not yet admitted). No goal-id yet: the
-	// generation is minted at confirm (newGoalID's own contract).
+	// generation is minted at confirm (newGoalID's own contract). The frame
+	// carries the compiled criteria breakdown (D5.2/FR-011) so the SPA's
+	// confirmation card itemizes exactly what will run.
 	condition := compiled.Prompt
 	if condition == "" {
 		condition = compiled.Intent
@@ -329,7 +331,7 @@ func (al *AgentLoop) applyGoalCompileOutcome(
 	if cfg := al.GetConfig(); cfg != nil {
 		maxRounds = cfg.Planning.EffectiveGoalMaxRounds()
 	}
-	al.emitGoalStatusFrame(sessionID, "", condition, 0, maxRounds, "", goalPillQueued)
+	al.emitGoalStatusFrameWithCriteria(sessionID, "", condition, 0, maxRounds, "", goalPillQueued, compiled.Criteria)
 
 	echo := formatGoalEcho(compiled)
 	if outcome.UsedFallback {
@@ -743,6 +745,14 @@ func (al *AgentLoop) activeLoopsSnapshot(kind string) (active, capN int) {
 // never had one minted, in which case the wire frame simply omits goal_id
 // (it is OPTIONAL per GoalStatusFrame.yaml).
 func (al *AgentLoop) emitGoalStatusFrame(sessionID, goalID, condition string, round, maxRounds int, reason, state string) {
+	al.emitGoalStatusFrameWithCriteria(sessionID, goalID, condition, round, maxRounds, reason, state, nil)
+}
+
+// emitGoalStatusFrameWithCriteria is emitGoalStatusFrame plus the compiled
+// criteria breakdown (ADR-074 D5.2 / FR-011): the `queued` pending-confirm
+// emission carries the itemized criteria so GoalThreadTailCards' echo card
+// shows exactly what will run; every other emission passes nil.
+func (al *AgentLoop) emitGoalStatusFrameWithCriteria(sessionID, goalID, condition string, round, maxRounds int, reason, state string, criteria []task.AcceptanceCriterion) {
 	active, capN := al.activeLoopsSnapshot("goal")
 	al.EmitGoalStatusChanged(GoalStatusChangedPayload{
 		SessionID:    sessionID,
@@ -754,6 +764,7 @@ func (al *AgentLoop) emitGoalStatusFrame(sessionID, goalID, condition string, ro
 		ActiveLoops:  active,
 		Cap:          capN,
 		State:        state,
+		Criteria:     criteria,
 	})
 }
 

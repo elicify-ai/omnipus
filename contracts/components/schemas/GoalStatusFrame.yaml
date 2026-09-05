@@ -130,3 +130,23 @@ properties:
       (FR-089) — do not assume presence or absence until the audit
       classifies this frame type. Keep in sync by hand with
       contracts/asyncapi.yaml's inline GoalStatusFrame.
+  criteria:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      ADR-074 D5.2 / judgment-first FR-011 — the compiled acceptance-criteria
+      breakdown behind `condition`, itemized per-criterion (text + any
+      technical payload, commands verbatim) so the confirmation surface
+      shows exactly what will run. SHAPE DECISION (documented per D5.2's
+      "implementation chooses"): an ADDITIVE OPTIONAL field on
+      GoalStatusFrame — not a sibling GoalEchoFrame — because the pending
+      (`state: queued`) pill already reaches GoalThreadTailCards through
+      this frame and the breakdown is the same lifecycle datum; items $ref
+      the canonical AcceptanceCriterion (never a third criteria shape).
+      Present on the `queued` (pending-confirm) emission; absent on
+      round/lifecycle pushes, whose consumers only track accounting.
+      NOTE the asyncapi.yaml inline canonical copy cannot cross-file-$ref:
+      it carries a hand-synced INLINE duplicate of the AcceptanceCriterion
+      shape (the JudgeVerdictFrame/CriterionVerdict precedent) — any field
+      edit to AcceptanceCriterion.yaml MUST be mirrored there.

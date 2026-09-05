@@ -25,6 +25,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -196,6 +197,12 @@ type WSHandler struct {
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
+
+	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
+	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
+	// Nil until then — handleAskUserAnswer and emitSessionState's
+	// pending_asks snapshot degrade gracefully.
+	askUserReg *askuser.Registry
 
 	// devicePairingRegistry tracks in-flight device pairing requests awaiting operator approval.
 	devicePairingRegistry *devicePairingRegistry
@@ -1114,6 +1121,27 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				continue
 			}
 			h.subscribePairingInterest(wc, f.ChannelId, f.Active)
+		case string(generated.WsFrameTypeAskUserAnswer):
+			// AskUserQuestion card submission/cancel (askuserquestion-tool-
+			// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
+			// Full semantic validation (ownership, membership, arity,
+			// first-valid-wins) is the registry's; the schema gate above
+			// (wsFrameSchemaName → AskUserAnswerFrame) bounds the shape.
+			var f generated.AskUserAnswerFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed ask_user_answer frame", "error", err)
+				wc.inboundDropped.Add(1)
+				continue
+			}
+			if f.CardId == "" || f.SessionId == "" {
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "ask_user_answer requires card_id and session_id",
+				})
+				continue
+			}
+			h.handleAskUserAnswer(wc, f)
 		default:
 			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
@@ -1137,6 +1165,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "SessionCloseFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 		return "WhatsAppPairingSubscribeFrame"
+	case string(generated.WsFrameTypeAskUserAnswer):
+		return "AskUserAnswerFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
 	// ADR-038 finding #3: the 4 browser-live client→server frame types.
@@ -4282,6 +4312,11 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				gid := p.GoalID
 				goalF.GoalId = &gid
 			}
+			// ADR-074 D5.2 / FR-011: the compiled criteria breakdown rides the
+			// `queued` (pending-confirm) emission so the SPA's echo card can
+			// itemize exactly what will run (commands verbatim). Optional on
+			// the wire — absent (nil) on every other emission.
+			setGoalStatusCriteria(&goalF, p.Criteria)
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run

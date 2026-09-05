@@ -10320,6 +10320,11 @@ export interface components {
              * @example go test output shows 3 failing tests; criterion requires all passing.
              */
             reason: string;
+            /**
+             * @description ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+             * @example --- PASS: TestPlanStore_CreatePersists (0.02s)
+             */
+            evidence_quote?: string;
         };
         /**
          * PlanApproveError

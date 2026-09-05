@@ -1806,16 +1806,24 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 	// so start from a non-nil, empty slice rather than appending onto a nil
 	// one.
 	out.PerCriterion = make([]struct {
-		CriterionId string `json:"criterion_id"`
-		Met         bool   `json:"met"`
-		Reason      string `json:"reason"`
+		CriterionId   string  `json:"criterion_id"`
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+		Met           bool    `json:"met"`
+		Reason        string  `json:"reason"`
 	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
+		// ADR-074 D7: optional + empty-safe — an empty quote (fail-closed /
+		// pre-D7 verdicts) stays absent from the wire, never "".
+		var quote *string
+		if c.EvidenceQuote != "" {
+			quote = ptr(c.EvidenceQuote)
+		}
 		out.PerCriterion = append(out.PerCriterion, struct {
-			CriterionId string `json:"criterion_id"`
-			Met         bool   `json:"met"`
-			Reason      string `json:"reason"`
-		}{CriterionId: c.CriterionID, Met: c.Met, Reason: c.Reason})
+			CriterionId   string  `json:"criterion_id"`
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+			Met           bool    `json:"met"`
+			Reason        string  `json:"reason"`
+		}{CriterionId: c.CriterionID, EvidenceQuote: quote, Met: c.Met, Reason: c.Reason})
 	}
 	return out
 }
