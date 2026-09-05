@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -648,6 +649,10 @@ type resumePayload struct {
 	Answers []Answer  `json:"answers,omitempty"`
 }
 
+// resumeMessagePrefix opens every §0.2 resume message. ResumeMessage renders
+// with it and ParseResumeCardID recognizes it — keep the two in lockstep.
+const resumeMessagePrefix = "Answers to your questions (card_id="
+
 // ResumeMessage renders the §0.2 correlated user-role resume message:
 //
 //	Answers to your questions (card_id=<id>): {"status":...,"answers":[...]}
@@ -663,7 +668,26 @@ func ResumeMessage(set *PendingSet) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("askuser: marshal resume payload: %w", err)
 	}
-	return fmt.Sprintf("Answers to your questions (card_id=%s): %s", set.CardID, string(data)), nil
+	return fmt.Sprintf("%s%s): %s", resumeMessagePrefix, set.CardID, string(data)), nil
+}
+
+// ParseResumeCardID recognizes a §0.2 resume message (the exact shape
+// ResumeMessage renders) and extracts its card id. It exists for the SPA
+// presentation rule's server-side half (§0.2: the resume message is rendered
+// AS the collapsed answer record, never as raw JSON): the gateway's session
+// replay uses it to identify persisted resume messages so it can suppress
+// the raw-JSON user bubble and emit the reconstructed collapsed card in its
+// place. Returns ok=false for any content that is not a resume message.
+func ParseResumeCardID(content string) (cardID string, ok bool) {
+	if !strings.HasPrefix(content, resumeMessagePrefix) {
+		return "", false
+	}
+	rest := content[len(resumeMessagePrefix):]
+	end := strings.Index(rest, ")")
+	if end <= 0 {
+		return "", false
+	}
+	return rest[:end], true
 }
 
 // validateSubmission applies the §3 server-side submission validation over a

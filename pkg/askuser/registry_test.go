@@ -713,6 +713,33 @@ func TestRestart_RearmFromPersistedState(t *testing.T) {
 	}
 }
 
+// ParseResumeCardID must recognize exactly what ResumeMessage renders (the
+// two share resumeMessagePrefix) — the gateway's replay suppression of the
+// §0.2 raw-JSON bubble depends on this round-trip.
+func TestParseResumeCardID_RoundTripAndRejects(t *testing.T) {
+	set := testSet("session_x")
+	set.Status = StatusAnswered
+	set.Answers = []Answer{{Header: "Scope", QuestionText: "Which scope?", Selected: []string{"Backend"}}}
+	msg, err := ResumeMessage(set)
+	if err != nil {
+		t.Fatalf("ResumeMessage: %v", err)
+	}
+	id, ok := ParseResumeCardID(msg)
+	if !ok || id != set.CardID {
+		t.Fatalf("round-trip failed: got (%q, %v), want (%q, true)", id, ok, set.CardID)
+	}
+	for _, content := range []string{
+		"",
+		"hello there",
+		"Answers to your questions (card_id=", // truncated, no closing paren
+		"Answers to your questions (card_id=): {}", // empty card id
+	} {
+		if _, ok := ParseResumeCardID(content); ok {
+			t.Fatalf("must reject %q", content)
+		}
+	}
+}
+
 func TestRearmSession_NoopWithoutPersistedSet(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)

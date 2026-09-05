@@ -172,6 +172,8 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	TaskID       string           `json:"task_id,omitempty"`
 	PlanID       string           `json:"plan_id,omitempty"`
 	PerCriterion []map[string]any `json:"per_criterion,omitempty"`
+	// AskUserQuestionFrame decoder slot (spec v3 §0.6 replay reconstruction).
+	Card map[string]any `json:"card,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
@@ -2719,7 +2721,12 @@ func (h *WSHandler) handleAttachSession(
 		// agent.AgentLoop.IsSubTurnActiveForSpawnCall's doc comment.
 		isSpanActive = h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
-	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive)
+	// askuserquestion-tool-spec v3 §0.6: hand replay the session's terminal
+	// (answered/cancelled) AskUserQuestion record, if any, so the collapsed
+	// card is reconstructed on cold history load and the §0.2 resume message
+	// never renders as a raw JSON bubble — see streamReplay's terminalAsk doc.
+	terminalAsk := loadTerminalAskRecord(store, attachID)
+	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive, terminalAsk)
 
 	durationMS := time.Since(replayStart).Milliseconds()
 
