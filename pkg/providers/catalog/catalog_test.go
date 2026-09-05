@@ -7,11 +7,46 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fixturePath is the FR-027 conformance fixture shared (by copy) with the
 // assembly repository's own tests.
 const fixturePath = "testdata/providers_catalog_2.0.0_fixture.json"
+
+// fixtureUpdatedAt is the fixture's own updated_at stamp, which staleness
+// (StaleAfter) is measured against.
+var fixtureUpdatedAt = time.Date(2026, 8, 22, 6, 0, 0, 0, time.UTC)
+
+// fixtureFreshNow is the pinned test clock: a fixed instant inside the
+// fixture's StaleAfter window. Every shared constructor (mustCatalog,
+// bootEmbedded) pins Catalog.nowFn to this instant BEFORE the initial
+// apply, because the served pair's stale flag is baked at apply time
+// (buildServed) and Degraded() reads the same clock live. This makes the
+// package's tests date-independent: they no longer start failing when the
+// fixture's updated_at ages past StaleAfter against the real wall clock
+// (which is exactly what happened on 2026-09-05). Tests that probe the
+// staleness boundary itself (TestServed_StaleComputedAtApply) pin their
+// own offsets instead.
+var fixtureFreshNow = time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
+
+// TestFixturePinnedClockIsFresh guards the pin itself: if the fixture's
+// updated_at is ever bumped without moving fixtureFreshNow (or vice
+// versa), this fails loudly instead of every staleness-adjacent assertion
+// silently flipping.
+func TestFixturePinnedClockIsFresh(t *testing.T) {
+	doc, err := ParseDocument(loadFixture(t))
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+	if !doc.UpdatedAt.Equal(fixtureUpdatedAt) {
+		t.Fatalf("fixture updated_at = %s, but fixtureUpdatedAt pins %s — update both together", doc.UpdatedAt, fixtureUpdatedAt)
+	}
+	age := fixtureFreshNow.Sub(fixtureUpdatedAt)
+	if age < 0 || age > StaleAfter {
+		t.Fatalf("fixtureFreshNow is %s after the fixture's updated_at — it must sit inside the StaleAfter (%s) fresh window", age, StaleAfter)
+	}
+}
 
 func loadFixture(t *testing.T) []byte {
 	t.Helper()
@@ -97,13 +132,34 @@ func providerIndex(t *testing.T, m map[string]any, id string) int {
 	return -1
 }
 
+// mustCatalog builds a catalog serving data with the test clock pinned to
+// fixtureFreshNow. It mirrors NewCatalog's exact wiring (New → Apply) but
+// sets nowFn between the two steps, because staleness is baked into the
+// served pair at apply time — pinning after Apply would be too late.
+// NewCatalog itself stays covered by TestNewCatalog.
 func mustCatalog(t *testing.T, data []byte) *Catalog {
 	t.Helper()
-	c, err := NewCatalog(data)
+	c := New()
+	c.nowFn = func() time.Time { return fixtureFreshNow }
+	if err := c.Apply(data); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	return c
+}
+
+// TestNewCatalog keeps the production convenience constructor covered now
+// that mustCatalog pins the clock via New+Apply instead of calling it.
+func TestNewCatalog(t *testing.T) {
+	c, err := NewCatalog(loadFixture(t))
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
 	}
-	return c
+	if c.Document() == nil {
+		t.Fatal("NewCatalog must serve the parsed document")
+	}
+	if c, err := NewCatalog([]byte(`{"not": "a catalog"`)); err == nil || c != nil {
+		t.Fatalf("NewCatalog must reject invalid data with a nil catalog, got %v %v", c, err)
+	}
 }
 
 // T1 — DS-1.1, US-1.AC1: the conforming fixture loads and every pair
