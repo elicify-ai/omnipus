@@ -196,6 +196,9 @@ import {
   KnowledgeSearchResponse as KnowledgeSearchResponseSchema,
   KnowledgeOutline as KnowledgeOutlineSchema,
   KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
+  // view-kinds-design-2026-09-03 §7 — the evaluated saved-view result the
+  // Library's .base surface draws (contract-first #8).
+  ViewResult as ViewResultSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -478,6 +481,8 @@ import type {
   KnowledgeSearchResponse,
   KnowledgeOutline,
   KnowledgeGraphResponse,
+  // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
+  ViewResult,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -4245,6 +4250,31 @@ export function fetchKnowledgeGraph(
     `/library/${encodeURIComponent(workspaceId)}/knowledge/graph?${params.toString()}`,
     signal ? { signal } : undefined,
     KnowledgeGraphResponseSchema as ZodType<KnowledgeGraphResponse>,
+  )
+}
+
+/**
+ * Evaluate one saved view and return everything needed to draw it
+ * (view-kinds-design-2026-09-03 §7, GET /library/{workspace_id}/knowledge/view).
+ *
+ * The server evaluates the view's filter/grouping/aggregation through the one
+ * query engine and precomputes every aggregate under the gate rules — per-unit
+ * totals only (G2), unit-less rows shown/excluded/counted (G3) — so the SPA
+ * only draws. A view that cannot answer is a 200 with `refusal` set, never a
+ * transport error; an out-of-scope collection answers exactly like an unknown
+ * view (FR-052/FR-053), so callers must treat that refusal as an answer too.
+ */
+export function fetchKnowledgeViewResult(
+  workspaceId: string,
+  collectionId: string,
+  view: string,
+  signal?: AbortSignal,
+): Promise<ViewResult> {
+  const qs = new URLSearchParams({ collection_id: collectionId, view }).toString()
+  return request<ViewResult>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/view?${qs}`,
+    signal ? { signal } : undefined,
+    ViewResultSchema as ZodType<ViewResult>,
   )
 }
 

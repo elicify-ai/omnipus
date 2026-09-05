@@ -1,0 +1,67 @@
+title: ViewResultGroup
+description: >
+  One group of a grouped view part (view-kinds-design-2026-09-03 §4, §7).
+
+  Groups REFERENCE rows by path rather than repeating them — the same shape
+  VaultFindGroup takes, and for the same reason: a record holding several
+  values of the grouped property appears in every group it belongs to
+  (FR-028), and repeating it would render it three times.
+
+  The per-group subtotal row is PER UNIT under G2: `subtotals` is a list of
+  ViewUnitTotal, one entry per (property, op, unit value), never one combined
+  figure. Rows whose unit is missing or unconfirmed are counted in this
+  group's own `excluded_count` (G3) — shown in the group, excluded from every
+  subtotal.
+type: object
+additionalProperties: false
+required:
+  - key
+  - count
+  - paths
+  - subtotals
+properties:
+  key:
+    type: string
+    description: >
+      The group's value, rendered. An EMPTY key is the ABSENT group — read it
+      with `absent`, because an empty string is itself a value (R-3) and must
+      not collide with absence.
+    example: "Acme Pte Ltd"
+  absent:
+    type: boolean
+    description: >
+      True when this group holds the records where the grouped property is
+      ABSENT, which `key` alone cannot express.
+  count:
+    type: integer
+    description: Evaluated rows in this group.
+    example: 4
+  paths:
+    type: array
+    description: >
+      The member rows, by path into the result's own `rows` list. Always
+      present — an empty array, never null.
+    items:
+      type: string
+  subtotals:
+    type: array
+    description: >
+      Per-group totals, one entry per (property, op, unit value) under G2.
+      Always present — an empty array, never null, so "this part declares no
+      subtotals" is stated rather than inferred.
+    items:
+      $ref: "./ViewUnitTotal.yaml"
+      x-go-type: ViewUnitTotal
+  excluded_count:
+    type: integer
+    description: >
+      Rows in this group excluded from every subtotal because their unit value
+      is missing or unconfirmed (G3). Absent when the subtotalled numbers
+      declare no companion unit, or when nothing was excluded.
+    example: 1
+  excluded_reason:
+    type: string
+    description: >
+      Why those rows were excluded, ready to render. Present exactly when
+      excluded_count is present and greater than zero.
+    example: "1 row has no confirmed currency value and is excluded from every subtotal"

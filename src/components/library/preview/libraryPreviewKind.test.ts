@@ -137,6 +137,21 @@ describe('classifyLibraryEntry — the three new kinds (ADR-067 D15)', () => {
     expect(classifyLibraryEntry({ name: 'page', mime: 'text/html', is_text_editable: false })).toBe('other')
   })
 
+  it('classifies .base as base regardless of the is_text_editable hint (view-kinds §7)', () => {
+    // A .base file opens as its views — tabs over evaluated view results —
+    // never as raw YAML behind Edit and never as a download card.
+    expect(classifyLibraryEntry({ name: 'Invoices.base', is_text_editable: true })).toBe('base')
+    expect(classifyLibraryEntry({ name: 'Invoices.base', is_text_editable: false })).toBe('base')
+    expect(classifyLibraryEntry({ name: 'INVOICES.BASE', is_text_editable: false })).toBe('base')
+  })
+
+  it('decides base on the extension alone, never on the mime hint', () => {
+    // The mime-driven image/video checks still win (purely additive change),
+    // and no mime hint can make a non-.base file a base surface.
+    expect(classifyLibraryEntry({ name: 'Invoices.base', mime: 'image/png', is_text_editable: false })).toBe('image')
+    expect(classifyLibraryEntry({ name: 'notes.txt', mime: 'application/x-base', is_text_editable: true })).toBe('text')
+  })
+
   it('returns only kinds that are members of LIBRARY_PREVIEW_KINDS', () => {
     for (const c of CLASSIFICATION_CORPUS) {
       expect(LIBRARY_PREVIEW_KINDS as readonly string[]).toContain(
@@ -247,6 +262,11 @@ const CLASSIFICATION_CORPUS: CorpusCase[] = [
   { label: 'extensionless, mime application/pdf', name: 'doc', mime: 'application/pdf', is_text_editable: false },
   { label: 'extensionless, mime text/html', name: 'page', mime: 'text/html', is_text_editable: false },
   { label: 'extensionless, mime text/html, editable', name: 'page', mime: 'text/html', is_text_editable: true },
+  // --- .base: the view-kinds diff group (view-kinds-design-2026-09-03 §7) ---
+  { label: 'Invoices.base', name: 'Invoices.base', is_text_editable: false },
+  { label: 'Invoices.base marked text-editable', name: 'Invoices.base', is_text_editable: true },
+  { label: 'INVOICES.BASE (uppercase)', name: 'INVOICES.BASE', is_text_editable: false },
+  { label: 'Invoices.base with mime image/png', name: 'Invoices.base', mime: 'image/png', is_text_editable: false },
 ]
 
 /** Generated from HEAD's classifier before the ADR-067 change. Do not edit. */
@@ -311,13 +331,26 @@ const PRE_CHANGE_CLASSIFICATION: Record<string, LibraryPreviewKind> = {
   "extensionless, mime application/pdf": 'other',
   "extensionless, mime text/html": 'other',
   "extensionless, mime text/html, editable": 'text',
+  // Generated the same way for the view-kinds change: what the classifier did
+  // to .base files before the 'base' kind existed.
+  "Invoices.base": 'other',
+  "Invoices.base marked text-editable": 'text',
+  "INVOICES.BASE (uppercase)": 'other',
+  "Invoices.base with mime image/png": 'image',
 }
 
 /**
  * The only rows ADR-067 is allowed to move, and where each must land.
- * Three groups: `.html`/`.htm`, `.pdf`, and the seven audio extensions.
+ * Three groups: `.html`/`.htm`, `.pdf`, and the seven audio extensions —
+ * plus one later group, `.base` (view-kinds-design-2026-09-03 §7), added the
+ * same way: fixture rows recorded from the pre-change classifier, intended
+ * landing spot declared here. The mime-precedence row (`Invoices.base with
+ * mime image/png`) is deliberately NOT in this set: it must stay `image`.
  */
 const INTENDED_DIFF: Record<string, LibraryPreviewKind> = {
+  'Invoices.base': 'base',
+  'Invoices.base marked text-editable': 'base',
+  'INVOICES.BASE (uppercase)': 'base',
   'page.html': 'html',
   'page.html marked text-editable': 'html',
   'page.htm': 'html',
@@ -393,6 +426,7 @@ const SAMPLE_PER_KIND: Record<LibraryPreviewKind, { name: string; is_text_editab
   html: { name: 'page.html', is_text_editable: false },
   pdf: { name: 'doc.pdf', is_text_editable: false },
   audio: { name: 'song.mp3', is_text_editable: false },
+  base: { name: 'Invoices.base', is_text_editable: true },
   markdown: { name: 'report.md', is_text_editable: true },
   mermaid: { name: 'diagram.mmd', is_text_editable: true },
   text: { name: 'main.ts', is_text_editable: true },

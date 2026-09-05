@@ -1,0 +1,58 @@
+title: ViewResultCrosstab
+description: >
+  The precomputed grid of a crosstab part (view-kinds-design-2026-09-03 §2.2,
+  §7): two group properties and a number, reduced server-side into cells so
+  the SPA only draws. Key order in `row_keys`/`column_keys` is the grid's
+  render order (lexical over the case-folded key, ruling R-5/R-E — the same
+  order grouping itself uses).
+type: object
+additionalProperties: false
+required:
+  - row_property
+  - column_property
+  - row_keys
+  - column_keys
+  - cells
+properties:
+  row_property:
+    type: string
+    minLength: 1
+    description: The property the grid's rows group by (the part's outer grouping key).
+    example: client
+  column_property:
+    type: string
+    minLength: 1
+    description: The property the grid's columns group by (the part's inner grouping key).
+    example: status
+  row_keys:
+    type: array
+    description: >
+      Every row key, in render order. An empty string is the ABSENT group.
+      Always present — an empty array, never null.
+    items:
+      type: string
+  column_keys:
+    type: array
+    description: >
+      Every column key, in render order. An empty string is the ABSENT group.
+      Always present — an empty array, never null.
+    items:
+      type: string
+  cells:
+    type: array
+    description: >
+      The aggregated cells. SPARSE — a (row, column) position with no values
+      simply has no cell, and the SPA renders it empty rather than as a zero
+      nobody computed. Always present — an empty array, never null.
+    items:
+      $ref: "./ViewResultCrosstabCell.yaml"
+      x-go-type: ViewResultCrosstabCell
+  excluded_count:
+    type: integer
+    description: >
+      Rows excluded from every cell because their unit value is missing or
+      unconfirmed (G3). Absent when the aggregated number declares no
+      companion unit, or when nothing was excluded.
+  excluded_reason:
+    type: string
+    description: Why those rows were excluded, ready to render.

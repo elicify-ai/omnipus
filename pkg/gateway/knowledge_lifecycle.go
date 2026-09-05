@@ -779,11 +779,11 @@ func (kl *KnowledgeLifecycle) resolvedWorkDir(workspaceID string) string {
 	if err != nil {
 		return ""
 	}
-	real, err := knowledge.ResolveCollectionRoot(workDir)
+	resolved, err := knowledge.ResolveCollectionRoot(workDir)
 	if err != nil {
 		return ""
 	}
-	return real
+	return resolved
 }
 
 // attachResolvedCollection routes one collection knowledge.ResolveScope

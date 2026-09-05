@@ -50,6 +50,7 @@ import type {
   LibraryPreviewTokenResponse,
 } from '@/lib/api/generated/openapi-types'
 import { classifyLibraryEntry } from './preview/libraryPreviewKind'
+import { BasePreview } from './preview/BasePreview'
 import { LibraryImagePreview } from './preview/LibraryImagePreview'
 import { LibraryVideoPreview } from './preview/LibraryVideoPreview'
 import { LibraryPdfPreview } from './preview/LibraryPdfPreview'
@@ -157,6 +158,12 @@ export function LibraryPreviewPane({
         return <LibraryVideoPreview workspaceId={workspaceId} entry={liveEntry} />
       case 'audio':
         return <LibraryAudioPreview workspaceId={workspaceId} entry={liveEntry} />
+      case 'base':
+        // A .base file renders as its views (tabs over evaluated view
+        // results, view-kinds-design-2026-09-03 §7). BasePreview fetches the
+        // file's own content itself (same query key, so react-query dedupes)
+        // because it also needs the collection walk and per-view results.
+        return <BasePreview workspaceId={workspaceId} entry={liveEntry} />
       case 'pdf':
         return <LibraryPdfPreview workspaceId={workspaceId} entry={liveEntry} />
       case 'html': {

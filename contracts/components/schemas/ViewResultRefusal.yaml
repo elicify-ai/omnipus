@@ -1,0 +1,43 @@
+title: ViewResultRefusal
+description: >
+  WHY a saved view cannot be answered (view-kinds-design-2026-09-03 §7,
+  FR-018b's "the reason is NAMED"). It is the wire form of the same refusal
+  the backend already states in prose — records.ViewServeRefusal, the shape
+  knowledge_describe's "NOT SERVABLE by knowledge_find" line reads — so the
+  SPA can show the operator WHY a view cannot answer instead of a blank panel.
+
+  A refusal is a 200 with this object set and no data, never a transport
+  error: the view is real, the request was well-formed, and the reason is the
+  answer.
+type: object
+additionalProperties: false
+required:
+  - code
+  - reason
+  - remedy
+properties:
+  code:
+    type: string
+    minLength: 1
+    description: >
+      Machine-readable refusal code. NOT a closed enum, deliberately: the
+      codes are owned by the backend's own refusal vocabularies and new ones
+      must be able to arrive without a contract change silently dropping them
+      at the SPA's validation edge. Current emitters: "unknown_view" (no view
+      of that name is addressable here — which is also what an out-of-scope
+      collection answers, indistinguishably, per FR-053), "view_disabled"
+      (records.ServeRefusalDisabled: stored but never applied, FR-105),
+      "no_drawable_parts" (a layout with no part equivalent, e.g. `map`, and
+      no explicit parts), every records.ViewRejectionCode (a view file that
+      exists but was refused at load, e.g. "view_unknown_property"), and every
+      RecordProblem.code a refused evaluation names (e.g. "index_unavailable").
+    example: view_disabled
+  reason:
+    type: string
+    minLength: 1
+    description: What cannot be done, in the operator's own vocabulary.
+  remedy:
+    type: string
+    description: >
+      What to do about it. May be empty when the underlying refusal named
+      none, but the field is always present so a renderer never invents one.
