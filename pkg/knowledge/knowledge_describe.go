@@ -311,8 +311,27 @@ func renderTypes(b *strings.Builder, d DescribeData, detail string) {
 		}
 		b.WriteString(head + "\n")
 		renderProperties(b, sc, detail)
+		renderAvailableViews(b, sc, detail)
 	}
 	renderSchemaRejections(b, d.SchemaReport)
+}
+
+// renderAvailableViews is design view-kinds-design-2026-09-03 §6.2's
+// discovery block: for each of the eight closed view kinds, states whether
+// THIS record type can back it and, if not, exactly what it is missing —
+// "the agent asks, it does not remember" (§6.3). The gate rules themselves
+// live in view_kinds.go (RenderAvailableViews / ViewKindAvailabilityFor),
+// shared with knowledge_configure's create_view composer, so the two can
+// never disagree about which kind is offered.
+//
+// Skipped at DetailMinimal for the same reason an enum's value list is
+// (renderProperties above): it is elaboration on a property this section
+// already named, not the fact of the property's existence.
+func renderAvailableViews(b *strings.Builder, sc *records.Schema, detail string) {
+	if detail == DetailMinimal {
+		return
+	}
+	b.WriteString("    " + RenderAvailableViews(sc) + "\n")
 }
 
 func renderProperties(b *strings.Builder, sc *records.Schema, detail string) {
@@ -518,6 +537,14 @@ var viewBodyKeys = []string{
 	"formulas",
 	"property_config",
 	"untranslated",
+	// kind: which of the eight view kinds authored this view
+	// (view-kinds-design-2026-09-03 §4). Provenance for a reader deciding how
+	// to re-edit, so it is RENDERED rather than silently claimed.
+	"kind",
+	// parts: the ordered stack the renderer walks (same design, §2.2/§4).
+	// Parts carry grouping/subtotals/aggregation of their own, so they are a
+	// constraint report, not provenance.
+	"parts",
 }
 
 // viewBodyRender accumulates one view's description.
@@ -589,6 +616,66 @@ func renderViewClauses(v *records.SavedView, r *viewBodyRender) {
 		r.add("group " + strings.Join(keys, ", "))
 	}
 	renderViewSharedTail(v, r)
+	if v.Def.Kind != nil && *v.Def.Kind != "" {
+		r.add("kind " + string(*v.Def.Kind))
+	}
+	if v.Def.Parts != nil && len(*v.Def.Parts) > 0 {
+		segs := make([]string, 0, len(*v.Def.Parts))
+		for _, p := range *v.Def.Parts {
+			seg := string(p.Part)
+			var details []string
+			if p.Number != nil && *p.Number != "" {
+				n := *p.Number
+				if p.Unit != nil && *p.Unit != "" {
+					// G2: the unit companion is restated so a reader can see
+					// which pairing the part was composed against.
+					n += " per " + *p.Unit
+				}
+				if p.Aggregate != nil && *p.Aggregate != "" {
+					n = string(*p.Aggregate) + " of " + n
+				}
+				details = append(details, n)
+			}
+			if p.Date != nil && *p.Date != "" {
+				details = append(details, "over "+*p.Date)
+			}
+			if p.Image != nil && *p.Image != "" {
+				details = append(details, "images from "+*p.Image)
+			}
+			if p.Choice != nil && *p.Choice != "" {
+				details = append(details, "columns from "+*p.Choice)
+			}
+			if p.Grouping != nil && len(*p.Grouping) > 0 {
+				keys := make([]string, 0, len(*p.Grouping))
+				for _, g := range *p.Grouping {
+					// Same omitted-means-asc reporting rule as the view-level
+					// grouping clause above.
+					dir := string(generated.ViewGroupByDirectionAsc)
+					if g.Direction != nil && *g.Direction != "" {
+						dir = string(*g.Direction)
+					}
+					keys = append(keys, g.Property+" "+dir)
+				}
+				details = append(details, "group "+strings.Join(keys, ", "))
+			}
+			if p.Subtotals != nil && len(*p.Subtotals) > 0 {
+				names := sortedMapKeys(*p.Subtotals)
+				out := make([]string, 0, len(names))
+				for _, n := range names {
+					out = append(out, n+" "+string((*p.Subtotals)[n]))
+				}
+				details = append(details, "subtotal "+strings.Join(out, ", "))
+			}
+			if p.Properties != nil && len(*p.Properties) > 0 {
+				details = append(details, "columns "+strings.Join(*p.Properties, ", "))
+			}
+			if len(details) > 0 {
+				seg += " (" + strings.Join(details, "; ") + ")"
+			}
+			segs = append(segs, seg)
+		}
+		r.add("parts " + strings.Join(segs, " then "))
+	}
 	if v.Def.Layout != nil {
 		layout := string(*v.Def.Layout)
 		// FR-109: only `table` and `cards` are drawn. A layout this product

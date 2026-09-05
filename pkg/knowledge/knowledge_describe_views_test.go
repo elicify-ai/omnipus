@@ -585,3 +585,62 @@ func TestDescribeViews_PopulatedKeysReadTheGeneratedTypeNotATranscription(t *tes
 		t.Errorf("`disabled: true` must count as declared; got %v", keys)
 	}
 }
+
+// TestDescribeViews_KindAndPartsAreRendered — Phase 1 (view-kinds design §4)
+// added `kind` and `parts` to generated.ViewDef; listing them in viewBodyKeys
+// is a PROMISE that renderViewClauses renders them (the ledger's own words).
+// This test pins the promise through the real load path, so deleting either
+// render branch goes red here and un-claiming the keys goes red in
+// TestDescribeViews_EveryViewDefKeyIsAccountedFor.
+//
+// MUTATION: delete the `kind` branch or the `parts` branch in
+// renderViewClauses — the matching assertion below fails by name.
+func TestDescribeViews_KindAndPartsAreRendered(t *testing.T) {
+	v := describeViewVault(t, "stacked.yaml", `
+name: stacked
+type: widget
+kind: summary
+parts:
+  - part: figures
+    number: batch
+    aggregate: sum
+  - part: table
+    grouping:
+      - property: state
+    subtotals:
+      batch: sum
+    properties:
+      - name
+      - batch
+`)
+	body := renderViewBody(v)
+	for _, want := range []string{
+		"kind summary",
+		"figures (sum of batch)",
+		"table (group state asc; subtotal batch sum; columns name, batch)",
+		"figures (sum of batch) then table",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("part-stack description is missing %q.\nA claimed-but-unrendered key is the exact "+
+				"hole the coverage ledger exists to close.\nrendered:\n%s", want, body)
+		}
+	}
+}
+
+// TestDescribeViews_PartUnitCompanionIsRendered pins the "per <unit>" branch,
+// which the shared widget fixture cannot reach (it declares no unit pairing).
+// Constructed directly rather than loaded: the loader's property-position
+// checks are exercised by the test above; this one is about the renderer
+// describing the pairing a part RECORDS (G2's restatement), which must appear
+// so a reader can see which pairing the part was composed against.
+func TestDescribeViews_PartUnitCompanionIsRendered(t *testing.T) {
+	num, unit := "amount", "currency"
+	agg := generated.ViewPartAggregate("sum")
+	parts := []generated.ViewPart{{Part: generated.ViewPartPart("figures"), Number: &num, Unit: &unit, Aggregate: &agg}}
+	v := &records.SavedView{Def: generated.ViewDef{Parts: &parts}}
+	body := renderViewBody(v)
+	if !strings.Contains(body, "sum of amount per currency") {
+		t.Fatalf("a part carrying a unit companion must render it — the pairing is the G2 fact a "+
+			"reader needs to check a total against.\nrendered:\n%s", body)
+	}
+}

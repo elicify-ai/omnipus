@@ -834,13 +834,26 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 	// plus ErrorResult — was already on allowedToolsSelectors below, so part
 	// C's pin needed no new entries for this file either.
 	//
+	// knowledge_configure_create_view.go (view-kinds-design-2026-09-03 §6.1)
+	// is the create_view composer — a SEPARATE file from knowledge_configure.go
+	// (this file's own header explains why) but the SAME adapter role: it
+	// calls t.deps.begin/refuse, assembles a part stack, and hands the result
+	// to ParseView/ValidateViewAgainstSchemas/overwriteControlPlaneFile — the
+	// same primitives execWriteView already uses, none of which is byte-level
+	// rewriting this file does itself. Its only reason to import pkg/tools at
+	// all is tools.ToolResult / tools.NewToolResult for its own response —
+	// both already on allowedToolsSelectors below before this file was added,
+	// so part C's pin needed no new entries either; this addition is purely
+	// part B's file allow-list, exactly like knowledge_configure.go's own
+	// entry above.
+	//
 	// This stays an EXPLICIT literal rather than a "*_tools.go" pattern: the
 	// point of the guard is that adding pkg/tools to a new file is a decision
 	// somebody has to make on purpose, and a pattern would silently admit the
 	// next file that happened to be named to fit.
 	want := []string{
-		"authoring_tools.go", "knowledge_configure.go", "knowledge_edit.go",
-		"knowledge_restructure.go", "scope_turn.go", "tools.go",
+		"authoring_tools.go", "knowledge_configure.go", "knowledge_configure_create_view.go",
+		"knowledge_edit.go", "knowledge_restructure.go", "scope_turn.go", "tools.go",
 	}
 	if strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
 		t.Fatalf("pkg/tools is imported by %v, want exactly %v. It is the only import here whose own "+
