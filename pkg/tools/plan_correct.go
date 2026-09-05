@@ -243,7 +243,7 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 										},
 										"description": "Required when kind is \"check\"; must be omitted for other kinds",
 									},
-									"behavior": behaviorCriterionSchema(),
+									"behavior": task.BehaviorCriterionParamSchema(),
 								},
 								"required": []string{"text"},
 							},
