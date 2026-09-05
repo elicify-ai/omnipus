@@ -401,7 +401,12 @@ func (t *ConfigureTool) Parameters() map[string]any {
 			},
 			"definition": map[string]any{
 				"type": "object",
-				"description": "create_record_type / edit_record_type: the full schema — " +
+				"description": "NOT for op=create_view — create_view takes flat arguments " +
+					"(kind, type, number, unit, date, image, choice, group_by, columns, sort, " +
+					"limit, filter) and refuses `definition` by name; send only the arguments " +
+					"your kind needs, never empty placeholders (UAT D5: a first call carrying " +
+					"every schema key wastes a round-trip). " +
+					"create_record_type / edit_record_type: the full schema — " +
 					"schema_version (required), type, optional label, optional identity " +
 					"{prefix}, and properties (a map of property name to {type, many, " +
 					"required, and per-type: label, values, to, inverse, unit}). " +

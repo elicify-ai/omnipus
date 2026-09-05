@@ -249,3 +249,24 @@ func TestTypedView_UnitTotalsUnchanged(t *testing.T) {
 	require.NotNil(t, res.Parts[0].ExcludedCount)
 	assert.Equal(t, 1, *res.Parts[0].ExcludedCount, "the currency-less invoice is excluded and counted (G3)")
 }
+
+// TestViewResultExcludedReason_PluralVerbsAgree pins UAT finding D4: the
+// plural branch once reused the singular verb ("3 rows has"). Noun and verb
+// are now produced together, and this test holds both branches to it.
+func TestViewResultExcludedReason_PluralVerbsAgree(t *testing.T) {
+	one := viewResultExcludedReason(1, 1, []string{"currency"})
+	for _, want := range []string{"1 row has no confirmed", "1 row records more than one"} {
+		if !strings.Contains(one, want) {
+			t.Errorf("singular branch lost %q:\n%s", want, one)
+		}
+	}
+	many := viewResultExcludedReason(3, 2, []string{"currency"})
+	for _, want := range []string{"3 rows have no confirmed", "2 rows record more than one"} {
+		if !strings.Contains(many, want) {
+			t.Errorf("plural branch lost %q:\n%s", want, many)
+		}
+	}
+	if strings.Contains(many, "rows has") || strings.Contains(many, "rows records") {
+		t.Errorf("plural noun with singular verb resurfaced:\n%s", many)
+	}
+}

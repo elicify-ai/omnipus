@@ -123,6 +123,14 @@ func (e *viewExcluded) add(other viewExcluded) {
 // each cause with its OWN count.
 func viewResultExcludedReason(missing, ambiguous int, unitProps []string) string {
 	prop := strings.Join(unitProps, "/")
+	// rowsVerbOf pairs the noun with its verb, so the plural branch cannot
+	// drift from the singular one again (UAT finding D4: "3 rows has").
+	rowsVerbOf := func(n int, singular, plural string) string {
+		if n == 1 {
+			return "1 row " + singular
+		}
+		return fmt.Sprintf("%d rows %s", n, plural)
+	}
 	rowsOf := func(n int) string {
 		if n == 1 {
 			return "1 row"
@@ -131,11 +139,11 @@ func viewResultExcludedReason(missing, ambiguous int, unitProps []string) string
 	}
 	var causes []string
 	if missing > 0 {
-		causes = append(causes, fmt.Sprintf("%s has no confirmed %s value", rowsOf(missing), prop))
+		causes = append(causes, fmt.Sprintf("%s no confirmed %s value", rowsVerbOf(missing, "has", "have"), prop))
 	}
 	if ambiguous > 0 {
-		causes = append(causes, fmt.Sprintf("%s records more than one %s value, so which one its number is in is not confirmed",
-			rowsOf(ambiguous), prop))
+		causes = append(causes, fmt.Sprintf("%s more than one %s value, so which one its number is in is not confirmed",
+			rowsVerbOf(ambiguous, "records", "record"), prop))
 	}
 	return fmt.Sprintf("%s excluded from every total (G3), still shown: %s",
 		rowsOf(missing+ambiguous), strings.Join(causes, "; "))
