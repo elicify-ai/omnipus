@@ -9,9 +9,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { formatVerifiesVia } from '@/components/shared/CriteriaBreakdown'
 import type { AcceptanceCriterion } from '@/lib/api'
 
-type CriterionKind = AcceptanceCriterion['kind']
+type BehaviorScope = NonNullable<AcceptanceCriterion['behavior']>['scope']
 
 interface AcceptanceCriteriaEditorProps {
   criteria: AcceptanceCriterion[]
@@ -23,43 +24,72 @@ interface AcceptanceCriteriaEditorProps {
 }
 
 /**
- * Definition-of-Done criteria editor (ADR-049 D2/D5/FR-3, SD-C13). Reused by
- * Create Task, Task detail, and the Create/Edit Plan slide-over's DoD editor
- * — reuses the removable-row + add-button grammar of the existing
- * todos/dependencies editors (`CreateTaskSlideOver.tsx:593-643`).
+ * Integer-parse helper shared by the exit-code and count validators.
  *
- * `kind: check` reveals command + expected-exit-code fields; `kind: prose`
- * reveals a single text field. Each saved criterion shows its author identity
- * as a read-only label.
+ * `parseInt` silently truncates a fractional string ("3.5" -> 3) instead of
+ * rejecting it (planning-goals-spec.md "Dataset: Criteria editor validation"
+ * #2), so `Number(...)` + `Number.isInteger` rejects both non-numeric ("abc")
+ * and non-integer ("3.5") input; the empty string coerces to `0` under
+ * `Number('')`, so callers check emptiness first.
+ */
+function parseIntStrict(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (trimmed === '') return null
+  const n = Number(trimmed)
+  return Number.isInteger(n) ? n : null
+}
+
+/**
+ * Definition-of-Done criteria editor — judgment-first (ADR-074 D5.1, spec
+ * US-7; extends ADR-049 D2/D5/FR-3, SD-C13). Reused by Create Task, Task
+ * detail, and the Create/Edit Plan slide-over's DoD editor.
+ *
+ * The primary input is a single plain-language field ("What must be true when
+ * this is done?"). A criterion added with nothing else attached is `prose` —
+ * there is NO kind selector as the lead control. Two quiet expanders,
+ * "+ Add technical check" and "+ Add action-count check", optionally attach a
+ * `check` (command + expected exit code) or `behavior` (tool + min/max count +
+ * scope) payload to the criterion being added. Added criteria render as
+ * cards: text primary, a mono "verifies via:" chip when a payload is
+ * attached, and the author stamp. No kind classification label is shown
+ * (spec §4: no user-facing `[kind]` tokens).
  */
 export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, emptyHint }: AcceptanceCriteriaEditorProps) {
-  const [kind, setKind] = useState<CriterionKind>('check')
   const [text, setText] = useState('')
+  const [error, setError] = useState('')
+  // Which payload expander is open — at most one; null = plain prose add.
+  const [expander, setExpander] = useState<'check' | 'behavior' | null>(null)
+  // Technical-check payload fields.
   const [command, setCommand] = useState('')
   const [exitCode, setExitCode] = useState('0')
-  const [error, setError] = useState('')
+  // Action-count payload fields. Min defaults to 1 (the wire default); an
+  // explicit '0' is preserved as `min_count: 0` (with max 0 = "never call
+  // this tool" — ADR-052 FR-034). Max left empty = ABSENT (no upper bound),
+  // never coerced to 0.
+  const [tool, setTool] = useState('')
+  const [minCount, setMinCount] = useState('1')
+  const [maxCount, setMaxCount] = useState('')
+  const [scope, setScope] = useState<BehaviorScope>('task_session')
+
+  function toggleExpander(next: 'check' | 'behavior') {
+    setExpander((cur) => (cur === next ? null : next))
+    setError('')
+  }
 
   function addCriterion() {
     const trimmedText = text.trim()
     if (!trimmedText) {
-      setError(kind === 'check' ? 'A description of what the check verifies is required' : 'Criterion text is required')
+      setError('Criterion text is required')
       return
     }
-    if (kind === 'check') {
+
+    if (expander === 'check') {
       if (!command.trim()) {
         setError('Command is required')
         return
       }
-      // Round-1 fix (test-driven, planning-goals-spec.md "Dataset: Criteria
-      // editor validation" #2): `parseInt` silently truncates a fractional
-      // string ("3.5" -> 3) instead of rejecting it, so a non-integer typed
-      // by the user was previously accepted with no feedback. `Number(...)`
-      // + `Number.isInteger` rejects both non-numeric ("abc") and
-      // non-integer ("3.5") input; the empty string coerces to `0` under
-      // `Number('')`, so it needs its own explicit check.
-      const trimmedExit = exitCode.trim()
-      const code = Number(trimmedExit)
-      if (trimmedExit === '' || !Number.isInteger(code)) {
+      const code = parseIntStrict(exitCode)
+      if (code === null) {
         setError('Exit code must be an integer')
         return
       }
@@ -82,6 +112,48 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
       ])
       setCommand('')
       setExitCode('0')
+    } else if (expander === 'behavior') {
+      if (!tool.trim()) {
+        setError('Tool name is required')
+        return
+      }
+      const min = parseIntStrict(minCount)
+      if (min === null || min < 0) {
+        setError('Min count must be a non-negative integer')
+        return
+      }
+      let max: number | undefined
+      if (maxCount.trim() !== '') {
+        const parsed = parseIntStrict(maxCount)
+        if (parsed === null || parsed < 0) {
+          setError('Max count must be a non-negative integer')
+          return
+        }
+        if (parsed < min) {
+          setError('Max count must be greater than or equal to min count')
+          return
+        }
+        max = parsed
+      }
+      onChange([
+        ...criteria,
+        {
+          kind: 'behavior',
+          text: trimmedText,
+          behavior: {
+            tool: tool.trim(),
+            min_count: min,
+            ...(max !== undefined ? { max_count: max } : {}),
+            scope,
+          },
+          author: currentAuthor,
+          status: 'pending',
+        },
+      ])
+      setTool('')
+      setMinCount('1')
+      setMaxCount('')
+      setScope('task_session')
     } else {
       onChange([
         ...criteria,
@@ -90,6 +162,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
     }
     setError('')
     setText('')
+    setExpander(null)
   }
 
   function removeCriterion(idx: number) {
@@ -104,61 +177,69 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
 
       {criteria.length > 0 && (
         <ul className="space-y-1.5">
-          {criteria.map((c, idx) => (
-            <li
-              key={c.id ?? idx}
-              className="flex items-start gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
-            >
-              <div className="flex-1 min-w-0">
-                <p className="text-[var(--color-secondary)]">
-                  <span className="uppercase text-[9px] font-semibold text-[var(--color-muted)] mr-1">
-                    {c.kind}
-                  </span>
-                  {c.text}
-                </p>
-                {c.kind === 'check' && c.check && (
-                  <p className="font-mono text-[10px] text-[var(--color-muted)] truncate">
-                    $ {c.check.command} (exit {c.check.expected_exit_code})
-                  </p>
-                )}
-                <p className="text-[10px] text-[var(--color-muted)]">
-                  by {c.author.kind}:{c.author.id}
-                </p>
-              </div>
-              <button tabIndex={0}
-                type="button"
-                onClick={() => removeCriterion(idx)}
-                aria-label={`Remove criterion ${c.text}`}
-                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+          {criteria.map((c, idx) => {
+            const verifiesVia = formatVerifiesVia(c)
+            return (
+              <li
+                key={c.id ?? idx}
+                className="flex items-start gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
               >
-                <Trash size={12} />
-              </button>
-            </li>
-          ))}
+                <div className="flex-1 min-w-0 space-y-0.5">
+                  <p className="text-[var(--color-secondary)]">{c.text}</p>
+                  {verifiesVia && (
+                    <p className="inline-flex max-w-full items-baseline gap-1 rounded bg-[var(--color-surface-1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
+                      <span className="shrink-0">verifies via:</span>
+                      <span className="truncate">{verifiesVia}</span>
+                    </p>
+                  )}
+                  <p className="text-[10px] text-[var(--color-muted)]">
+                    by {c.author.kind}:{c.author.id}
+                  </p>
+                </div>
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => removeCriterion(idx)}
+                  aria-label={`Remove criterion ${c.text}`}
+                  className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                >
+                  <Trash size={12} />
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
 
       <div className="flex flex-col gap-1.5 rounded-md border border-dashed border-[var(--color-border)] p-2">
-        <div className="flex items-center gap-2">
-          <Select value={kind} onValueChange={(v) => { setKind(v as CriterionKind); setError('') }}>
-            <SelectTrigger aria-label="Criterion kind" className="h-8 text-xs w-28 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="check" className="text-xs">Check</SelectItem>
-              <SelectItem value="prose" className="text-xs">Prose</SelectItem>
-            </SelectContent>
-          </Select>
-          <Input
-            aria-label={kind === 'check' ? 'Check description' : 'Criterion text'}
-            value={text}
-            onChange={(e) => { setText(e.target.value); setError('') }}
-            placeholder={kind === 'check' ? 'What does this check verify?' : 'Criterion statement'}
-            maxLength={500}
-            className="text-xs flex-1"
-          />
+        <Input
+          aria-label="What must be true when this is done?"
+          value={text}
+          onChange={(e) => { setText(e.target.value); setError('') }}
+          placeholder="What must be true when this is done?"
+          maxLength={1000}
+          className="text-xs"
+        />
+
+        <div className="flex items-center gap-3">
+          <button tabIndex={0}
+            type="button"
+            aria-expanded={expander === 'check'}
+            onClick={() => toggleExpander('check')}
+            className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+          >
+            + Add technical check
+          </button>
+          <button tabIndex={0}
+            type="button"
+            aria-expanded={expander === 'behavior'}
+            onClick={() => toggleExpander('behavior')}
+            className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+          >
+            + Add action-count check
+          </button>
         </div>
-        {kind === 'check' && (
+
+        {expander === 'check' && (
           <div className="flex items-center gap-2">
             <Input
               aria-label="Command"
@@ -177,6 +258,44 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
             />
           </div>
         )}
+
+        {expander === 'behavior' && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              aria-label="Tool name"
+              value={tool}
+              onChange={(e) => { setTool(e.target.value); setError('') }}
+              placeholder="search_web"
+              maxLength={200}
+              className="text-xs font-mono flex-1 min-w-32"
+            />
+            <Input
+              aria-label="Min count"
+              type="number"
+              value={minCount}
+              onChange={(e) => { setMinCount(e.target.value); setError('') }}
+              className="text-xs w-20"
+            />
+            <Input
+              aria-label="Max count"
+              type="number"
+              value={maxCount}
+              onChange={(e) => { setMaxCount(e.target.value); setError('') }}
+              placeholder="no max"
+              className="text-xs w-20"
+            />
+            <Select value={scope} onValueChange={(v) => { setScope(v as BehaviorScope); setError('') }}>
+              <SelectTrigger aria-label="Count scope" className="h-8 text-xs w-32 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="task_session" className="text-xs">Whole session</SelectItem>
+                <SelectItem value="attempt" className="text-xs">Per attempt</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {error && <p className="text-xs text-[var(--color-error)]">{error}</p>}
         <Button
           type="button"
