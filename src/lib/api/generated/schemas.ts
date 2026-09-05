@@ -184,6 +184,7 @@ type CriterionVerdict = {
   criterion_id: string;
   met: boolean;
   reason: string;
+  evidence_quote?: string | undefined;
 };
 type SessionPage = {
   sessions: Array<Session>;
@@ -1894,6 +1895,7 @@ export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
   criterion_id: z.string().min(1),
   met: z.boolean(),
   reason: z.string(),
+  evidence_quote: z.string().max(500).optional(),
 });
 export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
   id: z.string(),
@@ -11415,6 +11417,7 @@ export const JudgeVerdictFrame = z
       criterion_id: z.string().min(1),
       met: z.boolean(),
       reason: z.string(),
+      evidence_quote: z.string().max(500).optional(),
     })
     .strict()),
     model: z.string(),

@@ -1019,7 +1019,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		var missing []string // criteria the verifier RAN on but omitted → unjudgeable
 		for _, c := range proseCriteria {
 			if pc, found := byID[c.ID]; found {
-				out = append(out, task.CriterionVerdict{CriterionID: c.ID, Met: pc.Met, Reason: pc.Reason})
+				out = append(out, task.CriterionVerdict{CriterionID: c.ID, Met: pc.Met, Reason: pc.Reason, EvidenceQuote: pc.EvidenceQuote})
 			} else {
 				// The verifier turn ran and judged OTHER criteria but returned
 				// no verdict for THIS one → criterion_unjudgeable (ran, no

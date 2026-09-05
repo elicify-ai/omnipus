@@ -764,6 +764,7 @@ export const JudgeVerdictFrame = z
       criterion_id: z.string().min(1),
       met: z.boolean(),
       reason: z.string(),
+      evidence_quote: z.string().max(500).optional(),
     })
     .strict()),
     model: z.string(),

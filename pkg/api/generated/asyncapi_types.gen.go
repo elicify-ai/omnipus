@@ -335,9 +335,10 @@ type JudgeVerdictFrame struct {
 	Met          bool   `json:"met"`
 	Model        string `json:"model"`
 	PerCriterion []struct {
-		CriterionId string `json:"criterion_id"`
-		Met         bool   `json:"met"`
-		Reason      string `json:"reason"`
+		CriterionId   string  `json:"criterion_id"`
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+		Met           bool    `json:"met"`
+		Reason        string  `json:"reason"`
 	} `json:"per_criterion"`
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`

@@ -672,6 +672,7 @@ export interface JudgeVerdictFrame {
     criterion_id: string;
     met: boolean;
     reason: string;
+    evidence_quote?: string;
   }>;
   model: string;
   judged_at: string;

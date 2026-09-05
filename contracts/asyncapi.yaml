@@ -4273,6 +4273,9 @@ components:
                 type: boolean
               reason:
                 type: string
+              evidence_quote:
+                type: string
+                maxLength: 500
         model:
           type: string
         judged_at:

@@ -977,11 +977,18 @@ func failClosedProseVerdicts(criteria []task.AcceptanceCriterion, reason string)
 }
 
 // judgeCriterionResponse is one entry of the judge's declared JSON contract
-// (coreagent.JudgeDefaultRubric): {"id","met","reason"}.
+// (coreagent.JudgeDefaultRubric): {"id","evidence_quote","met","reason"}.
+// EvidenceQuote (ADR-074 D7) is the rubric's quote-before-verdict excerpt —
+// verbatim UNTRUSTED content, truncated rune-safe to
+// maxEvidenceQuoteRunes code points by parseJudgeResponse; empty when the
+// judge had nothing to quote (which the rubric pairs with met:false), and
+// absent entirely from pre-D7 souls (parse-compatible: the field simply
+// stays "").
 type judgeCriterionResponse struct {
-	ID     string `json:"id"`
-	Met    bool   `json:"met"`
-	Reason string `json:"reason"`
+	ID            string `json:"id"`
+	Met           bool   `json:"met"`
+	Reason        string `json:"reason"`
+	EvidenceQuote string `json:"evidence_quote"`
 }
 
 // judgeLLMResponse is the judge's full declared JSON contract:
@@ -1040,6 +1047,31 @@ func extractJudgeJSON(s string) (string, error) {
 	return "", fmt.Errorf("judge response contains an unclosed JSON object")
 }
 
+// maxEvidenceQuoteRunes is the ADR-074 D7 laundering-defense bound on
+// evidence_quote, matching CriterionVerdict.yaml's maxLength: 500. Enforced
+// at the parser (rune-safe: code points, never split mid-rune) so no
+// over-long quote ever reaches persistence or the wire.
+const maxEvidenceQuoteRunes = 500
+
+// truncateEvidenceQuote returns s truncated to at most max code points,
+// never splitting a rune (range over a string yields rune boundaries).
+// Distinct from task_completion_signal.go's truncateRunes, which APPENDS a
+// truncation note — a quote must stay verbatim evidence, so nothing is ever
+// appended here.
+func truncateEvidenceQuote(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 func parseJudgeResponse(raw string) (judgeLLMResponse, error) {
 	jsonStr, err := extractJudgeJSON(raw)
 	if err != nil {
@@ -1048,6 +1080,10 @@ func parseJudgeResponse(raw string) (judgeLLMResponse, error) {
 	var out judgeLLMResponse
 	if err := json.Unmarshal([]byte(jsonStr), &out); err != nil {
 		return judgeLLMResponse{}, fmt.Errorf("unmarshal judge JSON: %w", err)
+	}
+	// ADR-074 D7 (a): bound every evidence quote at the parser, rune-safe.
+	for i := range out.Criteria {
+		out.Criteria[i].EvidenceQuote = truncateEvidenceQuote(out.Criteria[i].EvidenceQuote, maxEvidenceQuoteRunes)
 	}
 	return out, nil
 }
