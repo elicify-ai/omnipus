@@ -337,11 +337,34 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 
 // goalSessionWindowText renders the transcript window for a chat /goal
 // verification (FR-032): the last N tokens of the session carrying the goal
-// condition, read from the goal agent's own session store. Returns "" (never
-// an error) on any missing/unresolvable input.
+// condition. Returns "" (never an error) on any missing/unresolvable input.
+//
+// STORE RESOLUTION (2026-09-06 UAT defect, judgment-first H-7 class): live
+// chat sessions are written to the SHARED store (al.GetSessionStore() —
+// whose own doc marks GetAgentStore as "legacy per-agent session access"),
+// but this feed used to read ONLY the per-agent legacy store. Because
+// ReadTranscript returns empty-with-no-error for a session directory that
+// does not exist in the store it's asked, the window came back silently
+// empty and the goal Judge fail-closed every criterion with "no evidence"
+// against a session whose transcript plainly held the reply — observed live
+// on the first end-to-end /goal UAT. The shared store is now consulted
+// first; the legacy per-agent store remains as a fallback for old installs
+// whose sessions still live there.
 func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
 	if goalSessionID == "" || agentID == "" {
+		logger.WarnCF("agent", "verifier: goal window feed skipped — empty session or agent id",
+			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 		return ""
+	}
+	if shared := al.GetSessionStore(); shared != nil {
+		if text := al.sessionWindowText(shared, goalSessionID, nil); text != "" {
+			return text
+		}
+		logger.WarnCF("agent", "verifier: goal window empty from the SHARED store — falling back to the legacy per-agent store",
+			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
+	} else {
+		logger.WarnCF("agent", "verifier: no shared session store — goal window falling back to the legacy per-agent store",
+			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 	}
 	store := al.GetAgentStore(agentID)
 	if store == nil {
@@ -377,6 +400,14 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	}
 	if t == nil || t.SessionID == "" {
 		return "" // task has no session yet — not an error, just nothing to feed
+	}
+	// Shared store first (see goalSessionWindowText's STORE RESOLUTION note —
+	// same 2026-09-06 UAT defect class; task sessions are written to the
+	// shared store too), legacy per-agent store as the old-install fallback.
+	if shared := al.GetSessionStore(); shared != nil {
+		if text := al.sessionWindowText(shared, t.SessionID, map[string]any{"task_id": taskID}); text != "" {
+			return text
+		}
 	}
 	store := al.GetAgentStore(assigneeAgentID)
 	if store == nil {
