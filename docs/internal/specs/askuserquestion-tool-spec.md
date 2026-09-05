@@ -1,6 +1,6 @@
 # AskUserQuestion — structured clarification tool spec
 
-- **Status:** Draft **v3** (2026-09-05). Two grill rounds complete per project standard: r1 (4C/11M — blocking model refuted, rebuilt on the durable park) corrected in v2; r2 (2C/8M — resume contract misdescribed, v1 channel hole) corrected here. **One flagged item awaits explicit operator sign-off (§9.1).**
+- **Status:** Draft **v3** (2026-09-05). Two grill rounds complete per project standard: r1 (4C/11M — blocking model refuted, rebuilt on the durable park) corrected in v2; r2 (2C/8M — resume contract misdescribed, v1 channel hole) corrected here; the one flagged sign-off (§9.1, channel phasing) was RESOLVED by operator interview #5 — specs complete, zero open sign-offs.
 - **Authoritative parents:** ADR-074 D4b (Accepted; all operator rulings FIXED; visual reference `docs/internal/design/askuserquestion-ui-mock.html` v2). **ADR-053 D2 amendment:** recorded at the ADR itself (D2 row annotation) per the design-first rule — the card supersedes D2's "no per-question reply card" for session owners; the owner-only restriction survives (children ask their parent via `message_parent`).
 - **Role:** general-purpose agent tool; first consumer is ADR-074 D4a's goal-compilation clarifying question.
 
