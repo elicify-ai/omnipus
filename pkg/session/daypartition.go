@@ -185,6 +185,19 @@ type SessionMeta struct {
 	// proposed values, GoalPendingJSON clears). Ephemeral-ish: cleared on
 	// /goal clear and on a fresh `/goal <intent>` that supersedes it.
 	GoalPendingJSON string `json:"goal_pending,omitempty"`
+	// PendingAskJSON is the AskUserQuestion tool's durable pending question
+	// set (askuserquestion-tool-spec.md §0.4, M-R2-1): a JSON-encoded
+	// askuser.PendingSet, written by pkg/askuser's Registry when a question
+	// set parks the owner session's turn, updated on every server-side state
+	// change (a default-safe auto-resolution, the answered/cancelled
+	// terminal record §0.6), and re-read on boot to re-arm the 30-minute
+	// default-safe timers (US-6 S1). Empty means no set was ever asked on
+	// this session; a terminal-status record (status answered/cancelled)
+	// means "not pending" — the collapsed card record renders from it on
+	// history reload. Persisted in the goal.json field group alongside
+	// GoalPendingJSON (its closest sibling: session-scoped pending
+	// interaction state that must not bump the session's composed recency).
+	PendingAskJSON string `json:"pending_ask,omitempty"`
 
 	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
 	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
