@@ -17,7 +17,7 @@
 // cross-check the numbers against the visual spec.
 
 import { describe, it, expect } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import type {
   VaultFindRow,
   ViewResult,
@@ -267,6 +267,53 @@ describe('CalendarPart', () => {
       screen.getAllByTestId('viewpart-calendar-day').length +
       screen.queryAllByTestId('viewpart-calendar-day-outside').length
     expect(days % 7).toBe(0)
+  })
+
+  // code-review finding #3(a) — the visible month is seeded from
+  // `useState(initialMonth)`, whose argument React only reads on the FIRST
+  // render. When the SAME CalendarPart instance later receives entirely
+  // different rows (e.g. BasePreview swapping to a different view tab, which
+  // keeps the same `key` in ViewPartsRenderer), `initialMonth` recomputes to
+  // the new dataset's earliest month but `visible` state does not follow —
+  // the grid keeps showing the OLD dataset's month forever. It must instead
+  // reset once the earliest month of the underlying data actually changes.
+  it('follows the data to a new initial month when the underlying rows change, not just the initial mount', () => {
+    const mayPart: ViewResultPart = { part: 'calendar', source: { part: 'calendar', date: 'due_date' } }
+    const { rerender } = render(<CalendarPart part={mayPart} rows={ROWS} />)
+    expect(screen.getByTestId('viewpart-calendar-month').textContent).toContain('May 2026')
+
+    // User pages forward within the same dataset — legitimate client state.
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
+    expect(screen.getByTestId('viewpart-calendar-month').textContent).toContain('June 2026')
+
+    // The underlying dataset itself changes (e.g. a different view tab) —
+    // a completely different row set, earliest date in August 2026.
+    const augustRows: VaultFindRow[] = [row('aug-01.md', 'AUG-ONE', { due_date: '2026-08-10' })]
+    rerender(<CalendarPart part={mayPart} rows={augustRows} />)
+    expect(screen.getByTestId('viewpart-calendar-month').textContent).toContain('August 2026')
+  })
+
+  // code-review finding #3(d) — when the server already grouped the part's
+  // rows (ViewResultPart.groups), the renderer must consume that grouping
+  // rather than re-deriving day membership itself by rescanning every row's
+  // raw date cell a second time. Proven by a case where the two disagree:
+  // two rows share May 5's date cell, but the server's own group for that
+  // day names only one of them (e.g. the other was excluded upstream for a
+  // reason the raw date cell alone can't express) — the group's membership
+  // must win over an independent rescan of the raw rows.
+  it('consumes the server-provided groups for day membership instead of re-deriving them from raw rows', () => {
+    const sameDayRows: VaultFindRow[] = [
+      row('a.md', 'EVENT-A', { due_date: '2026-05-05' }),
+      row('b.md', 'EVENT-B', { due_date: '2026-05-05' }),
+    ]
+    const partWithGroups: ViewResultPart = {
+      part: 'calendar',
+      source: { part: 'calendar', date: 'due_date' },
+      groups: [{ key: '2026-05-05', count: 1, paths: ['a.md'], subtotals: [] }],
+    }
+    render(<CalendarPart part={partWithGroups} rows={sameDayRows} />)
+    const events = screen.getAllByTestId('viewpart-calendar-event')
+    expect(events.map((e) => e.textContent)).toEqual(['EVENT-A'])
   })
 })
 

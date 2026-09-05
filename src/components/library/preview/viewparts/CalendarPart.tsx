@@ -6,10 +6,10 @@
 // an empty view, which is the failure the empty state exists to prevent —
 // and the reader can page months with the arrows (client state only).
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CaretLeft, CaretRight } from '@phosphor-icons/react'
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
-import { cellValue } from './viewResultData'
+import { cellValue, rowsByPath } from './viewResultData'
 import { TotalsFooter } from './PartChrome'
 
 const DAY_HEADERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'] as const
@@ -22,9 +22,25 @@ function isoDay(value: string): string | undefined {
 
 export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: VaultFindRow[] }) {
   const dateProperty = part.source.date
+  const groups = part.groups
 
   const rowsByDay = useMemo(() => {
     const m = new Map<string, VaultFindRow[]>()
+    // code-review finding #3(d) — when the server already grouped this
+    // part's rows, consume THAT membership rather than re-deriving it by
+    // rescanning every row's raw date cell a second time: the group may
+    // exclude a row the raw cell alone gives no reason to exclude.
+    if (groups !== undefined) {
+      const byPath = rowsByPath(rows)
+      for (const g of groups) {
+        const day = isoDay(g.key)
+        if (day === undefined) continue
+        const members = g.paths.map((p) => byPath.get(p)).filter((r): r is VaultFindRow => r !== undefined)
+        if (members.length === 0) continue
+        m.set(day, [...(m.get(day) ?? []), ...members])
+      }
+      return m
+    }
     if (dateProperty === undefined) return m
     for (const row of rows) {
       const day = isoDay(cellValue(row, dateProperty))
@@ -33,7 +49,7 @@ export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: Vault
       m.get(day)?.push(row)
     }
     return m
-  }, [rows, dateProperty])
+  }, [rows, dateProperty, groups])
 
   const initialMonth = useMemo(() => {
     const days = [...rowsByDay.keys()].sort()
@@ -44,6 +60,25 @@ export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: Vault
   }, [rowsByDay])
 
   const [visible, setVisible] = useState(initialMonth)
+  // code-review finding #3(a) — `useState(initialMonth)` only reads its
+  // argument on the FIRST render. When this SAME component instance later
+  // receives a wholly different row set (e.g. BasePreview swapping to a
+  // different view tab that keeps the same part-array index, so React does
+  // not remount it), `initialMonth` recomputes but `visible` does not follow
+  // — the grid is stuck showing the PREVIOUS dataset's month forever. Reset
+  // `visible` whenever the data's own earliest month actually changes; a
+  // user paging with the arrows never changes `initialMonth` (it depends
+  // only on the row set, not on which month is being viewed), so manual
+  // navigation is untouched.
+  const initialMonthKey = `${initialMonth.year}-${initialMonth.month}`
+  const lastInitialMonthKey = useRef(initialMonthKey)
+  useEffect(() => {
+    if (initialMonthKey !== lastInitialMonthKey.current) {
+      lastInitialMonthKey.current = initialMonthKey
+      setVisible(initialMonth)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the primitive so an equal-value new object doesn't re-trigger
+  }, [initialMonthKey])
 
   const cells = useMemo(() => {
     const firstOfMonth = new Date(Date.UTC(visible.year, visible.month, 1))
