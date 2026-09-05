@@ -99,6 +99,11 @@ type Session struct {
 	videoPktCount atomic.Int64
 	audioPktCount atomic.Int64
 	pliBursting   atomic.Bool
+	// pliDeferred records that a keyframe request was asked for while the
+	// ingest connection was not yet able to carry one (see sendPLI's
+	// not-connected branch). attachIngestTrack redeems it via flushDeferredPLI
+	// the moment a video track arrives on a live connection.
+	pliDeferred atomic.Bool
 
 	// videoLastOutSeq/audioLastOutSeq are the session-lifetime OUTGOING
 	// sequence-number high-water marks (RFC 1982 16-bit serial space, stored

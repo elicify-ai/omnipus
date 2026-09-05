@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -116,45 +117,25 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 
 	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
 		s.logf("%s ICE connection state -> %s", prefix, st.String())
+		if st == webrtc.ICEConnectionStateFailed {
+			// An ICE failure on the LOOPBACK ingest leg is the single most
+			// consequential startup failure this package has (it leaves the
+			// shared local tracks in place with nothing feeding them, so every
+			// viewer answered from them shows a black panel), and until this
+			// log existed the record of one was three words long: "->
+			// failed". Nothing said which candidates either side actually
+			// offered, so the one question that would identify the cause --
+			// did this connection have a usable host pair at all, or was it
+			// relying on srflx/mDNS candidates that a container cannot use --
+			// was unanswerable after the fact. Logged only on failure, so a
+			// healthy connection costs nothing.
+			s.logf("%s ICE failed; local candidates: %s", prefix, describeSDPCandidates(descriptionSDP(pc.LocalDescription())))
+			s.logf("%s ICE failed; remote candidates: %s", prefix, describeSDPCandidates(descriptionSDP(pc.RemoteDescription())))
+		}
 	})
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
 		s.logf("%s peer connection state -> %s", prefix, st.String())
-
-		// Clear a DEAD ingest connection instead of only logging it
-		// (live-diagnosed 2026-08-03). Previously this handler was
-		// log-only, so s.ingestPC kept pointing at a closed connection
-		// forever: every subsequent recapture called sendPLI ->
-		// WriteRTCP -> "io: read/write on closed pipe", no keyframe ever
-		// arrived, and the panel stayed frozen on whatever frame it last
-		// received — the operator saw the start page persist while the tab
-		// title and URL bar advanced through several real sites.
-		//
-		// Only the CURRENTLY-INSTALLED connection is cleared: a late state
-		// change from a connection that a newer offer already replaced must
-		// not wipe its healthy successor.
-		switch st {
-		case webrtc.PeerConnectionStateFailed,
-			webrtc.PeerConnectionStateClosed,
-			webrtc.PeerConnectionStateDisconnected:
-			s.mu.Lock()
-			cleared := s.ingestPC == pc
-			if cleared {
-				s.ingestPC = nil
-			}
-			notify := s.onIngestLost
-			s.mu.Unlock()
-			if !cleared {
-				return
-			}
-			s.logf("%s ingest connection %s — cleared; a fresh capture is required", prefix, st.String())
-			// Ask the owner (CaptureSession) to re-establish capture. Without
-			// this the session sits with no ingest at all and nothing ever
-			// asks the encoder to reconnect, which is indistinguishable to
-			// the user from a hung browser.
-			if notify != nil {
-				go notify()
-			}
-		}
+		s.handleIngestStateChange(prefix, pc, st)
 	})
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		go s.attachIngestTrack(prefix, track, receiver)
@@ -213,6 +194,178 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 
 	s.logf("%s answer sent to encoder", prefix)
 	return local.SDP, nil
+}
+
+// ingestDisconnectGracePeriod bounds how long the INSTALLED ingest connection
+// may sit in the Disconnected state before this package gives up on it and
+// asks the owner for a fresh capture. A var (not const) purely as a test seam,
+// mirroring disconnectGracePeriod (the viewer leg's equivalent, viewer.go) and
+// audioGraceTimeout.
+//
+// Why a grace exists at all, when Failed/Closed are still handled instantly:
+//
+//  1. Disconnected is NOT a terminal state. Pion reaches it after 5s of failed
+//     ICE consent checks (pion/ice defaultDisconnectedTimeout) and leaves it
+//     again the moment consent is restored; only after a further 25s
+//     (defaultFailedTimeout) does it become Failed. On a CPU-starved box --
+//     the exact condition under which the encoder's headless Chrome is least
+//     able to answer a consent check on time -- a loopback connection that is
+//     perfectly healthy can still cross that 5s line. Treating that as death
+//     spends a FULL capture teardown and renegotiation, which is the most
+//     expensive and most failure-prone thing this pipeline does, at precisely
+//     the moment the machine can least afford it.
+//
+//  2. Disconnected is also what a NORMAL encoder-side recapture produces.
+//     encoder.js's runCaptureAndOffer tears its PeerConnection down FIRST and
+//     only then captures, negotiates and offers; the replacement offer can
+//     easily be more than 5s behind the teardown on a slow box (a cold
+//     tabCapture is budgeted at up to 20s in capture_session.go). In that
+//     window the old connection is still s.ingestPC, so the pre-grace code
+//     cleared it and asked the owner for ANOTHER recapture -- while the first
+//     one was still in flight. encoder.js coalesces that into a rerun, which
+//     tears down the connection it just built, which produces another
+//     Disconnected, which asks for another recapture. Every recapture fed the
+//     next one. The re-check below breaks that loop directly: if a newer offer
+//     has already installed its own connection, this one's Disconnected is
+//     ancient history and means nothing.
+var ingestDisconnectGracePeriod = 8 * time.Second
+
+// handleIngestStateChange is the body of the ingest PeerConnection's
+// OnConnectionStateChange handler, split out so the eviction policy is
+// reachable from tests without standing up a full Go<->Go wire flow.
+//
+// Failed and Closed are terminal and are acted on immediately. Disconnected is
+// not terminal and is given ingestDisconnectGracePeriod to recover first -- see
+// that var's doc comment for the two distinct failure modes an immediate
+// eviction caused. Every other state is ignored.
+func (s *Session) handleIngestStateChange(prefix string, pc *webrtc.PeerConnection, st webrtc.PeerConnectionState) {
+	switch st {
+	case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+		s.clearIngestIfCurrent(prefix, pc, st.String())
+	case webrtc.PeerConnectionStateDisconnected:
+		s.scheduleIngestDisconnectEviction(prefix, pc)
+	}
+}
+
+// scheduleIngestDisconnectEviction arms a one-shot timer for an ingest
+// connection that just entered Disconnected. When it fires it re-checks the
+// world: a connection that recovered to Connected is left alone, and one that
+// a newer ingest offer has already replaced is left alone too (that newer
+// connection is the live one; HandleIngestOffer closed this one itself).
+// Anything else is treated exactly like a Failed connection.
+//
+// Multiple Disconnected callbacks for the same pc simply arm multiple
+// redundant timers -- clearIngestIfCurrent's own identity check makes the
+// eviction idempotent, mirroring scheduleDisconnectEviction on the viewer leg.
+func (s *Session) scheduleIngestDisconnectEviction(prefix string, pc *webrtc.PeerConnection) {
+	s.logf("%s ingest connection disconnected — waiting %s for it to recover", prefix, ingestDisconnectGracePeriod)
+	time.AfterFunc(ingestDisconnectGracePeriod, func() {
+		if pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+			s.logf("%s ingest connection recovered from disconnected — keeping it", prefix)
+			return
+		}
+		s.clearIngestIfCurrent(prefix, pc, pc.ConnectionState().String())
+	})
+}
+
+// clearIngestIfCurrent clears pc as the installed ingest connection and asks
+// the owner (CaptureSession) for a fresh capture -- but ONLY if pc is still the
+// installed one. A late state change from a connection that a newer offer
+// already replaced must not wipe its healthy successor, nor trigger a
+// recapture the successor does not need.
+//
+// Clearing matters beyond bookkeeping (live-diagnosed 2026-08-03): a stale
+// s.ingestPC pointing at a dead connection made every subsequent sendPLI fail
+// against a closed pipe, so no keyframe ever arrived and the panel stayed
+// frozen on its last frame while the tab title and URL bar advanced through
+// several real sites.
+//
+// Returns whether it cleared, for tests.
+func (s *Session) clearIngestIfCurrent(prefix string, pc *webrtc.PeerConnection, reason string) bool {
+	s.mu.Lock()
+	cleared := s.ingestPC == pc
+	if cleared {
+		s.ingestPC = nil
+	}
+	notify := s.onIngestLost
+	s.mu.Unlock()
+	if !cleared {
+		return false
+	}
+	s.logf("%s ingest connection %s — cleared; a fresh capture is required", prefix, reason)
+	// Ask the owner (CaptureSession) to re-establish capture. Without this the
+	// session sits with no ingest at all and nothing ever asks the encoder to
+	// reconnect, which is indistinguishable to the user from a hung browser.
+	if notify != nil {
+		go notify()
+	}
+	return true
+}
+
+// descriptionSDP is SessionDescription-or-nil -> SDP string, so a caller can
+// read a PeerConnection's local/remote description in a log line without
+// guarding each one.
+func descriptionSDP(desc *webrtc.SessionDescription) string {
+	if desc == nil {
+		return ""
+	}
+	return desc.SDP
+}
+
+// describeSDPCandidates summarises the ICE candidates carried in an SDP as a
+// short, log-safe string: a count per candidate type ("host=2 srflx=1"), plus
+// an explicit mdns count for host candidates whose address is an obfuscated
+// ".local" name rather than an IP.
+//
+// The mdns split is the point of this function. A Chrome peer that has not been
+// granted a media-device permission publishes its host candidates as
+// <uuid>.local names, which the receiving agent must resolve over multicast DNS
+// before it can check them. Multicast DNS routinely does not work inside a
+// container, and when it does not, an SDP that LOOKS like it offered perfectly
+// good host candidates has in fact offered nothing usable -- a distinction
+// invisible in a plain "ICE -> failed" log line, and the difference between
+// "the network was slow" and "these two processes could never have connected".
+//
+// Returns "none" for an SDP with no candidates at all (also the empty-SDP case)
+// so the log line never reads as though the field were missing.
+func describeSDPCandidates(sdp string) string {
+	counts := map[string]int{}
+	order := []string{}
+	mdns := 0
+	total := 0
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimSpace(line)
+		attr, ok := strings.CutPrefix(line, "a=candidate:")
+		if !ok {
+			continue
+		}
+		// RFC 5245 §15.1: <foundation> <component> <transport> <priority>
+		// <connection-address> <port> typ <type> ...
+		fields := strings.Fields(attr)
+		if len(fields) < 8 || fields[6] != "typ" {
+			continue
+		}
+		total++
+		typ := fields[7]
+		if _, seen := counts[typ]; !seen {
+			order = append(order, typ)
+		}
+		counts[typ]++
+		if typ == "host" && strings.HasSuffix(strings.ToLower(fields[4]), ".local") {
+			mdns++
+		}
+	}
+	if total == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(order)+1)
+	for _, typ := range order {
+		parts = append(parts, fmt.Sprintf("%s=%d", typ, counts[typ]))
+	}
+	if mdns > 0 {
+		parts = append(parts, fmt.Sprintf("mdns=%d", mdns))
+	}
+	return strings.Join(parts, " ")
 }
 
 // attachIngestTrack is invoked (in its own goroutine, from HandleIngestOffer's
@@ -353,6 +506,13 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 
 	s.logf("%s ingest track arrived: kind=%s codec=%s clockRate=%d ssrc=%d payloadType=%d",
 		prefix, kind, codec.MimeType, codec.ClockRate, remote.SSRC(), remote.PayloadType())
+
+	// Redeem any keyframe request sendPLI had to skip while this connection
+	// was still negotiating -- see flushDeferredPLI. Only on video: a PLI
+	// names the video SSRC, which is set just above, and Opus never needs one.
+	if kind == webrtc.RTPCodecTypeVideo {
+		s.flushDeferredPLI(prefix)
+	}
 
 	// Drain RTCP on the receiver so its buffer never blocks (standard Pion
 	// requirement for any track we only ever read from) -- and, fix-wave
@@ -500,11 +660,55 @@ func (s *Session) sendPLI(prefix string) {
 	if pc == nil || ssrc == 0 {
 		return
 	}
+	// A PLI is an RTCP packet written over the ingest connection's DTLS/SRTP
+	// transport, and that transport does not exist until ICE has connected and
+	// the DTLS handshake has completed. Writing before then is not a slow send
+	// or a retryable one: pion's DTLSTransport.WriteRTCP looks up the SRTCP
+	// session, finds none, and returns "the DTLS transport has not started
+	// yet" WITHOUT touching the network.
+	//
+	// This is reachable on the ordinary startup path, not just in a crash.
+	// pliBurstForNewViewer arms a 15s repeating burst when a viewer is
+	// answered, and the gateway issues a corrective recapture immediately
+	// AFTER answering that same viewer (applyColdStartRecapture,
+	// pkg/gateway/browser_webrtc.go) -- so the encoder replaces its whole
+	// PeerConnection while the burst is still running, and every remaining
+	// tick lands on a connection that has not finished negotiating. The result
+	// was five "PLI send failed" lines that read like a transport fault while
+	// the actual problem was upstream, plus a keyframe request that was simply
+	// lost: by the time the new connection WAS ready, the burst window had
+	// expired and nothing asked again.
+	//
+	// So: skip the doomed write, and record that a keyframe is owed.
+	// attachIngestTrack redeems it the moment a video track arrives on a live
+	// connection (see flushDeferredPLI).
+	if st := pc.ConnectionState(); st != webrtc.PeerConnectionStateConnected {
+		s.pliDeferred.Store(true)
+		s.logf("%s PLI deferred: ingest connection is %s, not connected", prefix, st.String())
+		return
+	}
 	if err := pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(ssrc)}}); err != nil {
 		s.logf("%s PLI send failed: %v", prefix, err)
 		return
 	}
 	s.logf("%s PLI sent to encoder (ssrc=%d)", prefix, ssrc)
+}
+
+// flushDeferredPLI sends the keyframe request that sendPLI skipped while the
+// ingest connection was still negotiating, if there was one. Called from
+// attachIngestTrack once a video track has arrived -- which, because pion only
+// fires OnTrack after DTLS/SRTP is up and the first RTP packet has been read,
+// is the earliest point at which a PLI can actually reach the encoder.
+//
+// A no-op when nothing was deferred, so a healthy connection pays nothing. The
+// flag is consumed with CompareAndSwap, so several deferred requests collapse
+// into the single keyframe they were all asking for.
+func (s *Session) flushDeferredPLI(prefix string) {
+	if !s.pliDeferred.CompareAndSwap(true, false) {
+		return
+	}
+	s.logf("%s ingest connection is up — sending the keyframe request deferred while it negotiated", prefix)
+	s.sendPLI(prefix)
 }
 
 // forwardPLIThrottled is called by drainViewerRTCP (viewer.go) when ANY
