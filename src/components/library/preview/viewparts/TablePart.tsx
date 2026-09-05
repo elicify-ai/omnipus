@@ -5,16 +5,24 @@
 // The renderer DRAWS the server's answer and nothing else: groups arrive with
 // their subtotals already reduced once per unit value (ViewResultGroup), the
 // footer totals arrive the same way (ViewResultPart.totals), and this file
-// never adds two numbers. The one judgement it makes locally is WHERE the G3
-// warn mark goes — the row whose unit cell is empty — which is presentation,
-// not arithmetic; the server already excluded that row from every figure.
+// never adds two numbers. Even WHICH rows carry the G3 warn mark is the
+// server's answer — ViewResultPart.excluded_paths names them — because the
+// unit a row is excluded for is resolved from the record type, which this
+// side cannot read.
 //
 // A number with a declared companion unit draws as ONE value ("12,480.00
 // SGD", design §5), and the unit property loses its own column when both are
 // listed.
 
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
-import { cellValue, formatNumberText, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPERTY } from './viewResultData'
+import {
+  cellValue,
+  formatNumberText,
+  partUnitProperty,
+  rowExcludedFromTotals,
+  rowsByPath,
+  FILE_NAME_PROPERTY,
+} from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter, UnitValue } from './PartChrome'
 
 /** Column header text: 'file.name' reads as "Name", the rest as declared. */
@@ -53,8 +61,8 @@ function Cell({
       </td>
     )
   }
-  const unitProperty = part.source.unit
-  const unit = unitProperty === undefined || unitProperty === '' ? undefined : cellValue(row, unitProperty)
+  const unitProperty = partUnitProperty(part)
+  const unit = unitProperty === undefined ? undefined : cellValue(row, unitProperty)
   return (
     <td className="whitespace-nowrap border-b border-[var(--color-border)] px-3 py-1.5 text-right">
       {value === '' ? (
@@ -112,10 +120,12 @@ export function TablePart({ part, rows }: { part: ViewResultPart; rows: VaultFin
   // shapes the same way.
   const allColumns = part.columns !== undefined && part.columns.length > 0 ? part.columns : [FILE_NAME_PROPERTY]
   // §5: the declared unit property draws inside the number cell, not as its
-  // own column — but only when the part actually binds a number to it.
-  const unitProperty = part.source.unit
+  // own column — but only when the part actually binds a number to it. The
+  // property is the SERVER's resolved one where it resolved any, never the
+  // possibly-stale `unit:` stamp (partUnitProperty).
+  const unitProperty = partUnitProperty(part)
   const filteredColumns =
-    unitProperty !== undefined && unitProperty !== '' && part.source.number !== undefined
+    unitProperty !== undefined && part.source.number !== undefined
       ? allColumns.filter((c) => c !== unitProperty)
       : allColumns
   // The unit-column filter above can ALSO empty the list (a one-column part

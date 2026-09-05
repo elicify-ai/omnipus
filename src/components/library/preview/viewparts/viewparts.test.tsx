@@ -101,6 +101,11 @@ function tablePart(over: Partial<ViewResultPart> = {}): ViewResultPart {
     totals: UNIT_TOTALS,
     excluded_count: 1,
     excluded_reason: EXCLUDED_REASON,
+    // The server NAMES the excluded rows; the SPA no longer infers them from
+    // an empty unit cell (which could not see an AMBIGUOUS exclusion at all,
+    // and saw nothing on a part carrying no `unit:` stamp of its own).
+    excluded_paths: ['inv-042.md'],
+    unit_property: 'currency',
     ...over,
   }
 }
@@ -149,8 +154,12 @@ describe('TablePart', () => {
     // The heart of G2: no combined figure anywhere in the rendered output.
     assertNoCombinedTotal(container)
 
-    // The unit-less row carries the warn mark (G3 "shown, excluded, marked").
-    expect(screen.getAllByTestId('viewpart-excluded-mark').length).toBeGreaterThanOrEqual(1)
+    // EXACTLY the row the server named carries the warn mark (G3 "shown,
+    // excluded, marked") — not one more, not one fewer.
+    const marked = screen
+      .getAllByTestId('viewpart-table-row')
+      .filter((tr) => within(tr).queryByTestId('viewpart-excluded-mark') !== null)
+    expect(marked.map((tr) => tr.textContent)).toEqual([expect.stringContaining('INV-2026-042')])
   })
 
   it('draws the unit inside the number cell and drops the unit property column (§5)', () => {
@@ -197,6 +206,87 @@ describe('TablePart', () => {
     // must never take the numbers down with it.
     const subtotals = screen.getAllByTestId('viewpart-group-subtotal')
     expect(subtotals[0]?.textContent).toContain('20,680.00')
+  })
+})
+
+// ── G3 marking: the server names the rows, the SPA marks them ───────────────
+//
+// The exclusion a row suffers is decided from the RECORD TYPE (design §5:
+// declared, never inferred), which the SPA cannot read. It used to guess —
+// "the part declares a `unit:` stamp AND this row's cell for it is empty" —
+// and that guess was wrong in both directions, which is what these two cases
+// pin:
+//
+//   · A row excluded as AMBIGUOUS carries TWO unit values, so its cell is not
+//     empty and the guess never marked it.
+//   · A part with NO `unit:` stamp of its own (the server resolved the unit
+//     from the schema and said so in `unit_property`) left EVERY exclusion
+//     unmarkable — the case the review proved could not be drawn at all.
+
+describe('G3 marking follows the server, not a re-derivation', () => {
+  it('marks exactly the rows in excluded_paths, including one whose unit cell is NOT empty', () => {
+    const part = tablePart({
+      // Two exclusions with opposite causes: inv-042 has no currency at all,
+      // inv-039 records two. Only the first has an empty cell.
+      excluded_paths: ['inv-042.md', 'inv-039.md'],
+      excluded_count: 2,
+    })
+    render(<TablePart part={part} rows={ROWS} />)
+
+    const marked = screen
+      .getAllByTestId('viewpart-table-row')
+      .filter((tr) => within(tr).queryByTestId('viewpart-excluded-mark') !== null)
+    expect(marked.map((tr) => tr.textContent)).toEqual([
+      expect.stringContaining('INV-2026-039'),
+      expect.stringContaining('INV-2026-042'),
+    ])
+  })
+
+  it('marks correctly when the part carries NO unit stamp and only the server resolved one', () => {
+    const part = tablePart({
+      // The composer stamped no `unit:`; the schema declared one, and the
+      // server resolved it. Before excluded_paths this row was unmarkable.
+      source: {
+        part: 'table',
+        number: 'amount',
+        grouping: [{ property: 'client' }],
+        subtotals: { amount: 'sum' },
+      },
+      unit_property: 'currency',
+      excluded_paths: ['inv-042.md'],
+      columns: ['file.name', 'client', 'amount', 'currency'],
+    })
+    render(<TablePart part={part} rows={ROWS} />)
+
+    const marked = screen
+      .getAllByTestId('viewpart-table-row')
+      .filter((tr) => within(tr).queryByTestId('viewpart-excluded-mark') !== null)
+    expect(marked.map((tr) => tr.textContent)).toEqual([expect.stringContaining('INV-2026-042')])
+
+    // And the SERVER's unit property is what drives §5 rendering too: the
+    // unit draws inside the number cell and loses its own column.
+    const table = screen.getByTestId('viewpart-table')
+    const headerCells = within(table).getAllByRole('columnheader').map((th) => th.textContent)
+    expect(headerCells).not.toContain('currency')
+    expect(screen.getAllByTestId('viewpart-table-row')[0]?.textContent).toContain('SGD')
+  })
+
+  it('marks nothing when the server excluded nothing, whatever the unit cells hold', () => {
+    render(<TablePart part={tablePart({ excluded_paths: [], excluded_count: 0 })} rows={ROWS} />)
+    expect(screen.queryByTestId('viewpart-excluded-mark')).not.toBeInTheDocument()
+  })
+
+  it('marks the same rows in a list part, from the same server field', () => {
+    render(
+      <ListPart
+        part={tablePart({ part: 'list', groups: undefined, excluded_paths: ['inv-039.md'] })}
+        rows={ROWS}
+      />,
+    )
+    const marked = screen
+      .getAllByTestId('viewpart-list-row')
+      .filter((li) => within(li).queryByTestId('viewpart-excluded-mark') !== null)
+    expect(marked.map((li) => li.textContent)).toEqual([expect.stringContaining('INV-2026-039')])
   })
 })
 
