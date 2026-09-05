@@ -16462,6 +16462,11 @@ type ViewResultGroup struct {
 	// Paths The member rows, by path into the result's own `rows` list. Always present — an empty array, never null.
 	Paths []string `json:"paths"`
 
+	// PathsOmitted How many of this group's members are NOT named in `paths` because the answer does not carry them. Absent when every member is named.
+	//
+	// `paths` references rows in the result's own `rows` list, and `rows` is capped. A group's `count` is its size over the FULL evaluated set, so once the cap binds, count and len(paths) legitimately differ — and the difference has to be STATED. Copying every member path instead would make the payload grow with the corpus rather than with the cap (a 100k record match produced ~100k path strings per grouped part), and naming rows the answer does not carry would leave the references dangling.
+	PathsOmitted *int `json:"paths_omitted,omitempty"`
+
 	// Subtotals Per-group totals, one entry per (property, op, unit value) under G2. Always present — an empty array, never null, so "this part declares no subtotals" is stated rather than inferred.
 	Subtotals []ViewUnitTotal `json:"subtotals"`
 }

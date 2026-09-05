@@ -526,7 +526,9 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 		resp.Next = nextActions(q, &resp)
 	}
 
-	trimToBudget(&resp)
+	if q.renderRows == 0 {
+		trimToBudget(&resp)
+	}
 	finishVerdict(&resp, q)
 
 	// The cursor has to be derived from resp.Counts.Shown, trimToBudget's own

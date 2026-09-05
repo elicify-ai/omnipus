@@ -569,6 +569,7 @@ type ViewResultGroup = {
   excluded_count?: number | undefined;
   excluded_reason?: string | undefined;
   excluded_paths?: Array<string> | undefined;
+  paths_omitted?: number | undefined;
 };
 type ViewUnitTotal = {
   property: string;
@@ -4014,6 +4015,7 @@ export const ViewResultGroup: z.ZodType<ViewResultGroup> = z.object({
   excluded_count: z.number().int().optional(),
   excluded_reason: z.string().optional(),
   excluded_paths: z.array(z.string().min(1)).optional(),
+  paths_omitted: z.number().int().gte(1).optional(),
 });
 export const ViewResultPoint: z.ZodType<ViewResultPoint> = z.object({
   key: z.string(),

@@ -5626,6 +5626,13 @@ export interface components {
              *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
              */
             excluded_paths?: string[];
+            /**
+             * @description How many of this group's members are NOT named in `paths` because the answer does not carry them. Absent when every member is named.
+             *
+             *     `paths` references rows in the result's own `rows` list, and `rows` is capped. A group's `count` is its size over the FULL evaluated set, so once the cap binds, count and len(paths) legitimately differ — and the difference has to be STATED. Copying every member path instead would make the payload grow with the corpus rather than with the cap (a 100k record match produced ~100k path strings per grouped part), and naming rows the answer does not carry would leave the references dangling.
+             * @example 8
+             */
+            paths_omitted?: number;
         };
         /**
          * ViewUnitTotal

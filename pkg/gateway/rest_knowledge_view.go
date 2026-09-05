@@ -59,16 +59,25 @@ import (
 // exists in another workspace.
 // ---------------------------------------------------------------------------
 
-const (
-	// viewResultPageSize is knowledgefind's own MaxLimit, asked for
-	// explicitly so paging takes as few round trips as the engine permits.
-	viewResultPageSize = 200
-	// maxViewResultRows bounds how many rows one view result will carry.
-	// Above it the result reports rows_truncated and computes NO totals —
-	// a total over a truncated set is a wrong number that looks right,
-	// which is the one output this surface exists to make impossible.
-	maxViewResultRows = 2000
-)
+// maxViewResultRows bounds how many rows one view result will carry. Above it
+// the result reports rows_truncated and computes NO totals — a total over a
+// truncated set is a wrong number that looks right, which is the one output
+// this surface exists to make impossible.
+//
+// It is a var, not a const, ONLY so a test can lower it: proving the cap is
+// EXACT (2000 rows carried, not 2199) needs a corpus one row past it, and a
+// 2001-note fixture would make the proof too slow to run and therefore not
+// run. Nothing in production writes it.
+var maxViewResultRows = 2000
+
+// viewResultFind is the seam every evaluation in this file goes through.
+//
+// It is knowledgefind.Find and nothing else. It exists so a test can COUNT the
+// evaluations one request makes — the quantity the offset-paging defect was
+// about, and one that no field of the response reports. Behaviour that cannot
+// be observed cannot be regression-tested, and this endpoint's cost was
+// previously ten full re-evaluations of the whole query per request.
+var viewResultFind = knowledgefind.Find
 
 // viewResultExcludedReason writes the G3 footer line for one scope.
 func viewResultExcludedReason(n int, unitProps []string) string {
@@ -159,15 +168,25 @@ func viewResultRefusedUnknown(name string) gen.ViewResult {
 // ---------------------------------------------------------------------------
 
 type viewResultBuilder struct {
-	ctx       context.Context
-	env       vaultprops.FindEnv
-	view      *records.SavedView
+	ctx  context.Context
+	env  vaultprops.FindEnv
+	view *records.SavedView
+	// parts is the resolved part stack, held so the row collection can ask the
+	// engine for the grouping the stack actually needs.
+	parts     []gen.ViewPart
 	sel       *[]string
 	rowByPath map[string]*gen.VaultFindRow
 	// groupCache caches full-evaluated-set groupings by signature, so a part
 	// whose grouping matches the view's own reuses the base call's groups.
 	groupCache map[string][]gen.VaultFindGroup
 	truncated  bool
+	// snapshotEpoch is the properties-index generation the ROW evaluation ran
+	// against. Every later evaluation this request makes is checked against
+	// it, so a grouping computed over a re-indexed vault can never be paired
+	// with rows from before the reindex — the Count=N beside an N-1 subtotal
+	// case. Zero means the engine reported no epoch, and the check is skipped
+	// rather than passed on a coincidence of zeroes.
+	snapshotEpoch int64
 	// refusedUnitProps dedupes the untyped-view G2 refusal: one problem per
 	// property per result, however many parts and groups total it.
 	refusedUnitProps map[string]bool
@@ -240,6 +259,7 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) g
 		view:       v,
 		rowByPath:  map[string]*gen.VaultFindRow{},
 		groupCache: map[string][]gen.VaultFindGroup{},
+		parts:      parts,
 		out:        &out,
 	}
 	b.sel = b.buildSelect(parts)
@@ -304,22 +324,54 @@ func (b *viewResultBuilder) buildSelect(parts []gen.ViewPart) *[]string {
 	return &sel
 }
 
-// collectRows pages the WHOLE row set through the engine's own cursor,
-// bounded by maxViewResultRows. It returns a refusal result when the engine
-// refuses, and nil on success.
+// collectRows evaluates the view ONCE and keeps every row it is allowed to
+// carry. It returns a refusal result when the engine refuses, and nil on
+// success.
+//
+// IT IS ONE EVALUATION, AND THAT IS THE POINT. This used to walk the engine's
+// OFFSET cursor a page at a time, and an offset cursor is not a resumable
+// stream: every page is a fresh Find() that re-runs the WHOLE evaluation —
+// candidate selection, filter, sort, aggregate over the full set — and then
+// discards everything before the offset. Ten pages therefore cost ten complete
+// evaluations of one query per HTTP request, and the engine's 4 kB response
+// budget (sized for a language model's context window, not for an HTTP body)
+// trimmed each page as well, so a view over a few hundred records could not
+// reach its own row cap however many pages it took, and reported itself
+// INCOMPLETE after carrying every row.
+//
+// Deps.RenderRows is what makes one call sufficient: the caller states the
+// bound it can actually take and the engine answers within it, capping the
+// page there instead of at MaxLimit and skipping a byte budget written for a
+// different consumer. The request asks for ONE MORE row than will be kept,
+// which is how "there are more" is distinguished from "that was all" without
+// a second round trip — and the extra row is dropped, so the cap is EXACT
+// rather than a floor the last page overshoots from.
 func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
-	limit := viewResultPageSize
+	// One past the cap: the extra row is the truncation detector and is never
+	// carried.
+	limit := maxViewResultRows + 1
 	req := gen.VaultFindRequest{View: &name, Limit: &limit}
 	if b.sel != nil {
 		req.Select = b.sel
 	}
+	// THE GROUPING THE STACK NEEDS, ASKED FOR IN THE SAME CALL. A view whose
+	// own `grouping:` is empty but whose table part declares one would
+	// otherwise need a second full evaluation to obtain groups the first call
+	// could have produced — and a second evaluation is a second point in time
+	// as well as a second cost.
+	base := b.baseGrouping()
+	if gb := viewGroupByRequest(base); len(gb) > 0 {
+		req.GroupBy = &gb
+	}
+	deps := b.env.Deps
+	deps.RenderRows = limit
 
-	first, err := knowledgefind.Find(b.ctx, b.env.Deps, req)
-	if err != nil || first.Refused {
+	resp, err := viewResultFind(b.ctx, deps, req)
+	if err != nil || resp.Refused {
 		ref := viewResultRefused(*b.out, "evaluation_refused",
 			fmt.Sprintf("the view %q could not be evaluated", name), "")
-		if len(first.Problems) > 0 {
-			p := first.Problems[0]
+		if len(resp.Problems) > 0 {
+			p := resp.Problems[0]
 			remedy := ""
 			if p.Fix != nil {
 				remedy = *p.Fix
@@ -329,53 +381,24 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		return &ref
 	}
 
-	b.out.Complete = first.Complete
-	b.out.CompleteReason = first.CompleteReason
-	// Problems are carried from the FIRST page only. Query-level problems
-	// (exclusions, clamps) are recomputed identically on every page, so
-	// appending each page's copy would state every one of them N times; the
-	// cost is that a stale-row problem for a row on a later page is carried
-	// only by that row's own `stale` flag, which survives in `rows`.
-	b.out.Problems = first.Problems
+	b.out.Complete = resp.Complete
+	b.out.CompleteReason = resp.CompleteReason
+	b.out.Problems = resp.Problems
 	if b.out.Problems == nil {
 		b.out.Problems = []gen.RecordProblem{}
 	}
+	b.snapshotEpoch = viewResponseEpoch(resp)
 
-	appendRows := func(rows []gen.VaultFindRow) {
-		for i := range rows {
-			b.out.Rows = append(b.out.Rows, rows[i])
-			if _, dup := b.rowByPath[rows[i].Path]; !dup {
-				b.rowByPath[rows[i].Path] = &b.out.Rows[len(b.out.Rows)-1]
-			}
-		}
+	rows := resp.Rows
+	if len(rows) > maxViewResultRows {
+		rows = rows[:maxViewResultRows]
 	}
-	appendRows(first.Rows)
+	b.out.Rows = append(b.out.Rows, rows...)
 
-	if first.Groups != nil {
-		b.groupCache[viewGroupingSignature(b.viewGrouping())] = *first.Groups
-	}
-
-	cursor := first.NextCursor
-	for cursor != nil && len(b.out.Rows) < maxViewResultRows {
-		pageReq := req
-		pageReq.Cursor = cursor
-		page, pageErr := knowledgefind.Find(b.ctx, b.env.Deps, pageReq)
-		if pageErr != nil || page.Refused {
-			// A page that refuses mid-walk (a stale cursor after a concurrent
-			// reindex) degrades the VERDICT, never the rows already gathered.
-			b.out.Complete = false
-			reason := "the row set changed while it was being read; re-request the view"
-			b.out.CompleteReason = &reason
-			b.truncated = true
-			t := true
-			b.out.RowsTruncated = &t
-			return nil
-		}
-		appendRows(page.Rows)
-		b.out.Complete = b.out.Complete && page.Complete
-		cursor = page.NextCursor
-	}
-	if cursor != nil {
+	// TRUNCATION IS EITHER OF TWO FACTS, and both are the same answer: the
+	// engine offered a cursor (more rows exist than were asked for), or it
+	// returned the detector row.
+	if resp.NextCursor != nil || len(resp.Rows) > maxViewResultRows {
 		b.truncated = true
 		t := true
 		b.out.RowsTruncated = &t
@@ -385,9 +408,16 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		b.out.CompleteReason = &reason
 	}
 
-	// The rows the row map indexes must be the FINAL slice elements: the
-	// appends above may have reallocated the backing array, so the map is
-	// rebuilt once over the settled slice rather than trusted.
+	// The base call's groups come from the SAME evaluation as the rows, so a
+	// group's count and its members are one consistent snapshot by
+	// construction — the property groupsFor has to work for to obtain.
+	if resp.Groups != nil {
+		b.groupCache[viewGroupingSignature(base)] = *resp.Groups
+	}
+
+	// The row map indexes the FINAL slice elements: the append above may have
+	// reallocated the backing array, so the map is built over the settled
+	// slice rather than during the copy.
 	b.rowByPath = make(map[string]*gen.VaultFindRow, len(b.out.Rows))
 	for i := range b.out.Rows {
 		if _, dup := b.rowByPath[b.out.Rows[i].Path]; !dup {
@@ -395,6 +425,16 @@ func (b *viewResultBuilder) collectRows(name string) *gen.ViewResult {
 		}
 	}
 	return nil
+}
+
+// viewResponseEpoch reads the properties-index generation an evaluation ran
+// against. Zero means the engine reported none, which is treated as "cannot be
+// compared" rather than as a generation that matches every other zero.
+func viewResponseEpoch(resp gen.VaultFindResponse) int64 {
+	if resp.Index == nil || resp.Index.Epoch == nil {
+		return 0
+	}
+	return *resp.Index.Epoch
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +446,42 @@ func (b *viewResultBuilder) viewGrouping() []gen.ViewGroupBy {
 		return nil
 	}
 	return *b.view.Def.Grouping
+}
+
+// baseGrouping is the grouping the single row-collecting evaluation asks for:
+// the view's own when it declares one, otherwise the first part's that does.
+//
+// It exists so the ordinary shape — a stack whose parts all group the way the
+// first one does, or do not group at all — costs ONE evaluation. A part
+// grouping some other way still needs its own call, and pays for it knowingly.
+func (b *viewResultBuilder) baseGrouping() []gen.ViewGroupBy {
+	if g := b.viewGrouping(); len(g) > 0 {
+		return g
+	}
+	for _, part := range b.parts {
+		if part.Grouping != nil && len(*part.Grouping) > 0 {
+			// A crosstab's grouping is two-level and the engine caps grouping
+			// at two levels, so this is safe to pass through as written.
+			return *part.Grouping
+		}
+	}
+	return nil
+}
+
+// viewGroupByRequest translates a view grouping into the engine's own group_by
+// argument. One translation, used by both the base call and groupsFor, so the
+// two cannot come to disagree about what a direction means.
+func viewGroupByRequest(grouping []gen.ViewGroupBy) []gen.VaultFindGroupBy {
+	gb := make([]gen.VaultFindGroupBy, 0, len(grouping))
+	for _, g := range grouping {
+		key := gen.VaultFindGroupBy{Property: g.Property}
+		if g.Direction != nil {
+			dir := gen.VaultFindGroupByDirection(string(*g.Direction))
+			key.Direction = &dir
+		}
+		gb = append(gb, key)
+	}
+	return gb
 }
 
 // effectiveGrouping is the ViewPart contract's inheritance rule: a part's own
@@ -460,7 +536,26 @@ func (b *viewResultBuilder) groupsFor(grouping []gen.ViewGroupBy) ([]gen.VaultFi
 	if b.sel != nil {
 		req.Select = b.sel
 	}
-	resp, err := knowledgefind.Find(b.ctx, b.env.Deps, req)
+	resp, err := viewResultFind(b.ctx, b.env.Deps, req)
+	if err == nil && !resp.Refused && !b.sameSnapshotAsRows(resp) {
+		// A SECOND EVALUATION IS A SECOND POINT IN TIME, and this is the one
+		// place this request cannot avoid taking one — a part grouping some
+		// way the view itself does not has no groups in the base call's
+		// answer. If the properties index was rebuilt in between, the groups
+		// describe a different row set from the one in `rows`, and pairing
+		// them would put a count of N beside a subtotal over N-1 with nothing
+		// said. The groups are dropped, not reconciled: reconciling two
+		// snapshots is inventing a third.
+		fix := "re-request the view; the vault was re-indexed while this answer was being assembled"
+		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+			Code:    gen.AggregateRefused,
+			Reason:  "this part's grouping was evaluated against a different index generation from the rows, so its groups and their subtotals are not shown — they would describe a row set this answer does not carry",
+			Fix:     &fix,
+			Records: []string{},
+		})
+		b.out.Complete = false
+		return nil, false
+	}
 	if err != nil || resp.Refused || resp.Groups == nil {
 		reason := "grouped evaluation failed"
 		if len(resp.Problems) > 0 {
@@ -478,6 +573,45 @@ func (b *viewResultBuilder) groupsFor(grouping []gen.ViewGroupBy) ([]gen.VaultFi
 	}
 	b.groupCache[sig] = *resp.Groups
 	return *resp.Groups, true
+}
+
+// carriedPaths bounds a group's member list to the rows this answer actually
+// carries, and COUNTS what it dropped.
+//
+// A group's `paths` are documented as references INTO the result's own `rows`.
+// Copying the engine's full membership broke that on both sides: it named rows
+// the answer does not carry (a dangling reference the SPA resolves to nothing),
+// and it made the payload grow with the CORPUS rather than with the row cap —
+// 100k matching records produced ~100k path strings per grouped part, whatever
+// the 2000-row cap said.
+//
+// The shortfall is stated, never silent. A group's `count` is still its size
+// over the full evaluated set, so count and len(paths) legitimately differ once
+// the cap binds; `paths_omitted` is the difference, and a reader who wants to
+// know why a group of 600 lists 40 members is told.
+func (b *viewResultBuilder) carriedPaths(paths []string) ([]string, int) {
+	out := make([]string, 0, len(paths))
+	omitted := 0
+	for _, p := range paths {
+		if _, ok := b.rowByPath[p]; ok {
+			out = append(out, p)
+			continue
+		}
+		omitted++
+	}
+	return out, omitted
+}
+
+// sameSnapshotAsRows reports whether a later evaluation ran against the same
+// properties-index generation as the row collection. An epoch of zero on
+// either side means the comparison cannot be made, and an unmakeable
+// comparison is not treated as a passing one.
+func (b *viewResultBuilder) sameSnapshotAsRows(resp gen.VaultFindResponse) bool {
+	got := viewResponseEpoch(resp)
+	if b.snapshotEpoch == 0 || got == 0 {
+		return true
+	}
+	return got == b.snapshotEpoch
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,12 +1271,17 @@ func (b *viewResultBuilder) buildTablePartData(p *gen.ViewResultPart, src gen.Vi
 		if groups, ok := b.groupsFor(grouping); ok {
 			resultGroups := make([]gen.ViewResultGroup, 0, len(groups))
 			for _, g := range groups {
+				paths, omitted := b.carriedPaths(g.Paths)
 				rg := gen.ViewResultGroup{
 					Key:       g.Key,
 					Absent:    g.Absent,
 					Count:     g.Count,
-					Paths:     append([]string{}, g.Paths...),
+					Paths:     paths,
 					Subtotals: []gen.ViewUnitTotal{},
+				}
+				if omitted > 0 {
+					n := omitted
+					rg.PathsOmitted = &n
 				}
 				if len(subtotalProps) > 0 && !b.truncated {
 					rows := b.rowsFor(g.Paths)

@@ -355,7 +355,12 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	// row dropped by the byte budget is a row the answer does not show, so the
 	// header has to count it. Trimming afterwards would leave the verdict
 	// describing a response that no longer exists.
-	trimToBudget(&resp)
+	// THE BYTE BUDGET IS A MODEL'S BUDGET. A renderer that declared its own
+	// row bound is answered within that bound instead of being trimmed to a
+	// context window it does not have.
+	if q.renderRows == 0 {
+		trimToBudget(&resp)
+	}
 	finishVerdict(&resp, q)
 
 	// THE CURSOR MUST BE DERIVED FROM WHAT WAS ACTUALLY RETURNED (F8), which
@@ -410,8 +415,8 @@ func finishVerdict(resp *generated.VaultFindResponse, q *query) {
 		reasons = append(reasons, fmt.Sprintf("page size clamped to %d", q.limit))
 		resp.Problems = append(resp.Problems, problem(generated.PageSizeClamped,
 			fmt.Sprintf("limit=%d exceeds the cap of %d and was reduced to %d",
-				q.limitAsked, MaxLimit, q.limit),
-			fmt.Sprintf("ask for %d or fewer, and page with the cursor", MaxLimit)))
+				q.limitAsked, q.limitCap(), q.limit),
+			fmt.Sprintf("ask for %d or fewer, and page with the cursor", q.limitCap())))
 	}
 
 	if len(reasons) == 0 {

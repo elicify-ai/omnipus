@@ -502,7 +502,7 @@ func TestComposed_SelectorStillCarriesExactlyThreeFields(t *testing.T) {
 	f := newComposedFixture(t)
 	req, views := composedRequest()
 	set := f.set
-	q, r := parse(withView(req, views), set, views.formulas)
+	q, r := parse(withView(req, views), set, views.formulas, 0)
 	if r != nil {
 		t.Fatalf("the composed query did not parse: %v", r)
 	}

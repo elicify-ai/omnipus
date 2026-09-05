@@ -96,6 +96,9 @@ type query struct {
 	clamped    bool
 	cursor     string
 	minimal    bool
+	// renderRows is Deps.RenderRows, carried so applyLimit and the budget can
+	// both see it. Zero is every tool call.
+	renderRows int
 
 	// resolve maps a wikilink to a record identity — D5.1's wikilink -> file
 	// -> record id, the SAME seam the comparator's R-8 comparisons run
@@ -161,11 +164,12 @@ type aggregate struct {
 // Every failure here returns a *RefusalError carrying the remedy. None of them
 // returns an empty result: "no matches" and "you spelled it wrong" are
 // indistinguishable to a caller, and the second is far more common.
-func parse(req generated.VaultFindRequest, set *records.SchemaSet, formulas map[string]string) (*query, *RefusalError) {
+func parse(req generated.VaultFindRequest, set *records.SchemaSet, formulas map[string]string, renderRows int) (*query, *RefusalError) {
 	q := &query{
-		kind:  KindNote,
-		limit: DefaultLimit,
-		set:   set,
+		kind:       KindNote,
+		limit:      DefaultLimit,
+		set:        set,
+		renderRows: renderRows,
 	}
 
 	// A PRESENT-BUT-BLANK `type` or `kind` never reaches here: Find refuses it
@@ -278,13 +282,25 @@ func (q *query) applyLimit(req generated.VaultFindRequest) *RefusalError {
 			fmt.Sprintf("limit is between 1 and %d; drop it to use %d", MaxLimit, DefaultLimit)), nil)
 	}
 	q.limitAsked = n
-	if n > MaxLimit {
-		q.limit = MaxLimit
+	// The cap is MaxLimit for a model and RenderRows for an in-process
+	// renderer that declared its own bound. Either way it is a CAP, and either
+	// way exceeding it clamps and SAYS SO — the clamp is never silent.
+	ceiling := q.limitCap()
+	if n > ceiling {
+		q.limit = ceiling
 		q.clamped = true
 		return nil
 	}
 	q.limit = n
 	return nil
+}
+
+// limitCap is the page-size ceiling this query is answered under.
+func (q *query) limitCap() int {
+	if q.renderRows > 0 {
+		return q.renderRows
+	}
+	return MaxLimit
 }
 
 // resolveType is FR-024 for the record type itself.
