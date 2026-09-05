@@ -12,7 +12,10 @@
 // `criteria` field (present on the `queued` pending-confirm emission,
 // ADR-074 D5.2). Rendering is plain-language-FIRST: each row leads with the
 // criterion text; a technical payload (machine-check command verbatim, or a
-// behavior count) renders as a quiet per-row "verifies via" chip. `[kind]`
+// behavior count) renders as a quiet per-row "verifies via:" chip. Row and
+// chip rendering — including the chip's formatting — is delegated entirely
+// to the shared CriteriaBreakdown component (D5.4), so the same criterion
+// reads identically here and in the Create Task / Create Plan flows. `[kind]`
 // classification tokens are NOT user-facing content and never render.
 //
 // Purely presentational — driven by props. Literal commands are shown
@@ -21,31 +24,11 @@
 
 import { Target, ArrowBendUpRight } from '@phosphor-icons/react'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
-
-type GoalCriterion = NonNullable<GoalStatusFrame['criteria']>[number]
+import { CriteriaBreakdown } from '@/components/shared/CriteriaBreakdown'
 
 export interface GoalEchoCardProps {
   /** The goal_status frame describing the compiled goal (condition + accounting + criteria breakdown). */
   frame: GoalStatusFrame
-}
-
-/**
- * Renders one criterion's technical payload as the "verifies via" chip text,
- * or null when the criterion is plain prose (no chip — the judge reads it).
- * Commands are verbatim (FR-113 substance), never paraphrased.
- */
-function verifiesVia(c: GoalCriterion): string | null {
-  if (c.check) {
-    return `${c.check.command} (expected exit ${c.check.expected_exit_code})`
-  }
-  if (c.behavior) {
-    const min = c.behavior.min_count ?? 1
-    if (typeof c.behavior.max_count === 'number') {
-      return `${c.behavior.tool} called ${min}–${c.behavior.max_count} times`
-    }
-    return `${c.behavior.tool} called at least ${min} time${min === 1 ? '' : 's'}`
-  }
-  return null
 }
 
 export function GoalEchoCard({ frame }: GoalEchoCardProps) {
@@ -74,36 +57,15 @@ export function GoalEchoCard({ frame }: GoalEchoCardProps) {
       </p>
 
       {/* Criteria breakdown — plain language first, per-row verifies-via chip
-          for technical payloads (ADR-074 D5.2 / FR-011). */}
+          for technical payloads (ADR-074 D5.2 / FR-011). Rendered by the
+          shared CriteriaBreakdown (D5.4) so criteria read identically on
+          every confirmation surface. */}
       {criteria.length > 0 && (
         <div className="mt-2.5" data-testid="goal-echo-criteria">
           <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
             Done when
           </div>
-          <ol className="space-y-1.5">
-            {criteria.map((c, i) => {
-              const chip = verifiesVia(c)
-              return (
-                <li key={c.id ?? i} className="flex items-start gap-2" data-testid="goal-echo-criterion">
-                  <span className="text-[var(--color-muted)] tabular-nums shrink-0">{i + 1}.</span>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[var(--color-secondary)] break-words">{c.text}</span>
-                    {chip && (
-                      <span
-                        className="block mt-0.5 text-[11px] text-[var(--color-muted)]"
-                        data-testid="goal-echo-verifies-via"
-                      >
-                        verifies via{' '}
-                        <code className="font-mono text-[var(--color-accent)] bg-[var(--color-surface-2)] rounded px-1.5 py-0.5 break-all">
-                          {chip}
-                        </code>
-                      </span>
-                    )}
-                  </div>
-                </li>
-              )
-            })}
-          </ol>
+          <CriteriaBreakdown criteria={criteria} />
         </div>
       )}
 

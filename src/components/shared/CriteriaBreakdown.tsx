@@ -3,9 +3,11 @@
  *
  * Renders an itemized Definition-of-Done breakdown: plain-language text
  * first, with a mono "verifies via:" chip beneath any criterion that carries
- * a technical payload. Used by the Create Task / Create Plan flows to present
- * agent-drafted criteria for confirmation, and by the goal confirmation card
- * (D5.2 — the same component, consumed by the goal-card contract stream).
+ * a technical payload. Used by the Create Task / Create Plan flows
+ * (AcceptanceCriteriaEditor) to present agent-drafted criteria for
+ * confirmation, and by the goal confirmation card (GoalEchoCard, D5.2) —
+ * the same component on every surface, so a criterion reads identically
+ * everywhere it is shown.
  *
  * Deliberately coupled by INTERFACE, not imports: `CriteriaBreakdownItem` is
  * a minimal structural subset of the generated `AcceptanceCriterion` wire

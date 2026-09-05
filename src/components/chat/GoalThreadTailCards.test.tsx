@@ -59,8 +59,10 @@ describe('GoalThreadTailCards', () => {
     })
     render(<GoalThreadTailCards />)
     expect(screen.getByTestId('goal-thread-tail-cards')).toBeInTheDocument()
-    expect(screen.getAllByTestId('goal-echo-criterion')).toHaveLength(2)
-    expect(screen.getByTestId('goal-echo-verifies-via')).toHaveTextContent('npm run build')
+    // Criteria render through the shared CriteriaBreakdown (D5.4).
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText('verifies via:')).toBeInTheDocument()
+    expect(screen.getByText('npm run build -> exit 0')).toBeInTheDocument()
   })
 
   // US-6 S3 negative (R2-03): an ACTIVE goal paused waiting_on_user is NOT a
