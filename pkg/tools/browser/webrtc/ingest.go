@@ -115,8 +115,16 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		}
 	}()
 
+	// ice-diag: full candidate/timing/selected-pair instrumentation, on the
+	// SUCCESS path as well as the failure path -- see icediag.go's header for
+	// why a failure's candidate set is uninterpretable without a success's.
+	diag := newICEDiag(prefix, "ingest", s.logf)
+	pc.OnICECandidate(diag.noteLocalCandidate)
+	pc.OnICEGatheringStateChange(diag.noteGatheringState)
+
 	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
 		s.logf("%s ICE connection state -> %s", prefix, st.String())
+		diag.noteICEState(st, pc)
 		if st == webrtc.ICEConnectionStateFailed {
 			// An ICE failure on the LOOPBACK ingest leg is the single most
 			// consequential startup failure this package has (it leaves the
@@ -142,6 +150,12 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	})
 
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
+	// Log what the ENCODER offered before applying it, unconditionally. This
+	// is the only dump that must not wait for an outcome: whether Chrome
+	// obfuscated its host candidates as mDNS ".local" names has to be
+	// answerable for the runs that SUCCEEDED too, or an intermittent failure
+	// can never be told apart from a constant condition.
+	diag.noteRemoteOffer(sdpOffer)
 	if err = pc.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("webrtc: ingest %s: set remote description: %w", prefix, err)
 	}
@@ -157,11 +171,20 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		return "", fmt.Errorf("webrtc: ingest %s: set local description: %w", prefix, err)
 	}
 
+	// gatherStart is deliberately taken AFTER SetLocalDescription (which is
+	// what actually starts the gatherer), so the duration reported is the
+	// gathering itself and not the SDP work preceding it. A gathering that
+	// takes ~0ms is host-candidates-only; one that takes seconds is a STUN
+	// round trip, and one that hits gatherTimeout is a STUN server that never
+	// answered -- three different diagnoses the previous log could not
+	// separate, because it reported only which of the two branches was taken.
+	gatherStart := time.Now()
 	select {
 	case <-gatherComplete:
-		s.logf("%s server gathering complete, sending answer", prefix)
+		s.logf("%s server gathering complete in %dms, sending answer", prefix, time.Since(gatherStart).Milliseconds())
 	case <-time.After(gatherTimeout):
-		s.logf("%s WARNING: server gathering did not complete within %s, sending partial answer", prefix, gatherTimeout)
+		s.logf("%s WARNING: server gathering did not complete within %s, sending partial answer (%s)",
+			prefix, gatherTimeout, describeSDPCandidates(descriptionSDP(pc.LocalDescription())))
 	}
 
 	local := pc.LocalDescription()

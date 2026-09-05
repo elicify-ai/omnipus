@@ -223,6 +223,13 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	}
 
 	se := webrtc.SettingEngine{}
+	// Forward pion's OWN internal logging (ICE agent, DTLS, mux) into this
+	// Session's log sink. Without this, pion uses its default factory, which
+	// is LogLevelError AND writes to a stderr that never reaches gateway.log
+	// -- so the one line that names the cause of a loopback ICE failure,
+	// pion/ice's Warn "Failed to discover mDNS candidate <name>: <err>", was
+	// discarded twice over. See icediag.go's header and pionLogEnv.
+	se.LoggerFactory = &pionLogBridge{level: pionLogLevel(), logf: s.logf}
 	// Always gather loopback candidates in ADDITION to normal host
 	// candidates. This never changes production behavior (Fly pods have a
 	// real interface, so this just adds an extra, usually-useless candidate)
