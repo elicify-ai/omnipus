@@ -608,16 +608,42 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 				// docs/internal/agent-refactor/context.md §"Compression paths")
 				// does NOT pre-empt the first LLM call. The default heuristic
 				// (MaxTokens*4 = 16384) is smaller than the seeded builtin tool
-				// catalog's ~12100 estimated tool-def tokens + this MaxTokens
-				// (4096), so without this override the proactive trim fires
-				// before the provider ever sees the request, emitting a
-				// `proactive_budget` compress event that shadows the
-				// `llm_retry` event this test exists to exercise. 32768 leaves
-				// the assembled request comfortably under budget on paper, so
-				// the mockProvider's context-limit error drives the REACTIVE
-				// retry-compress path — the documented fallback for when the
-				// estimate undershoots reality.
-				ContextWindow: 32768,
+				// catalog's estimated tool-def tokens + this MaxTokens (4096),
+				// so without this override the proactive trim fires before the
+				// provider ever sees the request, emitting a `proactive_budget`
+				// compress event that shadows the `llm_retry` event this test
+				// exists to exercise.
+				//
+				// CI run 33959789214 caught this value going stale: the builtin
+				// tool catalog grew from the ~12100 estimated tokens assumed
+				// when 32768 was chosen to 59 tools / ~28778 estimated tokens
+				// (instrumented directly via isOverContextBudget on this exact
+				// test config), pushing the proactive check's total to ~36272 —
+				// over the old 32768 window — so it fired first every run and
+				// findEvent(events, EventKindContextCompress) picked up its
+				// "proactive_budget" reason instead of the retry path's
+				// "llm_retry" one.
+				//
+				// Two hypotheses, one rejected: this could mean the retry path
+				// itself was being masked/skipped (H2), or that the retry path
+				// still ran correctly and only the test's window headroom had
+				// gone stale (H1). Evidence rejects H2: the captured event
+				// stream still contained BOTH the `llm_retry` EventKindLLMRetry
+				// event (reason=context_limit, attempt=1, asserted above) AND
+				// its own `llm_retry`-reasoned EventKindContextCompress event —
+				// the retry path (loop.go's isContextError branch, which is
+				// unconditional on the provider's context-limit error, not
+				// gated by isOverContextBudget) never stopped firing. Only the
+				// proactive check's pre-empting a call that used to clear the
+				// window is new, confirming H1.
+				//
+				// Fix: raise ContextWindow to 131072 (128Ki) — the same "treat
+				// unknown model as 128k" fallback loop.go already uses at
+				// decideSwitchCompressAction's call site (loop.go:11613) — for
+				// headroom well beyond the current ~36272 total, so the
+				// proactive check keeps clearing and this test again isolates
+				// the reactive retry-compress path it was written to exercise.
+				ContextWindow: 131072,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
