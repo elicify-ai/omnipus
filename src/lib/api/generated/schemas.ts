@@ -258,6 +258,22 @@ type KnowledgeGraphSkip = {
     | "hop_limit";
   detail?: string | undefined;
 };
+type KnowledgeBaseViews = {
+  base_path: string;
+  is_knowledge_base: boolean;
+  collection_id?: string | undefined;
+  collection_root?: string | undefined;
+  source?: string | undefined;
+  views: Array<KnowledgeBaseView>;
+  unloadable_count: number;
+};
+type KnowledgeBaseView = {
+  name: string;
+  label: string;
+  kind?: string | undefined;
+  unservable?: boolean | undefined;
+  unservable_reason?: string | undefined;
+};
 type KnowledgeOutline = {
   path: string;
   is_knowledge_base: boolean;
@@ -3968,6 +3984,22 @@ export const KnowledgeOutline: z.ZodType<KnowledgeOutline> = z.object({
   headings: z.array(KnowledgeOutlineHeading),
   frontmatter_malformed: z.boolean().optional(),
 });
+export const KnowledgeBaseView: z.ZodType<KnowledgeBaseView> = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.string().optional(),
+  unservable: z.boolean().optional(),
+  unservable_reason: z.string().min(1).optional(),
+});
+export const KnowledgeBaseViews: z.ZodType<KnowledgeBaseViews> = z.object({
+  base_path: z.string().min(1),
+  is_knowledge_base: z.boolean(),
+  collection_id: z.string().min(1).optional(),
+  collection_root: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+  views: z.array(KnowledgeBaseView),
+  unloadable_count: z.number().int().gte(0),
+});
 export const ViewResultRefusal: z.ZodType<ViewResultRefusal> = z.object({
   code: z.string().min(1),
   reason: z.string().min(1),
@@ -7204,6 +7236,58 @@ Carries no index counts. Index progress is a streaming state pushed over the Web
       },
     ],
     response: KnowledgeBaseInfo,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/base-views",
+    alias: "getKnowledgeBaseViews",
+    description: `Lists the saved views whose &#x60;source&#x60; names the given &#x60;.base&#x60; file, with the slug each one is actually addressed by, its display label, its kind, and whether it can be served at all — plus the enclosing collection, so a caller can evaluate any of them without a second lookup.
+
+THE SLUG IS THE SERVER&#x27;S TO GIVE. Import is one-shot (FR-102) and the importer&#x27;s SlugRegistry appends a collision counter that nothing outside it can reconstruct, so a client that re-derived slugs by parsing the &#x60;.base&#x60; file mapped two colliding view names onto one slug and rendered the first view&#x27;s rows under the second view&#x27;s name. Every &#x60;name&#x60; here is read from the saved view file itself and must be passed VERBATIM to GET .../knowledge/view.
+
+A &#x60;.base&#x60; outside any knowledge base answers 200 with is_knowledge_base&#x3D;false and no views: nothing imported it, so it has no views to run, which is a stated answer rather than an error. View files that name this base but failed to load are counted in unloadable_count rather than silently reducing the list.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeBaseViews,
     errors: [
       {
         status: 400,

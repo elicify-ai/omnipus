@@ -1,0 +1,66 @@
+title: KnowledgeBaseView
+description: >
+  One saved view that was imported from a given `.base` file, as the server
+  knows it (view-kinds-design-2026-09-03 §7).
+
+  THE SERVER'S SLUG IS THE ONLY ADDRESS. Import is one-shot (FR-102): a
+  `.base` file's views were translated into
+  `<vault>/.omnipus-vault/views/<slug>.yaml` and the source file is never
+  read again on the query path. The importer's own SlugRegistry
+  (pkg/vaultimport/util.go) derives that slug — kebab(base stem) + "--" +
+  kebab(view name), plus a numeric suffix when two view names kebab to the
+  same string — and the suffix is a COUNTER over everything already handed
+  out, which nothing outside the importer can reconstruct. A client that
+  re-derived the slug by parsing the `.base` file therefore mapped two
+  colliding view names onto ONE slug: the second tab silently rendered the
+  first view's rows under the second view's name. `name` here is read from
+  the saved view file itself, so there is nothing left to re-derive.
+type: object
+additionalProperties: false
+required:
+  - name
+  - label
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      The saved view's own name — the authoritative slug, to be passed
+      VERBATIM as the `view` query parameter of
+      GET /library/{workspace_id}/knowledge/view. Never reconstructed by a
+      client.
+    example: "invoices--outstanding"
+  label:
+    type: string
+    minLength: 1
+    description: >
+      What to show a reader: the view's declared `label` when it has one,
+      otherwise its `name`. Resolved server-side (records.SavedView's
+      DisplayLabel) so no two consumers can invent different fallbacks.
+    example: "Outstanding"
+  kind:
+    type: string
+    description: >
+      The view kind that authored this view (design §2.3), when the file
+      declares one. Provenance — nothing renders from it.
+    example: "summary"
+  unservable:
+    type: boolean
+    description: >
+      True when the view loaded but CANNOT be served — it is stored
+      `disabled` (FR-105), or its filter cannot be carried into the query
+      grammar. Absent or false means it can be evaluated normally.
+
+
+      Reported rather than hidden: a view the vault declares and this surface
+      silently omits is indistinguishable from a view that was never
+      imported, and the operator's fix differs completely between the two.
+    example: true
+  unservable_reason:
+    type: string
+    minLength: 1
+    description: >
+      Why it cannot be served, in the operator's own vocabulary, together
+      with the remedy — records.ViewServeRefusal's Reason and Remedy.
+      Present exactly when `unservable` is true.
+    example: "the view is stored disabled because an expression in its filter could not be translated — write the filter directly to run it"

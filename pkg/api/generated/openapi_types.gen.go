@@ -9821,6 +9821,55 @@ type KnowledgeBaseInfoDetectionErrorCode string
 // KnowledgeBaseInfoMarker Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
 type KnowledgeBaseInfoMarker string
 
+// KnowledgeBaseView One saved view that was imported from a given `.base` file, as the server knows it (view-kinds-design-2026-09-03 §7).
+// THE SERVER'S SLUG IS THE ONLY ADDRESS. Import is one-shot (FR-102): a `.base` file's views were translated into `<vault>/.omnipus-vault/views/<slug>.yaml` and the source file is never read again on the query path. The importer's own SlugRegistry (pkg/vaultimport/util.go) derives that slug — kebab(base stem) + "--" + kebab(view name), plus a numeric suffix when two view names kebab to the same string — and the suffix is a COUNTER over everything already handed out, which nothing outside the importer can reconstruct. A client that re-derived the slug by parsing the `.base` file therefore mapped two colliding view names onto ONE slug: the second tab silently rendered the first view's rows under the second view's name. `name` here is read from the saved view file itself, so there is nothing left to re-derive.
+type KnowledgeBaseView struct {
+	// Kind The view kind that authored this view (design §2.3), when the file declares one. Provenance — nothing renders from it.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label What to show a reader: the view's declared `label` when it has one, otherwise its `name`. Resolved server-side (records.SavedView's DisplayLabel) so no two consumers can invent different fallbacks.
+	Label string `json:"label"`
+
+	// Name The saved view's own name — the authoritative slug, to be passed VERBATIM as the `view` query parameter of GET /library/{workspace_id}/knowledge/view. Never reconstructed by a client.
+	Name string `json:"name"`
+
+	// Unservable True when the view loaded but CANNOT be served — it is stored `disabled` (FR-105), or its filter cannot be carried into the query grammar. Absent or false means it can be evaluated normally.
+	//
+	// Reported rather than hidden: a view the vault declares and this surface silently omits is indistinguishable from a view that was never imported, and the operator's fix differs completely between the two.
+	Unservable *bool `json:"unservable,omitempty"`
+
+	// UnservableReason Why it cannot be served, in the operator's own vocabulary, together with the remedy — records.ViewServeRefusal's Reason and Remedy. Present exactly when `unservable` is true.
+	UnservableReason *string `json:"unservable_reason,omitempty"`
+}
+
+// KnowledgeBaseViews The saved views that belong to one `.base` file, plus everything needed to evaluate them — the answer to "open this base as its views" (view-kinds-design-2026-09-03 §7).
+// WHY THIS ENDPOINT EXISTS. Nothing listed which saved views came from which source file, so the SPA read the `.base` file itself and re-derived each view's slug by mirroring the importer's slugger. Two things that cost: the importer's collision COUNTER cannot be mirrored (two view names that kebab alike collapsed onto one slug, and the second tab rendered the first view's rows), and a hand-rolled YAML walk mistook a nested `name:` key for the view's own name (a valid view then answered `unknown_view`). Both are re-derivations of a fact the server already holds: every imported view file records the `source` it came from, its own `name`, and its `label`. This endpoint reports them, and the client re-derives nothing.
+// MATCHING IS ON `source`, NOT ON THE FILENAME. A view's `source` is the vault-relative path of the `.base` it was imported from, written by the importer; the slug's spelling is a convenience, not an index.
+type KnowledgeBaseViews struct {
+	// BasePath The workspace-relative path that was asked about, echoed back, so a cached answer can never be shown against the wrong file.
+	BasePath string `json:"base_path"`
+
+	// CollectionId The enclosing collection, to be passed as `collection_id` when evaluating one of these views. Absent exactly when `is_knowledge_base` is false. Opaque — never parse a path out of it.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// CollectionRoot Workspace-relative path of that collection's root, forward-slash separated, matching KnowledgeBaseInfo.root_path. The SPA joins it with a vault-relative attachment path to build a download URL. Absent exactly when `is_knowledge_base` is false.
+	CollectionRoot *string `json:"collection_root,omitempty"`
+
+	// IsKnowledgeBase Whether the file sits inside a knowledge base at all. False means its views have nowhere to run — nothing imported them, and there is no collection to evaluate them against — and `views` is then empty. This is a stated answer, not an error: an ordinary `.base` file sitting outside a vault is an ordinary file.
+	IsKnowledgeBase bool `json:"is_knowledge_base"`
+
+	// Source The vault-relative path the views were matched on — the value an imported view carries in its own `source` field. Present exactly when `is_knowledge_base` is true. Reported so a base with zero views can be diagnosed without guessing what was looked for.
+	Source *string `json:"source,omitempty"`
+
+	// UnloadableCount How many view files name this base as their `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the schema no longer declares. They cannot appear in `views` because they have no usable name to address, so they are counted here instead, and the caller says "N views could not be loaded" rather than quietly showing fewer tabs than the base has views.
+	//
+	// A file so broken that its own `source` key is unreadable cannot be attributed to any base and is counted against none.
+	UnloadableCount int `json:"unloadable_count"`
+
+	// Views The views imported from this base, in the collection's own load order (filename order, so it is stable across runs). Always present — an empty array is the honest answer for a `.base` nothing imported, and the caller must render it as such rather than as a blank.
+	Views []KnowledgeBaseView `json:"views"`
+}
+
 // KnowledgeConflictError Typed 409 body for a refused knowledge-base write (ADR-067 D18 / D14). Returned when the version token a write carried does not match the file on disk (FR-106) — the file changed underneath the caller and applying the write would silently lose whatever changed.
 // The refusal NAMES THE PATH, because "conflict" without a path is not actionable in a collection of thousands of notes.
 // THE VERSION TOKEN, defined here because this is the type that carries it: an opaque string the server computes over the file's CONTENT — not its modification time, which is not sufficient on its own to detect an external change (FR-107). Every read that a write may follow returns the current token, every write MUST send back the token it read, and the server compares them. Callers MUST treat the token as opaque: never parse it, never compare it for ordering, never construct one. The encoding is the server's to change without a contract change, and a client that has not decoded it cannot be broken by that.
@@ -16882,6 +16931,12 @@ type GetLibraryInlineDispositionParams struct {
 // GetKnowledgeBaseInfoParams defines parameters for GetKnowledgeBaseInfo.
 type GetKnowledgeBaseInfoParams struct {
 	// Path Workspace-relative path of the folder to test. Use "" or "." for the work-tree root.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeBaseViewsParams defines parameters for GetKnowledgeBaseViews.
+type GetKnowledgeBaseViewsParams struct {
+	// Path Workspace-relative path of the .base file.
 	Path string `form:"path" json:"path"`
 }
 
