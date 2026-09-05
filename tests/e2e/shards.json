@@ -93,6 +93,7 @@
         "tests/e2e/settings-memory.spec.ts",
         "tests/e2e/tool-order.spec.ts",
         "tests/e2e/browser-live-video.spec.ts",
+        "tests/e2e/csp-assumptions.spec.ts",
         "tests/e2e/preview-pdf.spec.ts"
       ]
     },
