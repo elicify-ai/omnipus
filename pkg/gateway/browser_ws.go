@@ -1071,7 +1071,7 @@ func (h *BrowserWSHandler) readLoop(
 	// Re-register the PongHandler now that this connection has a viewer
 	// identity and a place to record one. It still does what the handshake's
 	// handler did — refresh the 60s read deadline — and additionally stamps
-	// the manager's viewer heartbeat (ADR-072 FR-052).
+	// the manager's viewer heartbeat (ADR-075 FR-052).
 	//
 	// The pong is the right signal precisely because it owes nothing to the
 	// user: pingPump sends a ping every 30s and the peer's browser answers it
@@ -2070,7 +2070,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 }
 
 // sessionWorkspaceID reads the workspace a chat session is bound to, from that
-// session's OWN meta on disk. It is ADR-072 FR-017's whole mechanism, and the
+// session's OWN meta on disk. It is ADR-075 FR-017's whole mechanism, and the
 // reason no wire field was added for the workspace (FR-016): the client tells
 // the gateway which chat it is looking at, and the gateway — not the client —
 // decides which workspace that is.
@@ -2109,7 +2109,7 @@ func (h *BrowserWSHandler) sessionWorkspaceID(chatSessionID string) string {
 
 // browserNoWorkspaceRemedy is the ONE sentence-ending clause every surface that
 // reports "this agent has no browser of its own" must end with, word for word
-// (ADR-072 FR-008a, round-2 MIN-107). It is quoted verbatim out of
+// (ADR-075 FR-008a, round-2 MIN-107). It is quoted verbatim out of
 // browser.ErrNoBrowsingContext, which is the authority: the panel, the tool
 // error an agent reads back, and the boot log must not each invent their own
 // phrasing of the same fix, because an operator who tries the panel's wording
@@ -2126,7 +2126,7 @@ const browserNoWorkspaceRemedy = "add this agent to a workspace's team, " +
 
 // browserResolveReason renders an agent.BrowserResolveOutcome as the sentence a
 // panel shows. The three failure reasons are DIFFERENT operator problems and
-// were indistinguishable before ADR-072 FR-008a — every one of them reported
+// were indistinguishable before ADR-075 FR-008a — every one of them reported
 // "browser tools may not be registered for this agent", which is actionable
 // advice for exactly one of them and a wild goose chase for the other two.
 func browserResolveReason(outcome agent.BrowserResolveOutcome, agentID string) string {

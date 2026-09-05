@@ -1,4 +1,4 @@
-# UAT plan — the browser rework (ADR-072 D1 + D2)
+# UAT plan — the browser rework (ADR-075 D1 + D2)
 
 **Audience:** a human tester sitting in front of the Omnipus web UI with a terminal open. No
 test-framework knowledge is assumed and none is needed. Nothing in this plan is automated.
@@ -7,7 +7,7 @@ test-framework knowledge is assumed and none is needed. Nothing in this plan is 
 
 | Document | Absolute path | What it settles |
 |---|---|---|
-| ADR-072 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions.md` | The decisions |
+| ADR-075 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-075-workspace-scoped-browser-sessions.md` | The decisions |
 | Ownership spec (**D1**) | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/specs/browser-workspace-ownership-spec.md` | Who owns which browser and which tabs |
 | Capability spec (**D2**) | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/specs/browser-agent-capability-spec.md` | The six new browser actions, and how elements are found |
 
@@ -338,7 +338,7 @@ Priorities: **P0** must pass to ship. **P1** must pass or carry an agreed, owned
 information — a failure is recorded, not blocking.
 
 "Traces to" cites the source document: **D1** = ownership spec, **D2** = capability spec, **ADR** =
-ADR-072, **H-n** = that document's numbered holdout scenario in its §13.
+ADR-075, **H-n** = that document's numbered holdout scenario in its §13.
 
 ### 4.1 Case index
 

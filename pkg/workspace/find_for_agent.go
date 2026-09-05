@@ -106,7 +106,7 @@ func FindForAgent(home, agentID string) (string, bool) {
 //
 // FindForAgent answers "which one" by applying a sorted-first tie-break; this
 // answers "how many, and which", for the caller that must REFUSE rather than
-// tie-break. The browser's ResolveBrowsingKey is that caller (ADR-072 FR-033):
+// tie-break. The browser's ResolveBrowsingKey is that caller (ADR-075 FR-033):
 // choosing arbitrarily between two workspaces there would silently pick which
 // set of live logins a turn acts with, which is not a filesystem-rerooting
 // question and must not inherit the filesystem answer.

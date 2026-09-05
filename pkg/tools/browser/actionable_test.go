@@ -15,7 +15,7 @@ import (
 )
 
 // TestActionCondition_SetIsExactlyFour enumerates the constants so a fifth
-// cannot be added silently. ADR-072 criterion 7 is that a failure names WHICH
+// cannot be added silently. ADR-075 criterion 7 is that a failure names WHICH
 // condition was unmet; that is only meaningful while the set stays closed.
 func TestActionCondition_SetIsExactlyFour(t *testing.T) {
 	want := []ActionCondition{CondVisible, CondStable, CondEnabled, CondHitTestable}

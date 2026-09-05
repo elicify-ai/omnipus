@@ -1,4 +1,4 @@
-// Omnipus — the browser write lease (ADR-072 D1 §14, NORMATIVE)
+// Omnipus — the browser write lease (ADR-075 D1 §14, NORMATIVE)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

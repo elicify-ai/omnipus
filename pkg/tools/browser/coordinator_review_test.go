@@ -40,7 +40,7 @@ import (
 // Chrome — same PID, KillCount==0 — AND the cookie a tab set BEFORE the
 // reload must still be readable AFTER it (login survives a Settings save).
 //
-// The context-id half of this assertion is GONE with ADR-072 FR-031, which
+// The context-id half of this assertion is GONE with ADR-075 FR-031, which
 // deleted CDP browser contexts. What persists a login across a reload is now
 // the workspace's own --user-data-dir profile directory on disk (FR-043),
 // which is strictly stronger: the old CDP context was in-memory and did not
@@ -197,7 +197,7 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	}
 
 	// Register again → the relaunched Chrome, reachable through a fresh root
-	// context. There is no context id to compare any more (ADR-072 FR-031
+	// context. There is no context id to compare any more (ADR-075 FR-031
 	// deleted CDP browser contexts); what makes recovery observable is the
 	// fresh pid asserted above plus the usable session asserted below.
 	if _, err := coord.Register(context.Background(), "agent-a", mgrA); err != nil {

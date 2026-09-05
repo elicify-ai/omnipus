@@ -71,7 +71,7 @@ func resolveTestBinary(t *testing.T) string {
 // The chrome-headless-shell resolver that used to live here is DELETED with
 // d2_spike_test.go, its only caller. It existed to obtain the old-headless
 // binary the D2 spike needed to prove CDP browser-context isolation — a
-// mechanism ADR-072 FR-031 retired outright. Nothing in this package needs a
+// mechanism ADR-075 FR-031 retired outright. Nothing in this package needs a
 // specific Chrome BUILD any more; resolveTestBinary's "whichever is installed"
 // answer is the right one for every remaining test.
 
@@ -96,7 +96,7 @@ func newTestManager(t *testing.T, cfg BrowserConfig) *BrowserManager {
 	return mgr
 }
 
-// M2, re-scoped by ADR-072: two agents on ONE browsing key Register against
+// M2, re-scoped by ADR-075: two agents on ONE browsing key Register against
 // that key's coordinator and get exactly one Chrome (one PID) and the SAME
 // underlying *chromedp.Browser.
 //
@@ -185,7 +185,7 @@ func TestManager_Shutdown_DropsConnectionNotProcess(t *testing.T) {
 // FR-008, re-scoped to THE KEY'S OWN CHROME: coordinator.Shutdown() is the
 // SOLE kill path for the Chrome this key owns. After it that key's pid is gone
 // and KillCount==1. It says nothing about any other key's Chrome — under
-// ADR-072 there are N of them, and TestPool_CrashIsContained is what proves
+// ADR-075 there are N of them, and TestPool_CrashIsContained is what proves
 // one going down leaves the others up.
 func TestCoordinator_Shutdown_IsSoleKill(t *testing.T) {
 	skipIfNoBrowser(t)
@@ -211,7 +211,7 @@ func TestCoordinator_Shutdown_IsSoleKill(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DELETED with ADR-072 FR-031, and deliberately not replaced:
+// DELETED with ADR-075 FR-031, and deliberately not replaced:
 //
 //   - TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride
 //   - TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtxID

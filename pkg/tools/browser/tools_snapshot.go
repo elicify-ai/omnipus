@@ -1,4 +1,4 @@
-// Omnipus — browser_snapshot (ADR-072 D2, capability spec Stream D).
+// Omnipus — browser_snapshot (ADR-075 D2, capability spec Stream D).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

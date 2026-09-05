@@ -231,7 +231,7 @@ func TestCloseSession_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 
 // --- 5. FR-025: per-tab reaping semantics survive the workspace re-key -------
 
-// TestReap_PerTabTTLAndViewerPin is ADR-072 D1 test 43. FR-025's wording is
+// TestReap_PerTabTTLAndViewerPin is ADR-075 D1 test 43. FR-025's wording is
 // exact and worth repeating, because it is a constraint on this change rather
 // than a new feature: per-tab reaping semantics are ASSERTED, NOT REWRITTEN.
 //
@@ -247,7 +247,7 @@ func TestCloseSession_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 //     TTL; if the per-tab sweep took the process down, that separate control
 //     would have nothing left to do and its absence would go unnoticed.
 //
-// Under ADR-072 the browser belongs to the WORKSPACE, which raises the cost of
+// Under ADR-075 the browser belongs to the WORKSPACE, which raises the cost of
 // getting (2) or (3) wrong: the browser a sweep tears down is now shared by
 // every agent on the workspace and holds the operator's live logins, not one
 // agent's scratch context.

@@ -375,7 +375,7 @@ describe('WorkspaceTabContainer — query error state (D9)', () => {
 // one effect: ChatControls' "Open browser" launcher reads activeWorkspaceId and
 // sends it with POST /sessions, the gateway stamps it on the new session's
 // meta, and the live browser panel resolves which workspace's browser — and
-// whose live logins — to show by reading that meta server-side (ADR-072
+// whose live logins — to show by reading that meta server-side (ADR-075
 // FR-016/FR-017). Break this binding and the launcher silently goes back to
 // creating workspace-less sessions, and a multi-workspace agent is refused as
 // ambiguous while being told to open the panel from a workspace chat — which is

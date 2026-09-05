@@ -159,7 +159,7 @@ describe('omnipusAttachmentAdapter', () => {
   // workspace, and a multi-workspace agent is refused as ambiguous. Same root
   // cause as the "Open browser" launcher's own create, same fix: the workspace
   // travels with the create rather than waiting for the first message to stamp
-  // it (ADR-072 FR-017 reads it off the session's meta, server-side).
+  // it (ADR-075 FR-017 reads it off the session's meta, server-side).
   it('send() creates that session inside the workspace the chat belongs to', async () => {
     useSessionStore.setState({ activeSessionId: null, activeAgentId: 'jim', activeAgentType: null })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-alpha' })

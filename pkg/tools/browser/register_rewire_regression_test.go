@@ -74,7 +74,7 @@ func TestRegisterTools_RewireMustApplyNewSecurityState(t *testing.T) {
 	}
 
 	// Every registered tool must resolve through the CURRENT resolver. Under
-	// ADR-072 FR-002a a tool holds no manager at all — it asks its resolver on
+	// ADR-075 FR-002a a tool holds no manager at all — it asks its resolver on
 	// every Execute — so the staleness this guards against moved from "which
 	// manager is bolted to the tool" to "which resolver is". The property is
 	// the same one: a discarded re-registration leaves the registry serving

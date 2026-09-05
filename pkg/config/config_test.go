@@ -2107,7 +2107,7 @@ func TestLoadConfig_MissingVersionField(t *testing.T) {
 
 // TestConfig_NoBrowserCountKeyExists is FR-059's config half.
 //
-// ADR-072 D1.5a deleted every browser tab counter. BrowserToolConfig must carry
+// ADR-075 D1.5a deleted every browser tab counter. BrowserToolConfig must carry
 // no field whose JSON key names a tab count — not max_tabs, not max_total_tabs,
 // and not a renamed successor. The check is by SHAPE (the json tag) rather than
 // by field name, because the way this comes back is a rename.
@@ -2136,7 +2136,7 @@ func TestConfig_NoBrowserCountKeyExists(t *testing.T) {
 			if name == bad {
 				t.Errorf(
 					"tools.browser.%s is back as field %s. Every browser tab counter was deleted "+
-						"(ADR-072 D1.5a): the only limit is live memory, and a refusal that names a "+
+						"(ADR-075 D1.5a): the only limit is live memory, and a refusal that names a "+
 						"cap sends an operator looking for a setting this build does not have.",
 					name, typ.Field(i).Name)
 			}

@@ -304,7 +304,7 @@ func DefaultConfig() *Config {
 				"browser_switch_tab": "allow",
 				"browser_close_tab":  "allow",
 				"browser_open_tab":   "allow",
-				// ADR-072 D2 — the interaction verbs and the accessibility
+				// ADR-075 D2 — the interaction verbs and the accessibility
 				// snapshot. This is the CEILING, not a grant: it closes policy
 				// coverage for every agent (validation is OR-based across the
 				// global and per-agent maps) while the per-agent seeds in
@@ -320,7 +320,7 @@ func DefaultConfig() *Config {
 				"browser_press_key":     "allow",
 				"browser_hover":         "allow",
 				"browser_snapshot":      "allow",
-				// ADR-072 D2 FR-035 — the dialog recovery verb. Ceiling, not
+				// ADR-075 D2 FR-035 — the dialog recovery verb. Ceiling, not
 				// a grant, exactly like the four above it: it closes coverage
 				// for every agent while the per-agent seeds decide who holds
 				// it. Allow rather than ask, because a tool that un-wedges a

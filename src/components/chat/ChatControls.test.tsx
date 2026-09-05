@@ -203,7 +203,7 @@ describe('ChatControls — Open browser launcher', () => {
   // U2. The launcher's session is the ONE the live browser panel then attaches
   // against, and the gateway decides which workspace's browser — and whose
   // live logins — that panel shows by reading the workspace off this session's
-  // own meta, server-side (ADR-072 FR-016/FR-017). Creating it with agent_id
+  // own meta, server-side (ADR-075 FR-016/FR-017). Creating it with agent_id
   // alone left the panel nothing to read: an agent on more than one
   // workspace's team was refused and told to "open this panel from a chat that
   // belongs to the workspace you mean" — from inside exactly such a chat. The

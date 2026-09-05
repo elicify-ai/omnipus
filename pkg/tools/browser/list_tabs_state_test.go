@@ -1,4 +1,4 @@
-// list_tabs_state_test.go — ADR-072 D1 tests 8, 9 and 11.
+// list_tabs_state_test.go — ADR-075 D1 tests 8, 9 and 11.
 //
 // The subject is one sentence: browser_list_tabs must stop conflating things
 // that are not the same. It conflated two of them.
@@ -9,7 +9,7 @@
 //     browser here" (FR-013).
 //   - WHOSE they are. A browser holds one tab set per chat session plus the
 //     operator's own; reporting one of them as "the tabs" is the ownership
-//     confusion ADR-072 §1.1 records (FR-080).
+//     confusion ADR-075 §1.1 records (FR-080).
 //
 // And one thing that is NOT a state: a policy-denied agent. ADR D1.12
 // withdrew the "denied" member as unreachable — the tool never reaches that
@@ -276,7 +276,7 @@ const finalWorkspaceBrowserLiteral = "this workspace's browser"
 // FR-037 — the change that gives each workspace its own Chrome process and its
 // own --user-data-dir profile directory. Before that commit one Chrome served
 // every workspace and this sentence was false; a product asserting an
-// isolation guarantee it does not have is the exact defect ADR-072 §1.1
+// isolation guarantee it does not have is the exact defect ADR-075 §1.1
 // records (MAJ-107).
 const finalIsolationLiteral = "Each workspace has its own browser, with its own logins; " +
 	"you cannot see or use another workspace's."

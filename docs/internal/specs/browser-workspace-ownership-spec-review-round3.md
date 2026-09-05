@@ -1,7 +1,7 @@
 # Round-3 grill — `browser-workspace-ownership-spec.md` (revision 3, 1588 lines)
 
 - **Spec reviewed:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/specs/browser-workspace-ownership-spec.md` (revision 3; 67 live FRs, 21 user stories, 37 scenarios, 64 TDD rows)
-- **Source ADR at time of review:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions.md` (1211 lines, HEAD `028abcfcb`)
+- **Source ADR at time of review:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-075-workspace-scoped-browser-sessions.md` (1211 lines, HEAD `028abcfcb`)
 - **Prior rounds:** `…-spec-review.md` (29 findings, BLOCK), `…-spec-review-round2.md` (29 findings, BLOCK)
 - **Mode:** `plan-spec` (full structural checks apply)
 - **Primary task:** drift against ADR §D1.1b / §D1.1c / §D1.1d, all four of which landed **after** this revision was written.

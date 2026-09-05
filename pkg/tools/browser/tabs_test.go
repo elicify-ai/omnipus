@@ -61,7 +61,7 @@ func fakeTabFactory() (fn func(allocCtx context.Context, targetID target.ID) (*t
 
 // newTestManagerWithFakeTabs builds a manager with no real Chromium behind it.
 //
-// It takes no tab cap: ADR-072 D1.5a deleted every counter, and the only limit
+// It takes no tab cap: ADR-075 D1.5a deleted every counter, and the only limit
 // is the FR-060 memory gate. A test that needs the gate to refuse installs
 // refuseTabsAtOrAbove (or unmeasurableHost) on m.memoryPressureFn — the seam
 // that replaced the cap argument this helper used to take.
@@ -161,7 +161,7 @@ func TestSession_FollowsActiveTabAfterSwitch(t *testing.T) {
 
 // FR-060: the gate that used to be a tab CAP is now live memory, at the same
 // site (createFirstTab). The refusal names memory and a remedy, and names no
-// limit and no config key — there is none to raise (ADR-072 D1.5a).
+// limit and no config key — there is none to raise (ADR-075 D1.5a).
 func TestSession_MemoryPressure_ReturnsError(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t)
 	m.memoryPressureFn = refuseTabsAtOrAbove(1)

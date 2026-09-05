@@ -1,4 +1,4 @@
-// Omnipus — the per-workspace browser pool (ADR-072 D1, FR-037/FR-040..FR-054)
+// Omnipus — the per-workspace browser pool (ADR-075 D1, FR-037/FR-040..FR-054)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -13,7 +13,7 @@ package browser
 // browser_open_tab's descriptions rests on. Before this file existed, those
 // tools could only honestly say every agent on a workspace shares one browser;
 // they could not say a workspace cannot see another workspace's, because one
-// Chrome served the whole install. ADR-072 §1.1 is the record of an agent
+// Chrome served the whole install. ADR-075 §1.1 is the record of an agent
 // getting that wrong in the field.
 //
 // Invariants, each load-bearing:
@@ -72,7 +72,7 @@ import (
 // injected encoder extension and a video encode loop, and that delta has
 // never been measured. Gate G-1 — the marginal PSS cost of a SECOND Chrome on
 // Linux WITH capture running — was deferred by the operator on 2026-09-02
-// (ADR-072 D1.13: "we work with the data we have as assumption, after
+// (ADR-075 D1.13: "we work with the data we have as assumption, after
 // everything is proven working, you can run the measurement on a Fly Linux
 // machine yourself"). Until that runs, treat this as the floor below which a
 // launch is certainly unwise, not as the cost of a launch.
@@ -85,7 +85,7 @@ import (
 // There is deliberately no per-renderer and no per-tab byte constant anywhere
 // in this package, and --renderer-process-limit appears in no launch flag
 // (FR-062). A tab's cost is not a number anyone can name, which is the whole
-// reason ADR-072 D1.5a deleted every tab counter in favour of asking the host
+// reason ADR-075 D1.5a deleted every tab counter in favour of asking the host
 // what it actually has left.
 const PerBrowserCostBytes uint64 = 182 << 20
 
@@ -98,13 +98,13 @@ const PerBrowserCostBytes uint64 = 182 << 20
 // the expensive thing (tearing down a Chrome the user may be about to need
 // again). It is not derived from a measurement of relaunch cost: gate G-5,
 // which would have measured cold start against a warm profile on disk, is
-// deferred (ADR-072 D1.13). Overridable via tools.browser.idle_close_ttl.
+// deferred (ADR-075 D1.13). Overridable via tools.browser.idle_close_ttl.
 const defaultIdleCloseTTL = 15 * time.Minute
 
 // thrashWindow and thrashThreshold drive FR-054's evict-then-reopen detection.
 //
 // ⚠ ASSUMPTIONS, both of them, and the FR says so: their values were to come
-// from gate G-5's cold-start measurement, which is deferred (ADR-072 D1.13).
+// from gate G-5's cold-start measurement, which is deferred (ADR-075 D1.13).
 // They are set deliberately CONSERVATIVELY — a wide window and a high count —
 // so the WARN fires only on unmistakable thrash rather than on an install that
 // merely opens and closes browsers. A false WARN about memory would send an

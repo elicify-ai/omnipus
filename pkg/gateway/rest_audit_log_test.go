@@ -439,7 +439,7 @@ func auditEntryEventPatternFromContract(t *testing.T) *regexp.Regexp {
 // SnapshotTool.recordSnapshot puts in the file is what an audit-log reader
 // gets, character for character.
 //
-// Under ADR-072 that is a real disclosure surface rather than a hygiene
+// Under ADR-075 that is a real disclosure surface rather than a hygiene
 // point: every agent on a workspace drives the OPERATOR'S browser with the
 // operator's live logins in it, and browser_snapshot renders field values
 // unconditionally by operator ruling (FR-018). So the rendered text routinely

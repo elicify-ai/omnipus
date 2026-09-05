@@ -1,7 +1,7 @@
 # Grill — round 3: `browser-agent-capability-spec.md` (revision 3)
 
 - **Spec under review:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/specs/browser-agent-capability-spec.md` (1515 lines, revision 3, landed at `dfa9dd4e9`)
-- **Source ADR:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions.md` (read at HEAD `028abcfcb`)
+- **Source ADR:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-075-workspace-scoped-browser-sessions.md` (read at HEAD `028abcfcb`)
 - **Sibling spec:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/specs/browser-workspace-ownership-spec.md` (D1, read at HEAD)
 - **Prior rounds:** `browser-agent-capability-spec-review.md` (30 findings), `browser-agent-capability-spec-review-round2.md` (26 findings)
 - **Mode:** `plan-spec`
@@ -290,7 +290,7 @@ What is stale is the **status**, in three places, all of which route work that i
   that the global `ask` is overridden downward"* — that is a description of text that now exists.
 - §15 item 3: *"**The ADR's D2.9 table says `ask` for them** and its own next paragraph implies
   `deny` — that contradiction predates this spec and needs an ADR erratum either way."*
-- §11 edit site 21 lists the ADR-072 D2.11 errata as outstanding and omits D2.9 entirely, so a
+- §11 edit site 21 lists the ADR-075 D2.11 errata as outstanding and omits D2.9 entirely, so a
   reader reconciling the two cannot tell which errata landed.
 
 There is also a **disposition-class error**. §12's legend: *RULED = decided by the operator,

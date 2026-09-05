@@ -1,4 +1,4 @@
-// Omnipus — Browser ownership keys (ADR-072 D1, FR-002b/FR-007/FR-080)
+// Omnipus — Browser ownership keys (ADR-075 D1, FR-002b/FR-007/FR-080)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -14,7 +14,7 @@ import (
 // session constant as the thing every browser tool addresses. Constructed ONLY by
 // ResolveBrowsingKey — there is deliberately no exported literal constructor
 // and no zero-value default, so a caller cannot mint a shared browser by
-// accident (ADR-072 D1.11).
+// accident (ADR-075 D1.11).
 //
 // There is exactly ONE shape: "ws:<workspaceID>". The D1.10 ruling (2026-08-31)
 // removed the unattended shape; do not reintroduce a second kind without
@@ -46,7 +46,7 @@ type BrowsingKey struct{ s string }
 const browsingKeyPrefix = "ws:"
 
 // browsingProfileSegmentPrefix is the RENDERED path segment a BrowsingKey
-// becomes on disk (ADR-072 D1.8's flat layout: "<profileRoot>/ws-<id>"). FR-037
+// becomes on disk (ADR-075 D1.8's flat layout: "<profileRoot>/ws-<id>"). FR-037
 // validates THIS string — not the bare workspace id — because the segment is
 // what a filesystem sees.
 const browsingProfileSegmentPrefix = "ws-"
@@ -66,7 +66,7 @@ func (k BrowsingKey) WorkspaceID() string {
 }
 
 // ProfileSegment returns the single path segment this key's profile directory
-// occupies under the profile root — "ws-<workspaceID>", ADR-072 D1.8's FLAT
+// occupies under the profile root — "ws-<workspaceID>", ADR-075 D1.8's FLAT
 // layout. It is the exact string FR-037's segment validation ran against in
 // ResolveBrowsingKey, so a key that exists is a key whose segment is safe.
 func (k BrowsingKey) ProfileSegment() string {
@@ -84,7 +84,7 @@ var ErrNoBrowsingContext = errors.New(
 		"add this agent to a workspace's team, or run the request in a workspace chat")
 
 // TabOwner names WHOSE tab set a browser operation addresses, inside the one
-// browser a BrowsingKey names (ADR-072 D1.9c, operator ruling 2026-09-02).
+// browser a BrowsingKey names (ADR-075 D1.9c, operator ruling 2026-09-02).
 // This type is the explicit carrier of the SESSION dimension that used to live
 // only in the accident of one BrowserManager per agent — FR-080.
 //
@@ -104,7 +104,7 @@ var ErrNoBrowsingContext = errors.New(
 // It resolves to the manager's sessions-map key, so the map holds one entry
 // per SESSION that has browsed plus at most one workspace entry. There is no
 // "all tabs" owner: a tool that wants both sets asks for both and says which
-// is which, because "whose tab is this" is exactly the question ADR-072 §1.1
+// is which, because "whose tab is this" is exactly the question ADR-075 §1.1
 // records an agent getting wrong.
 //
 // There is deliberately NO TabOwnerAgent. Keying on the agent is the

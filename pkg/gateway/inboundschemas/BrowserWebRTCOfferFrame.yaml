@@ -5,15 +5,15 @@ description: >
   /api/v1/browser/ws channel after browser_attach. Non-trickle: the SPA
   gathers all ICE candidates locally before sending, so `sdp` is the
   complete offer. The gateway's Pion relay (ADR-047 D1) resolves the browsing
-  context exactly as browser_attach does under ADR-072: session_id names the
+  context exactly as browser_attach does under ADR-075: session_id names the
   chat session whose workspace_id the gateway reads server-side, and the
   capture session it ensures/creates belongs to THAT WORKSPACE's browser —
   one capture per workspace browser, shared by every agent on the team
-  (ADR-072 FR-016a), started on the first WebRTC-capable viewer offer
+  (ADR-075 FR-016a), started on the first WebRTC-capable viewer offer
   (ADR-047 D2) and fed to each new viewer PeerConnection from the shared
   media tracks. agent_id names who is asking and is checked for membership of
   that workspace; it is NO LONGER the binding key, and two agents on one
-  workspace no longer contend for a capture. See ADR-072 and ADR-047 D1/D4.
+  workspace no longer contend for a capture. See ADR-075 and ADR-047 D1/D4.
 type: object
 required:
   - type
@@ -40,7 +40,7 @@ properties:
     maxLength: 128
     description: >-
       The client's chat session id. Exactly as in BrowserAttachFrame, it
-      RESOLVES the browsing context under ADR-072 FR-017: the gateway reads
+      RESOLVES the browsing context under ADR-075 FR-017: the gateway reads
       this session's own workspace_id server-side and targets that
       workspace's browser and its single capture session. It is still echoed
       back on browser_webrtc_answer / browser_webrtc_state so the client can

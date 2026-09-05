@@ -1,4 +1,4 @@
-// Omnipus — profile cache trimming (ADR-072 D1, FR-072/FR-073/FR-074)
+// Omnipus — profile cache trimming (ADR-075 D1, FR-072/FR-073/FR-074)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

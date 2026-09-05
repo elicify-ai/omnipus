@@ -111,7 +111,7 @@ func TestNoResidualDefaultSessionID(t *testing.T) {
 
 // TestNoResidualTabCap is FR-059's structural half.
 //
-// ADR-072 D1.5a deleted EVERY browser tab counter: the per-agent courtesy cap,
+// ADR-075 D1.5a deleted EVERY browser tab counter: the per-agent courtesy cap,
 // the global cross-agent budget, the in-flight reservation bookkeeping and both
 // halves of the reserve/release protocol. The only limit is live memory, checked
 // at each tab open (FR-060).
@@ -170,14 +170,14 @@ func TestNoResidualTabCap(t *testing.T) {
 	})
 
 	require.Empty(t, offenders,
-		"a browser tab counter is back in %d place(s). Every counter was deleted by ADR-072 D1.5a; "+
+		"a browser tab counter is back in %d place(s). Every counter was deleted by ADR-075 D1.5a; "+
 			"the only limit is live memory, enforced by the FR-060 gate at each tab open.\n%s",
 		len(offenders), strings.Join(offenders, "\n"))
 }
 
 // TestNoCDPBrowserContextIsEverCreated is FR-031's structural half.
 //
-// ADR-072 retired CDP browser contexts outright, along with the
+// ADR-075 retired CDP browser contexts outright, along with the
 // tools.browser.capture_shared_context knob that chose between them and
 // Chrome's default context. Isolation is now one Chrome PROCESS and one
 // --user-data-dir profile directory per workspace (FR-037).
@@ -226,7 +226,7 @@ func TestNoCDPBrowserContextIsEverCreated(t *testing.T) {
 
 	require.Empty(t, offenders,
 		"a CDP browser context or the retired capture_shared_context knob is back in %d place(s). "+
-			"Both were deleted by ADR-072 FR-031: a tab inside a CDP-created context cannot be "+
+			"Both were deleted by ADR-075 FR-031: a tab inside a CDP-created context cannot be "+
 			"captured at all, and the isolation it offered was in-memory and did not survive a "+
 			"restart. Per-workspace Chrome processes and profile directories replaced it.\n%s",
 		len(offenders), strings.Join(offenders, "\n"))

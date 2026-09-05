@@ -1,4 +1,4 @@
-// audit_test.go — ADR-072 D1 tests 45 and 75 (FR-027, FR-058).
+// audit_test.go — ADR-075 D1 tests 45 and 75 (FR-027, FR-058).
 //
 // The requirement is short and the failure mode it guards is specific: ADR
 // D2.11 rejects FIRST-USE-ONLY auditing by name, because "an event on first use

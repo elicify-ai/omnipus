@@ -317,7 +317,7 @@ type ControlSink func(controlledByOther bool)
 // BrowserManager. Safe for concurrent use.
 //
 // ⚠️ A BrowserManager is NOT "scoped to one agent" any more, and this comment
-// used to say it was (ADR-038 D4's per-agent manager map). ADR-072 FR-001
+// used to say it was (ADR-038 D4's per-agent manager map). ADR-075 FR-001
 // re-keyed that map to the BROWSING KEY: one manager per WORKSPACE, shared by
 // every agent on it. What gives a LiveView its identity is therefore the map
 // key itself — sessionKey(BrowsingKey, TabOwner) — not the manager it hangs
@@ -378,7 +378,7 @@ func runCDPWithTimeout(ctx context.Context, timeout time.Duration, actions ...ch
 }
 
 // resolveSessionID resolves an omitted session id to the WORKSPACE-OWNED tab
-// set — the operator's own tabs (ADR-072 §0.2a).
+// set — the operator's own tabs (ADR-075 §0.2a).
 //
 // Empty is a real, reachable input here and it comes from exactly one place:
 // a gateway-originated live-panel frame that carried no session id. The panel

@@ -1,11 +1,11 @@
-// acquire_provenance_test.go — ADR-072 D1 test 34 (FR-035, SC-003).
+// acquire_provenance_test.go — ADR-075 D1 test 34 (FR-035, SC-003).
 //
 // THE REQUIREMENT IS BEHAVIOURAL, and that word is the whole point. An earlier
 // form of this check was STRUCTURAL: it asserted that BrowsingKey's field is
 // unexported, so a key cannot be minted outside the package. That is true and
 // it proves nothing about a RUN — a key resolved for turn A and then reused to
 // acquire a browser for turn B is perfectly well-typed, and is exactly the
-// identity confusion ADR-072 §1.1 records.
+// identity confusion ADR-075 §1.1 records.
 //
 // So this test observes an actual run: several turns, in several workspaces,
 // each making several browser tool calls, and asserts the invariant over
@@ -220,7 +220,7 @@ func TestAcquire_KeyProvenance(t *testing.T) {
 	assert.Empty(t, ledger.untraceable(),
 		"SC-003: every browser acquisition must carry a key that ResolveBrowsingKey returned in the "+
 			"SAME turn. An untraceable key means a turn acted on a browser chosen by something other "+
-			"than its own workspace resolution — which is ADR-072 §1.1's defect with a different cause")
+			"than its own workspace resolution — which is ADR-075 §1.1's defect with a different cause")
 
 	// And the keys are the ones the turns were actually rooted in — the
 	// invariant above would also hold if every turn resolved and acquired the

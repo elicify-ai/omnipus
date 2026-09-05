@@ -251,7 +251,7 @@ func videoAndAudio() VideoCapability {
 // the encoder page and the tab it captures have to live in the same Chrome.
 //
 // The former third check — tools.browser.capture_shared_context — is gone
-// with ADR-072 FR-031. Every session now bootstraps into Chrome's DEFAULT
+// with ADR-075 FR-031. Every session now bootstraps into Chrome's DEFAULT
 // browser context unconditionally, because that is the only context
 // chrome.tabCapture can reach ("visibility is not capturability", ADR-048);
 // isolation moved down to one Chrome PROCESS and one profile directory per

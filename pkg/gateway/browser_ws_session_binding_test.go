@@ -22,7 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// Test 46 (ADR-072 SC-007 condition 3, FR-016/FR-017/FR-018).
+// Test 46 (ADR-075 SC-007 condition 3, FR-016/FR-017/FR-018).
 //
 // This is the ONE condition of SC-007 that a semantic reversal cannot pass
 // cleanly. Conditions (1) "verify-contracts exits 0" and (2) "the contracts/
@@ -35,7 +35,7 @@ import (
 // The property under test: for an agent that is on BOTH workspace A and
 // workspace B, an attach naming a chat session that belongs to B must resolve
 // to B's browser — not A's, and not "whichever sorts first". The sorted-first
-// tie-break is exactly the failure mode ADR-072 FR-033 refuses to commit,
+// tie-break is exactly the failure mode ADR-075 FR-033 refuses to commit,
 // because the two workspaces hold two different sets of live logins and
 // picking one silently decides which of them the panel drives.
 //

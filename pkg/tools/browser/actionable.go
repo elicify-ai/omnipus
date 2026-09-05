@@ -1,6 +1,6 @@
 package browser
 
-// actionable.go — the actionability gate (ADR-072 D2, spec §3).
+// actionable.go — the actionability gate (ADR-075 D2, spec §3).
 //
 // The problem it exists to solve: before this, a click that could not land
 // said "context deadline exceeded". That sentence tells an agent nothing it
@@ -32,7 +32,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// ActionCondition is the CLOSED set the gate reports on failure. ADR-072
+// ActionCondition is the CLOSED set the gate reports on failure. ADR-075
 // criterion 7 requires the error to name which condition was unmet; a closed
 // set is what makes that testable rather than prose.
 type ActionCondition string

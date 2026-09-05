@@ -1425,7 +1425,7 @@ func spawnSubTurn(
 		// re-rooting" comment) removed a genuine tie-breaking signal for a
 		// child agent that belongs to more than one workspace's CoreTeam.
 		WorkspaceID: parentTS.opts.WorkspaceID,
-		// ADR-072 FR-032 / issue #659: AutoDenyAsk is INHERITED from the
+		// ADR-075 FR-032 / issue #659: AutoDenyAsk is INHERITED from the
 		// parent turn. It was not, and that was the defect.
 		//
 		// AutoDenyAsk means "there is no operator on this run, so an
@@ -1438,7 +1438,7 @@ func spawnSubTurn(
 		// approval request into a run with nobody watching and the turn
 		// blocked until its deadline.
 		//
-		// D1 is what makes this urgent rather than tidy: under ADR-072 a
+		// D1 is what makes this urgent rather than tidy: under ADR-075 a
 		// delegated sub-turn browses its workspace's SIGNED-IN browser, and
 		// D2.9 seeds browser_upload_file as `ask` for every agent. Without
 		// this line the first delegated sub-turn to reach it hangs.

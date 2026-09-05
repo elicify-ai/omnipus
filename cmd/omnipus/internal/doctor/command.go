@@ -175,7 +175,7 @@ func checkBrowserVideoCapability(cfg *config.Config) []warning {
 		}
 	}
 
-	// WARN-BROWSER-004 is RETIRED with ADR-072 FR-031. It warned that
+	// WARN-BROWSER-004 is RETIRED with ADR-075 FR-031. It warned that
 	// tools.browser.capture_shared_context was false; that key no longer
 	// exists, and there is no configuration left under which the capture
 	// extension cannot reach the tab. Do not reintroduce the code without a

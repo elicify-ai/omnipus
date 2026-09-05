@@ -97,7 +97,7 @@ func TestCheckBrowserVideoCapability_LiteBuild(t *testing.T) {
 }
 
 // TestCheckBrowserVideoCapability_CaptureSharedContextDisabled is DELETED
-// with ADR-072 FR-031. It asserted WARN-BROWSER-004, which warned that
+// with ADR-075 FR-031. It asserted WARN-BROWSER-004, which warned that
 // tools.browser.capture_shared_context was false. That key no longer exists
 // and the warning it produced can no longer be true, so the test could only
 // ever have been kept green by reintroducing the defect it described.

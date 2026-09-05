@@ -16,7 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// Test 25 (ADR-072 FR-016a).
+// Test 25 (ADR-075 FR-016a).
 //
 // Before this, the WebRTC capture registry was keyed by AGENT ID, and the
 // ADR-048 condition-2 fence asked "does any other agent hold an

@@ -18,7 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// Tests 21, 22 and 23 — the gateway's half of ADR-072's server-side
+// Tests 21, 22 and 23 — the gateway's half of ADR-075's server-side
 // agent→workspace resolution.
 //
 // The shared premise: an operator staring at a dead browser panel needs to
@@ -58,7 +58,7 @@ func TestGateway_ResolveOutcomes_AreDistinct(t *testing.T) {
 	assert.NotContains(t, strings.ToLower(noWorkspace), "not registered",
 		"an agent that is simply not on a workspace team has not failed to register anything")
 	assert.NotContains(t, strings.ToLower(noWorkspace), "may not be registered",
-		"this is the pre-ADR-072 sentence every outcome used to render")
+		"this is the pre-ADR-075 sentence every outcome used to render")
 
 	// Word-for-word agreement with the error the AGENT sees. Asserted in both
 	// directions on purpose: that the panel carries the remedy, AND that the
@@ -78,7 +78,7 @@ func TestGateway_ResolveOutcomes_AreDistinct(t *testing.T) {
 	assert.Contains(t, strings.ToLower(ambiguous), "logins",
 		"the ambiguity refusal must name the consequence, not just the condition")
 
-	// No fourth, capacity-shaped reason. ADR-072 D1.5a deleted every tab and
+	// No fourth, capacity-shaped reason. ADR-075 D1.5a deleted every tab and
 	// browser counter, so the panel can never truthfully blame a cap — and a
 	// reason naming one would send an operator looking for a limit to raise
 	// that does not exist.

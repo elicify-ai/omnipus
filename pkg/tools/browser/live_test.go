@@ -633,7 +633,7 @@ func newTestRegistry() (*BrowserManager, *LiveViewRegistry) {
 }
 
 // An omitted session id on a gateway-originated live-panel frame resolves to
-// the WORKSPACE-OWNED tab set — the operator's own tabs (ADR-072 §0.2a). It
+// the WORKSPACE-OWNED tab set — the operator's own tabs (ADR-075 §0.2a). It
 // used to resolve to the deleted shared session constant, which is the merge
 // FR-080 exists to prevent; and it must NOT become ErrNoTabOwner, which is the
 // right answer for a TOOL with no transcript session and the wrong one for the

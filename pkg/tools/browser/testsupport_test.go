@@ -12,7 +12,7 @@ import (
 // testsupport_test.go — the ONE seam package tests use to mint a browsing key
 // and a manager-level session id.
 //
-// Why this file exists at all. Before ADR-072 every test addressed the browser
+// Why this file exists at all. Before ADR-075 every test addressed the browser
 // through the exported DefaultSessionID constant, which is exactly the shared
 // identity FR-002b deletes. There is deliberately no exported literal
 // constructor for a BrowsingKey (see key.go), so test code needs one seam
@@ -135,7 +135,7 @@ func newOperatorResolver(mgr *BrowserManager) *fixedResolver {
 }
 
 // registerToolsForTest is the migration shim for the tests that used to call
-// RegisterTools' pre-ADR-072 signature (which built the manager itself and
+// RegisterTools' pre-ADR-075 signature (which built the manager itself and
 // returned it). It builds the manager, binds it to the package's standard
 // browsing key, and registers the eleven tools against a resolver that hands
 // every Execute that same (manager, key, owner) triple.
@@ -215,7 +215,7 @@ func unmeasurableHost() func(openTabs int) (bool, bool) {
 	return func(int) (bool, bool) { return false, false }
 }
 
-// deletedTabCapConfigKey is the config key ADR-072 D1.5a DELETED, assembled at
+// deletedTabCapConfigKey is the config key ADR-075 D1.5a DELETED, assembled at
 // runtime rather than written as a literal.
 //
 // The assembly is not cosmetic. Several tests assert that a memory refusal does

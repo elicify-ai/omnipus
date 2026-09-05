@@ -13,7 +13,7 @@ import (
 // key_test.go — FR-080. Whose tabs are these?
 //
 // Every test in this file is about one question, and it is the question
-// ADR-072 §1.1 records an agent getting wrong: an operator browses in the live
+// ADR-075 §1.1 records an agent getting wrong: an operator browses in the live
 // panel, switches the chat from Mia to Jim, and Jim reports zero tabs.
 
 // listTabsThrough runs browser_list_tabs against a resolver and returns the
@@ -86,7 +86,7 @@ func TestTabs_TwoSessionsDoNotMerge(t *testing.T) {
 	require.Len(t, tabsA, 2, "chat B browsing must not have disturbed chat A's tabs")
 }
 
-// TestTabs_AgentSwitchWithinASessionSeesTheSameTabs is ADR-072 §1.1's reported
+// TestTabs_AgentSwitchWithinASessionSeesTheSameTabs is ADR-075 §1.1's reported
 // defect, asserted directly.
 //
 // Switching the chat from one agent to another does not change the session, so

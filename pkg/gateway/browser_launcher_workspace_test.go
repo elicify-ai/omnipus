@@ -23,7 +23,7 @@ import (
 // U2 regression: "Open browser" refused with advice the operator had already
 // followed.
 //
-// The panel's workspace binding (ADR-072 FR-017) was never broken — a chat
+// The panel's workspace binding (ADR-075 FR-017) was never broken — a chat
 // session whose meta carries a workspace_id resolves that workspace's browser,
 // as browser_ws_session_binding_test.go proves. What was broken is the ONE
 // session the launcher itself makes: the SPA's "Open browser" button creates a

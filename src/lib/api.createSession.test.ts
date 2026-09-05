@@ -12,7 +12,7 @@
 //
 // The stakes are not cosmetic: the live browser panel decides which workspace's
 // browser — and whose live logins — it shows by reading the workspace off the
-// created session's own meta, server-side (ADR-072 FR-016/FR-017). If the id
+// created session's own meta, server-side (ADR-075 FR-016/FR-017). If the id
 // never reaches the request body, the session names no workspace, and an agent
 // on more than one workspace's team is refused as ambiguous while being told to
 // open the panel from a workspace chat — which is where the click came from.

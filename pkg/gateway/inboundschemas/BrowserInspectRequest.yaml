@@ -19,9 +19,9 @@ properties:
       A BROWSER session id, carried for context/correlation and logging only.
       Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id
       this is NOT a chat session id and it gains no workspace semantics under
-      ADR-072: browser_inspect resolves the browsing context from agent_id
+      ADR-075: browser_inspect resolves the browsing context from agent_id
       ALONE, so an agent that belongs to more than one workspace is REFUSED
-      here (ADR-072 FR-033) rather than borrowing whichever workspace the
+      here (ADR-075 FR-033) rather than borrowing whichever workspace the
       live panel happened to resolve.
   agent_id:
     type: string
@@ -30,7 +30,7 @@ properties:
     description: >-
       The agent to resolve the browsing context from. This is the ONLY input
       that selects a browser on this endpoint, and the browser it selects
-      belongs to the agent's workspace, not to the agent (ADR-072 FR-001).
+      belongs to the agent's workspace, not to the agent (ADR-075 FR-001).
   x:
     type: number
     minimum: 0

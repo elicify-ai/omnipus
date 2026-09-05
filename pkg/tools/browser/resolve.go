@@ -1,4 +1,4 @@
-// Omnipus — the single browsing-key resolution point (ADR-072 D1.11, FR-007)
+// Omnipus — the single browsing-key resolution point (ADR-075 D1.11, FR-007)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -19,7 +19,7 @@ import (
 // from the workspace-file reads FindForAgentPreferring / FindAllForAgent
 // perform.
 //
-// Ladder (ADR-072 D1.11), evaluated in order — three rungs, no fourth:
+// Ladder (ADR-075 D1.11), evaluated in order — three rungs, no fourth:
 //  1. tools.ToolWorkspaceID(ctx), WHEN THE AGENT IS ON THAT WORKSPACE'S TEAM
 //     -> ws:<that id>
 //  2. the agent's workspace membership resolves UNAMBIGUOUSLY -> ws:<that id>
@@ -136,7 +136,7 @@ func resolveBrowsingKeyForAgent(home, agentID, preferredWorkspaceID string) (Bro
 // validation happens.
 //
 // FR-037: the check runs on the RENDERED segment "ws-<id>", not on the bare id.
-// That is the string a filesystem will see (ADR-072 D1.8's flat profile
+// That is the string a filesystem will see (ADR-075 D1.8's flat profile
 // layout), and the two differ in a way that matters — a bare id of ".." is
 // obviously unsafe, but so is an id of "./x", and an id containing a separator
 // escapes the profile root whatever the prefix. Validating the bare id would

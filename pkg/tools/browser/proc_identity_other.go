@@ -7,7 +7,7 @@
 package browser
 
 // confirmProcessIsOurChrome always reports FALSE off Linux, and that is a
-// DECLARED GAP rather than a defensive default (ADR-072 FR-042a).
+// DECLARED GAP rather than a defensive default (ADR-075 FR-042a).
 //
 // What it costs: boot reconciliation will not terminate an orphaned Chrome on
 // macOS or Windows. It clears the stale marker and logs a WARN naming the pid,

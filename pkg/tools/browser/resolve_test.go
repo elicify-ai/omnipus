@@ -60,7 +60,7 @@ func turnCtx(agentID, workspaceID string) context.Context {
 
 // TestResolveBrowsingKey_Ladder walks the three rungs in order. There is no
 // fourth rung, and that is the point: a fallback constant would re-create the
-// one-browser-for-everyone identity ADR-072 exists to remove, and it would do so
+// one-browser-for-everyone identity ADR-075 exists to remove, and it would do so
 // silently, because a shared browser looks exactly like a working browser until
 // two workspaces' logins are in one cookie jar.
 //

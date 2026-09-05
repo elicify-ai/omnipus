@@ -1,4 +1,4 @@
-// Real-Chrome end-to-end tests for ADR-072 D2's interaction verbs
+// Real-Chrome end-to-end tests for ADR-075 D2's interaction verbs
 // (capability spec §10 orders 17, 18, 19 and 20).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

@@ -1,7 +1,7 @@
 package browser
 
 // tools_dialog.go — browser_handle_dialog, and the per-tab dialog bookkeeping
-// it reads (ADR-072 D2, spec §3 Stream C).
+// it reads (ADR-075 D2, spec §3 Stream C).
 //
 // The failure this exists to end: a page calls alert(), confirm() or prompt(),
 // Chrome blocks the tab's execution waiting for an answer, and every

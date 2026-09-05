@@ -12,7 +12,7 @@ import (
 
 // register_resolver_test.go — FR-002a.
 //
-// The reported defect in ADR-072 §1.1 is not "the wrong browser was chosen". It
+// The reported defect in ADR-075 §1.1 is not "the wrong browser was chosen". It
 // is that no choice was ever made: each tool closed over the manager it was
 // REGISTERED with, so which browser a call drove was decided at registration
 // time by which agent happened to be registering, and could not follow the turn.
@@ -52,7 +52,7 @@ func TestRegisterTools_NoBoundManagerField(t *testing.T) {
 			require.NotEqual(t, managerType, f.Type,
 				"%s.%s is a captured *BrowserManager. A tool that holds a manager drives whichever "+
 					"browser it was REGISTERED with, not the one this turn is rooted in — which is "+
-					"the ADR-072 §1.1 defect. Resolve it per Execute via ManagerResolver instead.",
+					"the ADR-075 §1.1 defect. Resolve it per Execute via ManagerResolver instead.",
 				typ.Name(), f.Name)
 		}
 	}
@@ -74,7 +74,7 @@ func TestRegisterTools_NoBoundManagerField(t *testing.T) {
 // is cited by that name in the §10.1 traceability table of
 // docs/internal/specs/browser-workspace-ownership-spec.md (row 4a), and
 // renaming it here would orphan that row. The catalog was eleven tools when
-// the row was written; ADR-072 D2 added six (select_option, press_key, hover,
+// the row was written; ADR-075 D2 added six (select_option, press_key, hover,
 // snapshot, handle_dialog, upload_file — the capability spec's §2.1 row for
 // metadata.go calls for exactly those "six additions"), so it is SEVENTEEN.
 //
@@ -106,7 +106,7 @@ func TestBrowserBuiltinMetadata_ConstructsAllEleven(t *testing.T) {
 
 	metadata := BrowserBuiltinMetadata()
 	require.Len(t, metadata, 17,
-		"the browser catalog is seventeen tools: the eleven that shipped before ADR-072 plus D2's "+
+		"the browser catalog is seventeen tools: the eleven that shipped before ADR-075 plus D2's "+
 			"six (select_option, press_key, hover, snapshot, handle_dialog, upload_file). Still no "+
 			"take-control tool (FR-070) — acquiring the operator's tab is implicit and has no surface")
 

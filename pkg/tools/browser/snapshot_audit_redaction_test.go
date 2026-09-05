@@ -8,7 +8,7 @@ package browser
 // the audit log, and it is deliberately separate from snapshot_test.go so it
 // is hard to delete by accident.
 //
-// The property is FR-028's, and the reason it matters is ADR-072's own design:
+// The property is FR-028's, and the reason it matters is ADR-075's own design:
 // every agent on a workspace drives the OPERATOR'S browser, with the
 // operator's live logins in it. browser_snapshot renders field VALUES
 // unconditionally by operator ruling (FR-018), so the rendered text routinely
@@ -143,7 +143,7 @@ func TestSnapshotAudit_PageSecretsNeverReachTheAuditRecord(t *testing.T) {
 	for _, secret := range pageSecrets {
 		require.NotContains(t, raw, secret,
 			"a value read off the OPERATOR'S logged-in page reached the audit log: %q.\n\n"+
-				"Under ADR-072 every agent on a workspace drives the operator's own browser, so this is "+
+				"Under ADR-075 every agent on a workspace drives the operator's own browser, so this is "+
 				"their password/card/token, copied into a file that is retained by design and read by "+
 				"whoever can read the audit trail. FR-028 makes the browser_snapshot event METADATA "+
 				"ONLY: recordSnapshot receives the whole render and must put only counts and an origin "+

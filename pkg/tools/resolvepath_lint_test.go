@@ -90,7 +90,7 @@ var allowlistedRawFSFilesBrowser = map[string]string{
 	"coordinator_lock_other.go": "the non-Unix (O_EXCL-based) variant of the " +
 		"same CRIT-001 single-launch lock helpers as coordinator_lock_unix.go " +
 		"— same lockPath() (cfg.ProfileDir) origin, same justification.",
-	"pool.go": "the ADR-072 per-workspace BrowserPool (not a Tool) — the " +
+	"pool.go": "the ADR-075 per-workspace BrowserPool (not a Tool) — the " +
 		"multi-workspace successor to coordinator.go and inheriting its " +
 		"justification exactly. Every raw call here targets one of two " +
 		"system-computed roots and nothing else: the workspace's profile " +
@@ -104,7 +104,7 @@ var allowlistedRawFSFilesBrowser = map[string]string{
 		"segment that is not a single clean path element. ResolvePath resolves " +
 		"a per-turn agent WorkDir; these are process-wide browser-lifecycle " +
 		"paths with no per-turn confinement decision to enforce.",
-	"trim.go": "ADR-072 FR-072..074 profile cache trimming (not a Tool). Its " +
+	"trim.go": "ADR-075 FR-072..074 profile cache trimming (not a Tool). Its " +
 		"RemoveAll targets are computed by trimAllowListPaths as " +
 		"<profile dir> joined with entries from the fixed trimAllowList " +
 		"literal (Default/Cache, Default/Code Cache, …); its ReadDir calls " +

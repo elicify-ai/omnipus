@@ -196,7 +196,7 @@ func webrtcCapableGateMutate(t *testing.T) func(cfg *config.Config) {
 }
 
 // TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate is the
-// gateway-level guard for the ADR-072 FR-037 pool cutover — the same
+// gateway-level guard for the ADR-075 FR-037 pool cutover — the same
 // regression pkg/tools/browser's TestCaptureVideoCapability_
 // PoolAttachedCountsAsAttached pins one layer down, asserted here on the
 // function production actually calls.

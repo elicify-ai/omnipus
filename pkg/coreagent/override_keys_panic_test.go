@@ -20,7 +20,7 @@ import (
 )
 
 // TestValidateOverrideKeys_PanicsOnUnknown pins the guard that fixes the
-// commit ordering for the whole ADR-072 D2 seed.
+// commit ordering for the whole ADR-075 D2 seed.
 //
 // validateOverrideKeys PANICS — it does not return an error, and it does not
 // log — on an override key that is not in allStaticToolNames. That is the

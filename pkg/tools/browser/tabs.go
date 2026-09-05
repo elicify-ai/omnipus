@@ -70,7 +70,7 @@ func (t *ListTabsTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// (2) WHOSE ARE THEY? A browser holds one tab set per chat session that has
 	//     browsed, plus the operator's own workspace-owned set. Reporting them
 	//     merged, or reporting one and calling it "the tabs", is the ownership
-	//     confusion ADR-072 §1.1 exists to fix. FR-080 requires the payload to
+	//     confusion ADR-075 §1.1 exists to fix. FR-080 requires the payload to
 	//     say which is which, so the answer names ownership rather than leaving
 	//     the model to infer it.
 	//
@@ -477,7 +477,7 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// contract and targetHostForTool for how "target host" is derived.
 	t.recordBrowserAction(ctx, key, owner, t.Name(), targetHostForTool(rawURL))
 
-	// ADR-072 D1.5a/FR-059: there is no tab budget to reserve any more. Every
+	// ADR-075 D1.5a/FR-059: there is no tab budget to reserve any more. Every
 	// counter is deleted; the only limit is live memory, and it is enforced one
 	// level down inside OpenTab (FR-060) so a refusal names memory rather than
 	// a cap an operator would go looking for and not find.
@@ -600,7 +600,7 @@ func tabsToWireFrom(tabs []Tab, base int) []map[string]any {
 	return out
 }
 
-// --- the ONE index space (ADR-072 D1.9b ruling 1 / FR-070) ------------------
+// --- the ONE index space (ADR-075 D1.9b ruling 1 / FR-070) ------------------
 //
 // A turn can see two tab sets: its own chat session's, and the operator's
 // workspace-owned one. Both used to be numbered from 0 in their own private

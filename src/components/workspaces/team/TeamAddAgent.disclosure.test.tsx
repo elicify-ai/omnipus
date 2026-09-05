@@ -1,7 +1,7 @@
-// TeamAddAgent.disclosure.test.tsx — ADR-072 FR-047, test 64.
+// TeamAddAgent.disclosure.test.tsx — ADR-075 FR-047, test 64.
 //
 // Adding an agent to a workspace team grants it that workspace's browser, and
-// under ADR-072 that browser is one Chrome with one cookie jar that is already
+// under ADR-075 that browser is one Chrome with one cookie jar that is already
 // signed in to whatever the operator signed it in to. So the add is an
 // elevation of privilege, and since D1.10 it is a larger one than when FR-047
 // was written: unattended work — scheduled turns, heartbeats — inherits the

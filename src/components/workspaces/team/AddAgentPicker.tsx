@@ -25,11 +25,11 @@ interface AddAgentPickerProps {
  * team. Selecting one adds a node (= team membership). Searchable; shows the
  * agent avatar, name, and role so the choice is unambiguous.
  *
- * ADR-072 FR-047 — the elevation-of-privilege disclosure lives HERE, above the
+ * ADR-075 FR-047 — the elevation-of-privilege disclosure lives HERE, above the
  * candidate list, and not anywhere else.
  *
  * Adding an agent to a workspace team is not only an organisational act. Under
- * ADR-072 a browser belongs to the workspace: one Chrome, one profile, one
+ * ADR-075 a browser belongs to the workspace: one Chrome, one profile, one
  * cookie jar, shared by everyone on the team. So the moment an agent joins, it
  * can drive every site that workspace is already signed in to — the operator's
  * own live sessions, not a fresh logged-out browser. Since D1.10 that reach

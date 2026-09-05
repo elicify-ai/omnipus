@@ -318,7 +318,7 @@ func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *
 	}
 	mgr.AttachSharedChrome(coord, browserTestKey("agent-no-root-ctx"))
 	// The capture path resolves the WORKSPACE-OWNED tab set (the live panel is
-	// the operator, ADR-072 §0.2a), so the hand-planted entry must be keyed the
+	// the operator, ADR-075 §0.2a), so the hand-planted entry must be keyed the
 	// way production will look it up — AttachSharedChrome above is what gives
 	// the manager the browsing key that key is built from.
 	mgr.sessions[mgr.OperatorSessionID()] = &sessionEntry{

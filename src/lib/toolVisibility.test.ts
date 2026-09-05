@@ -329,7 +329,7 @@ describe('shouldRenderToolCallInPanel', () => {
   )
 })
 
-// ── ADR-072 / browser-agent-capability-spec FR-028 + FR-039 ──────────────
+// ── ADR-075 / browser-agent-capability-spec FR-028 + FR-039 ──────────────
 //
 // The D2 spec adds six browser tools — browser_select_option,
 // browser_press_key, browser_hover, browser_upload_file,

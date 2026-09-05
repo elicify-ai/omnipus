@@ -40,7 +40,7 @@ import (
 // agent drove another, with nothing on either side reporting a problem. The
 // serious half is that the agent's tools got a workspace's browser — and
 // therefore the operator's live logins and cookies for every site that workspace
-// has visited — while not being on its team. Under ADR-072 every agent on a
+// has visited — while not being on its team. Under ADR-075 every agent on a
 // workspace shares those logins, which is exactly why membership is a security
 // boundary and not bookkeeping.
 //

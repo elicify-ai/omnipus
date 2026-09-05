@@ -1913,7 +1913,7 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
  *
  * It matters beyond bookkeeping: the live browser panel decides which
  * workspace's browser, and whose live logins, it shows by reading the
- * workspace off the attaching chat session's own meta on the server (ADR-072
+ * workspace off the attaching chat session's own meta on the server (ADR-075
  * FR-016/FR-017 — no workspace travels on the attach frame itself). A session
  * created without one leaves that read empty, and an agent on more than one
  * workspace's team is then refused as ambiguous. Sending it here means a chat

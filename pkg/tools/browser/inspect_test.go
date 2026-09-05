@@ -293,7 +293,7 @@ func TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult(t *testing.T) {
 		},
 	}
 	// InspectPoint resolves the WORKSPACE-OWNED tab set — the live panel is the
-	// operator (ADR-072 §0.2a) — so the hand-planted entry is keyed that way.
+	// operator (ADR-075 §0.2a) — so the hand-planted entry is keyed that way.
 	mgr.sessions[mgr.OperatorSessionID()] = &sessionEntry{
 		tabs: []*tabEntry{{ctx: context.Background(), cancel: func() {}}}, activeIdx: 0,
 	}

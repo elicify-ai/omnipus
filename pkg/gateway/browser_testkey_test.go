@@ -11,7 +11,7 @@ import (
 
 // browserTestKey mints a browser.BrowsingKey for this package's tests.
 //
-// A BrowsingKey has no exported literal constructor by design (ADR-072 D1.11):
+// A BrowsingKey has no exported literal constructor by design (ADR-075 D1.11):
 // the only way to get one is to resolve it, so a caller cannot mint a shared
 // browser by accident. Tests are no exception — this resolves a real key
 // against a throwaway workspace file rather than fabricating a string.

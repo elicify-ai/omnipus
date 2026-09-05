@@ -470,7 +470,7 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 		case tabAdoptReasonMemoryPressure:
 			// FR-063. The text names MEMORY and a remedy that exists, and
 			// names NO limit and NO config key — there is no cap to raise any
-			// more (ADR-072 D1.5a), so telling the model to raise one sends it
+			// more (ADR-075 D1.5a), so telling the model to raise one sends it
 			// looking for a setting this build does not have. Without this arm
 			// the refusal falls to the default "it could not be adopted" text
 			// and the model retries the same open in a loop.
@@ -1269,7 +1269,7 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 // check any other tool's result shape.
 func controlledResult(mgr *BrowserManager, key BrowsingKey, owner TabOwner, toolName string) *tools.ToolResult {
 	// FR-002c. This asked the live registry about a hardcoded shared session id
-	// until ADR-072 D1
+	// until ADR-075 D1
 	// re-keyed the live-view registry. Left on the constant it would match
 	// nothing and return false FOREVER — an intact, populated human-control
 	// lock that is never consulted, with no error, no log line and every lease

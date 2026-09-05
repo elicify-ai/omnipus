@@ -13,7 +13,7 @@
  *
  * So these cases are driven one layer down, through the product's OWN live
  * browser channel (/api/v1/browser/ws — the exact frames the SPA's browser
- * panel sends: ADR-038/ADR-041/ADR-072). That is a real product surface a human
+ * panel sends: ADR-038/ADR-041/ADR-075). That is a real product surface a human
  * uses through the panel, and it exercises the same server-side resolution the
  * agent tools use (pkg/tools/browser/resolve.go). It is NOT the same as a human
  * asking an agent: the AGENT-OWNED tab set (a tab that belongs to one chat and
@@ -33,7 +33,7 @@
  *     run succeeded, so "everything is refused" can never read as a pass.
  *
  * MEMORY. The pool refuses a new browser when the machine is low on memory
- * (D2/ADR-072 memory ceiling) with "this machine is low on memory". That is the
+ * (D2/ADR-075 memory ceiling) with "this machine is low on memory". That is the
  * feature working, not a defect, but it makes an attach fail. Where it happens
  * the test fails with that message quoted, so the reader can tell a refusal
  * from a defect.
@@ -483,7 +483,7 @@ test('UAT-09b a cookie set in one workspace is absent from the other', async ({}
   expect(b.error).toBeNull();
 
   // browser_inspect resolves the browsing context from agent_id ALONE
-  // (ADR-072), so each probe agent reads its OWN workspace's live page.
+  // (ADR-075), so each probe agent reads its OWN workspace's live page.
   const read = async (agentId: string): Promise<string> => {
     const ctx = await apiRequest.newContext({
       baseURL: process.env.OMNIPUS_URL || 'http://localhost:6060',
@@ -521,7 +521,7 @@ test('UAT-09b a cookie set in one workspace is absent from the other', async ({}
  * workspace it is not on is critical.
  *
  * The check is deliberately three-way, because "refused" is not the only safe
- * outcome and "attached" is not by itself a breach: per ADR-072 the chat's
+ * outcome and "attached" is not by itself a breach: per ADR-075 the chat's
  * named workspace is IGNORED when the agent is not on its team, and resolution
  * falls back to the agent's own membership. So the assertion is on WHICH
  * browser came back — the tab strip must be the agent's own workspace's page,

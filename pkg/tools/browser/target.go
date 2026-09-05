@@ -1,7 +1,7 @@
 package browser
 
 // target.go — the SINGLE element-resolution seam every browser tool that
-// names an element goes through (ADR-072 D2, spec §3 "Shared interface
+// names an element goes through (ADR-075 D2, spec §3 "Shared interface
 // contract"). It is deliberately the FIRST thing landed in this wave: four
 // existing tools and every new interaction verb code against `Locator`,
 // `ErrLocatorConflict` and `resolveTarget`, so their shapes are fixed here
@@ -326,7 +326,7 @@ func resolveRoleNameTarget(
 			// Definitive too: frame targeting is out of scope, and waiting
 			// cannot move the element into the top document.
 			return "", func() {}, fmt.Errorf(
-				"%s: %s matched in a child frame; frame targeting is out of scope (ADR-072 D2.6) — use a CSS locator inside that frame",
+				"%s: %s matched in a child frame; frame targeting is out of scope (ADR-075 D2.6) — use a CSS locator inside that frame",
 				toolName, displayRoleName(loc))
 		default:
 			// Nothing survived. Record that, but do NOT ask WHY yet: the

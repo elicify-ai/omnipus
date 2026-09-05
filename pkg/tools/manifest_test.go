@@ -657,7 +657,7 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 
 // tier3SearchOnlyToolNames is ADR-071 §4.1's literal Tier 3 list, transcribed
 // verbatim, now 68 names: 62 after write_agent_metadata's retirement, plus
-// ADR-072 D2's five new browser tools and Stream C's browser_handle_dialog (a
+// ADR-075 D2's five new browser tools and Stream C's browser_handle_dialog (a
 // redundant, unguarded second door onto
 // the same files update_agent already writes through a properly-guarded
 // path — see pkg/sysagent/tools/metadata.go). It exists ONLY as the third leg
@@ -670,13 +670,13 @@ var tier3SearchOnlyToolNames = []string{
 	"install_skill", "browser_navigate", "browser_click", "browser_type", "browser_screenshot",
 	"browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab",
 	"browser_close_tab", "browser_open_tab",
-	// ADR-072 D2 (ADR D1.9b ruling 3) — all five new browser tools are Tier 3
+	// ADR-075 D2 (ADR D1.9b ruling 3) — all five new browser tools are Tier 3
 	// search-only, alongside the other eleven. browser_upload_file is here
 	// even though FR-029 holds its registration: the tier sets are about
 	// manifest VISIBILITY of a catalog name, not about registration.
 	"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
 	"browser_upload_file",
-	// ADR-072 D2 Stream C — the dialog recovery verb, Tier 3 like the rest of
+	// ADR-075 D2 Stream C — the dialog recovery verb, Tier 3 like the rest of
 	// the browser surface.
 	"browser_handle_dialog",
 	"create_workspace", "update_workspace", "delete_workspace",
@@ -694,7 +694,7 @@ var tier3SearchOnlyToolNames = []string{
 // TestVisibility_TierArithmetic pins the full 17+7+68+1=93 partition (FR-032:
 // navigate's retirement dropped the previewed set from 8 to 7, and
 // write_agent_metadata's retirement dropped the search-only set from 63 to
-// 62, and ADR-072 D2 raised it from 62 to 68 (five interaction/snapshot
+// 62, and ADR-075 D2 raised it from 62 to 68 (five interaction/snapshot
 // verbs plus browser_handle_dialog) — "The
 // always-listed set MUST contain exactly 17 names, the previewed set exactly
 // 7, the search-only set exactly 68, and the infrastructure set exactly 1"). Counts

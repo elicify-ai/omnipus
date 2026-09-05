@@ -544,7 +544,7 @@ describe('ActivityPanel — bash-kind error state', () => {
 //   - it aggregates ONLY subagent delegation spans, background bash sessions
 //     and judge verdicts (useRunningActivity.ts's own header). A PARENT-turn
 //     tool call is none of those, so it never appears here at all — which is
-//     why ADR-072 D2.11's "a browser_snapshot never appears there" is right
+//     why ADR-075 D2.11's "a browser_snapshot never appears there" is right
 //     for the parent case and wrong for the delegated one.
 //   - a span must still be running, or inside RECENTLY_FINISHED_CAP = 8
 //     (useRunningActivity.ts:148), to be listed.

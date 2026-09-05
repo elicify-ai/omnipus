@@ -194,7 +194,7 @@ func newWarmTestCoordinator(t *testing.T) *browser.BrowserCoordinator {
 	return browser.NewBrowserCoordinator(t.TempDir(), cfg)
 }
 
-// TestPickWarmBrowserManager_PrefersTheDefaultAgent — migrated to ADR-072
+// TestPickWarmBrowserManager_PrefersTheDefaultAgent — migrated to ADR-075
 // FR-016b. "The default agent's manager" is no longer a thing that exists: a
 // manager is a WORKSPACE's browser, so the selection is the default agent's
 // RESOLVED workspace. Mia is on beta; alpha and gamma belong to other people.
@@ -337,7 +337,7 @@ func TestPickWarmBrowserManager_SkipsUnwarmableManagers(t *testing.T) {
 	}
 }
 
-// Test 24 — TestPickWarmBrowser_UsesResolvedKey (ADR-072 FR-016b).
+// Test 24 — TestPickWarmBrowser_UsesResolvedKey (ADR-075 FR-016b).
 //
 // This is the regression the migration above exists for, isolated. Selection
 // used to compare agents.defaults.default_agent_id against mgr.AgentID(). That

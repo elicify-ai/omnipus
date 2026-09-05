@@ -3181,9 +3181,9 @@ export interface components {
          * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
          */
         BrowserInspectRequest: {
-            /** @description A BROWSER session id, carried for context/correlation and logging only. Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id this is NOT a chat session id and it gains no workspace semantics under ADR-072: browser_inspect resolves the browsing context from agent_id ALONE, so an agent that belongs to more than one workspace is REFUSED here (ADR-072 FR-033) rather than borrowing whichever workspace the live panel happened to resolve. */
+            /** @description A BROWSER session id, carried for context/correlation and logging only. Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id this is NOT a chat session id and it gains no workspace semantics under ADR-075: browser_inspect resolves the browsing context from agent_id ALONE, so an agent that belongs to more than one workspace is REFUSED here (ADR-075 FR-033) rather than borrowing whichever workspace the live panel happened to resolve. */
             session_id: string;
-            /** @description The agent to resolve the browsing context from. This is the ONLY input that selects a browser on this endpoint, and the browser it selects belongs to the agent's workspace, not to the agent (ADR-072 FR-001). */
+            /** @description The agent to resolve the browsing context from. This is the ONLY input that selects a browser on this endpoint, and the browser it selects belongs to the agent's workspace, not to the agent (ADR-075 FR-001). */
             agent_id: string;
             /** @description Device (CSS) x of the point to inspect. */
             x: number;
@@ -3651,7 +3651,7 @@ export interface components {
             type?: "chat" | "task" | "channel";
             /**
              * @description The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
-             *     Stamped straight onto the new session's meta, so a session created for a workspace chat carries its workspace from birth rather than from its first message. That gap is what ADR-072 FR-017 tripped over: the live browser panel reads the workspace off the attaching chat session's own meta, server-side, and the SPA's "Open browser" launcher creates its session here — with no workspace — before any message has been sent. An agent on more than one workspace's team was therefore refused (FR-033) and told to open the panel from a chat belonging to the workspace it meant, which is exactly where the click had come from.
+             *     Stamped straight onto the new session's meta, so a session created for a workspace chat carries its workspace from birth rather than from its first message. That gap is what ADR-075 FR-017 tripped over: the live browser panel reads the workspace off the attaching chat session's own meta, server-side, and the SPA's "Open browser" launcher creates its session here — with no workspace — before any message has been sent. An agent on more than one workspace's team was therefore refused (FR-033) and told to open the panel from a chat belonging to the workspace it meant, which is exactly where the click had come from.
              *     Must name a workspace that exists (400 otherwise). Membership is NOT checked here: the value is a preference, and every consumer that grants access on it re-checks membership itself — browser.ResolveBrowsingKeyForAgent honours it only when the agent really is on that workspace's team.
              * @example 01M1H9JS5EHRYWDBM0BYA45NFM
              */

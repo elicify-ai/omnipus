@@ -47,7 +47,7 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&SwitchTabTool{},
 		&CloseTabTool{},
 		&OpenTabTool{},
-		// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+		// ADR-075 D2 — the interaction verbs and the accessibility snapshot.
 		//
 		// THESE ENTRIES ARE ATOMIC WITH THE POLICY SEED, not merely adjacent
 		// to it: TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
@@ -59,7 +59,7 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&PressKeyTool{},
 		&HoverTool{},
 		&SnapshotTool{},
-		// ADR-072 D2 Stream C — the dialog recovery verb. Its Name,
+		// ADR-075 D2 Stream C — the dialog recovery verb. Its Name,
 		// Description and Category are static strings with no mgr
 		// dereference, per this file's binding invariant: these instances
 		// carry a nil *BrowserManager and are never Execute()d.

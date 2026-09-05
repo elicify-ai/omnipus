@@ -1,4 +1,4 @@
-// Omnipus — "the operator browses, then asks the agent to take over" (ADR-072
+// Omnipus — "the operator browses, then asks the agent to take over" (ADR-075
 // D1.9b/D1.9c, FR-070/FR-071/FR-080)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

@@ -24,7 +24,7 @@ package browser
 // real Chrome 150). A tools.browser.capture_shared_context knob chose between
 // the two placements.
 //
-// ADR-072 FR-031 retired CDP browser contexts and that knob outright. DO NOT
+// ADR-075 FR-031 retired CDP browser contexts and that knob outright. DO NOT
 // read the paragraph above as a live mechanism: there is no CDP-created
 // context to avoid, no capture_shared_context to enable, and no cross-context
 // visibility trick in play. Isolation moved down a level — one Chrome PROCESS

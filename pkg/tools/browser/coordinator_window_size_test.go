@@ -19,7 +19,7 @@ package browser
 // test captured those outgoing CreateTargetParams through a
 // createTargetParamsForTest seam in coordinator.go.
 //
-// ADR-072 FR-031 deleted the per-agent CDP browser context — every session now
+// ADR-075 FR-031 deleted the per-agent CDP browser context — every session now
 // bootstraps into Chrome's DEFAULT context, and isolation moved down to one
 // Chrome process and one --user-data-dir per workspace. The per-agent window,
 // the CreateTarget call and the seam went with it. Tabs are now created only by
@@ -58,7 +58,7 @@ import (
 )
 
 // TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize is the REVERT-PROOF
-// test for D17 after ADR-072 FR-031.
+// test for D17 after ADR-075 FR-031.
 //
 // It is deliberately an assertion about the launch flags rather than about a
 // running Chrome: on the Chrome builds this project runs against, headless
@@ -85,7 +85,7 @@ func TestChromeLaunchFlags_WindowSizePinnedToAgentWindowSize(t *testing.T) {
 		t.Fatalf(
 			"chromeHardeningBaseFlags(): found %d %s flags %q, want exactly 1 "+
 				"(D17 regression — window size is pinned ONLY here now that "+
-				"ADR-072 FR-031 removed the per-agent CreateTarget path)",
+				"ADR-075 FR-031 removed the per-agent CreateTarget path)",
 			len(found), flagPrefix, found,
 		)
 	}

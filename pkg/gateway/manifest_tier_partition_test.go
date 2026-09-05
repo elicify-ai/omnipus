@@ -1,5 +1,5 @@
 // Omnipus — the manifest tier partition must cover the whole builtin catalog
-// (ADR-072 D2 FR-036).
+// (ADR-075 D2 FR-036).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

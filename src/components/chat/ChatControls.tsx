@@ -95,7 +95,7 @@ export function ChatControls({ className }: ChatControlsProps) {
       //
       // The panel about to open resolves which workspace's browser — and whose
       // live logins — it shows by reading the workspace off this very session's
-      // meta, server-side (ADR-072 FR-016/FR-017); nothing on the attach frame
+      // meta, server-side (ADR-075 FR-016/FR-017); nothing on the attach frame
       // carries it, deliberately, so a client cannot ask to drive a workspace's
       // browser just by saying so. Creating the session with agent_id alone
       // therefore handed the panel a session that named no workspace, and an

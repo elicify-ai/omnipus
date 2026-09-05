@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ADR-072 FR-052 — a viewer must keep PROVING it is there.
+// ADR-075 FR-052 — a viewer must keep PROVING it is there.
 //
 // BrowserManager.Viewers() used to return the raw attach count, so a
 // live-panel WebSocket whose cleanup never ran (SIGKILL, a half-open socket

@@ -392,7 +392,7 @@ var allStaticToolNames = []string{
 	"browser_get_text", "browser_wait", "browser_evaluate",
 	// Browser tab-management tools (ADR-041 D3).
 	"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
-	// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+	// ADR-075 D2 — the interaction verbs and the accessibility snapshot.
 	//
 	// THIS BLOCK AND THE POLICY MAPS BELOW ARE ONE COMMIT, NOT AN ORDERING.
 	// validateOverrideKeys PANICS on an override key absent from this literal,
@@ -411,7 +411,7 @@ var allStaticToolNames = []string{
 	// seeded name with no registration is inert.
 	"browser_select_option", "browser_press_key", "browser_hover",
 	"browser_snapshot", "browser_upload_file",
-	// ADR-072 D2 Stream C — the dialog recovery verb. Same one-commit rule as
+	// ADR-075 D2 Stream C — the dialog recovery verb. Same one-commit rule as
 	// the block above, and the same reason: this name landing alone would make
 	// denyAllThenOverride stamp an explicit deny on every seeded agent, which
 	// COMPLETES coverage and suppresses the single WARN the repair pass would
@@ -801,14 +801,14 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				// ADR-041 D3 — tab-management, same allow as the rest of the
 				// interactive/visual browsing surface above.
 				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
-				// ADR-072 D2 (FR-024) — parity with Jim and Ray on the new
+				// ADR-075 D2 (FR-024) — parity with Jim and Ray on the new
 				// interaction verbs and the accessibility snapshot. None of
 				// the five is arbitrary-code-adjacent, which is the property
 				// the existing ten-allow/one-deny carve-out actually turns on:
 				// browser_evaluate stays denied here for the same reason it
 				// always was.
 				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
-				// ADR-072 D2 FR-035/A-12 — allow for every browser-capable
+				// ADR-075 D2 FR-035/A-12 — allow for every browser-capable
 				// agent. A dialog wedges the tab for whoever hits it, so the
 				// verb that clears it has to be held by everyone who can open
 				// one. The dangerous half is guarded at the ARGUMENT, not
@@ -866,14 +866,14 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				// ADR-041 D3 — tab-management, same allow as the rest of the
 				// interactive/visual browsing surface above.
 				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
-				// ADR-072 D2 (FR-024) — parity with Jim and Ray on the new
+				// ADR-075 D2 (FR-024) — parity with Jim and Ray on the new
 				// interaction verbs and the accessibility snapshot. None of
 				// the five is arbitrary-code-adjacent, which is the property
 				// the existing ten-allow/one-deny carve-out actually turns on:
 				// browser_evaluate stays denied here for the same reason it
 				// always was.
 				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
-				// ADR-072 D2 FR-035/A-12 — allow for every browser-capable
+				// ADR-075 D2 FR-035/A-12 — allow for every browser-capable
 				// agent. A dialog wedges the tab for whoever hits it, so the
 				// verb that clears it has to be held by everyone who can open
 				// one. The dangerous half is guarded at the ARGUMENT, not
@@ -1060,7 +1060,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_switch_tab": allow,
 			"browser_close_tab":  allow,
 			"browser_open_tab":   allow,
-			// ADR-072 D2 — the interaction verbs and the accessibility
+			// ADR-075 D2 — the interaction verbs and the accessibility
 			// snapshot. Same allow as the rest of Ray's browsing surface, and
 			// for the same reason browser_evaluate above is NOT: none of these
 			// five runs arbitrary code.
@@ -1068,7 +1068,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_press_key":     allow,
 			"browser_hover":         allow,
 			"browser_snapshot":      allow,
-			// ADR-072 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+			// ADR-075 D2 FR-035/A-12 — the dialog recovery verb, allow. See
 			// the note on the delegation-tier seeds above: the consequential
 			// half (`accept:true`) is an argument-level guard, not a policy
 			// value, because policy cannot see arguments.
@@ -1235,13 +1235,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_switch_tab": allow,
 			"browser_close_tab":  allow,
 			"browser_open_tab":   allow,
-			// ADR-072 D2 — the interaction verbs and the accessibility
+			// ADR-075 D2 — the interaction verbs and the accessibility
 			// snapshot, same allow as the rest of Jim's browser surface.
 			"browser_select_option": allow,
 			"browser_press_key":     allow,
 			"browser_hover":         allow,
 			"browser_snapshot":      allow,
-			// ADR-072 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+			// ADR-075 D2 FR-035/A-12 — the dialog recovery verb, allow. See
 			// the note on the delegation-tier seeds above: the consequential
 			// half (`accept:true`) is an argument-level guard, not a policy
 			// value, because policy cannot see arguments.

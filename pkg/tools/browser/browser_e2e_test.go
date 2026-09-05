@@ -455,7 +455,7 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// G-2 — the mechanical gate for the per-workspace browser pool (ADR-072 /
+// G-2 — the mechanical gate for the per-workspace browser pool (ADR-075 /
 // browser-workspace-ownership-spec FR-045).
 // ---------------------------------------------------------------------------
 
@@ -531,7 +531,7 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 // "Invalid tab specified." regardless of enableInIncognito. That is why the
 // current single-Chrome design has to put both the encoder page and the
 // agent's own tab in the ONE default browser context, and it is the reason
-// per-agent CDP contexts cannot be the isolation mechanism. ADR-072's pool
+// per-agent CDP contexts cannot be the isolation mechanism. ADR-075's pool
 // replaces CDP contexts with one Chrome PROCESS per workspace, each with its
 // own --user-data-dir profile — and rests entirely on the claim that a tab in
 // a SEPARATE PROCESS's own default context does NOT inherit that restriction.
@@ -545,7 +545,7 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 //     (marked in=chrome-one) is not in chrome.tabs.query's result. Process
 //     separation is real, not nominal.
 //  4. chrome.tabCapture.getMediaStreamId SUCCEEDS for a tab in Chrome #2's
-//     DEFAULT browser context — the only context there is, since ADR-072
+//     DEFAULT browser context — the only context there is, since ADR-075
 //     FR-031 deleted the CDP-browser-context mechanism outright — and the
 //     returned id yields a getUserMedia MediaStream carrying a LIVE video
 //     track.
@@ -630,7 +630,7 @@ func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
 	//
 	// chromedp.NewContext off the coordinator's rootCtx creates a plain
 	// Target.createTarget with NO browserContextId — i.e. the default browser
-	// context. Since ADR-072 FR-031 there is no other kind, which
+	// context. Since ADR-075 FR-031 there is no other kind, which
 	// TestNoCDPBrowserContextIsEverCreated asserts structurally so this
 	// e2e does not have to re-prove it against a live Chrome.
 	oneURL := srv.URL + "/?in=chrome-one"
@@ -723,7 +723,7 @@ func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
 		t, res.Error,
 		"chrome.tabCapture failed against the SECOND Chrome's default-context tab. "+
 			"If this is \"Invalid tab specified.\", the per-workspace browser POOL DESIGN IS WRONG: "+
-			"a separate Chrome process does not lift the ADR-048 capture restriction and ADR-072 must be "+
+			"a separate Chrome process does not lift the ADR-048 capture restriction and ADR-075 must be "+
 			"revisited before any pool code is written. Full probe result: %+v", res,
 	)
 	require.NotEmpty(t, res.StreamID, "getMediaStreamId must return a non-empty stream id; probe result: %+v", res)

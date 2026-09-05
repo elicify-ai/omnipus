@@ -446,7 +446,7 @@ jobs:
           exit 1
 
       - name: "G-2 gate: chrome.tabCapture against a SECOND Chrome process"
-        # ADR-072 / browser-workspace-ownership-spec FR-045, SC-012a.
+        # ADR-075 / browser-workspace-ownership-spec FR-045, SC-012a.
         #
         # This is a MEASUREMENT GATE, not coverage. It answers one yes/no
         # question the per-workspace browser pool's whole design rests on:

@@ -138,7 +138,7 @@ func TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor(t *testing.T) {
 	require.ErrorIs(t, refusedErr, browser.ErrBrowserMemoryRefused,
 		"the pool ADMITTED a browser one byte below its own launch headroom (err=%v).\n"+
 			"THE TWO RESPONSES HAVE COLLAPSED: the pool is no longer refusing to grow at zero, "+
-			"which is the only admission control at this level — every tab counter was deleted (ADR-072 D1.5a).", refusedErr)
+			"which is the only admission control at this level — every tab counter was deleted (ADR-075 D1.5a).", refusedErr)
 	require.NotContains(t, refusedErr.Error(), "profile directory",
 		"the refusal must happen BEFORE the launch is attempted, not after")
 	require.Empty(t, pool.LiveKeys(), "a refused acquire must leave no live browser behind")

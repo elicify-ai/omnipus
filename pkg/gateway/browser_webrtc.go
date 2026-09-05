@@ -70,7 +70,7 @@ import (
 // single shared classifier (fix 9, webrtcUnavailableReason).
 
 // captureRegistry is the process-wide WebRTC CaptureSession registry, keyed by
-// BROWSING KEY (ADR-072 FR-016a) — one capture session per workspace browser,
+// BROWSING KEY (ADR-075 FR-016a) — one capture session per workspace browser,
 // not per agent. It is shared between the main browser WS handler (which
 // creates sessions on a viewer's browser_webrtc_offer) and the capture-ingest
 // WS handler (which must locate a session purely from an inbound
@@ -319,7 +319,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		return
 	}
 
-	// ADR-048 condition 2, re-scoped a second time by ADR-072 FR-016a: the
+	// ADR-048 condition 2, re-scoped a second time by ADR-075 FR-016a: the
 	// cross-BROWSER capture conflict. It used to be the "multi-AGENT" fence,
 	// and under FR-001 that framing has stopped meaning anything — agents on
 	// one workspace share one Chrome and therefore one capture session, so
@@ -994,7 +994,7 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 }
 
 // ensureCaptureSession get-or-creates the CaptureSession for the WORKSPACE
-// BROWSER mgr owns — one active stream per browsing key (ADR-072 FR-016a,
+// BROWSER mgr owns — one active stream per browsing key (ADR-075 FR-016a,
 // narrowing wave-plan W2-A item 4's "one per agent") — registering it in
 // h.captures under that key so the ingest WS can find it by token, wiring
 // SetOnStopped to remove it from both the registry and the manager once it

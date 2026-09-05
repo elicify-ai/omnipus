@@ -1,4 +1,4 @@
-// subturn_ask_deny_test.go — ADR-072 D1 test 30 (FR-032, issue #659).
+// subturn_ask_deny_test.go — ADR-075 D1 test 30 (FR-032, issue #659).
 //
 // THE DEFECT. `AutoDenyAsk` means "there is no operator on this run, so an
 // `ask`-policy tool must be DENIED rather than queued for an approval nobody
@@ -9,7 +9,7 @@
 // `ask`-policy tool therefore issued an approval request into a run with
 // nobody watching, and the turn blocked until the approval registry's timeout.
 //
-// WHY ADR-072 MAKES IT URGENT rather than tidy. Under D1 a delegated sub-turn
+// WHY ADR-075 MAKES IT URGENT rather than tidy. Under D1 a delegated sub-turn
 // browses its workspace's SIGNED-IN browser, and D2.9 seeds
 // browser_upload_file as `ask` for every agent. Without the inheritance the
 // first delegated sub-turn to reach it hangs — §0.2 records this as the

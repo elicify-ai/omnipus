@@ -27,7 +27,7 @@ import (
 	"testing"
 )
 
-// d2BrowserToolNames are the names ADR-072 D2 adds here.
+// d2BrowserToolNames are the names ADR-075 D2 adds here.
 // browser_upload_file is included even though FR-029 holds its registration:
 // coverage is about the catalog, not the registry, and its name is seeded.
 var d2BrowserToolNames = []string{

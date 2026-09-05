@@ -1308,7 +1308,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	// U2: this field exists because the SPA's "Open browser" launcher creates
 	// its session here, and the live browser panel resolves which workspace's
 	// browser (and whose live logins) to show by reading the workspace off the
-	// attaching chat session's own meta, server-side (ADR-072 FR-016/FR-017).
+	// attaching chat session's own meta, server-side (ADR-075 FR-016/FR-017).
 	// Before this, the launcher sent agent_id and nothing else, so the session
 	// it handed the panel named no workspace at all; an agent on more than one
 	// workspace's team was refused under FR-033 and advised to "open this panel

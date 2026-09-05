@@ -65,7 +65,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		// would be wrong because it makes the tool inert and pushes the request
 		// back into prose the operator has to act on manually.
 		"request_mount": "ask",
-		// browser_upload_file (ADR-072 D2 FR-021) is the third member of this
+		// browser_upload_file (ADR-075 D2 FR-021) is the third member of this
 		// class and the only browser verb in it. Every other browser tool
 		// reads the page or drives it; this one hands a HOST FILE to a page on
 		// the operator's signed-in session, which is the one browser action

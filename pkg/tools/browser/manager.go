@@ -103,7 +103,7 @@ type BrowserConfig struct {
 	// all — exactly the steady-state resident-tab count this reaper exists
 	// to bound.
 	IdleTTL time.Duration `json:"idle_ttl,omitempty"`
-	// IdleCloseTTL is the WHOLE-CHROME idle window (ADR-072 FR-040): how long
+	// IdleCloseTTL is the WHOLE-CHROME idle window (ADR-075 FR-040): how long
 	// a workspace's browser may sit with zero tabs, zero live viewers and no
 	// call in flight before the process itself is closed. The profile
 	// directory survives, so the workspace is still logged in next time.
@@ -119,7 +119,7 @@ type BrowserConfig struct {
 	// forbids either of them shipping behind an off switch.
 	IdleCloseTTL time.Duration `json:"idle_close_ttl,omitempty"`
 	// CacheTrimInterval is how often the pool sweeps CLOSED workspace profiles
-	// for disposable browser cache (ADR-072 FR-072). Reload-applied.
+	// for disposable browser cache (ADR-075 FR-072). Reload-applied.
 	//
 	// ⚠ It does NOT bound a profile's size, and the config documentation must
 	// not imply that it does (FR-074). Nothing is trimmed while a Chrome is
@@ -276,7 +276,7 @@ type sessionEntry struct {
 	// ViewerAttached/ViewerDetached.
 	viewers int
 	// lastViewerBeat is when a viewer on this browsing context last PROVED it
-	// was still there (ADR-072 FR-052). Stamped by ViewerAttached and
+	// was still there (ADR-075 FR-052). Stamped by ViewerAttached and
 	// re-stamped by every ViewerHeartbeat; never cleared, because a session
 	// with zero viewers is judged by the count alone.
 	//
@@ -410,7 +410,7 @@ type Tab struct {
 // Session model: tools operate on a persistent "default" session tab so that
 // browser_navigate, browser_click, browser_get_text, etc. act on the same page.
 // Additional sessions can be created for parallel browsing; the only limit is
-// live memory (ADR-072 D1.5a — every tab counter was deleted).
+// live memory (ADR-075 D1.5a — every tab counter was deleted).
 type BrowserManager struct {
 	cfg  BrowserConfig
 	ssrf *security.SSRFChecker // never nil — enforced by NewBrowserManager
@@ -452,7 +452,7 @@ type BrowserManager struct {
 	// state, and an absent entry means "its own set", which is every turn
 	// that has not taken anything over.
 	//
-	// This is NOT ownership and must not be read as any (ADR-072 FR-070,
+	// This is NOT ownership and must not be read as any (ADR-075 FR-070,
 	// §0.7's C-403 note). The operator's tabs stay owned by the workspace:
 	// every session on the workspace can still see them, every session can
 	// still drive them, and nothing here transfers on a take-over. What it
@@ -521,11 +521,11 @@ type BrowserManager struct {
 	// instead of building its own ExecAllocator.
 	//
 	// CRIT-003 is now trivially true rather than carefully maintained: since
-	// ADR-072 FR-031 there are no CDP browser contexts at all, so no path can
+	// ADR-075 FR-031 there are no CDP browser contexts at all, so no path can
 	// create one whose disposal would destroy cookies on a reload. Cookies
 	// live in the workspace's profile directory on disk.
 	coordinator *BrowserCoordinator
-	// pool is the ADR-072 per-workspace browser pool. When set it SUPERSEDES
+	// pool is the ADR-075 per-workspace browser pool. When set it SUPERSEDES
 	// the coordinator field: ensureStarted asks the pool for this key's
 	// Chrome, and the pool hands back the coordinator that owns it. The
 	// coordinator field is then a cached result, refreshed on every
@@ -686,13 +686,13 @@ func (m *BrowserManager) Live() *LiveViewRegistry {
 }
 
 // AttachSharedChrome wires this manager to the coordinator that owns its
-// browsing key's Chrome (ADR-043, re-keyed by ADR-072 FR-001). When set,
+// browsing key's Chrome (ADR-043, re-keyed by ADR-075 FR-001). When set,
 // ensureStarted asks that coordinator to launch/provide the key's Chrome. A
 // nil coordinator (the default for direct/test construction) keeps the legacy
 // per-manager ExecAllocator behavior.
 //
 // key identifies this manager to the coordinator. It is the BROWSING KEY, not
-// an agent id (ADR-072 FR-001): there is one manager, one Chrome and one
+// an agent id (ADR-075 FR-001): there is one manager, one Chrome and one
 // profile directory per workspace, and N agents on that workspace share it, so
 // the coordinator's Register/Release/RemoveAgent bookkeeping is keyed by the
 // browser rather than by whichever agent happened to touch it first.
@@ -702,7 +702,7 @@ func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, key
 	m.agentID = key.String()
 }
 
-// AttachPool wires this manager to the per-workspace browser pool (ADR-072
+// AttachPool wires this manager to the per-workspace browser pool (ADR-075
 // FR-037) instead of to one coordinator directly. This is production's path.
 //
 // The difference that matters: with a pool, WHICH Chrome this manager drives
@@ -718,7 +718,7 @@ func (m *BrowserManager) AttachPool(pool *BrowserPool, key BrowsingKey) {
 
 // OperatorSessionID is the manager-level session id naming the WORKSPACE-OWNED
 // tab set — the tabs the operator opened through the live panel, visible to
-// every agent on this workspace (ADR-072 §0.2a).
+// every agent on this workspace (ADR-075 §0.2a).
 //
 // It is the exported seam the gateway addresses instead of the deleted
 // shared session constant. Exported rather than exposing sessionKey because
@@ -782,7 +782,7 @@ func (m *BrowserManager) BrowsingKey() BrowsingKey { return m.key }
 
 // focusedTabSet reports which tab set a turn whose OWN set is `home` currently
 // addresses — its own, or the operator's workspace-owned set it has taken over
-// (ADR-072 D1.9b ruling 1, FR-070).
+// (ADR-075 D1.9b ruling 1, FR-070).
 //
 // Every browser tool resolves through this, on the ONE path resolveTurn takes,
 // which is why "take over the operator's browsing" is a property of the turn
@@ -1040,7 +1040,7 @@ func (m *BrowserManager) liveViewersLocked(se *sessionEntry, now time.Time) int 
 
 // Viewers reports how many live-panel viewers are attached across every
 // browsing context this manager owns AND have proved they are still there
-// within viewerLivenessWindow (ADR-072 FR-010, FR-052).
+// within viewerLivenessWindow (ADR-075 FR-010, FR-052).
 //
 // It exists because BOTH lifetime controls need it and neither may guess: the
 // pool refuses to evict a browser somebody is watching (FR-050) and refuses to
@@ -1065,7 +1065,7 @@ func (m *BrowserManager) Viewers() int {
 }
 
 // InFlight reports how many browser_* tool calls are executing against this
-// manager right now (ADR-072 FR-051).
+// manager right now (ADR-075 FR-051).
 //
 // EVERY browser tool increments it — leased and lease-exempt alike — because
 // the question eviction asks is "would killing this Chrome break a call that
@@ -1106,7 +1106,7 @@ func (m *BrowserManager) EnterCall() func() {
 
 // TotalOpenTabs reports how many tabs are open across every browsing context
 // this manager owns. It is NOT a budget and nothing compares it to a cap —
-// every tab counter was deleted by ADR-072 D1.5a. It answers one question:
+// every tab counter was deleted by ADR-075 D1.5a. It answers one question:
 // has this browser got anything left in it (FR-040's idle close).
 func (m *BrowserManager) TotalOpenTabs() int {
 	m.mu.Lock()
@@ -1885,7 +1885,7 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 		ctx, cancel := context.WithCancel(context.Background())
 		return ctx, cancel, nil
 	}
-	// ADR-072 FR-031: no CDP browser context is adopted or created here,
+	// ADR-075 FR-031: no CDP browser context is adopted or created here,
 	// because there are none. Every session bootstraps into Chrome's DEFAULT
 	// context — the only one chrome.tabCapture can reach — and isolation is
 	// the workspace's own Chrome process and profile directory (FR-037), not
@@ -1900,7 +1900,7 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 
 // errMemoryPressureTabOpen is the shared refusal every tab-open site returns
 // when the FR-060 memory gate says stop. It replaces the deleted cap error, which
-// named a cap (tools.browser.max_tabs) that ADR-072 D1.5a DELETED.
+// named a cap (tools.browser.max_tabs) that ADR-075 D1.5a DELETED.
 //
 // It names MEMORY and a remedy that exists, and it names NO limit and NO config
 // key — deliberately (FR-053, FR-063). An operator told to raise a limit would
@@ -2100,7 +2100,7 @@ func refreshTabMeta(tabCtx context.Context, timeout time.Duration) (title, url s
 }
 
 // totalTabCountLocked sums the number of tabs across every browsing context
-// this manager tracks. It SURVIVED ADR-072 D1.5a's counter deletion as a
+// this manager tracks. It SURVIVED ADR-075 D1.5a's counter deletion as a
 // COUNT — nothing compares it against a cap any more; the FR-082 floor on an
 // unmeasurable host is its one remaining reader, plus OpenTabCount's reporting
 // (ADR-041 generalized its pre-ADR-041 meaning of "total
@@ -2158,7 +2158,7 @@ func (m *BrowserManager) SetTabsChangedFunc(cb func(sessionID string, tabs []Tab
 }
 
 // TabState is the CLOSED three-value answer to "what is there to see in this
-// tab set?" (ADR-072 FR-013). It exists because `ListTabs` used to return the
+// tab set?" (ADR-075 FR-013). It exists because `ListTabs` used to return the
 // identical `nil, 0, nil` for two genuinely different situations, and the tool
 // on top of it told the model "no tabs" in a case where the truthful answer was
 // "there is no browser here at all". §1.1 of the ADR records what that
@@ -3439,7 +3439,7 @@ func (m *BrowserManager) ViewerAttached(sessionID string) {
 }
 
 // ViewerHeartbeat records that a viewer on sessionID's browsing context is
-// still there right now (ADR-072 FR-052). Called from the live-panel
+// still there right now (ADR-075 FR-052). Called from the live-panel
 // WebSocket's PongHandler — the peer answering the server's keep-alive ping
 // is the proof, which is why an idle-but-alive watcher keeps pinning its
 // browser without touching anything.
@@ -3605,7 +3605,7 @@ func cancelBounded(cancel context.CancelFunc, logFields map[string]any) {
 // TestReapIdleSessions_ActiveTabItselfReaped_ActiveIdxStaysCoherent, which
 // pins only that the index stays in range.
 //
-// ADR-072 D1.5a/FR-059: there is NO tab-budget accounting here any more. Every
+// ADR-075 D1.5a/FR-059: there is NO tab-budget accounting here any more. Every
 // counter was deleted, so a reaped tab hands nothing back — the memory gate
 // re-reads live memory at the next open rather than tracking slots.
 //
@@ -3942,7 +3942,7 @@ func (m *BrowserManager) Shutdown() {
 }
 
 // OpenTabCount returns the number of currently-open tabs across this manager's
-// browsing contexts. It SURVIVED ADR-072 D1.5a's counter deletion as a COUNT —
+// browsing contexts. It SURVIVED ADR-075 D1.5a's counter deletion as a COUNT —
 // it is reporting and diagnostics, never compared against a cap. The read takes
 // m.mu briefly (the same lock totalTabCountLocked uses), so callers must NOT
 // already hold m.mu.

@@ -79,7 +79,7 @@ async function ensureSession(): Promise<string> {
       // The session this mints becomes the ACTIVE one, and it is the session
       // the live browser panel would attach against if the user opened it
       // before sending anything. The gateway reads which workspace's browser
-      // to show off that session's own meta, server-side (ADR-072 FR-017), so
+      // to show off that session's own meta, server-side (ADR-075 FR-017), so
       // a session created with no workspace gets a multi-workspace agent
       // refused as ambiguous — advised to open the panel from a workspace
       // chat, which is where they already are. Waiting for the first message

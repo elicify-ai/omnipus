@@ -53,7 +53,7 @@ func browserKeyProbeHome(t *testing.T, workspaceID string) string {
 // The failure it guards against is not a leak. It is two managers for one
 // workspace, each with its own Chrome and its own logins, where an agent's
 // tools drive one and the operator's live panel watches the other. That is
-// ADR-072 §1.1's reported defect in its second form, and nothing about it looks
+// ADR-075 §1.1's reported defect in its second form, and nothing about it looks
 // wrong from either side.
 func TestLoop_BrowserManagerForKey_OnePerKey(t *testing.T) {
 	cfg, err := browser.DefaultConfig()
@@ -129,7 +129,7 @@ func TestLoop_BrowserMgrsCommentIsCurrent(t *testing.T) {
 	require.Contains(t, doc, "ws:<workspaceID>",
 		"the doc must show the actual key shape a reader will see in a log line")
 	require.NotContains(t, doc, "one BrowserManager per agent",
-		"the pre-ADR-072 claim survived the re-key — it is now false and actively misleading")
+		"the pre-ADR-075 claim survived the re-key — it is now false and actively misleading")
 }
 
 // TestBrowserManagerForAgent_DistinguishesNotRegisteredFromNoWorkspace is
@@ -154,7 +154,7 @@ func TestBrowserManagerForAgent_DistinguishesNotRegisteredFromNoWorkspace(t *tes
 }
 
 // TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager is the
-// ADR-038 finding #2 regression guard, carried through the ADR-072 re-key:
+// ADR-038 finding #2 regression guard, carried through the ADR-075 re-key:
 // registerSharedTools MUST call Shutdown() on the PRIOR BrowserManager for a
 // browsing key before installing a replacement for that SAME key (the
 // hot-reload path, driven by ReloadProviderAndConfig on every Settings save).

@@ -54,7 +54,7 @@ type ManagerResolver interface {
 //
 // The error is RETURNED, never swallowed into a shared browser or the
 // operator's tab set (FR-008, FR-080) — that swallowing is the whole defect
-// ADR-072 exists to fix.
+// ADR-075 exists to fix.
 func resolveTurn(
 	ctx context.Context, res ManagerResolver, ba *browserAudit, toolName string,
 ) (mgr *BrowserManager, key BrowsingKey, home, owner TabOwner, sid string, failure *tools.ToolResult) {
@@ -165,7 +165,7 @@ func resolveTurnTabSet(
 // RegisterTools registers browser automation tools with the given registry.
 //
 // The manager is RESOLVED PER CALL, not captured at registration (FR-002a).
-// Before ADR-072 this function constructed one BrowserManager and closed every
+// Before ADR-075 this function constructed one BrowserManager and closed every
 // tool struct over it, which is what made a tool's browser a property of the
 // agent that happened to be registered rather than of the turn being executed.
 // No tool struct holds a *BrowserManager after this change — the structural
@@ -212,7 +212,7 @@ func RegisterTools(
 	// Opens a NEW tab (the agent-facing counterpart to the human "+" button)
 	// — distinct from browser_navigate, which reuses the current tab.
 	registry.RegisterReplacing(&OpenTabTool{res: res})
-	// ADR-072 D2 — the interaction verbs and the accessibility snapshot.
+	// ADR-075 D2 — the interaction verbs and the accessibility snapshot.
 	//
 	// EVERY ONE OF THESE LINES LANDS IN THE SAME COMMIT AS ITS POLICY SEED
 	// (pkg/coreagent/core.go's allStaticToolNames + per-agent maps and

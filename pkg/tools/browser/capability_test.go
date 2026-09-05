@@ -371,7 +371,7 @@ func TestCaptureVideoCapability_RequiresCoordinatorAttached(t *testing.T) {
 }
 
 // TestCaptureVideoCapability_PoolAttachedCountsAsAttached is the regression
-// guard for the ADR-072 FR-037 pool cutover.
+// guard for the ADR-075 FR-037 pool cutover.
 //
 // AttachSharedChrome pins a coordinator at attach time; AttachPool — which is
 // production's ONLY path (pkg/agent/loop.go's browserFactory) — deliberately

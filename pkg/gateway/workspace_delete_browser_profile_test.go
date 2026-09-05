@@ -7,7 +7,7 @@ package gateway
 // R5 finding 3 — deleting a workspace must actually delete its browser
 // profile, including when the browser is mid-shutdown.
 //
-// ADR-072 FR-043a / SC-017 make workspace deletion the ONE trigger that removes
+// ADR-075 FR-043a / SC-017 make workspace deletion the ONE trigger that removes
 // a profile directory, precisely because that directory holds the workspace's
 // live logins. The single-shot Close-then-DeleteProfile the handler used could
 // report success while leaving them on disk, and the whole point of these tests

@@ -488,7 +488,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
           </div>
         </div>
         <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={lastSavedAt} />
-        {/* ADR-072 FR-047: the "this agent gets the workspace's live logins"
+        {/* ADR-075 FR-047: the "this agent gets the workspace's live logins"
             disclosure travels INSIDE AddAgentPicker, so both of this tab's two
             render sites carry it. Do not replace either with a bare Button. */}
         <AddAgentPicker agents={agents} memberIds={memberIds} onAdd={handleAddMember} />
@@ -529,7 +529,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
                 Add an agent to drop the first node, then draw delegation edges between them.
               </p>
             </div>
-            {/* ADR-072 FR-047: second render site. The disclosure comes with
+            {/* ADR-075 FR-047: second render site. The disclosure comes with
                 the picker — see the header site above. */}
             <AddAgentPicker agents={agents} memberIds={memberIds} onAdd={handleAddMember} />
           </div>

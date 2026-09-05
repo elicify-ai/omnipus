@@ -2,7 +2,7 @@ package browser
 
 // coordinator.go implements ADR-043 / spec "Stream A": a BrowserCoordinator
 // owns ONE Chrome process and the pipe root context every tab in it descends
-// from. There is one coordinator PER WORKSPACE, not one per gateway (ADR-072
+// from. There is one coordinator PER WORKSPACE, not one per gateway (ADR-075
 // FR-037: BrowserPool keys them by BrowsingKey and hands each its own
 // --user-data-dir), and it owns no CDP browser contexts at all — those were
 // retired by FR-031; see the HISTORICAL paragraph below before reading any
@@ -32,7 +32,7 @@ package browser
 //
 // HISTORICAL, and deliberately not re-implementable: this coordinator used to
 // give every agent its OWN CDP browser context, created over raw CDP with
-// its own window. ADR-072
+// its own window. ADR-075
 // FR-031 deleted that whole mechanism. Every session now bootstraps into
 // Chrome's DEFAULT context, because that is the only context
 // chrome.tabCapture can reach, and isolation moved DOWN a level: one Chrome
@@ -85,7 +85,7 @@ import (
 // treated as stale (removable), never silently driven.
 const ownershipMarkerOwner = "omnipus"
 
-// BrowserCoordinator owns ONE Chrome process — one workspace's (ADR-072
+// BrowserCoordinator owns ONE Chrome process — one workspace's (ADR-075
 // FR-037), reached through BrowserPool, which builds and keys these by
 // BrowsingKey. It owns no per-agent browser contexts: FR-031 retired them, and
 // what partitions one workspace's logins from another's is now the profile
@@ -100,7 +100,7 @@ type BrowserCoordinator struct {
 	homeDir string // $OMNIPUS_HOME; ownership marker + profile dir root
 	cfg     BrowserConfig
 
-	// key is the BrowsingKey this coordinator's Chrome belongs to (ADR-072
+	// key is the BrowsingKey this coordinator's Chrome belongs to (ADR-075
 	// FR-037). It is what makes the ownership marker per-key —
 	// <homeDir>/browser/ws-<id>.pid — instead of one shared-chrome.pid that,
 	// with N Chromes running, could only ever name one of them and would
@@ -166,9 +166,9 @@ type BrowserCoordinator struct {
 
 // NewBrowserCoordinator constructs a coordinator. homeDir is $OMNIPUS_HOME (the
 // ownership marker lands at <homeDir>/browser/shared-chrome.pid; the profile
-// dir comes from cfg.ProfileDir). There is no tab budget parameter: ADR-072
+// dir comes from cfg.ProfileDir). There is no tab budget parameter: ADR-075
 // D1.5a deleted every tab counter, and live memory is the only limit.
-// (startPageURL is gone with ADR-072 FR-031. It existed for the coordinator's
+// (startPageURL is gone with ADR-075 FR-031. It existed for the coordinator's
 // OWN target-creation path — the per-agent window Register used to open in a
 // CDP browser context. The coordinator creates no targets any more; every tab
 // is created by a manager, which has its own StartPageURL.)
@@ -193,7 +193,7 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinato
 		pipeLauncher: launchManagedPipe,
 	}
 	c.launchDone = sync.NewCond(&c.mu)
-	// ADR-072 D1.5a/FR-059: there is no tab budget to report. Every counter —
+	// ADR-075 D1.5a/FR-059: there is no tab budget to report. Every counter —
 	// the global one and the per-agent one — is deleted, and the only limit is
 	// live memory, enforced at each tab open by the manager's own gate. An
 	// operator reading this line used to be told a number to raise; there is no
@@ -210,7 +210,7 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinato
 // HISTORICAL NOTE — there is no tab counter of any kind here any more.
 // Spec D7 originally seeded a global cross-agent budget of 30, sized from the
 // measured ~91 MB Chrome baseline + a blended per-tab average. That number was
-// a proxy for a memory guard, not a correctness guard, and ADR-072 D1.5a
+// a proxy for a memory guard, not a correctness guard, and ADR-075 D1.5a
 // replaced the whole family — the global budget, the per-agent courtesy cap and
 // the in-flight reservation bookkeeping — with a live-memory gate at each tab
 // open (FR-059, FR-060). Do not reintroduce a counter here: a cap an operator
@@ -224,7 +224,7 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinato
 // has no ws:// URL and is private to this OS process).
 //
 // EVERY session bootstraps into Chrome's DEFAULT browser context. There is no
-// per-agent CDP browser context anymore: ADR-072 FR-031 retired
+// per-agent CDP browser context anymore: ADR-075 FR-031 retired
 // tools.browser.capture_shared_context and the whole CDP-browser-context
 // mechanism with it. Isolation is now a property of the PROCESS — one Chrome
 // and one --user-data-dir profile directory per BrowsingKey (FR-037), which
@@ -325,7 +325,7 @@ func (c *BrowserCoordinator) Release(agentID string) int {
 // longer in cfg.Agents. Safe to call for an agentID that was never registered
 // (no-op).
 //
-// It no longer disposes anything Chrome-side: ADR-072 FR-031 retired the
+// It no longer disposes anything Chrome-side: ADR-075 FR-031 retired the
 // per-agent CDP browser context, and the cookie/storage partition an agent
 // can reach is now the WORKSPACE's profile directory, which outlives any one
 // agent by design. The partition is freed when the workspace is deleted
@@ -541,7 +541,7 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	// racing-goroutine trick is needed.
 	callCtx, cancel := boundedCallContext(ctx, loadExtensionDefaultTimeout)
 	defer cancel()
-	// WithEnableInIncognito(true) is RETAINED after ADR-072 FR-031 deleted the
+	// WithEnableInIncognito(true) is RETAINED after ADR-075 FR-031 deleted the
 	// per-agent CDP contexts it was originally added for. It is now harmless
 	// rather than load-bearing: every tab lives in the default context, which
 	// Extensions.loadUnpacked already scopes to. Dropping the flag is a
@@ -1107,7 +1107,7 @@ type ownershipMarker struct {
 }
 
 // markerPath is where this coordinator records its Chrome's pid. Per key when
-// it has one (ADR-072 FR-042), and the historical shared name when it does not
+// it has one (ADR-075 FR-042), and the historical shared name when it does not
 // — the latter reachable only from direct/test construction.
 func (c *BrowserCoordinator) markerPath() string {
 	name := "shared-chrome.pid"

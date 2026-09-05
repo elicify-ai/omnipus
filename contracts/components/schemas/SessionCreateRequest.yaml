@@ -28,7 +28,7 @@ properties:
 
       Stamped straight onto the new session's meta, so a session created for a
       workspace chat carries its workspace from birth rather than from its
-      first message. That gap is what ADR-072 FR-017 tripped over: the live
+      first message. That gap is what ADR-075 FR-017 tripped over: the live
       browser panel reads the workspace off the attaching chat session's own
       meta, server-side, and the SPA's "Open browser" launcher creates its
       session here — with no workspace — before any message has been sent. An

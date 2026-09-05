@@ -1,8 +1,8 @@
-# Grill review — `browser-agent-capability-spec.md` (ADR-072 D2)
+# Grill review — `browser-agent-capability-spec.md` (ADR-075 D2)
 
 - **Spec reviewed:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/specs/browser-agent-capability-spec.md`
-- **Source ADR:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions.md`
-- **Round-1 grill:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-072-workspace-scoped-browser-sessions-review.md`
+- **Source ADR:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-075-workspace-scoped-browser-sessions.md`
+- **Round-1 grill:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf/docs/internal/architecture/ADR-075-workspace-scoped-browser-sessions-review.md`
 - **Worktree:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-browser-perf` · branch `feat/browser-streaming-performance`
 - **Spec written at:** `077c5237` · **HEAD at review time:** `5a67157f` (`docs(adr): record two operator rulings on the D2 capability surface`)
 - **Mode:** `plan-spec` (BDD scenarios, FR-xxx, traceability matrix, SC-xxx all present)

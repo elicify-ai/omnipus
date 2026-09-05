@@ -1,4 +1,4 @@
-// Omnipus — per-action browser audit (ADR-072 D1, FR-027 / FR-058)
+// Omnipus — per-action browser audit (ADR-075 D1, FR-027 / FR-058)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 //
@@ -60,7 +60,7 @@ var writeClassBrowserTools = map[string]bool{
 	"browser_switch_tab": true,
 	"browser_close_tab":  true,
 	"browser_open_tab":   true,
-	// ADR-072 D2 — the four new interaction verbs. All four call
+	// ADR-075 D2 — the four new interaction verbs. All four call
 	// controlledResult (FR-040), so under §14 rule 3's biconditional all four
 	// are write-class and all four are leased. Adding a verb here without
 	// wiring controlledResult, or the reverse, is what audit_test.go's
@@ -80,14 +80,14 @@ var readOnlyBrowserTools = map[string]bool{
 	"browser_screenshot": true,
 	"browser_get_text":   true,
 	"browser_wait":       true,
-	// ADR-072 D2 FR-038 — browser_snapshot is read-only. It calls neither
+	// ADR-075 D2 FR-038 — browser_snapshot is read-only. It calls neither
 	// controlledResult nor the write lease, so it belongs here and NOT in the
 	// write-class set. It emits its OWN metadata-only browser_snapshot event
 	// (FR-028) rather than a browser_action row: the two answer different
 	// questions and recordBrowserAction refuses a non-write-class name by
 	// design.
 	"browser_snapshot": true,
-	// ADR-072 D2 FR-035 — browser_handle_dialog is exempt for a DIFFERENT
+	// ADR-075 D2 FR-035 — browser_handle_dialog is exempt for a DIFFERENT
 	// reason from everything else in this map, and the difference is worth
 	// stating rather than letting the shared membership imply sameness.
 	//

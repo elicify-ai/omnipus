@@ -46,7 +46,7 @@ func minimalArgsFor(name string) map[string]any {
 		return map[string]any{"js": "1+1"}
 	case "browser_switch_tab", "browser_close_tab":
 		return map[string]any{"index": float64(0)}
-	// ADR-072 D2. These must get PAST their own parameter validation, or the
+	// ADR-075 D2. These must get PAST their own parameter validation, or the
 	// tool returns an argument error before reaching either gate and the
 	// biconditional below reads "does not defer" for a tool that in fact does.
 	case "browser_hover":
@@ -80,7 +80,7 @@ const (
 // index-taking tools can resolve ownership and actually REACH the gates these
 // tests are about.
 //
-// Why it is needed at all. ADR-072 D1.9b gave a turn's own tabs and the
+// Why it is needed at all. ADR-075 D1.9b gave a turn's own tabs and the
 // operator's tabs ONE merged index space, so browser_switch_tab and
 // browser_close_tab must now resolve the index onto a tab set BEFORE either
 // gate can be consulted — "is a human driving the set this call addresses" is
@@ -149,7 +149,7 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 	for _, tool := range lockRegistry.GetAll() {
 		names[tool.Name()] = true
 	}
-	// 11 shipped + ADR-072 D2's five registered tools (select_option,
+	// 11 shipped + ADR-075 D2's five registered tools (select_option,
 	// press_key, hover, snapshot, handle_dialog). browser_upload_file is
 	// implemented and seeded but NOT registered while FR-029 holds it, so it
 	// raises this number when #659 closes.

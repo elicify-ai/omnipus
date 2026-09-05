@@ -55,7 +55,7 @@ var declaredControlGateExemptions = map[string]string{
 		"the mechanisms the fault itself disables is a deadlock, not a safety property",
 }
 
-// fr040Inclusions is the four ADR-072 D2 action verbs FR-040 is written about.
+// fr040Inclusions is the four ADR-075 D2 action verbs FR-040 is written about.
 // Named separately from the set arithmetic below so AC2 fails with the tool's
 // own name rather than as a diff between two long lists.
 var fr040Inclusions = []string{
@@ -111,7 +111,7 @@ func TestBrowserTools_ControlGateMembershipMatchesExemptions(t *testing.T) {
 				"no local explanation", name)
 	}
 
-	// AC3 — the two ADR-072 D2 exemptions, named individually. The inclusion
+	// AC3 — the two ADR-075 D2 exemptions, named individually. The inclusion
 	// and the exemption are one assertion over six names precisely so neither
 	// can drift without the other failing.
 	for _, name := range []string{"browser_snapshot", "browser_handle_dialog"} {

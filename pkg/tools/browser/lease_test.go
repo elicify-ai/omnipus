@@ -16,7 +16,7 @@ import (
 // The lease exists because two TURNS — not two agents — can address one tab
 // set: /loop, async system-notify (#505) and cron SessionModeMain each start a
 // second turn on an already-live session id. Two turns interleaving CDP
-// commands on one page is what ADR-072 §5 calls the most expensive failure
+// commands on one page is what ADR-075 §5 calls the most expensive failure
 // class in this design, because the page ends up in a state neither turn asked
 // for and neither can tell.
 

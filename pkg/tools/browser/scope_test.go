@@ -25,7 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// TestBrowserTools_AllSixDeclareScopeCore covers the five tools ADR-072 D2
+// TestBrowserTools_AllSixDeclareScopeCore covers the five tools ADR-075 D2
 // adds here plus browser_upload_file, which is implemented and seeded but
 // deliberately unregistered (FR-029) — a held tool with the wrong scope would
 // ship the defect the day #659 closes and its registration line lands.

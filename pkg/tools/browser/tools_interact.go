@@ -1,4 +1,4 @@
-// Omnipus — the four interaction verbs (ADR-072 D2, capability spec Stream B).
+// Omnipus — the four interaction verbs (ADR-075 D2, capability spec Stream B).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

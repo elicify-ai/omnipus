@@ -1,11 +1,11 @@
-# ADR-072 — Browser tools: workspace-scoped, and usable by an agent
+# ADR-075 — Browser tools: workspace-scoped, and usable by an agent
 
 - **Status:** Proposed
 - **Date:** 2026-08-31. **Consolidated 2026-09-01** — see "About this revision".
 - **Decider for every ruling in this document:** Daniel Piatkowski (operator).
   Recorded once here so the individual "operator ruling" citations below have a
   named authority; a spec cannot resolve its own provenance.
-- **Replaces:** an earlier, unpushed draft that also claimed ADR-072
+- **Replaces:** an earlier, unpushed draft that also claimed ADR-075
   ("Region-aware transport for the live browser") — deleted in the same commit
   as this file lands. §7 records why that work stopped.
 - **Amends:**
@@ -2274,7 +2274,7 @@ and which is **not yet verified against code** (§6).
 ### 9.3 `ADR-048-live-browser-capture-default-context.md`
 
 Its header still reads *"Option A ratified for v1"* with Option B *"tracked for
-later in #509"*. It must be amended in place to record that ADR-072 D1.4 adopts
+later in #509"*. It must be amended in place to record that ADR-075 D1.4 adopts
 Option B at the workspace axis — the same disclosure-in-both-places treatment
 ADR-047 D2 received when ADR-048 amended it.
 

@@ -1,6 +1,6 @@
 package browser
 
-// SC-002 stress test (spec §11), REWRITTEN for ADR-072 D1.
+// SC-002 stress test (spec §11), REWRITTEN for ADR-075 D1.
 //
 // The old scenario was five agents each in their own CDP browser context
 // inside one Chrome — five implicit per-agent jars. That is no longer a
@@ -378,7 +378,7 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	}
 
 	// G8, re-scoped: exactly ONE top-level Chromium browser process for five
-	// agents on ONE workspace. Under ADR-072 "one Chrome" is a per-workspace
+	// agents on ONE workspace. Under ADR-075 "one Chrome" is a per-workspace
 	// claim, not a per-gateway one — a second top-level process HERE would
 	// mean a leak, whereas five workspaces are SUPPOSED to have five.
 	topLevel := countTopLevelChromeProcesses(cfg.ExecPath)

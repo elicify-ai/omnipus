@@ -250,13 +250,13 @@ type AgentLoop struct {
 	ssrfChecker *security.SSRFChecker
 
 	// browserMgrs holds one BrowserManager per BROWSING KEY — one browser, one
-	// Chrome, one profile directory, one workspace (ADR-072 FR-001). The map
+	// Chrome, one profile directory, one workspace (ADR-075 FR-001). The map
 	// key is browser.BrowsingKey.String() ("ws:<workspaceID>"), NOT an agent id.
 	// Guarded by mu.
 	//
 	// ⚠️ THE KEY CHANGED, AND THE OLD KEY IS THE BUG. This map used to be keyed
 	// by agentID (ADR-038 D4), which made "which browser am I driving" a
-	// property of whichever agent happened to be on the chat. ADR-072 §1.1
+	// property of whichever agent happened to be on the chat. ADR-075 §1.1
 	// records the consequence: an operator browses in the live panel, switches
 	// the chat from Mia to Jim, and Jim reports zero tabs — the tab was in
 	// Mia's browser. Under the browsing key every agent on a workspace shares
@@ -287,7 +287,7 @@ type AgentLoop struct {
 	// distinguish BrowserResolveNotRegistered ("this agent has no browser
 	// tools") from BrowserResolveNoWorkspace ("it has them, but this turn is
 	// not rooted in a workspace") now that managers are created lazily per key
-	// rather than eagerly per agent — before ADR-072, absence from browserMgrs
+	// rather than eagerly per agent — before ADR-075, absence from browserMgrs
 	// meant both, and browser_inspect.go reported the former for both.
 	// Guarded by mu.
 	browserRegisteredAgents map[string]bool
@@ -307,7 +307,7 @@ type AgentLoop struct {
 	// so the coordinator — and the per-agent contexts it owns — survive a
 	// Settings save). nil only in tests that construct managers directly.
 	browserCoordinator *browser.BrowserCoordinator
-	// browserPool (ADR-072 FR-037) owns ONE Chrome per workspace, each with
+	// browserPool (ADR-075 FR-037) owns ONE Chrome per workspace, each with
 	// its own profile directory. It supersedes browserCoordinator as the
 	// thing managers attach to; the coordinator field survives only for the
 	// direct/test path and for shutdown symmetry. Constructed once and reused
@@ -2397,7 +2397,7 @@ func registerSharedTools(
 				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
 					browserCfg.IdleTTL = 0
 				}
-				// ADR-072 FR-040a / FR-072: the whole-browser idle window and
+				// ADR-075 FR-040a / FR-072: the whole-browser idle window and
 				// the closed-profile cache-trim schedule. Both are documented
 				// operator keys, and both were unreachable until this line —
 				// the value was parsed into nothing and the pool silently ran
@@ -2559,7 +2559,7 @@ func registerSharedTools(
 				// switch takes effect without a restart, which is the whole
 				// reason it exists.
 				browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)
-				// ADR-072 D2 FR-027: browser_snapshot renders field VALUES by
+				// ADR-075 D2 FR-027: browser_snapshot renders field VALUES by
 				// operator ruling, so its rendered outline is run through the
 				// credential replacer before it is returned. Wired at this
 				// call site, and for the same reason as the line above: it
@@ -2578,7 +2578,7 @@ func registerSharedTools(
 				// browser a tool drives is now a property of the TURN
 				// (ResolveBrowsingKey + BrowserManagerForKey), never of
 				// whichever agent it was registered under — which is the
-				// reported defect ADR-072 §1.1 records.
+				// reported defect ADR-075 §1.1 records.
 				if regErr := browser.RegisterTools(
 					agent.Tools, al.browserResolver(), evaluateEnabled,
 					agent.Home, cfg.Agents.Defaults.RestrictToWorkspace,
@@ -5106,11 +5106,11 @@ func (al *AgentLoop) GetConfig() *config.Config {
 
 // BrowserResolveOutcome is a closed enum naming WHY a browser could not be
 // resolved. "not registered" and "no workspace" are DIFFERENT operator-facing
-// problems and were indistinguishable before ADR-072 — browser_inspect.go
+// problems and were indistinguishable before ADR-075 — browser_inspect.go
 // reported the former for both, so an operator whose agent simply was not on a
 // workspace team was told browser tools had failed to register.
 //
-// There is deliberately NO BrowserResolvePoolFull: ADR-072 D1.5a deleted every
+// There is deliberately NO BrowserResolvePoolFull: ADR-075 D1.5a deleted every
 // counter, so the panel never has a capacity reason to render.
 type BrowserResolveOutcome int
 
@@ -5133,7 +5133,7 @@ const (
 
 // BrowserManagerForKey returns (creating on first use) the manager that owns
 // key's browser. Exactly one manager and one Chrome per key, process-wide —
-// FR-001. There is no cap: ADR-072 D1.5a made live memory the only limit, and
+// FR-001. There is no cap: ADR-075 D1.5a made live memory the only limit, and
 // it is enforced at each tab open inside the manager (FR-060).
 func (al *AgentLoop) BrowserManagerForKey(
 	_ context.Context, key browser.BrowsingKey,
@@ -5210,7 +5210,7 @@ func (al *AgentLoop) rewireBrowserManagerForKey(
 	}
 }
 
-// BrowserPool returns the per-workspace browser pool (ADR-072 FR-037), or nil
+// BrowserPool returns the per-workspace browser pool (ADR-075 FR-037), or nil
 // before the first registration pass has built it. The gateway needs it for
 // boot preprovision (FR-016c), for the one-minute sweep's whole-Chrome idle
 // close (FR-040a) and for workspace-deletion disposal (FR-026).

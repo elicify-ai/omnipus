@@ -3325,7 +3325,7 @@ func warmCaptureIdleTimeout(cfg *config.Config) time.Duration {
 
 // pickWarmBrowserManager chooses the ONE browser whose tab (and, optionally,
 // capture) gets warmed at boot: the browser of the workspace the DEFAULT agent
-// resolves to (ADR-072 FR-016b). It returns (nil, reason) when there is
+// resolves to (ADR-075 FR-016b). It returns (nil, reason) when there is
 // nothing to warm — reason is a short operator-facing sentence, and the caller
 // logs it exactly once at INFO.
 //
@@ -3611,7 +3611,7 @@ func startBrowserWarmBoot(
 		// extra one in the shared Chrome (which the encoder's fallback tab
 		// resolution could then bind to by mistake).
 		//
-		// It is the WORKSPACE-OWNED tab set, not an agent's: under ADR-072
+		// It is the WORKSPACE-OWNED tab set, not an agent's: under ADR-075
 		// FR-080 a browser_* tool addresses its own SESSION's tabs, which do
 		// not exist until that session browses and cannot be warmed at boot.
 		// The panel's tabs can be, and are.
@@ -6325,7 +6325,7 @@ type browserCacheTrimScheduler interface {
 	CacheTrimInterval() time.Duration
 }
 
-// runBrowserCacheTrimSchedule is ADR-072 FR-072 triggers 2 and 3: the boot sweep
+// runBrowserCacheTrimSchedule is ADR-075 FR-072 triggers 2 and 3: the boot sweep
 // of every profile with no live Chrome, then the recurring sweep.
 //
 // The interval is re-read from the pool on EVERY round rather than captured

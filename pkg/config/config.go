@@ -3830,7 +3830,7 @@ type BrowserToolConfig struct {
 	// the context forever — the panel close is a pure UI dismiss, so reopening
 	// days later resurfaced the exact page left behind.
 	IdleTTLSec int `json:"idle_ttl" env:"OMNIPUS_TOOLS_BROWSER_IDLE_TTL"`
-	// IdleCloseTTLSec is the WHOLE-BROWSER idle window (ADR-072 FR-040a): how
+	// IdleCloseTTLSec is the WHOLE-BROWSER idle window (ADR-075 FR-040a): how
 	// long a workspace's Chrome may sit with zero tabs, zero live viewers and
 	// no call in flight before the process itself is closed. The profile
 	// directory survives, so the workspace is still signed in next time.
@@ -3848,7 +3848,7 @@ type BrowserToolConfig struct {
 	// operator value that disables it.
 	IdleCloseTTLSec int `json:"idle_close_ttl" env:"OMNIPUS_TOOLS_BROWSER_IDLE_CLOSE_TTL"`
 	// CacheTrimIntervalSec is how often CLOSED workspace profiles are swept
-	// for disposable browser cache (ADR-072 FR-072 trigger 3). Seconds; zero
+	// for disposable browser cache (ADR-075 FR-072 trigger 3). Seconds; zero
 	// leaves pkg/tools/browser's defaultCacheTrimInterval (1 hour) in force.
 	// Applied on reload, not only at boot.
 	//
@@ -3872,7 +3872,7 @@ type BrowserToolConfig struct {
 	ExecPath string `json:"exec_path" env:"OMNIPUS_TOOLS_BROWSER_EXEC_PATH"`
 	// There is deliberately NO per-agent tab cap and NO global tab budget key
 	// here.
-	// ADR-072 D1.5a deleted every browser tab counter — the per-agent
+	// ADR-075 D1.5a deleted every browser tab counter — the per-agent
 	// courtesy cap and the global cross-agent budget alike — because a cap
 	// is a number that has to be right on every host, and no single number
 	// ever was. The only limit is live memory, checked at each tab open
@@ -3996,7 +3996,7 @@ type BrowserToolConfig struct {
 	// Set it only when the media address genuinely differs from the web
 	// origin (split DNS, a separate media IP).
 	WebRTCPublicIP string `json:"webrtc_public_ip,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP"`
-	// RETIRED — tools.browser.capture_shared_context (ADR-072 FR-031).
+	// RETIRED — tools.browser.capture_shared_context (ADR-075 FR-031).
 	// Do not reintroduce this key.
 	//
 	// It selected between two ways of placing a browsing session: Chrome's

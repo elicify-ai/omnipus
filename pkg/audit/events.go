@@ -179,7 +179,7 @@ const (
 
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
-	// BrowsingKey established it (ADR-072 FR-027). Fires exactly ONCE per
+	// BrowsingKey established it (ADR-075 FR-027). Fires exactly ONCE per
 	// browser instance, not once per agent and not once per turn. Fields:
 	// {workspace_id, browsing_key}; the establishing agent is Entry.AgentID
 	// and the turn's transcript session is Entry.SessionID.

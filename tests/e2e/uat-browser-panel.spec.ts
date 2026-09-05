@@ -99,7 +99,7 @@ async function openWorkspaceChat(page: Page): Promise<string> {
  *
  * Why this is necessary, and why it is itself a finding (see the report):
  * pkg/gateway/browser_ws.go's `sessionWorkspaceID` resolves the panel's
- * workspace from the CHAT SESSION'S OWN meta on disk (ADR-072 FR-017) — the
+ * workspace from the CHAT SESSION'S OWN meta on disk (ADR-075 FR-017) — the
  * client never gets to name a workspace, because a workspace's browser holds
  * that workspace's live logins. But a session only acquires a workspace when a
  * message is sent through it (src/store/chat.ts forwards

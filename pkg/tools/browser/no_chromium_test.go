@@ -1,7 +1,7 @@
 package browser
 
 // no_chromium_test.go — FR-033 / S-55 (capability spec §10 order 25): on a host
-// where no Chromium can be found, every one of ADR-072 D2's six new tools has
+// where no Chromium can be found, every one of ADR-075 D2's six new tools has
 // to fail in a way that sends the operator to the right place.
 //
 // This is the linux/arm64 shipping state (#665) and it is not exotic: it is
@@ -241,7 +241,7 @@ func TestBrowserTools_NoChromium_ErrorNamesMissingBrowser(t *testing.T) {
 // from quietly shrinking. FR-033's coverage claim is "all six", and a table
 // that lost a row would still be green.
 func TestBrowserTools_NoChromium_TableCoversEveryNewTool(t *testing.T) {
-	// The six ADR-072 D2 additions, listed here independently of the table so
+	// The six ADR-075 D2 additions, listed here independently of the table so
 	// the two have to agree.
 	want := []string{
 		"browser_select_option",

@@ -307,7 +307,7 @@ func newBrowserInspectTestAPIWithMutate(t *testing.T, mutate func(cfg *config.Co
 // fails deterministically and near-instantly with ENOTDIR, before ever
 // touching exec discovery or CDP — no real Chromium involved, no skip needed.
 //
-// WHICH path has to be the file changed under ADR-072, and getting it wrong
+// WHICH path has to be the file changed under ADR-075, and getting it wrong
 // is silent: BrowserPool no longer launches into cfg.ProfileDir itself. It
 // treats that value's PARENT as the profile ROOT (pool.go's profileRoot() =
 // filepath.Dir(filepath.Clean(cfg.ProfileDir))) and launches each workspace

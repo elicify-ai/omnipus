@@ -1,4 +1,4 @@
-// subturn_cancel_browser_test.go — ADR-072 D1 test 36 (FR-036).
+// subturn_cancel_browser_test.go — ADR-075 D1 test 36 (FR-036).
 //
 // TWO PROPERTIES THAT PULL IN OPPOSITE DIRECTIONS, which is why they are
 // asserted together:
@@ -9,7 +9,7 @@
 //     spawnSubTurn as REQUIRED, load-bearing inheritance and warns that deleting
 //     it produces no error and no obvious test failure — just a chat-wide Stop
 //     that silently stops reaching delegated sub-turns.
-//   - A parent cancel MUST NOT close the browser. Under ADR-072 the browser
+//   - A parent cancel MUST NOT close the browser. Under ADR-075 the browser
 //     belongs to the WORKSPACE, not the turn: it holds the operator's live
 //     logins and every agent on that workspace shares it. A cancel that tore it
 //     down would log the operator out of everything because one delegated turn
