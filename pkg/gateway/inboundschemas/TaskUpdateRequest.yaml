@@ -125,11 +125,13 @@ properties:
   criteria:
     type: array
     items:
-      $ref: ./AcceptanceCriterion.yaml
+      $ref: ./AcceptanceCriterionInput.yaml
     description: >
       Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces
       the current `criteria` atomically. Agent tool paths reject an update
-      that reduces the count below 1.
+      that reduces the count below 1. Items use the authoring-time
+      `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted
+      and is inferred server-side from the payload.
   max_attempts:
     type: integer
     minimum: 1

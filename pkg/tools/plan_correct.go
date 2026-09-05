@@ -224,7 +224,10 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 										"description": "check: a shell command verified via the assignee's bash tool; " +
 											"prose: a free-text statement judged by the verifier; " +
 											"behavior: a deterministic count of successful calls of a named tool " +
-											"in the session's tool-call log",
+											"in the session's tool-call log. Optional (ADR-074 D2) — when " +
+											"omitted, inferred from the payload: check payload => check, " +
+											"behavior payload => behavior, no payload => prose. An explicit " +
+											"kind mismatching its payload is rejected.",
 									},
 									"text": map[string]any{
 										"type":        "string",
@@ -240,7 +243,7 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 									},
 									"behavior": behaviorCriterionSchema(),
 								},
-								"required": []string{"kind", "text"},
+								"required": []string{"text"},
 							},
 							"description": "REQUIRED, at least one: this member's acceptance criteria describing " +
 								"the REPLACEMENT work itself. For a supersede, you do not need to know or " +

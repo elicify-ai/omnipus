@@ -418,6 +418,16 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			}
 			c.Behavior = b
 		}
+		// ADR-074 D2: kind is optional at authoring time — resolve it from the
+		// payload shape HERE, before the caller's ADR-049 D2-rule-5 all-check
+		// bash-policy gate runs, so the gate fires on inferred kinds too. An
+		// explicit kind passes through unchanged; kind-less with BOTH payloads
+		// is rejected as ambiguous.
+		k, kErr := task.InferCriterionKind(&c)
+		if kErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
+		}
+		c.Kind = k
 		out = append(out, c)
 	}
 	return out, nil
@@ -525,7 +535,9 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 							"description": "check: a shell command verified via the assignee's own bash tool; " +
 								"prose: a free-text statement judged by the Judge System Agent; " +
 								"behavior: a deterministic count of successful calls of a named tool in the " +
-								"session's tool-call log",
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -541,7 +553,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 						},
 						"behavior": behaviorCriterionSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
 					"one criterion — an agent-created task with zero criteria is rejected.",

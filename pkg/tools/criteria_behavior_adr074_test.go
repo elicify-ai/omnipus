@@ -76,7 +76,7 @@ func assertCriterionSchemaShape(t *testing.T, items map[string]any) {
 		t.Fatal("behavior schema has no properties")
 	}
 	for _, f := range []string{"tool", "min_count", "max_count", "scope"} {
-		if _, ok := behProps[f]; !ok {
+		if _, present := behProps[f]; !present {
 			t.Errorf("behavior schema is missing field %q", f)
 		}
 	}

@@ -18,19 +18,30 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
+// schemaMap does a checked map[string]any assertion on a schema node.
+func schemaMap(t *testing.T, v any, what string) map[string]any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("%s is %T, want map[string]any", what, v)
+	}
+	return m
+}
+
 // TestWorkspaceCriteriaSchema_BehaviorKind proves create_task_in_workspace's
 // criteria schema carries kind enum [check, prose, behavior] plus the
 // behavior payload object (ADR-074 D3a; required-test #5's enum half).
 func TestWorkspaceCriteriaSchema_BehaviorKind(t *testing.T) {
 	t.Parallel()
 	params := (&TaskCreateTool{}).Parameters()
-	props := params["properties"].(map[string]any)
-	items := props["criteria"].(map[string]any)["items"].(map[string]any)
-	itemProps := items["properties"].(map[string]any)
+	props := schemaMap(t, params["properties"], "properties")
+	items := schemaMap(t, schemaMap(t, props["criteria"], "criteria")["items"], "criteria.items")
+	itemProps := schemaMap(t, items["properties"], "items.properties")
 
-	enum, ok := itemProps["kind"].(map[string]any)["enum"].([]string)
+	kindNode := schemaMap(t, itemProps["kind"], "kind")
+	enum, ok := kindNode["enum"].([]string)
 	if !ok {
-		t.Fatalf("kind.enum is %T, want []string", itemProps["kind"].(map[string]any)["enum"])
+		t.Fatalf("kind.enum is %T, want []string", kindNode["enum"])
 	}
 	want := []string{"check", "prose", "behavior"}
 	if len(enum) != len(want) {
@@ -46,7 +57,7 @@ func TestWorkspaceCriteriaSchema_BehaviorKind(t *testing.T) {
 	if !ok {
 		t.Fatal("criteria items schema has no behavior property (ADR-074 D3a)")
 	}
-	behProps := beh["properties"].(map[string]any)
+	behProps := schemaMap(t, beh["properties"], "behavior.properties")
 	for _, f := range []string{"tool", "min_count", "max_count", "scope"} {
 		if _, ok := behProps[f]; !ok {
 			t.Errorf("behavior schema is missing field %q", f)

@@ -1,23 +1,29 @@
-# CANONICAL SCHEMA (ADR-074 D2) — AcceptanceCriterionInput.yaml is DERIVED
-# from this file: the authoring-time (request-body) shape, identical except
-# `kind` is absent from its `required` (the server infers it from the
-# payload). Any field-shape edit here MUST be mirrored there; the pair is a
-# known drift surface guarded by a contract test asserting field-set equality
-# with a required-delta of exactly {kind}.
-title: AcceptanceCriterion
+# DERIVED SCHEMA (ADR-074 D2) — AcceptanceCriterion.yaml is CANONICAL.
+# This is the authoring-time (request-body) shape of AcceptanceCriterion: the
+# ONLY difference is that `kind` is absent from `required` (the server infers
+# it from the payload — see the `kind` description). Any other edit belongs in
+# AcceptanceCriterion.yaml FIRST and is mirrored here; the pair is a known
+# drift surface guarded by a contract test asserting field-set equality with
+# a required-delta of exactly {kind}.
+#
+# CODEGEN TRAP — do NOT add an OpenAPI `default:` key to `kind` here: a
+# `default:` on a field absent from `required` makes openapi-typescript emit
+# the field as NON-optional, silently defeating this relaxation (the trap is
+# documented on TaskCreateRequest.yaml's `is_join` as well). The optionality
+# is documented in the description ONLY.
+title: AcceptanceCriterionInput
 description: >
-  A single Definition-of-Done criterion on a Task (`task.criteria[]`) or Plan
-  (`plan.dod[]`) — ADR-049 D2/D5/FR-3. `kind: check` criteria are
-  machine-checkable: a command dispatched through the assignee agent's own
-  `bash` tool machinery (never a parallel judge-owned exec path) whose exit
-  code produces unfakeable `EvidenceRecord` evidence. `kind: prose` criteria
-  are free-text statements judged by the Judge System Agent's LLM call against
-  evidence-first input. Every criterion records its author identity (agent or
-  user); absence of evidence/verdict never defaults to `met` (NFR-2,
-  fail-closed).
+  Authoring-time (request) shape of a Definition-of-Done criterion — ADR-074
+  D2. Identical field set to `AcceptanceCriterion` (the canonical response
+  schema), except `kind` is optional here: when omitted, the server infers it
+  from the payload (a `check` payload implies `kind: check`, a `behavior`
+  payload implies `kind: behavior`, no payload implies `kind: prose`). A
+  criterion omitting `kind` while carrying BOTH payloads is rejected 400
+  (ambiguous), and an EXPLICIT `kind` mismatching its payload stays a 400
+  (shape rules unchanged). The server always persists an explicit kind, so
+  every criterion in a response carries one.
 type: object
 required:
-  - kind
   - text
   - author
   - status
@@ -41,8 +47,11 @@ properties:
       Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic
       machine check over the session's own tool-call log — the comparator is
       the count of successful calls of a named tool within a scope, resolved
-      WITHOUT the LLM verifier or `inspect_session`. Ladder order:
-      machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+      WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input
+      shape (ADR-074 D2): when omitted, inferred from the payload — `check`
+      payload => `check`, `behavior` payload => `behavior`, no payload =>
+      `prose`. (No schema `default:` here on purpose — see the header
+      comment's codegen trap.)
     example: "check"
   text:
     type: string
@@ -55,13 +64,12 @@ properties:
   check:
     type: object
     description: >
-      Present iff `kind == check` (400 if present with `kind == prose` — no
-      mixed shape); required iff `kind == check` (400 if absent). Dispatched
-      through the assignee agent's existing `bash` tool machinery (ADR D2
-      rule 1) — same tool registry, policy resolution, sandbox enforcement,
-      and audit trail as any other `bash` call. Policy `allow` runs; `ask`
-      resolves to deny (no interactive approver mid-loop); `deny` fails the
-      criterion closed.
+      Present iff the effective kind is `check` (400 if present with another
+      effective kind — no mixed shape). Dispatched through the assignee
+      agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool
+      registry, policy resolution, sandbox enforcement, and audit trail as
+      any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no
+      interactive approver mid-loop); `deny` fails the criterion closed.
     required:
       - command
       - expected_exit_code
@@ -81,14 +89,13 @@ properties:
   behavior:
     type: object
     description: >
-      Present iff `kind == behavior` (400 if present with a different `kind`
-      — no mixed shape); required iff `kind == behavior` (400 if absent).
-      ADR-052 FR-034 — resolved deterministically from the session's
-      per-entry tool-call log (no LLM verifier dispatch). Unknown fields are
-      rejected 400 (`additionalProperties: false`). `min_count >= 0`, and
-      `min_count == 0` with `max_count == 0` expresses "never call this
-      tool"; when both are present, `max_count >= min_count` (400 if
-      violated).
+      Present iff the effective kind is `behavior` (400 if present with
+      another effective kind — no mixed shape). ADR-052 FR-034 — resolved
+      deterministically from the session's per-entry tool-call log (no LLM
+      verifier dispatch). Unknown fields are rejected 400
+      (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0`
+      with `max_count == 0` expresses "never call this tool"; when both are
+      present, `max_count >= min_count` (400 if violated).
     required:
       - tool
     additionalProperties: false
