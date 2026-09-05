@@ -58,42 +58,6 @@ func validateBlockersSameWorkspace(store *task.Store, dependentWorkspaceID strin
 	return nil
 }
 
-// behaviorCriterionSchemaWorkspace returns the JSON-schema fragment for a
-// criterion's `behavior` payload on create_task_in_workspace. Mirrors
-// pkg/tools/task.go's behaviorCriterionSchema exactly (duplicated rather than
-// exported+imported: that helper is unexported package-internal to pkg/tools,
-// and this package must not reach into pkg/tools' internals — same rationale
-// as parseCriteriaArgsFromWorkspaceTool below). ADR-074 D3a.
-func behaviorCriterionSchemaWorkspace() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"tool": map[string]any{
-				"type":        "string",
-				"description": "Name of the tool whose successful-call count is checked",
-			},
-			"min_count": map[string]any{
-				"type":    "integer",
-				"minimum": 0,
-				"description": "Minimum successful calls of tool required within scope. Omitted defaults " +
-					"to 1; an EXPLICIT 0 is distinct (0 with max_count 0 = \"never call this tool\")",
-			},
-			"max_count": map[string]any{
-				"type":        "integer",
-				"minimum":     0,
-				"description": "Maximum successful calls allowed within scope. Omitted = unbounded; must be >= min_count when present",
-			},
-			"scope": map[string]any{
-				"type":        "string",
-				"enum":        []string{"attempt", "task_session"},
-				"description": "Window the count is evaluated over; defaults to task_session",
-			},
-		},
-		"required":    []string{"tool"},
-		"description": "Required when kind is \"behavior\"; must be omitted for other kinds",
-	}
-}
-
 // parseCriteriaArgsFromWorkspaceTool converts create_task_in_workspace's raw
 // "criteria" argument (a []any of map[string]any — the shape LLM tool-call
 // arguments always decode into) into []task.AcceptanceCriterion. Mirrors
@@ -105,11 +69,10 @@ func behaviorCriterionSchemaWorkspace() map[string]any {
 // Shape/length validation is left to the store's own normalizeCriteria,
 // invoked from Store.Create.
 //
-// Behavior payloads (ADR-052 FR-034 / ADR-074 D3a) decode with the pointer
-// semantics pkg/task/criterion.go documents: an ABSENT min_count/max_count
-// stays nil (validateCriterionBehavior later defaults min_count to 1), while
-// an EXPLICIT 0 decodes to a pointer at 0 — the distinction that makes
-// {min_count: 0, max_count: 0} ("never call this tool") expressible.
+// Behavior payloads (ADR-052 FR-034 / ADR-074 D3a) decode via the shared
+// task.DecodeBehaviorPayload, which honors the pointer semantics
+// pkg/task/criterion.go documents (absent min_count/max_count stay nil; an
+// explicit 0 decodes to a pointer at 0).
 func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
 	out := make([]task.AcceptanceCriterion, 0, len(raw))
 	for i, item := range raw {
@@ -133,20 +96,7 @@ func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task
 			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
 		}
 		if beh, ok := m["behavior"].(map[string]any); ok {
-			b := &task.CriterionBehavior{}
-			b.Tool, _ = beh["tool"].(string)
-			if v, ok := beh["min_count"].(float64); ok {
-				n := int(v)
-				b.MinCount = &n
-			}
-			if v, ok := beh["max_count"].(float64); ok {
-				n := int(v)
-				b.MaxCount = &n
-			}
-			if s, ok := beh["scope"].(string); ok && s != "" {
-				b.Scope = task.BehaviorScope(s)
-			}
-			c.Behavior = b
+			c.Behavior = task.DecodeBehaviorPayload(beh)
 		}
 		// ADR-074 D2: kind is optional at authoring time — resolve it from the
 		// payload shape HERE, before the caller's ADR-049 D2-rule-5 all-check
@@ -299,7 +249,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 							},
 							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
-						"behavior": behaviorCriterionSchemaWorkspace(),
+						"behavior": task.BehaviorCriterionParamSchema(),
 					},
 					"required": []string{"text"},
 				},
