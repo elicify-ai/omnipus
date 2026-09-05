@@ -38,6 +38,7 @@ func TestGoalLoop_ClaimPath_BudgetExhausted_Brakes(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	emptyCriteria := ""
 	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
 		t.Fatal(err)

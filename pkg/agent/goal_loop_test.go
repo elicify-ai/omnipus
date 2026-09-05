@@ -58,6 +58,29 @@ func newGoalTestSession(t *testing.T, al *AgentLoop, agentID string) (*session.U
 	return store, meta.ID
 }
 
+// activatePendingGoal drives the ADR-074 D4a confirm step: a prose `/goal
+// <intent>` now parks as a PENDING goal (US-3 S1) rather than activating
+// immediately, so tests that need an ACTIVE goal replay `/goal confirm` after
+// the set. Asserts the confirm actually activated (matched=true,
+// handled=false — the confirm turn continues into round 1) and that the goal
+// condition is now live.
+func activatePendingGoal(t *testing.T, al *AgentLoop, agentInst *AgentInstance, opts *processOptions) {
+	t.Helper()
+	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, opts)
+	if !matched || handled {
+		t.Fatalf("activatePendingGoal: matched=%v handled=%v reply=%q, want matched=true handled=false "+
+			"(fresh-pending confirm rewrites the turn into round 1)", matched, handled, reply)
+	}
+	meta, err := opts.TranscriptStore.GetMeta(opts.TranscriptSessionID)
+	if err != nil {
+		t.Fatalf("activatePendingGoal: GetMeta: %v", err)
+	}
+	if meta.GoalCondition == "" {
+		t.Fatal("activatePendingGoal: goal must be ACTIVE after confirm")
+	}
+}
+
 func metJudgeProvider(reason string) *fakeJudgeProvider {
 	return &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return &providers.LLMResponse{
@@ -76,6 +99,10 @@ func unmetJudgeProvider(reason string) *fakeJudgeProvider {
 
 // --- /goal: set / status / clear ----------------------------------------
 
+// TestGoalCommand_SetRewritesUserMessage — updated for ADR-074 D4a (US-3 S1):
+// a PROSE `/goal <intent>` no longer activates in the set turn. It parks as a
+// PENDING goal (echo + confirm), and it is the CONFIRM turn that rewrites
+// opts.UserMessage and continues into round 1.
 func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
@@ -85,13 +112,36 @@ func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 		TranscriptStore: store, TranscriptSessionID: sid,
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
 	}
-	matched, handled, _ := al.applyGoalCommandPrompt(
+	matched, handled, reply := al.applyGoalCommandPrompt(
 		context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true},
 		agentInst, &opts,
 	)
+	if !matched || !handled {
+		t.Fatalf("matched=%v handled=%v, want matched=true handled=true (prose set answers with the pending echo)", matched, handled)
+	}
+	if reply == "" {
+		t.Fatal("prose set must reply with the itemized pending echo")
+	}
+	mid, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mid.GoalCondition != "" {
+		t.Fatalf("prose set must NOT activate before confirm, got condition %q", mid.GoalCondition)
+	}
+	if mid.GoalPendingJSON == "" {
+		t.Fatal("prose set must park a pending compiled goal (GoalPendingJSON)")
+	}
+
+	// The confirm turn activates and rewrites the user message into round 1.
+	matched, handled, _ = al.applyGoalCommandPrompt(
+		context.Background(),
+		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true},
+		agentInst, &opts,
+	)
 	if !matched || handled {
-		t.Fatalf("matched=%v handled=%v, want matched=true handled=false (turn continues to LLM)", matched, handled)
+		t.Fatalf("confirm: matched=%v handled=%v, want matched=true handled=false (turn continues to LLM)", matched, handled)
 	}
 	if opts.UserMessage != "make the tests pass" {
 		t.Fatalf("opts.UserMessage = %q, want the condition text", opts.UserMessage)
@@ -116,6 +166,7 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition A", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	oneRound := 1
 	if err := store.SetMeta(sid, session.MetaPatch{GoalRoundsUsed: &oneRound}); err != nil {
 		t.Fatal(err)
@@ -180,6 +231,7 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	matched, handled, reply = al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal", UserInitiated: true}, agentInst, &opts)
@@ -196,6 +248,15 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 	for _, verb := range []string{"clear", "stop", "cancel"} {
 		al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+		// First iteration: the status section's goal is still ACTIVE, so the
+		// restate parked as an amendment (confirm answers synchronously);
+		// later iterations: a fresh pending goal (confirm continues into
+		// round 1). Either way the confirm leaves an ACTIVE goal to clear.
+		al.applyGoalCommandPrompt(context.Background(),
+			bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, &opts)
+		if mid, merr := store.GetMeta(sid); merr != nil || mid.GoalCondition == "" {
+			t.Fatalf("%s: setup — goal must be active before the clear (err=%v)", verb, merr)
+		}
 		matched, handled, reply = al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal " + verb, UserInitiated: true}, agentInst, &opts)
 		if !matched || !handled {
@@ -269,6 +330,7 @@ func TestGoalClear_CancelsInFlightGoalVerifierSession(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	registered := make(chan struct{})
 	proceed := make(chan struct{})
@@ -345,6 +407,7 @@ func TestGoalLoop_MetVerdict_ClearsGoalAndWritesVerdict(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	// Phase-2 compile stored a UUID-IDed criteria ladder; the canned met-judge
 	// provider echoes the legacy "goal-condition" ID, so exercise the back-compat
 	// fallback (compiledGoalCriteriaFor with empty GoalCriteriaJSON).
@@ -400,6 +463,7 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	// Phase-2 compile produced a UUID-IDed criteria ladder in GoalCriteriaJSON.
 	// The canned judge providers below echo the legacy "goal-condition" ID, so
 	// exercise the back-compat fallback (compiledGoalCriteriaFor with empty
@@ -463,6 +527,7 @@ func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &goalOpts)
+	activatePendingGoal(t, al, agentInst, &goalOpts)
 
 	// A judge provider that fails the test if ever called — a scheduled/loop
 	// turn must never reach the judge at all.
@@ -524,6 +589,7 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &goalOpts)
+	activatePendingGoal(t, al, agentInst, &goalOpts)
 
 	judgeInst.Provider = unmetJudgeProvider("still not there")
 
@@ -566,6 +632,7 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	judgeInst.Provider = unmetJudgeProvider("still unmet")
 
 	// ADR-053 Phase-2 (FR-101): each round advances on a CLAIM, not a bare
@@ -621,6 +688,7 @@ func TestGoalLoop_JudgeUnavailable_DoesNotConsumeRound(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return nil, context.DeadlineExceeded
@@ -674,6 +742,7 @@ func TestGoalLoop_JudgeThrottled_BoundedByOwnTimeout_NotCallerCtx(t *testing.T) 
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	// The judge keeps erroring — with the ORIGINAL (pre-fix) code, calling
 	// JudgeCriteria on a ctx with no deadline would retry the real
@@ -1124,6 +1193,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	// the SAME goal being refined, not a new one) ---
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition A", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	meta1, err := store.GetMeta(sid)
 	if err != nil {
 		t.Fatal(err)
@@ -1159,6 +1229,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	al.clearGoal(sid, store, goalClearNoteUser)
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition B", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	meta2, err := store.GetMeta(sid)
 	if err != nil {
 		t.Fatal(err)
@@ -1188,7 +1259,13 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 		case meta2.GoalID:
 			sawSecondID = true
 		case "":
-			t.Fatalf("emitted GoalStatusFrame with an empty goal_id: %+v", p)
+			// ADR-074 D4a: a PENDING (queued) frame legitimately carries no
+			// goal-id — the generation is minted at confirm, never earlier
+			// (newGoalID's own contract). Any OTHER state with an empty id is
+			// still the UAT S3 bug.
+			if p.State != goalPillQueued {
+				t.Fatalf("emitted GoalStatusFrame with an empty goal_id: %+v", p)
+			}
 		default:
 			t.Fatalf("emitted GoalStatusFrame with an unexpected goal_id %q: %+v", p.GoalID, p)
 		}
@@ -1217,6 +1294,7 @@ func TestGoalClear_UserInitiated_EmitsClearedNotFailed(t *testing.T) {
 
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	c, cleanup := newEventCollector(t, al)
 	defer cleanup()
@@ -1262,6 +1340,7 @@ func TestGoalClear_GenuineFailures_StillEmitFailed(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 
 	c, cleanup := newEventCollector(t, al)
 	defer cleanup()

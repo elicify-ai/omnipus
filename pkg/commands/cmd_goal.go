@@ -17,17 +17,20 @@ package commands
 //     (clear) are answered SYNCHRONOUSLY (matched=true, handled=true) — no
 //     LLM call, deterministic reply text so `/goal status`'s BDD assertions
 //     hold exactly.
-//   - `/goal <condition>` persists the condition + round state on the
-//     session's UnifiedMeta and rewrites opts.UserMessage to the condition
-//     itself (matched=true, handled=false) so the turn continues to the LLM
-//     as the goal's first round.
+//   - a MARKER-ONLY `/goal <condition>` persists the condition + round state
+//     on the session's UnifiedMeta and rewrites opts.UserMessage to the
+//     condition itself (matched=true, handled=false) so the turn continues to
+//     the LLM as the goal's first round. A PROSE/mixed condition (ADR-074
+//     D4a) instead compiles to a PENDING goal answered with an itemized echo
+//     (matched=true, handled=true); `/goal confirm` (or a bare confirm reply)
+//     activates it and runs round 1.
 //   - a non-user-initiated turn (Gap #8/R6) is NOT matched at all — the text
 //     passes through untouched as ordinary chat content.
 func goalCommand() Definition {
 	return Definition{
 		Name:        "goal",
 		Description: "Iterate until a condition is judged met — describe what \"done\" looks like",
-		Usage:       "/goal <condition> | /goal | /goal clear",
+		Usage:       "/goal <condition> | /goal | /goal confirm | /goal clear",
 		Surfaces:    []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
 		Delivery:    DeliveryAgent,
 		Handler:     nil,
