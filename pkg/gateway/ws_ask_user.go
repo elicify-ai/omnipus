@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -49,53 +50,46 @@ func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) gene
 		CreatedAt: set.CreatedAt.UTC().Format(time.RFC3339),
 	}
 
+	// Elements are grown zero-valued and assigned field-by-field through
+	// pointers into the generated slices (the setGoalStatusCriteria pattern)
+	// — no locally-declared struct types, so the generated shapes stay the
+	// only wire types in play (check-no-handwritten-wire-types).
 	hasDefaultSafe := false
+	card.Questions = slices.Grow(card.Questions, len(set.Questions))[:len(set.Questions)]
 	for i := range set.Questions {
 		q := &set.Questions[i]
 		if q.DefaultSafe {
 			hasDefaultSafe = true
 		}
-		wq := struct {
-			Context     *string `json:"context,omitempty"`
-			DefaultSafe *bool   `json:"default_safe,omitempty"`
-			Header      string  `json:"header"`
-			MultiSelect *bool   `json:"multi_select,omitempty"`
-			Options     []struct {
-				Description *string `json:"description,omitempty"`
-				Label       string  `json:"label"`
-			} `json:"options"`
-			Question    string  `json:"question"`
-			Recommended *string `json:"recommended,omitempty"`
-		}{Header: q.Header, Question: q.Question}
+		dst := &card.Questions[i]
+		dst.Header = q.Header
+		dst.Question = q.Question
+		dst.Options = slices.Grow(dst.Options, len(q.Options))[:len(q.Options)]
 		for j := range q.Options {
-			o := q.Options[j]
-			wo := struct {
-				Description *string `json:"description,omitempty"`
-				Label       string  `json:"label"`
-			}{Label: o.Label}
+			o := &q.Options[j]
+			od := &dst.Options[j]
+			od.Label = o.Label
 			if o.Description != "" {
 				desc := o.Description
-				wo.Description = &desc
+				od.Description = &desc
 			}
-			wq.Options = append(wq.Options, wo)
 		}
 		if q.MultiSelect {
 			v := true
-			wq.MultiSelect = &v
+			dst.MultiSelect = &v
 		}
 		if q.DefaultSafe {
 			v := true
-			wq.DefaultSafe = &v
+			dst.DefaultSafe = &v
 		}
 		if q.Recommended != "" {
 			rec := q.Recommended
-			wq.Recommended = &rec
+			dst.Recommended = &rec
 		}
 		if q.Context != "" {
 			ctxText := q.Context
-			wq.Context = &ctxText
+			dst.Context = &ctxText
 		}
-		card.Questions = append(card.Questions, wq)
 	}
 
 	if hasDefaultSafe && set.Status == askuser.StatusPending {
@@ -105,23 +99,22 @@ func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) gene
 	for header := range set.AutoResolved {
 		card.AutoResolved = append(card.AutoResolved, header)
 	}
-	for i := range set.Answers {
-		a := &set.Answers[i]
-		wa := struct {
-			AutoDefault bool     `json:"auto_default"`
-			FreeText    *string  `json:"free_text,omitempty"`
-			Header      string   `json:"header"`
-			Question    string   `json:"question"`
-			Selected    []string `json:"selected,omitempty"`
-		}{AutoDefault: a.AutoDefault, Header: a.Header, Question: a.QuestionText}
-		if a.FreeText != nil {
-			ft := *a.FreeText
-			wa.FreeText = &ft
+	if len(set.Answers) > 0 {
+		card.Answers = slices.Grow(card.Answers, len(set.Answers))[:len(set.Answers)]
+		for i := range set.Answers {
+			a := &set.Answers[i]
+			wa := &card.Answers[i]
+			wa.AutoDefault = a.AutoDefault
+			wa.Header = a.Header
+			wa.Question = a.QuestionText
+			if a.FreeText != nil {
+				ft := *a.FreeText
+				wa.FreeText = &ft
+			}
+			if len(a.Selected) > 0 {
+				wa.Selected = append([]string(nil), a.Selected...)
+			}
 		}
-		if len(a.Selected) > 0 {
-			wa.Selected = append([]string(nil), a.Selected...)
-		}
-		card.Answers = append(card.Answers, wa)
 	}
 	return card
 }
