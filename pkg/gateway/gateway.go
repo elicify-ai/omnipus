@@ -1928,6 +1928,54 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 	return nil
 }
 
+// persistSkillsMigrations durably records config.skills_migrations (the
+// ADR-074 D4 one-shot migration markers coreagent.SeedConfig checks) into
+// config.json's raw JSON map, preserving every other key exactly as-is — the
+// same read-modify-write convention as persistFreshInstallDefaultAgentID
+// above, and for the same reason: SeedConfig is a pure config-struct mutation
+// with zero filesystem side effects, so without this step the marker lives
+// only in THIS process's in-memory cfg and the migration would re-run on
+// every boot (harmless in effect — it is additive and append-if-lacking — but
+// it would defeat the marker's "run once, recorded" contract and rewrite
+// config.json every boot).
+//
+// Idempotent at the byte level: when the on-disk key already equals the
+// in-memory value the file is left completely untouched (no write, no mtime
+// churn), making the second boot a byte-level no-op (judgment-first spec
+// test 16).
+func persistSkillsMigrations(configPath string, markers []string) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var m map[string]any
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		return fmt.Errorf("parse config: %w", unmarshalErr)
+	}
+	// Skip the write entirely when the on-disk value already matches.
+	if existing, ok := m["skills_migrations"].([]any); ok && len(existing) == len(markers) {
+		same := true
+		for i := range markers {
+			if s, isStr := existing[i].(string); !isStr || s != markers[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil
+		}
+	}
+	m["skills_migrations"] = markers
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize config: %w", err)
+	}
+	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
 // u25AllSessionsForUsage adapts AgentLoop.ListAllSessions' ADR-057/U9
 // paginated signature (limit, offset int, parentSessionID string, flat bool)
 // back to the zero-arg, "return everything" shape systools.Deps.ListSessions
@@ -2133,6 +2181,23 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// handling that makes this safe against a single bad entity file.
 		if seedErr := persistSeededCoreAgents(homePath, cfg.Agents.List); seedErr != nil {
 			return seedErr
+		}
+	}
+
+	// ADR-074 D4: durably record the one-shot skills-migration markers
+	// SeedConfig checked/wrote in memory (e.g. the define-done allowlist
+	// append). The agent-side appends were just persisted by
+	// persistSeededCoreAgents above; this writes the marker into config.json
+	// so the migration never re-runs. Best-effort like the default_agent_id
+	// persist above: a failure only means the (idempotent, additive) check
+	// runs again next boot — not a boot-time fatal. The helper skips the
+	// write entirely when the on-disk key already matches, so a settled
+	// install's boot performs no config.json write here at all.
+	if len(cfg.SkillsMigrations) > 0 {
+		if persistErr := persistSkillsMigrations(configPath, cfg.SkillsMigrations); persistErr != nil {
+			slog.Warn("gateway: could not persist skills_migrations to config.json; "+
+				"the additive skills migration will be re-checked on the next boot",
+				"error", persistErr)
 		}
 	}
 

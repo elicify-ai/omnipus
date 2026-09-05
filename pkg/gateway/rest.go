@@ -4248,6 +4248,13 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 	// Redact any top-level field names that look like credentials.
 	redactSensitiveFields(m)
 
+	// Strip internal-only bookkeeping keys from the wire (judgment-first spec
+	// US-4 S6 / R2-04): skills_migrations records which one-shot allowlist
+	// migrations have run on THIS install (ADR-074 D4) — an implementation
+	// detail of the boot seed, not operator-facing config. It stays in
+	// config.json on disk; it never crosses the wire.
+	delete(m, "skills_migrations")
+
 	jsonOK(w, m)
 }
 

@@ -1448,12 +1448,25 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func systemAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDPlanSupervisor:
-		// The plan skill carries the re-planning playbook (diagnose →
-		// classify → supersede / targeted-retry / append → record the
-		// falsified assumption → honest exit) that PlanSupervisorDefaultRubric
-		// is derived from rule-for-rule. It is the only skill the adjudicator
-		// has any use for.
-		return []string{"plan"}
+		// EXACTLY these two — an explicit ADR-074 D4 amendment to
+		// plan-supervisor-spec FR-007/N3 ("exactly one" → "exactly these
+		// two"):
+		//
+		//   - plan: carries the re-planning playbook (diagnose → classify →
+		//     supersede / targeted-retry / append → record the falsified
+		//     assumption → honest exit) that PlanSupervisorDefaultRubric is
+		//     derived from rule-for-rule.
+		//   - define-done: the built-in criteria-authoring quality bar.
+		//     PlanSupervisor authors acceptance criteria whenever a
+		//     correction adds tail members (plan_correct append/supersede),
+		//     so the skill that governs criteria-writing everywhere else
+		//     governs it here too.
+		//
+		// Because seedSystemAgents re-enforces a non-nil allowlist with an
+		// exact-equality overwrite on every boot, this is the one agent
+		// where the define-done grant reaches existing installs
+		// automatically — no migration marker involved (ADR-074 D4).
+		return []string{"plan", "define-done"}
 	default:
 		return nil
 	}
@@ -1521,9 +1534,14 @@ Return ONLY valid JSON, in this field order:
 // Derivation: every behavioural rule below is derived rule-for-rule from
 // pkg/skills/embedded/plan/SKILL.md's re-planning playbook (diagnose →
 // classify → supersede / targeted-retry / append → record the falsified
-// assumption → honest exit), which is also the one skill PlanSupervisor's
-// allowlist grants (systemAgentSkills above). THE TWO MUST NOT DRIFT: where
-// this rubric states a rule the skill also states, the SKILL is the source.
+// assumption → honest exit), which is the first of the exactly-two skills
+// PlanSupervisor's allowlist grants (systemAgentSkills above; the second,
+// define-done, is the ADR-074 D4 criteria-authoring quality bar). THE
+// GRANTED SKILLS AND THIS RUBRIC MUST NOT DRIFT: where this rubric states a
+// rule the plan skill also states, the plan SKILL is the source; and where
+// this rubric states a criteria-quality rule define-done also states,
+// define-done is the source (ADR-074 D4 extends the original plan-only
+// no-drift invariant to span both granted skills).
 // The only additions are facts the skill cannot know — the ROLE fact that the
 // corrector is a different actor from the plan's author, and the STALL wake,
 // which the skill does not cover. Marked in the spec as a first draft open to
@@ -1635,28 +1653,31 @@ func SystemAgentDefaultSoul(id CoreAgentID) string {
 // allowlist is enforced at skill-resolution time (default-DENY): a core agent
 // can only resolve/invoke the skills returned here. The matrix:
 //
-//	summarize       → Mia, Ray
-//	plan            → Jim
+//	summarize       → Mia, Ray, Explorer, Researcher
+//	plan            → Jim, Planner
 //	skill-authoring → Ava
 //	daily-briefing  → Mia
+//	define-done     → every agent above (ADR-074 D4: any agent that authors
+//	                  acceptance criteria or a Definition of Done carries the
+//	                  one built-in criteria-authoring skill)
 //
 // Returns nil for an agent that has no seeded skills (no restriction seeded).
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"summarize", "daily-briefing"}
+		return []string{"summarize", "daily-briefing", "define-done"}
 	case IDRay:
-		return []string{"summarize"}
+		return []string{"summarize", "define-done"}
 	case IDJim:
-		return []string{"plan"}
+		return []string{"plan", "define-done"}
 	case IDAva:
-		return []string{"skill-authoring"}
+		return []string{"skill-authoring", "define-done"}
 	case IDPlanner:
 		// The Planner decomposes goals into a task DAG — the plan skill is its core.
-		return []string{"plan"}
+		return []string{"plan", "define-done"}
 	case IDExplorer, IDResearcher:
 		// Explorer + Researcher synthesize what they find.
-		return []string{"summarize"}
+		return []string{"summarize", "define-done"}
 	default:
 		return nil
 	}
@@ -2059,7 +2080,88 @@ func SeedConfig(cfg *config.Config) bool {
 		modified = true
 	}
 
+	// ADR-074 D4: one-shot, marker-keyed, additive-only define-done migration
+	// for existing installs. Runs AFTER the seeding loops so a fresh install's
+	// just-seeded lists (which already contain define-done via
+	// coreAgentSkills) take no append and only the marker is recorded.
+	if applyDefineDoneSkillsMigration(cfg) {
+		modified = true
+	}
+
 	return modified
+}
+
+// SkillsMigrationDefineDone is the ADR-074 D4 marker recorded in
+// config.skills_migrations once the one-shot define-done allowlist migration
+// has run on an install. Exported so pkg/gateway can persist the marker into
+// config.json after SeedConfig (SeedConfig itself is a pure config-struct
+// mutation with zero filesystem side effects — see its doc comment).
+const SkillsMigrationDefineDone = "adr074-define-done"
+
+// applyDefineDoneSkillsMigration is the ADR-074 D4 marker-keyed migration.
+//
+// Background: the fresh-install gate on the core-roster skill seed
+// (isFreshInstall && len(a.Skills)==0 above) makes adding "define-done" to
+// coreAgentSkills a silent no-op on every EXISTING install, and ADR-072 D5.1
+// explicitly prohibits re-running the seed ("would silently restore a grant
+// list the operator later emptied on purpose"). This migration is the narrow,
+// argued exception ADR-074 D4 records: it appends a grant that has NEVER
+// existed before, which cannot restore anything — additive-only, run once,
+// keyed by the SkillsMigrationDefineDone marker.
+//
+// Semantics, exactly as ratified:
+//   - Marker present → no-op in full (second boot is byte-identical).
+//   - Marker absent → for each CORE-ROSTER agent whose compiled-in seed
+//     carries an allowlist (coreAgentSkills != nil): append "define-done"
+//     only when the live list is non-nil AND non-empty AND lacks it.
+//   - Nil stays nil (unrestricted already resolves every installed skill).
+//   - Empty [] stays empty (an operator who zeroed the list opted out —
+//     respected, per ADR-072 D5.1).
+//   - User-created agents and System Agents are never touched (ByID only
+//     resolves the core/worker roster; PlanSupervisor's grant propagates via
+//     seedSystemAgents' exact-equality re-enforcement instead).
+//   - The marker is recorded in the SAME SeedConfig pass as the appends, so
+//     both land in one config mutation; the caller persists them together.
+//
+// Returns true when it modified cfg (it always does when the marker was
+// absent, because writing the marker is itself a modification).
+func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
+	for _, marker := range cfg.SkillsMigrations {
+		if marker == SkillsMigrationDefineDone {
+			return false
+		}
+	}
+	const skillDefineDone = "define-done"
+	for i := range cfg.Agents.List {
+		a := &cfg.Agents.List[i]
+		ca := ByID(CoreAgentID(a.ID))
+		if ca == nil {
+			// Not a core-roster agent (user-created, or a System Agent —
+			// ByID iterates All(), which excludes SystemAgents()).
+			continue
+		}
+		if coreAgentSkills(ca.ID) == nil {
+			// A roster agent whose seed grants no skills (e.g. the worker):
+			// the migration introduces no grant it never seeded.
+			continue
+		}
+		if len(a.Skills) == 0 {
+			// Nil stays nil; operator-emptied [] stays empty.
+			continue
+		}
+		alreadyGranted := false
+		for _, s := range a.Skills {
+			if s == skillDefineDone {
+				alreadyGranted = true
+				break
+			}
+		}
+		if !alreadyGranted {
+			a.Skills = append(a.Skills, skillDefineDone)
+		}
+	}
+	cfg.SkillsMigrations = append(cfg.SkillsMigrations, SkillsMigrationDefineDone)
+	return true
 }
 
 // seedSystemAgents creates or re-enforces every System Agent (ADR-049 D3) in

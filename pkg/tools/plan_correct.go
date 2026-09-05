@@ -150,7 +150,9 @@ func (t *PlanCorrectTool) Description() string {
 		"never supplied by you — but superseded_member_id and retried_member_id name an EXISTING " +
 		"member and MUST be that member's real id from the plan's member list, never a label like " +
 		"\"m2\" or a title. Corrections consume the plan's existing judge-round budget; they do not " +
-		"get a separate one."
+		"get a separate one. When a correction adds tail members you are authoring their acceptance " +
+		"criteria: before authoring acceptance criteria, load the define-done skill (via the Skill " +
+		"tool) and follow its quality bar."
 }
 
 func (t *PlanCorrectTool) Parameters() map[string]any {
