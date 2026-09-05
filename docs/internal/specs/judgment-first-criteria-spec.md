@@ -177,9 +177,9 @@ EC-1 kind-omitted + both payloads → 400. EC-1b explicit kind + both payloads �
 | FR-012 | US-7 S1-S4; US-5 S4 | 20 |
 | FR-014 | US-3 S4 | 12 (counter assert) |
 
-## 9. Ambiguity warnings (open, acknowledged)
+## 9. Ambiguity warnings
 
-1. Clarifying-question UX: chat message (assumed). 2. `GoalStatusFrame` additive field vs new frame: additive-first, `$ref AcceptanceCriterion` either way, dual-copy sync obligation named. 3. `define-done` final wording: operator-reviewed at implementation. 4. Repair-prompt wording: free within FR-007. 5. Compile cost surfacing in `/goal` status: not surfaced this phase (R2 unasked-Q3, noted). 6. `queued` description tension: possible ADR r4 cleanup.
+1. **RESOLVED (operator ruling, 2026-09-05 interview — ADR-074 D4b):** the clarifying question is delivered via a NEW general-purpose structured clarification agent tool (`ask_user`-style: question + context + options with descriptions + recommendation + free-text), not a plain chat message; the tool is usable by any agent for any clarification, and its own spec is a tracked dependency of US-3 S7. Until it ships, plain chat message is the explicit fallback — US-3 S7's scenarios and tests 14 target the fallback now and the tool when it lands. 2. `GoalStatusFrame` additive field vs new frame: additive-first, `$ref AcceptanceCriterion` either way, dual-copy sync obligation named. 3. `define-done` final wording: operator-reviewed at implementation. 4. Repair-prompt wording: free within FR-007. 5. Compile cost surfacing in `/goal` status: not surfaced this phase. 6. `queued` description tension: possible ADR r5 cleanup.
 
 ## 10. Holdout evaluation scenarios (external only; dev loop must not build against these)
 
