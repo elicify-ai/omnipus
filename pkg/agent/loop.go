@@ -7759,6 +7759,18 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
+	// ADR-074 D4a reply routing (judgment-first spec US-3 S9): when this
+	// session carries a pending goal state (compiled-awaiting-confirmation or
+	// awaiting a clarification answer), a BARE chat message may be the confirm
+	// token or the clarification answer. The hook answers synchronously
+	// (handled=true), rewrites the turn into round 1 on a fresh-goal confirm
+	// (handled=false + opts.UserMessage), or passes an ordinary message
+	// through untouched — a routine chat message never silently mutates goal
+	// state.
+	if goalHandled, goalReply := al.applyGoalPendingReply(ctx, msg, agent, &opts); goalHandled {
+		return goalReply, agent, nil
+	}
+
 	resp, err := al.runAgentLoop(ctx, agent, opts)
 	return resp, agent, err
 }
