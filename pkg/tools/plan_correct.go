@@ -222,9 +222,14 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 								"properties": map[string]any{
 									"kind": map[string]any{
 										"type": "string",
-										"enum": []string{"check", "prose"},
+										"enum": []string{"check", "prose", "behavior"},
 										"description": "check: a shell command verified via the assignee's bash tool; " +
-											"prose: a free-text statement judged by the verifier",
+											"prose: a free-text statement judged by the verifier; " +
+											"behavior: a deterministic count of successful calls of a named tool " +
+											"in the session's tool-call log. Optional (ADR-074 D2) — when " +
+											"omitted, inferred from the payload: check payload => check, " +
+											"behavior payload => behavior, no payload => prose. An explicit " +
+											"kind mismatching its payload is rejected.",
 									},
 									"text": map[string]any{
 										"type":        "string",
@@ -236,10 +241,11 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 											"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 											"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 										},
-										"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+										"description": "Required when kind is \"check\"; must be omitted for other kinds",
 									},
+									"behavior": behaviorCriterionSchema(),
 								},
-								"required": []string{"kind", "text"},
+								"required": []string{"text"},
 							},
 							"description": "REQUIRED, at least one: this member's acceptance criteria describing " +
 								"the REPLACEMENT work itself. For a supersede, you do not need to know or " +

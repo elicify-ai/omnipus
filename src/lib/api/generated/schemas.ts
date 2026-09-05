@@ -855,12 +855,36 @@ type TaskCreateRequest = {
   write_set?: Array<string> | undefined;
   stream?: string | undefined;
   is_join?: boolean | undefined;
-  criteria?: Array<AcceptanceCriterion> | undefined;
+  criteria?: Array<AcceptanceCriterionInput> | undefined;
   max_attempts?: (number | null) | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
   source_channel?: string | undefined;
   source_chat_id?: string | undefined;
+};
+type AcceptanceCriterionInput = {
+  id?: string | undefined;
+  kind?: ("check" | "prose" | "behavior") | undefined;
+  text: string;
+  check?:
+    | {
+        command: string;
+        expected_exit_code: number;
+      }
+    | undefined;
+  behavior?:
+    | {
+        tool: string;
+        min_count?: number | undefined;
+        max_count?: number | undefined;
+        scope?: ("attempt" | "task_session") | undefined;
+      }
+    | undefined;
+  author: {
+    kind: "agent" | "user";
+    id: string;
+  };
+  status: "pending" | "met" | "unmet";
 };
 type TaskUpdateRequest = Partial<{
   title: string;
@@ -879,7 +903,7 @@ type TaskUpdateRequest = Partial<{
   write_set: Array<string>;
   stream: string;
   is_join: boolean;
-  criteria: Array<AcceptanceCriterion>;
+  criteria: Array<AcceptanceCriterionInput>;
   max_attempts: number | null;
   surface: "user" | "heartbeat";
   result: string;
@@ -1162,7 +1186,7 @@ type PlanCreateRequest = {
   goal?: string | undefined;
   description?: string | undefined;
   owner_agent_id: string;
-  dod?: Array<AcceptanceCriterion> | undefined;
+  dod?: Array<AcceptanceCriterionInput> | undefined;
   rationale?: string | undefined;
   bounds?:
     | Partial<{
@@ -1179,7 +1203,7 @@ type PlanUpdateRequest = Partial<{
   description: string;
   state: "draft" | "approved" | "running" | "done" | "failed";
   owner_agent_id: string;
-  dod: Array<AcceptanceCriterion>;
+  dod: Array<AcceptanceCriterionInput>;
   bounds: Partial<{
     plan_judge_max_rounds: number;
     idle_expiry_days: number;
@@ -3133,6 +3157,34 @@ export const Task: z.ZodType<Task> = z
       .optional(),
   })
   .passthrough();
+export const AcceptanceCriterionInput: z.ZodType<AcceptanceCriterionInput> =
+  z.object({
+    id: z.string().optional(),
+    kind: z.enum(["check", "prose", "behavior"]).optional(),
+    text: z.string().min(1).max(1000),
+    check: z
+      .object({
+        command: z.string().min(1),
+        expected_exit_code: z.number().int().gte(0).lte(255),
+      })
+      .optional(),
+    behavior: z
+      .object({
+        tool: z.string().min(1),
+        min_count: z.number().int().gte(0).optional().default(1),
+        max_count: z.number().int().gte(0).optional(),
+        scope: z
+          .enum(["attempt", "task_session"])
+          .optional()
+          .default("task_session"),
+      })
+      .optional(),
+    author: z.object({
+      kind: z.enum(["agent", "user"]),
+      id: z.string().min(1),
+    }),
+    status: z.enum(["pending", "met", "unmet"]),
+  });
 export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   title: z.string().min(1).max(200),
   prompt: z.string().max(10000).optional(),
@@ -3150,7 +3202,7 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   write_set: z.array(z.string()).optional(),
   stream: z.string().optional(),
   is_join: z.boolean().optional(),
-  criteria: z.array(AcceptanceCriterion).optional(),
+  criteria: z.array(AcceptanceCriterionInput).optional(),
   max_attempts: z.number().int().gte(1).nullish(),
   due: z.string().datetime({ offset: true }).optional(),
   surface: z.enum(["user", "heartbeat"]).optional().default("user"),
@@ -3215,7 +3267,7 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     write_set: z.array(z.string()),
     stream: z.string(),
     is_join: z.boolean(),
-    criteria: z.array(AcceptanceCriterion),
+    criteria: z.array(AcceptanceCriterionInput),
     max_attempts: z.number().int().gte(1).nullable(),
     surface: z.enum(["user", "heartbeat"]),
     result: z.string().max(50000),
@@ -3634,7 +3686,7 @@ export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
   goal: z.string().max(2000).optional(),
   description: z.string().max(2000).optional(),
   owner_agent_id: z.string().min(1),
-  dod: z.array(AcceptanceCriterion).optional(),
+  dod: z.array(AcceptanceCriterionInput).optional(),
   rationale: z.string().max(4000).optional(),
   bounds: z
     .object({
@@ -3653,7 +3705,7 @@ export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
     description: z.string().max(2000),
     state: z.enum(["draft", "approved", "running", "done", "failed"]),
     owner_agent_id: z.string().min(1),
-    dod: z.array(AcceptanceCriterion),
+    dod: z.array(AcceptanceCriterionInput),
     bounds: z
       .object({
         plan_judge_max_rounds: z.number().int().gte(1),

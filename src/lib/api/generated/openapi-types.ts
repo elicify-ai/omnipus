@@ -8359,8 +8359,8 @@ export interface components {
              * @example false
              */
             is_join?: boolean;
-            /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). */
-            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            criteria?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
              * @example 5
@@ -8475,8 +8475,8 @@ export interface components {
              * @example false
              */
             is_join?: boolean;
-            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. */
-            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            criteria?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
              * @example 5
@@ -9929,8 +9929,8 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). */
-            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
              * @example Split into two lint-disjoint worktree streams (schema + client) that converge at a single merge member, per the shard+assemble topology.
@@ -9985,8 +9985,8 @@ export interface components {
              * @example jim
              */
             owner_agent_id?: string;
-            /** @description Replacement Definition of Done set (replaces the current `dod` atomically). */
-            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Replacement Definition of Done set (replaces the current `dod` atomically). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description Per-plan bounds overrides, MERGED field-by-field into the plan's stored bounds. A field present here is written; a field ABSENT here keeps its stored value, and omitting `bounds` entirely leaves all of them untouched.
              *
@@ -10056,6 +10056,87 @@ export interface components {
                 expected_exit_code: number;
             };
             /** @description Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated). */
+            behavior?: {
+                /**
+                 * @description Name of the tool whose successful-call count is checked.
+                 * @example bash
+                 */
+                tool: string;
+                /**
+                 * @description Minimum number of successful calls of `tool` required within `scope`.
+                 * @default 1
+                 * @example 1
+                 */
+                min_count: number;
+                /**
+                 * @description Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+                 * @example 5
+                 */
+                max_count?: number;
+                /**
+                 * @description Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+                 * @default task_session
+                 * @example task_session
+                 * @enum {string}
+                 */
+                scope: "attempt" | "task_session";
+            };
+            /** @description Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting. */
+            author: {
+                /**
+                 * @description Whether this criterion was authored by an agent or a human user.
+                 * @example agent
+                 * @enum {string}
+                 */
+                kind: "agent" | "user";
+                /**
+                 * @description Agent ID or username of the author.
+                 * @example jim
+                 */
+                id: string;
+            };
+            /**
+             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+             * @example pending
+             * @enum {string}
+             */
+            status: "pending" | "met" | "unmet";
+        };
+        /**
+         * AcceptanceCriterionInput
+         * @description Authoring-time (request) shape of a Definition-of-Done criterion — ADR-074 D2. Identical field set to `AcceptanceCriterion` (the canonical response schema), except `kind` is optional here: when omitted, the server infers it from the payload (a `check` payload implies `kind: check`, a `behavior` payload implies `kind: behavior`, no payload implies `kind: prose`). A criterion omitting `kind` while carrying BOTH payloads is rejected 400 (ambiguous), and an EXPLICIT `kind` mismatching its payload stays a 400 (shape rules unchanged). The server always persists an explicit kind, so every criterion in a response carries one.
+         */
+        AcceptanceCriterionInput: {
+            /**
+             * @description Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+             * @example 550e8400-e29b-41d4-a716-446655440010
+             */
+            id?: string;
+            /**
+             * @description `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+             * @example check
+             * @enum {string}
+             */
+            kind?: "check" | "prose" | "behavior";
+            /**
+             * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+             * @example All new pkg/plan tests pass
+             */
+            text: string;
+            /** @description Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed. */
+            check?: {
+                /**
+                 * @description Shell command run through the assignee's `bash` tool.
+                 * @example go test ./pkg/plan/... -run TestPlanStore_CreatePersists
+                 */
+                command: string;
+                /**
+                 * @description Exit code that counts as PASS (`met`) for this check.
+                 * @example 0
+                 */
+                expected_exit_code: number;
+            };
+            /** @description Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated). */
             behavior?: {
                 /**
                  * @description Name of the tool whose successful-call count is checked.
@@ -18641,6 +18722,7 @@ export type PlanCreateRequest = components["schemas"]["PlanCreateRequest"];
 export type PlanUpdateRequest = components["schemas"]["PlanUpdateRequest"];
 export type PlanListResponse = components["schemas"]["PlanListResponse"];
 export type AcceptanceCriterion = components["schemas"]["AcceptanceCriterion"];
+export type AcceptanceCriterionInput = components["schemas"]["AcceptanceCriterionInput"];
 export type EvidenceRecord = components["schemas"]["EvidenceRecord"];
 export type JudgeVerdict = components["schemas"]["JudgeVerdict"];
 export type CriterionVerdict = components["schemas"]["CriterionVerdict"];

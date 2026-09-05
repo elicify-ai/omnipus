@@ -164,9 +164,13 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"kind": map[string]any{
 							"type": "string",
-							"enum": []string{"check", "prose"},
+							"enum": []string{"check", "prose", "behavior"},
 							"description": "check: a shell command verified via the plan owner's bash tool; " +
-								"prose: a free-text statement judged by the plan verifier",
+								"prose: a free-text statement judged by the plan verifier; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -178,10 +182,11 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 							},
-							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
+						"behavior": behaviorCriterionSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Plan-level Definition of Done. REQUIRED: at least one criterion — an " +
 					"agent-authored plan with zero DoD criteria is rejected.",

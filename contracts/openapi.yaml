@@ -748,6 +748,8 @@ components:
       $ref: ./components/schemas/PlanListResponse.yaml
     AcceptanceCriterion:
       $ref: ./components/schemas/AcceptanceCriterion.yaml
+    AcceptanceCriterionInput:
+      $ref: ./components/schemas/AcceptanceCriterionInput.yaml
     EvidenceRecord:
       $ref: ./components/schemas/EvidenceRecord.yaml
     JudgeVerdict:

@@ -1,3 +1,9 @@
+# CANONICAL SCHEMA (ADR-074 D2) — AcceptanceCriterionInput.yaml is DERIVED
+# from this file: the authoring-time (request-body) shape, identical except
+# `kind` is absent from its `required` (the server infers it from the
+# payload). Any field-shape edit here MUST be mirrored there; the pair is a
+# known drift surface guarded by a contract test asserting field-set equality
+# with a required-delta of exactly {kind}.
 title: AcceptanceCriterion
 description: >
   A single Definition-of-Done criterion on a Task (`task.criteria[]`) or Plan

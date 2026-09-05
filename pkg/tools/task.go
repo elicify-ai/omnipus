@@ -329,6 +329,43 @@ func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 	t.planStore = store
 }
 
+// behaviorCriterionSchema returns the JSON-schema fragment for a criterion's
+// `behavior` payload, shared by the four criteria-authoring tool schemas
+// (create_task, create_plan, plan_correct here; create_task_in_workspace
+// keeps its own duplicated copy in pkg/sysagent/tools — same
+// no-reaching-into-internals rationale as its parser twin). ADR-074 D3a:
+// the tool schemas had drifted from the contract, which has carried the
+// `behavior` kind since ADR-052 FR-034.
+func behaviorCriterionSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"tool": map[string]any{
+				"type":        "string",
+				"description": "Name of the tool whose successful-call count is checked",
+			},
+			"min_count": map[string]any{
+				"type":    "integer",
+				"minimum": 0,
+				"description": "Minimum successful calls of tool required within scope. Omitted defaults " +
+					"to 1; an EXPLICIT 0 is distinct (0 with max_count 0 = \"never call this tool\")",
+			},
+			"max_count": map[string]any{
+				"type":        "integer",
+				"minimum":     0,
+				"description": "Maximum successful calls allowed within scope. Omitted = unbounded; must be >= min_count when present",
+			},
+			"scope": map[string]any{
+				"type":        "string",
+				"enum":        []string{"attempt", "task_session"},
+				"description": "Window the count is evaluated over; defaults to task_session",
+			},
+		},
+		"required":    []string{"tool"},
+		"description": "Required when kind is \"behavior\"; must be omitted for other kinds",
+	}
+}
+
 // parseCriteriaArgs converts the create_task tool's raw "criteria" argument
 // (a []any of map[string]any — the shape LLM tool-call arguments always
 // decode into) into []task.AcceptanceCriterion. Every criterion is
@@ -337,6 +374,12 @@ func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 // Shape/length validation (kind enum, text bounds, check-shape-iff-kind,
 // ID/status defaulting) is left to the store's own normalizeCriteria,
 // invoked from Store.Create — this only handles the untyped-map decode.
+//
+// Behavior payloads (ADR-052 FR-034 / ADR-074 D3a) decode with the pointer
+// semantics pkg/task/criterion.go documents: an ABSENT min_count/max_count
+// stays nil (validateCriterionBehavior later defaults min_count to 1), while
+// an EXPLICIT 0 decodes to a pointer at 0 — the distinction that makes
+// {min_count: 0, max_count: 0} ("never call this tool") expressible.
 func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
 	out := make([]task.AcceptanceCriterion, 0, len(raw))
 	for i, item := range raw {
@@ -359,6 +402,32 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			}
 			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
 		}
+		if beh, ok := m["behavior"].(map[string]any); ok {
+			b := &task.CriterionBehavior{}
+			b.Tool, _ = beh["tool"].(string)
+			if v, ok := beh["min_count"].(float64); ok {
+				n := int(v)
+				b.MinCount = &n
+			}
+			if v, ok := beh["max_count"].(float64); ok {
+				n := int(v)
+				b.MaxCount = &n
+			}
+			if s, ok := beh["scope"].(string); ok && s != "" {
+				b.Scope = task.BehaviorScope(s)
+			}
+			c.Behavior = b
+		}
+		// ADR-074 D2: kind is optional at authoring time — resolve it from the
+		// payload shape HERE, before the caller's ADR-049 D2-rule-5 all-check
+		// bash-policy gate runs, so the gate fires on inferred kinds too. An
+		// explicit kind passes through unchanged; kind-less with BOTH payloads
+		// is rejected as ambiguous.
+		k, kErr := task.InferCriterionKind(&c)
+		if kErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
+		}
+		c.Kind = k
 		out = append(out, c)
 	}
 	return out, nil
@@ -464,9 +533,13 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"kind": map[string]any{
 							"type": "string",
-							"enum": []string{"check", "prose"},
+							"enum": []string{"check", "prose", "behavior"},
 							"description": "check: a shell command verified via the assignee's own bash tool; " +
-								"prose: a free-text statement judged by the Judge System Agent",
+								"prose: a free-text statement judged by the Judge System Agent; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -478,10 +551,11 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 							},
-							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
+						"behavior": behaviorCriterionSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
 					"one criterion — an agent-created task with zero criteria is rejected.",
