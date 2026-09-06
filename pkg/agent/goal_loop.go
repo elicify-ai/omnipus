@@ -33,6 +33,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // goalClarifyWebChannel is the SPA session origin gate for ADR-079 D3's
@@ -160,7 +161,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 				)
 			}
 		}
-		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, args, sessionID, "", "", opts.WorkspaceID)
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, args, sessionID, "", "", false, opts.WorkspaceID)
 		return true, true, al.applyGoalCompileOutcome(sessionID, store, args, outcome, opts, agentInst)
 	}
 
@@ -470,8 +471,9 @@ func (al *AgentLoop) emitGoalClarificationCard(
 	}
 	recordJSON, merr2 := marshalGoalClarification(record)
 	if merr2 != nil {
-		logger.WarnCF("agent", "goal: could not marshal clarification record (card already created)",
+		logger.WarnCF("agent", "goal: could not marshal clarification record — cancelling the just-created card to avoid stranding it",
 			map[string]any{"session_id": sessionID, "card_id": set.CardID, "error": merr2.Error()})
+		al.cancelOrphanedClarifyCard(reg, set.CardID, sessionID)
 		return "Could not record the clarifying question (internal error). Please restate the goal.", true
 	}
 	empty := ""
@@ -480,8 +482,16 @@ func (al *AgentLoop) emitGoalClarificationCard(
 		GoalPendingJSON:       &empty, // a question supersedes any earlier pending compile
 		GoalLastActivityAt:    &nowStr,
 	}); err != nil {
-		logger.WarnCF("agent", "goal: could not persist clarification record (card already created)",
+		// Fix-wave finding #5: CreatePending already succeeded above, so the
+		// card is LIVE in the registry — if we return here without undoing
+		// it, the card survives blocking the composer, but no session-side
+		// goalClarificationRecord exists to ever recognize its answer
+		// (applyGoalClarificationReply's loadGoalClarification(meta.
+		// GoalClarificationJSON) returns nil forever), stranding it
+		// permanently. Cancel it rather than leave an orphan.
+		logger.WarnCF("agent", "goal: could not persist clarification record — cancelling the just-created card to avoid stranding it",
 			map[string]any{"session_id": sessionID, "card_id": set.CardID, "error": err.Error()})
+		al.cancelOrphanedClarifyCard(reg, set.CardID, sessionID)
 		return "Could not record the clarifying question (internal error). Please restate the goal.", true
 	}
 
@@ -489,6 +499,26 @@ func (al *AgentLoop) emitGoalClarificationCard(
 	// blocks the composer. No emitGoalStatusFrameWithCriteria here (no
 	// criteria exist yet).
 	return "I have a few questions before I lock this goal in — please answer them on the card above.", true
+}
+
+// cancelOrphanedClarifyCard undoes a just-created AskUserQuestion card whose
+// OWN session-side goalClarificationRecord failed to persist (fix-wave
+// finding #5): reg.CancelByUser removes the in-memory pending set, persists
+// the terminal (cancelled) record, and unlocks the SPA composer BEFORE it
+// ever attempts a resume dispatch — so it is safe to call even though this
+// session's GoalClarificationJSON never got the card's CardID recorded. A
+// failure here is logged (not returned) — the caller already has its own
+// error to report to the user, and cancellation failing does not change
+// that outcome, only that the operator now has a second WARN pointing at
+// the same orphaned card for manual cleanup.
+func (al *AgentLoop) cancelOrphanedClarifyCard(reg tools.AskUserQuestionRegistry, cardID, sessionID string) {
+	if reg == nil || cardID == "" {
+		return
+	}
+	if cerr := reg.CancelByUser(cardID, sessionID); cerr != nil {
+		logger.WarnCF("agent", "goal: could not cancel the orphaned clarify card after a persist failure — it may remain stranded",
+			map[string]any{"session_id": sessionID, "card_id": cardID, "error": cerr.Error()})
+	}
 }
 
 // applyGoalPendingReply is the ADR-074 D4a pre-LLM reply-routing hook (US-3
@@ -606,14 +636,20 @@ func (al *AgentLoop) applyGoalClarificationReply(
 			return true, al.clearGoal(sessionID, store, goalClearNoteUser)
 		}
 		question, answer := formatGoalCardAnswers(clar.Questions, resume.Answers)
-		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, question, answer, opts.WorkspaceID)
+		// resumed=true (fix-wave finding #6): unconditionally, regardless of
+		// whether formatGoalCardAnswers rendered a non-empty question — an
+		// all-empty resume.Answers still spends this episode's single
+		// question-round budget.
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, question, answer, true, opts.WorkspaceID)
 		return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome, opts, agentInst)
 	}
 
 	// Channel plain-chat path — today's behavior, pinned: the next bare
 	// message IS the answer, whatever it says.
 	answer := strings.TrimSpace(msg.Content)
-	outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer, opts.WorkspaceID)
+	// resumed=true (fix-wave finding #6): same reasoning as the CardID
+	// branch above.
+	outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer, true, opts.WorkspaceID)
 	return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome, opts, agentInst)
 }
 

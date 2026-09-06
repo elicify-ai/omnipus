@@ -457,6 +457,16 @@ func defineGoalSkillPath() string {
 // loadDefineGoalSkillContent reads the seeded define-goal skill content when
 // the file exists; "" when it does not (the compile proceeds without the
 // quality bar — the skill ships via ADR-074 D4's own rollout slot).
+//
+// Fix-wave finding #7: os.IsNotExist is the ONLY expected/silent case (a
+// pre-rollout install, or an install where SeedDefaults simply hasn't run
+// yet) — every other read error (permission denied, a corrupt/unreadable
+// file, an I/O error) is WARN-logged once per call, mirroring
+// goalCompileWindowText's own logging pattern above, so a mis-permissioned
+// or corrupt SKILL.md is observable rather than silently indistinguishable
+// from "not seeded yet". This is what makes finding #1's downstream
+// (deleteOrphanedDefineDoneDir deleting define-done/ while define-goal/ is
+// unreadable) visible in the logs rather than a silent quality-bar loss.
 func loadDefineGoalSkillContent() string {
 	p := defineGoalSkillPath()
 	if p == "" {
@@ -464,6 +474,11 @@ func loadDefineGoalSkillContent() string {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.WarnCF("agent", "goal compile: could not read the seeded define-goal skill "+
+				"(compiling without the quality-bar rewrite)",
+				map[string]any{"path": p, "error": err.Error()})
+		}
 		return ""
 	}
 	return strings.TrimSpace(string(data))
@@ -724,11 +739,27 @@ func noteGoalCompileFallback(sessionID, reason string) {
 // D-CONTEXT2's workspace/project-instructions feed (buildWorkspaceInstructionsNote
 // handles "" by falling back to the default workspace, or "" when none
 // resolves — a byte-identical no-context call).
+//
+// resumed (fix-wave finding #6) is the CALLER'S OWN declaration of whether
+// this is a resumed compile — it is NOT derived from question/answer being
+// non-empty. Before this parameter existed, the ambiguous-branch budget
+// check keyed on `question != ""`, and formatGoalCardAnswers
+// (goal_loop.go) can legitimately render an EMPTY question string on a
+// resumed card compile (an all-empty resume.Answers — e.g. an
+// attachment-only submission with no QuestionText echo and no matching
+// Header in clar.Questions), which made a resumed compile with an empty
+// rendered question indistinguishable from a fresh, first-round compile:
+// an ambiguous result would re-ask (spending a SECOND question round) in
+// clear violation of the documented single-round-per-episode budget. Every
+// resume call site (applyGoalClarificationReply, both the web-card and
+// channel plain-chat branches) passes resumed=true regardless of whether it
+// rendered a non-empty question string; only the very first compile of a
+// fresh episode (applyGoalCommandPrompt) passes resumed=false.
 func (al *AgentLoop) compileGoalIntentLLM(
 	ctx context.Context,
 	agentInst *AgentInstance,
 	fc FeasibilityContext,
-	intent, sessionID, question, answer, workspaceID string,
+	intent, sessionID, question, answer string, resumed bool, workspaceID string,
 ) llmGoalCompileOutcome {
 	fallback := func(reason string) llmGoalCompileOutcome {
 		noteGoalCompileFallback(sessionID, reason)
@@ -829,17 +860,22 @@ func (al *AgentLoop) compileGoalIntentLLM(
 			return fallback("compile output rejected: " + perr.Error())
 		}
 		if parsed.Clarity == "ambiguous" {
-			if question != "" || repairReason != "" {
+			if resumed || repairReason != "" {
 				// Max ONE question round per episode (US-3 S7, ADR-079 D2): a
 				// question from the resumed compile — or from a repair call —
-				// is out of budget. The resumed state is detected by the
-				// PERSISTED question, never by the answer text: a reply that
-				// trims to empty (whitespace-only, or an attachment-only
-				// message whose content is "") still spends the episode's
-				// single round. The resume compile proceeds with the empty
-				// answer; if the compiler asks again, it lands here and falls
-				// back deterministically. Keying on answer != "" instead let
-				// the compiler re-ask indefinitely on empty replies.
+				// is out of budget. The resumed state is keyed on the
+				// CALLER-DECLARED `resumed` flag (fix-wave finding #6), never
+				// on the rendered question/answer text: formatGoalCardAnswers
+				// (goal_loop.go) can render an EMPTY question string on a
+				// resumed CardID compile (an all-empty resume.Answers), and a
+				// reply can independently trim to empty (whitespace-only, or
+				// an attachment-only message whose content is ""). Either
+				// way the episode's single round is still spent. The resume
+				// compile proceeds with the empty answer; if the compiler
+				// asks again, it lands here and falls back deterministically.
+				// Keying on question/answer != "" instead let a resumed
+				// compile with an empty rendered question masquerade as a
+				// FIRST-round compile and re-ask indefinitely.
 				return fallback("compiler asked a question outside its single question round")
 			}
 			return llmGoalCompileOutcome{

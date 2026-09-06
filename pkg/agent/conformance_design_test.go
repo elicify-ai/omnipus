@@ -500,13 +500,14 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 // ADR-080 D-DOD's judged-set union seam (compiledGoalCriteriaFor,
 // goal_compile.go): adjudication now feeds Criteria UNION DoD to the Judge,
 // so compiled.DoD's own item(s) (at minimum the built-in floor DoD —
-// loadCompiledGoal backfills it whenever a persisted goal carries none, which
-// is exactly what happens here: the t0 scenario's deterministic-fallback
-// compile — mockProvider's Chat is not JSON, so goalCompileIntentLLM falls
-// back to compileGoalIntent, which sets no DoD — gets the floor DoD
-// backfilled the moment GoalCriteriaJSON round-trips through loadCompiledGoal)
-// ride the SAME per-criterion verdict list this stub returns — omitting them
-// would leave the floor DoD unjudgeable and the overall verdict unmet.
+// compileGoalIntent itself sets the floor DoD at compile time, fix-wave
+// finding #2, so this holds even for the t0 scenario's deterministic-
+// fallback compile — mockProvider's Chat is not JSON, so
+// goalCompileIntentLLM falls back to compileGoalIntent — with
+// loadCompiledGoal's OWN backfill kept only as a legacy-goal safety net for
+// a persisted goal compiled before this fix) ride the SAME per-criterion
+// verdict list this stub returns — omitting them would leave the floor DoD
+// unjudgeable and the overall verdict unmet.
 func metJudgeProviderForCompiled(t *testing.T, compiled *CompiledGoal, reason string) *fakeJudgeProvider {
 	t.Helper()
 	var entries []string

@@ -13,6 +13,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -27,9 +29,11 @@ import (
 // CreatePending records a clone of every accepted set and can be scripted to
 // return an error (once) for the fallback-condition tests.
 type fakeGoalAskRegistry struct {
-	mu      sync.Mutex
-	created []*askuser.PendingSet
-	nextErr error
+	mu        sync.Mutex
+	created   []*askuser.PendingSet
+	nextErr   error
+	cancelled []string // card IDs passed to CancelByUser, in call order
+	cancelErr error    // scripted CancelByUser failure (once), for the double-failure log path
 }
 
 func (f *fakeGoalAskRegistry) CreatePending(set *askuser.PendingSet) error {
@@ -49,6 +53,40 @@ func (f *fakeGoalAskRegistry) PendingForSession(string) (*askuser.PendingSet, bo
 }
 
 func (f *fakeGoalAskRegistry) CancelOnSessionStop(string) bool { return false }
+
+// CancelByUser is fix-wave finding #5's undo path: emitGoalClarificationCard
+// calls this when it created a card but then failed to persist its OWN
+// goalClarificationRecord (marshal or SetMeta error), so the card never
+// gets stranded — orphaned in the registry with no session-side record that
+// could ever resolve it.
+func (f *fakeGoalAskRegistry) CancelByUser(cardID, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelled = append(f.cancelled, cardID)
+	if f.cancelErr != nil {
+		err := f.cancelErr
+		f.cancelErr = nil
+		return err
+	}
+	// Mirror the real Registry.CancelByUser's observable effect closely
+	// enough for these tests: remove the card from "created" so
+	// lastCreated()/createCount() reflect that it is no longer live.
+	for i, s := range f.created {
+		if s.CardID == cardID {
+			f.created = append(f.created[:i], f.created[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (f *fakeGoalAskRegistry) cancelledCardIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.cancelled))
+	copy(out, f.cancelled)
+	return out
+}
 
 func (f *fakeGoalAskRegistry) lastCreated() *askuser.PendingSet {
 	f.mu.Lock()
@@ -253,6 +291,104 @@ func TestGoalCompileCard_UnexpectedCreatePendingError_SurfacesInternalError(t *t
 	}
 }
 
+// --- Orphan prevention on persist failure (fix-wave finding #5) ------------
+
+// TestGoalCompileCard_SetMetaFailure_CancelsOrphanedCard is code-review
+// fix-wave finding #5: emitGoalClarificationCard's CreatePending succeeds
+// (the card goes live in the registry, blocking the SPA composer) but the
+// session-side goalClarificationRecord SetMeta call then fails with a
+// GENUINE disk I/O error (not a fake) — before the fix, the card would
+// survive as a permanent orphan: no goalClarificationRecord ever exists to
+// recognize its eventual answer, since loadGoalClarification(meta.
+// GoalClarificationJSON) returns nil forever. The fix must call
+// reg.CancelByUser to undo the create.
+//
+// Failure injection mirrors pkg/agent/loop_adr057_test.go's own
+// permission-revocation pattern: chmod the session's real on-disk directory
+// to 0o000 so goal.json's WriteFileAtomic (inside SetMeta) fails — the read
+// half of SetMeta is served from the warm meta cache, so only the WRITE is
+// broken, exactly targeting the failure this fix guards.
+func TestGoalCompileCard_SetMetaFailure_CancelsOrphanedCard(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-based failure injection is ineffective under root; run as non-root")
+	}
+	al, agentInst, provider, store, sid, opts := twoPhaseHarness(t,
+		func(int, []providers.Message) (*providers.LLMResponse, error) {
+			return structuredQuestionJSON("Repo", "Which repo do you mean?"), nil
+		}, nil)
+	reg := &fakeGoalAskRegistry{}
+	al.SetAskUserRegistry(reg)
+
+	// Warm the meta cache (so SetMeta's internal readMetaLocked is a
+	// cache hit, not a disk read) before revoking write access.
+	if _, err := store.GetMeta(sid); err != nil {
+		t.Fatalf("setup: GetMeta must succeed to warm the cache: %v", err)
+	}
+	sessionDir := filepath.Join(store.BaseDir(), sid)
+	if err := os.Chmod(sessionDir, 0o000); err != nil {
+		t.Fatalf("setup: chmod session dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
+
+	_, handled, reply := setGoal(t, al, agentInst, opts, "improve the readme")
+	if !handled {
+		t.Fatal("a SetMeta failure while recording the clarify card must still answer synchronously")
+	}
+	if !strings.Contains(reply, "internal error") {
+		t.Fatalf("must surface the internal-error reply, got %q", reply)
+	}
+	if provider.callCount() != 1 {
+		t.Fatalf("want exactly 1 compile call, got %d", provider.callCount())
+	}
+
+	// The card must have been cancelled — not left live in the registry.
+	if created := reg.lastCreated(); created != nil {
+		t.Fatalf("the orphaned card must have been cancelled, but is still live: %+v", created)
+	}
+	cancelled := reg.cancelledCardIDs()
+	if len(cancelled) != 1 {
+		t.Fatalf("want exactly one CancelByUser call to undo the orphaned card, got %d: %+v",
+			len(cancelled), cancelled)
+	}
+}
+
+// TestGoalCompileCard_SetMetaFailure_CancelByUserAlsoFails_StillReturnsError
+// covers the double-failure path: CancelByUser itself errors (e.g. the
+// registry is also unhealthy). The caller must still surface its own
+// internal-error reply rather than panic or silently swallow the second
+// failure — cancellation failing does not change the outcome the user sees,
+// only that an operator gets a second WARN for manual cleanup (documented
+// on cancelOrphanedClarifyCard).
+func TestGoalCompileCard_SetMetaFailure_CancelByUserAlsoFails_StillReturnsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-based failure injection is ineffective under root; run as non-root")
+	}
+	al, agentInst, _, store, sid, opts := twoPhaseHarness(t,
+		func(int, []providers.Message) (*providers.LLMResponse, error) {
+			return structuredQuestionJSON("Repo", "Which repo do you mean?"), nil
+		}, nil)
+	reg := &fakeGoalAskRegistry{cancelErr: errors.New("registry also down")}
+	al.SetAskUserRegistry(reg)
+
+	if _, err := store.GetMeta(sid); err != nil {
+		t.Fatalf("setup: GetMeta must succeed to warm the cache: %v", err)
+	}
+	sessionDir := filepath.Join(store.BaseDir(), sid)
+	if err := os.Chmod(sessionDir, 0o000); err != nil {
+		t.Fatalf("setup: chmod session dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
+
+	_, handled, reply := setGoal(t, al, agentInst, opts, "improve the readme")
+	if !handled || !strings.Contains(reply, "internal error") {
+		t.Fatalf("a double failure (SetMeta AND CancelByUser) must still surface the internal-error reply, "+
+			"got handled=%v reply=%q", handled, reply)
+	}
+	if len(reg.cancelledCardIDs()) != 1 {
+		t.Fatal("CancelByUser must still have been attempted exactly once even though it failed")
+	}
+}
+
 // --- Resume: CardID keying (regrill C1) -------------------------------------
 
 // cardTestHarness sets up a webchat session with a wired fake registry and
@@ -328,6 +464,60 @@ func TestGoalCompileCard_Resume_MatchingCardIDResumesCompile(t *testing.T) {
 	}
 	if after.GoalPendingJSON == "" || after.GoalCondition != "" {
 		t.Fatalf("the resumed compile must end pending+confirm: %+v", after)
+	}
+}
+
+// TestGoalCompileCard_Resume_EmptyAnswerStillConsumesSingleRound is
+// code-review fix-wave finding #6: a resumed card compile whose
+// resume.Answers is EMPTY (e.g. an all-default/attachment-only submission)
+// makes formatGoalCardAnswers render an EMPTY question string —
+// indistinguishable, by TEXT alone, from a fresh FIRST-round compile. Before
+// the fix, compileGoalIntentLLM's ambiguous-branch budget check keyed on
+// `question != ""`, so this exact shape let the resumed compile re-ask (a
+// SECOND clarifying question / a second card) instead of falling back,
+// blowing the documented one-round-per-episode budget (US-3 S7). The fix
+// keys the check on the caller-declared `resumed` bool instead: an
+// ambiguous result on ANY resumed compile — empty question text or not —
+// must fall back, never re-ask.
+func TestGoalCompileCard_Resume_EmptyAnswerStillConsumesSingleRound(t *testing.T) {
+	al, agentInst, provider, store, sid, opts, _, cardID := cardTestHarness(t,
+		func(int, []providers.Message) (*providers.LLMResponse, error) {
+			// The resumed compile is STILL ambiguous — this must fall back,
+			// not spawn a second clarifying question/card.
+			return questionJSON("Which repo, still?"), nil
+		})
+
+	// A resume submission with ZERO answers: formatGoalCardAnswers's
+	// range-over-answers loop never executes, so both question and answer
+	// render as "" — the exact trigger condition for finding #6.
+	resumeSet := &askuser.PendingSet{CardID: cardID, Status: askuser.StatusAnswered, Answers: nil}
+	resumeMsg, err := askuser.ResumeMessage(resumeSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := goalCompileFallbacksTotal()
+	handled, reply := al.applyGoalPendingReply(context.Background(),
+		bus.InboundMessage{Content: resumeMsg, UserInitiated: true}, agentInst, opts)
+	if !handled {
+		t.Fatal("the matching card_id answers message must be intercepted and resume the compile")
+	}
+	if provider.callCount() != 2 {
+		t.Fatalf("want exactly 2 LLM calls (initial + ONE resume, no re-ask), got %d", provider.callCount())
+	}
+	if got := goalCompileFallbacksTotal(); got != before+1 {
+		t.Fatalf("an ambiguous RESUMED compile must fall back (single round spent): fallback counter = %d, want %d",
+			got, before+1)
+	}
+	if !strings.Contains(reply, "quality-bar rewrite was unavailable") {
+		t.Fatalf("must be the fallback pending echo (no re-ask), got: %s", reply)
+	}
+	meta, _ := store.GetMeta(sid)
+	if meta.GoalClarificationJSON != "" {
+		t.Fatalf("must NOT re-ask (no second clarification record persisted), got %+v", meta.GoalClarificationJSON)
+	}
+	if meta.GoalPendingJSON == "" {
+		t.Fatal("the deterministic fallback compile must still park a pending goal")
 	}
 }
 

@@ -1949,6 +1949,66 @@ func persistSeededSkillGrants(configPath string, markers []string) error {
 	return nil
 }
 
+// deleteOrphanedDefineDoneDir deletes the orphaned define-done/ skill
+// directory left behind by the ADR-080 D-SKILL define-goal rename — but
+// ONLY when the replacement define-goal/ directory is verifiably present on
+// disk (fix-wave finding #1, operator-ratified 2026-09-07 Q3). The
+// migration marker (SkillsMigrationDefineGoalRename) alone is NOT
+// sufficient evidence the rename actually landed: skills.SeedDefaults can
+// fail (disk full, permissions, a corrupt embed) after the marker was
+// already recorded in SeededSkillGrants, and deleting define-done/ on the
+// marker's say-so alone would leave a fresh boot with NEITHER directory on
+// disk — loadDefineGoalSkillContent silently returns "" in that state, and
+// every `/goal` compile silently loses its quality bar with no observable
+// signal at compile time.
+//
+// The safe order is: marker present -> define-goal/ verifiably present ->
+// ONLY THEN delete define-done/. Any other combination fails SAFE (not
+// open): define-done/ is left untouched and the reason is returned so the
+// caller can WARN. Returns deleted=true only when define-done/ was actually
+// removed by THIS call; a repeat call after a successful deletion (or when
+// the marker is absent, or define-done/ was never there) is a clean, silent
+// no-op (deleted=false, err=nil) — idempotent by the directories' own
+// on-disk state, never a second marker.
+func deleteOrphanedDefineDoneDir(skillsGlobalDir string, markers []string) (deleted bool, err error) {
+	renamed := false
+	for _, m := range markers {
+		if m == coreagent.SkillsMigrationDefineGoalRename {
+			renamed = true
+			break
+		}
+	}
+	if !renamed {
+		// A pre-ADR-080 install that has not yet run the rename never
+		// reaches this branch — its define-done/ stays untouched until its
+		// own boot actually rewrites its allowlists.
+		return false, nil
+	}
+
+	defineGoalDir := filepath.Join(skillsGlobalDir, "define-goal")
+	if _, statErr := os.Stat(defineGoalDir); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return false, fmt.Errorf(
+				"replacement define-goal/ skill directory not found at %s (SeedDefaults may have failed) "+
+					"— preserving define-done/ rather than deleting it", defineGoalDir)
+		}
+		return false, fmt.Errorf("could not stat replacement define-goal skill directory %s: %w", defineGoalDir, statErr)
+	}
+
+	orphanedDir := filepath.Join(skillsGlobalDir, "define-done")
+	if _, statErr := os.Stat(orphanedDir); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return false, nil // already deleted (or never existed) — clean no-op
+		}
+		return false, fmt.Errorf("could not stat orphaned define-done skill directory %s: %w", orphanedDir, statErr)
+	}
+
+	if rmErr := os.RemoveAll(orphanedDir); rmErr != nil {
+		return false, fmt.Errorf("could not delete orphaned define-done skill directory %s: %w", orphanedDir, rmErr)
+	}
+	return true, nil
+}
+
 // u25AllSessionsForUsage adapts AgentLoop.ListAllSessions' ADR-057/U9
 // paginated signature (limit, offset int, parentSessionID string, flat bool)
 // back to the zero-arg, "return everything" shape systools.Deps.ListSessions
@@ -2729,40 +2789,25 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// has recorded its marker in cfg.SeededSkillGrants (rewritten in memory
 	// during SeedConfig above, persisted to config.json by the
 	// persistSeededSkillGrants call earlier in this function), the embedded
-	// define-goal/ skill SeedDefaults just seeded above has fully superseded
-	// the old define-done/ directory — delete the orphan so no stale,
+	// define-goal/ skill SeedDefaults just seeded above HAS SUPERSEDED the
+	// old define-done/ directory — delete the orphan so no stale,
 	// manually-invokable skill serving OLD content survives
-	// (operator-ratified 2026-09-07, Q3). Guarded by the same marker: an
-	// install that has not yet run the rename (marker absent) never reaches
-	// this branch, so a pre-ADR-080 install's define-done/ stays untouched
-	// until its own boot actually rewrites its allowlists. Once removed, the
-	// path no longer exists on subsequent boots and os.RemoveAll is a clean
-	// no-op — idempotent by the directory's own absence, not a second
-	// on-disk marker. Accepted caveat: this removes any operator edits to
-	// the old define-done/ skill — acceptable because define-goal is an
-	// engine-authoritative built-in (ADR-074 D4's no-drift skill), not a
-	// user-customization surface.
-	defineGoalRenamed := false
-	for _, m := range cfg.SeededSkillGrants {
-		if m == coreagent.SkillsMigrationDefineGoalRename {
-			defineGoalRenamed = true
-			break
-		}
-	}
-	if defineGoalRenamed {
-		orphanedRenamedSkillDir := filepath.Join(skillsGlobalDir, "define-done")
-		if _, statErr := os.Stat(orphanedRenamedSkillDir); statErr == nil {
-			if rmErr := os.RemoveAll(orphanedRenamedSkillDir); rmErr != nil {
-				slog.Warn("gateway: could not delete orphaned define-done skill directory after the ADR-080 define-goal rename",
-					"dir", orphanedRenamedSkillDir, "error", rmErr)
-			} else {
-				slog.Info("gateway: deleted orphaned define-done skill directory after the ADR-080 define-goal rename",
-					"dir", orphanedRenamedSkillDir)
-			}
-		} else if !os.IsNotExist(statErr) {
-			slog.Warn("gateway: could not stat orphaned define-done skill directory",
-				"dir", orphanedRenamedSkillDir, "error", statErr)
-		}
+	// (operator-ratified 2026-09-07, Q3). deleteOrphanedDefineDoneDir
+	// verifies the replacement define-goal/ is actually on disk before
+	// deleting — never on the marker's say-so alone (fix-wave finding #1):
+	// if SeedDefaults failed above, define-goal/ is absent and the delete is
+	// skipped, preserving define-done/ so /goal keeps a quality bar rather
+	// than silently losing one. Accepted caveat on the delete path: this
+	// removes any operator edits to the old define-done/ skill — acceptable
+	// because define-goal is an engine-authoritative built-in (ADR-074 D4's
+	// no-drift skill), not a user-customization surface.
+	orphanedRenamedSkillDir := filepath.Join(skillsGlobalDir, "define-done")
+	if deleted, delErr := deleteOrphanedDefineDoneDir(skillsGlobalDir, cfg.SeededSkillGrants); delErr != nil {
+		slog.Warn("gateway: could not delete orphaned define-done skill directory after the ADR-080 define-goal rename",
+			"dir", orphanedRenamedSkillDir, "error", delErr)
+	} else if deleted {
+		slog.Info("gateway: deleted orphaned define-done skill directory after the ADR-080 define-goal rename",
+			"dir", orphanedRenamedSkillDir)
 	}
 
 	sysSkillsLoader := skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)

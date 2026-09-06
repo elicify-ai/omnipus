@@ -419,3 +419,62 @@ func TestCriterionBehavior_UnmarshalJSON_RejectsUnknownFields_ViaCriterion(t *te
 	require.Error(t, err, "unknown key nested under behavior must be rejected")
 	assert.Contains(t, err.Error(), "extra_key")
 }
+
+// TestValidateCriterion_KindJudgmentCorrelation is code-review fix-wave
+// finding #3: validateCriterion itself must re-assert the kind<->judgment
+// correlation, not rely solely on InferJudgment catching it upstream.
+// Before the fix, a criterion built with an EXPLICIT, already-resolved kind
+// AND a mismatched explicit judgment — e.g. {Kind: KindCheck, Judgment:
+// JudgmentArtifact} — passed validateCriterion cleanly whenever a caller
+// invoked it directly (bypassing normalizeCriteria's InferJudgment call),
+// because the correlation lived only in InferJudgment. Called directly here
+// (not through normalizeCriteria/InferJudgment) to prove validateCriterion
+// itself, not just its usual caller, now rejects the mismatch.
+func TestValidateCriterion_KindJudgmentCorrelation(t *testing.T) {
+	validAuthor := CriterionAuthor{Kind: AuthorKindUser, ID: "alice"}
+
+	t.Run("check with judgment artifact is rejected", func(t *testing.T) {
+		c := AcceptanceCriterion{
+			Kind: KindCheck, Judgment: JudgmentArtifact, Text: "tests pass",
+			Check:  &CriterionCheck{Command: "go test", ExpectedExitCode: 0},
+			Author: validAuthor, Status: CritPending,
+		}
+		err := validateCriterion(&c, 0)
+		require.Error(t, err, "kind=check with judgment=artifact must be rejected by validateCriterion directly")
+		assert.Contains(t, err.Error(), "check")
+	})
+
+	t.Run("behavior with judgment artifact is rejected", func(t *testing.T) {
+		one := 1
+		c := AcceptanceCriterion{
+			Kind: KindBehavior, Judgment: JudgmentArtifact, Text: "call search_web",
+			Behavior: &CriterionBehavior{Tool: "search_web", MinCount: &one, Scope: BehaviorScopeTaskSession},
+			Author:   validAuthor, Status: CritPending,
+		}
+		err := validateCriterion(&c, 0)
+		require.Error(t, err, "kind=behavior with judgment=artifact must be rejected by validateCriterion directly")
+		assert.Contains(t, err.Error(), "behavior")
+	})
+
+	// Control: the matching (natural) judgment for each technical kind still
+	// passes, so the new checks are additive, not a regression on the
+	// already-correlated case.
+	t.Run("check with judgment boolean (natural) still passes", func(t *testing.T) {
+		c := AcceptanceCriterion{
+			Kind: KindCheck, Judgment: JudgmentBoolean, Text: "tests pass",
+			Check:  &CriterionCheck{Command: "go test", ExpectedExitCode: 0},
+			Author: validAuthor, Status: CritPending,
+		}
+		require.NoError(t, validateCriterion(&c, 0))
+	})
+
+	t.Run("behavior with judgment quantitative (natural) still passes", func(t *testing.T) {
+		one := 1
+		c := AcceptanceCriterion{
+			Kind: KindBehavior, Judgment: JudgmentQuantitative, Text: "call search_web",
+			Behavior: &CriterionBehavior{Tool: "search_web", MinCount: &one, Scope: BehaviorScopeTaskSession},
+			Author:   validAuthor, Status: CritPending,
+		}
+		require.NoError(t, validateCriterion(&c, 0))
+	})
+}

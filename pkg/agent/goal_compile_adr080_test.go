@@ -158,3 +158,72 @@ func TestNewFloorDoD_ValidatesShape(t *testing.T) {
 		t.Fatalf("floor DoD failed NormalizeCriteria: %v", err)
 	}
 }
+
+// TestLoadCompiledGoal_LegacyNoJudgment_GetsBackfilled is code-review
+// fix-wave finding #8: loadCompiledGoal now runs the loaded Criteria/DoD
+// through task.NormalizeCriteria, making real the invariant
+// criterion.go's own doc comment already claimed ("the load-time backfill
+// path for legacy persisted criteria carrying no judgment") — before the
+// fix, loadCompiledGoal bare-unmarshaled straight from JSON with no schema
+// pass at all, so a goal compiled before ADR-080 D-TYPES existed (every
+// criterion serialized with no "judgment" key) stayed with an EMPTY
+// Judgment forever.
+func TestLoadCompiledGoal_LegacyNoJudgment_GetsBackfilled(t *testing.T) {
+	t.Parallel()
+
+	t.Run("legacy_criterion_with_no_judgment_key_is_backfilled_boolean", func(t *testing.T) {
+		t.Parallel()
+		// Pre-ADR-080 D-TYPES serialization: no "judgment" key on the
+		// criterion at all (Judgment unmarshals to the zero value "").
+		legacy := `{"intent":"make tests pass","prompt":"make tests pass","criteria":[` +
+			`{"id":"c1","kind":"prose","text":"tests pass",` +
+			`"author":{"kind":"user","id":"u1"},"status":"pending"}]}`
+		g := loadCompiledGoal(legacy)
+		if g == nil {
+			t.Fatal("loadCompiledGoal returned nil for valid legacy JSON")
+		}
+		if len(g.Criteria) != 1 {
+			t.Fatalf("want 1 criterion, got %d", len(g.Criteria))
+		}
+		if g.Criteria[0].Judgment != task.JudgmentBoolean {
+			t.Errorf("Criteria[0].Judgment = %q, want %q (InferJudgment's prose default, "+
+				"backfilled by NormalizeCriteria)", g.Criteria[0].Judgment, task.JudgmentBoolean)
+		}
+		// The ID a legacy record already carried must survive unchanged —
+		// NormalizeCriteria only server-sets an ID when one is ABSENT.
+		if g.Criteria[0].ID != "c1" {
+			t.Errorf("Criteria[0].ID = %q, want unchanged %q", g.Criteria[0].ID, "c1")
+		}
+	})
+
+	t.Run("legacy_check_criterion_with_no_judgment_key_is_backfilled_boolean", func(t *testing.T) {
+		t.Parallel()
+		legacy := `{"intent":"x","prompt":"x","criteria":[` +
+			`{"id":"c1","kind":"check","text":"tests pass",` +
+			`"check":{"command":"go test ./...","expected_exit_code":0},` +
+			`"author":{"kind":"user","id":"u1"},"status":"pending"}]}`
+		g := loadCompiledGoal(legacy)
+		if g == nil {
+			t.Fatal("loadCompiledGoal returned nil for valid legacy JSON")
+		}
+		if g.Criteria[0].Judgment != task.JudgmentBoolean {
+			t.Errorf("check criterion Judgment = %q, want %q (check is always boolean)",
+				g.Criteria[0].Judgment, task.JudgmentBoolean)
+		}
+	})
+
+	t.Run("malformed_persisted_criterion_falls_back_loudly_not_silently", func(t *testing.T) {
+		t.Parallel()
+		// A persisted criterion that fails shape validation outright (empty
+		// text) must make loadCompiledGoal fall back exactly like its
+		// existing parse-failure/zero-criteria corruption cases — not panic,
+		// not silently hand back an invalid record.
+		malformed := `{"intent":"x","prompt":"x","criteria":[` +
+			`{"id":"c1","kind":"prose","text":"",` +
+			`"author":{"kind":"user","id":"u1"},"status":"pending"}]}`
+		g := loadCompiledGoal(malformed)
+		if g != nil {
+			t.Fatalf("want nil (fallback) for a criterion that fails NormalizeCriteria, got %+v", g)
+		}
+	})
+}

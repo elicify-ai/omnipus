@@ -463,6 +463,17 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 		if c.Behavior != nil {
 			return verr("criteria[%d]: check criterion must not carry a behavior payload", idx)
 		}
+		// Fix-wave finding #3: re-assert the kind<->judgment correlation
+		// InferJudgment already enforces on an OMITTED judgment — a
+		// caller that bypasses InferJudgment and hands validateCriterion a
+		// criterion with an explicit, mismatched judgment (e.g.
+		// {kind:"check", judgment:"artifact"}) must still be rejected here,
+		// not silently accepted because the shape checks above happened to
+		// pass. Check criteria are always boolean (exit-code pass/fail).
+		if c.Judgment != "" && c.Judgment != JudgmentBoolean {
+			return verr("criteria[%d]: judgment %q is incompatible with kind \"check\" "+
+				"(check criteria are always boolean)", idx, c.Judgment)
+		}
 	case KindProse:
 		if c.Check != nil {
 			return verr("criteria[%d]: prose criterion must not carry a check object", idx)
@@ -476,6 +487,12 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 		}
 		if err := validateCriterionBehavior(c.Behavior, idx); err != nil {
 			return err
+		}
+		// Fix-wave finding #3: mirrors the KindCheck re-assertion above —
+		// behavior criteria are always quantitative (count vs min/max).
+		if c.Judgment != "" && c.Judgment != JudgmentQuantitative {
+			return verr("criteria[%d]: judgment %q is incompatible with kind \"behavior\" "+
+				"(behavior criteria are always quantitative)", idx, c.Judgment)
 		}
 	}
 	if c.Author.Kind != AuthorKindAgent && c.Author.Kind != AuthorKindUser {
