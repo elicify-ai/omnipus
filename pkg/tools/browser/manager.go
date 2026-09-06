@@ -544,6 +544,13 @@ type BrowserManager struct {
 	// deliberately NOT m.mu.
 	capture   *CaptureSession
 	captureMu sync.Mutex
+	// videoHealthObs is the gateway's live-video health observer (issue
+	// #674), registered once per manager by the browser WS handler and
+	// installed on every CaptureSession this manager creates. Guarded by
+	// captureMu, alongside the session it is installed on. nil until the
+	// gateway registers one (and always nil for a manager driven by a caller
+	// that has no viewers to notify, e.g. a unit test).
+	videoHealthObs func(VideoHealthEvent)
 
 	// pendingAdopt tracks CDP target IDs currently being adopted (ADR-041
 	// D2's adoptTarget), mirroring `pending`'s exact race-guard shape: the
@@ -1147,8 +1154,42 @@ func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, err
 	if err != nil {
 		return nil, err
 	}
+	// Install the gateway's video-health observer on the session BEFORE it is
+	// published (issue #674). newFn is the gateway's own constructor closure,
+	// but it lives in a file this wiring must not touch, so the observer is
+	// registered on the MANAGER (SetVideoHealthObserver, from browser_attach)
+	// and attached here — the one place that sees every CaptureSession this
+	// manager will ever own, exactly once each.
+	if m.videoHealthObs != nil {
+		cs.SetOnVideoHealth(m.videoHealthObs)
+	}
 	m.capture = cs
 	return cs, nil
+}
+
+// SetVideoHealthObserver registers fn as the observer notified whenever the
+// live-browser video path for this manager's capture changes state — lost,
+// recovering, recovered, or unrecoverable (issue #674). It is installed on the
+// CURRENT CaptureSession if one already exists, and on every session created
+// afterwards.
+//
+// Registered on the manager rather than passed to NewCaptureSession because
+// the gateway learns which manager it is dealing with at browser_attach time,
+// well before any viewer offer creates a capture session — and because a
+// manager outlives the sessions it creates, so one registration covers a
+// session that is torn down and rebuilt. Idempotent: the browser WS handler
+// re-registers the same observer on every attach.
+//
+// fn is invoked on whichever goroutine observed the transition, with no
+// CaptureSession lock held. Pass nil to unregister.
+func (m *BrowserManager) SetVideoHealthObserver(fn func(VideoHealthEvent)) {
+	m.captureMu.Lock()
+	m.videoHealthObs = fn
+	cur := m.capture
+	m.captureMu.Unlock()
+	if cur != nil {
+		cur.SetOnVideoHealth(fn)
+	}
 }
 
 // ClearCaptureSession drops this manager's CaptureSession reference,

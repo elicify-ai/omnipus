@@ -93,6 +93,54 @@ type Session struct {
 	videoCodec      string
 	audioCodec      string
 
+	// feedSeq mints the tokens recorded in videoFeedID/audioFeedID — one per
+	// attachIngestTrack invocation, monotonic for the Session's lifetime so a
+	// token is never reused and a stale goroutine can never "un-retire" a
+	// newer feed.
+	feedSeq atomic.Int64
+	// videoFeedID/audioFeedID identify the attachIngestTrack invocation that
+	// is CURRENTLY forwarding RTP into videoTrack/audioTrack. 0 means nothing
+	// is: the shared local track still exists, but no ingest connection is
+	// writing to it, so answering a viewer from it would produce a black
+	// panel.
+	//
+	// ISSUE #674 — why a token and NOT nil-ing videoTrack/audioTrack.
+	//
+	// The bug: videoTrack was assigned in exactly one place (attachIngestTrack)
+	// and never set back to nil — Close() cleared only ingestPC. waitForTracks
+	// returned ok as soon as videoTrack != nil, with no check that anything
+	// still fed it, so after the FIRST successful ingest every later viewer
+	// offer was answered instantly against a dead track and the panel never
+	// recovered, however many times the user reopened it.
+	//
+	// The obvious fix — nil the pointers when the ingest dies — is the WRONG
+	// one here, and would trade a dead panel for a worse, subtler failure. The
+	// shared TrackLocalStaticRTP is not an implementation detail of one ingest
+	// connection: it is the binding every ALREADY-ATTACHED viewer's RTPSender
+	// holds (see Session's doc comment and attachIngestTrack's). Nil-ing it
+	// makes the next attachIngestTrack construct a BRAND NEW local track, which
+	// no existing viewer is bound to — every viewer that survived the blip
+	// would go silently black forever, with no error anywhere, which is
+	// precisely the class of failure the sequence-number rewrite exists to
+	// prevent. The long-lived shared track is load-bearing; its LIVENESS is a
+	// separate fact, so it gets separate state.
+	//
+	// Retired in three places, all of which must stay: the forwarding
+	// goroutine's own exit (endFeed, the most precise signal — the source
+	// really has stopped), clearIngestIfCurrent (the connection died, so no
+	// feed of it can be alive even if its read loop has not unblocked yet),
+	// and Close(). Guarded by mu, like the tracks themselves.
+	videoFeedID int64
+	audioFeedID int64
+
+	// onIngestLive is invoked (in its own goroutine, no lock held) the moment
+	// a VIDEO feed starts forwarding into the shared local track — the exact
+	// counterpart to onIngestLost. The owner uses it to retire a bounded
+	// automatic-recovery attempt sequence and tell the panel video is back;
+	// without a positive "it worked" signal, recovery can only ever be timed
+	// out, never confirmed. nil is a valid no-op.
+	onIngestLive func()
+
 	viewersMu sync.Mutex
 	viewers   map[string]*viewerConn
 
@@ -382,6 +430,18 @@ func (s *Session) SetOnIngestLost(cb func()) {
 	s.mu.Unlock()
 }
 
+// SetOnIngestLive registers cb, invoked once each time a VIDEO feed begins
+// forwarding into the shared local track — i.e. video is genuinely flowing
+// again. It is the positive half of the pair SetOnIngestLost opens: an owner
+// running a bounded automatic recovery needs to know an attempt SUCCEEDED, or
+// it can only ever exhaust its attempt budget on a stream that is already
+// healthy. Safe to call at any time; pass nil to unregister.
+func (s *Session) SetOnIngestLive(cb func()) {
+	s.mu.Lock()
+	s.onIngestLive = cb
+	s.mu.Unlock()
+}
+
 func (s *Session) logf(format string, args ...any) {
 	if s.logfn != nil {
 		s.logfn(format, args...)
@@ -469,9 +529,15 @@ func (s *Session) Stats() Stats {
 	s.viewersMu.Unlock()
 
 	return Stats{
-		Viewers:      viewers,
-		HasVideo:     s.videoTrack != nil,
-		HasAudio:     s.audioTrack != nil,
+		Viewers: viewers,
+		// Issue #674: liveness, not mere existence. The shared local tracks
+		// are never torn down (see videoFeedID's doc comment), so
+		// `videoTrack != nil` stays true forever after the first ingest — and
+		// this is what the gateway turns into the panel's has_audio and what
+		// an operator reads in a stats dump. Reporting a track that nothing
+		// feeds as present is the same lie waitForTracks used to tell.
+		HasVideo:     s.videoTrack != nil && s.videoFeedID != 0,
+		HasAudio:     s.audioTrack != nil && s.audioFeedID != 0,
 		VideoCodec:   s.videoCodec,
 		AudioCodec:   s.audioCodec,
 		VideoPackets: s.videoPktCount.Load(),
@@ -552,6 +618,12 @@ func (s *Session) Close() error {
 	s.closed = true
 	ingest := s.ingestPC
 	s.ingestPC = nil
+	// Retire both feeds (#674). A closed Session must never report a live
+	// video feed: waitForTracks is reachable from a viewer offer that raced
+	// this Close, and answering it from a track nothing writes to is the exact
+	// dead-panel failure the feed tokens exist to prevent.
+	s.videoFeedID = 0
+	s.audioFeedID = 0
 	s.mu.Unlock()
 
 	var errs []error

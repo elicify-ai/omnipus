@@ -1458,6 +1458,17 @@ func (h *BrowserWSHandler) handleAttach(
 		ControlledByOther: &cbo,
 	}, dropContext(chatSessionID, viewerID, "attach-ok"))
 
+	// Issue #674: register the live-video health observer on the manager. Done
+	// here, at attach, because this is the earliest point the gateway knows
+	// WHICH manager this connection is talking to — well before a viewer offer
+	// creates the CaptureSession the observer ultimately lands on
+	// (BrowserManager.EnsureCaptureSession installs it on every session it
+	// creates). Idempotent by design: h.onVideoHealth is a method value on the
+	// process-wide handler and fans out via the event's own viewer list, so
+	// re-registering it on every attach — including a second viewer's — simply
+	// overwrites it with an identical observer.
+	mgr.SetVideoHealthObserver(h.onVideoHealth)
+
 	// ADR-047: announce WebRTC availability for this fresh attach — the SPA
 	// only sends its offer after an available:true state frame (see
 	// announceWebRTCAvailability's doc for why omitting this deadlocks the

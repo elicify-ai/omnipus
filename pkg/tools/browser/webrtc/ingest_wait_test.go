@@ -28,6 +28,25 @@ func newTestTrack(t *testing.T, kind string) *pion.TrackLocalStaticRTP {
 	return tr
 }
 
+// setLiveTrack installs a shared local track for kind AND marks it as fed by a
+// live ingest attachment. Issue #674 made waitForTracks treat a track with no
+// live feed as ABSENT (see videoFeedID's doc comment in session.go), so a test
+// that only assigned the pointer would be asserting against a state production
+// can no longer reach — attachIngestTrack always sets both together. Caller
+// must NOT hold s.mu.
+func setLiveTrack(t *testing.T, s *Session, kind string) {
+	t.Helper()
+	tr := newTestTrack(t, kind)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	feedID := s.feedSeq.Add(1)
+	if kind == "audio" {
+		s.audioTrack, s.audioFeedID = tr, feedID
+		return
+	}
+	s.videoTrack, s.videoFeedID = tr, feedID
+}
+
 func setGrace(t *testing.T, d time.Duration) {
 	t.Helper()
 	old := audioGraceTimeout
@@ -38,10 +57,8 @@ func setGrace(t *testing.T, d time.Duration) {
 func TestWaitForTracksBothPresentReturnsImmediately(t *testing.T) {
 	s := NewSession(Config{}, nil, nil)
 	t.Cleanup(func() { _ = s.Close() })
-	s.mu.Lock()
-	s.videoTrack = newTestTrack(t, "video")
-	s.audioTrack = newTestTrack(t, "audio")
-	s.mu.Unlock()
+	setLiveTrack(t, s, "video")
+	setLiveTrack(t, s, "audio")
 
 	start := time.Now()
 	v, a, ok := s.waitForTracks(time.Second)
@@ -60,15 +77,11 @@ func TestWaitForTracksWaitsOutTheAudioRace(t *testing.T) {
 	setGrace(t, 2*time.Second)
 	s := NewSession(Config{}, nil, nil)
 	t.Cleanup(func() { _ = s.Close() })
-	s.mu.Lock()
-	s.videoTrack = newTestTrack(t, "video")
-	s.mu.Unlock()
+	setLiveTrack(t, s, "video")
 
 	go func() {
 		time.Sleep(150 * time.Millisecond)
-		s.mu.Lock()
-		s.audioTrack = newTestTrack(t, "audio")
-		s.mu.Unlock()
+		setLiveTrack(t, s, "audio")
 	}()
 
 	v, a, ok := s.waitForTracks(time.Second)
@@ -86,9 +99,7 @@ func TestWaitForTracksVideoOnlyAfterGrace(t *testing.T) {
 	setGrace(t, 100*time.Millisecond)
 	s := NewSession(Config{}, nil, nil)
 	t.Cleanup(func() { _ = s.Close() })
-	s.mu.Lock()
-	s.videoTrack = newTestTrack(t, "video")
-	s.mu.Unlock()
+	setLiveTrack(t, s, "video")
 
 	start := time.Now()
 	v, a, ok := s.waitForTracks(time.Second)
@@ -148,9 +159,7 @@ func TestWaitForTracksSurvivesObservedProductionColdStartLatency(t *testing.T) {
 		t.Cleanup(func() { _ = s.Close() })
 		go func() {
 			time.Sleep(observedVideoArrivalDelay)
-			s.mu.Lock()
-			s.videoTrack = newTestTrack(t, "video")
-			s.mu.Unlock()
+			setLiveTrack(t, s, "video")
 		}()
 		return s
 	}

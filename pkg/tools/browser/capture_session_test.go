@@ -67,6 +67,7 @@ type fakeRelay struct {
 	// contract the real webrtc.Session honors from its own removeViewer.
 	onViewerRemoved func(viewerID string, handle any)
 	onIngestLost    func()
+	onIngestLive    func()
 }
 
 // SetOnViewerRemoved implements the viewerRemover optional capability (see
@@ -114,6 +115,27 @@ func (f *fakeRelay) SetOnIngestLost(fn func()) {
 func (f *fakeRelay) triggerIngestLost() {
 	f.mu.Lock()
 	fn := f.onIngestLost
+	f.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// SetOnIngestLive implements the ingestLiveNotifier optional capability (see
+// capture_session.go) so tests can exercise CaptureSession's wiring of the
+// positive half of the ingest-liveness pair (issue #674).
+func (f *fakeRelay) SetOnIngestLive(fn func()) {
+	f.mu.Lock()
+	f.onIngestLive = fn
+	f.mu.Unlock()
+}
+
+// triggerIngestLive simulates a video feed starting to forward — exactly the
+// SetOnIngestLive contract the real webrtc.Session honors from
+// attachIngestTrack.
+func (f *fakeRelay) triggerIngestLive() {
+	f.mu.Lock()
+	fn := f.onIngestLive
 	f.mu.Unlock()
 	if fn != nil {
 		fn()

@@ -342,6 +342,22 @@ func (s *Session) clearIngestIfCurrent(prefix string, pc *webrtc.PeerConnection,
 	cleared := s.ingestPC == pc
 	if cleared {
 		s.ingestPC = nil
+		// Issue #674: retire the feed tokens too. The shared local tracks
+		// deliberately outlive every ingest connection (see videoFeedID's doc
+		// comment in session.go), so `videoTrack != nil` says nothing about
+		// whether anything is still writing to them — and until this line
+		// existed, nothing ever said otherwise. That is why a dead panel never
+		// came back across repeated opens: the FIRST ingest set videoTrack,
+		// and every viewer offer from then on was answered instantly against
+		// a corpse.
+		//
+		// Retired here as well as in endFeed because the two signals are not
+		// interchangeable. endFeed fires when the forwarding goroutine's
+		// blocking Read finally unblocks, which on a degraded transport can
+		// lag the connection's death by a long way; the connection's own
+		// terminal state is available immediately and is just as conclusive.
+		s.videoFeedID = 0
+		s.audioFeedID = 0
 	}
 	notify := s.onIngestLost
 	s.mu.Unlock()
@@ -520,9 +536,38 @@ func (r *seqRewriter) rewrite(in uint16) uint16 {
 	return out
 }
 
+// endFeed retires feedID as the live feed for kind, if it still is one — the
+// forwarding goroutine's own "I have stopped" signal (issue #674). Idempotent
+// and identity-checked: a goroutine whose feed was already superseded by a
+// newer attachment, or already retired by clearIngestIfCurrent/Close, must not
+// clear the successor's token on its way out.
+func (s *Session) endFeed(prefix string, kind webrtc.RTPCodecType, feedID int64) {
+	s.mu.Lock()
+	var cleared bool
+	switch kind {
+	case webrtc.RTPCodecTypeVideo:
+		if s.videoFeedID == feedID {
+			s.videoFeedID = 0
+			cleared = true
+		}
+	case webrtc.RTPCodecTypeAudio:
+		if s.audioFeedID == feedID {
+			s.audioFeedID = 0
+			cleared = true
+		}
+	}
+	s.mu.Unlock()
+	if cleared {
+		s.logf("%s ingest %s feed ended — nothing is writing to the shared local track now", prefix, kind)
+	}
+}
+
 func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 	codec := remote.Codec()
 	kind := remote.Kind()
+	// Minted before any lock is taken so the token is unique even if two
+	// OnTrack callbacks for the same kind race (ingest replacement).
+	feedID := s.feedSeq.Add(1)
 
 	s.mu.Lock()
 	if s.closed {
@@ -551,17 +596,33 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 			s.audioTrack = local
 		}
 	}
+	var live func()
 	switch kind {
 	case webrtc.RTPCodecTypeVideo:
 		s.videoSSRC = remote.SSRC()
 		s.videoCodec = codec.MimeType
+		s.videoFeedID = feedID
+		live = s.onIngestLive
 	case webrtc.RTPCodecTypeAudio:
 		s.audioCodec = codec.MimeType
+		s.audioFeedID = feedID
 	}
 	s.mu.Unlock()
+	// From here on this goroutine OWNS the feed token, so every exit path must
+	// retire it — including the RTCP-drain/forward loop's `return`s below.
+	defer s.endFeed(prefix, kind, feedID)
 
 	s.logf("%s ingest track arrived: kind=%s codec=%s clockRate=%d ssrc=%d payloadType=%d",
 		prefix, kind, codec.MimeType, codec.ClockRate, remote.SSRC(), remote.PayloadType())
+
+	// Video is what the panel shows, so it — not audio — is the signal that
+	// says "the stream is genuinely back". Fired in its own goroutine, with no
+	// lock held, matching onIngestLost's convention: the owner's handler calls
+	// back into this package (Stats, Recapture) and must never do so under
+	// s.mu.
+	if live != nil {
+		go live()
+	}
 
 	// Redeem any keyframe request sendPLI had to skip while this connection
 	// was still negotiating -- see flushDeferredPLI. Only on video: a PLI
@@ -686,6 +747,18 @@ func (s *Session) waitForTracks(timeout time.Duration) (video, audio *webrtc.Tra
 	for {
 		s.mu.Lock()
 		v, a := s.videoTrack, s.audioTrack
+		// Issue #674: a track with no live feed is treated exactly as an
+		// ABSENT track, so the existing video-mandatory / audio-grace policy
+		// below is unchanged in every respect except that it now asks a
+		// question with a true answer. Before this, the first successful
+		// ingest made `videoTrack != nil` permanently true and every later
+		// viewer offer was answered against whatever was left of it.
+		if s.videoFeedID == 0 {
+			v = nil
+		}
+		if s.audioFeedID == 0 {
+			a = nil
+		}
 		s.mu.Unlock()
 		if v != nil && a != nil {
 			return v, a, true

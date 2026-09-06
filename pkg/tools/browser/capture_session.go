@@ -198,6 +198,22 @@ type ingestLossNotifier interface {
 	SetOnIngestLost(fn func())
 }
 
+// ingestLiveNotifier is the optional RelaySession capability for being told
+// that a VIDEO feed has started forwarding — the positive counterpart to
+// ingestLossNotifier (issue #674).
+//
+// Why it matters: the automatic recovery in capture_video_health.go is
+// bounded, and a bound is only meaningful if success can be observed. Without
+// this signal a recapture that WORKED would look identical to one that did
+// not, so the attempt budget would drain on a perfectly healthy stream and the
+// panel could never be told the video came back.
+//
+// Detected via type assertion, same discipline (and same test-fake reasons) as
+// ingestLossNotifier above.
+type ingestLiveNotifier interface {
+	SetOnIngestLive(fn func())
+}
+
 // bitrateTargetNotifier is the optional RelaySession capability that reports a
 // congestion target derived from the VIEWER leg's RTCP receiver reports
 // (ADR-069 Finding 2). Detected by type assertion for the same reason as the
@@ -377,6 +393,36 @@ type CaptureSession struct {
 	tabChangeRecaptureW int
 	tabChangeRecaptureH int
 
+	// ── Bounded automatic video recovery (#674) ─────────────────────────────
+	// All guarded by mu. See capture_video_health.go for the state machine
+	// these back and for why every one of them is needed.
+	//
+	// ingestVideoLive is the relay's last reported verdict on whether video is
+	// actually flowing (SetOnIngestLive / SetOnIngestLost).
+	ingestVideoLive bool
+	// ingestRecoveryAttempts counts automatic recaptures issued since video
+	// was last confirmed live. Reset to 0 by onIngestVideoLive.
+	ingestRecoveryAttempts int
+	// ingestRecoveryTimer is the single armed evaluation of the recovery state
+	// machine; nil when none is pending. Exactly one may exist at a time —
+	// that is what stops a burst of loss notifications becoming a burst of
+	// recaptures.
+	ingestRecoveryTimer *time.Timer
+	// ingestRecoveryGaveUp latches once the attempt budget is spent. It stops
+	// the loop dead and is cleared only by video actually coming back, so the
+	// failure ends in a named, reported error rather than an endless retry.
+	ingestRecoveryGaveUp bool
+	// recapturePendingUntil is when the most recently ISSUED recapture (from
+	// any source — this state machine, a viewport resize, a tab change) stops
+	// being plausibly in flight. A recapture tears the ingest connection down
+	// on its way to rebuilding it, so a loss inside this window is the
+	// replacement, not a death, and must not stack a second capture on top of
+	// an in-flight one.
+	recapturePendingUntil time.Time
+	// onVideoHealth is the gateway's observer, installed via SetOnVideoHealth
+	// (see BrowserManager.SetVideoHealthObserver). nil is a valid no-op.
+	onVideoHealth func(VideoHealthEvent)
+
 	// foregroundAssertFn is the test seam for the CDP foreground re-assert
 	// RecaptureForTabChange performs (production: bringAgentTabToFront).
 	// Mirrors BrowserManager.tabFocusFn's rationale exactly: the fake tab
@@ -492,8 +538,16 @@ func newCaptureSessionWithDeps(
 		// A dead ingest means the encoder is gone; ask it to re-capture so the
 		// stream recovers on its own. Without this the session sits with no
 		// ingest at all and nothing ever asks for a new one, which is
-		// indistinguishable to the user from a hung browser.
+		// indistinguishable to the user from a hung browser. The recapture is
+		// BOUNDED — see capture_video_health.go.
 		il.SetOnIngestLost(cs.onIngestLost)
+	}
+	if il, ok := relay.(ingestLiveNotifier); ok {
+		// The other half of the pair: without a positive "video is flowing
+		// again" signal, the bounded recovery above can only ever exhaust its
+		// budget — it would keep counting failures against a stream that had
+		// already come back, and could never tell the panel it recovered.
+		il.SetOnIngestLive(cs.onIngestVideoLive)
 	}
 	if bt, ok := relay.(bitrateTargetNotifier); ok {
 		// Close the congestion loop: the viewer leg measures the real path,
@@ -502,21 +556,6 @@ func newCaptureSessionWithDeps(
 		bt.SetOnBitrateTarget(cs.SetMaxBitrate)
 	}
 	return cs
-}
-
-// onIngestLost re-requests capture after the relay reports its ingest
-// connection died. Best-effort: Recapture is itself a no-op when no ingest
-// connection is currently bound (the encoder reconnects on its own watchdog in
-// that case), so a spurious call is harmless.
-func (cs *CaptureSession) onIngestLost() {
-	cs.mu.Lock()
-	stopped := cs.stopped
-	cs.mu.Unlock()
-	if stopped {
-		return
-	}
-	cs.logf("capture[%s]: ingest connection lost — requesting a fresh capture", cs.agentID)
-	cs.Recapture()
 }
 
 // captureInjectPayload is the exact shape encoder.js's readConfig() expects
@@ -1436,6 +1475,12 @@ func (cs *CaptureSession) ResetAdaptation(reason string) {
 }
 
 func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
+	// Open the in-flight window BEFORE the control frame goes out (#674): the
+	// encoder tears its PeerConnection down as the first step of a recapture,
+	// so the resulting ingest loss can arrive before this function returns. A
+	// window opened afterwards would already have missed it, and the bounded
+	// recovery would spend an attempt on a recapture that was working.
+	cs.noteRecaptureIssued()
 	cs.requestControl("recapture", nil, expectedW, expectedH)
 	cs.relay.SignalRecapture()
 }
@@ -1519,6 +1564,9 @@ func (cs *CaptureSession) RecaptureForTabChangeAt(expectedW, expectedH int) {
 		return
 	}
 	cs.tabChangeRecaptureRunning = true
+	// Same reason as RecaptureAt: a tab-change recapture is a real teardown,
+	// and the loss it produces must not be read as a death (#674).
+	cs.recapturePendingUntil = time.Now().Add(ingestRecoverySettle)
 	cs.mu.Unlock()
 
 	// Prime attached viewers for the coming gap NOW, on the caller's own
@@ -1545,6 +1593,7 @@ func (cs *CaptureSession) RecaptureForTabChangeAt(expectedW, expectedH int) {
 			firstPass = false
 
 			cs.assertForeground(context.Background())
+			cs.noteRecaptureIssued()
 			cs.requestControl("recapture", nil, w, h)
 
 			cs.mu.Lock()
@@ -1749,6 +1798,10 @@ func (cs *CaptureSession) Stop() {
 		cs.stopTimer.Stop()
 		cs.stopTimer = nil
 	}
+	// A pending recovery evaluation must not outlive the session it would
+	// recapture (#674) — Recapture on a stopped session is a no-op, but the
+	// timer would keep a dead CaptureSession reachable and log noise flowing.
+	cs.stopIngestRecoveryLocked()
 	tabCancel := cs.tabCancel
 	viewerIDs := make([]string, 0, len(cs.viewers))
 	for id := range cs.viewers {
