@@ -925,3 +925,89 @@ func MigrateLegacyToolPolicyKeys(cfg *Config) bool {
 	}
 	return changed
 }
+
+// ReconcileToolPolicyCeiling backfills cfg.Sandbox.ToolPolicies (the GLOBAL
+// tool-policy ceiling) with a real, shipped-default entry for every static
+// builtin tool named in knownTools that the ceiling has no entry for yet —
+// ADR-076. This closes the gap CLAUDE.md hard constraint 6's "no
+// default-policy fallback" model left open on upgrade: an existing install's
+// config.json is a point-in-time snapshot of whatever pkg/config/defaults.go
+// enumerated at the time it was written, so every static builtin tool added
+// to defaults.go afterward is missing from that install's ceiling until
+// something adds it. Coverage still technically resolves in that gap (Go's
+// encoding/json map-merge and RepairIncompleteToolPolicyCoverage's deny
+// backfill both prevent a genuine "no entry anywhere" hole — see
+// ValidateAgentOwnToolPolicyCoverage's doc comment for the full mechanism),
+// but resolves to the WRONG thing: a per-agent "deny" backfill or an
+// unrepresented, undocumented in-memory-only default, never the operator-
+// visible, config.json-persisted value pkg/config/defaults.go actually
+// ships. A brand-new tool like AskUserQuestion — shipped "allow" — silently
+// becomes unusable on every pre-existing install until an operator notices
+// and edits config.json by hand.
+//
+// knownTools MUST be the exact same static-catalog set the Constraint-6
+// validator uses (buildKnownBuiltinToolNames() at the gateway.go call site)
+// — passing the identical map instance, not a re-derived one, is what makes
+// "coverage and reconciliation can never disagree" true by construction
+// rather than by convention. The shipped default VALUE for each name comes
+// from DefaultConfig().Sandbox.ToolPolicies, which pkg/config/defaults.go's
+// own doc comment states mirrors pkg/coreagent/core.go's allStaticToolNames
+// literal-for-literal — i.e. the same static catalog knownTools represents.
+//
+// Rules (never deviate from these — see ADR-076 for the rationale):
+//   - A tool name in knownTools with NO existing cfg.Sandbox.ToolPolicies
+//     entry gets one added, at exactly DefaultConfig()'s shipped value for
+//     that name (never a blanket "allow" — e.g. browser_upload_file ships
+//     "ask").
+//   - A tool name that ALREADY has an entry — operator-set, migrated, or
+//     from an earlier reconciliation — is never touched. This function only
+//     ever ADDS a missing entry; it never overwrites one, regardless of
+//     value.
+//   - A key in cfg.Sandbox.ToolPolicies that is NOT in knownTools (a
+//     retired/legacy key, an MCP-namespaced key, an operator's own custom
+//     entry) is left completely alone — reconciliation is additive-only
+//     against the current static catalog, never a cleanup pass.
+//   - A name in knownTools that DefaultConfig().Sandbox.ToolPolicies has no
+//     entry for (a catalog/defaults drift that TestBuildKnownBuiltinToolNames_
+//     MatchesCoreagentStaticToolCatalog guards against separately) is
+//     skipped rather than guessed at — this function never invents a value.
+//
+// Mutates cfg in place; allocates cfg.Sandbox.ToolPolicies if it was nil.
+// Returns every "tool=policy" pair actually added, sorted, for the caller to
+// log — nil when nothing needed adding, including on a second call over an
+// already-reconciled config (idempotent by construction: an added entry is
+// present on the next call, so the "no existing entry" guard skips it).
+//
+// Intended call site: pkg/gateway/gateway.go's shared
+// repairAndValidateToolPolicyCoverage helper, immediately AFTER
+// MigrateLegacyToolPolicyKeys (so a renamed legacy key is not treated as
+// "missing" and reconciled to a possibly-different default) and BEFORE
+// RepairIncompleteToolPolicyCoverage (so a global-ceiling gap is closed with
+// the real shipped default instead of the AGENT-level fail-closed "deny"
+// backfill RepairIncompleteToolPolicyCoverage would otherwise apply).
+func ReconcileToolPolicyCeiling(cfg *Config, knownTools map[string]struct{}) []string {
+	if cfg == nil || len(knownTools) == 0 {
+		return nil
+	}
+	defaultPolicies := DefaultConfig().Sandbox.ToolPolicies
+	if len(defaultPolicies) == 0 {
+		return nil
+	}
+	if cfg.Sandbox.ToolPolicies == nil {
+		cfg.Sandbox.ToolPolicies = make(map[string]string, len(knownTools))
+	}
+	var added []string
+	for name := range knownTools {
+		if _, ok := cfg.Sandbox.ToolPolicies[name]; ok {
+			continue // never overwrite an existing entry, operator-set or otherwise
+		}
+		defVal, ok := defaultPolicies[name]
+		if !ok {
+			continue // no shipped default to reconcile from — skip rather than guess
+		}
+		cfg.Sandbox.ToolPolicies[name] = defVal
+		added = append(added, name+"="+defVal)
+	}
+	sort.Strings(added)
+	return added
+}

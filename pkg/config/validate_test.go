@@ -810,3 +810,180 @@ func TestMigrateLegacyToolPolicyKeys_NilOrEmpty_NoOp(t *testing.T) {
 	cfg := &Config{Agents: AgentsConfig{List: []AgentConfig{{ID: "agent-i"}}}}
 	assert.False(t, MigrateLegacyToolPolicyKeys(cfg), "a config with no legacy keys anywhere must be a no-op")
 }
+
+// --- ReconcileToolPolicyCeiling (ADR-076) ---
+
+// reconcileTestKnownTools is a small, fixed static-catalog stand-in shared by
+// the tests below. It intentionally includes AskUserQuestion (ships "allow")
+// and browser_upload_file (ships "ask", NOT "allow" — the exact case the bug
+// report named) alongside a few ordinary tools, so a blanket-allow bug would
+// be caught immediately.
+func reconcileTestKnownTools() map[string]struct{} {
+	return map[string]struct{}{
+		"AskUserQuestion":     {},
+		"browser_upload_file": {},
+		"read_file":           {},
+		"bash":                {},
+	}
+}
+
+// TestReconcileToolPolicyCeiling_AddsMissingStaticToolsAtShippedDefaults is
+// the core regression test for the reported bug: a ceiling missing
+// AskUserQuestion and browser_upload_file must end up with the EXACT shipped
+// default value for each — allow and ask respectively — not a blanket
+// "allow" and not left absent.
+func TestReconcileToolPolicyCeiling_AddsMissingStaticToolsAtShippedDefaults(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "allow", "bash": "allow"}, // pre-existing, unrelated
+		},
+	}
+	knownTools := reconcileTestKnownTools()
+
+	// Sanity-check the shipped defaults this test's oracle depends on, so a
+	// future defaults.go edit that silently changes these values fails this
+	// test loudly instead of the assertions below quietly testing nothing.
+	shipped := DefaultConfig().Sandbox.ToolPolicies
+	require.Equal(t, "allow", shipped["AskUserQuestion"])
+	require.Equal(t, "ask", shipped["browser_upload_file"])
+
+	added := ReconcileToolPolicyCeiling(cfg, knownTools)
+
+	assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["AskUserQuestion"])
+	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["browser_upload_file"],
+		"browser_upload_file must be reconciled to its shipped \"ask\" default, never a blanket allow")
+	assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["read_file"], "pre-existing entry must survive")
+	assert.ElementsMatch(t, []string{"AskUserQuestion=allow", "browser_upload_file=ask"}, added,
+		"only the two genuinely-missing tools should be reported as added")
+}
+
+// TestReconcileToolPolicyCeiling_PreservesOperatorSetValue verifies an
+// operator-tightened value (deny, on a tool that ships allow) is never
+// overwritten by reconciliation.
+func TestReconcileToolPolicyCeiling_PreservesOperatorSetValue(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"AskUserQuestion": "deny"},
+		},
+	}
+	knownTools := reconcileTestKnownTools()
+
+	added := ReconcileToolPolicyCeiling(cfg, knownTools)
+
+	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["AskUserQuestion"],
+		"an operator-set value must never be overwritten by reconciliation, even though it disagrees with the shipped default")
+	for _, a := range added {
+		assert.NotContains(t, a, "AskUserQuestion", "AskUserQuestion must not be reported as added — it already had an entry")
+	}
+}
+
+// TestReconcileToolPolicyCeiling_LeavesUnrelatedAndCustomKeysUntouched
+// verifies keys outside knownTools — an MCP-namespaced key and an arbitrary
+// custom/legacy key — are left exactly as-is, and are never reported as
+// added.
+func TestReconcileToolPolicyCeiling_LeavesUnrelatedAndCustomKeysUntouched(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{
+				"mcp_myserver_do_thing": "allow",
+				"some_operator_custom":  "ask",
+			},
+		},
+	}
+	knownTools := reconcileTestKnownTools()
+
+	added := ReconcileToolPolicyCeiling(cfg, knownTools)
+
+	assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["mcp_myserver_do_thing"])
+	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["some_operator_custom"])
+	for _, a := range added {
+		assert.NotContains(t, a, "mcp_myserver_do_thing")
+		assert.NotContains(t, a, "some_operator_custom")
+	}
+}
+
+// TestReconcileToolPolicyCeiling_Idempotent_SecondCallIsNoOp verifies running
+// the reconciliation twice over the same config produces no further change.
+func TestReconcileToolPolicyCeiling_Idempotent_SecondCallIsNoOp(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "allow"},
+		},
+	}
+	knownTools := reconcileTestKnownTools()
+
+	first := ReconcileToolPolicyCeiling(cfg, knownTools)
+	require.NotEmpty(t, first, "first call must add the missing static tools")
+	snapshot := map[string]string{}
+	for k, v := range cfg.Sandbox.ToolPolicies {
+		snapshot[k] = v
+	}
+
+	second := ReconcileToolPolicyCeiling(cfg, knownTools)
+	assert.Empty(t, second, "second call over an already-reconciled config must add nothing")
+	assert.Equal(t, snapshot, cfg.Sandbox.ToolPolicies, "the ceiling must be byte-for-byte unchanged on the second call")
+}
+
+// TestReconcileToolPolicyCeiling_DoesNotReAddRetiredKey verifies a
+// legacy/retired tool name — present neither in knownTools nor in the
+// shipped defaults — is never (re-)added by reconciliation, even if it once
+// existed in an older config.json and was since removed.
+func TestReconcileToolPolicyCeiling_DoesNotReAddRetiredKey(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "allow"},
+		},
+	}
+	// knownTools intentionally does NOT include "load_tool" or "hand_off" —
+	// both retired by ADR-071 and absent from DefaultConfig()'s shipped
+	// catalog (see TestReconcileToolPolicyCeiling package-level check below).
+	knownTools := reconcileTestKnownTools()
+
+	shipped := DefaultConfig().Sandbox.ToolPolicies
+	_, loadToolShipped := shipped["load_tool"]
+	require.False(t, loadToolShipped, "load_tool must not be part of the shipped default catalog (test precondition)")
+
+	ReconcileToolPolicyCeiling(cfg, knownTools)
+
+	_, loadToolPresent := cfg.Sandbox.ToolPolicies["load_tool"]
+	assert.False(t, loadToolPresent, "a retired key outside the current static catalog must never be (re-)added")
+	_, handOffPresent := cfg.Sandbox.ToolPolicies["hand_off"]
+	assert.False(t, handOffPresent, "a retired key outside the current static catalog must never be (re-)added")
+}
+
+// TestReconcileToolPolicyCeiling_RunsAfterMigration_NoDuplicateOrStaleName
+// proves the intended call order (migrate, then reconcile) leaves exactly
+// one entry — the migrated one — with no legacy key resurrected and no
+// duplicate/conflicting reconciliation of ToolSearch under its own name.
+func TestReconcileToolPolicyCeiling_RunsAfterMigration_NoDuplicateOrStaleName(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"load_tool": "ask"},
+		},
+	}
+	knownTools := map[string]struct{}{"ToolSearch": {}}
+
+	migrated := MigrateLegacyToolPolicyKeys(cfg)
+	require.True(t, migrated)
+	require.Equal(t, "ask", cfg.Sandbox.ToolPolicies["ToolSearch"], "migration must carry load_tool's value forward")
+
+	added := ReconcileToolPolicyCeiling(cfg, knownTools)
+
+	assert.Empty(t, added, "ToolSearch already has an entry after migration — reconciliation must add nothing")
+	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["ToolSearch"],
+		"reconciliation must not override the migrated value with the shipped default")
+	assert.Len(t, cfg.Sandbox.ToolPolicies, 1, "exactly one entry — no duplicate, no stale load_tool")
+}
+
+// TestReconcileToolPolicyCeiling_NilOrEmptyInputs_NoOp mirrors the
+// nil/empty-guard shape shared by MigrateLegacyToolPolicyKeys and
+// RepairIncompleteToolPolicyCoverage.
+func TestReconcileToolPolicyCeiling_NilOrEmptyInputs_NoOp(t *testing.T) {
+	assert.Empty(t, ReconcileToolPolicyCeiling(nil, reconcileTestKnownTools()))
+
+	cfg := &Config{Sandbox: OmnipusSandboxConfig{ToolPolicies: map[string]string{"read_file": "allow"}}}
+	assert.Empty(t, ReconcileToolPolicyCeiling(cfg, nil))
+	assert.Empty(t, ReconcileToolPolicyCeiling(cfg, map[string]struct{}{}))
+	assert.Equal(t, map[string]string{"read_file": "allow"}, cfg.Sandbox.ToolPolicies,
+		"a nil/empty knownTools must leave the ceiling completely untouched")
+}

@@ -1295,8 +1295,9 @@ var (
 	knownBuiltinToolNamesCache map[string]struct{}
 )
 
-// repairAndValidateToolPolicyCoverage runs the shared "backfill pre-existing
-// gaps, then hard-validate what remains" sequence used identically at boot
+// repairAndValidateToolPolicyCoverage runs the shared "migrate legacy keys,
+// reconcile the global ceiling, backfill pre-existing per-agent gaps, then
+// hard-validate what remains" sequence used identically at boot
 // (RunContextWithOptions) and at hot-reload (executeReload) — CLAUDE.md hard
 // constraint 6. Both call sites previously hand-rolled this same
 // knownTools-assembly + repair + summary-log sequence independently; sharing
@@ -1305,12 +1306,26 @@ var (
 // config.RepairIncompleteToolPolicyCoverage now delegating to
 // config.ValidateToolPolicyCoverage instead of re-deriving its predicate.
 //
-// Repairing first means installations whose on-disk config predates the
-// DefaultPolicy/default_policy fallback removal (sparse per-agent Policies
-// maps) get backfilled to explicit "deny" instead of tripping validation on
-// every restart/reload. Logs one WARN naming every backfilled (agent, tool)
-// pair (config.RepairIncompleteToolPolicyCoverage itself also logs one WARN
-// per repaired agent; this one is the gateway-level summary).
+// Order matters and must not be reshuffled (each step's own doc comment
+// explains why it must run where it does):
+//  1. config.MigrateLegacyToolPolicyKeys — rename retired keys forward first,
+//     so step 2 never reconciles a "missing" entry for a name that was only
+//     missing because it hadn't been renamed yet.
+//  2. config.ReconcileToolPolicyCeiling (ADR-076) — backfill the GLOBAL
+//     ceiling with the real shipped default for any static builtin tool
+//     added to pkg/config/defaults.go since this install's config.json was
+//     last written, so newly-added tools resolve to their intended
+//     allow/ask/deny posture instead of the fail-closed per-agent "deny"
+//     step 3 would otherwise apply.
+//  3. config.RepairIncompleteToolPolicyCoverage — installations whose
+//     on-disk config predates the DefaultPolicy/default_policy fallback
+//     removal (sparse per-agent Policies maps) get backfilled to explicit
+//     "deny" instead of tripping validation on every restart/reload. Logs
+//     one WARN naming every backfilled (agent, tool) pair
+//     (config.RepairIncompleteToolPolicyCoverage itself also logs one WARN
+//     per repaired agent; this one is the gateway-level summary).
+//  4. config.ValidateToolPolicyCoverage — the hard backstop for anything
+//     steps 1-3 could not close.
 //
 // Returns the remaining gaps (empty = fully covered) — the caller decides
 // what "remaining gaps" means for it (abort boot vs. reject the reload and
@@ -1332,6 +1347,20 @@ func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGa
 		)
 	}
 	knownTools := buildKnownBuiltinToolNames()
+
+	// ADR-076: reconcile the GLOBAL ceiling against the shipped static-catalog
+	// defaults BEFORE RepairIncompleteToolPolicyCoverage runs below. Must run
+	// after the legacy-key migration (a renamed key must not be re-added under
+	// its old name) and before the deny-backfill repair (a global-ceiling gap
+	// closed here with the real shipped default value means the deny-backfill
+	// repair has nothing left to do for that tool, on either side).
+	if added := config.ReconcileToolPolicyCeiling(cfg, knownTools); len(added) > 0 {
+		slog.Info("gateway: reconciled global tool-policy ceiling with shipped static-catalog defaults",
+			"added_count", len(added),
+			"added", strings.Join(added, ", "),
+		)
+	}
+
 	if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
 		agentIDs := make(map[string]struct{}, len(repaired))
 		for _, gap := range repaired {
