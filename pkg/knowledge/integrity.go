@@ -283,8 +283,32 @@ func (s *findingSink) add(cat IntegrityCategory, path, detail string) {
 		return
 	}
 	c.Total++
+	f := IntegrityFinding{Category: cat, Path: path, Detail: detail}
 	if len(c.Findings) < s.limit {
-		c.Findings = append(c.Findings, IntegrityFinding{Category: cat, Path: path, Detail: detail})
+		c.Findings = append(c.Findings, f)
+		return
+	}
+	// At capacity (D3-01): retain the s.limit findings with the SMALLEST
+	// (Path, Detail) keys, not the first s.limit the store happened to emit.
+	// The store's row order is not stable across re-runs (no ORDER BY on the
+	// candidate streams), so keeping insertion order would make WHICH findings
+	// survive non-deterministic — the stateless cursor would then page a
+	// different subset on a later request even though sortFindings normalizes
+	// their order. Bounding to the smallest-N by key keeps memory at s.limit
+	// AND makes the enumerable subset itself deterministic. The scan for the
+	// current maximum is O(s.limit) and only runs once a single category
+	// exceeds the cap (5000 in production), which no real vault reaches.
+	if s.limit == 0 {
+		return
+	}
+	maxi := 0
+	for i := 1; i < len(c.Findings); i++ {
+		if findingLess(c.Findings[maxi], c.Findings[i]) {
+			maxi = i
+		}
+	}
+	if findingLess(f, c.Findings[maxi]) {
+		c.Findings[maxi] = f
 	}
 }
 
@@ -323,12 +347,20 @@ func (s *findingSink) results() []*CategoryResult {
 // re-run regardless of the order the store yielded rows in. (Path, Detail) is a
 // total order: Detail already carries every distinguishing fact of a finding, so
 // two findings that share a path still order deterministically.
+// findingLess is the single (Path, Detail) total order used BOTH to sort a
+// category's retained findings and to decide which findings survive the
+// retention cap (D3-01) — the two must agree or the enumerable subset and its
+// ordering could disagree.
+func findingLess(a, b IntegrityFinding) bool {
+	if a.Path != b.Path {
+		return a.Path < b.Path
+	}
+	return a.Detail < b.Detail
+}
+
 func sortFindings(findings []IntegrityFinding) {
 	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Path != findings[j].Path {
-			return findings[i].Path < findings[j].Path
-		}
-		return findings[i].Detail < findings[j].Detail
+		return findingLess(findings[i], findings[j])
 	})
 }
 
