@@ -417,7 +417,7 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 			Text       string                 `json:"text"`
 		}{
 			Kind:     gen.PlanDodKind(c.Kind),
-			Judgment: gen.PlanDodJudgment(c.Judgment),
+			Judgment: gen.PlanDodJudgment(wireCriterionJudgment(c)),
 			Status:   gen.PlanDodStatus(c.Status),
 			Text:     c.Text,
 		}

@@ -521,6 +521,22 @@ func buildTrigger(
 
 // toWireCriteria converts internal acceptance criteria to the gen.Task.Criteria
 // inline wire shape (read path — GET/POST/PATCH responses).
+// wireCriterionJudgment returns a criterion's judgment for the wire, backfilling
+// it via task.InferJudgment when empty. Persisted criteria authored before the
+// ADR-080 judgment field carry no judgment; the response schema requires one
+// (enum {boolean,quantitative,artifact}), so emitting "" makes the SPA's zod
+// validation reject the whole payload. Mirrors goal_status_criteria.go's
+// defensive backfill so a legacy task/plan is never returned schema-invalid.
+func wireCriterionJudgment(c task.AcceptanceCriterion) task.JudgmentKind {
+	if c.Judgment != "" {
+		return c.Judgment
+	}
+	if j, err := task.InferJudgment(&c); err == nil && j != "" {
+		return j
+	}
+	return task.JudgmentBoolean
+}
+
 func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 	Author struct {
 		Id   string                     `json:"id"`
@@ -589,7 +605,7 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 			Text       string                      `json:"text"`
 		}{
 			Kind:     gen.TaskCriteriaKind(c.Kind),
-			Judgment: gen.TaskCriteriaJudgment(c.Judgment),
+			Judgment: gen.TaskCriteriaJudgment(wireCriterionJudgment(c)),
 			Status:   gen.TaskCriteriaStatus(c.Status),
 			Text:     c.Text,
 		}
