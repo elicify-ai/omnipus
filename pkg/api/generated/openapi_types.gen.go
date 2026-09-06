@@ -16189,6 +16189,93 @@ type VaultRecord struct {
 	VersionToken *string `json:"version_token,omitempty"`
 }
 
+// VaultSearchNoteHit One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine; the snippet is a render-time excerpt of the note as it is on disk.
+type VaultSearchNoteHit struct {
+	// Path Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
+	Path string `json:"path"`
+
+	// Score Relevance score. Comparable only within one response.
+	Score float64 `json:"score"`
+
+	// Snippet A short excerpt of the note body around the first matched term, read from the file at query time. ABSENT when no term could be located in the current file (the match may have moved, or the file could not be read) — the hit is still returned with path and title rather than fabricating an excerpt or dropping the result.
+	Snippet *string `json:"snippet,omitempty"`
+
+	// Title Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty.
+	Title string `json:"title"`
+}
+
+// VaultSearchRecordHit One record matched by the query (library-b-c-design-2026-09-07 §C1). A record is a note that declares a record type; its typed property values are carried as cells so the caller can see WHICH values matched without a second read.
+type VaultSearchRecordHit struct {
+	// Cells The record's rendered typed property values, in the engine's column order. Always present — an empty array, never null.
+	Cells []VaultFindCell `json:"cells"`
+
+	// Id The record identifier, byte-exact and never case-folded. Absent on a record note that declares no id.
+	Id *string `json:"id,omitempty"`
+
+	// Path Collection-relative path of the matched record note.
+	Path string `json:"path"`
+
+	// RecordType The declared record type, when the row resolved one.
+	RecordType *string `json:"record_type,omitempty"`
+
+	// Score Relevance score. Comparable only within one response.
+	Score float64 `json:"score"`
+
+	// Title The record note's display title.
+	Title string `json:"title"`
+}
+
+// VaultSearchRequest Request body for POST /api/v1/library/{workspace_id}/knowledge/find — the HUMAN vault search (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text, records matched by their typed property values, and saved views matched by name or label.
+// It runs over the SAME engine the agent's knowledge_find tool uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour rather than standing up a second search path.
+// Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace, and a collection outside that scope yields an EMPTY result set rather than a permission error — so a caller can never use the error channel to probe for collections it may not see.
+type VaultSearchRequest struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections.
+	CollectionId string `json:"collection_id"`
+
+	// Limit Maximum hits to return PER KIND (notes, records and views are counted separately). A value above the server cap is CLAMPED, not rejected.
+	Limit *int `json:"limit,omitempty"`
+
+	// Query Free-text query, matched against note bodies, record properties and view names.
+	Query string `json:"query"`
+}
+
+// VaultSearchResponse The human vault search result (library-b-c-design-2026-09-07 §C1): three grouped hit lists for one query, plus an honest completeness verdict.
+// An empty result is EMPTY, not an error — every hit array is always present and may be empty. When the index is not ready (never built, or still catching up with the files on disk), `complete` is false and `complete_reason` carries the engine's freshness signal, so the caller can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns this same empty-but-complete shape.
+type VaultSearchResponse struct {
+	// CollectionId The collection this result covers, echoed from the request.
+	CollectionId string `json:"collection_id"`
+
+	// Complete True only when the search covered the whole vault: the index was built, current, and no kind's result was clamped or refused. False whenever the index is not ready — see complete_reason.
+	Complete bool `json:"complete"`
+
+	// CompleteReason Why the verdict is false, ready to render (e.g. "the text index has never finished indexing this vault — it currently reflects 3 of 68 files…"). Absent when complete is true.
+	CompleteReason *string `json:"complete_reason,omitempty"`
+
+	// Notes Notes matched by body text. Always present — an empty array, never null.
+	Notes []VaultSearchNoteHit `json:"notes"`
+
+	// Records Records matched by their typed property values. Always present — an empty array, never null.
+	Records []VaultSearchRecordHit `json:"records"`
+
+	// Views Saved views whose name or label matched. Always present — an empty array, never null.
+	Views []VaultSearchViewHit `json:"views"`
+}
+
+// VaultSearchViewHit One saved view (or imported base view) whose name or label matched the query (library-b-c-design-2026-09-07 §C1). Opening it evaluates the view — the same result the GET .../knowledge/view endpoint returns.
+type VaultSearchViewHit struct {
+	// Kind The view's declared kind, when it has one (table, board, gallery, …).
+	Kind *string `json:"kind,omitempty"`
+
+	// Label The view's display label — its declared label, falling back to its name.
+	Label string `json:"label"`
+
+	// Type The record type the view is scoped to, when it declares one.
+	Type *string `json:"type,omitempty"`
+
+	// View The view's identifier, passed VERBATIM to GET .../knowledge/view.
+	View string `json:"view"`
+}
+
 // VaultTermCount One term the text index actually holds, with its document frequency (spec FR-114, FR-115).
 // It is what a zero-hit answer reports INSTEAD of broadening the query. The system states the vocabulary it has and stops: a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
 type VaultTermCount struct {
@@ -17209,6 +17296,9 @@ type MintLibraryPreviewTokenJSONRequestBody = LibraryPreviewTokenRequest
 
 // PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
 type PutLibraryContentJSONRequestBody = LibraryContentRequest
+
+// FindVaultJSONRequestBody defines body for FindVault for application/json ContentType.
+type FindVaultJSONRequestBody = VaultSearchRequest
 
 // SearchKnowledgeBaseJSONRequestBody defines body for SearchKnowledgeBase for application/json ContentType.
 type SearchKnowledgeBaseJSONRequestBody = KnowledgeSearchRequest

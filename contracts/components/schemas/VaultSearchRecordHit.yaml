@@ -1,0 +1,45 @@
+title: VaultSearchRecordHit
+description: >
+  One record matched by the query (library-b-c-design-2026-09-07 §C1). A record
+  is a note that declares a record type; its typed property values are carried
+  as cells so the caller can see WHICH values matched without a second read.
+type: object
+additionalProperties: false
+required:
+  - path
+  - title
+  - cells
+  - score
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: Collection-relative path of the matched record note.
+    example: "crm/acme.md"
+  title:
+    type: string
+    description: The record note's display title.
+    example: "Acme Corp"
+  id:
+    type: string
+    description: >
+      The record identifier, byte-exact and never case-folded. Absent on a
+      record note that declares no id.
+    example: "CO-0142"
+  record_type:
+    type: string
+    description: The declared record type, when the row resolved one.
+    example: "company"
+  cells:
+    type: array
+    description: >
+      The record's rendered typed property values, in the engine's column
+      order. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultFindCell.yaml"
+      x-go-type: VaultFindCell
+  score:
+    type: number
+    format: double
+    description: Relevance score. Comparable only within one response.
+    example: 4.10

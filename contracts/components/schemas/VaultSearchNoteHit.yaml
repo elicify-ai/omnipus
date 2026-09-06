@@ -1,0 +1,37 @@
+title: VaultSearchNoteHit
+description: >
+  One note matched by body text (library-b-c-design-2026-09-07 §C1). The match
+  decision and ranking come from the knowledge_find engine; the snippet is a
+  render-time excerpt of the note as it is on disk.
+type: object
+additionalProperties: false
+required:
+  - path
+  - title
+  - score
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
+    example: "architecture/sandboxing.md"
+  title:
+    type: string
+    description: >
+      Display title — the note's frontmatter title or first heading, falling
+      back to the basename. May be empty.
+    example: "Sandboxing"
+  snippet:
+    type: string
+    description: >
+      A short excerpt of the note body around the first matched term, read from
+      the file at query time. ABSENT when no term could be located in the
+      current file (the match may have moved, or the file could not be read) —
+      the hit is still returned with path and title rather than fabricating an
+      excerpt or dropping the result.
+    example: "…Landlock is per-thread and inherited, so the gateway and its children…"
+  score:
+    type: number
+    format: double
+    description: Relevance score. Comparable only within one response.
+    example: 7.42

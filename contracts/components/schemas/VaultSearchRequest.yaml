@@ -1,0 +1,46 @@
+title: VaultSearchRequest
+description: >
+  Request body for POST /api/v1/library/{workspace_id}/knowledge/find — the
+  HUMAN vault search (library-b-c-design-2026-09-07 §C1). One free-text query
+  is answered across three kinds at once: notes matched by body text, records
+  matched by their typed property values, and saved views matched by name or
+  label.
+
+  It runs over the SAME engine the agent's knowledge_find tool uses
+  (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits
+  that engine's prefix-matching, coverage and freshness behaviour rather than
+  standing up a second search path.
+
+  Scope is not negotiable by the caller beyond naming a collection: the gateway
+  restricts every search to knowledge bases mounted into the calling agent's
+  workspace, and a collection outside that scope yields an EMPTY result set
+  rather than a permission error — so a caller can never use the error channel
+  to probe for collections it may not see.
+type: object
+additionalProperties: false
+required:
+  - query
+  - collection_id
+properties:
+  query:
+    type: string
+    minLength: 1
+    maxLength: 1024
+    description: Free-text query, matched against note bodies, record properties and view names.
+    example: "landlock seccomp fallback"
+  collection_id:
+    type: string
+    minLength: 1
+    description: >
+      The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge
+      base is exactly one mounted folder and no query resolves across two
+      collections.
+    example: "kb_3d1c9a7e5b2f4806"
+  limit:
+    type: integer
+    minimum: 1
+    default: 20
+    description: >
+      Maximum hits to return PER KIND (notes, records and views are counted
+      separately). A value above the server cap is CLAMPED, not rejected.
+    example: 20

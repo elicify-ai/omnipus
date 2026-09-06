@@ -1138,6 +1138,16 @@ components:
       $ref: ./components/schemas/VaultIndexState.yaml
     VaultTermCount:
       $ref: ./components/schemas/VaultTermCount.yaml
+    VaultSearchRequest:
+      $ref: ./components/schemas/VaultSearchRequest.yaml
+    VaultSearchResponse:
+      $ref: ./components/schemas/VaultSearchResponse.yaml
+    VaultSearchNoteHit:
+      $ref: ./components/schemas/VaultSearchNoteHit.yaml
+    VaultSearchRecordHit:
+      $ref: ./components/schemas/VaultSearchRecordHit.yaml
+    VaultSearchViewHit:
+      $ref: ./components/schemas/VaultSearchViewHit.yaml
     ValidationReport:
       $ref: ./components/schemas/ValidationReport.yaml
     Agent:
@@ -7972,6 +7982,70 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/KnowledgeSearchResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/find:
+    post:
+      operationId: findVault
+      summary: Human vault search — notes, records and views in one query
+      description: >
+        The human-facing counterpart to the agent's knowledge_find tool
+        (library-b-c-design-2026-09-07 §C1). One free-text query is answered
+        across three kinds at once: notes matched by body text (with a snippet),
+        records matched by their typed property values, and saved views matched
+        by name or label.
+
+
+        It runs over the SAME engine the agent uses
+        (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it
+        inherits that engine's prefix-matching, coverage and freshness
+        behaviour — there is no second search engine.
+
+
+        Honest states: an empty result is EMPTY, not an error. When the index
+        is not ready (never built, or still catching up with disk), the response
+        is complete=false with a complete_reason carrying the freshness signal,
+        so the UI can say "still indexing" rather than "no results". A
+        collection outside the caller's workspace scope returns the same
+        empty-but-complete shape rather than a permission error, so the error
+        channel cannot be used to probe for collections the caller may not see.
+        POST rather than GET because a free-text query does not belong in a URL
+        that lands in request logs.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VaultSearchRequest'
+      responses:
+        '200':
+          description: The three grouped hit lists and the completeness verdict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultSearchResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
