@@ -40,6 +40,7 @@ import (
 //
 //	GET  /api/v1/library/{workspace_id}/knowledge          detection + identity
 //	POST /api/v1/library/{workspace_id}/knowledge/search    relevance search
+//	POST /api/v1/library/{workspace_id}/knowledge/find      human vault search (notes+records+views, rest_knowledge_find.go)
 //	GET  /api/v1/library/{workspace_id}/knowledge/graph     links/backlinks/…
 //	GET  /api/v1/library/{workspace_id}/knowledge/outline   heading outline
 //	GET  /api/v1/library/{workspace_id}/knowledge/view      saved-view result (rest_knowledge_view.go)
@@ -153,6 +154,12 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 			return
 		}
 		a.handleKnowledgeSearch(w, r, workspaceID)
+	case "find":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeVaultSearch(w, r, workspaceID)
 	case "graph":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
