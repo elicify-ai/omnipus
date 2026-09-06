@@ -151,7 +151,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 				)
 			}
 		}
-		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, args, sessionID, "", "")
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, args, sessionID, "", "", opts.WorkspaceID)
 		return true, true, al.applyGoalCompileOutcome(sessionID, store, args, outcome)
 	}
 
@@ -395,7 +395,7 @@ func (al *AgentLoop) applyGoalPendingReply(
 			fc = agentFeasibilityContext{agentInst: agentInst}
 		}
 		answer := strings.TrimSpace(msg.Content)
-		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer)
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer, opts.WorkspaceID)
 		return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome)
 	}
 

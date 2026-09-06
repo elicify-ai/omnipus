@@ -311,18 +311,23 @@ func (al *AgentLoop) resolveVerifierWindowText(in JudgeCriteriaInput) string {
 	}
 }
 
-// sessionWindowText is the shared read+render tail for both the task-scope
-// and goal-scope FR-032 window feeds (Simplifier Q2: the two scopes'
-// wrappers below differ only in HOW they resolve sessionID — task scope
-// resolves it via the task store first, goal scope already has it in
-// GoalSessionID — the read+trim+render body is identical, so it lives here
-// once). extraLogFields are merged into the Warn log's structured fields on
-// a ReadTranscript failure (session_id and error are always included) — the
-// task-scope wrapper passes its task_id for correlation; the goal-scope
-// wrapper passes nil. Returns "" (never an error) on a read failure — window
-// evidence is a best-effort enrichment, never a hard requirement for
-// adjudication to proceed.
-func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID string, extraLogFields map[string]any) string {
+// sessionWindowText is the shared read+render tail for the task-scope,
+// goal-scope FR-032 window feeds AND the ADR-079 D1 /goal-compile window
+// feed (Simplifier Q2: the callers below differ only in HOW they resolve
+// sessionID and WHICH token budget applies — the read+trim+render body is
+// identical, so it lives here once). budgetTokens is the caller's own
+// resolved bound (the Judge passes effectiveVerifierWindowTokens(); the
+// compile feed, goalCompileWindowText in goal_compile_llm.go, passes
+// effectiveGoalCompileWindowTokens() — a mechanical parameterization, ADR-079
+// D1, that changes no existing caller's behavior since every pre-existing
+// call site still passes its own effectiveVerifierWindowTokens()).
+// extraLogFields are merged into the Warn log's structured fields on a
+// ReadTranscript failure (session_id and error are always included) — the
+// task-scope wrapper passes its task_id for correlation; the goal-scope and
+// compile wrappers pass nil. Returns "" (never an error) on a read failure —
+// window evidence is a best-effort enrichment, never a hard requirement for
+// adjudication (or compilation) to proceed.
+func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID string, budgetTokens int, extraLogFields map[string]any) string {
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
 		fields := map[string]any{"session_id": sessionID, "error": err.Error()}
@@ -332,7 +337,7 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	return renderVerifierWindowText(entries, al.effectiveVerifierWindowTokens())
+	return renderVerifierWindowText(entries, budgetTokens)
 }
 
 // goalSessionWindowText renders the transcript window for a chat /goal
@@ -357,7 +362,7 @@ func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string
 		return ""
 	}
 	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, goalSessionID, nil); text != "" {
+		if text := al.sessionWindowText(shared, goalSessionID, al.effectiveVerifierWindowTokens(), nil); text != "" {
 			return text
 		}
 		logger.WarnCF("agent", "verifier: goal window empty from the SHARED store — falling back to the legacy per-agent store",
@@ -370,7 +375,7 @@ func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string
 	if store == nil {
 		return ""
 	}
-	return al.sessionWindowText(store, goalSessionID, nil)
+	return al.sessionWindowText(store, goalSessionID, al.effectiveVerifierWindowTokens(), nil)
 }
 
 // taskSessionWindowText resolves and renders a task's own working-session
@@ -405,7 +410,7 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	// same 2026-09-06 UAT defect class; task sessions are written to the
 	// shared store too), legacy per-agent store as the old-install fallback.
 	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, t.SessionID, map[string]any{"task_id": taskID}); text != "" {
+		if text := al.sessionWindowText(shared, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID}); text != "" {
 			return text
 		}
 	}
@@ -415,7 +420,7 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 			map[string]any{"task_id": taskID, "agent_id": assigneeAgentID})
 		return ""
 	}
-	return al.sessionWindowText(store, t.SessionID, map[string]any{"task_id": taskID})
+	return al.sessionWindowText(store, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID})
 }
 
 // renderTranscriptEntriesForWindow converts raw session.TranscriptEntry

@@ -423,6 +423,16 @@ func validateBootConfig(cfg *Config) error {
 			cfg.Planning.VerifierWindowTokens,
 		)
 	}
+	// ADR-079 D1: /goal compile session-transcript-window token bound.
+	if cfg.Planning.GoalCompileWindowTokens == 0 {
+		cfg.Planning.GoalCompileWindowTokens = DefaultGoalCompileWindowTokens
+	}
+	if cfg.Planning.GoalCompileWindowTokens < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.GoalCompileWindowTokens=%d must be at least 1",
+			cfg.Planning.GoalCompileWindowTokens,
+		)
+	}
 
 	// --- ADR-053 §8: session_messaging (FR-195's 21 keys) ---
 	// The kill-switch trio defaults to ENABLED (the plane is live on a fresh
