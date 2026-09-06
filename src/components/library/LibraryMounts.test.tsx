@@ -8,9 +8,17 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { mountNameFromPath } from './libraryMountName'
 import type { LibraryEntry } from '@/lib/api'
+
+// LibraryEntryRow reads the knowledge-base-info query cache (C3, a passive
+// read for Vault-icon detection — see LibraryEntryRow.tsx), so it now needs a
+// QueryClientProvider ancestor even where no query actually runs.
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+}
 
 function entry(over: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
@@ -55,7 +63,11 @@ function renderRow(e: LibraryEntry, over: Partial<Record<string, unknown>> = {})
     onUnmount: vi.fn(),
     ...over,
   }
-  render(<LibraryEntryRow {...props} />)
+  render(
+    <QueryClientProvider client={makeClient()}>
+      <LibraryEntryRow {...props} />
+    </QueryClientProvider>,
+  )
   return props
 }
 

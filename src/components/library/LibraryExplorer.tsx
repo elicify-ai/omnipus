@@ -88,6 +88,7 @@ import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
+import { WorkspaceIcon } from './icons'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
@@ -897,7 +898,13 @@ export function LibraryExplorer({
                   data-testid={`library-workspace-node-${node.id}`}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 hover:bg-[var(--color-surface-2)] text-left transition-colors"
                 >
-                  <Tray size={18} weight="fill" className="text-[var(--color-accent)] shrink-0" />
+                  {/* C3 (library-b-c-design §"Icon system — LOCKED"): the
+                      virtual-root's workspace nodes get the locked
+                      WorkspaceIcon (gold tile + 2×2 knockout), not the
+                      generic Phosphor Tray glyph — a workspace is a distinct
+                      container kind from vault/folder/mount, not a stand-in
+                      for "storage" in general. */}
+                  <WorkspaceIcon size={18} className="text-[var(--color-accent)] shrink-0" />
                   <span className="flex-1 truncate text-sm text-[var(--color-secondary)]">{node.name}</span>
                   <span className="text-xs text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}
