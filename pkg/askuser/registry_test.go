@@ -771,8 +771,8 @@ func TestParseResumeMessage_DecodesPayloadAndRejects(t *testing.T) {
 
 	// Not a resume message at all: ok=false, no error (mirrors ParseResumeCardID).
 	for _, content := range []string{"", "hello there", "Answers to your questions (card_id="} {
-		if _, gotOK, perr := ParseResumeMessage(content); gotOK || perr != nil {
-			t.Fatalf("ParseResumeMessage(%q) = ok=%v err=%v, want ok=false err=nil", content, gotOK, perr)
+		if _, gotOK, gotErr := ParseResumeMessage(content); gotOK || gotErr != nil {
+			t.Fatalf("ParseResumeMessage(%q) = ok=%v err=%v, want ok=false err=nil", content, gotOK, gotErr)
 		}
 	}
 
