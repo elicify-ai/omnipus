@@ -881,15 +881,29 @@ func cloneCriterionForInheritance(c task.AcceptanceCriterion) task.AcceptanceCri
 // independently of identical text (e.g. a re-tag from boolean to
 // quantitative on otherwise-unchanged wording is a real change).
 func criterionKey(c *task.AcceptanceCriterion) string {
+	// Resolve an empty judgment to its inferred value so an un-normalized
+	// criterion (e.g. a legacy one carried in from a superseded plan) keys
+	// IDENTICALLY to its already-normalized form — otherwise dedup breaks the
+	// moment one side has been normalized and the other has not (go-test
+	// regression 2026-09-07). Mirrors task.InferJudgment's correlation:
+	// behavior→quantitative, check/prose→boolean.
+	j := string(c.Judgment)
+	if j == "" {
+		if c.Kind == task.KindBehavior {
+			j = string(task.JudgmentQuantitative)
+		} else {
+			j = string(task.JudgmentBoolean)
+		}
+	}
 	switch c.Kind {
 	case task.KindCheck:
 		if c.Check == nil {
-			return "check|" + string(c.Judgment) + "|<missing>"
+			return "check|" + j + "|<missing>"
 		}
-		return "check|" + string(c.Judgment) + "|" + c.Check.Command + "|" + strconv.Itoa(c.Check.ExpectedExitCode)
+		return "check|" + j + "|" + c.Check.Command + "|" + strconv.Itoa(c.Check.ExpectedExitCode)
 	case task.KindBehavior:
 		if c.Behavior == nil {
-			return "behavior|" + string(c.Judgment) + "|<missing>"
+			return "behavior|" + j + "|<missing>"
 		}
 		maxCount := "unbounded"
 		if c.Behavior.MaxCount != nil {
@@ -899,10 +913,10 @@ func criterionKey(c *task.AcceptanceCriterion) string {
 		if scope == "" {
 			scope = "task_session"
 		}
-		return "behavior|" + string(c.Judgment) + "|" + c.Behavior.Tool + "|" +
+		return "behavior|" + j + "|" + c.Behavior.Tool + "|" +
 			strconv.Itoa(c.Behavior.EffectiveMinCount()) + "|" + maxCount + "|" + scope
 	default:
-		return string(c.Kind) + "|" + string(c.Judgment) + "|" + strings.TrimSpace(c.Text)
+		return string(c.Kind) + "|" + j + "|" + strings.TrimSpace(c.Text)
 	}
 }
 

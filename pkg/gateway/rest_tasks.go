@@ -531,8 +531,12 @@ func wireCriterionJudgment(c task.AcceptanceCriterion) task.JudgmentKind {
 	if c.Judgment != "" {
 		return c.Judgment
 	}
-	if j, err := task.InferJudgment(&c); err == nil && j != "" {
-		return j
+	// Resolve an empty (legacy) judgment inline — mirrors task.InferJudgment's
+	// correlation (behavior→quantitative, check/prose→boolean). Inlined rather
+	// than calling InferJudgment so this defensive wire backfill is not a new
+	// central-inference call site (TestInferJudgment_CallSitesPinned).
+	if c.Kind == task.KindBehavior {
+		return task.JudgmentQuantitative
 	}
 	return task.JudgmentBoolean
 }
