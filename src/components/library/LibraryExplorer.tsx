@@ -40,13 +40,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Files,
   CaretRight,
-  UploadSimple,
-  FolderPlus,
-  FolderSimpleDashed,
   X,
   ArrowSquareOut,
   Tray,
-  SpinnerGap,
   FolderOpen,
 } from '@phosphor-icons/react'
 import { Switch } from '@/components/ui/switch'
@@ -82,6 +78,7 @@ import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
 import { LibraryAddMountDialog } from './LibraryAddMountDialog'
+import { LibraryCreateMenu } from './LibraryCreateMenu'
 import { LibraryMountsDialog } from './LibraryMountsDialog'
 import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
@@ -696,81 +693,54 @@ export function LibraryExplorer({
               Show hidden
             </label>
           )}
-          {workspaceId !== null && (
-            <>
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={openNewFolderDialog}
-                disabled={isReservedLibraryDir}
-                aria-label="New folder"
-                title={
-                  isReservedLibraryDir
-                    ? "Can't create folders inside the reserved .library folder"
-                    : 'New folder'
-                }
-                data-testid="library-new-folder-button"
-                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
-              >
-                <FolderPlus size={16} />
-              </button>
-              {workspaceMounts.length > 0 && (
-                <button
-                  type="button"
-                  tabIndex={0}
-                  onClick={() => setMountsOpen(true)}
-                  title="Review and revoke mounted folders"
-                  aria-label={`Manage ${workspaceMounts.length} mounted folders`}
-                  data-testid="library-mounts-count"
-                  className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-info)] transition-colors"
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      workspaceMounts.some((e) => e.mount?.broad)
-                        ? 'bg-[var(--color-warning)]'
-                        : 'bg-[var(--color-info)]'
-                    }`}
-                  />
-                  {workspaceMounts.length} mounted
-                </button>
-              )}
-              {/* Adding a mount sits AMONG New folder and Upload, not above
-                  them: it is the rarer action, and nothing in this toolbar is
-                  filled or accented. */}
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={() => setAddMountOpen(true)}
-                aria-label="Add a folder from your Mac"
-                title="Add a folder from your Mac"
-                data-testid="library-add-mount-button"
-                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-info)] transition-colors"
-              >
-                <FolderSimpleDashed size={16} />
-              </button>
-              <input
-                tabIndex={0}
-                ref={fileInputRef}
-                type="file"
-                multiple
-                onChange={handleFileInputChange}
-                data-testid="library-upload-input"
-                className="hidden"
+          {/* Status indicator only — the ACTION that used to live on this
+              pill ("Manage mounted folders") moved into the unified "+"
+              create menu below, alongside New folder / Upload / Add mount /
+              New vault / New workspace (feature C2). This stays a passive
+              at-a-glance readout (count + broad-grant color) rather than a
+              second path to the same dialog the menu already opens. */}
+          {workspaceId !== null && workspaceMounts.length > 0 && (
+            <span
+              title="Folders on your Mac mounted into this workspace"
+              data-testid="library-mounts-count"
+              className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)]"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  workspaceMounts.some((e) => e.mount?.broad)
+                    ? 'bg-[var(--color-warning)]'
+                    : 'bg-[var(--color-info)]'
+                }`}
               />
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadMutation.isPending || isReservedLibraryDir}
-                aria-label="Upload files"
-                title={isReservedLibraryDir ? "Can't upload into the reserved .library folder" : 'Upload files'}
-                data-testid="library-upload-button"
-                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
-              >
-                {uploadMutation.isPending ? <SpinnerGap size={16} className="animate-spin" /> : <UploadSimple size={16} />}
-              </button>
-            </>
+              {workspaceMounts.length} mounted
+            </span>
           )}
+          {workspaceId !== null && (
+            <input
+              tabIndex={0}
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={handleFileInputChange}
+              data-testid="library-upload-input"
+              className="hidden"
+            />
+          )}
+          <LibraryCreateMenu
+            workspaceId={workspaceId}
+            workspaces={sortedWorkspaces}
+            isReservedLibraryDir={isReservedLibraryDir}
+            mountedCount={workspaceMounts.length}
+            uploadPending={uploadMutation.isPending}
+            onNewFolder={openNewFolderDialog}
+            onAddMount={() => setAddMountOpen(true)}
+            onManageMounts={() => setMountsOpen(true)}
+            onUpload={() => fileInputRef.current?.click()}
+            onVaultCreated={(wsId, entry) => {
+              setBrowsedDir(entry.path)
+              goTo(wsId, null)
+            }}
+          />
           {onPopOut && (
             <button
               type="button"
