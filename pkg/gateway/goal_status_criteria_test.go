@@ -118,3 +118,66 @@ func TestSetGoalStatusCriteria_ProseItemMarshalsWithoutPayloadKeys(t *testing.T)
 	assert.False(t, strings.Contains(s, `"check"`), "prose item leaked a zero-valued check object: %s", s)
 	assert.False(t, strings.Contains(s, `"behavior"`), "prose item leaked a zero-valued behavior object: %s", s)
 }
+
+// TestSetGoalStatusDoD_MapsProvenanceAndFieldsDistinctFromCriteria is
+// ADR-080 D-DOD's wire-mapping half: setGoalStatusDoD fills f.Dod
+// (DISTINCT from f.Criteria — both can be populated on the same frame),
+// mapping Provenance onto its own optional wire field the same way
+// setGoalStatusCriteria maps it, so the confirm card can flag
+// `provenance == inferred` items.
+func TestSetGoalStatusDoD_MapsProvenanceAndFieldsDistinctFromCriteria(t *testing.T) {
+	f := baseGoalFrame()
+	setGoalStatusCriteria(&f, []task.AcceptanceCriterion{{
+		ID: "c1", Kind: task.KindProse, Text: "the post is written",
+		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "mia"},
+		Status: task.CritPending,
+	}})
+	setGoalStatusDoD(&f, []task.AcceptanceCriterion{
+		{
+			ID: "d1", Kind: task.KindProse, Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
+			Text:   "no secrets or credentials appear in the output",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorIDForTest},
+			Status: task.CritPending,
+		},
+		{
+			ID: "d2", Kind: task.KindProse, Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceInferred,
+			Text:   "the response cites its sources",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorIDForTest},
+			Status: task.CritPending,
+		},
+	})
+
+	require.Len(t, f.Criteria, 1, "setGoalStatusDoD must not touch f.Criteria")
+	require.Len(t, f.Dod, 2)
+
+	assert.Equal(t, "floor", *f.Dod[0].Provenance)
+	require.NotNil(t, f.Dod[1].Provenance)
+	assert.Equal(t, "inferred", *f.Dod[1].Provenance)
+	assert.Equal(t, "the response cites its sources", f.Dod[1].Text)
+	assert.Equal(t, "boolean", f.Dod[1].Judgment)
+
+	// Both fields marshal independently on the wire.
+	data, err := json.Marshal(f)
+	require.NoError(t, err)
+	s := string(data)
+	assert.True(t, strings.Contains(s, `"criteria"`))
+	assert.True(t, strings.Contains(s, `"dod"`))
+}
+
+// TestSetGoalStatusDoD_EmptyInputLeavesFieldAbsent mirrors
+// TestSetGoalStatusCriteria_EmptyInputLeavesFieldAbsent for the dod field.
+func TestSetGoalStatusDoD_EmptyInputLeavesFieldAbsent(t *testing.T) {
+	f := baseGoalFrame()
+	setGoalStatusDoD(&f, nil)
+	assert.Nil(t, f.Dod)
+
+	data, err := json.Marshal(f)
+	require.NoError(t, err)
+	assert.False(t, strings.Contains(string(data), `"dod"`),
+		"empty DoD breakdown must stay absent from the wire (omitempty)")
+}
+
+// goalDoDFloorAuthorIDForTest avoids importing pkg/agent's unexported
+// goalDoDFloorAuthorID constant from this package — any valid author id
+// works for these wire-mapping assertions, which do not test authorship.
+const goalDoDFloorAuthorIDForTest = "system:goal-dod-floor"

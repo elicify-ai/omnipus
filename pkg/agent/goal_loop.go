@@ -321,8 +321,10 @@ func (al *AgentLoop) applyGoalCompileOutcome(
 	// The pending state occupies the `queued` pill (ADR-074 D4a: compiled,
 	// awaiting user confirmation — not yet admitted). No goal-id yet: the
 	// generation is minted at confirm (newGoalID's own contract). The frame
-	// carries the compiled criteria breakdown (D5.2/FR-011) so the SPA's
-	// confirmation card itemizes exactly what will run.
+	// carries the compiled criteria breakdown (D5.2/FR-011) AND, per
+	// ADR-080 D-STATEMENT/D-DOD, the restated Definition and the DoD
+	// breakdown, so the SPA's confirmation card renders exactly what
+	// formatGoalEcho's chat echo shows.
 	condition := compiled.Prompt
 	if condition == "" {
 		condition = compiled.Intent
@@ -331,7 +333,9 @@ func (al *AgentLoop) applyGoalCompileOutcome(
 	if cfg := al.GetConfig(); cfg != nil {
 		maxRounds = cfg.Planning.EffectiveGoalMaxRounds()
 	}
-	al.emitGoalStatusFrameWithCriteria(sessionID, "", condition, 0, maxRounds, "", goalPillQueued, compiled.Criteria)
+	al.emitGoalStatusFrameWithCriteriaAndDoD(
+		sessionID, "", condition, 0, maxRounds, "", goalPillQueued, compiled.Definition, compiled.Criteria, compiled.DoD,
+	)
 
 	echo := formatGoalEcho(compiled)
 	if outcome.UsedFallback {
@@ -764,6 +768,20 @@ func (al *AgentLoop) emitGoalStatusFrame(sessionID, goalID, condition string, ro
 // emission carries the itemized criteria so GoalThreadTailCards' echo card
 // shows exactly what will run; every other emission passes nil.
 func (al *AgentLoop) emitGoalStatusFrameWithCriteria(sessionID, goalID, condition string, round, maxRounds int, reason, state string, criteria []task.AcceptanceCriterion) {
+	al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, goalID, condition, round, maxRounds, reason, state, "", criteria, nil)
+}
+
+// emitGoalStatusFrameWithCriteriaAndDoD is emitGoalStatusFrameWithCriteria
+// plus ADR-080's `definition` (D-STATEMENT) and `dod` (D-DOD) breakdown: the
+// `queued` pending-confirm emission is the ONLY call site that passes a
+// non-empty definition/dod (goal_loop.go's applyGoalCompileOutcome) — every
+// other emission passes "" / nil, exactly like criteria above, so the
+// confirm card renders the same statement + criteria + DoD the chat echo
+// (formatGoalEcho) does.
+func (al *AgentLoop) emitGoalStatusFrameWithCriteriaAndDoD(
+	sessionID, goalID, condition string, round, maxRounds int, reason, state, definition string,
+	criteria, dod []task.AcceptanceCriterion,
+) {
 	active, capN := al.activeLoopsSnapshot("goal")
 	al.EmitGoalStatusChanged(GoalStatusChangedPayload{
 		SessionID:    sessionID,
@@ -775,7 +793,9 @@ func (al *AgentLoop) emitGoalStatusFrameWithCriteria(sessionID, goalID, conditio
 		ActiveLoops:  active,
 		Cap:          capN,
 		State:        state,
+		Definition:   definition,
 		Criteria:     criteria,
+		DoD:          dod,
 	})
 }
 

@@ -92,3 +92,73 @@ func setGoalStatusCriteria(f *generated.GoalStatusFrame, in []task.AcceptanceCri
 		}
 	}
 }
+
+// setGoalStatusDoD fills f.Dod from in — ADR-080 D-DOD's Definition of Done
+// breakdown, DISTINCT from f.Criteria, carried on the SAME `queued`
+// pending-confirm emission so the SPA's confirm card can flag
+// `provenance == inferred` items as "inferred — confirm or drop". The
+// conversion mirrors setGoalStatusCriteria's field-by-field mapping exactly
+// (asyncapi.yaml's inline `dod` items are a hand-synced duplicate of the
+// same AcceptanceCriterion shape as `criteria` — GoalStatusFrame.yaml's own
+// hand-sync obligation) — duplicated rather than shared because `Criteria`
+// and `Dod` are two separately-declared (structurally identical but
+// distinct) anonymous struct-slice fields in the generated code, so there is
+// no single field-pointer this function could target for both.
+func setGoalStatusDoD(f *generated.GoalStatusFrame, in []task.AcceptanceCriterion) {
+	if len(in) == 0 {
+		return
+	}
+	f.Dod = slices.Grow(f.Dod, len(in))[:len(in)]
+	for i := range in {
+		src := &in[i]
+		dst := &f.Dod[i]
+		dst.Kind = string(src.Kind)
+		dst.Judgment = string(src.Judgment)
+		if dst.Judgment == "" {
+			dst.Judgment = string(task.JudgmentBoolean)
+		}
+		if src.Provenance != "" {
+			p := string(src.Provenance)
+			dst.Provenance = &p
+		}
+		dst.Text = src.Text
+		dst.Status = string(src.Status)
+		if dst.Status == "" {
+			dst.Status = string(task.CritPending)
+		}
+		dst.Author.Kind = src.Author.Kind
+		dst.Author.Id = src.Author.ID
+		if src.ID != "" {
+			id := src.ID
+			dst.Id = &id
+		}
+		if src.Check != nil {
+			dst.Check = &struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			}{Command: src.Check.Command, ExpectedExitCode: src.Check.ExpectedExitCode}
+		}
+		if src.Behavior != nil {
+			var minCount, maxCount *int
+			if src.Behavior.MinCount != nil {
+				v := *src.Behavior.MinCount
+				minCount = &v
+			}
+			if src.Behavior.MaxCount != nil {
+				v := *src.Behavior.MaxCount
+				maxCount = &v
+			}
+			var scope *string
+			if src.Behavior.Scope != "" {
+				s := string(src.Behavior.Scope)
+				scope = &s
+			}
+			dst.Behavior = &struct {
+				MaxCount *int    `json:"max_count,omitempty"`
+				MinCount *int    `json:"min_count,omitempty"`
+				Scope    *string `json:"scope,omitempty"`
+				Tool     string  `json:"tool"`
+			}{MaxCount: maxCount, MinCount: minCount, Scope: scope, Tool: src.Behavior.Tool}
+		}
+	}
+}

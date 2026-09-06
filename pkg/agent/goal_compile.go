@@ -502,12 +502,61 @@ var hedgingTokens = map[string]bool{
 
 // --- Echo & confirm + amendment diff (FR-113/D11/N-6) ----------------------
 
+// formatGoalStatementAndCriteria renders the shared CORE of every goal echo
+// surface (ADR-080 D-STATEMENT/D-DOD, §122's "formatGoalEcho on EVERY
+// surface"): the restated goal statement, the criteria ladder, and a
+// DISTINCT "Definition of Done" block with `provenance == inferred` items
+// flagged for approve/drop. formatGoalEcho (the web card AND the channel
+// plain-text echo — one renderer, no separate channel path) and
+// buildGoalPendingNote (goal_pending_note.go, ADR-078 D2) both build their
+// surface-specific framing around this so a channel user who confirms by
+// TYPING sees exactly what the web GoalEchoCard shows — the R-C2 fix: DoD
+// and its inferred gates were previously web-card-only.
+func formatGoalStatementAndCriteria(g *CompiledGoal) string {
+	var sb strings.Builder
+	sb.WriteString("Goal: ")
+	switch {
+	case g.Definition != "":
+		// D-STATEMENT: the compiled SMART restatement leads every surface —
+		// in place of the old Prompt/Intent fallback, which now only applies
+		// to a goal compiled before this field existed (deterministic
+		// fallback path, or a pre-ADR-080 persisted goal).
+		sb.WriteString(g.Definition)
+	case g.Prompt != "":
+		sb.WriteString(g.Prompt)
+	default:
+		sb.WriteString(g.Intent)
+	}
+	sb.WriteString("\n\nDone when (a reviewer will verify each of these):\n")
+	for i, c := range g.Criteria {
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, criterionEchoLine(c))
+	}
+	if len(g.DoD) > 0 {
+		// D-DOD: a DISTINCT block, never merged into the criteria numbering —
+		// they are judged together (the verifier_adjudication.go union seam)
+		// but shown separately so the setter can tell "what I asked for" from
+		// "the standing quality bar every goal carries".
+		sb.WriteString("\nDefinition of Done (standing quality gates, judged alongside the criteria above):\n")
+		for i, c := range g.DoD {
+			line := criterionEchoLine(c)
+			if c.Provenance == task.ProvenanceInferred {
+				line += " (inferred — confirm or drop)"
+			}
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, line)
+		}
+	}
+	return sb.String()
+}
+
 // formatGoalEcho renders the compiled goal for the chat echo (FR-113/D11/G-8,
 // delivered by ADR-074 D4a's pending step — this is the confirmation surface
 // in chat history): the literal commands are included verbatim (never
 // paraphrased away), and the whole echo is what the user confirms by a chat
 // reply — no form/modal. The user's confirming reply (any of
-// confirmGoalAliases, or `/goal confirm`) activates the goal.
+// confirmGoalAliases, or `/goal confirm`) activates the goal. This IS the
+// channel plain-text echo (no separate renderer) — see
+// formatGoalStatementAndCriteria for the statement/criteria/DoD core it
+// shares with buildGoalPendingNote.
 //
 // Plain-language-first (spec US-6 S4, FR-011): criteria are itemized as
 // readable statements with their technical payloads verbatim per row —
@@ -518,16 +567,7 @@ func formatGoalEcho(g *CompiledGoal) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("Here's the goal I've compiled for your confirmation.\n\n")
-	sb.WriteString("Goal: ")
-	if g.Prompt != "" {
-		sb.WriteString(g.Prompt)
-	} else {
-		sb.WriteString(g.Intent)
-	}
-	sb.WriteString("\n\nDone when (a reviewer will verify each of these):\n")
-	for i, c := range g.Criteria {
-		fmt.Fprintf(&sb, "  %d. %s\n", i+1, criterionEchoLine(c))
-	}
+	sb.WriteString(formatGoalStatementAndCriteria(g))
 	sb.WriteString("\nReply **" + ConfirmGoalWord + "** (or `/goal confirm`) to activate this goal, " +
 		"`/goal <new intent>` to restate it, or `/goal clear` to discard.")
 	return sb.String()
@@ -539,24 +579,46 @@ func formatGoalEcho(g *CompiledGoal) string {
 const goalEchoFallbackNote = "\n\nNote: the automatic quality-bar rewrite was unavailable, " +
 	"so these criteria were compiled directly from your wording without it."
 
+// judgmentEchoSuffix renders a short, plain-language tag for a criterion's
+// ADR-080 D-TYPES judgment kind (the "what SHAPE of claim is this" axis,
+// distinct from Kind's verification mechanism) — appended to every echo line
+// so the setter reviews not just the criterion's text but what shape of
+// verdict the Judge will form on it. Never a raw enum token (same
+// plain-language-first bar formatGoalEcho's own doc comment states for Kind).
+func judgmentEchoSuffix(j task.JudgmentKind) string {
+	switch j {
+	case task.JudgmentBoolean:
+		return " (judged yes/no)"
+	case task.JudgmentQuantitative:
+		return " (judged against a measured value)"
+	case task.JudgmentArtifact:
+		return " (judged by checking for the named result)"
+	default:
+		return ""
+	}
+}
+
 // criterionEchoLine renders one criterion's literal verification shape for the
-// echo (commands included verbatim — FR-113 "including literal commands").
+// echo (commands included verbatim — FR-113 "including literal commands"),
+// followed by its ADR-080 D-TYPES judgment tag (judgmentEchoSuffix).
 func criterionEchoLine(c task.AcceptanceCriterion) string {
+	base := c.Text
 	switch c.Kind {
 	case task.KindBehavior:
 		if c.Behavior != nil {
 			minCount := c.Behavior.EffectiveMinCount()
 			if c.Behavior.MaxCount != nil {
-				return fmt.Sprintf("%s: call %s between %d and %d times", c.Text, c.Behavior.Tool, minCount, *c.Behavior.MaxCount)
+				base = fmt.Sprintf("%s: call %s between %d and %d times", c.Text, c.Behavior.Tool, minCount, *c.Behavior.MaxCount)
+			} else {
+				base = fmt.Sprintf("%s: call %s at least %d times", c.Text, c.Behavior.Tool, minCount)
 			}
-			return fmt.Sprintf("%s: call %s at least %d times", c.Text, c.Behavior.Tool, minCount)
 		}
 	case task.KindCheck:
 		if c.Check != nil {
-			return fmt.Sprintf("%s: `%s` (expected exit %d)", c.Text, c.Check.Command, c.Check.ExpectedExitCode)
+			base = fmt.Sprintf("%s: `%s` (expected exit %d)", c.Text, c.Check.Command, c.Check.ExpectedExitCode)
 		}
 	}
-	return c.Text
+	return base + judgmentEchoSuffix(c.Judgment)
 }
 
 // ConfirmGoalWord is the chat reply that activates an echoed goal (FR-113/D11).
@@ -1047,9 +1109,31 @@ func loadCompiledGoal(raw string) *CompiledGoal {
 // present (Phase 2), else a single prose criterion synthesized from condition
 // (back-compat with pre-Phase-2 /goal sessions). This is the single point at
 // which the goal loop reads its criteria — DoD-11 (one implementation).
+//
+// ADR-080 D-DOD's "judged-set union seam" (§120, the load-bearing part):
+// when a compiled ladder exists, the returned slice is Criteria UNION DoD —
+// every Definition-of-Done item rides alongside the acceptance criteria into
+// JudgeCriteria (both callers, goal_triggers.go's runGoalAdjudication and
+// goal_loop.go's own pre-Phase-2 amendment-diff seed, feed this straight into
+// adjudication), so each DoD item gets its own per-criterion verdict exactly
+// like an acceptance criterion and an unmet DoD item fails the round via the
+// SAME dedupeJudgeCriteriaAnyUnmetWins path (verifier_adjudication.go) —
+// there is no separate DoD adjudication call, no separate Judge feed, and no
+// change to JudgeCriteria/runVerifierAdjudication's own shape: DoD items are
+// AcceptanceCriterion-shaped (KindProse) and simply widen in.Criteria. IDs
+// never collide (normalizeCriteria mints a fresh UUID per item; the fixed
+// floor-DoD IDs — newFloorDoD — are namespaced "goal-dod-floor-*", disjoint
+// from any criterion ID). Without this union the DoD would be defined,
+// confirmed, and never scored (ADR-080 R-C1).
 func compiledGoalCriteriaFor(rawJSON, condition, sessionID string) []task.AcceptanceCriterion {
 	if g := loadCompiledGoal(rawJSON); g != nil {
-		return g.Criteria
+		if len(g.DoD) == 0 {
+			return g.Criteria
+		}
+		union := make([]task.AcceptanceCriterion, 0, len(g.Criteria)+len(g.DoD))
+		union = append(union, g.Criteria...)
+		union = append(union, g.DoD...)
+		return union
 	}
 	if strings.TrimSpace(condition) == "" {
 		return nil

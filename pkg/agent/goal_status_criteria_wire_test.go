@@ -101,3 +101,58 @@ func TestGoalStatus_QueuedEmissionCarriesCriteriaBreakdown(t *testing.T) {
 			len(last.Criteria))
 	}
 }
+
+// TestGoalStatus_QueuedEmissionCarriesDefinitionAndDoD is ADR-080
+// D-STATEMENT/D-DOD's frame-emission requirement (item 3 of the consumption
+// wave): the `queued` pending-confirm payload carries the compiled
+// Definition and DoD breakdown alongside Criteria, and every other
+// lifecycle emission (here, the post-confirm `active` push) carries neither
+// — mirroring TestGoalStatus_QueuedEmissionCarriesCriteriaBreakdown's own
+// queued-only contract for Criteria.
+func TestGoalStatus_QueuedEmissionCarriesDefinitionAndDoD(t *testing.T) {
+	al, agentInst, _, _, sid, opts := twoPhaseHarness(t,
+		func(_ int, _ []providers.Message) (*providers.LLMResponse, error) {
+			return compileJSON("the launch post is written"), nil
+		}, nil)
+
+	c, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	setGoal(t, al, agentInst, opts, "write the launch post")
+
+	payloads := waitGoalStatusPayloads(t, c, sid, goalPillQueued)
+	queued := payloads[len(payloads)-1]
+	if queued.Definition == "" {
+		t.Fatal("queued emission carries no Definition (D-STATEMENT) — the confirm card cannot render the restated statement")
+	}
+	if queued.Definition != "the goal is compiled" {
+		t.Fatalf("queued Definition = %q, want the compileJSON fixture's compiled statement", queued.Definition)
+	}
+	if len(queued.DoD) == 0 {
+		t.Fatal("queued emission carries no DoD (D-DOD) — the confirm card cannot render the Definition of Done block")
+	}
+	for _, d := range queued.DoD {
+		if d.Text == "" {
+			t.Errorf("dod item %s has empty text on the wire payload", d.ID)
+		}
+		if d.Judgment == "" {
+			t.Errorf("dod item %s has empty judgment on the wire payload", d.ID)
+		}
+	}
+	// compileJSON's fixture DoD item is floor-provenance (built-in, never
+	// silently invented) — the payload must carry that tag through.
+	if queued.DoD[0].Provenance != task.ProvenanceFloor {
+		t.Errorf("dod[0].Provenance = %q, want %q", queued.DoD[0].Provenance, task.ProvenanceFloor)
+	}
+
+	// --- Confirm → the activation emission carries neither ---
+	activatePendingGoal(t, al, agentInst, opts)
+	payloads = waitGoalStatusPayloads(t, c, sid, goalPillActive)
+	last := payloads[len(payloads)-1]
+	if last.Definition != "" {
+		t.Errorf("active emission carries Definition %q, want empty (queued-only)", last.Definition)
+	}
+	if len(last.DoD) != 0 {
+		t.Errorf("active emission carries %d dod items, want 0 (queued-only)", len(last.DoD))
+	}
+}

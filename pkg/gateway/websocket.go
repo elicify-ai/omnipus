@@ -4348,6 +4348,16 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// itemize exactly what will run (commands verbatim). Optional on
 			// the wire — absent (nil) on every other emission.
 			setGoalStatusCriteria(&goalF, p.Criteria)
+			// ADR-080 D-STATEMENT/D-DOD: the restated goal statement and the
+			// Definition-of-Done breakdown ride the SAME `queued` emission as
+			// Criteria above — both optional on the wire, absent on every
+			// other emission (goal_loop.go's emitGoalStatusFrameWithCriteriaAndDoD
+			// only ever populates them on the pending-confirm push).
+			if p.Definition != "" {
+				def := p.Definition
+				goalF.Definition = &def
+			}
+			setGoalStatusDoD(&goalF, p.DoD)
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run
