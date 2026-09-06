@@ -2385,6 +2385,39 @@ func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 			mq.SetField(field)
 			qs = append(qs, mq)
 		}
+		// PREFIX MATCHING (F2 / harness Issue 14). The match queries above are
+		// exact-term-after-analysis: they find a note for `composio` but not for
+		// `compos`, because `compos` analyses to the term "compos" and the body
+		// dictionary holds "composio" (or its stem), which is a different term.
+		// A caller typing a partial word expects the fuller term to be found —
+		// the same expectation NearMissVocabulary already serves when it offers
+		// `compos → composio` as a suggestion, so a `words` search must actually
+		// honour what the suggestion promises rather than only naming it.
+		//
+		// A bleve PrefixQuery matches the term DICTIONARY by raw byte prefix and
+		// performs no analysis of its own, so the prefix must arrive folded the
+		// same way the prose analyzer folds (lowercased) — foldTokens does that
+		// and, deliberately, does NOT stem: a stem would shorten the prefix past
+		// the very characters the caller typed. These disjuncts only ever ADD
+		// matches to the exact ones above; they never remove one, so a query
+		// that already matched exactly is unaffected. Only the PROSE fields get
+		// a prefix pass — a keyword field (path/prop_key/prop) stores each value
+		// as one whole term where prefixing would silently change what an exact
+		// pair or key query means.
+		prefixFields := []string{fieldName, fieldBody, fieldTitle, fieldHeadings, fieldPropValue}
+		for _, token := range foldTokens(query) {
+			// vocabularyPrefixMin guards against a 1–2 character prefix matching
+			// a large fraction of the dictionary — the same floor the
+			// vocabulary suggester uses for the same reason.
+			if len([]rune(token)) < vocabularyPrefixMin {
+				continue
+			}
+			for _, field := range prefixFields {
+				pq := bleveQuery.NewPrefixQuery(token)
+				pq.SetField(field)
+				qs = append(qs, pq)
+			}
+		}
 		q = bleve.NewDisjunctionQuery(qs...)
 	}
 	return ix.runSearch(q, size, query)
