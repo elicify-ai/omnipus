@@ -4,11 +4,20 @@
 // `criteria` breakdown, and a G-5 `waiting_on_user` pause on an ACTIVE goal
 // never renders the confirm card (R2-03's kept negative).
 
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { GoalThreadTailCards } from './GoalThreadTailCards'
 import { useChatStore } from '@/store/chat'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+
+// ADR-078 D1: Amend pre-fills the composer via AssistantUI's
+// `useComposerRuntime().setText(...)` — the same mechanism `useSlashMenu.ts`
+// already uses (e.g. `composerRuntime.setText('/skills')`). Mock the whole
+// module (this component only touches `useComposerRuntime`).
+const mockSetText = vi.hoisted(() => vi.fn())
+vi.mock('@assistant-ui/react', () => ({
+  useComposerRuntime: () => ({ setText: mockSetText }),
+}))
 
 function makeGoal(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFrame {
   return {
@@ -27,7 +36,8 @@ function makeGoal(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFrame {
 
 describe('GoalThreadTailCards', () => {
   beforeEach(() => {
-    useChatStore.setState({ goalPills: {} })
+    mockSetText.mockClear()
+    useChatStore.setState({ goalPills: {}, sendMessage: vi.fn() })
   })
 
   it('renders nothing with no pills', () => {
@@ -63,6 +73,53 @@ describe('GoalThreadTailCards', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByText('verifies via:')).toBeInTheDocument()
     expect(screen.getByText('npm run build -> exit 0')).toBeInTheDocument()
+  })
+
+  // ADR-078 D1: Confirm sends the bare confirm token over the existing chat
+  // path — no new wire type, no new store action.
+  it('clicking Confirm sends the bare chat message "confirm"', () => {
+    const sendSpy = vi.fn()
+    useChatStore.setState({
+      goalPills: { _default: makeGoal() },
+      sendMessage: sendSpy,
+    })
+    render(<GoalThreadTailCards />)
+    fireEvent.click(screen.getByTestId('goal-echo-confirm'))
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith('confirm')
+    expect(mockSetText).not.toHaveBeenCalled()
+  })
+
+  // ADR-078 D1: Cancel sends `/goal clear`, the slash command the backend
+  // router (`clearGoal`) already handles for a pending-but-unconfirmed goal.
+  it('clicking Cancel sends the chat message "/goal clear"', () => {
+    const sendSpy = vi.fn()
+    useChatStore.setState({
+      goalPills: { _default: makeGoal() },
+      sendMessage: sendSpy,
+    })
+    render(<GoalThreadTailCards />)
+    fireEvent.click(screen.getByTestId('goal-echo-cancel'))
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith('/goal clear')
+    expect(mockSetText).not.toHaveBeenCalled()
+  })
+
+  // ADR-078 D1: Amend sends nothing — it pre-fills the composer via the
+  // AssistantUI composer runtime so the user restates the goal themselves
+  // (restatement stays an explicit user action; a routine click never
+  // silently mutates goal state).
+  it('clicking Amend pre-fills the composer with "/goal " and does NOT send a chat message', () => {
+    const sendSpy = vi.fn()
+    useChatStore.setState({
+      goalPills: { _default: makeGoal() },
+      sendMessage: sendSpy,
+    })
+    render(<GoalThreadTailCards />)
+    fireEvent.click(screen.getByTestId('goal-echo-amend'))
+    expect(mockSetText).toHaveBeenCalledTimes(1)
+    expect(mockSetText).toHaveBeenCalledWith('/goal ')
+    expect(sendSpy).not.toHaveBeenCalled()
   })
 
   // US-6 S3 negative (R2-03): an ACTIVE goal paused waiting_on_user is NOT a

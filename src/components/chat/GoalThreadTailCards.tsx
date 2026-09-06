@@ -1,19 +1,35 @@
-// GoalThreadTailCards — ADR-053 FE-8 / US-3.
+// GoalThreadTailCards — ADR-053 FE-8 / US-3; button wiring per ADR-078 D1.
 //
 // Renders the conversational goal echo (and amendment) cards at the thread
 // tail — the non-scrolling slot between the message list and the composer.
 // Per FE-8 / D11: the compiled goal is echoed IN CHAT (no form/modal), the
-// user confirms by replying in normal chat. This component surfaces the echo
-// card whenever a goal pill is in the `queued` state (newly compiled, not yet
-// active — awaiting the user's chat confirmation). Once the user replies and
-// the goal transitions to `active`, the echo card disappears (the bottom-right
-// pill continues to track the active goal).
+// user confirms by replying in normal chat OR (ADR-078) clicking Confirm.
+// This component surfaces the echo card whenever a goal pill is in the
+// `queued` state (newly compiled, not yet active — awaiting the user's
+// confirmation). Once the user replies/clicks and the goal transitions to
+// `active`, the echo card disappears (the bottom-right pill continues to
+// track the active goal).
+//
+// Button wiring (ADR-078 D1) reuses the existing chat-message path — no new
+// wire type, no new store action:
+//   - Confirm -> `sendMessage('confirm')`. The backend's pending-goal reply
+//     router (`applyGoalPendingReply` -> `IsGoalConfirm`) already treats the
+//     bare token `confirm` identically to the `/goal confirm` command.
+//   - Cancel  -> `sendMessage('/goal clear')`. A slash command, caught by
+//     `handleCommand` -> `clearGoal`, which clears a pending-but-unconfirmed
+//     goal.
+//   - Amend   -> sends nothing. Pre-fills the composer with `/goal ` via
+//     AssistantUI's `useComposerRuntime().setText(...)` — the same mechanism
+//     `useSlashMenu.ts` already uses throughout the composer (e.g.
+//     `composerRuntime.setText('/skills')`), verified against the installed
+//     `@assistant-ui/react` version by that existing, working call site.
 //
 // The `GoalAmendmentDiff` is imported here so the thread-tail is the single
 // render site for both echo and amendment; the amendment surfaces when the
 // store detects a condition change on an existing goal (tracked via a
 // before/after condition comparison in the pill subscription below).
 
+import { useComposerRuntime } from '@assistant-ui/react'
 import { useChatStore } from '@/store/chat'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 import { GoalEchoCard } from './GoalEchoCard'
@@ -26,6 +42,8 @@ function emptyDiff(d: GoalAmendmentDiffData): boolean {
 
 export function GoalThreadTailCards() {
   const goalPills = useChatStore((s) => s.goalPills ?? {})
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const composerRuntime = useComposerRuntime()
 
   const pills = Object.values(goalPills) as GoalStatusFrame[]
 
@@ -40,12 +58,19 @@ export function GoalThreadTailCards() {
 
   if (queuedPills.length === 0) return null
 
+  const handleConfirm = () => sendMessage('confirm')
+  const handleCancel = () => sendMessage('/goal clear')
+  const handleAmend = () => composerRuntime.setText('/goal ')
+
   return (
-    <div className="px-4 pb-2" data-testid="goal-thread-tail-cards">
+    <div className="w-full max-w-3xl mx-auto px-4 pb-2" data-testid="goal-thread-tail-cards">
       {queuedPills.map((frame) => (
         <GoalEchoCard
           key={frame.goal_id ?? '_default'}
           frame={frame}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+          onAmend={handleAmend}
         />
       ))}
     </div>

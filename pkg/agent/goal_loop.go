@@ -356,6 +356,17 @@ func (al *AgentLoop) applyGoalCompileOutcome(
 //
 // Slash commands never reach this hook's branches (handleCommand owns them);
 // the same fail-closed origin gate as applyGoalCommandPrompt applies.
+//
+// ADR-078 D3: the terminal `return false, ""` fall-through below is
+// DELIBERATELY kept as-is — a non-confirm reply must never itself recompile
+// or mutate goal state. What changed is what happens AFTER this hook returns
+// false with GoalPendingJSON still set: the turn continues into
+// runAgentLoop → runTurn, where buildGoalPendingNote/injectGoalPendingNote
+// (goal_pending_note.go) reads that same still-set GoalPendingJSON and
+// injects it as a per-turn ephemeral system note, so the model is no longer
+// context-blind about the pending goal on that turn. This router stays the
+// single authority on deterministic state transitions (confirm/clarify
+// only); the injector is a separate, additive context-awareness mechanism.
 func (al *AgentLoop) applyGoalPendingReply(
 	ctx context.Context,
 	msg bus.InboundMessage,

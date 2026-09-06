@@ -107,11 +107,13 @@ func absoluteShareTokens(cs config.ContextSettings) int {
 
 // ephemeralSystemNoteTokens estimates the token cost of the ephemeral
 // system notes runTurn injects into callMessages before the request that is
-// ACTUALLY sent to the provider (C1): the scratchpad note, the workspace
-// instructions note (AGENT.md — up to 262,144 bytes, ~104,857 estimator
-// tokens, with no budget-aware cap), and the web-rendering note (loop.go's
-// callMessages assembly — buildScratchpadNote / injectWorkspaceInstructions
-// / injectWebRenderingNote, all called on `repairedHistory`, never on the
+// ACTUALLY sent to the provider (C1): the scratchpad note, the ADR-078 D2
+// pending-goal note (buildGoalPendingNote — only while a fresh goal awaits
+// confirmation), the workspace instructions note (AGENT.md — up to 262,144
+// bytes, ~104,857 estimator tokens, with no budget-aware cap), and the
+// web-rendering note (loop.go's callMessages assembly — buildScratchpadNote
+// / injectGoalPendingNote / injectWorkspaceInstructions /
+// injectWebRenderingNote, all called on `repairedHistory`, never on the
 // `messages` slice either budget site measures). `messages` never carries
 // these notes — each injector returns a FRESH slice built strictly AFTER
 // both budget checks run — so requestTokens/sumRequestMessageTokens alone
@@ -136,6 +138,7 @@ func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 		}
 	}
 	add(al.buildScratchpadNote(ts.agent.ID))
+	add(buildGoalPendingNote(ts.opts.TranscriptStore, ts.opts.TranscriptSessionID))
 	add(buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 	add(buildWebRenderingNote(ts.channel))
 	return tokens
