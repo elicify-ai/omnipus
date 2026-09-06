@@ -13,7 +13,24 @@
 // It is deliberately reachable from a count in the header — a grant you cannot
 // see is a grant you cannot review, and a count that only appears when there is
 // something to count is the smallest honest version of that.
+//
+// # Mount-state UI (library-b-c-design-2026-09-07.md "Add mount → existing
+//   vault auto-detected")
+//
+// The backend already runs knowledge-base detection (and starts indexing) the
+// moment a mount is attached — there is no separate "open vault" step. This
+// register is where that shows: each row asks
+// GET /library/{ws}/knowledge?path=… for ITS OWN mount path (one call per row
+// here is deliberate and bounded — this list is a handful of operator-added
+// grants, not the potentially-huge file listing C3's row icons had to avoid
+// probing) and layers the `knowledge_index_progress` WebSocket frame on top
+// (via useKnowledgeIndexStore — NO polling, matching KnowledgePanel's own
+// contract). `resolveKnowledgeFirstRunState`/`KnowledgeEmptyState` are reused
+// verbatim from the knowledge surface rather than re-implemented, so the
+// honesty rules there (no invented percentages, "0 of 0" never shown, a
+// finished index says nothing) apply here too.
 
+import { useQuery } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -23,23 +40,88 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { FolderSimpleDashed, Warning } from '@phosphor-icons/react'
+import { Warning, SpinnerGap } from '@phosphor-icons/react'
+import { fetchKnowledgeBaseInfo } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
+import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
+import { resolveKnowledgeFirstRunState } from './knowledge/KnowledgePanel'
+import { KnowledgeEmptyState } from './knowledge/KnowledgeEmptyState'
+import { MountIcon } from './icons'
 
 interface LibraryMountsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The workspace's mounted entries, as returned by the work-tree listing. */
   mounts: LibraryEntry[]
+  /** Needed to ask the per-mount knowledge-base-info question. */
+  workspaceId: string | null
   workspaceName: string
   onUnmount: (entry: LibraryEntry) => void
   isPending: boolean
+}
+
+/**
+ * One mount row's vault/indexing state. Its own component (not inlined in the
+ * `mounts.map()` below) because it calls its own `useQuery` — hooks cannot be
+ * called from inside a loop in the parent.
+ */
+function MountVaultState({ workspaceId, path }: { workspaceId: string | null; path: string }) {
+  const progressByCollection = useKnowledgeIndexStore((s) => s.byCollection)
+  const query = useQuery({
+    queryKey: ['knowledge-base-info', workspaceId, path],
+    queryFn: () => fetchKnowledgeBaseInfo(workspaceId as string, path),
+    enabled: workspaceId !== null,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+
+  if (query.isPending) {
+    return (
+      <p
+        data-testid="library-mounts-vault-checking"
+        role="status"
+        className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]"
+      >
+        <SpinnerGap size={12} aria-hidden="true" className="animate-spin" />
+        Checking whether this mount is a vault
+      </p>
+    )
+  }
+  // The check itself failing is not "ordinary folder" (E-9's reasoning
+  // applies here too) — but this register's own job is revocation, not
+  // knowledge-base diagnosis, so it says just enough to not overclaim and
+  // leaves the detailed reason to the folder's own KnowledgePanel.
+  if (query.isError) {
+    return (
+      <p
+        data-testid="library-mounts-vault-error"
+        role="alert"
+        className="mt-1.5 text-[11px] text-[var(--color-error)]"
+      >
+        Could not check whether this mount is a vault.
+      </p>
+    )
+  }
+
+  // Mirrors KnowledgePanel.tsx's own lookup: a plain record read, keyed by
+  // this info's own collection_id — resolveKnowledgeFirstRunState re-checks
+  // the id itself, so a mis-keyed entry could not drive this row regardless.
+  const info = query.data
+  const progress = info.collection_id !== undefined ? progressByCollection[info.collection_id] : undefined
+  const state = resolveKnowledgeFirstRunState(info, progress)
+  // 'not_a_knowledge_base' and 'ready' both render nothing from
+  // KnowledgeEmptyState with no `onCreateCollection` wired here — an
+  // ordinary mounted folder says nothing extra, and a finished index says
+  // nothing extra either, matching that component's own honesty rule (a
+  // banner shown on every visit trains people to ignore the real warning).
+  return <KnowledgeEmptyState state={state} className="mt-1.5 px-2.5 py-2" />
 }
 
 export function LibraryMountsDialog({
   open,
   onOpenChange,
   mounts,
+  workspaceId,
   workspaceName,
   onUnmount,
   isPending,
@@ -69,41 +151,45 @@ export function LibraryMountsDialog({
               <div
                 key={entry.path}
                 data-testid={`library-mounts-row-${mount.name}`}
-                className="flex items-center gap-3 rounded border border-[var(--color-border)] px-3 py-2"
+                className="rounded border border-[var(--color-border)] px-3 py-2"
               >
-                <FolderSimpleDashed
-                  size={18}
-                  className={
-                    mount.broad ? 'text-[var(--color-warning)]' : 'text-[var(--color-info)]'
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{mount.name}</span>
-                    {mount.broad && (
-                      <span className="flex items-center gap-1 text-[11px] text-[var(--color-warning)]">
-                        <Warning size={12} /> Broad grant
-                      </span>
-                    )}
+                <div className="flex items-center gap-3">
+                  {/* Locked icon system (C3): Mount = --color-mount, escalated
+                      to --color-warning for a broad grant — same rule
+                      LibraryEntryRow applies to this same entry in the tree. */}
+                  <MountIcon
+                    size={18}
+                    className={mount.broad ? 'text-[var(--color-warning)]' : 'text-[var(--color-mount)]'}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{mount.name}</span>
+                      {mount.broad && (
+                        <span className="flex items-center gap-1 text-[11px] text-[var(--color-warning)]">
+                          <Warning size={12} /> Broad grant
+                        </span>
+                      )}
+                    </div>
+                    {/* The real path, because the name alone does not tell you
+                        what you granted. */}
+                    <p
+                      className="truncate font-mono text-[11px] text-[var(--color-muted)]"
+                      title={mount.host_path}
+                    >
+                      {mount.host_path}
+                    </p>
                   </div>
-                  {/* The real path, because the name alone does not tell you
-                      what you granted. */}
-                  <p
-                    className="truncate font-mono text-[11px] text-[var(--color-muted)]"
-                    title={mount.host_path}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isPending}
+                    onClick={() => onUnmount(entry)}
+                    data-testid={`library-mounts-unmount-${mount.name}`}
                   >
-                    {mount.host_path}
-                  </p>
+                    Unmount
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={isPending}
-                  onClick={() => onUnmount(entry)}
-                  data-testid={`library-mounts-unmount-${mount.name}`}
-                >
-                  Unmount
-                </Button>
+                <MountVaultState workspaceId={workspaceId} path={entry.path} />
               </div>
             )
           })}

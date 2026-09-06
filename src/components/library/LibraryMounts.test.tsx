@@ -5,13 +5,53 @@
 // sits must revoke access instead of removing their files. These tests assert
 // the differences a user can actually see and act on.
 
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { mountNameFromPath } from './libraryMountName'
 import type { LibraryEntry } from '@/lib/api'
+import type { KnowledgeBaseInfo } from '@/lib/api/generated/openapi-types'
+import type { KnowledgeIndexProgressFrame } from '@/lib/api/generated/asyncapi-types'
+import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
+
+// LibraryMountsDialog's per-row mount-state UI (mount auto-detect) asks
+// GET /library/{ws}/knowledge for each mounted row. Mocked so the register's
+// own tests (row/menu behaviour, unrelated to vault detection) get a
+// deterministic "ordinary folder" answer by default — an unmocked call here
+// is exactly the false-green trap LibraryExplorer.test.tsx's own comment on
+// this same mock warns about: the real fetch fails silently and every
+// assertion still passes, having tested nothing about the failed surface.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return { ...actual, fetchKnowledgeBaseInfo: vi.fn() }
+})
+
+import { fetchKnowledgeBaseInfo } from '@/lib/api'
+const mockedKnowledgeInfo = vi.mocked(fetchKnowledgeBaseInfo)
+
+function knowledgeInfo(over: Partial<KnowledgeBaseInfo> = {}): KnowledgeBaseInfo {
+  return {
+    root_path: 'unused',
+    is_knowledge_base: false,
+    marker: 'none',
+    ...over,
+  } as KnowledgeBaseInfo
+}
+
+function progressFrame(over: Partial<KnowledgeIndexProgressFrame> = {}): KnowledgeIndexProgressFrame {
+  return {
+    type: 'knowledge_index_progress',
+    collection_id: 'col-repo',
+    workspace_id: 'ws-1',
+    phase: 'indexing',
+    indexed_files: 142,
+    total_known: true,
+    total_files: 260,
+    ...over,
+  }
+}
 
 // LibraryEntryRow reads the knowledge-base-info query cache (C3, a passive
 // read for Vault-icon detection — see LibraryEntryRow.tsx), so it now needs a
@@ -183,17 +223,30 @@ describe('the mounted-folders register', () => {
     } as Partial<LibraryEntry>),
   ]
 
+  beforeEach(() => {
+    mockedKnowledgeInfo.mockReset()
+    mockedKnowledgeInfo.mockResolvedValue(knowledgeInfo())
+    // Module-level singleton store — reset so a frame applied in one test
+    // never leaks into the next.
+    useKnowledgeIndexStore.setState({ byCollection: {} })
+  })
+
   function renderDialog(over: Record<string, unknown> = {}) {
     const props = {
       open: true,
       onOpenChange: vi.fn(),
       mounts,
+      workspaceId: 'ws-1',
       workspaceName: 'Client Project',
       onUnmount: vi.fn(),
       isPending: false,
       ...over,
     }
-    render(<LibraryMountsDialog {...props} />)
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <LibraryMountsDialog {...props} />
+      </QueryClientProvider>,
+    )
     return props
   }
 
@@ -229,5 +282,92 @@ describe('the mounted-folders register', () => {
   it('says so plainly when nothing is granted', () => {
     renderDialog({ mounts: [] })
     expect(screen.getByText(/no folders are mounted/i)).toBeInTheDocument()
+  })
+
+  // ── Mount auto-detect UI (library-b-c-design-2026-09-07.md "Add mount →
+  //    existing vault auto-detected") ────────────────────────────────────────
+  describe('mount-state UI (vault auto-detect)', () => {
+    it('says nothing extra for an ordinary mounted folder', async () => {
+      mockedKnowledgeInfo.mockResolvedValue(knowledgeInfo({ is_knowledge_base: false, marker: 'none' }))
+      renderDialog()
+      await waitFor(() => expect(screen.queryAllByTestId('library-mounts-vault-checking')).toHaveLength(0))
+      expect(screen.queryByTestId('knowledge-state-indexing')).toBeNull()
+      expect(screen.queryByTestId('knowledge-state-index-status-unknown')).toBeNull()
+    })
+
+    it('says nothing extra yet when the mount is a vault but no progress frame has arrived', async () => {
+      mockedKnowledgeInfo.mockImplementation((_ws, path) =>
+        Promise.resolve(
+          path === 'omnipus-repo'
+            ? knowledgeInfo({
+                root_path: 'omnipus-repo',
+                is_knowledge_base: true,
+                marker: 'omnipus_vault',
+                collection_id: 'col-repo',
+              })
+            : knowledgeInfo(),
+        ),
+      )
+      renderDialog()
+
+      const row = await screen.findByTestId('library-mounts-row-omnipus-repo')
+      // No knowledge_index_progress frame has been received for this
+      // collection — the honest answer is "recognised, completeness unknown"
+      // (KnowledgePanel's own index_status_unknown state), not a guess.
+      await waitFor(() =>
+        expect(within(row).getByTestId('knowledge-state-index-status-unknown')).toBeInTheDocument(),
+      )
+    })
+
+    it('reports a vault detected in the mount as still indexing, with a progress line, sourced from the WS frame — no polling', async () => {
+      mockedKnowledgeInfo.mockImplementation((_ws, path) =>
+        Promise.resolve(
+          path === 'omnipus-repo'
+            ? knowledgeInfo({
+                root_path: 'omnipus-repo',
+                is_knowledge_base: true,
+                marker: 'omnipus_vault',
+                collection_id: 'col-repo',
+              })
+            : knowledgeInfo(),
+        ),
+      )
+      // Simulates the gateway's knowledge_index_progress frame having already
+      // arrived over the WebSocket (routed into this same store by
+      // src/store/chat.ts — not this component's concern) BEFORE the dialog
+      // is opened, exactly like KnowledgePanel.test.tsx's own convention.
+      useKnowledgeIndexStore.getState().apply(progressFrame())
+
+      renderDialog()
+
+      const row = await screen.findByTestId('library-mounts-row-omnipus-repo')
+      await waitFor(() => expect(within(row).getByTestId('knowledge-state-indexing')).toBeInTheDocument())
+      expect(within(row).getByTestId('knowledge-index-progress-ratio')).toHaveTextContent(
+        '142 of 260 files indexed.',
+      )
+
+      // Never polled: one fetchKnowledgeBaseInfo call per mounted row (this
+      // fixture has two mounts), no more even after the progress bar renders
+      // — the ratio came from the WS store, not a re-fetch.
+      expect(mockedKnowledgeInfo).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not treat a normal (non-broad) mount differently from a broad one for vault detection', async () => {
+      mockedKnowledgeInfo.mockImplementation((_ws, path) =>
+        Promise.resolve(
+          path === 'home'
+            ? knowledgeInfo({ root_path: 'home', is_knowledge_base: true, marker: 'obsidian', collection_id: 'col-home' })
+            : knowledgeInfo(),
+        ),
+      )
+      renderDialog()
+
+      const homeRow = await screen.findByTestId('library-mounts-row-home')
+      await waitFor(() =>
+        expect(within(homeRow).getByTestId('knowledge-state-index-status-unknown')).toBeInTheDocument(),
+      )
+      const repoRow = screen.getByTestId('library-mounts-row-omnipus-repo')
+      expect(within(repoRow).queryByTestId('knowledge-state-index-status-unknown')).toBeNull()
+    })
   })
 })

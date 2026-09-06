@@ -1088,6 +1088,7 @@ export function LibraryExplorer({
         open={mountsOpen}
         onOpenChange={setMountsOpen}
         mounts={workspaceMounts}
+        workspaceId={workspaceId}
         workspaceName={
           sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? 'this workspace'
         }
