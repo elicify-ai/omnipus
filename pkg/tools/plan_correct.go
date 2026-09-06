@@ -869,21 +869,27 @@ func cloneCriterionForInheritance(c task.AcceptanceCriterion) task.AcceptanceCri
 	return c
 }
 
-// criterionKey renders the (kind, expression) identity of a criterion for
-// FR-030b's comparison. The "expression" is the criterion's machine-meaningful
-// payload: the command and expected exit code for a check, the tool/count/scope
-// triple for a behavior, and the statement itself for prose. Rendered display
-// text is never the comparison basis for check/behavior criteria.
+// criterionKey renders the (kind, judgment, expression) identity of a
+// criterion for FR-030b's comparison. The "expression" is the criterion's
+// machine-meaningful payload: the command and expected exit code for a
+// check, the tool/count/scope triple for a behavior, and the statement
+// itself for prose. Rendered display text is never the comparison basis for
+// check/behavior criteria. ADR-080 D-TYPES: judgment is folded into every
+// branch's key so two criteria match only if their judgment matches too —
+// redundant for check/behavior (judgment is deterministic from kind there)
+// but load-bearing for prose, where judgment is author-stated and can vary
+// independently of identical text (e.g. a re-tag from boolean to
+// quantitative on otherwise-unchanged wording is a real change).
 func criterionKey(c *task.AcceptanceCriterion) string {
 	switch c.Kind {
 	case task.KindCheck:
 		if c.Check == nil {
-			return "check|<missing>"
+			return "check|" + string(c.Judgment) + "|<missing>"
 		}
-		return "check|" + c.Check.Command + "|" + strconv.Itoa(c.Check.ExpectedExitCode)
+		return "check|" + string(c.Judgment) + "|" + c.Check.Command + "|" + strconv.Itoa(c.Check.ExpectedExitCode)
 	case task.KindBehavior:
 		if c.Behavior == nil {
-			return "behavior|<missing>"
+			return "behavior|" + string(c.Judgment) + "|<missing>"
 		}
 		maxCount := "unbounded"
 		if c.Behavior.MaxCount != nil {
@@ -893,10 +899,10 @@ func criterionKey(c *task.AcceptanceCriterion) string {
 		if scope == "" {
 			scope = "task_session"
 		}
-		return "behavior|" + c.Behavior.Tool + "|" +
+		return "behavior|" + string(c.Judgment) + "|" + c.Behavior.Tool + "|" +
 			strconv.Itoa(c.Behavior.EffectiveMinCount()) + "|" + maxCount + "|" + scope
 	default:
-		return string(c.Kind) + "|" + strings.TrimSpace(c.Text)
+		return string(c.Kind) + "|" + string(c.Judgment) + "|" + strings.TrimSpace(c.Text)
 	}
 }
 

@@ -34,6 +34,20 @@ func setGoalStatusCriteria(f *generated.GoalStatusFrame, in []task.AcceptanceCri
 		src := &in[i]
 		dst := &f.Criteria[i]
 		dst.Kind = string(src.Kind)
+		dst.Judgment = string(src.Judgment)
+		if dst.Judgment == "" {
+			// Defensive backfill (fix-wave finding, mirrors the Status
+			// pending-default below): every persisted criterion should already
+			// carry an explicit judgment via normalizeCriteria/InferJudgment,
+			// but this converter also serves pre-normalization callers (e.g.
+			// compiledGoalCriteriaFor's back-compat fallback) — never emit an
+			// empty judgment onto the wire, where it is a required enum field.
+			dst.Judgment = string(task.JudgmentBoolean)
+		}
+		if src.Provenance != "" {
+			p := string(src.Provenance)
+			dst.Provenance = &p
+		}
 		dst.Text = src.Text
 		dst.Status = string(src.Status)
 		if dst.Status == "" {

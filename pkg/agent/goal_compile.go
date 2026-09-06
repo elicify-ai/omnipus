@@ -86,10 +86,23 @@ type CompiledGoal struct {
 	// Prompt is the steering prompt fed to the worker turn (the prose remainder
 	// of the intent after marker extraction — the subjective goal statement).
 	Prompt string `json:"prompt"`
+	// Definition is ADR-080 D-STATEMENT's compiled SMART restatement of the
+	// goal — one clear sentence, distinct from Prompt (the steering remainder)
+	// — rendered before the criteria in every echo surface. Populated by the
+	// compile-response parser (a later wave); zero-value until then, in which
+	// case formatGoalEcho's existing Prompt/Intent fallback still applies.
+	Definition string `json:"definition,omitempty"`
 	// Criteria is the compiled criteria ladder: behavior (countables), check
 	// (deterministic machine), prose (subjective). Schema-validated via
 	// task.NormalizeCriteria before this struct is returned.
 	Criteria []task.AcceptanceCriterion `json:"criteria"`
+	// DoD is ADR-080 D-DOD's Definition of Done — generic standing quality
+	// gates, DISTINCT from Criteria's outcome-specific checks, evaluated
+	// together (Criteria UNION DoD, a later wave's judged-set union). Every
+	// loaded goal carries at least one item — see dodFloorConstructor /
+	// loadCompiledGoal's legacy-goal backfill below, which guarantees this
+	// in-memory invariant even for a pre-ADR-080 persisted goal with no DoD.
+	DoD []task.AcceptanceCriterion `json:"dod,omitempty"`
 }
 
 // FeasibilityRejection is a compile-time gate failure (FR-111/D9): the
@@ -660,9 +673,17 @@ func normalizeCritText(s string) string {
 }
 
 // sameShape reports whether two criteria with the same Text have the same
-// verification shape (Check or Behavior payload).
+// verification shape (Check or Behavior payload) AND the same judgment
+// (ADR-080 D-TYPES: two criteria are "the same shape" only if their judgment
+// matches too — a re-statement that keeps the same text and Check/Behavior
+// payload but retags the judgment, e.g. boolean -> quantitative, is still a
+// real change the amendment diff must surface as "changed", not silently
+// treat as identical).
 func sameShape(a, b task.AcceptanceCriterion) bool {
 	if a.Kind != b.Kind {
+		return false
+	}
+	if a.Judgment != b.Judgment {
 		return false
 	}
 	switch a.Kind {
@@ -937,6 +958,39 @@ func (a agentFeasibilityContext) BashReachable() bool {
 		a.agentInst.LoadToolPolicy(), tools.ScopeCore, a.agentInst.AgentType, "bash") != "deny"
 }
 
+// goalDoDFloorAuthorID tags the built-in floor DoD's author identity (no
+// human/agent authored these — they are the ADR-080 D-DOD layer-3
+// guarantee). Mirrors judge.go's softTierCriterionID pattern: a fixed,
+// recognizable sentinel rather than a fresh UUID, so re-derivations are
+// byte-stable and a floor item is identifiable at a glance in logs/echoes.
+const goalDoDFloorAuthorID = "system"
+
+// newFloorDoD constructs ADR-080 D-DOD's built-in floor Definition of Done
+// (layer 3): a few universal quality gates that GUARANTEE a goal always
+// carries at least one DoD item (>= 1), even when nothing was stated, no
+// workspace convention applied, and no bounded inference ran. Defined once
+// as a single reusable constructor (per the ADR) so both the legacy-goal
+// load-time backfill below and the compiler's own layer-3 fallback (a later
+// wave) stay identical. IDs are fixed sentinels, not fresh UUIDs, so the
+// floor DoD is byte-stable across repeated loads of the same legacy goal.
+func newFloorDoD() []task.AcceptanceCriterion {
+	author := task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorID}
+	return []task.AcceptanceCriterion{
+		{
+			ID: "goal-dod-floor-no-secrets", Kind: task.KindProse,
+			Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
+			Text:   "No secrets or credentials appear in the output.",
+			Author: author, Status: task.CritPending,
+		},
+		{
+			ID: "goal-dod-floor-grounded-claims", Kind: task.KindProse,
+			Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
+			Text:   "Every factual claim is grounded, not assumed.",
+			Author: author, Status: task.CritPending,
+		},
+	}
+}
+
 // marshalCompiledGoal serializes a CompiledGoal for GoalCriteriaJSON persistence.
 func marshalCompiledGoal(g *CompiledGoal) (string, error) {
 	if g == nil {
@@ -976,6 +1030,15 @@ func loadCompiledGoal(raw string) *CompiledGoal {
 			"(falling back to a single prose criterion from GoalCondition)", nil)
 		return nil
 	}
+	// ADR-080 D-DOD legacy-goal backfill: a pre-ADR-080 persisted goal has no
+	// DoD at all (the field did not exist yet). Inject the built-in floor DoD
+	// here, in the goal-LOAD path, BEFORE any schema validation of the wire
+	// Goal record — mirrors normalizeCriteria's own load-time judgment
+	// backfill — so a legacy goal always satisfies the wire schema's
+	// `dod: minItems: 1` instead of failing the read.
+	if len(g.DoD) == 0 {
+		g.DoD = newFloorDoD()
+	}
 	return &g
 }
 
@@ -992,7 +1055,7 @@ func compiledGoalCriteriaFor(rawJSON, condition, sessionID string) []task.Accept
 		return nil
 	}
 	return []task.AcceptanceCriterion{{
-		ID: "goal-condition", Kind: task.KindProse, Text: condition,
+		ID: "goal-condition", Kind: task.KindProse, Judgment: task.JudgmentBoolean, Text: condition,
 		Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: sessionID},
 		Status: task.CritPending,
 	}}

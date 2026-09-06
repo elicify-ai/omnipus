@@ -124,12 +124,13 @@ func fullyPopulatedPlan(t *testing.T, api *restAPI, wsID string) *plan.Plan {
 		// sweep unions the keys across array elements for exactly this reason.
 		DoD: []task.AcceptanceCriterion{
 			{
-				ID:     "11111111-1111-4111-8111-111111111111",
-				Kind:   task.KindCheck,
-				Text:   "the build is green",
-				Status: task.CritPending,
-				Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "operator"},
-				Check:  &task.CriterionCheck{Command: "go build ./...", ExpectedExitCode: 3},
+				ID:         "11111111-1111-4111-8111-111111111111",
+				Kind:       task.KindCheck,
+				Text:       "the build is green",
+				Status:     task.CritPending,
+				Author:     task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "operator"},
+				Check:      &task.CriterionCheck{Command: "go build ./...", ExpectedExitCode: 3},
+				Provenance: task.ProvenanceStated,
 			},
 			{
 				ID:     "22222222-2222-4222-8222-222222222222",

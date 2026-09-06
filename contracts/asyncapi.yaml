@@ -4425,6 +4425,13 @@ components:
             for the shape decision.
         condition:
           type: string
+        definition:
+          type: string
+          description: >
+            ADR-080 D-STATEMENT — the compiled SMART restatement, rendered
+            before the criteria breakdown. Present on the `queued`
+            (pending-confirm) emission; keep in sync by hand with
+            components/schemas/GoalStatusFrame.yaml.
         round:
           type: integer
           minimum: 0
@@ -4483,6 +4490,7 @@ components:
             type: object
             required:
               - kind
+              - judgment
               - text
               - author
               - status
@@ -4496,6 +4504,127 @@ components:
                   - check
                   - prose
                   - behavior
+              judgment:
+                type: string
+                enum:
+                  - boolean
+                  - quantitative
+                  - artifact
+                description: >
+                  ADR-080 D-TYPES. Keep in sync by hand with
+                  components/schemas/AcceptanceCriterion.yaml.
+              provenance:
+                type: string
+                enum:
+                  - stated
+                  - workspace
+                  - floor
+                  - inferred
+                description: >
+                  ADR-080 D-DOD. ADDITIVE-OPTIONAL — meaningful only on DoD
+                  items. Keep in sync by hand with
+                  components/schemas/AcceptanceCriterion.yaml.
+              text:
+                type: string
+                minLength: 1
+                maxLength: 1000
+              check:
+                type: object
+                required:
+                  - command
+                  - expected_exit_code
+                additionalProperties: false
+                properties:
+                  command:
+                    type: string
+                    minLength: 1
+                  expected_exit_code:
+                    type: integer
+                    minimum: 0
+                    maximum: 255
+              behavior:
+                type: object
+                required:
+                  - tool
+                additionalProperties: false
+                properties:
+                  tool:
+                    type: string
+                    minLength: 1
+                  min_count:
+                    type: integer
+                    minimum: 0
+                    default: 1
+                  max_count:
+                    type: integer
+                    minimum: 0
+                  scope:
+                    type: string
+                    enum:
+                      - attempt
+                      - task_session
+                    default: task_session
+              author:
+                type: object
+                required:
+                  - kind
+                  - id
+                additionalProperties: false
+                properties:
+                  kind:
+                    type: string
+                    enum:
+                      - agent
+                      - user
+                  id:
+                    type: string
+                    minLength: 1
+              status:
+                type: string
+                enum:
+                  - pending
+                  - met
+                  - unmet
+        dod:
+          type: array
+          description: >
+            ADR-080 D-DOD — the goal's Definition of Done breakdown,
+            DISTINCT from `criteria`, for the `queued` (pending-confirm)
+            emission. Items are a hand-synced INLINE duplicate of the
+            canonical components/schemas/AcceptanceCriterion.yaml shape,
+            same as `criteria` above — keep both in sync by hand with
+            components/schemas/GoalStatusFrame.yaml.
+          items:
+            type: object
+            required:
+              - kind
+              - judgment
+              - text
+              - author
+              - status
+            additionalProperties: false
+            properties:
+              id:
+                type: string
+              kind:
+                type: string
+                enum:
+                  - check
+                  - prose
+                  - behavior
+              judgment:
+                type: string
+                enum:
+                  - boolean
+                  - quantitative
+                  - artifact
+              provenance:
+                type: string
+                enum:
+                  - stated
+                  - workspace
+                  - floor
+                  - inferred
               text:
                 type: string
                 minLength: 1

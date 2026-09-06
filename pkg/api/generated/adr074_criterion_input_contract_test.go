@@ -7,12 +7,13 @@
 package generated
 
 // adr074_criterion_input_contract_test.go — judgment-first-criteria-spec test
-// #6 (ADR-074 required-test #11 included): AcceptanceCriterionInput.yaml is
-// DERIVED from the canonical AcceptanceCriterion.yaml — identical field set
-// and shapes, with a `required` delta of exactly {kind} — and the generated
-// TypeScript emits `kind` OPTIONAL on the Input type while the response type
-// keeps it required (guarding the documented `default:` codegen trap, which
-// would silently make the field non-optional again).
+// #6 (ADR-074 required-test #11 included), extended by ADR-080 D-TYPES:
+// AcceptanceCriterionInput.yaml is DERIVED from the canonical
+// AcceptanceCriterion.yaml — identical field set and shapes, with a
+// `required` delta of exactly {kind, judgment} — and the generated
+// TypeScript emits `kind`/`judgment` OPTIONAL on the Input type while the
+// response type keeps them required (guarding the documented `default:`
+// codegen trap, which would silently make the field non-optional again).
 
 import (
 	"os"
@@ -137,9 +138,9 @@ func assertSchemaShapeParity(t *testing.T, path string, canonical, derived map[s
 
 // TestAcceptanceCriterionInput_ParityWithCanonical asserts the derived
 // authoring schema mirrors the canonical response schema field-for-field,
-// with a root `required` delta of exactly {kind} — and that the Input's
-// `kind` carries NO OpenAPI `default:` (the codegen trap: default + optional
-// makes openapi-typescript emit the field non-optional).
+// with a root `required` delta of exactly {kind, judgment} — and that the
+// Input's `kind`/`judgment` carry NO OpenAPI `default:` (the codegen trap:
+// default + optional makes openapi-typescript emit the field non-optional).
 func TestAcceptanceCriterionInput_ParityWithCanonical(t *testing.T) {
 	t.Parallel()
 	canonical := loadSchemaYAML(t, "AcceptanceCriterion.yaml")
@@ -149,13 +150,13 @@ func TestAcceptanceCriterionInput_ParityWithCanonical(t *testing.T) {
 
 	canonReq := stringSlice(t, canonical["required"], "canonical required")
 	inputReq := stringSlice(t, derived["required"], "input required")
-	wantCanon := []string{"author", "kind", "status", "text"}
+	wantCanon := []string{"author", "judgment", "kind", "status", "text"}
 	wantInput := []string{"author", "status", "text"}
 	if !equalStringSlices(canonReq, wantCanon) {
 		t.Errorf("canonical required = %v, want %v", canonReq, wantCanon)
 	}
 	if !equalStringSlices(inputReq, wantInput) {
-		t.Errorf("input required = %v, want %v — the delta must be exactly {kind}", inputReq, wantInput)
+		t.Errorf("input required = %v, want %v — the delta must be exactly {kind, judgment}", inputReq, wantInput)
 	}
 
 	inputProps, ok := derived["properties"].(map[string]any)
@@ -170,12 +171,21 @@ func TestAcceptanceCriterionInput_ParityWithCanonical(t *testing.T) {
 		t.Error("AcceptanceCriterionInput.kind carries an OpenAPI `default:` — FORBIDDEN (ADR-074 D2 " +
 			"codegen trap: default + absent-from-required makes openapi-typescript emit kind non-optional)")
 	}
+	inputJudgment, ok := inputProps["judgment"].(map[string]any)
+	if !ok {
+		t.Fatalf("input judgment node is %T, want map", inputProps["judgment"])
+	}
+	if _, has := inputJudgment["default"]; has {
+		t.Error("AcceptanceCriterionInput.judgment carries an OpenAPI `default:` — FORBIDDEN (ADR-080 " +
+			"D-TYPES codegen trap: default + absent-from-required makes openapi-typescript emit judgment non-optional)")
+	}
 }
 
 // TestAcceptanceCriterionInput_GeneratedTSKindOptional is ADR-074 required-
-// test #11: the generated TypeScript emits `kind` as OPTIONAL on the Input
-// type and REQUIRED on the response type. Asserted against the committed
-// generated artifact so a regeneration that regresses the trap fails here.
+// test #11, extended by ADR-080 D-TYPES: the generated TypeScript emits
+// `kind`/`judgment` as OPTIONAL on the Input type and REQUIRED on the
+// response type. Asserted against the committed generated artifact so a
+// regeneration that regresses the trap fails here.
 func TestAcceptanceCriterionInput_GeneratedTSKindOptional(t *testing.T) {
 	t.Parallel()
 	tsPath := filepath.Join(contractsDir(), "..", "src", "lib", "api", "generated", "openapi-types.ts")
@@ -195,6 +205,10 @@ func TestAcceptanceCriterionInput_GeneratedTSKindOptional(t *testing.T) {
 		t.Error("generated TS AcceptanceCriterionInput.kind is NOT optional (`kind?:`) — the ADR-074 D2 " +
 			"relaxation was defeated (check for a stray OpenAPI `default:`)")
 	}
+	if !regexp.MustCompile(`\bjudgment\?: `).MatchString(inputBlock) {
+		t.Error("generated TS AcceptanceCriterionInput.judgment is NOT optional (`judgment?:`) — the " +
+			"ADR-080 D-TYPES relaxation was defeated (check for a stray OpenAPI `default:`)")
+	}
 
 	respBlock := regexp.MustCompile(`(?s)\n {8}AcceptanceCriterion: \{.*?\n {8}\};`).FindString(src)
 	if respBlock == "" {
@@ -202,5 +216,8 @@ func TestAcceptanceCriterionInput_GeneratedTSKindOptional(t *testing.T) {
 	}
 	if !regexp.MustCompile(`\bkind: `).MatchString(respBlock) || regexp.MustCompile(`\bkind\?: `).MatchString(respBlock) {
 		t.Error("generated TS AcceptanceCriterion.kind must stay REQUIRED on the response schema")
+	}
+	if !regexp.MustCompile(`\bjudgment: `).MatchString(respBlock) || regexp.MustCompile(`\bjudgment\?: `).MatchString(respBlock) {
+		t.Error("generated TS AcceptanceCriterion.judgment must stay REQUIRED on the response schema")
 	}
 }

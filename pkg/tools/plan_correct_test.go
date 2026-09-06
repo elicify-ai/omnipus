@@ -141,7 +141,13 @@ func supervisorCtx() context.Context {
 
 func proseCriterion(text string) task.AcceptanceCriterion {
 	return task.AcceptanceCriterion{
-		ID: "crit-" + text, Kind: task.KindProse, Text: text,
+		// ADR-080 D-TYPES: Judgment set explicitly to boolean (prose's default)
+		// so this fixture matches the shape task.NormalizeCriteria would
+		// produce for real persisted data — criterionKey now folds judgment
+		// into its identity, so a fixture left at the zero value would mismatch
+		// production-path criteria (which are always normalize-backfilled) on
+		// an otherwise-identical criterion.
+		ID: "crit-" + text, Kind: task.KindProse, Judgment: task.JudgmentBoolean, Text: text,
 		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
 	}
 }
@@ -162,7 +168,9 @@ func tailMemberArg(title string, criteriaTexts ...string) map[string]any {
 // (superseded) member fixture, mirroring proseCriterion's fixed-id style.
 func checkCriterionDone(text, command string, expectedExitCode int) task.AcceptanceCriterion {
 	return task.AcceptanceCriterion{
-		ID: "crit-" + text, Kind: task.KindCheck, Text: text,
+		// ADR-080 D-TYPES: Judgment set explicitly (check's deterministic
+		// judgment is always boolean) — same rationale as proseCriterion above.
+		ID: "crit-" + text, Kind: task.KindCheck, Judgment: task.JudgmentBoolean, Text: text,
 		Check:  &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode},
 		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
 	}

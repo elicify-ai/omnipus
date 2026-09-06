@@ -708,6 +708,8 @@ type Todo = {
 type AcceptanceCriterion = {
   id?: string | undefined;
   kind: "check" | "prose" | "behavior";
+  judgment: "boolean" | "quantitative" | "artifact";
+  provenance?: ("stated" | "workspace" | "floor" | "inferred") | undefined;
   text: string;
   check?:
     | {
@@ -866,6 +868,8 @@ type TaskCreateRequest = {
 type AcceptanceCriterionInput = {
   id?: string | undefined;
   kind?: ("check" | "prose" | "behavior") | undefined;
+  judgment?: ("boolean" | "quantitative" | "artifact") | undefined;
+  provenance?: ("stated" | "workspace" | "floor" | "inferred") | undefined;
   text: string;
   check?:
     | {
@@ -1447,6 +1451,7 @@ type Goal = {
   prompt: string;
   definition?: string | undefined;
   criteria: Array<AcceptanceCriterion>;
+  dod: Array<AcceptanceCriterion>;
   attempts_max: number;
   judge_rounds_max: number;
   round: number;
@@ -3060,6 +3065,8 @@ export const Todo: z.ZodType<Todo> = z.object({
 export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
   id: z.string().optional(),
   kind: z.enum(["check", "prose", "behavior"]),
+  judgment: z.enum(["boolean", "quantitative", "artifact"]),
+  provenance: z.enum(["stated", "workspace", "floor", "inferred"]).optional(),
   text: z.string().min(1).max(1000),
   check: z
     .object({
@@ -3163,6 +3170,8 @@ export const AcceptanceCriterionInput: z.ZodType<AcceptanceCriterionInput> =
   z.object({
     id: z.string().optional(),
     kind: z.enum(["check", "prose", "behavior"]).optional(),
+    judgment: z.enum(["boolean", "quantitative", "artifact"]).optional(),
+    provenance: z.enum(["stated", "workspace", "floor", "inferred"]).optional(),
     text: z.string().min(1).max(1000),
     check: z
       .object({
@@ -4104,6 +4113,7 @@ export const Goal: z.ZodType<Goal> = z.object({
   prompt: z.string().min(1).max(4000),
   definition: z.string().max(4000).optional(),
   criteria: z.array(AcceptanceCriterion),
+  dod: z.array(AcceptanceCriterion).min(1),
   attempts_max: z.number().int().gte(1),
   judge_rounds_max: z.number().int().gte(1),
   round: z.number().int().gte(0),
@@ -11442,6 +11452,7 @@ export const GoalStatusFrame = z
     session_id: z.string().min(1),
     goal_id: z.string().min(1).optional(),
     condition: z.string(),
+    definition: z.string().optional(),
     round: z.number().int().min(0),
     max_rounds: z.number().int().min(1),
     latest_reason: z.string(),
@@ -11453,6 +11464,38 @@ export const GoalStatusFrame = z
     .object({
       id: z.string().optional(),
       kind: z.enum(["check", "prose", "behavior"]),
+      judgment: z.enum(["boolean", "quantitative", "artifact"]),
+      provenance: z.enum(["stated", "workspace", "floor", "inferred"]).optional(),
+      text: z.string().min(1).max(1000),
+      check: z
+      .object({
+        command: z.string().min(1),
+        expected_exit_code: z.number().int().min(0).max(255),
+      })
+      .strict().optional(),
+      behavior: z
+      .object({
+        tool: z.string().min(1),
+        min_count: z.number().int().min(0).optional(),
+        max_count: z.number().int().min(0).optional(),
+        scope: z.enum(["attempt", "task_session"]).optional(),
+      })
+      .strict().optional(),
+      author: z
+      .object({
+        kind: z.enum(["agent", "user"]),
+        id: z.string().min(1),
+      })
+      .strict(),
+      status: z.enum(["pending", "met", "unmet"]),
+    })
+    .strict()).optional(),
+    dod: z.array(z
+    .object({
+      id: z.string().optional(),
+      kind: z.enum(["check", "prose", "behavior"]),
+      judgment: z.enum(["boolean", "quantitative", "artifact"]),
+      provenance: z.enum(["stated", "workspace", "floor", "inferred"]).optional(),
       text: z.string().min(1).max(1000),
       check: z
       .object({

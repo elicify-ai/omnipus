@@ -350,11 +350,13 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			return nil, fmt.Errorf("criteria[%d]: must be an object", i)
 		}
 		kind, _ := m["kind"].(string)
+		judgment, _ := m["judgment"].(string)
 		text, _ := m["text"].(string)
 		c := task.AcceptanceCriterion{
-			Kind:   task.CriterionKind(kind),
-			Text:   text,
-			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
+			Kind:     task.CriterionKind(kind),
+			Judgment: task.JudgmentKind(judgment),
+			Text:     text,
+			Author:   task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
 		}
 		if chk, ok := m["check"].(map[string]any); ok {
 			command, _ := chk["command"].(string)
@@ -377,6 +379,17 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
 		}
 		c.Kind = k
+		// ADR-080 D-TYPES: judgment is likewise optional at authoring time —
+		// resolve it from the now-resolved kind HERE (mirroring InferCriterionKind
+		// immediately above), so every criterion this parser produces carries an
+		// explicit judgment before it ever reaches criterionKey/sameShape
+		// dedup comparisons against already-normalized (and therefore
+		// judgment-backfilled) stored criteria.
+		j, jErr := task.InferJudgment(&c)
+		if jErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, jErr)
+		}
+		c.Judgment = j
 		out = append(out, c)
 	}
 	return out, nil
