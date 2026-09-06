@@ -1,4 +1,5 @@
-// GoalEchoCard — ADR-053 FE-8 / US-3 / design §1 (D11).
+// GoalEchoCard — ADR-053 FE-8 / US-3 / design §1 (D11); criteria breakdown
+// per ADR-074 D5.2 / judgment-first FR-011 (US-6).
 //
 // Renders the compiled-goal ECHO in the chat thread: when the engine compiles
 // user intent into the goal definition + acceptance-criteria ladder (including
@@ -7,32 +8,31 @@
 // that echo surface — it shows exactly what will be run, and prompts the user
 // to reply to confirm or restate to amend.
 //
-// Per the design (§1, "Echo & confirm — in chat, no form (D11)"): "The refined
-// goal — including the literal compiled command(s) — is echoed by the agent in
-// the chat, and the user replies in the chat to confirm (no approval
-// form/modal). The goal goes active only on that reply. The user sees exactly
-// what will be run."
+// The criteria breakdown arrives on the goal_status frame's optional
+// `criteria` field (present on the `queued` pending-confirm emission,
+// ADR-074 D5.2). Rendering is plain-language-FIRST: each row leads with the
+// criterion text; a technical payload (machine-check command verbatim, or a
+// behavior count) renders as a quiet per-row "verifies via:" chip. Row and
+// chip rendering — including the chip's formatting — is delegated entirely
+// to the shared CriteriaBreakdown component (D5.4), so the same criterion
+// reads identically here and in the Create Task / Create Plan flows. `[kind]`
+// classification tokens are NOT user-facing content and never render.
 //
-// Purely presentational — driven by props. The literal commands are the
-// machine-check commands the compiler minted (shown verbatim so the user can
-// vet them before confirming — they run under the goal-bearing agent's own
-// tool policy, never a bypass).
+// Purely presentational — driven by props. Literal commands are shown
+// verbatim so the user can vet them before confirming — they run under the
+// goal-bearing agent's own tool policy, never a bypass.
 
-import { Target, Terminal, ArrowBendUpRight } from '@phosphor-icons/react'
+import { Target, ArrowBendUpRight } from '@phosphor-icons/react'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import { CriteriaBreakdown } from '@/components/shared/CriteriaBreakdown'
 
 export interface GoalEchoCardProps {
-  /** The goal_status frame describing the compiled goal (condition + accounting). */
+  /** The goal_status frame describing the compiled goal (condition + accounting + criteria breakdown). */
   frame: GoalStatusFrame
-  /**
-   * Literal compiled machine-check commands the compiler minted from user
-   * intent — shown verbatim so the user sees exactly what will run. Empty when
-   * the goal has no machine-check criteria (behaviour/prose only).
-   */
-  literalCommands?: string[]
 }
 
-export function GoalEchoCard({ frame, literalCommands = [] }: GoalEchoCardProps) {
+export function GoalEchoCard({ frame }: GoalEchoCardProps) {
+  const criteria = frame.criteria ?? []
   return (
     <div
       data-testid="goal-echo-card"
@@ -56,22 +56,16 @@ export function GoalEchoCard({ frame, literalCommands = [] }: GoalEchoCardProps)
         {frame.max_rounds} rounds · {frame.cap} concurrent loop{frame.cap === 1 ? '' : 's'}
       </p>
 
-      {/* Literal commands — the machine checks the compiler authored */}
-      {literalCommands.length > 0 && (
-        <div className="mt-2.5" data-testid="goal-echo-commands">
-          <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
-            <Terminal size={11} aria-hidden="true" />
-            Literal commands
+      {/* Criteria breakdown — plain language first, per-row verifies-via chip
+          for technical payloads (ADR-074 D5.2 / FR-011). Rendered by the
+          shared CriteriaBreakdown (D5.4) so criteria read identically on
+          every confirmation surface. */}
+      {criteria.length > 0 && (
+        <div className="mt-2.5" data-testid="goal-echo-criteria">
+          <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
+            Done when
           </div>
-          <ul className="space-y-1">
-            {literalCommands.map((cmd, i) => (
-              <li key={i} className="flex items-start gap-1.5">
-                <code className="font-mono text-[11px] text-[var(--color-accent)] bg-[var(--color-surface-2)] rounded px-1.5 py-0.5 break-all flex-1">
-                  {cmd}
-                </code>
-              </li>
-            ))}
-          </ul>
+          <CriteriaBreakdown criteria={criteria} />
         </div>
       )}
 

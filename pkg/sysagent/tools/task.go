@@ -68,6 +68,11 @@ func validateBlockersSameWorkspace(store *task.Store, dependentWorkspaceID strin
 // definition, agent-authored (SD-A7); author is never accepted from args.
 // Shape/length validation is left to the store's own normalizeCriteria,
 // invoked from Store.Create.
+//
+// Behavior payloads (ADR-052 FR-034 / ADR-074 D3a) decode via the shared
+// task.DecodeBehaviorPayload, which honors the pointer semantics
+// pkg/task/criterion.go documents (absent min_count/max_count stay nil; an
+// explicit 0 decodes to a pointer at 0).
 func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
 	out := make([]task.AcceptanceCriterion, 0, len(raw))
 	for i, item := range raw {
@@ -90,6 +95,19 @@ func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task
 			}
 			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
 		}
+		if beh, ok := m["behavior"].(map[string]any); ok {
+			c.Behavior = task.DecodeBehaviorPayload(beh)
+		}
+		// ADR-074 D2: kind is optional at authoring time — resolve it from the
+		// payload shape HERE, before the caller's ADR-049 D2-rule-5 all-check
+		// bash-policy gate runs, so the gate fires on inferred kinds too. An
+		// explicit kind passes through unchanged; kind-less with BOTH payloads
+		// is rejected as ambiguous.
+		k, kErr := task.InferCriterionKind(&c)
+		if kErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
+		}
+		c.Kind = k
 		out = append(out, c)
 	}
 	return out, nil
@@ -162,7 +180,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done). Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done). Before authoring acceptance criteria, load the define-done skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -211,9 +229,13 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"kind": map[string]any{
 							"type": "string",
-							"enum": []string{"check", "prose"},
+							"enum": []string{"check", "prose", "behavior"},
 							"description": "check: a shell command verified via the assignee's own bash tool; " +
-								"prose: a free-text statement judged by the Judge System Agent",
+								"prose: a free-text statement judged by the Judge System Agent; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -225,10 +247,11 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 							},
-							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
+						"behavior": task.BehaviorCriterionParamSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Acceptance criteria (Definition of Done). REQUIRED (at least one) when " +
 					"agent_id is set — an agent-assigned task with zero criteria is rejected.",

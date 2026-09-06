@@ -441,6 +441,15 @@ type AgentLoop struct {
 	// remain accessible via GetAgentStore for read-only access to old sessions.
 	sharedSessionStore *session.UnifiedStore
 
+	// askUserRegistry is the gateway-injected AskUserQuestion pending
+	// registry (askuserquestion-tool-spec v3 §0.4; pkg/askuser.Registry).
+	// Nil until SetAskUserRegistry is called; the per-agent
+	// AskUserQuestionTool instances resolve it LIVE per call (late-bound, so
+	// registerSharedTools may run before the gateway wires it) and fail
+	// closed while nil. Guarded by askUserRegistryMu.
+	askUserRegistry   tools.AskUserQuestionRegistry
+	askUserRegistryMu sync.RWMutex
+
 	// toolApprover is the gateway-injected implementation of the human-in-the-loop
 	// approval gate (FR-011, FR-082). Nil until SetToolApprover is called; when nil,
 	// ask-policy tools are treated as allow (open gate, no WS event).
@@ -1888,6 +1897,16 @@ func registerSharedTools(
 		// operator's current security state. See
 		// docs/internal/false-green-patterns.md §5.
 		agent.Tools.RegisterReplacing(messageTool)
+
+		// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b): the
+		// owner-session structured clarification tool. The registry is
+		// resolved LIVE per call via the closure (the gateway wires it with
+		// SetAskUserRegistry after boot), so this registration needs no
+		// re-wire pass; an unwired registry fails closed inside Execute with
+		// a clear "ask conversationally" error, never a silent park.
+		agent.Tools.RegisterReplacing(tools.NewAskUserQuestionTool(func() tools.AskUserQuestionRegistry {
+			return al.getAskUserRegistry()
+		}))
 
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
@@ -7757,6 +7776,18 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// "unavailable" when the required capability is nil.
 	if response, handled := al.handleCommand(ctx, msg, agent, &opts); handled {
 		return response, agent, nil
+	}
+
+	// ADR-074 D4a reply routing (judgment-first spec US-3 S9): when this
+	// session carries a pending goal state (compiled-awaiting-confirmation or
+	// awaiting a clarification answer), a BARE chat message may be the confirm
+	// token or the clarification answer. The hook answers synchronously
+	// (handled=true), rewrites the turn into round 1 on a fresh-goal confirm
+	// (handled=false + opts.UserMessage), or passes an ordinary message
+	// through untouched — a routine chat message never silently mutates goal
+	// state.
+	if goalHandled, goalReply := al.applyGoalPendingReply(ctx, msg, agent, &opts); goalHandled {
+		return goalReply, agent, nil
 	}
 
 	resp, err := al.runAgentLoop(ctx, agent, opts)

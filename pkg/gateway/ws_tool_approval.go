@@ -65,25 +65,11 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		return
 	}
 
-	h.mu.Lock()
-	conns := make([]*wsConn, 0, len(h.sessions))
-	for _, wc := range h.sessions {
-		conns = append(conns, wc)
-	}
-	h.mu.Unlock()
-
-	for _, wc := range conns {
-		// FR-073 scoping is moot under the single-user model — every connected
-		// client is the one account, so every connection receives every
-		// approval broadcast unconditionally (role-based scoping removed).
-		select {
-		case wc.sendCh <- raw:
-		default:
-			slog.Warn("ws: tool_approval_required dropped — send buffer full",
-				"approval_id", entry.ApprovalID)
-			wc.droppedFrames.Add(1)
-		}
-	}
+	// FR-073 scoping is moot under the single-user model — every connected
+	// client is the one account, so every connection receives every approval
+	// broadcast unconditionally (role-based scoping removed).
+	h.broadcastRaw(raw, "ws: tool_approval_required dropped — send buffer full",
+		"approval_id", entry.ApprovalID)
 }
 
 // emitSessionState sends the session_state one-shot frame to a single WS connection
@@ -128,6 +114,20 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 		UserId:           wc.userID,
 		PendingApprovals: pendingApprovals,
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// askuserquestion-tool-spec v3 US-6 S1/FR-9: snapshot every PENDING
+	// AskUserQuestion card so a reconnecting SPA re-hydrates its card +
+	// composer lock (the boot rearm sweep in gateway.go re-populates the
+	// registry from session meta after a restart). Optional field — absent
+	// when no registry is wired or nothing is pending.
+	if h.askUserReg != nil {
+		if pendingSets := h.askUserReg.PendingAll(); len(pendingSets) > 0 {
+			delay := h.askUserReg.EffectiveDefaultSafeDelay()
+			for _, set := range pendingSets {
+				frame.PendingAsks = append(frame.PendingAsks, toAskUserCard(set, delay))
+			}
+		}
 	}
 
 	raw, err := json.Marshal(frame)

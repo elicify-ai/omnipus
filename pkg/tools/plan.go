@@ -119,7 +119,9 @@ func (t *PlanCreateTool) Description() string {
 	return "Create a draft Plan to decompose / break down a complex, multi-step goal — a " +
 		"Definition-of-Done-driven grouping of tasks. Attach member tasks afterward with " +
 		"create_task(plan_id=..., write_set=..., stream=..., is_join=...). Requires at least one " +
-		"Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. Also " +
+		"Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. " +
+		"Before authoring acceptance criteria, load the define-done skill (via the Skill tool) " +
+		"and follow its quality bar. Also " +
 		"requires rationale: the planning discipline behind the decomposition (e.g. which " +
 		"write-set/stream split was chosen and which member is the join). Names an owner_agent_id — " +
 		"the real, addressable agent woken at the plan's decision points; a System Agent or worker is " +
@@ -162,9 +164,13 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"kind": map[string]any{
 							"type": "string",
-							"enum": []string{"check", "prose"},
+							"enum": []string{"check", "prose", "behavior"},
 							"description": "check: a shell command verified via the plan owner's bash tool; " +
-								"prose: a free-text statement judged by the plan verifier",
+								"prose: a free-text statement judged by the plan verifier; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -176,10 +182,11 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 							},
-							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
+						"behavior": task.BehaviorCriterionParamSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Plan-level Definition of Done. REQUIRED: at least one criterion — an " +
 					"agent-authored plan with zero DoD criteria is rejected.",

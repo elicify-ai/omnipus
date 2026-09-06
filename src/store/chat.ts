@@ -17,6 +17,10 @@ import type {
   LoopStatusFrame,
   JudgeVerdictFrame,
   PlanStatusFrame,
+  AskUserQuestionFrame,
+  AskUserQuestionCard,
+  AskUserAnswerFrame,
+  SessionStateFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
@@ -24,6 +28,7 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
+import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import {
@@ -468,6 +473,16 @@ export interface SessionChatState {
   goalPills?: Record<string, GoalStatusFrame>
   /** ADR-049 D6/US-12: latest `loop_status` frame for this session. Same session-scoped/store-verbatim/optional-for-fixture-compat pattern as `goalStatus`. */
   loopStatus?: LoopStatusFrame | null
+  /**
+   * askuserquestion-tool-spec v3 (ADR-074 D4b): the session's latest
+   * AskUserQuestion card — pending (renders the tabbed question zone +
+   * locks the composer) or terminal (renders the collapsed record). Fed by
+   * the session-scoped `ask_user_question` frame and the `session_state`
+   * reconnect snapshot (`pending_asks`). One card per routing session by
+   * server contract, so a single slot suffices. Optional for the same
+   * fixture-compat reason as `goalStatus` above.
+   */
+  pendingAsk?: AskUserQuestionCard | null
 }
 
 function emptySessionState(): SessionChatState {
@@ -494,6 +509,7 @@ function emptySessionState(): SessionChatState {
     goalStatus: null,
     goalPills: {},
     loopStatus: null,
+    pendingAsk: null,
   }
 }
 
@@ -1047,6 +1063,8 @@ interface ChatStore {
   goalPills?: Record<string, GoalStatusFrame>
   /** ADR-049 D6/US-12: active session's latest `loop_status` frame, or null/undefined. */
   loopStatus?: LoopStatusFrame | null
+  /** askuserquestion-tool-spec v3: the active session's AskUserQuestion card (pending → question zone + composer lock; terminal → collapsed record). See SessionChatState.pendingAsk. */
+  pendingAsk?: AskUserQuestionCard | null
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
@@ -1277,6 +1295,14 @@ interface ChatStore {
    */
   cancelStream: (sessionId?: string) => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
+  /**
+   * askuserquestion-tool-spec v3 §3: submit (or cancel) the pending
+   * AskUserQuestion card over the WS (`ask_user_answer`). Validation is the
+   * server's (first-valid-wins); a dropped connection surfaces a connection
+   * error and leaves the card pending for the reconnect snapshot to
+   * re-hydrate.
+   */
+  sendAskUserAnswer: (answer: Omit<AskUserAnswerFrame, 'type'>) => void
 
   // C8: defensively clear in-flight/streaming state for every session bucket.
   // Called when the stream is terminated by something OTHER than a clean done
@@ -1452,6 +1478,10 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   // handled as GLOBAL frames below (like notification/whatsapp_pairing) —
   // do not add them here.
   'goal_status', 'loop_status',
+  // askuserquestion-tool-spec v3 §3: session-scoped — the session id rides
+  // on card.session_id (required, min(1)); the routing resolver below
+  // falls back to it when no top-level session_id exists.
+  'ask_user_question',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
@@ -1778,6 +1808,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     goalStatus: null,
     goalPills: {},
     loopStatus: null,
+    pendingAsk: null,
     lastUserMessageAt: null,
     cancelStage: null,
     lastReceivedEventTime: null,
@@ -3149,6 +3180,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
       maybeDrainNext()
     },
 
+    sendAskUserAnswer: (answer) => {
+      const { connection } = useConnectionStore.getState()
+      if (!connection) {
+        useConnectionStore.getState().setConnectionError('Cannot send your answers — not connected. Reconnect and try again.')
+        return
+      }
+      const sent = connection.send({ type: 'ask_user_answer', ...answer })
+      if (!sent) {
+        useConnectionStore.getState().setConnectionError('Failed to send your answers — connection dropped. Reconnect and try again.')
+      }
+    },
+
     respondToPairing: (deviceId, decision) => {
       const { connection } = useConnectionStore.getState()
       if (!connection) {
@@ -3165,7 +3208,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
     handleFrame: (frame) => {
       // Resolve which session this frame belongs to.
       // session_started is special: it carries the new id for the pending message.
-      const frameSessionId = (frame as { session_id?: string }).session_id
+      // ask_user_question nests its session id on card.session_id (required
+      // by schema) rather than the top level — fall back to it so the frame
+      // routes session-scoped like every other member of
+      // SESSION_SCOPED_FRAME_TYPES.
+      const frameSessionId =
+        (frame as { session_id?: string }).session_id ??
+        (frame as { card?: { session_id?: string } }).card?.session_id
       const activeSid = getActiveSid()
 
       // F-S1: Route to the correct bucket.
@@ -5261,6 +5310,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
           break
         }
 
+        case 'ask_user_question': {
+          // askuserquestion-tool-spec v3 §3: session-scoped (card.session_id,
+          // resolved into targetSid above). Store the card verbatim — a
+          // pending card renders the tabbed question zone and locks the
+          // composer; a terminal (answered/cancelled) card renders the
+          // collapsed record (§0.6: from THIS record, never a parse of the
+          // resume message) and unlocks the composer.
+          if (!targetSid) break
+          const askFrame = frame as AskUserQuestionFrame
+          withBucket(targetSid, () => ({ pendingAsk: askFrame.card }))
+          break
+        }
+
         case 'plan_status': {
           // ADR-049 R3/FR-099: GLOBAL frame — PlanStatusFrame carries no
           // session_id (correlated by plan_id, not any chat thread), so it
@@ -5312,9 +5374,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
           useToolApprovalStore.getState().enqueue(frame)
           break
 
-        case 'session_state':
+        case 'session_state': {
           useToolApprovalStore.getState().reconcileWithSessionState(frame)
+          // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
+          // AskUserQuestion cards on every reconnect snapshot. The
+          // hydrate/clear/race semantics live in the dedicated, unit-tested
+          // reconcilePendingAsks (mirrors the toolApproval
+          // reconcileWithSessionState pattern); this case only applies the
+          // computed per-session changes.
+          const stateFrame = frame as SessionStateFrame
+          const askChanges = reconcilePendingAsks(
+            stateFrame.pending_asks ?? [],
+            get().sessionsById,
+          )
+          for (const [sid, card] of Object.entries(askChanges)) {
+            withBucket(sid, () => ({ pendingAsk: card }))
+          }
           break
+        }
 
         case 'system_overload':
           useUiStore.getState().addToast({

@@ -6,6 +6,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // EventKind identifies a structured agent-loop event.
@@ -754,6 +755,13 @@ type GoalStatusChangedPayload struct {
 	ActiveLoops  int    `json:"active_loops"`
 	Cap          int    `json:"cap"`
 	State        string `json:"state"`
+	// Criteria (ADR-074 D5.2 / judgment-first FR-011) is the compiled
+	// acceptance-criteria breakdown behind Condition, carried on the
+	// `queued` (pending-confirm) emission so the SPA's confirmation card
+	// itemizes exactly what will run (commands verbatim). Empty on
+	// round/lifecycle pushes. The WS forwarder maps it onto the wire
+	// frame's optional `criteria` field.
+	Criteria []task.AcceptanceCriterion `json:"criteria,omitempty"`
 }
 
 // LoopStatusChangedPayload carries a session's `/loop` status for the SPA

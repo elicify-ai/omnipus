@@ -1,0 +1,55 @@
+title: AskUserAnswerFrame
+description: >
+  Client → server (askuserquestion-tool-spec v3 §3, ADR-074 D4b). The
+  card's submission: either a full answer set (every question answered
+  exactly once — server-validated by askuser.Registry.Submit,
+  first-valid-wins) or cancel:true (the Cancel affordance — selections
+  discarded, submission-free cancelled resume). Validated inbound via the
+  gateway's wsFrameSchemaName → ValidateInboundFrameJSON path (this file's
+  machine-synced inboundschemas copy). Canonical copy lives inline in
+  contracts/asyncapi.yaml components.schemas — the HAND-synced pair is
+  {this file, the asyncapi inline copy}.
+type: object
+required:
+  - type
+  - card_id
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: ask_user_answer
+  card_id:
+    type: string
+    minLength: 1
+  session_id:
+    type: string
+    minLength: 1
+  cancel:
+    type: boolean
+    description: true = cancel the set (answers ignored/absent).
+  answers:
+    type: array
+    maxItems: 10
+    items:
+      type: object
+      required:
+        - header
+      additionalProperties: false
+      properties:
+        header:
+          type: string
+          minLength: 1
+          maxLength: 16
+        selected:
+          type: array
+          items:
+            type: string
+            maxLength: 80
+          maxItems: 6
+        free_text:
+          type: string
+          maxLength: 2000
+        auto_default:
+          type: boolean
+          description: Client marks answers that were server-auto-resolved (origin marker, US-3 S3).

@@ -1,125 +1,120 @@
 # AskUserQuestion — structured clarification tool spec
 
-- **Status:** Draft **v2** (2026-09-05). v1's grill (4 CRITICAL / 11 MAJOR / 6 MINOR) found the blocking-execution model infeasible against the turn engine and every consequence undersold; v2 is rebuilt on the codebase's own sanctioned pattern (durable park + pending registry + reconnect snapshot) and addresses every finding (C-n/M-n/m-n markers cite them). Grill round 2 pending.
-- **Authoritative parents:** ADR-074 D4b (Accepted — every operator ruling there is FIXED; see v1 header for the list; the approved visual reference is `docs/internal/design/askuserquestion-ui-mock.html` v2). **This spec records an amendment to ADR-053 D2** (C-4): D2 ruled "only a direct session/plan owner asks the human, conversationally in chat (no per-question reply card)" — D4b supersedes the no-card clause for session owners; the owner-only restriction SURVIVES (delegated children still ask their parent via `message_parent`, never the human).
+- **Status:** Draft **v3** (2026-09-05). Two grill rounds complete per project standard: r1 (4C/11M — blocking model refuted, rebuilt on the durable park) corrected in v2; r2 (2C/8M — resume contract misdescribed, v1 channel hole) corrected here; the one flagged sign-off (§9.1, channel phasing) was RESOLVED by operator interview #5 — specs complete, zero open sign-offs.
+- **Authoritative parents:** ADR-074 D4b (Accepted; all operator rulings FIXED; visual reference `docs/internal/design/askuserquestion-ui-mock.html` v2). **ADR-053 D2 amendment:** recorded at the ADR itself (D2 row annotation) per the design-first rule — the card supersedes D2's "no per-question reply card" for session owners; the owner-only restriction survives (children ask their parent via `message_parent`).
 - **Role:** general-purpose agent tool; first consumer is ADR-074 D4a's goal-compilation clarifying question.
 
 ---
 
-## 0. Execution model — durable park, not an in-memory block (C-1, C-3, O-1)
+## 0. Execution model — durable park (verified precedents cited)
 
-`AskUserQuestion` NEVER blocks inside `Execute()`. It follows the `message_parent(question:true)` precedent exactly:
-
-1. The tool validates its input, persists the pending question set as durable session state (session meta + a gateway-side pending registry shaped like `approvalRegistryV2` — O-2), emits the card frame, and returns a **`ParksTurn` result**: the turn ends parked with the `needs_input` lifecycle (`pkg/tools/message_parent.go`'s `LifecycleNeedsInput` pattern, honored at the loop's park seam).
-2. The user's answer — SPA frame or (v1.1) channel reply — **resumes as a correlated new turn** carrying the tool result (answers array or `cancelled`), exactly as a `needs_input` park resumes today.
-3. Because the turn ends at park time: the admission slot is released (no starvation), the steering queue is irrelevant (no mid-turn block for replies to divert around), per-agent/sub-turn/scheduled timeouts never race a human (nothing is running), and **restart survival is real by construction** — the pending state persists, the reconnect snapshot re-hydrates the card, and the answer starts the resume turn regardless of process lifetime. `RecoverOrphanedToolCalls`' cancel-on-restart semantic does not apply: there is no orphaned in-flight call to repair.
-4. The 30-minute default-safe timer runs server-side over the durable state (armed from the persisted rendered-at; re-armed on boot from the same timestamp — continuity for free), never inside a tool goroutine.
-
-**Caller scope (C-4):** v1 callers are **session owners only** — the agent driving a user-facing session. A delegated child's call is rejected with a clear error pointing at `message_parent(question:true)` (ADR-053 D2's surviving rule). Scheduled/headless runs (`AutoDenyAsk` contexts) get `no_human_surface` immediately.
-**Pending-key (C-4):** one pending question set per **routing session** (`routingSessionID` — the cancel/reachability namespace), so parallel delegated children can never race two cards onto one chat surface (they can't call it at all in v1, but the key rules out the class).
+1. **Park.** `Execute()` validates, persists the pending question set (see §0.3), emits the card frame, and returns `ParksTurn` — the loop ends the turn `TurnEndStatusParked` (`loop.go:11759`, `:11583-11588` — verified). **The park-time tool_result is written immediately** (the transcript's tool_use/tool_result adjacency is never left dangling — C-R2-1): its content is `{status:"pending", card_id, question_count}`, mirroring the `MessageParentResponse` precedent.
+2. **Resume.** The answer does NOT return as a tool result (refuted r2 — no late-fill mechanism exists). It returns exactly as the `message_parent` answer precedent does (`delegate.go:3520`, `:3562-3566`): a **correlated user-role message** starting the resume turn — `Answers to your questions (card_id=<id>): {"status":"answered"|"cancelled","answers":[...]}` — with each answered question's TEXT echoed alongside its answer (adopted o-R2-1: a days-late resume must not depend on the question surviving `windowTrim`'s eviction window). **Chat rendering:** the SPA renders this resume message AS the collapsed answer record (presentation rule), never as raw JSON; on channels it is not echoed back.
+3. **Slot/timeout consequences (wording per mechanism — m-R2-7):** admission gates inbound dispatch per session worker and the slot releases at worker idle-exit (`session_worker.go:154`), shortly after the park — no indefinite pin; nothing is running, so sub-turn/scheduled/per-agent timeouts never engage; the steering queue is irrelevant.
+4. **Durable store (M-R2-1, precise):** pending state lives in **UnifiedMeta (session meta) + the gateway-side pending registry** (`approvalRegistryV2` shape). Owner sessions have NO `LifecycleRecord` and this spec creates none — `ParksTurn` alone drives the loop seam (verified independent, `loop.go:11759`); the delegated-session boot sweep and `list_jobs` are untouched. The v2 "needs_input lifecycle" phrasing is struck.
+5. **Timers** run server-side over the durable state, re-armed on boot from persisted timestamps.
+6. **Collapsed-record reconstruction (C-R2-1 part 3):** on submission the registry/session-meta record is updated with the answers; the collapsed record (live and on history reload) renders from THAT record — not from the tool_call/tool_result pair (which holds only the park-time pending stub) and not from parsing the resume message.
+7. **Goal-loop gate (M-R2-5):** `TurnEndStatusParked` is NOT a natural turn stop for `checkGoalLoopAfterTurn` — a parked compile/clarification never advances the goal round, invokes the Judge, or re-dispatches; the gate lives at that function's entry.
+8. **Caller scope:** session owners only; delegated children rejected toward `message_parent(question:true)` (EC-9). The engine-invoked D4a goal-compile inside a DELEGATED child session (o-R2-3): falls back to `message_parent(question:true)` toward the delegating parent — never a card.
+9. **Pending-key:** one set per **routing session** (`turn.go:322-364` verified — root turns self-key, children inherit; exactly "one card per chat surface").
 
 ## 1. User stories
 
-### US-1 (P0) — An agent asks; the user answers on one structured surface
-1. **Given** a call with 3 questions from a session owner, **When** validated, **Then** the pending set persists, the card frame emits, the turn parks (`needs_input`), and the composer locks with the reason shown. *(FR-1, FR-2)*
-2. **Given** an option selected on Q1, **Then** its tab marks selected, the view auto-advances to the next question without a selection, and the n/M counter updates. *(FR-10)*
-3. **Given** all questions have a selection or free text, **When** the user presses Answer, **Then** the submission is server-validated (FR-6), the resume turn carries `{status: "answered", answers: [...]}`, the card collapses to the flat record, and the composer unlocks. *(FR-3)*
-4. **Given** Cancel pressed at any point, **Then** the resume turn carries `{status: "cancelled"}` with **no answers** — selections are discarded, uniformly on every surface (M-3 resolved; EC-1). The agent decides what to do next; the tool never re-asks by itself. *(FR-4)*
-5. **Given** `multi_select: true`, **Then** several options are selectable and `selected` is a list. (Visual for multi-select rows is NOT yet in the approved mock — flagged for a mock v3 before implementation, m-3.)
+### US-1 (P0) — Ask; answer on one structured surface
+1. Owner-session call, valid → pending persists, card frame emits, turn parks, composer locks with reason. *(FR-1, FR-2)*
+2. Selection on Q1 → tab marks, auto-advance to next unselected, n/M updates. *(FR-10)*
+3. All questions selected/free-texted → Answer press → server-validated submission (FR-6) → registry record updated with answers → **resume turn starts with the correlated answers message (§0.2)** → card collapses to the record → composer unlocks. *(FR-3)*
+4. Cancel at any point → submission-free resume with `{"status":"cancelled"}`, **no answers, selections discarded — uniform on every surface**; card collapses to a "cancelled" record; the agent decides next steps. *(FR-4)*
+5. `multi_select: true` → list answers. (Multi-select visual: mock v3 required before implementation — flagged.)
 
-### US-2 (P0) — Free text always, through the card only
-1. **Given** any question, **Then** a free-text input renders under its options; typing deselects that question's options; **presence of `free_text` in the answer object IS the flag** (no boolean — M-10); a re-select clears the free text from the result even if text remains visible in the field (EC-3: last interaction wins). *(FR-5)*
-2. The chat composer stays locked while pending; free-form answering happens only in the card (D4b).
+### US-2 (P0) — Free text always, via the card
+1. Free-text input under every question's options; typing deselects; **presence of `free_text` IS the flag**; re-select drops the text from the result (last interaction wins). *(FR-5)*
+2. Composer stays locked; free-form answering happens only in the card.
 
-### US-3 (P0) — Recommendation and the default-safe timer, with real definitions (M-4)
-Definitions: a question is **selected** when the card holds a selection/free text for it (client state, unsubmitted); **answered** only when a submitted card (Answer press or auto-submit) carries it. The default-safe timer concerns *answered*, not *selected* — an unsubmitted selection does not stop the timer (a walked-away user's half-card must not block a background plan forever, per D4b's own rationale).
-1. `recommended` renders first with the badge, never pre-selected.
-2. **Given** `default_safe: true` (requires `recommended`; validated), **Then** at rendered-at + 30:00 (fixed global) an unanswered such question resolves to its recommendation, marked `auto_default: true` per answer and "· auto (30 min)" in the record.
-3. **Given** timers have fired and every question now has an answer-or-auto-resolution BUT some are unsubmitted manual selections, **Then** the card auto-submits after a **5-minute grace period with no card interaction** (the concrete focus rule — v1 open-item 1 resolved: "focused" = any card interaction within the last 5 minutes defers auto-submit), including the manual selections, each answer marked by origin (`auto_default` true/false). A card where every answer is auto submits immediately.
-4. **Given** unanswered NON-default-safe questions remain, **Then** the card pends indefinitely — there is **no other expiry** (M-11: the v1 "turn Stop/expiry" language is deleted; nothing is running to expire). Recovery is: answer, Cancel, or the session's Stop affordances.
+### US-3 (P0) — Recommendation, timer, and the three answer states
+States (o-R2-2 adopted): **selected** (client-only, unsubmitted) → **resolved-pending-submit** (server auto-resolved a default-safe question; not yet part of a submission) → **answered** (part of the accepted submission).
+1. `recommended`: badge, listed first, never pre-selected.
+2. `default_safe` (requires `recommended`): at its timer expiry (30:00 fixed) an un-answered such question becomes resolved-pending-submit, marked `auto_default`.
+3. **Grace auto-submit — client-fired (M-R2-2):** when every question is selected/resolved and 5 minutes pass with no card interaction, the CLIENT submits (a normal `ask_user_answer`) including manual selections, each marked by origin. **Closed-tab outcome, stated:** client state is lost; the SERVER submits on its own only when EVERY question is default-safe-resolved and no client submission has landed — so a closed tab with manual selections on non-default-safe questions leaves the card pending (correct: those questions genuinely need the human), and a closed tab where all questions were default-safe yields the all-recommendation submission at 30:00.
+4. Unanswered non-default-safe questions pend indefinitely — no other expiry exists; recovery = answer, Cancel, or session Stop affordances.
 
 ### US-4 (P1) — Rich context
-1. `context` (markdown; media refs from the session's own uploads) renders as the flat left-rule block. It is display-only, never parsed, and the frame carries it **raw with SPA-side sanitized rendering** (same pipeline as chat markdown — v1 open-item 3 resolved normatively; XSS posture identical to chat). *(FR-7)*
+Raw markdown/media-ref context; SPA-sanitized render (chat pipeline); display-only. Hostile-markdown inertness is TESTED (m-R2-3). *(FR-7)*
 
-### US-5 (P1) — Text channels (v1.1, mechanism specified — C-2)
-The D4b ruling (plain-text degradation, no native channel UI) stands; v1 ships SPA-only, and **v1.1 ships channels on this specified mechanism** — not a parser footnote:
-1. **Why the park model makes this tractable:** with the turn parked, an inbound channel message is NOT mid-turn — it arrives between turns like any message. The mechanism is a **pre-turn pending-answer seam** in the loop's turn-start path (the `applyGoalCommandPrompt` precedent): before normal processing, if the session's routing key has a pending question set, the inbound text is consumed as the current question's answer instead of becoming a chat turn. No channel-adapter changes, no steering-queue surgery, no mid-turn interception (v1's deadlock, C-2, cannot occur — nothing is blocked).
-2. Questions deliver **sequentially** — one message per question ("2 of 5: …"), each with numbered options, "(recommended)" inline, "reply with a number or your own answer"; the next question sends after the answer.
-3. Reply parsing: an in-range number → that option; the exact whole-message keyword "cancel" (case-insensitive, trimmed — the `IsCancelCommand` precedent, m-1) → cancels the whole set (no answers, per FR-4); anything else → free text. A literal free-text answer "cancel" is unreachable on channels — documented limitation (use the app). *(FR-8)*
-4. **Per-question clock (M-5):** each question's 30-minute default-safe timer starts at ITS delivery, not card render. On restart, the current question re-sends with its timer continuing from persisted delivery time. Cancel mid-sequence returns `cancelled` with no answers (uniform rule).
-5. **Context on channels (M-6):** text context is included truncated to 500 chars; media context is omitted with "(details in the app)". Nothing else about the context leaves the session's own surfaces.
-6. A session live on BOTH SPA and a channel: the card and the sequential messages both present; **first valid submission wins** (FR-6's race rule); the loser surface gets a "already answered" notice.
+### US-5 (P1) — Text channels: the tool is BLOCKED there — permanent non-goal (operator ruling, interview #5, 2026-09-05; supersedes v2's v1.1 plan and resolves the §9.1 sign-off)
+1. On any non-web-origin session the tool errors immediately (`no_human_surface`-class error naming the reason), and the agent asks its question **conversationally, in plain language** — ordinary chat, no machinery. This is the operator's chosen simplification: no sequential delivery, no reply parsing, no channel degradation subsystem, ever.
+2. Consequences: the pre-turn answer seam, per-question channel clocks, both-surfaces races, and channel `/cancel`-as-card-cancel are all deleted from scope (the r2 findings M-R2-7 and parts of M-R2-4 dissolve with them). A session live on both the SPA and a channel is answerable via the SPA card only; channel messages during a pending set are ordinary turns (US-6 S6).
 
-### US-6 (P1) — Lifecycle, liveness, callers
-1. **Restart:** pending state persists in session meta; the SPA re-hydrates via the **reconnect snapshot** (the `pending_approvals`-in-`session_state` precedent — NOT a boot-time frame push; M-2); timers re-arm from persisted timestamps. The answer resumes a new turn — nothing needed to "survive". *(FR-9)*
-2. **Session Stop** (user hits Stop / `/cancel` on a channel): the pending set cancels (resume turn `cancelled`), card collapses, composer unlocks — no zombie cards. *(FR-4)*
-3. **One pending set per routing session**; a second call while one pends → tool error to the caller. *(FR-2)*
-4. **`no_human_surface` (M-1), operationally defined:** the tool errors immediately when (a) the turn context carries `AutoDenyAsk` (scheduled/headless — the existing seam; its non-inheritance defect #659 is a named dependency to verify for delegated contexts), or (b) a new **inverted gateway-liveness predicate** (the `policyApproverAdapter` pattern: gateway registers a "has any answerable surface" check into the loop) reports no SPA client AND no bound channel for the session. A session whose SPA client is merely disconnected but exists **waits** (the card hydrates on reconnect; parking makes waiting free).
-5. Delegated-child calls rejected (owner-only, §0).
+### US-6 (P1) — Lifecycle, liveness, inbound-while-pending
+1. **Restart:** session-meta persistence + reconnect-snapshot hydration (`SessionStateFrame` precedent verified, `websocket.go:704-706`); timers re-arm; the resume path needs nothing alive to "survive". *(FR-9)*
+2. **Session Stop / channel `/cancel`:** cancels the set, collapses the card, unlocks the composer.
+3. **One set per routing session**; second call → tool error.
+4. **Liveness, defined on origin — NOT connection state (M-R2-3):** answerable ⇔ the session's origin surface is the SPA (always answerable — a disconnected client's card hydrates on reconnect; parking makes waiting free). `no_human_surface` fires for: `AutoDenyAsk` contexts (scheduled/headless; ctx plumbing verified `base.go:123-152`, `loop.go:11278`; #659 status recorded: the inheritance CODE landed — `subturn.go:1428-1452`, ADR-075 FR-032 — the ISSUE remains open for its browser-tool remnant), and **every channel-origin session — permanently** (US-5 ruling): the agent asks conversationally instead; never a silent park a channel user can't see or answer. *(FR-12)*
+5. Delegated-child calls rejected (owner-only).
+6. **Ordinary inbound while pending, v1 (M-R2-4):** a plain message (second SPA client, stale tab) runs as a NORMAL turn; the pending set and card SURVIVE it untouched; that turn's own `AskUserQuestion` call errors (one-per-session); no server rejection notice (chat simply continues). Channel messages are likewise ordinary turns — permanently (US-5).
 
-### US-7 (P1) — Registration, policy, visibility (M-9)
-1. **Constraint #6 seeding:** the tool joins the static builtin catalog with an explicit, literal policy entry for every agent — seeded **allow** for all (core roster, subagent tier, system agents, new customs): asking the user is the safety-increasing direction, and an `ask`-gate on asking (a question requiring approval to ask a question) is absurd — stated here so nobody "hardens" it later. Boot coverage validation passes by seed, per the constraint's mechanism.
-2. **Visibility:** always visible in the thread (`toolVisibility.ts` classification: never hidden — it IS user-facing content).
-3. **Approval-surface interplay:** a tool-approval modal and a question card never contend — approvals gate dispatch pre-execution; the card exists only after this tool has executed and parked. If an unrelated later turn triggers an approval while a card pends, both render; the approval modal takes z-order precedence (it has its own 600s timeout; the card has none).
+### US-7 (P1) — Registration, policy, visibility (M-R2-6 corrected)
+1. **Constraint #6 seeding, all three sites enumerated:** (a) the tool joins `allStaticToolNames` (`core.go:625` region); (b) every agent's `denyAllThenOverride` override map gets an explicit entry — **allow** for every human-facing agent (core roster, subagent tier, customs' default allowlist), **deny for Judge and PlanSupervisor** (they can never be session owners; an advertised always-erroring tool violates their deliberately minimal seeds, `core.go:578-580`); (c) the global `sandbox.tool_policies` ceiling gains its literal entry. The "never harden asking into an ask-gate" rationale applies to the human-facing agents' allow.
+2. Visibility: always visible (`toolVisibility.ts`) — asserted in Test 14.
+3. Approval/card coexistence is **cross-session only** (m-R2-5 — the pending session is parked; nothing runs in it): an approval modal from ANOTHER session takes z-order precedence over this session's card. Asserted in Test 14.
 
-## 2. Tool schema (agent-facing)
+## 2. Tool schema
 
-As v1 (`questions[1..10]`, options 2..6, `recommended` by label, `multi_select`, `default_safe` ⇒ requires `recommended`, `context`), plus (M-8) size caps — question ≤500 chars, header ≤16 (enforced — in the rejection table now), option label ≤80, description ≤200, context ≤4000, free-text answer ≤2000 — and a completed validation table: 0/>10 questions; <2/>6 options; empty any required string; duplicate headers; **duplicate option labels within a question** (recommended matches by label); `default_safe` without `recommended`; `recommended` naming no option. `recommended` + `multi_select`: the auto-default resolves to a one-element list. Result schema: `{status: "answered"|"cancelled", answers?: [{header, selected?: [string], free_text?: string, auto_default: bool}]}` — `answers` present iff `answered` (M-3).
+As v2 (counts, caps, validation table incl. header ≤16, dup labels, empty strings, `default_safe`⇒`recommended`, one-element auto-default under `multi_select`). **The §2 result schema is the RESUME-MESSAGE payload, not a tool return** (C-R2-1): the tool's own Execute result is the park-time pending stub.
 
-## 3. Wire & SPA (Constraint #8 — rewritten per M-2)
+## 3. Wire & SPA
 
-- **Frames:** `ask_user_question` (server→client: card payload, card id, per-question rendered/delivered timestamps) and `ask_user_answer` (client→server: card id + answers | cancel). BOTH added to `WsFrameType.yaml`'s respective direction enums; `ask_user_answer` joins the inbound zod validation set.
-- **Dual-copy obligation:** each frame's canonical copy lives inline in `asyncapi.yaml` components.schemas AND as the schema file, kept in sync by hand — the documented `GoalStatusFrame.yaml` convention, named here so the PR checklist carries it.
-- **Session scoping:** both frames are session-scoped (`SESSION_SCOPED_FRAME_TYPES`, `src/store/chat.ts`) and carry the ADR-057 FR-089 frame-class/`producing_session_id` decision like their siblings.
-- **Hydration:** the pending card joins the **reconnect snapshot** (`session_state`, alongside `pending_approvals`) — attach-time hydration, no boot-time push.
-- **Server-side submission validation (M-7):** card id matches the session's pending set; submitting user owns the session (multi-user installs); every `selected` label ∈ that question's options; arity respects `multi_select`; free-text within cap. **First valid submission wins**; later ones are rejected with an "already answered" frame. Invalid submissions are rejected without consuming the pending set.
-- **Completed-card rendering on history load (m-5):** the collapsed record re-renders from the persisted transcript (tool_call + tool_result pair), not from live frames — the answers array is sufficient to reconstruct it.
-- SPA component per the approved mock; implementation note (m-2): the mock's 🔒/✓ glyphs are placeholders — production uses Phosphor icons per the no-emoji-in-chrome rule. Multi-select visual needs a mock v3 (m-3).
+As v2 (WsFrameType both directions; inbound zod; session-scoped + FR-089 frame class; reconnect-snapshot hydration; server-side validation + first-valid-wins incl. auto-resolutions; size caps), with: **copy-set verification (m-R2-6):** the sync obligation may be TRIPLE (asyncapi inline + schema file + `pkg/gateway/inboundschemas/`) — the PR checklist enumerates the real set at implementation. Completed-card render sources from the registry/session-meta record (§0.6).
 
 ## 4. Non-behaviors
 
-As v1, plus: the tool never blocks a goroutine awaiting a human; never re-asks after Cancel without the agent explicitly calling again; auto-default never fires on a question lacking `default_safe`; a cancelled set never yields partial answers; the pending registry never accepts a second set per routing session; an audit-log entry records every auto-default resolution (STRIDE note adopted).
+As v2, plus: the pending registry carries a global cap across sessions (DoS line item); a parked turn never advances a goal round; the server never submits while any non-default-safe question is unanswered.
 
 ## 5. Edge cases
 
-EC-1 Cancel with selections → `cancelled`, no answers (uniform). EC-2 → superseded by US-3's definitions and 5-minute grace rule. EC-3 free-text + re-select → last interaction wins; re-select drops the text from the result. EC-4 out-of-range/zero number on channel → free text. EC-5 channel silence: default-safe questions resolve on their per-question timers; non-default-safe pend indefinitely (no expiry — nothing is running). EC-6 headless/scheduled → `no_human_surface` immediately. EC-7 (new) two SPA clients race → first valid wins, loser notified. EC-8 (new) answer arrives for an already-cancelled/answered card id → rejected, no effect. EC-9 (new) delegated child calls the tool → owner-only rejection naming `message_parent`.
+EC-1 cancel discards selections (uniform). EC-2 → superseded by US-3 states + client-fired grace. EC-3 last-interaction-wins. EC-4 out-of-range number → free text. EC-5 struck (channel timers deleted with US-5's mechanism). EC-6 headless → `no_human_surface`. EC-7 two-client race → first valid wins. EC-8 stale card id → rejected. EC-9 delegated child → owner-only rejection. EC-10 channel-origin session → blocked tool + conversational ask, permanently (never a silent park). EC-11 (new) plain inbound during pending (v1) → normal turn, card survives.
 
-## 6. Test plan (v1 tests repaired; the review's seven gaps added)
+## 6. Test plan
 
 | # | Test | Level |
 |---|------|-------|
-| 1 | Schema validation table incl. size caps, dup labels, header cap (M-8) | Unit |
-| 2 | Answer assembly: single/multi/free-text/mixed; free-text-presence flag; EC-3 last-interaction-wins | Unit |
-| 3 | Park mechanics: Execute returns ParksTurn; needs_input lifecycle; admission slot released (assert no slot held while pending) | Integration |
-| 4 | Timer semantics per US-3 definitions: per-question fire; unsubmitted-selection doesn't stop it; 5-min grace; all-auto immediate submit; audit entry | Integration |
-| 5 | One-pending-per-routing-session: serial second call rejected; **parallel delegated child rejected (EC-9)** | Integration |
-| 6 | Restart: pending persists; reconnect snapshot hydrates; timers continue from persisted timestamps; answer resumes correctly post-restart | Integration |
-| 7 | Session Stop / channel `/cancel` cancels the set, unlocks composer | Integration |
-| 8 | Contracts: WsFrameType both directions, dual-copy sync, inbound zod, snapshot field; round-trip | Contract |
-| 9 | Card component: tabs/auto-advance/progress/badge/underline/countdown/collapsed record incl. origin markers; composer lock; **history-load reconstruction (m-5)** | Component |
-| 10 | (v1.1) Channel sequence: pre-turn seam consumes replies; numbered/free/cancel parsing; per-question clocks; restart mid-sequence; both-surfaces race (EC-7) | Integration |
-| 11 | `no_human_surface`: AutoDenyAsk path; liveness-predicate path; disconnected-but-exists waits | Integration |
-| 12 | E2E: goal-compilation clarifying question through the real card, stubbed LLM | E2E |
-| 13 | Server-side submission validation + race: ownership, label membership, arity, first-wins, stale-card rejection (M-7, EC-8) | Integration |
+| 1 | Validation table incl. caps/dup labels/header | Unit |
+| 2 | **Park-time stub result; resume-message format incl. question-text echo; answer assembly (single/multi/free-text/EC-3)** | Unit |
+| 3 | Park mechanics: ParksTurn, TurnEndStatusParked, worker idle slot release, no goal-round advance (M-R2-5) | Integration |
+| 4 | Timer + states: per-question fire, resolved-pending-submit marking, client grace submit, server all-default submit, closed-tab outcomes, audit entries | Integration |
+| 5 | One-per-routing-session; delegated-child rejection (EC-9) | Integration |
+| 6 | Restart: persistence, snapshot hydration, timer re-arm, **post-restart resume via the answers message** | Integration |
+| 7 | Session Stop + channel `/cancel` + **card Cancel button** (m-R2-2) all cancel correctly | Integration |
+| 8 | Contracts: frame enums both directions, copy-set sync, inbound zod, snapshot field | Contract |
+| 9 | Card component: tabs/advance/badge/underline/countdown/collapsed record from the registry record incl. history reload (§0.6) + **hostile-markdown context renders inert** (m-R2-3) | Component |
+| 10 | Channel-origin session → immediate blocked-tool error + agent asks conversationally (US-5); channel messages during an SPA-pending set stay ordinary turns | Integration |
+| 11 | Liveness: AutoDenyAsk; **channel-origin → blocked + conversational ask (EC-10)**; SPA disconnected-waits | Integration |
+| 12 | E2E: goal clarifying question through the card, stubbed LLM; delegated-child compile falls back to message_parent (o-R2-3) | E2E |
+| 13 | Submission validation + races: ownership, membership, arity, first-wins incl. auto-resolution contender, stale-card | Integration |
+| 14 | **Policy seeding (3 sites; Judge/PlanSupervisor deny), visibility classification, cross-session approval z-order** (m-R2-4) | Unit+Component |
+| 15 | Inbound-while-pending v1: normal turn, card survives, inner AskUserQuestion errors (EC-11) | Integration |
 
-## 7. Traceability (m-4)
+## 7. Traceability
 
 | FR | Requirement | Stories | Tests |
 |----|-------------|---------|-------|
-| FR-1 | Park execution model, no in-memory block | US-1 S1, §0 | 3 |
-| FR-2 | Durable pending state, one per routing session, owner-only | US-1 S1, US-6 S3/S5 | 3,5 |
-| FR-3 | Answer resume with validated answers | US-1 S3 | 2,13 |
-| FR-4 | Cancel/Stop → cancelled, no answers, uniform | US-1 S4, US-6 S2 | 7 |
-| FR-5 | Free text always, presence-as-flag, last-interaction-wins | US-2 | 2 |
-| FR-6 | Server-side validation + first-valid-wins | US-5 S6, §3 | 13 |
-| FR-7 | Raw context, SPA-sanitized render | US-4 | 8,9 |
-| FR-8 | Channel mechanism (v1.1): pre-turn seam, sequential, parsing, per-question clocks | US-5 | 10 |
-| FR-9 | Restart hydration via reconnect snapshot; timer continuity | US-6 S1 | 6 |
-| FR-10 | Approved visuals: flat, tabbed, auto-advance, collapsed record | US-1 S2/S3 | 9 |
-| FR-11 | Seeded allow for all agents; always visible; approval interplay | US-7 | 3 (policy assert), 9 |
+| FR-1 | Park model; park-time stub; resume-message contract | US-1 S1/S3, §0.1-0.2 | 2,3 |
+| FR-2 | Durable state (meta+registry, no LifecycleRecord); one per routing session; owner-only | §0.4/0.8-0.9, US-6 S3/S5 | 3,5 |
+| FR-3 | Validated submission → registry update → resume | US-1 S3 | 2,13 |
+| FR-4 | Cancel uniform, no answers (button/Stop//cancel) | US-1 S4, US-6 S2 | 7 |
+| FR-5 | Free text semantics | US-2 | 2 |
+| FR-6 | Server validation + first-valid-wins incl. auto-resolutions | US-5 S6, §3 | 13 |
+| FR-7 | Raw context, sanitized render, inert hostile input | US-4 | 8,9 |
+| FR-8 | Channels: tool blocked, conversational fallback (permanent) | US-5, EC-10 | 10 |
+| FR-9 | Restart lifecycle | US-6 S1 | 6 |
+| FR-10 | Approved visuals + record reconstruction | US-1 S2/S3, §0.6 | 9 |
+| FR-11 | Seeding (3 sites, deny for system agents), visibility, coexistence | US-7 | 14 |
+| FR-12 | Liveness by origin; channels permanently blocked | US-6 S4, EC-10 | 11 |
 
-## 8. Open items (for grill round 2)
+## 8. Open items
+1. Liveness predicate's concrete interface (the `policyApproverAdapter`-style injection — implementation detail; behavior is now fully specified).
+2. Mock v3: multi-select rows; also replace the mock's emoji glyphs with Phosphor icons at implementation (m-2/m-R2 carryover).
+3. (Struck — the channel seam was deleted with US-5's ruling; the goal pending-confirm taxonomy stands alone.)
 
-1. The inverted liveness predicate's exact interface and its #659 dependency status.
-2. Whether the v1.1 pre-turn seam should also serve the goal flow's pending-confirm taxonomy (two pre-turn pending-state consumers — one shared seam?).
-3. Mock v3 for multi-select rows (m-3) before implementation.
+## 9. Operator sign-off register
+**9.1 (RESOLVED — interview #5, 2026-09-05):** the operator superseded the channel-degradation ruling entirely: the tool is web-only and BLOCKED on other channels, where the agent asks conversationally in plain language; no channel mechanism is ever built. ADR-074 D4b carries the amended ruling. Also updates EC-10 to the permanent rule and deletes the v1.1 scope. No open sign-offs remain.

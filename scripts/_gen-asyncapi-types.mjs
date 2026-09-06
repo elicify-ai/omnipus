@@ -394,6 +394,9 @@ const clientFrames = [
   "DevicePairingResponseFrame",
   "SessionCloseFrame",
   "WhatsAppPairingSubscribeFrame",
+  // AskUserQuestion card submission/cancel (askuserquestion-tool-spec v3 §3)
+  // — client (SPA) → server on the chat channel.
+  "AskUserAnswerFrame",
   // Browser live channel (ADR-038) — client → server frames.
   "BrowserAttachFrame",
   "BrowserInputFrame",

@@ -646,17 +646,22 @@ func criteriaFromCreateWire(items []struct {
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
 	Id     *string                             `json:"id,omitempty"`
-	Kind   gen.TaskCreateRequestCriteriaKind   `json:"kind"`
+	Kind   *gen.TaskCreateRequestCriteriaKind  `json:"kind,omitempty"`
 	Status gen.TaskCreateRequestCriteriaStatus `json:"status"`
 	Text   string                              `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
 		c := task.AcceptanceCriterion{
-			Kind:   task.CriterionKind(it.Kind),
 			Text:   it.Text,
 			Status: task.CriterionStatus(it.Status),
 			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		// ADR-074 D2 (spec FR-002): the gateway performs NO kind defaulting —
+		// an absent kind passes THROUGH as empty and is inferred downstream by
+		// the store's normalizeCriteria.
+		if it.Kind != nil {
+			c.Kind = task.CriterionKind(*it.Kind)
 		}
 		if it.Id != nil {
 			c.ID = *it.Id
@@ -690,17 +695,22 @@ func criteriaFromUpdateWire(items []struct {
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
 	Id     *string                             `json:"id,omitempty"`
-	Kind   gen.TaskUpdateRequestCriteriaKind   `json:"kind"`
+	Kind   *gen.TaskUpdateRequestCriteriaKind  `json:"kind,omitempty"`
 	Status gen.TaskUpdateRequestCriteriaStatus `json:"status"`
 	Text   string                              `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
 		c := task.AcceptanceCriterion{
-			Kind:   task.CriterionKind(it.Kind),
 			Text:   it.Text,
 			Status: task.CriterionStatus(it.Status),
 			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		// ADR-074 D2 (spec FR-002): the gateway performs NO kind defaulting —
+		// an absent kind passes THROUGH as empty and is inferred downstream by
+		// the store's normalizeCriteria.
+		if it.Kind != nil {
+			c.Kind = task.CriterionKind(*it.Kind)
 		}
 		if it.Id != nil {
 			c.ID = *it.Id
@@ -1796,16 +1806,24 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 	// so start from a non-nil, empty slice rather than appending onto a nil
 	// one.
 	out.PerCriterion = make([]struct {
-		CriterionId string `json:"criterion_id"`
-		Met         bool   `json:"met"`
-		Reason      string `json:"reason"`
+		CriterionId   string  `json:"criterion_id"`
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+		Met           bool    `json:"met"`
+		Reason        string  `json:"reason"`
 	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
+		// ADR-074 D7: optional + empty-safe — an empty quote (fail-closed /
+		// pre-D7 verdicts) stays absent from the wire, never "".
+		var quote *string
+		if c.EvidenceQuote != "" {
+			quote = ptr(c.EvidenceQuote)
+		}
 		out.PerCriterion = append(out.PerCriterion, struct {
-			CriterionId string `json:"criterion_id"`
-			Met         bool   `json:"met"`
-			Reason      string `json:"reason"`
-		}{CriterionId: c.CriterionID, Met: c.Met, Reason: c.Reason})
+			CriterionId   string  `json:"criterion_id"`
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+			Met           bool    `json:"met"`
+			Reason        string  `json:"reason"`
+		}{CriterionId: c.CriterionID, EvidenceQuote: quote, Met: c.Met, Reason: c.Reason})
 	}
 	return out
 }

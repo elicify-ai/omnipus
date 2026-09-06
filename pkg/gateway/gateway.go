@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -1928,6 +1929,54 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 	return nil
 }
 
+// persistSeededSkillGrants durably records config.seeded_skill_grants (the
+// ADR-074 D4 one-shot migration markers coreagent.SeedConfig checks) into
+// config.json's raw JSON map, preserving every other key exactly as-is — the
+// same read-modify-write convention as persistFreshInstallDefaultAgentID
+// above, and for the same reason: SeedConfig is a pure config-struct mutation
+// with zero filesystem side effects, so without this step the marker lives
+// only in THIS process's in-memory cfg and the migration would re-run on
+// every boot (harmless in effect — it is additive and append-if-lacking — but
+// it would defeat the marker's "run once, recorded" contract and rewrite
+// config.json every boot).
+//
+// Idempotent at the byte level: when the on-disk key already equals the
+// in-memory value the file is left completely untouched (no write, no mtime
+// churn), making the second boot a byte-level no-op (judgment-first spec
+// test 16).
+func persistSeededSkillGrants(configPath string, markers []string) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var m map[string]any
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		return fmt.Errorf("parse config: %w", unmarshalErr)
+	}
+	// Skip the write entirely when the on-disk value already matches.
+	if existing, ok := m["seeded_skill_grants"].([]any); ok && len(existing) == len(markers) {
+		same := true
+		for i := range markers {
+			if s, isStr := existing[i].(string); !isStr || s != markers[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil
+		}
+	}
+	m["seeded_skill_grants"] = markers
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize config: %w", err)
+	}
+	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
 // u25AllSessionsForUsage adapts AgentLoop.ListAllSessions' ADR-057/U9
 // paginated signature (limit, offset int, parentSessionID string, flat bool)
 // back to the zero-arg, "return everything" shape systools.Deps.ListSessions
@@ -2133,6 +2182,23 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// handling that makes this safe against a single bad entity file.
 		if seedErr := persistSeededCoreAgents(homePath, cfg.Agents.List); seedErr != nil {
 			return seedErr
+		}
+	}
+
+	// ADR-074 D4: durably record the one-shot skills-migration markers
+	// SeedConfig checked/wrote in memory (e.g. the define-done allowlist
+	// append). The agent-side appends were just persisted by
+	// persistSeededCoreAgents above; this writes the marker into config.json
+	// so the migration never re-runs. Best-effort like the default_agent_id
+	// persist above: a failure only means the (idempotent, additive) check
+	// runs again next boot — not a boot-time fatal. The helper skips the
+	// write entirely when the on-disk key already matches, so a settled
+	// install's boot performs no config.json write here at all.
+	if len(cfg.SeededSkillGrants) > 0 {
+		if persistErr := persistSeededSkillGrants(configPath, cfg.SeededSkillGrants); persistErr != nil {
+			slog.Warn("gateway: could not persist seeded_skill_grants to config.json; "+
+				"the additive skills migration will be re-checked on the next boot",
+				"error", persistErr)
 		}
 	}
 
@@ -4644,6 +4710,57 @@ func setupAndStartServices(
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
 	agentLoop.SetToolApprover(newPolicyApproverAdapter(approvalReg, wsHandler))
+
+	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
+	// D4b; W9b wiring): durable state lives in each owner session's
+	// UnifiedMeta (pending_ask), the in-process registry mirrors it with the
+	// global cap + default-safe timers, the card sink broadcasts
+	// ask_user_question WS frames, and the resume dispatcher publishes the
+	// §0.2 answers message back into the owner session's turn machinery.
+	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
+		askSink := &askUserCardSink{h: wsHandler}
+		askReg := askuser.NewRegistry(
+			sharedStore,
+			&askUserResumeDispatcher{msgBus: msgBus},
+			askuser.Options{
+				Sink:  askSink,
+				Audit: &askUserAuditSink{al: agentLoop},
+			},
+		)
+		askSink.delayFn = askReg.EffectiveDefaultSafeDelay
+		wsHandler.askUserReg = askReg
+		agentLoop.SetAskUserRegistry(askReg)
+		// Boot rearm sweep (US-6 S1/FR-9): re-hydrate every persisted pending
+		// set so its default-safe timers re-arm from the durable CreatedAt
+		// (already-elapsed timers fire near-immediately) and the reconnect
+		// snapshot sees it. Runs in a goroutine — meta reads only, and a
+		// pending set is inert until a client answers or a timer fires.
+		go func() {
+			metas, listErr := sharedStore.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+				return m.PendingAskJSON != ""
+			})
+			if listErr != nil {
+				slog.Warn("gateway: askuser boot rearm sweep failed", "error", listErr)
+				return
+			}
+			for _, m := range metas {
+				if rearmErr := askReg.RearmSession(m.ID); rearmErr != nil {
+					slog.Warn("gateway: askuser rearm failed",
+						"session_id", m.ID, "error", rearmErr)
+				}
+			}
+		}()
+		// Wait out in-flight timer callbacks on shutdown so a persist never
+		// races the process teardown (the Quiesce contract). Bound to the
+		// gateway's shutdown-aware ctx — a defer here would fire when
+		// setupAndStartServices RETURNS (still at boot), not at shutdown.
+		go func() {
+			<-ctx.Done()
+			askReg.Quiesce()
+		}()
+	} else {
+		slog.Warn("gateway: askuser registry NOT wired — no shared session store; AskUserQuestion will fail closed")
+	}
 
 	// Wire the filter-metrics recorder into pkg/tools so FilterToolsByPolicy
 	// can emit FR-039 omnipus_tool_filter_total counters. (C4)

@@ -2160,10 +2160,12 @@ func FixtureEvidenceRecord_ZeroValue() EvidenceRecord {
 // Traces to: contracts/components/schemas/CriterionVerdict.yaml
 
 func FixtureCriterionVerdict_Populated() CriterionVerdict {
+	quote := "--- PASS: TestPlanStore_CreatePersists (0.02s)"
 	return CriterionVerdict{
-		CriterionId: "550e8400-e29b-41d4-a716-446655440010",
-		Met:         true,
-		Reason:      "go test output shows all tests passing.",
+		CriterionId:   "550e8400-e29b-41d4-a716-446655440010",
+		Met:           true,
+		Reason:        "go test output shows all tests passing.",
+		EvidenceQuote: &quote,
 	}
 }
 
@@ -2183,9 +2185,10 @@ func FixtureJudgeVerdict_Populated() JudgeVerdict {
 		Round:  1,
 		Met:    false,
 		PerCriterion: []struct {
-			CriterionId string `json:"criterion_id"`
-			Met         bool   `json:"met"`
-			Reason      string `json:"reason"`
+			CriterionId   string  `json:"criterion_id"`
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+			Met           bool    `json:"met"`
+			Reason        string  `json:"reason"`
 		}{
 			{CriterionId: "550e8400-e29b-41d4-a716-446655440010", Met: false, Reason: "3 tests still failing"},
 		},

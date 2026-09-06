@@ -345,6 +345,14 @@ func (al *AgentLoop) RequestCancel(
 		}
 	}
 
+	// --- Pending AskUserQuestion cancel (askuserquestion-tool-spec v3,
+	// US-6 S2): a Stop on a session with a PARKED question set has no active
+	// turn to claim below (the park already ended the turn), so — like the
+	// background-kill cascade above and for the same reason — this must NOT
+	// be gated on wasFired/ClaimCancel. Fires whenever sessionID resolved,
+	// unconditionally; a session with no pending set is a cheap no-op. ---
+	al.cancelPendingAskForScope(sessionID)
+
 	// --- Abuse detection (always, before ClaimCancel) ---
 	if al.cancelAbuse != nil {
 		al.cancelAbuse.recordAttempt(ctx, canceller.UserID, canceller.Channel, at, auditLogger)

@@ -157,8 +157,10 @@ func TestFeasibilityGate_RejectsUnjudgeable(t *testing.T) {
 	if res.Rejection == nil {
 		t.Fatal("want rejection for semantically unjudgeable prose, got nil")
 	}
-	if !strings.Contains(res.Rejection.Reason, "unjudgeable") {
-		t.Errorf("rejection reason should cite unjudgeability, got: %s", res.Rejection.Reason)
+	// ADR-074 D4a rewrote the reason plain-language-first: it must explain
+	// the problem in user terms, not internal vocabulary.
+	if !strings.Contains(res.Rejection.Reason, "can't be verified as written") {
+		t.Errorf("rejection reason should be the plain-language unjudgeable text, got: %s", res.Rejection.Reason)
 	}
 
 	// A substantive prose statement passes the gate.
@@ -274,9 +276,11 @@ func TestGoalClear_CancelsInflightCompilation(t *testing.T) {
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
 	}
 
-	// Start an active goal, then begin a re-statement amendment (pending).
+	// Start an active goal (set + ADR-074 D4a confirm), then begin a
+	// re-statement amendment (pending).
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal the feature lands correctly", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal the feature lands correctly and tests pass", UserInitiated: true}, agentInst, &opts)
 	mid, _ := store.GetMeta(sid)

@@ -11,6 +11,7 @@ package task
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -30,8 +31,46 @@ const (
 // IsValidCriterionKind reports whether k is a known criterion kind. Any other
 // value fails closed — validateCriterion is reached only after this gate, so
 // there is no unrecognized-kind fallthrough left to guard in its switch.
+//
+// Invariant (ADR-074 D2): authoring-time payloads may omit kind — it is
+// resolved by InferCriterionKind before validation — but every PERSISTED
+// criterion always carries an explicit, valid kind: normalizeCriteria infers
+// then validates on every store write, so an empty or unknown kind never
+// reaches disk (guards criterionKey/sameShape consumers, required-test #4).
 func IsValidCriterionKind(k CriterionKind) bool {
 	return k == KindCheck || k == KindProse || k == KindBehavior
+}
+
+// InferCriterionKind resolves a criterion's effective kind when the authoring
+// payload omitted it (ADR-074 D2). The rule: absent kind + check payload =>
+// check; + behavior payload => behavior; + no payload => prose. Absent kind
+// with BOTH payloads is ambiguous and is an error (EC-1). An EXPLICIT kind is
+// returned unchanged — inference never overrides it; a mismatch between an
+// explicit kind and its payload stays a 400 in validateCriterion (shape rules
+// unchanged).
+//
+// This is the ONLY inference implementation (spec FR-002): its call sites are
+// exactly the two tool-layer criteria parsers (pkg/tools/task.go's
+// parseCriteriaArgs, pkg/sysagent/tools/task.go's twin — both BEFORE the
+// ADR-049 D2-rule-5 all-check bash-policy gate, so the gate fires on inferred
+// kinds too) and normalizeCriteria below (which covers the REST paths: the
+// gateway converters pass an absent kind THROUGH as empty and never default
+// it themselves).
+func InferCriterionKind(c *AcceptanceCriterion) (CriterionKind, error) {
+	if c.Kind != "" {
+		return c.Kind, nil
+	}
+	switch {
+	case c.Check != nil && c.Behavior != nil:
+		return "", fmt.Errorf("kind is omitted and both check and behavior payloads are present — " +
+			"ambiguous; supply kind explicitly or remove one payload")
+	case c.Check != nil:
+		return KindCheck, nil
+	case c.Behavior != nil:
+		return KindBehavior, nil
+	default:
+		return KindProse, nil
+	}
 }
 
 // BehaviorScope enumerates CriterionBehavior.Scope (ADR-052 FR-034): whether
@@ -240,6 +279,16 @@ func normalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, e
 		if c.Status == "" {
 			c.Status = CritPending
 		}
+		// ADR-074 D2: an authoring payload may omit kind — infer it from the
+		// payload shape BEFORE validation, so every persisted criterion
+		// carries an explicit, valid kind (the IsValidCriterionKind
+		// invariant). Explicit kinds pass through unchanged; a dual-payload
+		// kind-less criterion is rejected here (EC-1).
+		k, kErr := InferCriterionKind(c)
+		if kErr != nil {
+			return nil, verr("criteria[%d]: %v", i, kErr)
+		}
+		c.Kind = k
 		if err := validateCriterion(c, i); err != nil {
 			return nil, err
 		}

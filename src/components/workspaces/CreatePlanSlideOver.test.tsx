@@ -416,6 +416,25 @@ describe('CreatePlanSlideOver — an edit sends only what actually changed', () 
     expect(body.title).toBe('Launch v2')
   })
 
+  // ADR-074 D5.1 / judgment-first spec US-7 S3 (TDD test 20): an edit that
+  // never touches the criteria editor must not re-assert `dod` — even on a
+  // DRAFT plan where the freeze cannot trip. The pin matters because the
+  // editor emits object-literal criteria while stored criteria carry
+  // server-set fields (`id`); `deepEqual` on the untouched form state is what
+  // keeps an incidental title edit from rewriting the Definition of Done.
+  it('editing only the title of a DRAFT plan with a DoD sends no dod PATCH (untouched criteria)', async () => {
+    vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver({ plan: planWithBounds({ state: 'draft', dod: [PROSE_CRITERION] }) })
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'Launch v2' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
+    const body = lastUpdateBody()
+    expect(Object.prototype.hasOwnProperty.call(body, 'dod')).toBe(false)
+    expect(body.title).toBe('Launch v2')
+  })
+
   it('clearing the Goal actually clears it — the request carries an explicit empty string', async () => {
     vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
     renderSlideOver({ plan: planWithBounds() })

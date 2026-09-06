@@ -4248,7 +4248,31 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 	// Redact any top-level field names that look like credentials.
 	redactSensitiveFields(m)
 
+	// Strip internal-only bookkeeping keys from the wire.
+	sanitizeConfigForWire(m)
+
 	jsonOK(w, m)
+}
+
+// wireExcludedConfigFields is the single place listing top-level config.json
+// keys that are internal-only bookkeeping: they stay on disk but must never
+// cross the wire. Current entries:
+//
+//   - seeded_skill_grants (judgment-first spec US-4 S6 / R2-04): records which
+//     one-shot allowlist migrations have run on THIS install (ADR-074 D4) —
+//     an implementation detail of the boot seed, not operator-facing config.
+var wireExcludedConfigFields = []string{
+	"seeded_skill_grants",
+}
+
+// sanitizeConfigForWire strips every wireExcludedConfigFields key from a
+// decoded config map before it is served. Used by getConfig; any future
+// endpoint that serves the raw config map must call it too, so the excluded
+// list lives in exactly one place.
+func sanitizeConfigForWire(m map[string]any) {
+	for _, k := range wireExcludedConfigFields {
+		delete(m, k)
+	}
 }
 
 // redactSensitiveFields recursively redacts map values whose keys contain

@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer"]);
 
 export const AuthFrame = z
   .object({
@@ -436,6 +436,67 @@ export const ToolApprovalRequiredFrame = z
   })
   .strict();
 
+export const AskUserQuestionCard = z
+  .object({
+    card_id: z.string().min(1),
+    session_id: z.string().min(1),
+    agent_id: z.string(),
+    status: z.enum(["pending", "answered", "cancelled"]),
+    created_at: z.string(),
+    default_safe_at: z.string().optional(),
+    auto_resolved: z.array(z.string()).max(10).optional(),
+    questions: z.array(z
+    .object({
+      header: z.string().min(1).max(16),
+      question: z.string().min(1).max(500),
+      options: z.array(z
+      .object({
+        label: z.string().min(1).max(80),
+        description: z.string().max(200).optional(),
+      })
+      .strict()).min(2).max(6),
+      multi_select: z.boolean().optional(),
+      recommended: z.string().max(80).optional(),
+      default_safe: z.boolean().optional(),
+      context: z.string().max(4000).optional(),
+    })
+    .strict()).min(1).max(10),
+    answers: z.array(z
+    .object({
+      header: z.string().min(1).max(16),
+      question: z.string().min(1).max(500),
+      selected: z.array(z.string().max(80)).max(6).optional(),
+      free_text: z.string().max(2000).optional(),
+      auto_default: z.boolean(),
+    })
+    .strict()).max(10).optional(),
+  })
+  .strict();
+
+export const AskUserQuestionFrame = z
+  .object({
+    type: z.literal("ask_user_question"),
+    card: AskUserQuestionCard,
+  })
+  .strict();
+
+export const AskUserAnswerFrame = z
+  .object({
+    type: z.literal("ask_user_answer"),
+    card_id: z.string().min(1),
+    session_id: z.string().min(1),
+    cancel: z.boolean().optional(),
+    answers: z.array(z
+    .object({
+      header: z.string().min(1).max(16),
+      selected: z.array(z.string().max(80)).max(6).optional(),
+      free_text: z.string().max(2000).optional(),
+      auto_default: z.boolean().optional(),
+    })
+    .strict()).max(10).optional(),
+  })
+  .strict();
+
 export const SessionStatePendingApproval = z
   .object({
     approval_id: z.string().min(1),
@@ -451,6 +512,7 @@ export const SessionStateFrame = z
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
+    pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     emitted_at: z.string(),
   })
   .strict();
@@ -734,6 +796,34 @@ export const GoalStatusFrame = z
     cap: z.number().int().min(1),
     state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
     producing_session_id: z.string().min(1).optional(),
+    criteria: z.array(z
+    .object({
+      id: z.string().optional(),
+      kind: z.enum(["check", "prose", "behavior"]),
+      text: z.string().min(1).max(1000),
+      check: z
+      .object({
+        command: z.string().min(1),
+        expected_exit_code: z.number().int().min(0).max(255),
+      })
+      .strict().optional(),
+      behavior: z
+      .object({
+        tool: z.string().min(1),
+        min_count: z.number().int().min(0).optional(),
+        max_count: z.number().int().min(0).optional(),
+        scope: z.enum(["attempt", "task_session"]).optional(),
+      })
+      .strict().optional(),
+      author: z
+      .object({
+        kind: z.enum(["agent", "user"]),
+        id: z.string().min(1),
+      })
+      .strict(),
+      status: z.enum(["pending", "met", "unmet"]),
+    })
+    .strict()).optional(),
   })
   .strict();
 
@@ -775,6 +865,7 @@ export const JudgeVerdictFrame = z
       criterion_id: z.string().min(1),
       met: z.boolean(),
       reason: z.string(),
+      evidence_quote: z.string().max(500).optional(),
     })
     .strict()),
     model: z.string(),
@@ -824,6 +915,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   MediaFrame,
   AgentSwitchedFrame,
   ToolApprovalRequiredFrame,
+  AskUserQuestionFrame,
+  AskUserAnswerFrame,
   SessionStateFrame,
   SystemOverloadFrame,
   ReplayWarningFrame,

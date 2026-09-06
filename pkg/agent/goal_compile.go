@@ -309,8 +309,7 @@ func compileGoalIntent(intent string, fc FeasibilityContext, authorID string) Co
 	if len(normalized) == 0 {
 		return CompileResult{Rejection: &FeasibilityRejection{
 			CriterionIndex: -1,
-			Reason: "no verifiable criteria could be compiled — add at least one " +
-				"concrete objective (e.g. [tests pass], [search: 3], or a judgeable statement)",
+			Reason:         goalNoCriteriaRejectionReason,
 		}}
 	}
 
@@ -319,6 +318,30 @@ func compileGoalIntent(intent string, fc FeasibilityContext, authorID string) Co
 		Prompt:   prose,
 		Criteria: normalized,
 	}}
+}
+
+// goalNoCriteriaRejectionReason is the whole-goal "nothing verifiable"
+// rejection text. Rewritten plain-language-FIRST per ADR-074 D4a (spec US-3
+// S5): the old text led with marker syntax ("[tests pass], [search: 3]"),
+// steering non-technical users toward technical markers; the plain-language
+// description now leads and the marker syntax survives only as a trailing
+// aside for users who want it.
+const goalNoCriteriaRejectionReason = "I couldn't find anything checkable in that goal. " +
+	"Describe what should be TRUE when the goal is done — an observable outcome, " +
+	"specific enough that a reviewer could say it failed (for example: \"the summary " +
+	"is written to notes.md\" or \"the flaky login test passes\"). Technical shorthand " +
+	"like [tests pass] or [search: 3] also works if you prefer it"
+
+// goalIntentNeedsLLMCompile reports whether intent takes the ADR-074 D4a LLM
+// compilation path (US-3 S1/S2): true when the prose remainder after marker
+// extraction is a real goal statement. Marker-only intents (every criterion
+// from explicit markers; remainder empty or pure steering) return false and
+// keep today's deterministic, immediate, zero-LLM path pinned (US-3 S3) — as
+// does a fully-empty/steering-only intent, whose deterministic rejection is
+// also unchanged.
+func goalIntentNeedsLLMCompile(intent string) bool {
+	_, prose, _ := parseIntentMarkers(strings.TrimSpace(intent), "")
+	return prose != "" && !looksLikePureSteering(prose)
 }
 
 // looksLikePureSteering reports whether prose is only connective/steering text
@@ -384,10 +407,13 @@ func feasibilityGate(criteria []task.AcceptanceCriterion, fc FeasibilityContext)
 			}
 		case task.KindProse:
 			if looksSemanticallyUnjudgeable(c.Text) {
+				// Plain-language-first (ADR-074 D4a / FR-007): lead with what
+				// the user can do about it, not with internal vocabulary.
 				return &FeasibilityRejection{CriterionIndex: i,
 					Reason: fmt.Sprintf(
-						"prose criterion %q is semantically unjudgeable — it carries no "+
-							"observable, evidence-bearing referent the Judge could rule on (D9)",
+						"%q can't be verified as written — it doesn't name anything observable "+
+							"a reviewer could check. Describe what should be TRUE when the goal is "+
+							"done (a concrete outcome, specific enough to fail)",
 						c.Text)}
 			}
 		default:
@@ -463,10 +489,16 @@ var hedgingTokens = map[string]bool{
 
 // --- Echo & confirm + amendment diff (FR-113/D11/N-6) ----------------------
 
-// formatGoalEcho renders the compiled goal for the chat echo (FR-113/D11/G-8):
-// the literal commands are included verbatim (never paraphrased away), and the
-// whole echo is what the user confirms by a chat reply — no form/modal. The
-// user's confirming reply (any of confirmGoalAliases) activates the goal.
+// formatGoalEcho renders the compiled goal for the chat echo (FR-113/D11/G-8,
+// delivered by ADR-074 D4a's pending step — this is the confirmation surface
+// in chat history): the literal commands are included verbatim (never
+// paraphrased away), and the whole echo is what the user confirms by a chat
+// reply — no form/modal. The user's confirming reply (any of
+// confirmGoalAliases, or `/goal confirm`) activates the goal.
+//
+// Plain-language-first (spec US-6 S4, FR-011): criteria are itemized as
+// readable statements with their technical payloads verbatim per row —
+// NEVER as `[kind]` classification tokens, which are not user-facing content.
 func formatGoalEcho(g *CompiledGoal) string {
 	if g == nil {
 		return "(no goal compiled)"
@@ -479,13 +511,20 @@ func formatGoalEcho(g *CompiledGoal) string {
 	} else {
 		sb.WriteString(g.Intent)
 	}
-	sb.WriteString("\n\nAcceptance criteria (the Judge will verify these):\n")
+	sb.WriteString("\n\nDone when (a reviewer will verify each of these):\n")
 	for i, c := range g.Criteria {
-		fmt.Fprintf(&sb, "  %d. [%s] %s\n", i+1, c.Kind, criterionEchoLine(c))
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, criterionEchoLine(c))
 	}
-	sb.WriteString("\nReply **" + ConfirmGoalWord + "** to activate this goal, or restate it to amend.")
+	sb.WriteString("\nReply **" + ConfirmGoalWord + "** (or `/goal confirm`) to activate this goal, " +
+		"`/goal <new intent>` to restate it, or `/goal clear` to discard.")
 	return sb.String()
 }
+
+// goalEchoFallbackNote is the FR-014/US-3 S4 observability line appended to
+// the pending echo whenever the deterministic parser produced the criteria
+// because the LLM compile could not (failure/timeout/schema miss/second veto).
+const goalEchoFallbackNote = "\n\nNote: the automatic quality-bar rewrite was unavailable, " +
+	"so these criteria were compiled directly from your wording without it."
 
 // criterionEchoLine renders one criterion's literal verification shape for the
 // echo (commands included verbatim — FR-113 "including literal commands").

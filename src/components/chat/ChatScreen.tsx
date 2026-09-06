@@ -41,6 +41,7 @@ import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { GoalThreadTailCards } from './GoalThreadTailCards'
+import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
@@ -1669,9 +1670,16 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // window (isConnected:false with reconnectPhase still null — "Connecting to
   // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
   // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
+  // askuserquestion-tool-spec v3 US-1 S1: the composer is LOCKED while an
+  // AskUserQuestion card is pending — free-form answering happens through
+  // the card, never the chat box; Cancel (always present on the card)
+  // unlocks. Terminal cards (answered/cancelled) release the lock.
+  const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
+
   const inputEnabled =
     !agentRemoved &&
     !isReplaying &&
+    !askLocked &&
     !(reconnectPhase === 'gave_up') &&
     (isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow')
 
@@ -3041,6 +3049,13 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               (newly compiled, awaiting the user's chat confirmation). Renders
               nothing when no queued pills exist. */}
           <GoalThreadTailCards />
+
+          {/* AskUserQuestion card — askuserquestion-tool-spec v3 (ADR-074
+              D4b): the flat, tabbed question zone (pending) or the collapsed
+              answer record (just-resolved), rendered at the thread tail.
+              While pending, the composer below is locked (see
+              OmnipusComposer's askLocked). */}
+          <AskUserQuestionThreadTail />
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /

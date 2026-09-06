@@ -337,6 +337,11 @@ func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 // Shape/length validation (kind enum, text bounds, check-shape-iff-kind,
 // ID/status defaulting) is left to the store's own normalizeCriteria,
 // invoked from Store.Create — this only handles the untyped-map decode.
+//
+// Behavior payloads (ADR-052 FR-034 / ADR-074 D3a) decode via the shared
+// task.DecodeBehaviorPayload, which honors the pointer semantics
+// pkg/task/criterion.go documents (absent min_count/max_count stay nil; an
+// explicit 0 decodes to a pointer at 0).
 func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
 	out := make([]task.AcceptanceCriterion, 0, len(raw))
 	for i, item := range raw {
@@ -359,6 +364,19 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			}
 			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
 		}
+		if beh, ok := m["behavior"].(map[string]any); ok {
+			c.Behavior = task.DecodeBehaviorPayload(beh)
+		}
+		// ADR-074 D2: kind is optional at authoring time — resolve it from the
+		// payload shape HERE, before the caller's ADR-049 D2-rule-5 all-check
+		// bash-policy gate runs, so the gate fires on inferred kinds too. An
+		// explicit kind passes through unchanged; kind-less with BOTH payloads
+		// is rejected as ambiguous.
+		k, kErr := task.InferCriterionKind(&c)
+		if kErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
+		}
+		c.Kind = k
 		out = append(out, c)
 	}
 	return out, nil
@@ -397,7 +415,9 @@ func (t *TaskCreateTool) Description() string {
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
 		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
-		"with none is rejected. If every criterion is kind=check, the assignee's effective bash policy " +
+		"with none is rejected. Before authoring acceptance criteria, load the define-done skill " +
+		"(via the Skill tool) and follow its quality bar. " +
+		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
 		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
 		"status `next` (triaged and dispatchable) — never `inbox`."
@@ -462,9 +482,13 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"kind": map[string]any{
 							"type": "string",
-							"enum": []string{"check", "prose"},
+							"enum": []string{"check", "prose", "behavior"},
 							"description": "check: a shell command verified via the assignee's own bash tool; " +
-								"prose: a free-text statement judged by the Judge System Agent",
+								"prose: a free-text statement judged by the Judge System Agent; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -476,10 +500,11 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 							},
-							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
+						"behavior": task.BehaviorCriterionParamSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
 					"one criterion — an agent-created task with zero criteria is rejected.",

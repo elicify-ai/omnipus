@@ -24,6 +24,62 @@ type AgentSwitchedFrame struct {
 	Type               string  `json:"type"`
 }
 
+// AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
+type AskUserAnswerFrame struct {
+	Answers []struct {
+		AutoDefault *bool    `json:"auto_default,omitempty"`
+		FreeText    *string  `json:"free_text,omitempty"`
+		Header      string   `json:"header"`
+		Selected    []string `json:"selected,omitempty"`
+	} `json:"answers,omitempty"`
+	// true = cancel the set (answers ignored/absent).
+	Cancel    *bool  `json:"cancel,omitempty"`
+	CardId    string `json:"card_id"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+}
+
+// AskUserQuestionCard — One AskUserQuestion card (askuserquestion-tool-spec v3, ADR-074 D4b): the durable pending/terminal record of a parked question set, as rendered by the SPA card. Carried by AskUserQuestionFrame (live push) and SessionStateFrame.pending_asks (reconnect snapshot). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionCard.yaml (the inboundschemas copy is machine-synced from that file by gen-contracts step 5).
+type AskUserQuestionCard struct {
+	// Agent that asked — names the card's "needs your input" header.
+	AgentId string `json:"agent_id"`
+	// Populated when status != pending — the collapsed record renders from THIS record (spec §0.6), never by parsing the resume message.
+	Answers []struct {
+		AutoDefault bool     `json:"auto_default"`
+		FreeText    *string  `json:"free_text,omitempty"`
+		Header      string   `json:"header"`
+		Question    string   `json:"question"`
+		Selected    []string `json:"selected,omitempty"`
+	} `json:"answers,omitempty"`
+	// Headers of default_safe questions the server has already resolved-pending-submit (US-3 S2) — reconnect hydration marks them selected + auto.
+	AutoResolved []string `json:"auto_resolved,omitempty"`
+	CardId       string   `json:"card_id"`
+	CreatedAt    string   `json:"created_at"`
+	// When the set carries at least one default_safe question: the instant those questions auto-resolve to their recommendation (created_at + the fixed 30 minutes). Drives the countdown line.
+	DefaultSafeAt *string `json:"default_safe_at,omitempty"`
+	Questions     []struct {
+		Context     *string `json:"context,omitempty"`
+		DefaultSafe *bool   `json:"default_safe,omitempty"`
+		Header      string  `json:"header"`
+		MultiSelect *bool   `json:"multi_select,omitempty"`
+		Options     []struct {
+			Description *string `json:"description,omitempty"`
+			Label       string  `json:"label"`
+		} `json:"options"`
+		Question    string  `json:"question"`
+		Recommended *string `json:"recommended,omitempty"`
+	} `json:"questions"`
+	// Transcript session id the set is parked on (session-scoped).
+	SessionId string `json:"session_id"`
+	Status    string `json:"status"`
+}
+
+// AskUserQuestionFrame — Server → client (askuserquestion-tool-spec v3 §3). Live push of an AskUserQuestion card: emitted at park time (status pending), on a default-safe auto-resolution (auto_resolved grows), and on terminal transitions (answered/cancelled — the SPA collapses the card and unlocks the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionFrame.yaml.
+type AskUserQuestionFrame struct {
+	Card AskUserQuestionCard `json:"card"`
+	Type string              `json:"type"`
+}
+
 // AttachSessionFrame — Client → server request to attach to an existing session. When `since` is provided, the server skips replay frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full replay (legacy behaviour).
 type AttachSessionFrame struct {
 	SessionId string `json:"session_id"`
@@ -328,6 +384,27 @@ type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
 	Condition   string `json:"condition"`
+	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
+	Criteria []struct {
+		Author struct {
+			Id   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int    `json:"max_count,omitempty"`
+			MinCount *int    `json:"min_count,omitempty"`
+			Scope    *string `json:"scope,omitempty"`
+			Tool     string  `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id     *string `json:"id,omitempty"`
+		Kind   string  `json:"kind"`
+		Status string  `json:"status"`
+		Text   string  `json:"text"`
+	} `json:"criteria,omitempty"`
 	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
 	GoalId       *string `json:"goal_id,omitempty"`
 	LatestReason string  `json:"latest_reason"`
@@ -350,9 +427,10 @@ type JudgeVerdictFrame struct {
 	Met          bool   `json:"met"`
 	Model        string `json:"model"`
 	PerCriterion []struct {
-		CriterionId string `json:"criterion_id"`
-		Met         bool   `json:"met"`
-		Reason      string `json:"reason"`
+		CriterionId   string  `json:"criterion_id"`
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+		Met           bool    `json:"met"`
+		Reason        string  `json:"reason"`
 	} `json:"per_criterion"`
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`
@@ -568,8 +646,10 @@ type SessionStateFrame struct {
 	EmittedAt string `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
-	Type             string                        `json:"type"`
-	UserId           string                        `json:"user_id"`
+	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
+	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
+	Type        string                `json:"type"`
+	UserId      string                `json:"user_id"`
 }
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.
@@ -630,7 +710,7 @@ type SubagentStateFrame struct {
 	SessionId       string `json:"session_id"`
 	SpanId          string `json:"span_id"`
 	State           string `json:"state"`
-	SteeringReceipt struct {
+	SteeringReceipt *struct {
 		AppliedAt     string `json:"applied_at"`
 		CorrelationId string `json:"correlation_id"`
 	} `json:"steering_receipt,omitempty"`
@@ -874,4 +954,6 @@ const (
 	WsFrameTypeLoopStatus               WsFrameType = "loop_status"
 	WsFrameTypePlanStatus               WsFrameType = "plan_status"
 	WsFrameTypeJudgeVerdict             WsFrameType = "judge_verdict"
+	WsFrameTypeAskUserQuestion          WsFrameType = "ask_user_question"
+	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
 )
