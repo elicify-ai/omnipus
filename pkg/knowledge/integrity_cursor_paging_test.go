@@ -156,3 +156,79 @@ func TestIntegrityCursor_PagingIsStableAcrossReorderedStream(t *testing.T) {
 		}
 	}
 }
+
+// reportWithFindingCount builds a report whose single category holds exactly
+// count retained findings (Total == count, nothing dropped), for exercising the
+// paging renderer directly at chosen offsets.
+func reportWithFindingCount(cat IntegrityCategory, count int) *IntegrityReport {
+	c := &CategoryResult{Category: cat, Total: count}
+	for i := 0; i < count; i++ {
+		c.Findings = append(c.Findings, IntegrityFinding{
+			Category: cat,
+			Path:     fmt.Sprintf("n%02d.md", i),
+			Detail:   fmt.Sprintf("finding %02d detail", i),
+		})
+	}
+	return &IntegrityReport{ScopeLabel: "test", NotesSwept: count, Categories: []*CategoryResult{c}}
+}
+
+// TestIntegrityCursor_OffsetPastEndIsCleanNotReversed is Finding 4's
+// reproduction. parseIntegrityCursor accepts any non-negative offset and the
+// renderer clamped it to len(Findings); at offset == count the status line then
+// formatted offset+1..end as "26-25 of 25 — end" — a reversed, nonsensical
+// range. An offset at or beyond the finding count names no page and must say so
+// cleanly.
+func TestIntegrityCursor_OffsetPastEndIsCleanNotReversed(t *testing.T) {
+	const count = 25 // not a multiple of the page size, so offset==count is a genuine over-run
+	cat := string(CategoryBrokenLink)
+
+	for _, offset := range []int{count, count + 1, 100} {
+		t.Run(fmt.Sprintf("offset=%d", offset), func(t *testing.T) {
+			r := reportWithFindingCount(CategoryBrokenLink, count)
+			var b strings.Builder
+			renderIntegrity(&b, r, fmt.Sprintf("%s%s%d", cat, integrityCursorSep, offset))
+			out := b.String()
+
+			// The reversed range is the exact defect: "showing 26-25 of 25".
+			reversed := fmt.Sprintf("showing %d-%d", offset+1, count)
+			if strings.Contains(out, reversed) {
+				t.Fatalf("offset %d past the end printed a reversed range %q:\n%s", offset, reversed, out)
+			}
+			// A past-end offset must never claim to be SHOWING findings at all.
+			if strings.Contains(out, "showing ") {
+				t.Fatalf("offset %d past the end must not print a showing-range at all:\n%s", offset, out)
+			}
+			// It must say, plainly, that this offset is past the end.
+			if !strings.Contains(out, "past the end") {
+				t.Fatalf("offset %d must print a clean past-end message; got:\n%s", offset, out)
+			}
+			// No finding lines are emitted at a past-end offset.
+			for i := 0; i < count; i++ {
+				if strings.Contains(out, fmt.Sprintf("finding %02d detail", i)) {
+					t.Fatalf("offset %d past the end must emit no finding lines; leaked finding %d:\n%s", offset, i, out)
+				}
+			}
+		})
+	}
+}
+
+// TestIntegrityCursor_LastValidPageStillRenders guards against the past-end fix
+// swallowing the genuine last page: the final page of a category (offset on the
+// last page boundary) must still render its findings and an "end" line.
+func TestIntegrityCursor_LastValidPageStillRenders(t *testing.T) {
+	const count = 25
+	cat := string(CategoryBrokenLink)
+	// Last page boundary: for 25 findings and page size 20, offset 20 shows 21-25.
+	lastOffset := (count / integrityFindingsPageSize) * integrityFindingsPageSize
+	r := reportWithFindingCount(CategoryBrokenLink, count)
+	var b strings.Builder
+	renderIntegrity(&b, r, fmt.Sprintf("%s%s%d", cat, integrityCursorSep, lastOffset))
+	out := b.String()
+	want := fmt.Sprintf("showing %d-%d of %d — end", lastOffset+1, count, count)
+	if !strings.Contains(out, want) {
+		t.Fatalf("the genuine last page must still render %q; got:\n%s", want, out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("finding %02d detail", count-1)) {
+		t.Fatalf("the genuine last page must render its findings; got:\n%s", out)
+	}
+}

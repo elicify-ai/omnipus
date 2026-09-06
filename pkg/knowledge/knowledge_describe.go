@@ -1297,8 +1297,15 @@ func renderIntegrityCategoryPage(b *strings.Builder, width int, c *CategoryResul
 	if offset < 0 {
 		offset = 0
 	}
-	if offset > len(c.Findings) {
-		offset = len(c.Findings)
+	if offset > 0 && offset >= len(c.Findings) {
+		// The cursor points at or beyond the last retained finding, so there is
+		// no page here to show. Clamping the offset to len and then formatting
+		// offset+1..end produced a reversed "26-25 of 25 — end" range (Finding
+		// 4); say plainly that the offset is past the end instead. offset==0 is
+		// deliberately excluded so an empty category still renders as nothing on
+		// the normal (non-cursor) path.
+		renderIntegrityCategoryPastEnd(b, c, offset)
+		return
 	}
 	end := offset + integrityFindingsPageSize
 	if end > len(c.Findings) {
@@ -1338,6 +1345,26 @@ func renderIntegrityCategoryStatus(b *strings.Builder, c *CategoryResult, offset
 		// The sweep found more than the retention cap kept. Name how many were
 		// dropped and how to narrow, because those findings are not enumerable
 		// by paging at all.
+		fmt.Fprintf(b, "  %s: %s more findings exceed the retention cap of %s and are not enumerable — narrow with collection=<name> or record_type=<name>\n",
+			cat, group(c.Total-len(c.Findings)), group(len(c.Findings)))
+	}
+}
+
+// renderIntegrityCategoryPastEnd handles a cursor offset that lands at or beyond
+// the category's last retained finding.
+//
+// Such an offset names no page — the caller over-ran the enumeration (a cursor
+// kept past the last "next page" line, or one typed by hand). The old renderer
+// clamped the offset to len(Findings) and then formatted offset+1..end, which
+// printed a reversed "26-25 of 25 — end" range that reads as nonsense. State the
+// fact plainly instead: this offset is past the end, and how many findings the
+// category actually has. The retention-overflow line is still stated because it
+// is a property of the category, not of any one page.
+func renderIntegrityCategoryPastEnd(b *strings.Builder, c *CategoryResult, offset int) {
+	cat := string(c.Category)
+	fmt.Fprintf(b, "  %s: cursor offset %s is past the end — this category has %s finding(s) — end\n",
+		cat, group(offset), group(len(c.Findings)))
+	if c.Total > len(c.Findings) {
 		fmt.Fprintf(b, "  %s: %s more findings exceed the retention cap of %s and are not enumerable — narrow with collection=<name> or record_type=<name>\n",
 			cat, group(c.Total-len(c.Findings)), group(len(c.Findings)))
 	}
