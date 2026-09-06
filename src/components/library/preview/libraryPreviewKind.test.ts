@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createElement } from 'react'
 import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   classifyLibraryEntry,
   libraryEntryExt,
@@ -450,18 +451,27 @@ function makeEntry(over: Partial<LibraryEntry> & { name: string; is_text_editabl
 }
 
 function renderRow(entry: LibraryEntry) {
+  // LibraryEntryRow reads the knowledge-base-info query cache (C3, a passive
+  // read for Vault-icon detection — see LibraryEntryRow.tsx), so it now
+  // needs a QueryClientProvider ancestor even where no query actually runs.
+  // Not this file's own concern (SC-016 is about thumbnail-kind coverage),
+  // but required scaffolding for any render of the row.
   return render(
-    createElement(LibraryEntryRow, {
-      workspaceId: 'ws-1',
-      entry,
-      selected: false,
-      onOpenDirectory: () => {},
-      onSelectFile: () => {},
-      onDownload: () => {},
-      onRename: () => {},
-      onTransfer: () => {},
-      onDelete: () => {},
-    }),
+    createElement(
+      QueryClientProvider,
+      { client: new QueryClient() },
+      createElement(LibraryEntryRow, {
+        workspaceId: 'ws-1',
+        entry,
+        selected: false,
+        onOpenDirectory: () => {},
+        onSelectFile: () => {},
+        onDownload: () => {},
+        onRename: () => {},
+        onTransfer: () => {},
+        onDelete: () => {},
+      }),
+    ),
   )
 }
 
