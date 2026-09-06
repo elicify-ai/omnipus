@@ -19,12 +19,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -32,6 +34,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// goalClarifyWebChannel is the SPA session origin gate for ADR-079 D3's
+// AskUserQuestion clarify card — mirrors pkg/tools/ask_user_question.go's
+// unexported webChannelName exactly (same bus channel value the gateway's
+// webchat WS handler stamps on every SPA turn). A card is attempted only on
+// this origin; every other channel keeps the plain-chat fallback (US-5).
+const goalClarifyWebChannel = "webchat"
 
 // newGoalID mints a stable per-generation goal identifier (ADR-053 R§8.11,
 // UAT S3 fix): a ULID prefixed "goal_", mirroring session.NewSessionID's
@@ -152,7 +161,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			}
 		}
 		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, args, sessionID, "", "", opts.WorkspaceID)
-		return true, true, al.applyGoalCompileOutcome(sessionID, store, args, outcome)
+		return true, true, al.applyGoalCompileOutcome(sessionID, store, args, outcome, opts, agentInst)
 	}
 
 	// Marker-only intent (every criterion from explicit markers — US-3 S3):
@@ -261,11 +270,23 @@ func formatCompileRejection(r *FeasibilityRejection) string {
 // pending state (US-3 S10).
 func (al *AgentLoop) applyGoalCompileOutcome(
 	sessionID string, store *session.UnifiedStore, intent string, outcome llmGoalCompileOutcome,
+	opts *processOptions, agentInst *AgentInstance,
 ) string {
 	empty := ""
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 
 	if outcome.ClarifyingQuestion != "" {
+		// ADR-079 D3: attempt the web AskUserQuestion card first; every
+		// fallback condition (non-webchat origin, unwired registry,
+		// CreatePending losing to ErrAlreadyPending/ErrSaturated/
+		// ErrDelegatedChild) keeps today's plain-chat path below, byte-
+		// identical to pre-D3 behavior.
+		if reply, handledByCard := al.emitGoalClarificationCard(
+			sessionID, store, intent, outcome, opts, agentInst, nowStr,
+		); handledByCard {
+			return reply
+		}
+
 		record := &goalClarificationRecord{
 			Intent: intent, Question: outcome.ClarifyingQuestion, AskedAt: nowStr,
 		}
@@ -344,14 +365,145 @@ func (al *AgentLoop) applyGoalCompileOutcome(
 	return echo
 }
 
+// emitGoalClarificationCard is ADR-079 D3's web-card clarify emission: on a
+// webchat owner session with a wired AskUserQuestion registry, it builds ONE
+// PendingSet from the compile's structured questions and calls
+// registry.CreatePending DIRECTLY — this is an ENGINE-created pending set
+// (the goal-compile is a provider call, not a tool call), so it deliberately
+// does NOT use ParksTurn; the originating /goal turn ends normally exactly
+// like every other prose compile.
+//
+// Returns handled=true whenever the card path was actually taken — success
+// (the card now exists, its reply is card-flavored) or a genuine internal
+// error while building it (an error reply, but still "handled": the caller
+// must NOT also fall back to plain chat and double-ask). Returns
+// handled=false only for the verified fallback conditions (ADR-079 D3):
+// non-webchat origin, no registry wired, or CreatePending losing to
+// ErrAlreadyPending/ErrSaturated/ErrDelegatedChild — the caller then runs
+// today's plain-chat path unchanged.
+func (al *AgentLoop) emitGoalClarificationCard(
+	sessionID string, store *session.UnifiedStore, intent string, outcome llmGoalCompileOutcome,
+	opts *processOptions, agentInst *AgentInstance, nowStr string,
+) (reply string, handled bool) {
+	if opts == nil || opts.Channel != goalClarifyWebChannel {
+		return "", false
+	}
+	reg := al.getAskUserRegistry()
+	if reg == nil {
+		return "", false
+	}
+	if len(outcome.ClarifyingQuestions) == 0 {
+		// Defensive: ClarifyingQuestion (joined text) was non-empty but the
+		// structured slice was not populated — compileGoalIntentLLM always
+		// sets both together, so this should be unreachable. Fall back rather
+		// than emit an empty/malformed card.
+		logger.WarnCF("agent", "goal: clarifying question present but no structured questions — falling back to plain chat",
+			map[string]any{"session_id": sessionID})
+		return "", false
+	}
+
+	meta, merr := store.GetMeta(sessionID)
+	if merr != nil {
+		logger.WarnCF("agent", "goal: could not read session meta for the clarify card's owner",
+			map[string]any{"session_id": sessionID, "error": merr.Error()})
+	}
+	owner := ""
+	if meta != nil {
+		owner = meta.Owner
+	}
+	agentID := ""
+	if agentInst != nil {
+		agentID = agentInst.ID
+	}
+
+	// M2 (ADR-079 D3 regrill): default_safe is FORBIDDEN on every goal-clarify
+	// question — the server's all-default auto-submit dispatches a
+	// non-UserInitiated resume that applyGoalPendingReply skips (goal_loop.go
+	// checkGoalLoopAfterTurn/applyGoalClarificationReply), stranding the
+	// compile; a goal must never auto-activate on a stepped-away user. Strip
+	// rather than reject — the compile prompt never asks the model for this
+	// field, so this is an engine-side safety net, not a quality issue to
+	// repair.
+	questions := make([]askuser.Question, len(outcome.ClarifyingQuestions))
+	copy(questions, outcome.ClarifyingQuestions)
+	for i := range questions {
+		questions[i].DefaultSafe = false
+	}
+
+	set := &askuser.PendingSet{
+		CardID:              askuser.NewCardID(),
+		RoutingSessionKey:   opts.SessionKey,
+		TranscriptSessionID: sessionID,
+		AgentID:             agentID,
+		Channel:             opts.Channel,
+		ChatID:              opts.ChatID,
+		Owner:               owner,
+		Questions:           questions,
+		Status:              askuser.StatusPending,
+	}
+
+	if err := reg.CreatePending(set); err != nil {
+		switch {
+		case errors.Is(err, askuser.ErrAlreadyPending),
+			errors.Is(err, askuser.ErrSaturated),
+			errors.Is(err, askuser.ErrDelegatedChild):
+			// Verified fallback conditions (ADR-079 D3) — the caller's
+			// plain-chat path picks this compile's question up instead.
+			return "", false
+		default:
+			// An unexpected CreatePending error (e.g. malformed set) is an
+			// engine bug, not a known "no human surface here" condition —
+			// surface it loudly rather than silently degrading to plain chat.
+			logger.WarnCF("agent", "goal: could not create the clarify AskUserQuestion card",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+			return "Could not present the clarifying question (internal error). Please restate the goal.", true
+		}
+	}
+
+	echoQuestions := make([]goalClarificationQuestionEcho, len(questions))
+	for i, q := range questions {
+		echoQuestions[i] = goalClarificationQuestionEcho{Header: q.Header, Question: q.Question}
+	}
+	record := &goalClarificationRecord{
+		Intent: intent, Question: outcome.ClarifyingQuestion, AskedAt: nowStr,
+		CardID: set.CardID, Questions: echoQuestions,
+	}
+	recordJSON, merr2 := marshalGoalClarification(record)
+	if merr2 != nil {
+		logger.WarnCF("agent", "goal: could not marshal clarification record (card already created)",
+			map[string]any{"session_id": sessionID, "card_id": set.CardID, "error": merr2.Error()})
+		return "Could not record the clarifying question (internal error). Please restate the goal.", true
+	}
+	empty := ""
+	if err := store.SetMeta(sessionID, session.MetaPatch{
+		GoalClarificationJSON: &recordJSON,
+		GoalPendingJSON:       &empty, // a question supersedes any earlier pending compile
+		GoalLastActivityAt:    &nowStr,
+	}); err != nil {
+		logger.WarnCF("agent", "goal: could not persist clarification record (card already created)",
+			map[string]any{"session_id": sessionID, "card_id": set.CardID, "error": err.Error()})
+		return "Could not record the clarifying question (internal error). Please restate the goal.", true
+	}
+
+	// D3: a brief reply that does NOT invite a typed answer — the card
+	// blocks the composer. No emitGoalStatusFrameWithCriteria here (no
+	// criteria exist yet).
+	return "I have a few questions before I lock this goal in — please answer them on the card above.", true
+}
+
 // applyGoalPendingReply is the ADR-074 D4a pre-LLM reply-routing hook (US-3
 // S9): called from processMessage right after handleCommand, it intercepts
 // BARE (non-slash) messages only when the session carries a pending goal
 // state. Taxonomy:
 //
-//   - Pending-clarification: the next ordinary chat message — whatever it
-//     says, confirm-words included — IS the answer, feeding ONE resumed
-//     compile (with its own single repair, FR-007).
+//   - Pending-clarification, channel plain-chat (ADR-079 D3, no CardID on
+//     the record): the next ordinary chat message — whatever it says,
+//     confirm-words included — IS the answer, feeding ONE resumed compile
+//     (with its own single repair, FR-007). Unchanged pre-ADR-079 behavior.
+//   - Pending-clarification, web card (ADR-079 D3, CardID set on the
+//     record): delegates to applyGoalClarificationReply, which resumes ONLY
+//     on the matching AskUserQuestion card's answers message — any other
+//     bare message passes through untouched and the card survives (C1).
 //   - Pending-confirm: a bare message that is exactly one confirm token
 //     (confirmGoalAliases) activates; a fresh activation rewrites the turn
 //     into round 1 (handled=false + opts.UserMessage). ANY other bare message
@@ -394,13 +546,7 @@ func (al *AgentLoop) applyGoalPendingReply(
 	}
 
 	if clar := loadGoalClarification(meta.GoalClarificationJSON); clar != nil {
-		var fc FeasibilityContext
-		if agentInst != nil {
-			fc = agentFeasibilityContext{agentInst: agentInst}
-		}
-		answer := strings.TrimSpace(msg.Content)
-		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer, opts.WorkspaceID)
-		return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome)
+		return al.applyGoalClarificationReply(ctx, msg, agentInst, opts, store, sessionID, clar)
 	}
 
 	if strings.TrimSpace(meta.GoalPendingJSON) != "" && IsGoalConfirm(msg.Content) {
@@ -418,6 +564,89 @@ func (al *AgentLoop) applyGoalPendingReply(
 	}
 
 	return false, ""
+}
+
+// applyGoalClarificationReply resolves a pending goal-clarification against
+// an inbound BARE message (ADR-079 D3, regrill C1). Two shapes:
+//
+//   - Web-card record (clar.CardID != ""): resumes ONLY when msg.Content is
+//     the matching AskUserQuestion card's answers message
+//     (askuser.ParseResumeMessage's card id == clar.CardID). Any other bare
+//     message — a stray second-client/stale-tab line, or simply not a resume
+//     message at all — passes THROUGH untouched (handled=false): the card
+//     and the clarification record survive, and the message runs as an
+//     ordinary turn. A cancelled submission discards the draft like
+//     `/goal clear`.
+//   - Channel plain-chat record (clar.CardID == ""): today's behavior,
+//     pinned — the next bare message IS the answer, verbatim.
+func (al *AgentLoop) applyGoalClarificationReply(
+	ctx context.Context, msg bus.InboundMessage, agentInst *AgentInstance, opts *processOptions,
+	store *session.UnifiedStore, sessionID string, clar *goalClarificationRecord,
+) (handled bool, reply string) {
+	var fc FeasibilityContext
+	if agentInst != nil {
+		fc = agentFeasibilityContext{agentInst: agentInst}
+	}
+
+	if clar.CardID != "" {
+		resume, ok, perr := askuser.ParseResumeMessage(msg.Content)
+		if !ok || resume.CardID != clar.CardID {
+			// Not this card's answers message (EC-11: a stray second-client /
+			// stale-tab bare message, or an unrelated resume message
+			// entirely). The card and the clarification record survive; the
+			// turn runs normally.
+			return false, ""
+		}
+		if perr != nil {
+			logger.WarnCF("agent", "goal: card_id matched but the resume payload failed to parse — treating as a stray message",
+				map[string]any{"session_id": sessionID, "card_id": clar.CardID, "error": perr.Error()})
+			return false, ""
+		}
+		if resume.Status == askuser.StatusCancelled {
+			return true, al.clearGoal(sessionID, store, goalClearNoteUser)
+		}
+		question, answer := formatGoalCardAnswers(clar.Questions, resume.Answers)
+		outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, question, answer, opts.WorkspaceID)
+		return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome, opts, agentInst)
+	}
+
+	// Channel plain-chat path — today's behavior, pinned: the next bare
+	// message IS the answer, whatever it says.
+	answer := strings.TrimSpace(msg.Content)
+	outcome := al.compileGoalIntentLLM(ctx, agentInst, fc, clar.Intent, sessionID, clar.Question, answer, opts.WorkspaceID)
+	return true, al.applyGoalCompileOutcome(sessionID, store, clar.Intent, outcome, opts, agentInst)
+}
+
+// formatGoalCardAnswers renders a resumed AskUserQuestion card's structured
+// answers into the numbered question/answer text pair
+// compileGoalIntentLLM's resumed-compile prompt expects (ADR-079 D3's "how
+// structured answers feed the resumed compile"). qs is the clarification
+// record's per-question header+text echo, consulted only when an answer's
+// own QuestionText echo (askuser.Answer, o-R2-1) is somehow empty.
+func formatGoalCardAnswers(qs []goalClarificationQuestionEcho, answers []askuser.Answer) (question, answer string) {
+	var qb, ab strings.Builder
+	for i, a := range answers {
+		qtext := a.QuestionText
+		if qtext == "" {
+			for _, q := range qs {
+				if q.Header == a.Header {
+					qtext = q.Question
+					break
+				}
+			}
+		}
+		if i > 0 {
+			qb.WriteString("\n")
+			ab.WriteString("\n")
+		}
+		fmt.Fprintf(&qb, "%d. %s", i+1, qtext)
+		av := strings.Join(a.Selected, ", ")
+		if a.FreeText != nil {
+			av = *a.FreeText
+		}
+		fmt.Fprintf(&ab, "%d. %s", i+1, av)
+	}
+	return qb.String(), ab.String()
 }
 
 // proposeGoalAmendment is the N-6/D11 re-statement path: a `/goal <new intent>`

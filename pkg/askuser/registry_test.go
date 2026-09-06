@@ -740,6 +740,71 @@ func TestParseResumeCardID_RoundTripAndRejects(t *testing.T) {
 	}
 }
 
+// ParseResumeMessage must decode both the card id AND the JSON payload,
+// mirror ParseResumeCardID's recognition exactly (ok=false for anything not
+// a resume message), and distinguish "not a resume message" from "a resume
+// message with a corrupt payload" (ADR-079 D3's goal-compile consumer keys
+// on this to tell a stray/foreign message apart from a genuine parse fault).
+func TestParseResumeMessage_DecodesPayloadAndRejects(t *testing.T) {
+	set := testSet("session_x")
+	set.Status = StatusAnswered
+	set.Answers = []Answer{{Header: "Scope", QuestionText: "Which scope?", Selected: []string{"Backend"}}}
+	msg, err := ResumeMessage(set)
+	if err != nil {
+		t.Fatalf("ResumeMessage: %v", err)
+	}
+
+	resume, ok, perr := ParseResumeMessage(msg)
+	if !ok || perr != nil {
+		t.Fatalf("round-trip failed: ok=%v err=%v", ok, perr)
+	}
+	if resume.CardID != set.CardID {
+		t.Fatalf("CardID = %q, want %q", resume.CardID, set.CardID)
+	}
+	if resume.Status != StatusAnswered {
+		t.Fatalf("Status = %q, want answered", resume.Status)
+	}
+	if len(resume.Answers) != 1 || resume.Answers[0].Header != "Scope" ||
+		len(resume.Answers[0].Selected) != 1 || resume.Answers[0].Selected[0] != "Backend" {
+		t.Fatalf("answers not decoded: %+v", resume.Answers)
+	}
+
+	// Not a resume message at all: ok=false, no error (mirrors ParseResumeCardID).
+	for _, content := range []string{"", "hello there", "Answers to your questions (card_id="} {
+		if _, ok, perr := ParseResumeMessage(content); ok || perr != nil {
+			t.Fatalf("ParseResumeMessage(%q) = ok=%v err=%v, want ok=false err=nil", content, ok, perr)
+		}
+	}
+
+	// A cancelled set carries no answers.
+	cancelSet := testSet("session_y")
+	cancelSet.Status = StatusCancelled
+	cancelMsg, err := ResumeMessage(cancelSet)
+	if err != nil {
+		t.Fatalf("ResumeMessage (cancel): %v", err)
+	}
+	cancelResume, ok, perr := ParseResumeMessage(cancelMsg)
+	if !ok || perr != nil {
+		t.Fatalf("cancel round-trip failed: ok=%v err=%v", ok, perr)
+	}
+	if cancelResume.Status != StatusCancelled || len(cancelResume.Answers) != 0 {
+		t.Fatalf("cancel resume = %+v, want cancelled with no answers", cancelResume)
+	}
+
+	// Recognized as a resume message (right prefix + card id) but the JSON
+	// payload itself is corrupt: ok=true, err!=nil — callers must NOT treat
+	// this as "not a resume message" (that would silently pass through a
+	// message that really was addressed to this card).
+	corrupt := "Answers to your questions (card_id=abc123): not valid json"
+	_, ok, perr = ParseResumeMessage(corrupt)
+	if !ok {
+		t.Fatalf("a message with the right prefix/card-id shape must be recognized as a resume message (ok=true), got ok=%v", ok)
+	}
+	if perr == nil {
+		t.Fatal("a corrupt JSON payload must return a non-nil error, not be silently accepted")
+	}
+}
+
 func TestRearmSession_NoopWithoutPersistedSet(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)

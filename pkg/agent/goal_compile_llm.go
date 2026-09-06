@@ -71,6 +71,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -97,15 +98,36 @@ var goalCompileFallbacks atomic.Uint64 //nolint:gochecknoglobals
 // goalCompileFallbacksTotal exposes the counter (tests, future status surfaces).
 func goalCompileFallbacksTotal() uint64 { return goalCompileFallbacks.Load() }
 
+// goalClarificationQuestionEcho is one clarifying question's header+text,
+// echoed into the clarification record (ADR-079 D3) so the resumed compile
+// can recover the question text for an answer whose own QuestionText echo
+// (askuser.Answer, o-R2-1) is somehow empty. Deliberately narrower than
+// askuser.Question — the record does not need to re-carry options/
+// recommended/multi_select, only the header/text pairing the spec names.
+type goalClarificationQuestionEcho struct {
+	Header   string `json:"header"`
+	Question string `json:"question"`
+}
+
 // goalClarificationRecord is the pending-clarification record persisted as
 // session.MetaPatch.GoalClarificationJSON (US-3 S7): the original intent plus
-// the compiler's single clarifying question. The user's next ordinary chat
-// message answers it, feeding ONE resumed compile; `/goal clear` or a fresh
-// `/goal <intent>` discards it. Max one question round per episode.
+// the compiler's clarifying question(s). The user's next ordinary chat
+// message (channel path) or matching AskUserQuestion card answer (web path,
+// ADR-079 D3) answers it, feeding ONE resumed compile; `/goal clear` or a
+// fresh `/goal <intent>` discards it. Max one question round per episode.
+//
+// CardID and Questions are ADR-079 D3's additive, absent-safe extension:
+// present ONLY on the web-card path (CardID correlates the record to a live
+// AskUserQuestionRegistry pending set); empty on the pre-ADR-079 / channel
+// plain-chat path, which keeps using Question exactly as before. Do NOT
+// repurpose Question into a slice — that would break both old records and
+// the channel single-question path (ADR-079 grill M1).
 type goalClarificationRecord struct {
-	Intent   string `json:"intent"`
-	Question string `json:"question"`
-	AskedAt  string `json:"asked_at,omitempty"`
+	Intent    string                          `json:"intent"`
+	Question  string                          `json:"question"`
+	AskedAt   string                          `json:"asked_at,omitempty"`
+	CardID    string                          `json:"card_id,omitempty"`
+	Questions []goalClarificationQuestionEcho `json:"questions,omitempty"`
 }
 
 // marshalGoalClarification serializes a clarification record for session meta.
@@ -181,11 +203,14 @@ type goalCompileResponse struct {
 	// something to emit).
 	DoD []goalCompileDoDItemParsed
 	// ClarifyingQuestions holds the compiler's question(s) when
-	// Clarity=="ambiguous" (ADR-079 D2, 1..10 questions in the schema; this
-	// wave keeps the existing single plain-chat clarification contract —
-	// see joinClarifyingQuestions — the structured AskUserQuestion card
-	// delivery is ADR-079 D3, a later wave).
-	ClarifyingQuestions []string
+	// Clarity=="ambiguous" (ADR-079 D2, 1..10 questions in the schema).
+	// Structured askuser.Question objects (header/question/2-6 options/
+	// optional recommended+multi_select), validated via
+	// askuser.ValidateQuestions — the SAME shape the shipped AskUserQuestion
+	// tool requires (ADR-079 D3 maps this array one-to-one onto the web
+	// card's questions). The channel plain-chat fallback still renders just
+	// the .Question text via joinClarifyingQuestions.
+	ClarifyingQuestions []askuser.Question
 }
 
 // errGoalCompileSchema wraps every INV-1/oneOf violation so callers can treat
@@ -213,10 +238,14 @@ func parseGoalCompileResponse(raw string) (*goalCompileResponse, error) {
 			Clarity string `json:"clarity"`
 			Reason  string `json:"reason"`
 		} `json:"assessment"`
-		Definition          string                       `json:"definition"`
-		Criteria            []map[string]json.RawMessage `json:"criteria"`
-		DoD                 []map[string]json.RawMessage `json:"dod"`
-		ClarifyingQuestions []string                     `json:"clarifying_questions"`
+		Definition string                       `json:"definition"`
+		Criteria   []map[string]json.RawMessage `json:"criteria"`
+		DoD        []map[string]json.RawMessage `json:"dod"`
+		// ClarifyingQuestions unmarshals directly into askuser.Question — its
+		// JSON tags (header/question/options/multi_select/recommended/
+		// default_safe/context) are exactly the shape the compile prompt asks
+		// the model to produce (ADR-079 D3).
+		ClarifyingQuestions []askuser.Question `json:"clarifying_questions"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &probe); err != nil {
 		return nil, fmt.Errorf("%w: %w", errGoalCompileSchema, err)
@@ -243,15 +272,16 @@ func parseGoalCompileResponse(raw string) (*goalCompileResponse, error) {
 				"%w: assessment.clarity=\"ambiguous\" requires a non-empty clarifying_questions array",
 				errGoalCompileSchema)
 		}
-		questions := make([]string, 0, len(probe.ClarifyingQuestions))
-		for i, q := range probe.ClarifyingQuestions {
-			q = strings.TrimSpace(q)
-			if q == "" {
-				return nil, fmt.Errorf("%w: clarifying_questions[%d] is empty", errGoalCompileSchema, i)
-			}
-			questions = append(questions, q)
+		// ADR-079 D3: every clarifying question must be a full, valid
+		// askuser.Question — header, question text, and 2-6 real answer
+		// options (the shipped AskUserQuestion card's own hard requirement;
+		// free text is always ALSO available, never a substitute for having
+		// no options at all). Reuse the tool's own validation table verbatim
+		// rather than re-deriving header/option-count bounds here.
+		if err := askuser.ValidateQuestions(probe.ClarifyingQuestions); err != nil {
+			return nil, fmt.Errorf("%w: clarifying_questions invalid: %w", errGoalCompileSchema, err)
 		}
-		return &goalCompileResponse{Clarity: clarity, ClarifyingQuestions: questions}, nil
+		return &goalCompileResponse{Clarity: clarity, ClarifyingQuestions: probe.ClarifyingQuestions}, nil
 	}
 
 	// clarity == "clear"
@@ -389,23 +419,23 @@ func goalCompileEntryProvenance(entry map[string]json.RawMessage) (task.Criterio
 }
 
 // joinClarifyingQuestions renders the (possibly several, ADR-079 D2's up to
-// 10) parsed clarifying questions into the single plain-chat question text
-// the existing US-3 S7 clarification flow expects
+// 10) parsed clarifying questions' TEXT into the single plain-chat question
+// the channel/no-registry/no-card fallback path expects
 // (llmGoalCompileOutcome.ClarifyingQuestion / goalClarificationRecord.
-// Question). ADR-079 D3's structured AskUserQuestion card delivery (one
-// card, per-question header/options/recommended) is a later wave; this wave
-// keeps today's single plain-chat contract while still letting the compile
-// emit more than one question internally.
-func joinClarifyingQuestions(qs []string) string {
+// Question) — the pre-ADR-079-D3 contract, kept byte-identical for that
+// fallback. The web card path (ADR-079 D3) uses the structured
+// outcome.ClarifyingQuestions directly instead; this function only ever
+// renders question TEXT, never the options.
+func joinClarifyingQuestions(qs []askuser.Question) string {
 	if len(qs) == 1 {
-		return qs[0]
+		return qs[0].Question
 	}
 	var sb strings.Builder
 	for i, q := range qs {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
-		fmt.Fprintf(&sb, "%d. %s", i+1, q)
+		fmt.Fprintf(&sb, "%d. %s", i+1, q.Question)
 	}
 	return sb.String()
 }
@@ -513,7 +543,22 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 			"   \"dod\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"," +
 			"\"provenance\":\"stated\"|\"workspace\"|\"floor\"|\"inferred\"}, ...]}\n\n" +
 			"Ambiguous:\n" +
-			"  {\"assessment\":{\"clarity\":\"ambiguous\"},\"clarifying_questions\":[\"...\", ...]}\n\n" +
+			"  {\"assessment\":{\"clarity\":\"ambiguous\"},\n" +
+			"   \"clarifying_questions\":[\n" +
+			"     {\"header\":\"<short unique tab label>\",\"question\":\"<the question text>\",\n" +
+			"      \"options\":[{\"label\":\"...\",\"description\":\"...\"}, ... concrete answer options],\n" +
+			"      \"multi_select\":true|false (optional, default false),\n" +
+			"      \"recommended\":\"<one option's exact label, optional>\"},\n" +
+			"     ... up to 10 questions in one round\n" +
+			"   ]}\n\n" +
+			fmt.Sprintf(
+				"Every clarifying question needs a short unique header (max %d chars) and %d-%d concrete "+
+					"answer options — real, specific candidate answers, never filler — even when the true "+
+					"answer is open-ended: the user can always answer in free text instead, so the options are "+
+					"a helpful starting menu, not an exhaustive list. Never set a \"default_safe\" field on a "+
+					"clarifying question — these must always wait for the user's own answer.\n\n",
+				askuser.MaxHeaderChars, askuser.MinOptions, askuser.MaxOptions,
+			) +
 			"Choose \"clear\" ONLY when you are confident, against the quality bar below, that every " +
 			"criterion is unambiguous and no reasonable reader would disagree about what \"done\" means. " +
 			"If scope, acceptance, or the user's meaning is genuinely ambiguous — including a goal that " +
@@ -638,11 +683,17 @@ type llmGoalCompileOutcome struct {
 	Result CompileResult
 	// ClarifyingQuestion is non-empty when the compile paused on its single
 	// question round (US-3 S7, ADR-079 D2's "ambiguous" branch). No criteria
-	// exist yet in that case. Populated via joinClarifyingQuestions when the
-	// compile emitted more than one question (ADR-079 D2 allows 1..10; this
-	// wave still delivers them as today's single plain-chat question — the
-	// structured AskUserQuestion card is ADR-079 D3, a later wave).
+	// exist yet in that case. Populated via joinClarifyingQuestions — the
+	// channel plain-chat fallback's question text (ADR-079 D2 allows 1..10;
+	// joined into one string).
 	ClarifyingQuestion string
+	// ClarifyingQuestions is the same clarifying-question set, UNjoined and
+	// structured (ADR-079 D3): one askuser.Question (header, text, 2-6
+	// options, optional recommended/multi_select) per question, ready to
+	// become the web AskUserQuestion card's PendingSet.Questions verbatim
+	// (default_safe is stripped at the card-build site, never here). Empty
+	// exactly when ClarifyingQuestion is empty.
+	ClarifyingQuestions []askuser.Question
 	// UsedFallback reports the deterministic parser produced Result (LLM
 	// failure/timeout/schema miss/second veto/question overflow) — the echo
 	// gains the FR-014 "no quality-bar rewrite" note.
@@ -791,7 +842,10 @@ func (al *AgentLoop) compileGoalIntentLLM(
 				// the compiler re-ask indefinitely on empty replies.
 				return fallback("compiler asked a question outside its single question round")
 			}
-			return llmGoalCompileOutcome{ClarifyingQuestion: joinClarifyingQuestions(parsed.ClarifyingQuestions)}
+			return llmGoalCompileOutcome{
+				ClarifyingQuestion:  joinClarifyingQuestions(parsed.ClarifyingQuestions),
+				ClarifyingQuestions: parsed.ClarifyingQuestions,
+			}
 		}
 		res := assemble(parsed)
 		if res.Rejection == nil {

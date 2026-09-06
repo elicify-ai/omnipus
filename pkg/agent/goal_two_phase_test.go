@@ -91,15 +91,18 @@ func compileJSON(criteria ...string) *providers.LLMResponse {
 	return &providers.LLMResponse{Content: sb.String()}
 }
 
-// questionJSON builds an "ambiguous"-branch compile response (ADR-079 D2)
-// carrying exactly one clarifying question — this wave still delivers a
-// single question through the existing plain-chat contract
-// (joinClarifyingQuestions collapses a 1-element array to the bare string),
-// so every existing single-question assertion in this file keeps working
-// unchanged.
+// questionJSON builds an "ambiguous"-branch compile response (ADR-079 D2/D3)
+// carrying exactly one clarifying question, shaped as a full askuser.Question
+// (header + question text + a valid 2-option answer menu — every real
+// AskUserQuestion needs options, MinOptions=2, even though free text is
+// always ALSO available). joinClarifyingQuestions collapses a 1-element
+// slice to the bare .Question text, so every existing single-question
+// substring assertion in this file keeps working unchanged.
 func questionJSON(q string) *providers.LLMResponse {
 	return &providers.LLMResponse{
-		Content: `{"assessment":{"clarity":"ambiguous"},"clarifying_questions":["` + q + `"]}`,
+		Content: `{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+			`{"header":"Q1","question":"` + q + `","options":[{"label":"Option A"},{"label":"Option B"}]}` +
+			`]}`,
 	}
 }
 
@@ -399,12 +402,37 @@ func TestParseGoalCompileResponse_SchemaEnforcesINV1(t *testing.T) {
 		t.Fatalf("unexpected dod parse: %+v", good.DoD)
 	}
 
-	q, err := parseGoalCompileResponse(`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":["Which repo?"]}`)
+	q, err := parseGoalCompileResponse(`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+		`{"header":"Repo","question":"Which repo?","options":[{"label":"omnipus"},{"label":"other"}]}` +
+		`]}`)
 	if err != nil {
 		t.Fatalf("valid question rejected: %v", err)
 	}
-	if q.Clarity != "ambiguous" || len(q.ClarifyingQuestions) != 1 || q.ClarifyingQuestions[0] != "Which repo?" {
+	if q.Clarity != "ambiguous" || len(q.ClarifyingQuestions) != 1 ||
+		q.ClarifyingQuestions[0].Question != "Which repo?" || q.ClarifyingQuestions[0].Header != "Repo" {
 		t.Fatalf("unexpected question parse: %+v", q)
+	}
+}
+
+// TestParseGoalCompileResponse_AmbiguousQuestionNeedsOptions is ADR-079 D3's
+// schema extension: a clarifying question with no options (or too few) is a
+// hard schema error — every real askuser.Question needs 2-6 real answer
+// options (free text is always ALSO available, never a substitute).
+func TestParseGoalCompileResponse_AmbiguousQuestionNeedsOptions(t *testing.T) {
+	bad := []string{
+		// No options field at all.
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[{"header":"H","question":"q?"}]}`,
+		// Only one option (MinOptions=2).
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+			`{"header":"H","question":"q?","options":[{"label":"only one"}]}]}`,
+		// Missing header.
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+			`{"question":"q?","options":[{"label":"a"},{"label":"b"}]}]}`,
+	}
+	for _, raw := range bad {
+		if _, err := parseGoalCompileResponse(raw); err == nil {
+			t.Errorf("parseGoalCompileResponse(%q) accepted, want a schema error (ADR-079 D3 options requirement)", raw)
+		}
 	}
 }
 
