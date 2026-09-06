@@ -127,6 +127,7 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 	}
 
 	var resolve records.RelationResolver
+	var resolveNear func(near string) (string, bool)
 	if store != nil {
 		walk, werr := knowledge.WalkContained(knowledge.OSLinkFS(), root)
 		if werr != nil {
@@ -134,19 +135,39 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 				"relation comparisons will report unresolved", "root", col.Root, "error", werr)
 		} else {
 			notes := knowledge.NewNoteIndex(walk.Files)
-			resolve = NewRelationResolver(ctx, notes, store).AsFunc()
+			rr := NewRelationResolver(ctx, notes, store)
+			resolve = rr.AsFunc()
+			// ResolveNear resolves `near` to the anchor NOTE's own path — the
+			// hop-0 origin — through the SAME wikilink->file resolution the
+			// record path uses (ResolveIdentity's first step), but WITHOUT the
+			// identity requirement AsFunc/Resolve impose. That is the whole
+			// point: an ordinary note with no record id must still be placeable
+			// as `near`'s anchor, and AsFunc collapses "exists but not a record"
+			// onto "did not resolve", which is exactly the note it must not drop.
+			resolveNear = func(near string) (string, bool) {
+				wl, ok := records.ParseWikilink(near)
+				if !ok {
+					wl = records.Wikilink{Target: near, Raw: "[[" + near + "]]"}
+				}
+				id, ok := rr.ResolveIdentity(wl)
+				if !ok || id.Path == "" {
+					return "", false
+				}
+				return id.Path, true
+			}
 		}
 	}
 
 	return FindEnv{
 		Deps: knowledgefind.Deps{
-			Schemas:    schemas,
-			Store:      store,
-			PathPrefix: "", // the whole mounted collection — knowledge_find has no per-call folder narrowing argument
-			Text:       &findTextSearcher{ix: ix},
-			Views:      records.NewViewFindLoader(views),
-			Resolve:    resolve,
-			Epoch:      epoch,
+			Schemas:     schemas,
+			Store:       store,
+			PathPrefix:  "", // the whole mounted collection — knowledge_find has no per-call folder narrowing argument
+			Text:        &findTextSearcher{ix: ix},
+			Views:       records.NewViewFindLoader(views),
+			Resolve:     resolve,
+			ResolveNear: resolveNear,
+			Epoch:       epoch,
 		},
 		Schemas:    schemas,
 		Views:      views,

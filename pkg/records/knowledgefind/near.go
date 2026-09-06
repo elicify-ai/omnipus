@@ -229,26 +229,61 @@ func buildRelationGraph(ctx context.Context, d Deps) (*relationGraph, *RefusalEr
 // no neighbours" are indistinguishable from here, and the caller finds out
 // which by reading NEAREST INDEXED TERMS / knowledge_describe the same way a
 // zero-hit word search already tells them.
-func nearReachable(ctx context.Context, d Deps, q *query) (map[string]bool, *RefusalError) {
+//
+// It returns TWO things a `near` query intersects against, and they are not the
+// same set:
+//
+//   - reached — the record IDENTITIES within `hops` typed-relation steps of the
+//     anchor's record (empty when the anchor is not a record). This is the graph
+//     half, and it is keyed by record ID.
+//   - anchorPath — the anchor NOTE's own collection-relative path, resolved
+//     through Deps.ResolveNear, or "" when ResolveNear is unwired or the
+//     reference names nothing on disk. This is how the origin counts as hop 0
+//     even for an ORDINARY note that has no record identity and therefore never
+//     appears in reached.
+//
+// A nil map AND an empty anchorPath, with a nil refusal, means `near` did not
+// resolve to anything at all — a legitimate ZERO-HIT answer (D3.2: absence is a
+// state, not a fault), exactly the way a `words` search matching nothing is zero
+// hits and not an error. It is NOT a refusal: "you spelled the note wrong" and
+// "that note has no neighbours" are indistinguishable from here, and the caller
+// finds out which by reading NEAREST INDEXED TERMS / knowledge_describe the same
+// way a zero-hit word search already tells them.
+func nearReachable(ctx context.Context, d Deps, q *query) (reached map[string]bool, anchorPath string, _ *RefusalError) {
 	if q.near == "" {
-		return nil, nil
+		return nil, "", nil
 	}
 	if d.Resolve == nil {
 		// Falling through silently here would answer EVERY near/hops query
 		// with an empty neighbourhood forever, indistinguishable from "that
 		// note has no relations" — precisely the quiet degradation Deps.Text
 		// is required, not optional, to prevent for the SAME reason.
-		return nil, refuse(problem(generated.IndexUnavailable,
+		return nil, "", refuse(problem(generated.IndexUnavailable,
 			"near/hops needs relation resolution, and this vault has none wired in",
 			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
 	}
+
+	// The anchor note's OWN path (hop 0), resolved independently of whether it
+	// is a record. This is what lets `near=<ordinary note> + words=<term>`
+	// return the anchor when it contains the term — the field-reported case a
+	// record-only near silently answered with zero.
+	if d.ResolveNear != nil {
+		if p, ok := d.ResolveNear(q.near); ok {
+			anchorPath = p
+		}
+	}
+
 	seed, ok := d.Resolve(nearWikilink(q.near))
 	if !ok {
-		return map[string]bool{}, nil
+		// Not a record — but the anchor may still exist as an ordinary note,
+		// in which case anchorPath above carries it as hop 0. reached is empty
+		// (a plain note is not a graph node); the caller proceeds on anchorPath
+		// alone rather than short-circuiting to zero.
+		return map[string]bool{}, anchorPath, nil
 	}
 	g, refusal := buildRelationGraph(ctx, d)
 	if refusal != nil {
-		return nil, refusal
+		return nil, "", refusal
 	}
-	return g.within(seed, q.hops), nil
+	return g.within(seed, q.hops), anchorPath, nil
 }

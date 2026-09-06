@@ -129,6 +129,19 @@ type Deps struct {
 	// relation comparisons report "unresolved" rather than silently comparing
 	// link text, which is the honest degradation.
 	Resolve records.RelationResolver
+	// ResolveNear turns `near`'s note reference (a bare path/name or a
+	// [[wikilink]]) into the anchor note's own collection-relative PATH, so the
+	// anchor counts as hop 0 EVEN WHEN IT IS AN ORDINARY NOTE with no record
+	// identity — the case Resolve cannot serve, because Resolve returns !ok for
+	// a note that is not a record (relation_resolver.go's Resolve collapses
+	// "exists but has no identity" onto "did not resolve"). near/hops still
+	// walks only the TYPED relation graph for hops >= 1; ResolveNear is purely
+	// how the origin note itself re-enters the answer at hop 0.
+	//
+	// Optional: when nil, near falls back to record-graph membership only — the
+	// anchor is hop 0 only if it is itself a record — which is the pre-existing
+	// behaviour every test that does not wire this relies on.
+	ResolveNear func(near string) (path string, ok bool)
 	// Epoch is the properties index's generation counter, which a cursor is
 	// issued against.
 	Epoch int64
@@ -503,15 +516,20 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// mechanism (FR-076: near MUST NOT bypass, weaken or replace any filter
 	// supplied alongside it, in either direction — AC-F2).
 	var nearSet map[string]bool
+	var nearAnchorPath string
 	if q.near != "" {
-		reached, r := nearReachable(ctx, d, q)
+		reached, anchorPath, r := nearReachable(ctx, d, q)
 		if r != nil {
 			return refusalResponse(generated.VaultFindRequest{}, echo, r), r
 		}
-		if len(reached) == 0 {
+		// Zero ONLY when neither the graph nor the anchor placed anything: an
+		// anchor that resolved to an ordinary note (empty graph, non-empty
+		// anchorPath) is NOT a zero-hit query — it still has hop 0 to return.
+		if len(reached) == 0 && anchorPath == "" {
 			return zeroHitResponse(ctx, d, q, echo), nil
 		}
 		nearSet = reached
+		nearAnchorPath = anchorPath
 	}
 
 	if d.Store == nil {
@@ -571,7 +589,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
-	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, files: files}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files}
 
 	// ONE evaluator for the whole scan, and `now` snapshotted ONCE (FR-146's
 	// last clause) so `now()`/`today()` give the same answer for every
@@ -692,6 +710,12 @@ type evaluation struct {
 	// other and with the typed filter (FR-076, AC-F2), never as a filter one
 	// of them could weaken.
 	near map[string]bool
+	// nearAnchorPath is the `near` origin note's own path (hop 0), admitted
+	// regardless of record identity so an ORDINARY-note anchor re-enters the
+	// answer even though it is not a node in the record graph `near` holds.
+	// Empty when the query carried no `near`, or when ResolveNear could not
+	// place the anchor on disk.
+	nearAnchorPath string
 
 	// files assembles FR-130's twelve virtual properties per candidate from the
 	// parent row and the child-table prepasses.
@@ -746,7 +770,15 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 	// correctly excluded here whenever `near` narrowed at all, without a
 	// special case.
 	if e.near != nil {
-		if c.RecordID == "" || !e.near[c.RecordID] {
+		// The anchor note itself is hop 0 and is admitted by PATH, so an
+		// ordinary-note anchor (RecordID == "") re-enters the answer even
+		// though it is not a node in the record graph. Every OTHER row must be
+		// a record within the traversed radius — a plain note that is not the
+		// anchor is still correctly excluded, because it can never be a graph
+		// node (relation edges connect record identities only, D7).
+		isAnchor := e.nearAnchorPath != "" && c.Path == e.nearAnchorPath
+		inRadius := c.RecordID != "" && e.near[c.RecordID]
+		if !isAnchor && !inRadius {
 			return propindex.Rejected, nil
 		}
 	}
