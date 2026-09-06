@@ -99,3 +99,30 @@ real renderer (Playwright) before claiming a UI behaviour done; commit per unit,
 no `Co-Authored-By`; do not push (lead integrates). Then the 7-reviewer gate:
 `/code-review` + `/grill-code` over the whole B+C diff, fix all, CI green, and a
 UAT that drives each surface in a real browser.
+
+---
+
+## Icon system — LOCKED (founder, 2026-09-07)
+
+The container hierarchy uses ONE coherent custom set on Phosphor's 24px grid.
+Rule proven the hard way this session: **every icon is judged at 16px first**,
+because a fine inner symbol that reads at 32px can vanish at list size.
+
+| Concept | Base shape | Treatment | Colour | Knockout symbol |
+|---|---|---|---|---|
+| **Workspace** | rounded **tile** (not a folder — it's the container above) | solid fill + knockout | gold `--color-accent` #d4af37 | **bold 2×2 cells** (large, thick — reads at 16px) |
+| **Vault** | folder | solid fill + knockout | gold `--color-accent` #d4af37 | **spark** (4-point, enlarged to fill the front panel) |
+| **Folder** | folder | outline | muted `--color-muted` #9ca3af | none |
+| **Mount** | folder | solid fill + knockout | **`--color-mount` #8ea3bd** (Liquid-Silver pewter — NEW token) | **external ↗** |
+
+Notes:
+- Knockouts are cut to `--color-primary` (#0a0a0b).
+- Colour does the first-glance separation (gold vault / silver mount / muted
+  folder / gold tile-workspace); the knockout confirms the kind.
+- Workspace is a TILE, not a folder, so gold-tile never blurs with gold-vault-
+  folder; a mount that *contains* vaults keeps the mount icon at its root with
+  vault icons on the vault folders inside it.
+- One new palette token to add: **`--color-mount` #8ea3bd**. Everything else
+  reuses existing tokens.
+- Custom set (deliberate) — Phosphor has no coherent workspace/vault/mount
+  family; native Phosphor is kept everywhere else in the app.
