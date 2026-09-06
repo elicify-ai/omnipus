@@ -91,6 +91,7 @@ export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCa
         <div className="mt-2.5 flex items-center gap-2" data-testid="goal-echo-actions">
           <button
             type="button"
+            tabIndex={0}
             onClick={onConfirm}
             data-testid="goal-echo-confirm"
             className="inline-flex items-center gap-1 rounded-md border border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-accent)]/20"
@@ -100,6 +101,7 @@ export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCa
           </button>
           <button
             type="button"
+            tabIndex={0}
             onClick={onAmend}
             data-testid="goal-echo-amend"
             className="inline-flex items-center gap-1 rounded-md border border-transparent px-2.5 py-1 text-[11px] text-[var(--color-secondary)]/80 transition-colors hover:border-[var(--color-secondary)]/20 hover:text-[var(--color-secondary)]"
@@ -109,6 +111,7 @@ export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCa
           </button>
           <button
             type="button"
+            tabIndex={0}
             onClick={onCancel}
             data-testid="goal-echo-cancel"
             className="inline-flex items-center gap-1 rounded-md border border-transparent px-2.5 py-1 text-[11px] text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"

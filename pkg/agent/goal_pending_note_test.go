@@ -13,12 +13,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
+
+// errGoalNoteLLMUnreachable is returned by the "must never be called" LLM
+// stubs after their t.Fatal — a sentinel so the unreachable return is a
+// nil value paired with a non-nil error (satisfies the nilnil linter).
+var errGoalNoteLLMUnreachable = errors.New("llm must not be called in this test")
 
 // TestGoalPendingNote_InjectedWhileFreshPending is spec item 1 (ADR-078
 // test plan #1): with GoalPendingJSON set and GoalCondition == "" (a fresh
@@ -80,7 +86,7 @@ func TestGoalPendingNote_EmptyWhenNoPendingOrClarificationOrActive(t *testing.T)
 		al, agentInst, _, store, sid, _ := twoPhaseHarness(t,
 			func(int, []providers.Message) (*providers.LLMResponse, error) {
 				t.Fatal("no /goal was issued — the LLM must never be called")
-				return nil, nil
+				return nil, errGoalNoteLLMUnreachable
 			}, nil)
 		_ = agentInst
 		if note := buildGoalPendingNote(store, sid); note != "" {
@@ -96,7 +102,7 @@ func TestGoalPendingNote_EmptyWhenNoPendingOrClarificationOrActive(t *testing.T)
 		_, _, _, store, _, _ := twoPhaseHarness(t,
 			func(int, []providers.Message) (*providers.LLMResponse, error) {
 				t.Fatal("unused")
-				return nil, nil
+				return nil, errGoalNoteLLMUnreachable
 			}, nil)
 		if note := buildGoalPendingNote(store, ""); note != "" {
 			t.Fatalf("empty sessionID must yield empty note, got:\n%s", note)
@@ -126,7 +132,7 @@ func TestGoalPendingNote_EmptyWhenNoPendingOrClarificationOrActive(t *testing.T)
 	t.Run("active_goal_amendment_window_excluded", func(t *testing.T) {
 		al, agentInst, provider, store, sid, opts := twoPhaseHarness(t,
 			func(int, []providers.Message) (*providers.LLMResponse, error) {
-				return nil, nil // marker-only + deterministic amendment: never called
+				return nil, errGoalNoteLLMUnreachable // marker-only + deterministic amendment: never called
 			}, nil)
 		allowBashPolicy(agentInst)
 		// Activate a goal immediately via the marker-only (zero-LLM) path.
