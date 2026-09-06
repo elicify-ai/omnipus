@@ -6,9 +6,8 @@
 // REST endpoints via the callbacks LibraryExplorer passes down.
 
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
-  Folder,
-  FolderSimpleDashed,
   DotsThree,
   DownloadSimple,
   PencilSimple,
@@ -30,6 +29,8 @@ import { libraryDownloadUrl } from '@/lib/api'
 import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
+import type { KnowledgeBaseInfo } from '@/lib/api/generated/openapi-types'
+import { VaultIcon, FolderIcon, MountIcon } from './icons'
 
 /** Format a byte count as a compact human-readable size. */
 export function formatLibrarySize(bytes: number): string {
@@ -75,18 +76,46 @@ export function LibraryEntryRow({
   onDelete,
   onUnmount,
 }: LibraryEntryRowProps) {
+  const queryClient = useQueryClient()
+
   // A mount is a real folder on the operator's machine, not workspace storage.
-  // It must never borrow the gold folder icon: gold means "yours, inside the
-  // workspace", and a write inside a mount lands on their actual disk. Broad
-  // grants (home directory, filesystem root) shift to the warning colour so
-  // "you mounted your whole home folder" is legible without opening anything.
+  // It must never borrow the gold vault/folder icon: gold means "yours,
+  // inside the workspace", and a write inside a mount lands on their actual
+  // disk. Broad grants (home directory, filesystem root) shift to the
+  // warning colour so "you mounted your whole home folder" is legible
+  // without opening anything — that safety escalation predates, and is kept
+  // alongside, the locked icon system's default Mount colour
+  // (`--color-mount`, docs/internal/specs/library-b-c-design-2026-09-07.md
+  // §"Icon system — LOCKED").
   const mount = entry.mount
-  const mountColor = mount?.broad ? 'var(--color-warning)' : 'var(--color-info)'
-  const { Icon, color } = mount
-    ? { Icon: FolderSimpleDashed, color: mountColor }
+  const mountColor = mount?.broad ? 'var(--color-warning)' : 'var(--color-mount)'
+
+  // Vault detection (C3): is this directory itself a knowledge base? There is
+  // no bulk "which of these children are vaults" endpoint — KnowledgeBaseInfo
+  // is answered per folder (GET /library/{ws}/knowledge?path=…), and
+  // KnowledgePanel already asks it for whichever folder LibraryExplorer is
+  // CURRENTLY browsing, caching the answer under
+  // ['knowledge-base-info', workspaceId, path] (see KnowledgePanel.tsx).
+  // Reading that cache here is a passive lookup — it fires no request of its
+  // own — so a directory the operator has already opened at least once this
+  // session (as browsedDir, or via "New vault") shows its true Vault icon
+  // retroactively when its PARENT listing renders; one never yet opened
+  // falls back to the plain Folder icon, which is the honest default rather
+  // than a guess. Explicitly NOT a per-row network probe (C3's requirement).
+  const cachedKnowledgeInfo = entry.is_dir
+    ? queryClient.getQueryData<KnowledgeBaseInfo>(['knowledge-base-info', workspaceId, entry.path])
+    : undefined
+  const isVault = cachedKnowledgeInfo?.is_knowledge_base === true
+
+  const containerIcon = mount
+    ? { Icon: MountIcon, color: mountColor }
     : entry.is_dir
-      ? { Icon: Folder, color: '#D4AF37' }
-      : fileTypeMeta(entry.name, entry.mime)
+      ? isVault
+        ? { Icon: VaultIcon, color: 'var(--color-accent)' }
+        : { Icon: FolderIcon, color: 'var(--color-muted)' }
+      : null
+  const fileMeta = containerIcon ? null : fileTypeMeta(entry.name, entry.mime)
+  const color = containerIcon?.color ?? (fileMeta as NonNullable<typeof fileMeta>).color
   const kind = entry.is_dir ? 'other' : classifyLibraryEntry(entry)
   const isMedia = kind === 'image' || kind === 'video'
   // Falls back to the generic type icon if the media itself won't load, so a
@@ -134,7 +163,19 @@ export function LibraryEntryRow({
           not become a directory of large downloads just by being listed. */}
       <div
         className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center overflow-hidden"
-        style={showThumb ? undefined : { backgroundColor: `${color}22`, color }}
+        style={
+          showThumb
+            ? undefined
+            : // `color-mix()` (not string-concatenating an alpha suffix onto
+              // `color`): the container icons' colours are CSS custom
+              // properties (`var(--color-accent)` etc.), and
+              // `` `${color}22` `` — the old formula — produces the
+              // syntactically invalid `"var(--color-accent)22"`, which the
+              // browser silently drops, leaving no background tint at all.
+              // `color-mix` works uniformly whether `color` is a var() or
+              // (for file rows, via fileTypeMeta) a literal hex string.
+              { backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`, color }
+        }
         aria-hidden="true"
       >
         {showThumb ? (
@@ -159,8 +200,13 @@ export function LibraryEntryRow({
               className="h-full w-full object-cover"
             />
           )
+        ) : containerIcon ? (
+          // The locked custom set (Workspace/Vault/Folder/Mount) already
+          // encodes its own fill-vs-outline treatment per kind — no `weight`
+          // prop to plumb through, unlike the Phosphor file icons below.
+          <containerIcon.Icon size={18} />
         ) : (
-          <Icon size={18} weight={entry.is_dir ? 'fill' : 'regular'} />
+          fileMeta && <fileMeta.Icon size={18} weight="regular" />
         )}
       </div>
 

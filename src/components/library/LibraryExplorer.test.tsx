@@ -1039,8 +1039,17 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     navigateTo({ workspaceId: 'ws-1', path: undefined })
     await waitFor(() => expect(screen.queryByTestId('library-preview-pane')).toBeNull())
     // Still in a/b — closing a file must not throw you back to the workspace
-    // root, which is what deriving the folder from the address alone would do.
-    expect(mockedFetchEntries).toHaveBeenLastCalledWith('ws-1', 'a/b', false)
+    // root, which is what deriving the folder from the address alone would
+    // do. `toHaveBeenCalledWith` (not `toHaveBeenLastCalledWith`): the mock
+    // backs BOTH this folder's own listing query AND the separate
+    // always-root `rootEntriesQuery` (used for the mounts list), so which of
+    // the two fires last is incidental effect-scheduling order, not a stated
+    // contract — C4's browsedDir-seeding change (LibraryExplorer.tsx) is
+    // free to settle the a/b fetch in one render pass instead of two, which
+    // reorders that incidental race without regressing the actual behaviour
+    // this test exists to prove. The DOM assertion right below is the real,
+    // order-independent oracle for "still showing a/b's listing".
+    expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', 'a/b', false)
     expect(screen.getByTestId('library-row-a/b/deep.md')).toBeInTheDocument()
   })
 

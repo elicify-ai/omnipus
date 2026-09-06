@@ -86,23 +86,44 @@ import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
+import { WorkspaceIcon } from './icons'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
 /**
  * The URL-addressable location of the Library (ADR-067 FR-012).
  *
- * Deliberately only two fields. The BROWSED FOLDER is not one of them: a
- * folder is always derivable from a selected file, and addressing folders too
- * would put two things in the URL that can disagree with each other. Closing
- * the preview therefore leaves you in the folder you were reading from
- * without that folder ever having been in the address.
+ * Historically only two fields. The BROWSED FOLDER was deliberately not one
+ * of them: a folder is always derivable from a selected file, and addressing
+ * folders too would put two things in the URL that can disagree with each
+ * other. Closing the preview therefore leaves you in the folder you were
+ * reading from without that folder ever having been in the address.
+ *
+ * C4 (library-b-c-design-2026-09-07.md "fullscreen carries the selection")
+ * adds `folder` as a narrow, one-directional exception to that rule — see
+ * its own doc below. It does not reopen the "two things that can disagree"
+ * risk: `goTo()` (this file's one place address changes are emitted) NEVER
+ * includes `folder` in what it reports back, so nothing in normal navigation
+ * ever WRITES it, and it is consumed only once, at mount, before either field
+ * has had a chance to move. There is exactly one path where it applies (no
+ * `path` is set) and it never fights a `path` that IS set.
  */
 export interface LibraryAddress {
   /** undefined = the virtual root (every workspace as a top-level node). */
   workspaceId?: string
   /** Work-tree-relative path of the selected FILE; undefined = nothing selected. */
   path?: string
+  /**
+   * Work-tree-relative path of the BROWSED FOLDER, consulted ONLY as a
+   * one-time initial seed when `path` is absent (a selected file's own
+   * parent folder always wins over this — see `selectedDir` below). Exists
+   * so a caller that can only address a folder, not a file inside it — the
+   * fullscreen pop-out's initial URL, built from whatever folder the docked
+   * panel had open with nothing selected (C4) — can still land there. Never
+   * emitted by `goTo()`/`onAddressChange`, so it cannot drift into a second,
+   * disagreeing source of truth once real navigation begins.
+   */
+  folder?: string
 }
 
 export interface LibraryExplorerProps {
@@ -143,6 +164,18 @@ export interface LibraryExplorerProps {
    * the user navigated inside the explorer.) */
   onWorkspaceChange?: (workspaceId: string | null) => void
   /**
+   * Fires whenever the CURRENT selection changes (the selected file, or —
+   * with no file selected — the browsed folder), including the initial
+   * mount. C4's fullscreen pop-out (LibraryPanel.tsx's `handlePopOut`) uses
+   * this to build the pop-out URL from wherever the docked panel actually
+   * is, the same way `onWorkspaceChange` already does for the workspace
+   * half of the address. Deliberately a plain reporting callback, not
+   * `onAddressChange` — the docked panel that needs this is NOT addressed
+   * (it owns its own navigation state; see `addressed` below), so there is
+   * no address for it to "change".
+   */
+  onSelectionChange?: (selection: { path: string | null; folder: string }) => void
+  /**
    * How the file list and the open preview divide the space.
    *
    * 'stacked' (default, the docked <aside>): preview BELOW the list. The aside
@@ -181,6 +214,7 @@ export function LibraryExplorer({
   onPopOut,
   className,
   onWorkspaceChange,
+  onSelectionChange,
   layout = 'stacked',
 }: LibraryExplorerProps) {
   const queryClient = useQueryClient()
@@ -204,7 +238,14 @@ export function LibraryExplorer({
   const workspaceId = addressed ? address?.workspaceId ?? null : internalWorkspaceId
   const selectedPath = addressed ? address?.path ?? null : internalSelectedPath
 
-  const [browsedDir, setBrowsedDir] = useState('')
+  // C4: seeds the fullscreen pop-out's INITIAL browsed folder from
+  // `address.folder` when there is no `address.path` to derive one from
+  // (see LibraryAddress's own doc comment). Seeded once, like
+  // `initialWorkspaceId`/`internalSelectedPath` above — the pop-out route
+  // never remounts on a later address change, so this initializer running
+  // exactly once at mount is precisely "the tab's starting folder", not an
+  // ongoing sync.
+  const [browsedDir, setBrowsedDir] = useState(address?.path ? parentDirOf(address.path) : address?.folder ?? '')
   const [includeHidden, setIncludeHidden] = useState(false)
   const isSplit = layout === 'split'
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
@@ -227,6 +268,16 @@ export function LibraryExplorer({
     // harmless but pointless noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
+
+  // C4: reports the current selection (selected file, or — with none — the
+  // browsed folder) on every change, mirroring the onWorkspaceChange effect
+  // just above. The docked LibraryPanel is the one caller today (it is not
+  // `addressed`, so it has no other way to learn this), and uses it to build
+  // the fullscreen pop-out's URL from wherever the panel actually is.
+  useEffect(() => {
+    onSelectionChange?.({ path: selectedPath, folder: browsedDir })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath, browsedDir])
 
   // A file address implies its folder, and that implication is the whole of
   // "a deep link opens the containing folder" (US-3 AS-5): the listing this
@@ -868,7 +919,13 @@ export function LibraryExplorer({
                   data-testid={`library-workspace-node-${node.id}`}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 hover:bg-[var(--color-surface-2)] text-left transition-colors"
                 >
-                  <Tray size={18} weight="fill" className="text-[var(--color-accent)] shrink-0" />
+                  {/* C3 (library-b-c-design §"Icon system — LOCKED"): the
+                      virtual-root's workspace nodes get the locked
+                      WorkspaceIcon (gold tile + 2×2 knockout), not the
+                      generic Phosphor Tray glyph — a workspace is a distinct
+                      container kind from vault/folder/mount, not a stand-in
+                      for "storage" in general. */}
+                  <WorkspaceIcon size={18} className="text-[var(--color-accent)] shrink-0" />
                   <span className="flex-1 truncate text-sm text-[var(--color-secondary)]">{node.name}</span>
                   <span className="text-xs text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}
@@ -1014,6 +1071,7 @@ export function LibraryExplorer({
         open={mountsOpen}
         onOpenChange={setMountsOpen}
         mounts={workspaceMounts}
+        workspaceId={workspaceId}
         workspaceName={
           sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? 'this workspace'
         }

@@ -2,9 +2,11 @@
 // (library-spec.md D-4). LibraryExplorer itself is mocked — its own behaviour
 // is covered by LibraryExplorer.test.tsx. This file exercises ONLY what
 // LibraryPanel itself is responsible for: the docked <aside>, the props it
-// passes down, the deliberate "pop-out does not close the docked panel"
-// choice, and the safety-net re-dock on a pop-out-closed broadcast.
+// passes down, the C4 "pop-out carries the selection and closes the
+// slide-out" behaviour, and the safety-net re-dock on a pop-out-closed
+// broadcast.
 
+import { useEffect } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
@@ -13,13 +15,34 @@ import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/
 
 const mockLibraryExplorerProps = vi.fn()
 
+// The mock's own "current selection" — settable per test via
+// `setMockLiveSelection` so a test can simulate the docked panel having
+// navigated somewhere (a different workspace, a browsed folder, an open
+// file) before the operator clicks pop-out. Defaults to "nothing selected,
+// at the initial workspace", matching the real LibraryExplorer's own
+// initial-mount report.
+let mockLiveWorkspaceId: string | null | undefined
+let mockLiveSelection: { path: string | null; folder: string } = { path: null, folder: '' }
+
 vi.mock('./LibraryExplorer', () => ({
   LibraryExplorer: (props: {
     initialWorkspaceId?: string
     onClose?: () => void
     onPopOut?: () => void
+    onWorkspaceChange?: (workspaceId: string | null) => void
+    onSelectionChange?: (selection: { path: string | null; folder: string }) => void
   }) => {
     mockLibraryExplorerProps(props)
+    // Mirrors the real component's onWorkspaceChange/onSelectionChange
+    // effects, which fire on every mount (including the very first) — see
+    // LibraryExplorer.tsx. `mockLiveWorkspaceId` defaults to
+    // `initialWorkspaceId` unless a test overrides it via
+    // `setMockLiveWorkspaceId` to simulate in-panel navigation.
+    useEffect(() => {
+      props.onWorkspaceChange?.((mockLiveWorkspaceId ?? props.initialWorkspaceId) ?? null)
+      props.onSelectionChange?.(mockLiveSelection)
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
     return (
       <div data-testid="mock-library-explorer">
         {props.onClose && (
@@ -42,6 +65,8 @@ import { LibraryPanel } from './LibraryPanel'
 beforeEach(() => {
   mockLibraryExplorerProps.mockClear()
   useUiStore.setState({ libraryPanel: null, toasts: [] })
+  mockLiveWorkspaceId = undefined
+  mockLiveSelection = { path: null, folder: '' }
 })
 
 describe('LibraryPanel (always-docked)', () => {
@@ -89,7 +114,7 @@ describe('LibraryPanel (always-docked)', () => {
     expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
   })
 
-  describe('onPopOut (deliberately does NOT close the docked panel)', () => {
+  describe('onPopOut (C4 — carries the current selection, then closes the slide-out)', () => {
     it('opens the hash-routed pop-out URL with the current workspace in the query string', () => {
       const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
 
@@ -102,16 +127,16 @@ describe('LibraryPanel (always-docked)', () => {
 
       expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1', '_blank', 'noopener,noreferrer')
 
-      // DELIBERATE difference from BrowserLivePanel: the docked panel stays
-      // open — there is no exclusive control lock to hand over (see
-      // LibraryPanel.tsx's module doc comment).
-      expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-1' })
-      expect(screen.getByTestId('library-panel-docked')).toBeInTheDocument()
+      // C4: the slide-out closes now that the fullscreen tab shows the same
+      // place — see LibraryPanel.tsx's module doc "C4 UPDATE" note for why
+      // this reverses the panel's old "never close on pop-out" behaviour.
+      expect(useUiStore.getState().libraryPanel).toBeNull()
+      expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
 
       openSpy.mockRestore()
     })
 
-    it('opens the pop-out with no query string at the virtual root', () => {
+    it('opens the pop-out with no query string at the virtual root, nothing selected', () => {
       const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
 
       render(<LibraryPanel />)
@@ -122,6 +147,67 @@ describe('LibraryPanel (always-docked)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
       expect(openSpy).toHaveBeenCalledWith('/#/library', '_blank', 'noopener,noreferrer')
+
+      openSpy.mockRestore()
+    })
+
+    it('carries a selected FILE as `path` in the pop-out URL', () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      mockLiveSelection = { path: '01-Areas/CRM/notes.md', folder: '01-Areas/CRM' }
+
+      render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openLibraryPanel('ws-1')
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+
+      // `path` wins over `folder` — a selected file already implies its own
+      // folder (LibraryAddress/`selectedDir`), so only one needs to travel.
+      expect(openSpy).toHaveBeenCalledWith(
+        '/#/library?workspace=ws-1&path=01-Areas%2FCRM%2Fnotes.md',
+        '_blank',
+        'noopener,noreferrer',
+      )
+
+      openSpy.mockRestore()
+    })
+
+    it('carries a browsed FOLDER as `folder` in the pop-out URL when nothing is selected', () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      mockLiveSelection = { path: null, folder: '01-Areas/CRM' }
+
+      render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openLibraryPanel('ws-1')
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+
+      expect(openSpy).toHaveBeenCalledWith(
+        '/#/library?workspace=ws-1&folder=01-Areas%2FCRM',
+        '_blank',
+        'noopener,noreferrer',
+      )
+
+      openSpy.mockRestore()
+    })
+
+    it('carries the workspace the operator actually navigated to in the docked panel, not the one it was opened with', () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      // Opened at the virtual root, but the operator drilled into ws-live
+      // inside the docked panel without closing it — libraryPanel.workspaceId
+      // (the store's OPEN-TIME value) never learns about that on its own.
+      mockLiveWorkspaceId = 'ws-live'
+
+      render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openLibraryPanel()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+
+      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-live', '_blank', 'noopener,noreferrer')
 
       openSpy.mockRestore()
     })

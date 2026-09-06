@@ -1,0 +1,5 @@
+export { WorkspaceIcon } from './WorkspaceIcon'
+export { VaultIcon } from './VaultIcon'
+export { FolderIcon } from './FolderIcon'
+export { MountIcon } from './MountIcon'
+export type { LibraryIconProps } from './types'
