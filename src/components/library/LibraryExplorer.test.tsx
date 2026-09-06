@@ -183,6 +183,27 @@ async function openRowMenuAndClick(path: string, nameRegex: RegExp) {
   fireEvent.click(await screen.findByRole('menuitem', { name: nameRegex }))
 }
 
+// New Folder / Upload / Add mount / Manage mounts / New vault / New
+// workspace collapsed into one "+" create menu (feature C2) — this is the
+// toolbar-level sibling of openRowMenuAndClick above, same open-by-pointerdown
+// mechanism (same DropdownMenu primitive).
+async function openCreateMenuAndClick(nameRegex: RegExp) {
+  fireEvent.pointerDown(screen.getByTestId('library-create-menu-trigger'), { ctrlKey: false, button: 0 })
+  fireEvent.click(await screen.findByRole('menuitem', { name: nameRegex }))
+}
+
+/** Opens the create menu, reads whether the named item is disabled, then
+ * closes the menu again so the caller's next interaction (a click elsewhere
+ * on the page) isn't racing an open dropdown. */
+async function createMenuItemDisabled(nameRegex: RegExp): Promise<boolean> {
+  fireEvent.pointerDown(screen.getByTestId('library-create-menu-trigger'), { ctrlKey: false, button: 0 })
+  const item = await screen.findByRole('menuitem', { name: nameRegex })
+  const disabled = item.getAttribute('data-disabled') !== null
+  fireEvent.keyDown(document, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('menuitem', { name: nameRegex })).not.toBeInTheDocument())
+  return disabled
+}
+
 describe('LibraryExplorer — virtual root (sidebar entry point, D-3)', () => {
   it('lists every workspace as a top-level node when opened with no initial workspace', async () => {
     mockedFetchWorkspaces.mockResolvedValue([
@@ -533,7 +554,7 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-upload-button')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('library-upload-input')).toBeInTheDocument())
     const fileInput = screen.getByTestId('library-upload-input') as HTMLInputElement
     const file = new File(['data'], '..\\dana-upload-traversal.txt', { type: 'text/plain' })
     fireEvent.change(fileInput, { target: { files: [file] } })
@@ -559,14 +580,16 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 // ever submitting), and shows the same single-channel error-banner
 // treatment Rename/Move now use on failure.
 describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
-  it('renders a New Folder toolbar action next to Upload, scoped to a workspace', async () => {
+  it('offers New folder and Upload files from the create menu, scoped to a workspace', async () => {
     mockedFetchWorkspaces.mockResolvedValue([])
     mockedFetchEntries.mockResolvedValue([])
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
-    expect(screen.getByTestId('library-upload-button')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    fireEvent.pointerDown(screen.getByTestId('library-create-menu-trigger'), { ctrlKey: false, button: 0 })
+    expect(await screen.findByRole('menuitem', { name: 'New folder' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Upload files' })).toBeInTheDocument()
   })
 
   it('does NOT render the New Folder action at the virtual root (no workspace scoped yet)', async () => {
@@ -591,8 +614,8 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    await openCreateMenuAndClick(/New folder/)
 
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
     const input = screen.getByTestId('library-new-folder-input') as HTMLInputElement
@@ -621,7 +644,7 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
     fireEvent.click(screen.getByTestId('library-row-reports'))
     await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', 'reports', false))
 
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await openCreateMenuAndClick(/New folder/)
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
     fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'q1' } })
     fireEvent.click(screen.getByTestId('library-new-folder-confirm'))
@@ -635,8 +658,8 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    await openCreateMenuAndClick(/New folder/)
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
 
     fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: '..dana-escape' } })
@@ -653,8 +676,8 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    await openCreateMenuAndClick(/New folder/)
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
 
     fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'foo/../bar' } })
@@ -676,7 +699,7 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
     renderExplorer('ws-1')
 
     await waitFor(() => expect(screen.getByText('drafts')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await openCreateMenuAndClick(/New folder/)
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
 
     fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'drafts' } })
@@ -692,8 +715,8 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    await openCreateMenuAndClick(/New folder/)
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
 
     fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'new-dir' } })
@@ -716,8 +739,8 @@ describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    await openCreateMenuAndClick(/New folder/)
     await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
 
     fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'drafts' } })
@@ -749,14 +772,15 @@ describe('LibraryExplorer — reserved .library directory guard', () => {
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-upload-button')).not.toBeDisabled())
+    await waitFor(() => expect(screen.getByTestId('library-create-menu-trigger')).toBeInTheDocument())
+    expect(await createMenuItemDisabled(/Upload files/)).toBe(false)
     fireEvent.click(screen.getByTestId('library-show-hidden-toggle'))
     await waitFor(() => expect(screen.getByText('.library')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-.library'))
 
     await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '.library', true))
-    expect(screen.getByTestId('library-upload-button')).toBeDisabled()
-    expect(screen.getByTestId('library-new-folder-button')).toBeDisabled()
+    expect(await createMenuItemDisabled(/Upload files/)).toBe(true)
+    expect(await createMenuItemDisabled(/New folder/)).toBe(true)
   })
 
   it('disables Upload and New Folder inside a SUBdirectory of .library too', async () => {
@@ -780,8 +804,8 @@ describe('LibraryExplorer — reserved .library directory guard', () => {
     // includeHidden stays true (state carried over from toggling Show
     // Hidden on to reach .library in the first place).
     await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '.library/attachments', true))
-    expect(screen.getByTestId('library-upload-button')).toBeDisabled()
-    expect(screen.getByTestId('library-new-folder-button')).toBeDisabled()
+    expect(await createMenuItemDisabled(/Upload files/)).toBe(true)
+    expect(await createMenuItemDisabled(/New folder/)).toBe(true)
   })
 
   it('leaves Upload/New Folder enabled again once navigated back out of .library', async () => {
@@ -800,13 +824,13 @@ describe('LibraryExplorer — reserved .library directory guard', () => {
     await waitFor(() => expect(screen.getByText('.library')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-.library'))
     await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '.library', true))
-    expect(screen.getByTestId('library-upload-button')).toBeDisabled()
+    expect(await createMenuItemDisabled(/Upload files/)).toBe(true)
 
     // Back out via the workspace breadcrumb crumb.
     fireEvent.click(screen.getByTestId('library-crumb-workspace'))
 
-    await waitFor(() => expect(screen.getByTestId('library-upload-button')).not.toBeDisabled())
-    expect(screen.getByTestId('library-new-folder-button')).not.toBeDisabled()
+    await waitFor(async () => expect(await createMenuItemDisabled(/Upload files/)).toBe(false))
+    expect(await createMenuItemDisabled(/New folder/)).toBe(false)
   })
 })
 
