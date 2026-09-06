@@ -142,22 +142,54 @@ func TestRelationResolver_UnresolvedWikilinkReportsMissing(t *testing.T) {
 // CompareRelationUnresolved), but a caller with schema context — checking
 // FR-034's "resolves, but to the wrong type" — needs to see that the file
 // DID resolve, which ResolveIdentity alone still reports.
-func TestRelationResolver_ResolvedButNotARecord(t *testing.T) {
+// R2-A (path fallback, 2026-09-07): a wikilink to an existing note that
+// carries no explicit record id resolves to a PATH identity, so a view
+// grouped by that relation buckets by the target note instead of dropping
+// every row as unresolved. HasIdentity() stays false — the typed-record
+// signal is unchanged; only the grouping/equality key gains the fallback.
+func TestRelationResolver_ResolvedButNoIdUsesPathIdentity(t *testing.T) {
 	r, _ := openResolverFixture(t)
 	link := records.Wikilink{Target: "loose", Raw: "[[loose]]"}
 
-	if id, ok := r.Resolve(link); ok {
-		t.Fatalf("Resolve([[loose]]) = (%q, true), want ok=false — the file has no record identity", id)
+	id, ok := r.Resolve(link)
+	if !ok {
+		t.Fatalf("Resolve([[loose]]) = ok=false; want a path identity — Notes/loose.md exists")
 	}
+	if id != "path:Notes/loose.md" {
+		t.Errorf("Resolve([[loose]]) = %q, want %q", id, "path:Notes/loose.md")
+	}
+	// ResolveIdentity's typed-record signal is unchanged.
 	identity, ok := r.ResolveIdentity(link)
 	if !ok {
-		t.Fatalf("ResolveIdentity([[loose]]) did not resolve the FILE at all, but Notes/loose.md exists")
+		t.Fatalf("ResolveIdentity([[loose]]) did not resolve the FILE, but Notes/loose.md exists")
 	}
 	if identity.HasIdentity() {
 		t.Fatalf("HasIdentity() = true for a note declaring no record type: %+v", identity)
 	}
 	if identity.Path != "Notes/loose.md" {
 		t.Errorf("Path = %q, want Notes/loose.md", identity.Path)
+	}
+}
+
+// R2-A: an explicit record id still WINS over the path fallback, and two
+// links to the same idless note return the SAME identity (so they bucket
+// together), while a link to a nonexistent note stays unresolved.
+func TestRelationResolver_PathFallbackHybrid(t *testing.T) {
+	r, _ := openResolverFixture(t)
+
+	// Explicit id wins: Companies/Acme Ltd.md carries RecordID CO-0001.
+	if id, ok := r.Resolve(records.Wikilink{Target: "Acme Ltd", Raw: "[[Acme Ltd]]"}); !ok || id != "CO-0001" {
+		t.Errorf("explicit id must win: got (%q, %v), want (CO-0001, true)", id, ok)
+	}
+	// Same idless note via two link spellings → same path identity → same bucket.
+	a, aok := r.Resolve(records.Wikilink{Target: "loose", Raw: "[[loose]]"})
+	b, bok := r.Resolve(records.Wikilink{Target: "Notes/loose", Raw: "[[Notes/loose]]"})
+	if !aok || !bok || a != b {
+		t.Errorf("two links to the same idless note must share an identity: %q vs %q", a, b)
+	}
+	// A link to a note that does not exist stays unresolved.
+	if id, ok := r.Resolve(records.Wikilink{Target: "does-not-exist", Raw: "[[does-not-exist]]"}); ok {
+		t.Errorf("nonexistent target must be unresolved, got (%q, true)", id)
 	}
 }
 

@@ -124,25 +124,43 @@ func (r *RelationResolver) AsFunc() records.RelationResolver {
 	if r == nil {
 		return nil
 	}
-	return func(link records.Wikilink) (string, bool) {
-		id, ok := r.ResolveIdentity(link)
-		if !ok || !id.HasIdentity() {
-			return "", false
-		}
-		return id.RecordID, true
-	}
+	return r.Resolve
 }
 
-// Resolve implements the identity-only half — records.RelationResolver's own
-// shape — directly, for a caller that wants exactly that function value
-// without going through AsFunc's closure. It is otherwise identical to
-// AsFunc's behaviour.
+// relationPathIdentityPrefix namespaces a path-fallback identity so it can
+// never collide with a real record-id value (ids like "CO-0142" never begin
+// with this). See relation-identity-path-fallback-2026-09-07 (R2-A).
+const relationPathIdentityPrefix = "path:"
+
+// Resolve is records.RelationResolver's own shape: a wikilink -> stable
+// identity used for relation grouping and equality.
+//
+// R2-A (path fallback, founder-ratified 2026-09-07). The identity is, in
+// order:
+//  1. ok=false — the wikilink resolves to no file at all: unresolved.
+//  2. an explicit record id (`id`/`omni_id`) on the target: that id wins.
+//  3. the target exists but carries no id: its resolved PATH, prefixed —
+//     the note is identified by its location, the same thing the wikilink
+//     already resolved by. This is what makes a view grouped by a relation
+//     resolve when no note carries an explicit id (the whole vault, today).
+//
+// HasIdentity() is deliberately NOT consulted here: it means "a typed record
+// with an explicit id", the signal FR-034 ("resolves, but to the wrong type")
+// depends on, and overloading it would conflate two questions. Two links to
+// the same idless note return the same path identity, so they bucket
+// together; different notes differ.
 func (r *RelationResolver) Resolve(link records.Wikilink) (string, bool) {
 	id, ok := r.ResolveIdentity(link)
-	if !ok || !id.HasIdentity() {
+	if !ok {
 		return "", false
 	}
-	return id.RecordID, true
+	if id.RecordID != "" {
+		return id.RecordID, true
+	}
+	if id.Path != "" {
+		return relationPathIdentityPrefix + id.Path, true
+	}
+	return "", false
 }
 
 // ResolveIdentity is D5.1's two steps, spelled out: the wikilink resolves to
