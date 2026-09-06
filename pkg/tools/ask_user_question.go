@@ -76,7 +76,7 @@ func (t *AskUserQuestionTool) Name() string { return AskUserQuestionToolName }
 
 // Description implements Tool.
 func (t *AskUserQuestionTool) Description() string {
-	return "Ask the human user up to 10 structured clarification questions on a single card, each with 2-6 options (plus an always-available free-text answer), and pause until they answer. Only usable on a web (SPA) session you own: on channel sessions ask conversationally in plain language instead, and as a delegated session use message_parent(kind=question, wait=true) toward your parent. Mark an option `recommended` to surface it first; add `default_safe: true` (requires `recommended`) to let it auto-resolve to the recommendation after 30 minutes without an answer."
+	return "Ask the human user up to 10 structured clarification questions on a single card, each with 2-6 options (plus an always-available free-text answer), and pause until they answer. Only usable on a web (SPA) session you own: on channel sessions ask conversationally in plain language instead, and as a delegated session use message_parent(kind=question, wait=true) toward your parent. To highlight one option, set the QUESTION's `recommended` field (a property of the question, NOT of an option) to that option's exact `label` string — it renders first with a badge, never pre-selected. Options carry only `label` and `description`; putting `recommended` inside an option is rejected. Add `default_safe: true` on a question (requires that question's `recommended`) to auto-resolve it to the recommended option after 30 minutes without an answer."
 }
 
 // Scope implements Tool.

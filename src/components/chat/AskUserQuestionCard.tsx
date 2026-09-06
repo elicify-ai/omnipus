@@ -403,18 +403,21 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
  */
 export function AskUserQuestionThreadTail() {
   const pendingAsk = useChatStore((s) => s.pendingAsk)
-  if (!pendingAsk) return null
+  // Dock ONLY while questions are actually pending. Once answered/cancelled the
+  // card leaves no lingering summary above the composer (operator directive
+  // 2026-09-06) — the answer is already in the transcript via the agent's reply.
+  // Constrain to the chat column width (matching the composer's
+  // `max-w-3xl mx-auto`) so the card never spans the full viewport.
+  if (!pendingAsk || pendingAsk.status !== 'pending') return null
   return (
-    <div className="px-4" data-testid="ask-user-thread-tail">
+    <div className="w-full max-w-3xl mx-auto px-4" data-testid="ask-user-thread-tail">
       <AskUserQuestionCard card={pendingAsk} />
-      {pendingAsk.status === 'pending' && (
-        <p
-          className="text-center font-mono text-[11px] text-[var(--color-muted)] mt-1.5"
-          data-testid="ask-user-composer-note"
-        >
-          chat input is locked while questions are pending — Cancel to unlock
-        </p>
-      )}
+      <p
+        className="text-center font-mono text-[11px] text-[var(--color-muted)] mt-1.5"
+        data-testid="ask-user-composer-note"
+      >
+        chat input is locked while questions are pending — Cancel to unlock
+      </p>
     </div>
   )
 }

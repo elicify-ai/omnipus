@@ -269,3 +269,55 @@ func TestAskUserQuestion_CatalogMetadata(t *testing.T) {
 		t.Fatal("AskUserQuestion missing from GeneralBuiltinMetadata")
 	}
 }
+
+// TestAskUserQuestion_RecommendedIsQuestionScoped guards the doc/schema
+// consistency the operator reported (2026-09-06): `recommended`/`default_safe`
+// are QUESTION-level properties, never option-level, and the Description must
+// say so rather than telling the model to "mark an option recommended" (which
+// led it to put the property inside an option, where additionalProperties
+// rejects it).
+func TestAskUserQuestion_RecommendedIsQuestionScoped(t *testing.T) {
+	tool := NewAskUserQuestionTool(nil)
+
+	// Description must not resurrect the misleading option-scoped phrasing.
+	desc := tool.Description()
+	if strings.Contains(desc, "Mark an option `recommended`") {
+		t.Errorf("Description resurrects the misleading option-scoped phrasing that caused the reported bug")
+	}
+	if !strings.Contains(desc, "QUESTION's `recommended`") {
+		t.Errorf("Description must scope `recommended` to the question level; got: %q", desc)
+	}
+
+	// Schema: question properties carry recommended/default_safe; option
+	// properties carry only label/description.
+	qProps := askQuestionItemProps(t, tool.Parameters())
+	for _, k := range []string{"recommended", "default_safe"} {
+		if _, ok := qProps[k]; !ok {
+			t.Errorf("question schema missing %q property", k)
+		}
+	}
+	optItems, _ := qProps["options"].(map[string]any)["items"].(map[string]any)
+	optProps, _ := optItems["properties"].(map[string]any)
+	for _, forbidden := range []string{"recommended", "default_safe"} {
+		if _, ok := optProps[forbidden]; ok {
+			t.Errorf("option schema must NOT carry %q (it is question-scoped)", forbidden)
+		}
+	}
+	if _, ok := optProps["label"]; !ok {
+		t.Error("option schema must carry label")
+	}
+}
+
+// askQuestionItemProps returns the per-question schema properties map from the
+// tool's Parameters() (properties.questions.items.properties).
+func askQuestionItemProps(t *testing.T, params map[string]any) map[string]any {
+	t.Helper()
+	props, _ := params["properties"].(map[string]any)
+	questions, _ := props["questions"].(map[string]any)
+	items, _ := questions["items"].(map[string]any)
+	qProps, _ := items["properties"].(map[string]any)
+	if qProps == nil {
+		t.Fatalf("could not navigate to questions.items.properties in Parameters()")
+	}
+	return qProps
+}

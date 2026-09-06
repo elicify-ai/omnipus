@@ -338,15 +338,19 @@ describe('AskUserQuestionThreadTail — composer lock note', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows the card + locked-composer note while pending, and drops the note once terminal', () => {
+  it('shows the card + locked-composer note while pending, and disappears entirely once terminal', () => {
     useChatStore.setState({ pendingAsk: makeCard(), sendAskUserAnswer: vi.fn() })
-    const { rerender } = render(<AskUserQuestionThreadTail />)
+    const { rerender, container } = render(<AskUserQuestionThreadTail />)
     expect(screen.getByTestId('ask-user-question-card')).toBeInTheDocument()
     expect(screen.getByTestId('ask-user-composer-note')).toHaveTextContent(/locked while questions are pending/)
 
+    // Once answered/cancelled the docked card leaves NO lingering summary on the
+    // page (operator directive 2026-09-06): ThreadTail renders nothing.
     useChatStore.setState({ pendingAsk: makeCard({ status: 'cancelled' }) })
     rerender(<AskUserQuestionThreadTail />)
     expect(screen.queryByTestId('ask-user-composer-note')).toBeNull()
-    expect(screen.getByTestId('ask-user-collapsed')).toBeInTheDocument()
+    expect(screen.queryByTestId('ask-user-collapsed')).toBeNull()
+    expect(screen.queryByTestId('ask-user-question-card')).toBeNull()
+    expect(container).toBeEmptyDOMElement()
   })
 })
