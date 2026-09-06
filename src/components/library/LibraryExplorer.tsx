@@ -88,6 +88,7 @@ import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
+import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
@@ -906,7 +907,19 @@ export function LibraryExplorer({
               ))}
           </>
         ) : (
-          <>
+          // C1 — persistent Library search bar (library-b-c-design-2026-09-07
+          // §C1). LibrarySearchBar owns the input, the segmented filter, and
+          // the grouped results; `children` (this folder's existing listing,
+          // unchanged) renders exactly as before whenever no query is active,
+          // and is replaced entirely by results while one is.
+          <LibrarySearchBar
+            workspaceId={workspaceId}
+            folderPath={browsedDir}
+            onOpenNote={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              goTo(workspaceId, workspacePath)
+            }}
+          >
             {entriesQuery.isLoading && <ListSkeleton />}
             {entriesQuery.isError && (
               <QueryErrorState
@@ -939,7 +952,7 @@ export function LibraryExplorer({
                   onUnmount={setUnmountTarget}
                 />
               ))}
-          </>
+          </LibrarySearchBar>
         )}
       </div>
 
