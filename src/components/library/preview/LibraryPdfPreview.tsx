@@ -25,12 +25,10 @@
 //     **`enableScripting: false` is deliberately not passed here, and that is
 //     not an oversight.** Measured against 6.2.108: `enableScripting` is not a
 //     `getDocument` parameter at all — it is an `AnnotationLayer.render`
-//     parameter (types/src/display/annotation_layer.d.ts), and this component
-//     never constructs an AnnotationLayer. Passing it to getDocument would set
-//     a key PDF.js ignores and give a call-site test that passes forever while
-//     proving nothing — the exact false-green the spec documents for the
-//     removed `isEvalSupported` option. So the control is structural: no
-//     annotation layer, no scripting host, no interpreter in the bundle.
+//     parameter (types/src/display/annotation_layer.d.ts). The one place this
+//     file DOES construct an AnnotationLayer (Edit mode, below) passes
+//     `enableScripting: false` explicitly there — where PDF.js actually reads
+//     it — rather than on `getDocument`, which would set a key PDF.js ignores.
 //
 //  3. No `isEvalSupported` — verified, that option no longer EXISTS in
 //     6.2.108 (zero occurrences in build/pdf.mjs, build/pdf.worker.mjs and
@@ -46,13 +44,42 @@
 //     without `worker-src`), we surface a visible error instead of degrading
 //     into the thing the requirement forbids.
 //
-// ── Read-only (NB-17) ──────────────────────────────────────────────────────
-// Annotation *editor* off (no AnnotationEditorUIManager, no editor layer) and
-// interactive form entry off (`annotationMode: ENABLE`, never ENABLE_FORMS or
-// ENABLE_STORAGE — those are the modes that turn form fields into live HTML
-// widgets). Form filling and drawn signing are proven feasible and are
-// deliberately out of scope for this release; they are a separate decision
-// with their own user stories.
+// ── Read-only BASE render (NB-17) — unchanged by Edit mode ─────────────────
+// The canvas itself always renders with `annotationMode: ENABLE` (never
+// ENABLE_FORMS/ENABLE_STORAGE) and `isEditing: false` — it draws a flat
+// picture of the document's CURRENT appearance streams, exactly as it always
+// has. That picture never changes live as fields are filled; entering Edit
+// mode below overlays a SEPARATE, real PDF.js AnnotationLayer on top of it.
+//
+// ── Edit mode (library-b-c-design-2026-09-07.md "B") ────────────────────────
+// Builds on ADR-067 D15.3's measured feasibility: `pdfjs-dist`'s
+// `annotationStorage` + `PDFDocumentProxy.saveDocument()` round-trip a filled
+// AcroForm field and a drawn signature into real, standard PDF bytes (tested
+// against pdfjs-dist 6.2.108, verified by re-rendering the saved file in an
+// engine unrelated to PDF.js). Two independent pieces share one
+// `annotationStorage` (`doc.annotationStorage`, the SAME object `saveDocument`
+// reads):
+//   - AcroForm fields — a real `pdfjs.AnnotationLayer` (the sanctioned,
+//     interactive form-widget renderer; NOT the editor-UI-manager machinery,
+//     see pdfInkAnnotation.ts's header for why) mounted per page, only while
+//     `mode === 'edit'`. Widget elements wire their own `input`/`change`
+//     listeners straight into `annotationStorage.setValue` — this component
+//     does not touch field values directly.
+//   - A drawn signature — LibrarySignaturePad captures freehand strokes in
+//     its own fixed pixel space; `placeSignatureOnViewport` below converts
+//     them to PDF-space points via the target page's own
+//     `PageViewport.convertToPdfPoint`, and `buildInkAnnotationEntry`
+//     (pdfInkAnnotation.ts) turns those into the exact plain-object shape
+//     PDF.js's worker expects for a brand-new `/Subtype /Ink` annotation.
+// Honest states (library-b-c-design-2026-09-07.md): a PDF with no AcroForm
+// fields (`doc.getFieldObjects()` resolves null/empty) mounts no annotation
+// layer and says so, but the signature affordance is offered regardless. A
+// save failure surfaces the reason (AutoSaveIndicator + toast) and changes
+// nothing else — `annotationStorage` is untouched by a failed
+// `saveDocument()`/PUT, so every entered value and placed signature is still
+// there for a retry.
+// Out of scope (unchanged from the ADR): PKI/cryptographic signatures, XFA
+// forms, agent-driven filling.
 //
 // ── Laziness (FR-018) ──────────────────────────────────────────────────────
 // `pdfjs-dist` is reached ONLY through the dynamic import below, so it stays
@@ -62,13 +89,25 @@
 // then match nothing and pass.
 
 import { useEffect, useRef, useState } from 'react'
-import { SpinnerGap } from '@phosphor-icons/react'
-import { libraryDownloadUrl } from '@/lib/api'
+import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X } from '@phosphor-icons/react'
+import { libraryDownloadUrl, putLibraryContentBinary } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
+import type { AutoSaveStatus } from '@/hooks/useAutoSave'
+import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { cn } from '@/lib/utils'
+import { useUiStore } from '@/store/ui'
+import { PreviewHeaderPortal } from './previewHeaderSlot'
+import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
+import { setLibraryEditorDirty } from './unsavedGuard'
+import { getLibraryErrorMessage } from '../libraryErrorMessage'
+import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from './LibrarySignaturePad'
+import { buildInkAnnotationEntry } from './pdfInkAnnotation'
+import type { SignatureStroke } from './pdfInkAnnotation'
+import { uint8ArrayToBase64 } from './pdfBinaryEncoding'
 
 // Type-only: erased at build time, so it does not pull pdfjs-dist into the
 // eager module graph.
-import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist'
 
 /** URL prefix the PDF.js runtime assets and worker are served from. Mirrors
  *  `PDFJS_ASSET_PREFIX` in vite.config.ts, which emits them there. The gateway
@@ -184,11 +223,131 @@ async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSig
   return res.arrayBuffer()
 }
 
+// ── Edit-mode link handling ──────────────────────────────────────────────
+// A minimal, deliberately inert `PDFLinkService`-shaped object. Constructing
+// PDF.js's real `AnnotationLayer` needs SOMETHING at `linkService` — Link
+// annotations and push-button widgets call into it — but following a link
+// (internal or external) is out of scope for a fill/sign editing surface,
+// and pdfjs-dist's real `PDFLinkService`/`SimpleLinkService` classes live in
+// the separate `pdfjs-dist/web/pdf_viewer` bundle this file deliberately does
+// not import (see the module doc above: this file builds its own Worker and
+// TextLayer rather than adopting the full viewer). Every method below is
+// exactly what `AnnotationLayer`'s Link/PushButton element classes call
+// (verified against pdf.mjs) — each one is a safe no-op or a link stripped to
+// `href="#"` with navigation cancelled, never left `undefined` (an
+// unimplemented method PDF.js calls unconditionally is a runtime crash, not
+// a soft failure).
+const PDF_EDIT_LINK_SERVICE = {
+  externalLinkTarget: null,
+  externalLinkRel: 'noopener noreferrer nofollow',
+  getDestinationHash: () => '#',
+  getAnchorUrl: () => '#',
+  addLinkAttributes: (link: HTMLAnchorElement) => {
+    link.href = '#'
+    link.removeAttribute('target')
+    link.rel = 'noopener noreferrer nofollow'
+    link.onclick = () => false
+  },
+  executeNamedAction: () => {},
+  executeSetOCGState: () => {},
+  goToDestination: async () => {},
+}
+
+/** Margin, in that page's own viewport pixels, between a placed signature and
+ * the page edge. */
+const SIGNATURE_MARGIN_VIEWPORT_PX = 16
+/** A placed signature is sized to whichever is smaller: 40% of the page's
+ * on-screen width, or this many viewport pixels — so it reads as
+ * signature-sized on both a business card and a poster-sized page. */
+const SIGNATURE_MAX_WIDTH_FRACTION = 0.4
+const SIGNATURE_MAX_WIDTH_VIEWPORT_PX = 220
+
+/**
+ * Places a LibrarySignaturePad capture (in the pad's own fixed pixel space)
+ * at the bottom-right of the given page, converting through that page's own
+ * `PageViewport` — which already encodes scale AND rotation — into PDF-space
+ * points. Returns strokes ready for `buildInkAnnotationEntry`.
+ */
+function placeSignatureOnViewport(padStrokes: SignatureStroke[], viewport: PageViewport): SignatureStroke[] {
+  const targetWidth = Math.min(viewport.width * SIGNATURE_MAX_WIDTH_FRACTION, SIGNATURE_MAX_WIDTH_VIEWPORT_PX)
+  const targetHeight = targetWidth * (SIGNATURE_PAD_HEIGHT / SIGNATURE_PAD_WIDTH)
+  const originX = viewport.width - SIGNATURE_MARGIN_VIEWPORT_PX - targetWidth
+  const originY = viewport.height - SIGNATURE_MARGIN_VIEWPORT_PX - targetHeight
+  const scaleX = targetWidth / SIGNATURE_PAD_WIDTH
+  const scaleY = targetHeight / SIGNATURE_PAD_HEIGHT
+
+  return padStrokes.map((stroke) =>
+    stroke.map(({ x, y }) => {
+      const [pdfX, pdfY] = viewport.convertToPdfPoint(originX + x * scaleX, originY + y * scaleY) as [
+        number,
+        number,
+      ]
+      return { x: pdfX, y: pdfY }
+    }),
+  )
+}
+
+interface PlacedSignature {
+  key: string
+  pageNumber: number
+}
+
 export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [pageCount, setPageCount] = useState(0)
+  // Distinct from `status === 'ready'`: that flips as soon as the DOCUMENT
+  // opens, while pages still render progressively afterwards (existing
+  // behaviour, unchanged). Edit mode needs every page's viewport/annotations
+  // captured first — entering it while page 3 of 5 is still mid-render would
+  // silently skip building a form layer for pages 4-5.
+  const [allPagesRendered, setAllPagesRendered] = useState(false)
+
+  const [mode, setMode] = useState<'view' | 'edit'>('view')
+  const [hasFormFields, setHasFormFields] = useState<boolean | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
+  const [saveError, setSaveError] = useState<string>()
+  const [lastSavedAt, setLastSavedAt] = useState<Date>()
+  const [signaturePadOpen, setSignaturePadOpen] = useState(false)
+  const [placedSignatures, setPlacedSignatures] = useState<PlacedSignature[]>([])
+  // Bumping this re-runs the load effect against `pendingSaveBytesRef`
+  // instead of a network fetch — how a successful Save re-opens the document
+  // showing what was just written, without a round trip for bytes already in
+  // memory (library-b-c-design-2026-09-07.md: "A saved PDF re-opens showing
+  // the entered values").
+  const [reloadNonce, setReloadNonce] = useState(0)
+
+  const addToast = useUiStore((s) => s.addToast)
+
+  const docRef = useRef<PDFDocumentProxy | null>(null)
+  const pdfjsRef = useRef<typeof import('pdfjs-dist') | null>(null)
+  const pagesRef = useRef<Map<number, PDFPageProxy>>(new Map())
+  const pageViewportsRef = useRef<Map<number, PageViewport>>(new Map())
+  const pageElsRef = useRef<Map<number, HTMLDivElement>>(new Map())
+  const pageAnnotationsRef = useRef<Map<number, unknown[]>>(new Map())
+  const annotationLayerDivsRef = useRef<Map<number, HTMLDivElement>>(new Map())
+  const signaturePreviewElsRef = useRef<Map<string, HTMLDivElement>>(new Map())
+  const pendingSaveBytesRef = useRef<Uint8Array | null>(null)
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Dirty-state guard (library-spec.md: "warn before navigating away from
+  // unsaved edits") — same wiring useLibraryFileEditor.ts uses for the text
+  // editors, so switching to a different Library file (or closing the pane)
+  // while a form field or signature is unsaved goes through the same
+  // confirm-discard prompt.
+  useEffect(() => {
+    setLibraryEditorDirty(dirty)
+  }, [dirty])
+  useEffect(() => {
+    return () => setLibraryEditorDirty(false)
+  }, [])
+  useEffect(() => {
+    return () => {
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const container = containerRef.current
@@ -203,6 +362,23 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
     setStatus('loading')
     setError(null)
     setPageCount(0)
+    setAllPagesRendered(false)
+    setMode('view')
+    setHasFormFields(null)
+    setDirty(false)
+    setSaveStatus('idle')
+    setSaveError(undefined)
+    setLastSavedAt(undefined)
+    setSignaturePadOpen(false)
+    setPlacedSignatures([])
+    pagesRef.current.clear()
+    pageViewportsRef.current.clear()
+    pageElsRef.current.clear()
+    pageAnnotationsRef.current.clear()
+    annotationLayerDivsRef.current.clear()
+    signaturePreviewElsRef.current.clear()
+    docRef.current = null
+    pdfjsRef.current = null
     container.replaceChildren()
 
     void (async () => {
@@ -216,7 +392,15 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
         const pdfjs = await import('pdfjs-dist')
         if (cancelled) return
 
-        const bytes = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
+        // A just-completed Save already has the new bytes in memory — reuse
+        // them instead of re-fetching what we just uploaded. Consumed once.
+        let data: ArrayBuffer | Uint8Array
+        if (pendingSaveBytesRef.current) {
+          data = pendingSaveBytesRef.current
+          pendingSaveBytesRef.current = null
+        } else {
+          data = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
+        }
         if (cancelled) return
 
         // FR-019c — our own worker, handed to PDF.js as a port, so there is no
@@ -237,7 +421,7 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
         const pdfWorker = pdfjs.PDFWorker.create({ name: 'omnipus-library-pdf', port })
 
         const task = pdfjs.getDocument({
-          data: bytes,
+          data,
           worker: pdfWorker,
           // D15.7 — XFA is a scripting surface and is unsupported anyway.
           enableXfa: false,
@@ -253,6 +437,39 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
         loadingTask = task
         doc = await task.promise
         if (cancelled) return
+        docRef.current = doc
+        pdfjsRef.current = pdfjs
+        // Any AcroForm fill or placed signature mutates this SAME object —
+        // this is the one hook point for "is there an unsaved edit" that
+        // covers both mechanisms without this component having to intercept
+        // every widget's own change listener. `onSetModified`/`onResetModified`
+        // are typed as bare `null` in annotation_storage.d.ts (a JSDoc
+        // initial-value artefact — the class assigns and calls them as
+        // callback slots at runtime; verified against build/pdf.mjs's
+        // `#setModified`/`resetModified`), so a documented cast is needed to
+        // assign a real function.
+        const annotationStorage = doc.annotationStorage as unknown as {
+          onSetModified: (() => void) | null
+          onResetModified: (() => void) | null
+        }
+        annotationStorage.onSetModified = () => {
+          if (!cancelled) setDirty(true)
+        }
+        annotationStorage.onResetModified = () => {
+          if (!cancelled) setDirty(false)
+        }
+        void doc
+          .getFieldObjects()
+          .then((fields) => {
+            if (!cancelled) setHasFormFields(!!fields && Object.keys(fields).length > 0)
+          })
+          .catch(() => {
+            // A field-object read failure costs the "has fields" banner only —
+            // the AnnotationLayer render below still tries per-page
+            // annotations regardless, so filling still works if the fields
+            // ARE there; this just can't promise it up front.
+            if (!cancelled) setHasFormFields(null)
+          })
         setPageCount(doc.numPages)
         setStatus('ready')
 
@@ -293,6 +510,10 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
 
           container.appendChild(pageEl)
 
+          pagesRef.current.set(n, page)
+          pageViewportsRef.current.set(n, viewport)
+          pageElsRef.current.set(n, pageEl)
+
           const ctx = canvas.getContext('2d')
           if (!ctx) throw new Error('This browser did not provide a 2D canvas context.')
 
@@ -301,9 +522,12 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
             canvasContext: ctx,
             viewport,
             transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
-            // NB-17 — read-only. ENABLE draws annotation appearance streams
-            // (including filled form values) as static graphics. ENABLE_FORMS
-            // and ENABLE_STORAGE are the modes that make fields editable.
+            // NB-17 — the BASE canvas stays read-only. ENABLE draws annotation
+            // appearance streams (including already-filled form values) as
+            // static graphics. ENABLE_FORMS and ENABLE_STORAGE are the modes
+            // that make the CANVAS ITSELF paint live widgets, which this file
+            // still never uses — Edit mode's interactivity comes entirely
+            // from the separate AnnotationLayer overlaid on top (below).
             annotationMode: pdfjs.AnnotationMode.ENABLE,
             isEditing: false,
           })
@@ -318,7 +542,13 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
 
           await Promise.all([renderTask.promise, textLayer.render()])
           if (cancelled) return
+
+          const annotations = await page.getAnnotations({ intent: 'display' })
+          if (cancelled) return
+          pageAnnotationsRef.current.set(n, annotations)
         }
+
+        if (!cancelled) setAllPagesRendered(true)
       } catch (err) {
         if (cancelled) return
         if (err instanceof DOMException && err.name === 'AbortError') return
@@ -343,7 +573,246 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
       // the worker we handed in — one call covers both.
       void loadingTask?.destroy().catch(() => {})
     }
-  }, [workspaceId, entry.path])
+  }, [workspaceId, entry.path, reloadNonce])
+
+  // Edit-mode AnnotationLayer mount/unmount. Runs only once every page has
+  // finished its base render (see `allPagesRendered` above) — entering Edit
+  // before then would silently skip whichever pages hadn't reached the loop
+  // yet. Leaving Edit tears the layers down again; nothing in
+  // `annotationStorage` is touched by that — field values and placed
+  // signatures live in the SAME storage object regardless of which mode is
+  // showing, so switching back to Edit (or Save) sees them unchanged.
+  useEffect(() => {
+    if (!allPagesRendered) return
+    const pdfjs = pdfjsRef.current
+    const doc = docRef.current
+    if (!pdfjs || !doc) return
+
+    if (mode !== 'edit') {
+      for (const div of annotationLayerDivsRef.current.values()) div.remove()
+      annotationLayerDivsRef.current.clear()
+      return
+    }
+
+    let cancelled = false
+    void (async () => {
+      for (const [pageNumber, viewport] of pageViewportsRef.current) {
+        if (cancelled) return
+        if (annotationLayerDivsRef.current.has(pageNumber)) continue
+        const pageEl = pageElsRef.current.get(pageNumber)
+        const page = pagesRef.current.get(pageNumber)
+        const annotations = pageAnnotationsRef.current.get(pageNumber)
+        if (!pageEl || !page || !annotations) continue
+
+        const div = document.createElement('div')
+        div.className = 'omnipus-pdf-annotation-layer'
+        div.setAttribute('data-testid', 'library-pdf-annotation-layer')
+        div.setAttribute('data-page-number', String(pageNumber))
+        pageEl.appendChild(div)
+        annotationLayerDivsRef.current.set(pageNumber, div)
+
+        // `AnnotationLayer`'s CONSTRUCTOR is genuinely loosely typed (every
+        // field in its own .d.ts is `any` — verified against
+        // types/src/display/annotation_layer.d.ts) but still requires every
+        // key to be PRESENT (an object-literal shape, not all-optional), so
+        // the unused optional collaborators are passed as explicit
+        // `undefined`. Its `.render()` method is typed against the separate,
+        // stricter `AnnotationLayerParameters` alias, which requires a real
+        // `PDFLinkService` instance — even though PDF.js's OWN real
+        // `render(params)` body (verified against build/pdf.mjs) only ever
+        // reads `annotations` and `optionalContentConfig` off that argument;
+        // `linkService` was already captured, and used, by the constructor.
+        // `PDF_EDIT_LINK_SERVICE` (this file's module-level constant) is
+        // deliberately NOT the real class — see its own doc comment — so the
+        // render call is cast past that one field rather than constructing a
+        // `PDFLinkService` this editing surface has no use for.
+        const viewportClone = viewport.clone({ dontFlip: true })
+        const layer = new pdfjs.AnnotationLayer({
+          div,
+          page,
+          // Matches pdfjs-dist's own `web/pdf_viewer` AnnotationLayerBuilder
+          // (verified against the shipped `web/pdf_viewer.mjs`): the
+          // annotation layer is built from a `dontFlip: true` clone of the
+          // page's viewport, not the viewport used for the canvas/text layer.
+          viewport: viewportClone,
+          linkService: PDF_EDIT_LINK_SERVICE,
+          annotationStorage: doc.annotationStorage,
+          accessibilityManager: undefined,
+          annotationCanvasMap: undefined,
+          annotationEditorUIManager: undefined,
+          structTreeLayer: undefined,
+          commentManager: undefined,
+        })
+        await layer.render({
+          div,
+          page,
+          viewport: viewportClone,
+          linkService: PDF_EDIT_LINK_SERVICE,
+          annotationStorage: doc.annotationStorage,
+          annotations,
+          renderForms: true,
+          enableScripting: false,
+        } as unknown as Parameters<typeof layer.render>[0])
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [mode, allPagesRendered])
+
+  function handleToggleMode(next: 'view' | 'edit') {
+    setMode(next)
+  }
+
+  function handleInsertSignature(padStrokes: SignatureStroke[], pageNumber: number) {
+    const doc = docRef.current
+    const pdfjs = pdfjsRef.current
+    const viewport = pageViewportsRef.current.get(pageNumber)
+    if (!doc || !pdfjs || !viewport) return
+
+    const strokesPdfSpace = placeSignatureOnViewport(padStrokes, viewport)
+    const { key, value } = buildInkAnnotationEntry({
+      strokesPdfSpace,
+      pageIndex: pageNumber - 1,
+      rotation: viewport.rotation,
+      annotationEditorTypeInk: pdfjs.AnnotationEditorType.INK,
+    })
+    doc.annotationStorage.setValue(key, value)
+    setPlacedSignatures((prev) => [...prev, { key, pageNumber }])
+    renderSignaturePreview(pageNumber, key, strokesPdfSpace, viewport)
+  }
+
+  /** Draws a lightweight, non-interactive preview of a just-placed signature
+   * directly on its page — the underlying PDF.js canvas never repaints from
+   * annotationStorage live (see the module doc's "Read-only BASE render"
+   * note), so without this the signature would be invisible until Save
+   * re-opens the document. */
+  function renderSignaturePreview(
+    pageNumber: number,
+    key: string,
+    strokesPdfSpace: SignatureStroke[],
+    viewport: PageViewport,
+  ) {
+    const pageEl = pageElsRef.current.get(pageNumber)
+    if (!pageEl) return
+
+    const viewportStrokes = strokesPdfSpace.map((stroke) =>
+      stroke.map(({ x, y }) => {
+        const [vx, vy] = viewport.convertToViewportPoint(x, y) as [number, number]
+        return { x: vx, y: vy }
+      }),
+    )
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const stroke of viewportStrokes) {
+      for (const p of stroke) {
+        if (p.x < minX) minX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.x > maxX) maxX = p.x
+        if (p.y > maxY) maxY = p.y
+      }
+    }
+    if (!Number.isFinite(minX)) return
+    const pad = 8
+    const left = minX - pad
+    const top = minY - pad
+    const width = Math.max(1, maxX - minX + pad * 2)
+    const height = Math.max(1, maxY - minY + pad * 2)
+
+    const wrapper = document.createElement('div')
+    wrapper.className = 'omnipus-pdf-signature-preview'
+    wrapper.style.left = `${left}px`
+    wrapper.style.top = `${top}px`
+    wrapper.style.width = `${width}px`
+    wrapper.style.height = `${height}px`
+    wrapper.setAttribute('data-testid', 'library-pdf-signature-preview')
+    wrapper.setAttribute('data-signature-key', key)
+
+    const canvas = document.createElement('canvas')
+    const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)
+    canvas.width = Math.max(1, Math.floor(width * ratio))
+    canvas.height = Math.max(1, Math.floor(height * ratio))
+    canvas.style.width = `${width}px`
+    canvas.style.height = `${height}px`
+    wrapper.appendChild(canvas)
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.scale(ratio, ratio)
+      ctx.strokeStyle = '#111111'
+      ctx.lineWidth = 2
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      for (const stroke of viewportStrokes) {
+        if (stroke.length === 0) continue
+        ctx.beginPath()
+        stroke.forEach((p, i) => {
+          const x = p.x - left
+          const y = p.y - top
+          if (i === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+        })
+        ctx.stroke()
+      }
+    }
+
+    const removeBtn = document.createElement('button')
+    removeBtn.type = 'button'
+    removeBtn.className = 'omnipus-pdf-signature-remove'
+    removeBtn.setAttribute('aria-label', 'Remove signature')
+    removeBtn.setAttribute('data-testid', `library-pdf-signature-remove-${key}`)
+    removeBtn.textContent = '×'
+    removeBtn.addEventListener('click', () => handleRemoveSignature(key))
+    wrapper.appendChild(removeBtn)
+
+    pageEl.appendChild(wrapper)
+    signaturePreviewElsRef.current.set(key, wrapper)
+  }
+
+  function handleRemoveSignature(key: string) {
+    docRef.current?.annotationStorage.remove(key)
+    signaturePreviewElsRef.current.get(key)?.remove()
+    signaturePreviewElsRef.current.delete(key)
+    setPlacedSignatures((prev) => prev.filter((s) => s.key !== key))
+  }
+
+  async function handleSave() {
+    const doc = docRef.current
+    if (!doc) return
+    setSaveStatus('saving')
+    setSaveError(undefined)
+    try {
+      const bytes = await doc.saveDocument()
+      const content_base64 = uint8ArrayToBase64(bytes)
+      await putLibraryContentBinary(workspaceId, { path: entry.path, content_base64 })
+      doc.annotationStorage.resetModified()
+      setSaveStatus('saved')
+      setLastSavedAt(new Date())
+      addToast({ message: 'Saved.', variant: 'success' })
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+      fadeTimerRef.current = setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
+      // Re-open from the exact bytes just written — proves the round-trip and
+      // shows the entered values as real, static content (library-b-c-design-
+      // 2026-09-07.md: "A saved PDF re-opens showing the entered values").
+      pendingSaveBytesRef.current = bytes
+      setReloadNonce((n) => n + 1)
+    } catch (err) {
+      // Deliberately do NOT touch annotationStorage, mode, or
+      // placedSignatures here — every entered value and placed signature
+      // stays in the tab for a retry (library-b-c-design-2026-09-07.md: "a
+      // save failure surfaces the reason and keeps the user's entries in the
+      // tab, never a silent no-op").
+      const message = getLibraryErrorMessage(err, 'Save failed')
+      setSaveStatus('error')
+      setSaveError(message)
+      addToast({ message, variant: 'error' })
+    }
+  }
+
+  const canEdit = status === 'ready'
+  const readyForFormsAndSignature = allPagesRendered && mode === 'edit'
 
   return (
     <div
@@ -355,7 +824,19 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
           own web/pdf_viewer.css needed for selection and in-page search to
           land on the right glyphs; they are scoped to this component rather
           than imported wholesale so the viewer's chrome styles stay out of the
-          SPA. The layer is transparent — the canvas is what you see. */}
+          SPA. The layer is transparent — the canvas is what you see.
+
+          The annotation-layer and signature-preview rules below are a
+          deliberately TRIMMED subset of pdfjs-dist's own
+          web/annotation_layer_builder.css (fetched and verified against the
+          6.2.108 tag) — positioning and the handful of cosmetic rules this
+          editing surface actually needs, dropping the parts that depend on
+          machinery this file does not build (the canvas-swap checkbox/radio
+          look needs `annotationCanvasMap`; forced-colors and comment-popup
+          styling are print/accessibility polish this scope doesn't require
+          to be FUNCTIONAL). Checkboxes/radios keep the browser's native
+          appearance rather than pdfjs's custom canvas-swapped one — correctly
+          reflecting :checked either way, and simpler without that map. */}
       <style>{`
 .omnipus-pdf-text-layer {
   position: absolute;
@@ -396,7 +877,166 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
 .omnipus-pdf-text-layer .markedContent { display: contents; }
 .omnipus-pdf-text-layer span[role="img"] { user-select: none; cursor: default; }
 .omnipus-pdf-text-layer ::selection { background: rgb(0 0 255 / 0.25); }
+
+.omnipus-pdf-annotation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+  z-index: 2;
+}
+.omnipus-pdf-annotation-layer section {
+  position: absolute;
+  pointer-events: auto;
+  box-sizing: border-box;
+  transform-origin: 0 0;
+}
+.omnipus-pdf-annotation-layer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton) > a {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+.omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea),
+.omnipus-pdf-annotation-layer .choiceWidgetAnnotation select,
+.omnipus-pdf-annotation-layer .buttonWidgetAnnotation:is(.checkBox, .radioButton) input {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  vertical-align: top;
+  font: calc(9px * var(--total-scale-factor)) sans-serif;
+  background: rgba(212, 175, 55, 0.12);
+  border: 1.5px solid var(--color-accent);
+  border-radius: 2px;
+}
+.omnipus-pdf-annotation-layer .textWidgetAnnotation textarea { resize: none; }
+.omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea):focus,
+.omnipus-pdf-annotation-layer .choiceWidgetAnnotation select:focus {
+  outline: 2px solid var(--color-accent);
+  background: rgba(212, 175, 55, 0.2);
+}
+.omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea)[disabled],
+.omnipus-pdf-annotation-layer .choiceWidgetAnnotation select[disabled] {
+  background: none;
+  cursor: not-allowed;
+}
+.omnipus-pdf-annotation-layer .popupAnnotation { display: none; }
+
+.omnipus-pdf-signature-preview {
+  position: absolute;
+  z-index: 3;
+}
+.omnipus-pdf-signature-preview canvas { display: block; pointer-events: none; }
+.omnipus-pdf-signature-remove {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  border: none;
+  background: var(--color-error);
+  color: var(--color-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  padding: 0;
+  cursor: pointer;
+  pointer-events: auto;
+}
 `}</style>
+
+      <PreviewHeaderPortal>
+        <div className="flex items-center gap-0.5" role="group" aria-label="View mode">
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => handleToggleMode('view')}
+            aria-pressed={mode === 'view'}
+            aria-label="View"
+            title="View"
+            data-testid="library-pdf-mode-view"
+            className={cn(LIBRARY_ICON_BTN, mode === 'view' && 'text-[var(--color-accent)]')}
+          >
+            <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
+          </button>
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => handleToggleMode('edit')}
+            disabled={!canEdit}
+            aria-pressed={mode === 'edit'}
+            aria-label="Edit"
+            title={canEdit ? 'Fill fields or add a signature' : 'Edit'}
+            data-testid="library-pdf-mode-edit"
+            className={cn(LIBRARY_ICON_BTN, mode === 'edit' && 'text-[var(--color-accent)]')}
+          >
+            <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
+          </button>
+        </div>
+        {mode === 'edit' && (
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => setSignaturePadOpen(true)}
+            disabled={!allPagesRendered}
+            aria-label="Add signature"
+            title="Draw and place a signature"
+            data-testid="library-pdf-add-signature"
+            className={LIBRARY_ICON_BTN}
+          >
+            <Signature size={15} />
+          </button>
+        )}
+        <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={lastSavedAt} />
+        {mode === 'edit' && (
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => void handleSave()}
+            disabled={!dirty || saveStatus === 'saving'}
+            aria-label={saveStatus === 'saving' ? 'Saving' : 'Save'}
+            title={saveStatus === 'saving' ? 'Saving…' : 'Save'}
+            data-testid="library-pdf-save"
+            className={cn(LIBRARY_ICON_BTN, dirty && saveStatus !== 'saving' && 'text-[var(--color-accent)]')}
+          >
+            <FloppyDisk size={15} weight={dirty ? 'fill' : 'regular'} />
+          </button>
+        )}
+      </PreviewHeaderPortal>
+
+      {mode === 'edit' && allPagesRendered && hasFormFields === false && (
+        <div
+          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-muted)]"
+          data-testid="library-pdf-no-fields-note"
+        >
+          This PDF has no fillable form fields — you can still add a signature.
+        </div>
+      )}
+
+      {mode === 'edit' && placedSignatures.length > 0 && (
+        <div
+          className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-muted)]"
+          data-testid="library-pdf-signature-list"
+        >
+          <span>Signatures placed (not yet saved):</span>
+          {placedSignatures.map((sig) => (
+            <button
+              key={sig.key}
+              type="button"
+              tabIndex={0}
+              onClick={() => handleRemoveSignature(sig.key)}
+              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-[var(--color-surface-2)]"
+              title={`Remove the signature on page ${sig.pageNumber}`}
+              data-testid={`library-pdf-signature-chip-${sig.key}`}
+            >
+              Page {sig.pageNumber} <X size={10} />
+            </button>
+          ))}
+        </div>
+      )}
 
       {status === 'loading' && (
         <div
@@ -425,6 +1065,14 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
         className={`min-h-0 flex-1 overflow-auto p-2 ${status === 'ready' ? '' : 'hidden'}`}
         data-testid="library-pdf-pages"
         aria-label={`${entry.name}, ${pageCount} page${pageCount === 1 ? '' : 's'}`}
+      />
+
+      <LibrarySignaturePad
+        open={signaturePadOpen && readyForFormsAndSignature}
+        onOpenChange={setSignaturePadOpen}
+        pageCount={pageCount}
+        defaultPageNumber={pageCount}
+        onInsert={handleInsertSignature}
       />
     </div>
   )
