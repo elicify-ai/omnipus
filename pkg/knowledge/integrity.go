@@ -298,9 +298,38 @@ func (s *findingSink) notRun(cat IntegrityCategory, reason string) {
 func (s *findingSink) results() []*CategoryResult {
 	out := make([]*CategoryResult, 0, len(s.catSet))
 	for _, c := range s.catSet {
-		out = append(out, s.byCat[c])
+		r := s.byCat[c]
+		sortFindings(r.Findings)
+		out = append(out, r)
 	}
 	return out
+}
+
+// sortFindings imposes a deterministic total order — Path, then Detail — on one
+// category's retained findings.
+//
+// WHY IT IS LOAD-BEARING FOR PAGING (Finding 3): the D3 cursor is STATELESS.
+// Every knowledge_describe?cursor=<cat>#<offset> re-runs the whole sweep and
+// slices Findings[offset:offset+page]. Some categories collect their findings in
+// the store's implicit row order — orphan rows and relations follow ScanRecords
+// / ScanRelations iteration order, which SQLite makes no promise about across a
+// re-plan, a rowid change, or any intervening write. If that order differed
+// between the page-1 request and a later cursor request, the same offset landed
+// on a different finding — silently skipping or duplicating findings across
+// pages while the count line claimed a clean, contiguous range.
+//
+// Sorting here, at the single point where every category's findings are
+// assembled into the report, makes the offset name the SAME finding on every
+// re-run regardless of the order the store yielded rows in. (Path, Detail) is a
+// total order: Detail already carries every distinguishing fact of a finding, so
+// two findings that share a path still order deterministically.
+func sortFindings(findings []IntegrityFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Path != findings[j].Path {
+			return findings[i].Path < findings[j].Path
+		}
+		return findings[i].Detail < findings[j].Detail
+	})
 }
 
 // ---------------------------------------------------------------------------
