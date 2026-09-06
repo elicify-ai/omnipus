@@ -43,6 +43,40 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 			Value:    renderValue(pv),
 		})
 	}
+
+	// BORROWED RELATIONS (D2 / FR-124). A `join` names a relation property whose
+	// related record is borrowed onto this row. This layer holds the relation
+	// VALUE — the related record's wikilink identity — which it renders as a
+	// borrowed line (`bed [[Greenhouse]]:`), marked as borrowed and never
+	// merged into this record's own columns above. It does NOT fetch the
+	// related record's other fields as borrowed cells: reading an arbitrary
+	// related record's columns needs a value reader this package is not wired
+	// with (Deps.Resolve carries a record IDENTITY, not the related record's
+	// values), so borrowing the identity is what is available here — and it is
+	// rendered rather than silently dropped, which is the whole of D2's rule.
+	for _, jp := range q.join {
+		pv, ok := s.values[jp]
+		if !ok || pv.State == records.StateAbsent {
+			continue
+		}
+		for _, v := range pv.Values {
+			target := v.Link.Raw
+			if target == "" {
+				// A non-relation stray (should not happen: join only accepts
+				// relation/person properties, validated at request time) —
+				// render whatever the value is rather than an empty target.
+				target = renderTyped(v)
+			}
+			if target == "" {
+				continue
+			}
+			row.Joins = append(row.Joins, generated.VaultFindJoin{
+				Relation: jp,
+				Target:   target,
+				Cells:    []generated.VaultFindCell{},
+			})
+		}
+	}
 	return row
 }
 

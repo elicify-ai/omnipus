@@ -1208,6 +1208,114 @@ func (ix *Index) ManifestPath() string { return ix.manifestPath }
 // DocCount returns the number of index documents — segments, not files.
 func (ix *Index) DocCount() (uint64, error) { return ix.idx.DocCount() }
 
+// IndexFreshness is a READ-ONLY snapshot of how well the text index reflects
+// the collection on disk RIGHT NOW — the fact a caller needs to tell a STALE
+// index (built once, then the collection changed underneath it) apart from a
+// collection with GENUINELY ABSENT content (nothing on disk to find).
+//
+// It is the same comparison Index.SyncWith performs to decide what to
+// re-index, run WITHOUT re-indexing anything: a stat-only walk (no file
+// content is read) diffed against the manifest the last build wrote. A term
+// present in 68 notes on disk but returned for only one is the shape this
+// exists to explain — a search that answers "1 hit" is not lying, the index is
+// just behind, and Fresh=false with Pending>0 says exactly that where a bare
+// hit count cannot.
+type IndexFreshness struct {
+	// Built is true when a manifest is present — i.e. a build has run at least
+	// once. False means the index has NEVER been built for this collection,
+	// which is a different state from "built but now stale".
+	Built bool
+	// Fresh is true exactly when the index reflects the collection with nothing
+	// pending: Built is true and New+Changed+Removed are all zero. A genuinely
+	// empty, fully-swept collection is Fresh (Built true, everything zero).
+	Fresh bool
+	// Scanned is the number of files on disk now; Indexed is the number the
+	// manifest records. They are equal on a fresh index and diverge on a stale
+	// one.
+	Scanned int
+	Indexed int
+	// New/Changed/Removed break down the pending reconcile: files on disk the
+	// index has never seen, files whose stat differs from the record, and files
+	// the index still holds that are gone from disk. Pending is their sum.
+	New     int
+	Changed int
+	Removed int
+	Pending int
+}
+
+// Freshness computes an IndexFreshness snapshot. It takes the same lock
+// Index.SyncWith does (ctx-answerable, so it never blocks uninterruptibly
+// behind a long reconcile) and reads only stat metadata and the manifest — no
+// file content, no index mutation.
+//
+// A never-built collection returns Built=false, Fresh=false, with New equal to
+// whatever is on disk. An unreadable/corrupt manifest is reported through the
+// error rather than papered over as fresh: a freshness answer this call could
+// not actually compute must not read as "all good".
+func (ix *Index) Freshness(ctx context.Context) (IndexFreshness, error) {
+	if err := ix.lockCtx(ctx); err != nil {
+		return IndexFreshness{}, err
+	}
+	defer ix.mu.Unlock()
+
+	var f IndexFreshness
+	built, err := ManifestExists(ix.manifestPath)
+	if err != nil {
+		return IndexFreshness{}, err
+	}
+	f.Built = built
+
+	scan, err := Scan(ix.root)
+	if err != nil {
+		return IndexFreshness{}, err
+	}
+	f.Scanned = len(scan.Entries)
+
+	// A never-built index has no manifest to diff against: every file on disk
+	// is pending, and Fresh stays false. LoadManifest would return an empty
+	// manifest here (a missing file is not an error), which would compute the
+	// identical New count — but reporting Built=false is the distinction the
+	// caller came for, so short-circuit rather than diffing against nothing.
+	if !f.Built {
+		f.New = f.Scanned
+		f.Pending = f.Scanned
+		return f, nil
+	}
+
+	manifest, err := LoadManifest(ix.manifestPath, ix.root)
+	if err != nil {
+		// Corrupt / wrong-root / wrong-version manifest — the exact states
+		// SyncWith rebuilds from. It is not a fresh index and it is not an
+		// honest empty one: surface the reason rather than guess.
+		return IndexFreshness{}, err
+	}
+	f.Indexed = manifest.Len()
+
+	seen := make(map[string]struct{}, len(scan.Entries))
+	for _, entry := range scan.Entries {
+		seen[entry.RelPath] = struct{}{}
+		if _, ok := manifest.Get(entry.RelPath); !ok {
+			f.New++
+			continue
+		}
+		// StatUnchanged is the same cheap size+mtime+kind check the reconcile
+		// applies; a touch can read as Changed and a real sync would then
+		// confirm the bytes and skip it, which only ever OVER-reports pending,
+		// never under-reports it — the safe direction for a freshness warning.
+		if !manifest.StatUnchanged(entry) {
+			f.Changed++
+		}
+	}
+	for relPath := range manifest.Entries {
+		if _, ok := seen[relPath]; !ok {
+			f.Removed++
+		}
+	}
+	f.Pending = f.New + f.Changed + f.Removed
+	f.Fresh = f.Pending == 0
+	return f, nil
+}
+
 // Close releases THIS holder's reference. The underlying handle is closed only
 // when the last holder releases it, so one revoked mount can never close an
 // index another workspace is still searching.
@@ -2384,6 +2492,39 @@ func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 			mq := bleveQuery.NewMatchQuery(query)
 			mq.SetField(field)
 			qs = append(qs, mq)
+		}
+		// PREFIX MATCHING (F2 / harness Issue 14). The match queries above are
+		// exact-term-after-analysis: they find a note for `composio` but not for
+		// `compos`, because `compos` analyses to the term "compos" and the body
+		// dictionary holds "composio" (or its stem), which is a different term.
+		// A caller typing a partial word expects the fuller term to be found —
+		// the same expectation NearMissVocabulary already serves when it offers
+		// `compos → composio` as a suggestion, so a `words` search must actually
+		// honour what the suggestion promises rather than only naming it.
+		//
+		// A bleve PrefixQuery matches the term DICTIONARY by raw byte prefix and
+		// performs no analysis of its own, so the prefix must arrive folded the
+		// same way the prose analyzer folds (lowercased) — foldTokens does that
+		// and, deliberately, does NOT stem: a stem would shorten the prefix past
+		// the very characters the caller typed. These disjuncts only ever ADD
+		// matches to the exact ones above; they never remove one, so a query
+		// that already matched exactly is unaffected. Only the PROSE fields get
+		// a prefix pass — a keyword field (path/prop_key/prop) stores each value
+		// as one whole term where prefixing would silently change what an exact
+		// pair or key query means.
+		prefixFields := []string{fieldName, fieldBody, fieldTitle, fieldHeadings, fieldPropValue}
+		for _, token := range foldTokens(query) {
+			// vocabularyPrefixMin guards against a 1–2 character prefix matching
+			// a large fraction of the dictionary — the same floor the
+			// vocabulary suggester uses for the same reason.
+			if len([]rune(token)) < vocabularyPrefixMin {
+				continue
+			}
+			for _, field := range prefixFields {
+				pq := bleveQuery.NewPrefixQuery(token)
+				pq.SetField(field)
+				qs = append(qs, pq)
+			}
 		}
 		q = bleve.NewDisjunctionQuery(qs...)
 	}

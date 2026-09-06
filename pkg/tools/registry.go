@@ -349,6 +349,20 @@ func (r *ToolRegistry) ExecuteWithContext(
 		return ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
 	}
 
+	// Recover arguments corrupted by a model that leaked its tool-call
+	// template control tokens into a string value (A1 — see argrepair.go).
+	// Runs before validation so a recoverable call (e.g. op="create_view"
+	// with `type` swallowed into op's value) is repaired into the call the
+	// model meant, rather than rejected with an unusable enum error. A no-op
+	// for every well-formed call: nothing fires unless a value carries BOTH a
+	// literal <arg_key>/<arg_value> template tag AND a per-call hex sentinel —
+	// the fingerprint of a genuine leak, so a legitimate value that merely
+	// mentions the tag is left untouched (A1).
+	if repairLeakedToolArgs(args) {
+		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
+			map[string]any{"tool": name})
+	}
+
 	// Validate arguments against the tool's declared schema.
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",

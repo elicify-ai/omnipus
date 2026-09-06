@@ -167,6 +167,27 @@ type stubText struct {
 	// takes priority and simulates the build-state check itself failing.
 	populated    *bool
 	populatedErr error
+
+	// fresh, when non-nil, makes stubText satisfy TextFreshnessReporter so a
+	// test can exercise the freshness/coverage signal (A2(d)). nil reports a
+	// zero-value snapshot (ScannedFiles == 0), which every freshness check in
+	// this package treats as inert, so the default is invisible to the tests
+	// that do not opt in. freshErr, when set, simulates the report failing.
+	fresh    *TextIndexFreshness
+	freshErr error
+}
+
+// IndexFreshness makes stubText an optional TextFreshnessReporter. The default
+// (fresh == nil) returns a zero-value snapshot whose ScannedFiles is 0, which
+// the freshness checks skip — so existing tests are unaffected.
+func (s *stubText) IndexFreshness(context.Context) (TextIndexFreshness, error) {
+	if s.freshErr != nil {
+		return TextIndexFreshness{}, s.freshErr
+	}
+	if s.fresh != nil {
+		return *s.fresh, nil
+	}
+	return TextIndexFreshness{}, nil
 }
 
 // Search returns s.only, filtered through s.hits, IN ORDER — and, since F6's

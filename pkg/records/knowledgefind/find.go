@@ -71,6 +71,47 @@ type TextSearcher interface {
 	Populated(ctx context.Context) (populated bool, err error)
 }
 
+// TextIndexFreshness is the richer answer TextFreshnessReporter gives beyond
+// Populated's single boolean: not only WHETHER the index reflects the whole
+// collection, but — when it does not — whether that is because it was NEVER
+// BUILT or because it has DRIFTED since its last build. Those are the two cases
+// Populated=false folds together, and they need different words to the caller:
+// "index it" versus "re-index it".
+type TextIndexFreshness struct {
+	// Built is true when a build has completed at least once. False is the
+	// never-indexed state.
+	Built bool
+	// Fresh is true when the index reflects the collection with nothing
+	// pending. A genuinely empty, fully-swept vault is Fresh.
+	Fresh bool
+	// ScannedFiles is what is on disk now; IndexedFiles is what the index
+	// reflects; PendingFiles is how many on-disk files the index has not yet
+	// caught up with. These make a stale-index message concrete ("reflects 1 of
+	// 68 files") rather than a bare "stale".
+	ScannedFiles int
+	IndexedFiles int
+	PendingFiles int
+}
+
+// TextFreshnessReporter is an OPTIONAL capability a TextSearcher may implement
+// to let a zero-hit refusal — and, in time, any answer — distinguish a STALE
+// index from one that was NEVER BUILT, and to say by how much it is behind.
+//
+// IT IS A SEPARATE INTERFACE RATHER THAN A METHOD ON TextSearcher for the same
+// reason ViewFormulaLoader is separate from ViewLoader: widening the required
+// interface would silently un-satisfy every existing implementation (the
+// production adapter AND every test stub) at once. A searcher that does not
+// implement it degrades to Populated's boolean — the pre-existing behaviour —
+// with no loss of correctness, only of specificity in the message.
+//
+// This is A2(d)'s "index-health / freshness" signal made reachable on the
+// knowledge_find path: a caller running a zero-hit `words` query over a vault
+// whose index is behind is told the index is stale and by how much, instead of
+// being told it was never built (wrong) or nothing matched (also wrong).
+type TextFreshnessReporter interface {
+	IndexFreshness(ctx context.Context) (TextIndexFreshness, error)
+}
+
 // ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
 // owns the loader; this package consumes it.
 type ViewLoader interface {
@@ -129,6 +170,19 @@ type Deps struct {
 	// relation comparisons report "unresolved" rather than silently comparing
 	// link text, which is the honest degradation.
 	Resolve records.RelationResolver
+	// ResolveNear turns `near`'s note reference (a bare path/name or a
+	// [[wikilink]]) into the anchor note's own collection-relative PATH, so the
+	// anchor counts as hop 0 EVEN WHEN IT IS AN ORDINARY NOTE with no record
+	// identity — the case Resolve cannot serve, because Resolve returns !ok for
+	// a note that is not a record (relation_resolver.go's Resolve collapses
+	// "exists but has no identity" onto "did not resolve"). near/hops still
+	// walks only the TYPED relation graph for hops >= 1; ResolveNear is purely
+	// how the origin note itself re-enters the answer at hop 0.
+	//
+	// Optional: when nil, near falls back to record-graph membership only — the
+	// anchor is hop 0 only if it is itself a record — which is the pre-existing
+	// behaviour every test that does not wire this relies on.
+	ResolveNear func(near string) (path string, ok bool)
 	// Epoch is the properties index's generation counter, which a cursor is
 	// issued against.
 	Epoch int64
@@ -503,15 +557,20 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// mechanism (FR-076: near MUST NOT bypass, weaken or replace any filter
 	// supplied alongside it, in either direction — AC-F2).
 	var nearSet map[string]bool
+	var nearAnchorPath string
 	if q.near != "" {
-		reached, r := nearReachable(ctx, d, q)
+		reached, anchorPath, r := nearReachable(ctx, d, q)
 		if r != nil {
 			return refusalResponse(generated.VaultFindRequest{}, echo, r), r
 		}
-		if len(reached) == 0 {
+		// Zero ONLY when neither the graph nor the anchor placed anything: an
+		// anchor that resolved to an ordinary note (empty graph, non-empty
+		// anchorPath) is NOT a zero-hit query — it still has hop 0 to return.
+		if len(reached) == 0 && anchorPath == "" {
 			return zeroHitResponse(ctx, d, q, echo), nil
 		}
 		nearSet = reached
+		nearAnchorPath = anchorPath
 	}
 
 	if d.Store == nil {
@@ -571,7 +630,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
-	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, files: files}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files}
 
 	// ONE evaluator for the whole scan, and `now` snapshotted ONCE (FR-146's
 	// last clause) so `now()`/`today()` give the same answer for every
@@ -597,6 +656,39 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 				group3(textFanout(q.limit)), q.words, group3(textFanout(q.limit))),
 			"add or tighten a typed `filter` — unlike `words`, it is evaluated over "+
 				"the full narrowed candidate population, not this fanout")})
+	}
+
+	// A2(d): a NON-ZERO `words` result can still UNDER-REPORT when the text
+	// index does not yet reflect the whole vault — the query returns the hits
+	// the partial index happens to hold while more matching files sit on disk
+	// unindexed. The zero-hit branch above (checkTextIndexPopulated) is the
+	// ONLY place the freshness signal was wired, so a partial index that
+	// returned SOME hits skipped it and would otherwise answer complete:true
+	// with no signal anywhere the caller reads — a false-completeness claim
+	// (R1), and the exact non-zero symptom the tester reported ("words=X
+	// returns 1 hit while 68 files contain it").
+	//
+	// When the searcher can report its freshness and it is behind, record a
+	// non-fatal coverage problem. finishVerdict derives complete:false from
+	// any recorded problem, so the caller is told the answer may be short and
+	// by how much — never silently told it is whole. A fresh, fully-swept
+	// index (Fresh, nothing pending, indexed == scanned) records nothing, so a
+	// healthy vault is not dragged incomplete. It reuses IndexUnavailable — the
+	// same code the zero-hit refusal uses for the identical "the index cannot
+	// be trusted to be whole" fact — because there is no narrower code and a
+	// new one is a wire-contract change owned elsewhere.
+	if q.words != "" {
+		if fr, ok := d.Text.(TextFreshnessReporter); ok {
+			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 &&
+				(!fresh.Fresh || fresh.PendingFiles > 0 || fresh.IndexedFiles < fresh.ScannedFiles) {
+				ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
+					fmt.Sprintf("the text index has not finished indexing this vault — it currently reflects "+
+						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
+						"under-report: matching files that are not yet indexed cannot appear here",
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
+					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state")})
+			}
+		}
 	}
 
 	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
@@ -654,6 +746,34 @@ func checkTextIndexPopulated(ctx context.Context, text TextSearcher) *RefusalErr
 			"re-run, or run knowledge_describe check_integrity to see the index state"), err)
 	}
 	if !populated {
+		// A2(d): the caller's real question is "is this zero a real miss, or an
+		// index that has not caught up?". Populated already answers that as a
+		// boolean; what it could not do was say BY HOW MUCH the index is behind.
+		// When the searcher can report its freshness, quote the concrete
+		// coverage — "reflects N of M files on disk, P not yet indexed" — so a
+		// stale/incomplete index is distinguishable from genuinely absent
+		// content by the NUMBERS, not just the refusal.
+		//
+		// It deliberately does NOT try to label the state "stale" vs "never
+		// built": an instant-indexing write (author.go) leaves a manifest with
+		// a single entry, so "manifest present" and "collection swept" are not
+		// the same fact and cannot be told apart from coverage alone — both are
+		// simply "the index does not cover this vault yet", which is exactly
+		// what the count says without over-claiming. The "never finished
+		// indexing" wording is preserved because it is true of every
+		// incomplete-coverage state (a vault whose index does not reflect all
+		// of it has not finished indexing it) and because callers/tests key on
+		// it.
+		if fr, ok := text.(TextFreshnessReporter); ok {
+			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
+				return refuse(problem(generated.IndexUnavailable,
+					fmt.Sprintf("the text index has never finished indexing this vault — it currently reflects "+
+						"%s of the %s files on disk (%s not yet indexed), so a zero-hit answer here cannot be "+
+						"trusted; it is indistinguishable from a real miss over a vault that was actually searched",
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
+					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state"), nil)
+			}
+		}
 		return refuse(problem(generated.IndexUnavailable,
 			"the text index has never finished indexing this vault, so a zero-hit answer "+
 				"here cannot be trusted — it would be indistinguishable from a real miss over a "+
@@ -692,6 +812,12 @@ type evaluation struct {
 	// other and with the typed filter (FR-076, AC-F2), never as a filter one
 	// of them could weaken.
 	near map[string]bool
+	// nearAnchorPath is the `near` origin note's own path (hop 0), admitted
+	// regardless of record identity so an ORDINARY-note anchor re-enters the
+	// answer even though it is not a node in the record graph `near` holds.
+	// Empty when the query carried no `near`, or when ResolveNear could not
+	// place the anchor on disk.
+	nearAnchorPath string
 
 	// files assembles FR-130's twelve virtual properties per candidate from the
 	// parent row and the child-table prepasses.
@@ -746,7 +872,15 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 	// correctly excluded here whenever `near` narrowed at all, without a
 	// special case.
 	if e.near != nil {
-		if c.RecordID == "" || !e.near[c.RecordID] {
+		// The anchor note itself is hop 0 and is admitted by PATH, so an
+		// ordinary-note anchor (RecordID == "") re-enters the answer even
+		// though it is not a node in the record graph. Every OTHER row must be
+		// a record within the traversed radius — a plain note that is not the
+		// anchor is still correctly excluded, because it can never be a graph
+		// node (relation edges connect record identities only, D7).
+		isAnchor := e.nearAnchorPath != "" && c.Path == e.nearAnchorPath
+		inRadius := c.RecordID != "" && e.near[c.RecordID]
+		if !isAnchor && !inRadius {
 			return propindex.Rejected, nil
 		}
 	}

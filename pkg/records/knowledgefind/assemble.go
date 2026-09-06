@@ -80,6 +80,16 @@ func (q *query) renderProperties() []*records.Property {
 			}
 		}
 	}
+	// JOIN properties must be DECODED even though renderRow renders them as
+	// borrowed relations rather than as own columns (D2): materialise only
+	// decodes what this list names, so a joined relation left off it has no
+	// value for renderRow to borrow — which is exactly why `join` used to
+	// render nothing at all. add() de-duplicates, so a property that is both
+	// selected and joined is decoded once and rendered borrowed (renderRow's
+	// isJoined check keeps it out of the own-column set).
+	for _, jp := range q.join {
+		add(jp)
+	}
 	return out
 }
 

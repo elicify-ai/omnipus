@@ -313,6 +313,7 @@ type findTextSearcher struct {
 }
 
 var _ knowledgefind.TextSearcher = (*findTextSearcher)(nil)
+var _ knowledgefind.TextFreshnessReporter = (*findTextSearcher)(nil)
 
 func (s *findTextSearcher) Search(_ context.Context, words string, limit int) ([]knowledgefind.TextHit, error) {
 	hits, err := s.ix.Search(words, limit)
@@ -340,6 +341,29 @@ func (s *findTextSearcher) NearestTerms(_ context.Context, words string, limit i
 
 func (s *findTextSearcher) SourceHash(_ context.Context, path string) (string, bool, error) {
 	return s.ix.SourceHashForPath(path)
+}
+
+// IndexFreshness implements knowledgefind.TextFreshnessReporter (A2(d)), so a
+// zero-hit words refusal can tell a STALE index from a NEVER-BUILT one and say
+// by how much it is behind. It converts pkg/knowledge's own IndexFreshness
+// snapshot to knowledgefind's wire-facing shape — the same knowledge-native ->
+// interface conversion every other method on this adapter performs, for the
+// import-cycle reason in this type's header.
+func (s *findTextSearcher) IndexFreshness(ctx context.Context) (knowledgefind.TextIndexFreshness, error) {
+	if s == nil || s.ix == nil {
+		return knowledgefind.TextIndexFreshness{}, nil
+	}
+	f, err := s.ix.Freshness(ctx)
+	if err != nil {
+		return knowledgefind.TextIndexFreshness{}, err
+	}
+	return knowledgefind.TextIndexFreshness{
+		Built:        f.Built,
+		Fresh:        f.Fresh,
+		ScannedFiles: f.Scanned,
+		IndexedFiles: f.Indexed,
+		PendingFiles: f.Pending,
+	}, nil
 }
 
 // Populated answers knowledgefind.TextSearcher's build-state question from
