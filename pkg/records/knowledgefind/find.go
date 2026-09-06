@@ -71,6 +71,47 @@ type TextSearcher interface {
 	Populated(ctx context.Context) (populated bool, err error)
 }
 
+// TextIndexFreshness is the richer answer TextFreshnessReporter gives beyond
+// Populated's single boolean: not only WHETHER the index reflects the whole
+// collection, but — when it does not — whether that is because it was NEVER
+// BUILT or because it has DRIFTED since its last build. Those are the two cases
+// Populated=false folds together, and they need different words to the caller:
+// "index it" versus "re-index it".
+type TextIndexFreshness struct {
+	// Built is true when a build has completed at least once. False is the
+	// never-indexed state.
+	Built bool
+	// Fresh is true when the index reflects the collection with nothing
+	// pending. A genuinely empty, fully-swept vault is Fresh.
+	Fresh bool
+	// ScannedFiles is what is on disk now; IndexedFiles is what the index
+	// reflects; PendingFiles is how many on-disk files the index has not yet
+	// caught up with. These make a stale-index message concrete ("reflects 1 of
+	// 68 files") rather than a bare "stale".
+	ScannedFiles int
+	IndexedFiles int
+	PendingFiles int
+}
+
+// TextFreshnessReporter is an OPTIONAL capability a TextSearcher may implement
+// to let a zero-hit refusal — and, in time, any answer — distinguish a STALE
+// index from one that was NEVER BUILT, and to say by how much it is behind.
+//
+// IT IS A SEPARATE INTERFACE RATHER THAN A METHOD ON TextSearcher for the same
+// reason ViewFormulaLoader is separate from ViewLoader: widening the required
+// interface would silently un-satisfy every existing implementation (the
+// production adapter AND every test stub) at once. A searcher that does not
+// implement it degrades to Populated's boolean — the pre-existing behaviour —
+// with no loss of correctness, only of specificity in the message.
+//
+// This is A2(d)'s "index-health / freshness" signal made reachable on the
+// knowledge_find path: a caller running a zero-hit `words` query over a vault
+// whose index is behind is told the index is stale and by how much, instead of
+// being told it was never built (wrong) or nothing matched (also wrong).
+type TextFreshnessReporter interface {
+	IndexFreshness(ctx context.Context) (TextIndexFreshness, error)
+}
+
 // ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
 // owns the loader; this package consumes it.
 type ViewLoader interface {
@@ -672,6 +713,34 @@ func checkTextIndexPopulated(ctx context.Context, text TextSearcher) *RefusalErr
 			"re-run, or run knowledge_describe check_integrity to see the index state"), err)
 	}
 	if !populated {
+		// A2(d): the caller's real question is "is this zero a real miss, or an
+		// index that has not caught up?". Populated already answers that as a
+		// boolean; what it could not do was say BY HOW MUCH the index is behind.
+		// When the searcher can report its freshness, quote the concrete
+		// coverage — "reflects N of M files on disk, P not yet indexed" — so a
+		// stale/incomplete index is distinguishable from genuinely absent
+		// content by the NUMBERS, not just the refusal.
+		//
+		// It deliberately does NOT try to label the state "stale" vs "never
+		// built": an instant-indexing write (author.go) leaves a manifest with
+		// a single entry, so "manifest present" and "collection swept" are not
+		// the same fact and cannot be told apart from coverage alone — both are
+		// simply "the index does not cover this vault yet", which is exactly
+		// what the count says without over-claiming. The "never finished
+		// indexing" wording is preserved because it is true of every
+		// incomplete-coverage state (a vault whose index does not reflect all
+		// of it has not finished indexing it) and because callers/tests key on
+		// it.
+		if fr, ok := text.(TextFreshnessReporter); ok {
+			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
+				return refuse(problem(generated.IndexUnavailable,
+					fmt.Sprintf("the text index has never finished indexing this vault — it currently reflects "+
+						"%s of the %s files on disk (%s not yet indexed), so a zero-hit answer here cannot be "+
+						"trusted; it is indistinguishable from a real miss over a vault that was actually searched",
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
+					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state"), nil)
+			}
+		}
 		return refuse(problem(generated.IndexUnavailable,
 			"the text index has never finished indexing this vault, so a zero-hit answer "+
 				"here cannot be trusted — it would be indistinguishable from a real miss over a "+
