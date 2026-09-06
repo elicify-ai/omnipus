@@ -15,7 +15,7 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
-let mockSearch: { workspace?: string; path?: string } = {}
+let mockSearch: { workspace?: string; path?: string; folder?: string } = {}
 
 const { mockNavigate, mockUseBlocker } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -114,6 +114,22 @@ describe('/library pop-out route', () => {
 
     expect(mockLibraryExplorerProps).toHaveBeenCalledWith(
       expect.objectContaining({ address: { workspaceId: undefined, path: undefined } }),
+    )
+  })
+
+  // C4 (library-b-c-design-2026-09-07.md "fullscreen carries the
+  // selection"): the pop-out's initial URL can name a browsed FOLDER with
+  // nothing selected (LibraryPanel's handlePopOut sends this when the docked
+  // panel has no file open) — the route must forward it as
+  // LibraryExplorer's `address.folder`, not drop it.
+  it('forwards the folder search param as address.folder, alongside workspace and no path', () => {
+    mockSearch = { workspace: 'ws-1', folder: '01-Areas/CRM' }
+    render(<LibraryRoute />)
+
+    expect(mockLibraryExplorerProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: { workspaceId: 'ws-1', path: undefined, folder: '01-Areas/CRM' },
+      }),
     )
   })
 

@@ -64,6 +64,15 @@ import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/
 const librarySearchSchema = z.object({
   workspace: z.string().min(1).optional(),
   path: z.string().min(1).optional(),
+  // C4 (library-b-c-design-2026-09-07.md "fullscreen carries the
+  // selection"): the folder the docked panel had open with NOTHING
+  // selected, so LibraryPanel's pop-out (which cannot always name a
+  // selected FILE) can still land the new tab in the right place. Read only
+  // as LibraryExplorer's `address.folder` — a one-time initial seed, never
+  // re-emitted by this route's own `onAddressChange` below (LibraryAddress's
+  // own doc comment explains why that's safe: `goTo()` never reports it
+  // back, so it can't drift out of sync with `path`).
+  folder: z.string().min(1).optional(),
 })
 
 export const Route = createFileRoute('/_app/library')({
@@ -72,7 +81,7 @@ export const Route = createFileRoute('/_app/library')({
 })
 
 function LibraryRoute() {
-  const { workspace, path } = Route.useSearch()
+  const { workspace, path, folder } = Route.useSearch()
   const navigate = useNavigate()
   const currentWorkspaceRef = useRef<string | undefined>(workspace)
 
@@ -115,7 +124,7 @@ function LibraryRoute() {
       // changed. With the address controlled, a param change IS the state
       // change, and remounting on every navigation would throw away the
       // browsed folder, the loaded listing and the open preview each time.
-      address={{ workspaceId: workspace, path }}
+      address={{ workspaceId: workspace, path, folder }}
       onAddressChange={(next) => {
         // Pushed, not replaced: each selected file is a place the back button
         // should return to (US-3 AS-4).

@@ -11,13 +11,23 @@
 // without an ADR" — see BrowserLivePanel.tsx's identical note). The only
 // other layout is the fullscreen `/#/library` pop-out tab (see handlePopOut).
 //
-// DELIBERATE DIFFERENCE FROM BrowserLivePanel: popping out does NOT close
-// this docked panel. BrowserLivePanel closes on pop-out because the live
-// browser view has an exclusive, first-come/no-preempt control lock — two
-// simultaneous viewers fight over "who's driving." The Library has no such
-// lock: browsing (or even editing, once D-5 lands) the same workspace's files
-// from two tabs at once is harmless, so keeping both open is strictly more
-// useful than forcing a hand-over.
+// C4 UPDATE (library-b-c-design-2026-09-07.md "fullscreen carries the
+// selection"): popping out NOW closes this docked panel — `handlePopOut`
+// calls `closeLibraryPanel()`. This REVERSES the note that used to stand
+// here ("popping out does NOT close the docked panel... keeping both open is
+// strictly more useful than forcing a hand-over"). That reasoning is still
+// correct as far as it goes — the Library has no BrowserLivePanel-style
+// exclusive control lock, and two tabs browsing the same files is still
+// harmless — but it answered a different question than the one C4 asks. The
+// founder-locked spec's own words: "the new tab starts with the same
+// folder/item selected... and the slide-out then closes." With the pop-out
+// now carrying the EXACT same selection (see `currentSelectionRef` below),
+// leaving the slide-out open beside an identical fullscreen view is
+// redundant clutter, not a second useful vantage point — closing it is a
+// declutter decision, not a concurrency one, and it does not reintroduce a
+// control lock: nothing stops the operator re-opening the docked panel
+// (sidebar, or the existing pop-out-closed handoff below) while the
+// fullscreen tab stays open.
 //
 // UAT fix (Dana, re-verified v8 — "pop-out re-dock STILL does not restore
 // the workspace"): the ORIGINAL version of this re-dock reaction only ever
@@ -57,6 +67,16 @@ export function LibraryPanel() {
   // that would look identical to "the pop-out is at the virtual root".
   const lastKnownPopoutWorkspaceRef = useRef<{ set: boolean; workspaceId?: string }>({ set: false })
 
+  // C4: the docked LibraryExplorer's CURRENT location — not the
+  // `libraryPanel.workspaceId` the store recorded at open time, which goes
+  // stale the moment the operator navigates to a different workspace inside
+  // the docked panel without closing it (there was no live workspace signal
+  // wired here before C4 — `onWorkspaceChange` is new to this file). Kept in
+  // refs, not state: this is read exactly once, at pop-out click time, and
+  // does not need to trigger a re-render on every keystroke of navigation.
+  const currentWorkspaceRef = useRef<string | undefined>(undefined)
+  const currentSelectionRef = useRef<{ path: string | null; folder: string }>({ path: null, folder: '' })
+
   useEffect(() => {
     return onLibraryWorkspaceChanged((workspaceId) => {
       lastKnownPopoutWorkspaceRef.current = { set: true, workspaceId }
@@ -85,12 +105,31 @@ export function LibraryPanel() {
     // a same-origin window.open'd tab inherits it automatically, no token
     // hand-off needed.
     const params = new URLSearchParams()
-    if (libraryPanel.workspaceId) params.set('workspace', libraryPanel.workspaceId)
+    // `currentWorkspaceRef`, not `libraryPanel.workspaceId` — see this ref's
+    // own doc comment above.
+    const workspaceId = currentWorkspaceRef.current
+    if (workspaceId) params.set('workspace', workspaceId)
+    // C4: carry the CURRENT selection into the new tab. A selected file
+    // (`path`) takes priority — it already fully determines its own folder
+    // (LibraryAddress/`selectedDir`) — and only when nothing is selected does
+    // the browsed folder itself (`folder`) go along, so a plain "I was
+    // looking at this folder, nothing open" state still lands in the right
+    // place rather than the workspace root.
+    const { path, folder } = currentSelectionRef.current
+    if (path) {
+      params.set('path', path)
+    } else if (folder) {
+      params.set('folder', folder)
+    }
     const qs = params.toString()
     // Hash routing: the route + search MUST live in the `#/` fragment or the
     // router falls back to the default route (same caveat as browser-live).
     window.open(`/#/library${qs ? `?${qs}` : ''}`, '_blank', 'noopener,noreferrer')
-    // Deliberately do NOT call closeLibraryPanel() here — see module doc.
+    // C4: close the slide-out now that the fullscreen tab shows the same
+    // place — see the module doc's "C4 UPDATE" note for why this reverses
+    // the prior "never close on pop-out" decision without reintroducing a
+    // control lock.
+    closeLibraryPanel()
   }
 
   return (
@@ -109,6 +148,12 @@ export function LibraryPanel() {
         initialWorkspaceId={libraryPanel.workspaceId}
         onClose={closeLibraryPanel}
         onPopOut={handlePopOut}
+        onWorkspaceChange={(id) => {
+          currentWorkspaceRef.current = id ?? undefined
+        }}
+        onSelectionChange={(selection) => {
+          currentSelectionRef.current = selection
+        }}
       />
     </aside>
   )
