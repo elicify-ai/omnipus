@@ -454,6 +454,14 @@ type Index struct {
 	freshMu       sync.Mutex
 	cachedFresh   *IndexFreshness
 	cachedFreshAt time.Time
+	// unindexable records files the latest completed SyncWith found on disk but
+	// could not index (unreadable), keyed by rel path to the mod-time at the
+	// failure. computeFreshness excludes such a file from New — it is not "not
+	// yet indexed" (pending work a re-index clears) but "cannot be indexed", and
+	// counting it as New made one permanently-unreadable file report the whole
+	// vault incomplete on every search forever (Finding 2c). A file whose
+	// mod-time has since moved is worth retrying, so it counts as New again.
+	unindexable map[string]int64
 
 	// regKey is the registry key (the resolved real root) this handle is shared
 	// under. Empty for a handle the registry does not manage.
@@ -1338,6 +1346,36 @@ func (ix *Index) storeFreshness(f IndexFreshness) {
 	ix.freshMu.Unlock()
 }
 
+// unindexableSnapshot returns a copy of the unindexable set for a lock-free
+// diff. nil when empty, which the caller treats as "exclude nothing".
+func (ix *Index) unindexableSnapshot() map[string]int64 {
+	ix.freshMu.Lock()
+	defer ix.freshMu.Unlock()
+	if len(ix.unindexable) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(ix.unindexable))
+	for k, v := range ix.unindexable {
+		out[k] = v
+	}
+	return out
+}
+
+// recordUnindexable replaces the set of files the latest completed SyncWith
+// found on disk but could not index. Replacing (not merging) is correct: a file
+// that has since become readable, was deleted, or was indexed successfully on
+// this run must drop out, and the run just observed the whole collection. An
+// empty result clears the set.
+func (ix *Index) recordUnindexable(failed map[string]int64) {
+	ix.freshMu.Lock()
+	if len(failed) == 0 {
+		ix.unindexable = nil
+	} else {
+		ix.unindexable = failed
+	}
+	ix.freshMu.Unlock()
+}
+
 // computeFreshness is the actual stat-walk-and-diff, factored out so both the
 // always-fresh Freshness and the throttled FreshnessCached share one
 // implementation.
@@ -1379,10 +1417,23 @@ func (ix *Index) computeFreshness(ctx context.Context) (IndexFreshness, error) {
 	}
 	f.Indexed = manifest.Len()
 
+	// A snapshot of the unindexable set, taken once so the per-entry diff below
+	// does not touch freshMu in the loop.
+	skip := ix.unindexableSnapshot()
+
 	seen := make(map[string]struct{}, len(scan.Entries))
 	for _, entry := range scan.Entries {
 		seen[entry.RelPath] = struct{}{}
 		if _, ok := manifest.Get(entry.RelPath); !ok {
+			// On disk, not in the manifest. Ordinarily "new, not yet indexed" —
+			// but a file the last sweep tried and could not read is not pending
+			// work a re-index would clear, so it must not report the vault
+			// incomplete forever (Finding 2c). It counts as New again only if
+			// its mod-time has moved since the failure, i.e. it is worth
+			// retrying.
+			if failedAt, isSkip := skip[entry.RelPath]; isSkip && failedAt == entry.ModTimeNanos {
+				continue
+			}
 			f.New++
 			continue
 		}
@@ -1649,6 +1700,11 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 		stats.ManifestRebuilt = true
 	}
 	seen := make(map[string]struct{}, len(scan.Entries))
+	// failed records files this sweep found on disk but could not index, keyed to
+	// the mod-time at the failure, so a freshness read can exclude them from New
+	// rather than reporting the vault incomplete forever over a file that cannot
+	// be indexed at all (Finding 2c).
+	failed := make(map[string]int64)
 	progress := newProgressCoalescer(opts.OnProgress, len(scan.Entries), opts.ProgressInterval, time.Now)
 
 	for _, entry := range scan.Entries {
@@ -1699,6 +1755,7 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 			stats.Problems = append(stats.Problems, ScanProblem{
 				RelPath: entry.RelPath, Reason: ScanProblemUnreadable, Detail: segErr.Error(),
 			})
+			failed[entry.RelPath] = entry.ModTimeNanos
 			continue
 		}
 		stats.Indexed++
@@ -1733,6 +1790,11 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 	if err := enforceIndexPermissions(ix.dir); err != nil {
 		return stats, err
 	}
+
+	// Publish which files this sweep could not index, so a subsequent freshness
+	// read excludes them from New instead of reporting the vault incomplete over
+	// a file that cannot be indexed at all (Finding 2c).
+	ix.recordUnindexable(failed)
 
 	// Warm the freshness cache from what this completed reconcile just observed,
 	// without a second walk: every scanned file is now either indexed or a

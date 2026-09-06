@@ -365,6 +365,9 @@ func (s *findTextSearcher) IndexFreshness(ctx context.Context) (knowledgefind.Te
 		ScannedFiles: f.Scanned,
 		IndexedFiles: f.Indexed,
 		PendingFiles: f.Pending,
+		NewFiles:     f.New,
+		ChangedFiles: f.Changed,
+		RemovedFiles: f.Removed,
 	}, nil
 }
 
