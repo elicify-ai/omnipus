@@ -96,20 +96,25 @@ func isLeakedValue(s string) bool {
 	return leakedArgTag.MatchString(s) && leakedSentinel.MatchString(s)
 }
 
-// repairLeakedToolArgs rewrites args in place, recovering values corrupted by
-// leaked tool-call template tokens (see the file header). It returns true
-// when it changed anything, so the caller can log that a repair fired.
+// repairLeakedToolArgs recovers values corrupted by leaked tool-call template
+// tokens (see the file header). It returns the arguments to use downstream and
+// true when it changed anything, so the caller can log that a repair fired.
 //
-// The map is mutated directly; callers on the execution path already own a
-// clone of the model's arguments (loop.go's cloneStringAnyMap), so this does
-// not mutate shared transcript state.
-func repairLeakedToolArgs(args map[string]any) bool {
+// Safety is ENFORCED, not conventional: the caller's map is never mutated. On
+// the common no-op path (no leak in any value) the very same map is returned
+// with no copy and no allocation. Only when a repair actually fires is the map
+// defensively cloned and the recovery written to the clone — so a caller that
+// (now or in future) shares its map with transcript/session state can never
+// have that state truncated in place on a rare leak match.
+func repairLeakedToolArgs(args map[string]any) (map[string]any, bool) {
 	if len(args) == 0 {
-		return false
+		return args, false
 	}
 
-	changed := false
-	recovered := map[string]string{}
+	// out and recovered stay nil until the first leak is seen, keeping the
+	// no-op path allocation-free.
+	var out map[string]any
+	var recovered map[string]string
 
 	for k, v := range args {
 		s, ok := v.(string)
@@ -120,8 +125,11 @@ func repairLeakedToolArgs(args map[string]any) bool {
 			continue
 		}
 		clean, pairs := splitLeakedValue(s)
-		args[k] = clean
-		changed = true
+		if out == nil {
+			out = cloneArgsMap(args)
+			recovered = map[string]string{}
+		}
+		out[k] = clean
 		for pk, pv := range pairs {
 			// A pair recovered from an EARLIER key wins over a later one only
 			// by map iteration order, which is nondeterministic — but the
@@ -132,6 +140,11 @@ func repairLeakedToolArgs(args map[string]any) bool {
 		}
 	}
 
+	if out == nil {
+		// No leak fired: caller's map is returned untouched.
+		return args, false
+	}
+
 	// Fill recovered fields only where the model did not also send a real one.
 	// A correctly-emitted argument is authoritative over anything unpacked
 	// from a leaked blob.
@@ -139,13 +152,24 @@ func repairLeakedToolArgs(args map[string]any) bool {
 		if pk == "" {
 			continue
 		}
-		if _, exists := args[pk]; !exists {
-			args[pk] = pv
-			changed = true
+		if _, exists := out[pk]; !exists {
+			out[pk] = pv
 		}
 	}
 
-	return changed
+	return out, true
+}
+
+// cloneArgsMap returns a shallow copy of src. A shallow copy suffices for the
+// repair: it only ever reassigns top-level string entries and adds top-level
+// keys, never mutating a nested slice/map value, so the caller's original map
+// (and any structure it shares) is left fully intact.
+func cloneArgsMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // splitLeakedValue separates a leaked string into its true leading value and
