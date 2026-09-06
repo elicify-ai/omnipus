@@ -354,8 +354,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// Runs before validation so a recoverable call (e.g. op="create_view"
 	// with `type` swallowed into op's value) is repaired into the call the
 	// model meant, rather than rejected with an unusable enum error. A no-op
-	// for every well-formed call: nothing fires unless a value carries a
-	// literal <arg_key>/<arg_value> template tag.
+	// for every well-formed call: nothing fires unless a value carries BOTH a
+	// literal <arg_key>/<arg_value> template tag AND a per-call hex sentinel —
+	// the fingerprint of a genuine leak, so a legitimate value that merely
+	// mentions the tag is left untouched (A1).
 	if repairLeakedToolArgs(args) {
 		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
 			map[string]any{"tool": name})

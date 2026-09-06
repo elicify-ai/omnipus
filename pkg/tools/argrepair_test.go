@@ -57,8 +57,9 @@ func TestRepairLeakedToolArgs_NoOpOnCleanArgs(t *testing.T) {
 
 func TestRepairLeakedToolArgs_HexAloneDoesNotTrigger(t *testing.T) {
 	// A value that merely contains an 8-hex-looking token but NONE of the
-	// structural tags must be left untouched — the structural tags are the
-	// sole trigger, so legitimate content is never mangled.
+	// structural tags must be left untouched — repair requires BOTH a
+	// structural tag and a hex sentinel, so a hex-only value (like a legit
+	// tool arg mentioning a commit hash) is never mangled.
 	args := map[string]any{
 		"op":    "write_view",
 		"value": "commit <deadbeef> landed",
@@ -75,7 +76,7 @@ func TestRepairLeakedToolArgs_DoesNotClobberRealArg(t *testing.T) {
 	// If the model ALSO sent a real `type`, the correctly-emitted one wins
 	// over anything unpacked from a leaked blob.
 	args := map[string]any{
-		"op":   "create_view</arg_value><arg_key>type</arg_key><arg_value>note",
+		"op":   "create_view</arg_value><5b656597><arg_key><2b53f23f>type</arg_key><ac7a3bd7><arg_value><b88a6f17>note",
 		"type": "invoice",
 	}
 	repairLeakedToolArgs(args)
@@ -84,6 +85,24 @@ func TestRepairLeakedToolArgs_DoesNotClobberRealArg(t *testing.T) {
 	}
 	if args["type"] != "invoice" {
 		t.Fatalf("real type must not be clobbered by recovered value: got %q want %q", args["type"], "invoice")
+	}
+}
+
+func TestRepairLeakedToolArgs_LegitimateTagMentionNotMangled(t *testing.T) {
+	// A1 regression: a legitimate argument that merely MENTIONS the literal
+	// structural tag (e.g. a bash command echoing the string, or note/body
+	// text discussing it) must NOT be silently truncated. Before the fix the
+	// tag alone triggered repair, so this command was rewritten to
+	// "echo 'the model leaked" and then executed truncated — a silent
+	// corruption of what actually ran.
+	cmd := "echo 'the model leaked </arg_value> into the value' > notes.txt"
+	args := map[string]any{"command": cmd}
+
+	if repairLeakedToolArgs(args) {
+		t.Fatalf("repair must not fire on a legitimate tag mention: value became %q", args["command"])
+	}
+	if args["command"] != cmd {
+		t.Fatalf("legitimate command was mangled: got %q want %q", args["command"], cmd)
 	}
 }
 

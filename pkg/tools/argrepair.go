@@ -47,26 +47,54 @@ import (
 // field is only filled in when the argument map does not already carry it,
 // so a correctly-emitted field is never clobbered.
 //
-// # Scope of the trigger (kept deliberately narrow)
+// # Scope of the trigger (kept deliberately narrow — A1 hardening)
 //
-// Repair fires ONLY when a string value contains one of the literal
-// structural tags (<arg_key>/<arg_value> open or close). The random hex
-// sentinels alone never trigger it — a legitimate value that merely happens
-// to contain something like "<deadbeef>" is left untouched. The structural
-// tags are not natural tool-argument text, so a false positive requires a
-// caller to legitimately send "<arg_value>" inside a string, which no real
-// tool argument does.
+// This repair runs registry-wide, before validation, for EVERY tool. Its
+// trigger must therefore be a fingerprint of the actual leak, not merely of
+// text that resembles one — otherwise a legitimate argument that only
+// MENTIONS the tag (a bash command echoing "</arg_value>", note/body text
+// discussing the grammar) would be silently truncated and then executed,
+// which is worse than the enum error the repair exists to fix.
+//
+// Repair fires ONLY when a string value contains BOTH:
+//
+//	1. a literal structural tag (<arg_key>/<arg_value>, open or close); AND
+//	2. at least one per-call 8-hex sentinel token (e.g. <5b656597>).
+//
+// The sentinels are the model's random per-call separators — they are the
+// distinctive fingerprint of a genuine template leak and are effectively
+// never present in real tool-argument text. Requiring them alongside the
+// structural tags means:
+//   - the structural tag ALONE no longer triggers repair, so a legitimate
+//     value that merely mentions "</arg_value>" is left untouched; and
+//   - a hex-looking token ALONE ("<deadbeef>") still never triggers repair.
+//
+// A false positive now requires a caller to legitimately send a structural
+// tag AND a random 8-hex token in the same string value, which no real tool
+// argument does. Every captured leak carries the sentinels (see the header
+// example); the template that produced them always emits them.
 
 var (
-	// leakedArgTag matches the STRUCTURAL template tags. Presence of one of
-	// these in a string value is the sole trigger for repair.
+	// leakedArgTag matches the STRUCTURAL template tags.
 	leakedArgTag = regexp.MustCompile(`</?arg_(?:key|value)>`)
+
+	// leakedSentinel matches a per-call 8-hex sentinel token. Its presence
+	// alongside a structural tag is what confirms a genuine template leak.
+	leakedSentinel = regexp.MustCompile(`<[0-9a-fA-F]{8}>`)
 
 	// leakedAnyToken matches every control token — the structural tags AND
 	// the per-call 8-hex sentinels — used to tokenise a value once it has
 	// been identified as leaked.
 	leakedAnyToken = regexp.MustCompile(`</?arg_(?:key|value)>|<[0-9a-fA-F]{8}>`)
 )
+
+// isLeakedValue reports whether s carries the fingerprint of a genuine
+// tool-call template leak: a structural tag AND at least one hex sentinel.
+// Both are required so that legitimate content mentioning only one of them is
+// never mistaken for a leak (A1).
+func isLeakedValue(s string) bool {
+	return leakedArgTag.MatchString(s) && leakedSentinel.MatchString(s)
+}
 
 // repairLeakedToolArgs rewrites args in place, recovering values corrupted by
 // leaked tool-call template tokens (see the file header). It returns true
@@ -88,7 +116,7 @@ func repairLeakedToolArgs(args map[string]any) bool {
 		if !ok {
 			continue
 		}
-		if !leakedArgTag.MatchString(s) {
+		if !isLeakedValue(s) {
 			continue
 		}
 		clean, pairs := splitLeakedValue(s)
