@@ -67,6 +67,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
@@ -2627,6 +2628,47 @@ func foldFieldTerm(field, term string) string {
 }
 
 // searchRaw executes one bleve query and returns the raw per-SEGMENT hits.
+// prefixSearchTokenizer tokenizes a query for the prefix pass EXACTLY as the
+// prose ("en") field analyzer tokenizes text for indexing — the Unicode UAX#29
+// word tokenizer — so a prefix token is compared against the term dictionary on
+// the same word boundaries the dictionary was built with. It is stateless and
+// safe to share.
+var prefixSearchTokenizer = unicode.NewUnicodeTokenizer()
+
+// prefixSearchTokens returns the lower-cased query tokens the prefix pass
+// prefix-matches against the prose dictionaries.
+//
+// It MUST tokenize the way the prose analyzer does, NOT the way
+// foldName/foldTokens does. foldName collapses EVERY non-alphanumeric rune —
+// the underscore included — to a break, so it split "keyword_new" into
+// "keyword" and "new". A PrefixQuery("keyword") then matched the unrelated
+// indexed term "keyword_old", because the "en" analyzer keeps "keyword_old" as
+// ONE term (Unicode word segmentation treats "_" as an ExtendNumLet connector).
+// That over-match made an edited note findable by its NEW term BEFORE the edit
+// and by its OLD term AFTER — the round-2 regression. Tokenizing with the same
+// Unicode tokenizer keeps "keyword_new" whole, so its prefix matches only terms
+// that actually begin "keyword_new"; "compos" still tokenizes to "compos" and
+// still prefix-matches "composio".
+//
+// Case is folded with Unicode lower-casing, which is what the "en" analyzer's
+// to_lower filter applied when building the dictionary — deliberately NOT
+// records.FoldKey (the name-ranking fold), which folds more aggressively
+// (ß→ss) than the dictionary was built and would therefore MISS a term rather
+// than over-match it. Stemming is deliberately skipped for the reason above.
+func prefixSearchTokens(query string) []string {
+	tokens := prefixSearchTokenizer.Tokenize([]byte(query))
+	if len(tokens) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if term := strings.ToLower(string(tok.Term)); term != "" {
+			out = append(out, term)
+		}
+	}
+	return out
+}
+
 func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 	var q bleveQuery.Query
 	if strings.TrimSpace(query) == "" {
@@ -2667,17 +2709,21 @@ func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 		// honour what the suggestion promises rather than only naming it.
 		//
 		// A bleve PrefixQuery matches the term DICTIONARY by raw byte prefix and
-		// performs no analysis of its own, so the prefix must arrive folded the
-		// same way the prose analyzer folds (lowercased) — foldTokens does that
-		// and, deliberately, does NOT stem: a stem would shorten the prefix past
-		// the very characters the caller typed. These disjuncts only ever ADD
-		// matches to the exact ones above; they never remove one, so a query
-		// that already matched exactly is unaffected. Only the PROSE fields get
-		// a prefix pass — a keyword field (path/prop_key/prop) stores each value
-		// as one whole term where prefixing would silently change what an exact
-		// pair or key query means.
+		// performs no analysis of its own, so the prefix must arrive tokenized
+		// and folded the SAME way the prose analyzer built the dictionary —
+		// prefixSearchTokens does that (Unicode word tokenizer + lower-case, no
+		// stem). It deliberately does NOT stem: a stem would shorten the prefix
+		// past the very characters the caller typed. It also must not use
+		// foldTokens, which splits on the underscore the "en" analyzer keeps
+		// inside a token — see prefixSearchTokens for the over-match that caused
+		// (round-2 regression). These disjuncts only ever ADD matches to the
+		// exact ones above; they never remove one, so a query that already
+		// matched exactly is unaffected. Only the PROSE fields get a prefix pass
+		// — a keyword field (path/prop_key/prop) stores each value as one whole
+		// term where prefixing would silently change what an exact pair or key
+		// query means.
 		prefixFields := []string{fieldName, fieldBody, fieldTitle, fieldHeadings, fieldPropValue}
-		for _, token := range foldTokens(query) {
+		for _, token := range prefixSearchTokens(query) {
 			// vocabularyPrefixMin guards against a 1–2 character prefix matching
 			// a large fraction of the dictionary — the same floor the
 			// vocabulary suggester uses for the same reason.
