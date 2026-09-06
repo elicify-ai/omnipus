@@ -223,7 +223,7 @@ func TestBuildGoalPendingNote_RendersDoDInferredFlag(t *testing.T) {
 // prove the union actually reaches adjudication and an unmet DoD item alone
 // fails the round.
 func unmetDoDJudgeProvider(compiled *CompiledGoal, dodReason string) *fakeJudgeProvider {
-	var entries []string
+	entries := make([]string, 0, len(compiled.Criteria)+len(compiled.DoD))
 	for _, c := range compiled.Criteria {
 		entries = append(entries, fmt.Sprintf(`{"id":%q,"met":true,"reason":"criterion met"}`, c.ID))
 	}

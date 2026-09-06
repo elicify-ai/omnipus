@@ -270,7 +270,7 @@ func TestGoalCompileCard_ErrAlreadyPending_FallsBackToPlainChat(t *testing.T) {
 }
 
 func TestGoalCompileCard_UnexpectedCreatePendingError_SurfacesInternalError(t *testing.T) {
-	al, agentInst, _, _, _, opts := twoPhaseHarness(t,
+	al, agentInst, _, _, _, opts := twoPhaseHarness(t, //nolint:dogsled // harness returns 6 values; this test uses only al/agentInst/opts
 		func(int, []providers.Message) (*providers.LLMResponse, error) {
 			return structuredQuestionJSON("Repo", "Which repo do you mean?"), nil
 		}, nil)
@@ -597,7 +597,7 @@ func TestGoalCompileCard_Resume_CancelledDiscardsLikeGoalClear(t *testing.T) {
 // not new behavior, just a regression pin that the card path does not
 // somehow trip it.
 func TestGoalCompileCard_GoalLoopGate_PendingClarificationNeverAdvances(t *testing.T) {
-	al, agentInst, _, store, sid, opts, _, _ := cardTestHarness(t,
+	al, agentInst, _, store, sid, opts, _, _ := cardTestHarness(t, //nolint:dogsled // harness returns 8 values; this test uses al/agentInst/store/sid/opts
 		func(int, []providers.Message) (*providers.LLMResponse, error) {
 			return nil, errors.New("must not be called by this test")
 		})
