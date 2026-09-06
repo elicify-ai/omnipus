@@ -106,6 +106,45 @@ func TestRepairLeakedToolArgs_LegitimateTagMentionNotMangled(t *testing.T) {
 	}
 }
 
+func TestRepairLeakedToolArgs_TagMentionPlusSeparateHexNotMangled(t *testing.T) {
+	// FINDING 6: a legitimate value that mentions a structural tag AND, quite
+	// separately, contains an 8-hex-in-brackets token (a short SHA fragment, or
+	// test data discussing this very grammar) must be left untouched. The two
+	// tokens are present but NOT in the contiguous shape the real leak produces,
+	// so this is not a leak. Before the adjacency tightening, "tag anywhere AND
+	// hex anywhere" fired and this value was silently truncated, its tail
+	// reinterpreted as arguments and then executed.
+	note := "grammar note: the leak wraps values in </arg_value> and uses a random sentinel such as <5b656597> as a separator"
+	args := map[string]any{"body": note}
+
+	if _, changed := repairLeakedToolArgs(args); changed {
+		t.Fatalf("repair must not fire when tag and hex are present but not adjacent: value became %q", args["body"])
+	}
+	if args["body"] != note {
+		t.Fatalf("legitimate note was mangled: got %q want %q", args["body"], note)
+	}
+}
+
+func TestRepairLeakedToolArgs_ContiguousLeakShapeStillRecovered(t *testing.T) {
+	// FINDING 6 counterpart: the genuine leak — a structural tag IMMEDIATELY
+	// followed by an 8-hex sentinel (</arg_value><5b656597>, <arg_key><2b53f23f>,
+	// <arg_value><b88a6f17>) — must still be detected and recovered after the
+	// trigger is tightened to that adjacency.
+	args := map[string]any{
+		"op": "create_view</arg_value><5b656597><arg_key><2b53f23f>type</arg_key><ac7a3bd7><arg_value><b88a6f17>note",
+	}
+	args, changed := repairLeakedToolArgs(args)
+	if !changed {
+		t.Fatal("expected repair to fire on the contiguous leaked shape")
+	}
+	if args["op"] != "create_view" {
+		t.Fatalf("op not recovered: got %q want %q", args["op"], "create_view")
+	}
+	if args["type"] != "note" {
+		t.Fatalf("type not recovered: got %q want %q", args["type"], "note")
+	}
+}
+
 func TestRepairLeakedToolArgs_DoesNotMutateCallerMap(t *testing.T) {
 	// FINDING 5 repro: the caller's own map must NOT be mutated when a repair
 	// fires. In-place mutation only stays safe by an unenforced convention that
