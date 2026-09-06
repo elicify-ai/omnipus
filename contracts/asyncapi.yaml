@@ -154,6 +154,8 @@ channels:
         $ref: '#/components/messages/BrowserWebRTCAnswerFrame'
       BrowserWebRTCStateFrame:
         $ref: '#/components/messages/BrowserWebRTCStateFrame'
+      BrowserVideoHealthFrame:
+        $ref: '#/components/messages/BrowserVideoHealthFrame'
   browserCaptureIngest:
     address: /api/v1/browser/capture-ingest
     description: 'Capture-ingest channel (ADR-047 D2/D6). A loopback-only WebSocket between the gateway and the gateway-owned
@@ -688,6 +690,19 @@ operations:
       '
     messages:
     - $ref: '#/channels/browser/messages/BrowserWebRTCStateFrame'
+  receiveBrowserVideoHealth:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    summary: 'Live-browser video health for the shared capture feeding every viewer: lost / recovering / recovered / unrecoverable,
+      with the bounded automatic-recapture attempt count. Pushed the moment the gateway learns of the change, so the panel
+      states the real reason promptly instead of inferring it from a first-frame timeout (issue #674). WebRTC is the ONLY
+      live-browser video path (ADR-061) — an unrecoverable state is a terminal, named failure the SPA must show, never a
+      silent degrade.
+
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserVideoHealthFrame'
   sendBrowserCaptureHello:
     action: send
     channel:
@@ -1108,6 +1123,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserWebRTCStateFrame'
+    BrowserVideoHealthFrame:
+      name: BrowserVideoHealthFrame
+      title: browser_video_health
+      summary: Live-browser video feed health and bounded automatic-recovery progress (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserVideoHealthFrame'
     BrowserCaptureHelloFrame:
       name: BrowserCaptureHelloFrame
       title: browser_capture_hello
@@ -1200,6 +1222,7 @@ components:
       - browser_capture_offer
       - browser_capture_answer
       - browser_capture_control
+      - browser_video_health
       - goal_status
       - loop_status
       - plan_status
@@ -3885,6 +3908,72 @@ components:
               credential:
                 type: string
                 maxLength: 256
+    BrowserVideoHealthFrame:
+      title: BrowserVideoHealthFrame
+      description: 'Server → client. A prompt, specific statement about the live-browser video feed, pushed the moment the
+        gateway learns of a change rather than left for the SPA to infer.
+
+        Why it exists (issue #674): the gateway knows within microseconds when the capture ingest connection dies — it gets
+        a terminal PeerConnection state from Pion — but the SPA used to learn only by exhausting its first-frame timeout,
+        and the panel therefore sat on "Connecting…" for tens of seconds before saying anything true. Shortening that timeout
+        is the wrong fix: its value was derived after a live incident in which a healthy-but-slow cold start showed a red
+        error and then connected fine. This frame fixes the SIGNAL instead, so the honesty deadline stays where it is and
+        simply stops being the only source of news.
+
+        Per ADR-061, WebRTC is the ONLY live-browser video path — there is no screencast fallback to degrade to — so a failure
+        here must be shown, not papered over. `state` says what is happening; `attempt`/`max_attempts` make the automatic
+        recovery legible instead of an unbounded spinner; and `state: unrecoverable` is a terminal, named error rather than
+        a retry that never ends.
+
+        Distinct from browser_webrtc_state, which describes whether this VIEWER may offer / is negotiated (an availability
+        and signalling concern). This frame describes the upstream CAPTURE feeding every viewer, and is delivered to all
+        of them.
+
+        '
+      type: object
+      required:
+      - type
+      - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_video_health
+        session_id:
+          type: string
+          maxLength: 128
+          description: Echoes the chat session_id this viewer attached with, for client-side correlation only.
+        state:
+          type: string
+          enum:
+          - lost
+          - recovering
+          - recovered
+          - unrecoverable
+          description: 'lost = the capture''s ingest connection died and automatic recovery is starting; the panel has no
+            video right now. recovering = an automatic recapture has just been issued (see `attempt`). recovered = video
+            is flowing again; any error the panel was showing for this cause should be cleared. unrecoverable = the bounded
+            recovery budget is spent and nothing further will be retried automatically — a terminal, named failure the operator
+            must see.'
+        attempt:
+          type: integer
+          minimum: 0
+          maximum: 16
+          description: Which automatic recapture attempt this is, 1-based. 0 when the state is not part of an attempt sequence
+            (recovered).
+        max_attempts:
+          type: integer
+          minimum: 0
+          maximum: 16
+          description: The attempt budget the gateway will spend before declaring the feed unrecoverable. Present so the
+            panel can say "2 of 3" rather than implying an unbounded retry.
+        detail:
+          type: string
+          maxLength: 512
+          description: Optional free-text cause for the operator to read and act on, carried on `lost` and `unrecoverable`.
+            Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly
+            as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because
+            they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame
       description: 'Client (capture extension) → server (gateway). First frame on the loopback-only /api/v1/browser/capture-ingest

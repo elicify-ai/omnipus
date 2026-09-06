@@ -156,6 +156,21 @@ type BrowserTabsFrame struct {
 	Type string `json:"type"`
 }
 
+// BrowserVideoHealthFrame — Server → client. A prompt, specific statement about the live-browser video feed, pushed the moment the gateway learns of a change rather than left for the SPA to infer. Why it exists (issue #674): the gateway knows within microseconds when the capture ingest connection dies — it gets a terminal PeerConnection state from Pion — but the SPA used to learn only by exhausting its first-frame timeout, and the panel therefore sat on "Connecting…" for tens of seconds before saying anything true. Shortening that timeout is the wrong fix: its value was derived after a live incident in which a healthy-but-slow cold start showed a red error and then connected fine. This frame fixes the SIGNAL instead, so the honesty deadline stays where it is and simply stops being the only source of news. Per ADR-061, WebRTC is the ONLY live-browser video path — there is no screencast fallback to degrade to — so a failure here must be shown, not papered over. `state` says what is happening; `attempt`/`max_attempts` make the automatic recovery legible instead of an unbounded spinner; and `state: unrecoverable` is a terminal, named error rather than a retry that never ends. Distinct from browser_webrtc_state, which describes whether this VIEWER may offer / is negotiated (an availability and signalling concern). This frame describes the upstream CAPTURE feeding every viewer, and is delivered to all of them.
+type BrowserVideoHealthFrame struct {
+	// Which automatic recapture attempt this is, 1-based. 0 when the state is not part of an attempt sequence (recovered).
+	Attempt *int `json:"attempt,omitempty"`
+	// Optional free-text cause for the operator to read and act on, carried on `lost` and `unrecoverable`. Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
+	Detail *string `json:"detail,omitempty"`
+	// The attempt budget the gateway will spend before declaring the feed unrecoverable. Present so the panel can say "2 of 3" rather than implying an unbounded retry.
+	MaxAttempts *int `json:"max_attempts,omitempty"`
+	// Echoes the chat session_id this viewer attached with, for client-side correlation only.
+	SessionId *string `json:"session_id,omitempty"`
+	// lost = the capture's ingest connection died and automatic recovery is starting; the panel has no video right now. recovering = an automatic recapture has just been issued (see `attempt`). recovered = video is flowing again; any error the panel was showing for this cause should be cleared. unrecoverable = the bounded recovery budget is spent and nothing further will be retried automatically — a terminal, named failure the operator must see.
+	State string `json:"state"`
+	Type  string `json:"type"`
+}
+
 // BrowserViewportFrame — Client → server. Reports the live-browser panel's current render box so the gateway can size the captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest (operator UAT 2026-07-31). device_scale_factor addresses the same report's second half, blur: the managed headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
 type BrowserViewportFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
@@ -854,6 +869,7 @@ const (
 	WsFrameTypeBrowserCaptureOffer      WsFrameType = "browser_capture_offer"
 	WsFrameTypeBrowserCaptureAnswer     WsFrameType = "browser_capture_answer"
 	WsFrameTypeBrowserCaptureControl    WsFrameType = "browser_capture_control"
+	WsFrameTypeBrowserVideoHealth       WsFrameType = "browser_video_health"
 	WsFrameTypeGoalStatus               WsFrameType = "goal_status"
 	WsFrameTypeLoopStatus               WsFrameType = "loop_status"
 	WsFrameTypePlanStatus               WsFrameType = "plan_status"

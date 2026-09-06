@@ -10592,7 +10592,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -11275,6 +11275,17 @@ export const BrowserWebRTCStateFrame = z
   })
   .strict();
 
+export const BrowserVideoHealthFrame = z
+  .object({
+    type: z.literal("browser_video_health"),
+    session_id: z.string().max(128).optional(),
+    state: z.enum(["lost", "recovering", "recovered", "unrecoverable"]),
+    attempt: z.number().int().min(0).max(16).optional(),
+    max_attempts: z.number().int().min(0).max(16).optional(),
+    detail: z.string().max(512).optional(),
+  })
+  .strict();
+
 export const BrowserCaptureHelloFrame = z
   .object({
     type: z.literal("browser_capture_hello"),
@@ -11433,6 +11444,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserWebRTCOfferFrame,
   BrowserWebRTCAnswerFrame,
   BrowserWebRTCStateFrame,
+  BrowserVideoHealthFrame,
   BrowserCaptureHelloFrame,
   BrowserCaptureOfferFrame,
   BrowserCaptureAnswerFrame,

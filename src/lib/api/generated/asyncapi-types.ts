@@ -58,6 +58,7 @@ export type WsFrameType =
   | "browser_capture_offer"
   | "browser_capture_answer"
   | "browser_capture_control"
+  | "browser_video_health"
   | "goal_status"
   | "loop_status"
   | "plan_status"
@@ -600,6 +601,15 @@ export interface BrowserWebRTCStateFrame {
   }>;
 }
 
+export interface BrowserVideoHealthFrame {
+  type: "browser_video_health";
+  session_id?: string;
+  state: "lost" | "recovering" | "recovered" | "unrecoverable";
+  attempt?: number;
+  max_attempts?: number;
+  detail?: string;
+}
+
 export interface BrowserCaptureHelloFrame {
   type: "browser_capture_hello";
   token: string;
@@ -736,6 +746,7 @@ export type WsFrame =
   | BrowserWebRTCOfferFrame
   | BrowserWebRTCAnswerFrame
   | BrowserWebRTCStateFrame
+  | BrowserVideoHealthFrame
   | BrowserCaptureHelloFrame
   | BrowserCaptureOfferFrame
   | BrowserCaptureAnswerFrame
@@ -804,6 +815,7 @@ export type ServerFrame =
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame
   | BrowserWebRTCStateFrame
+  | BrowserVideoHealthFrame
   | BrowserCaptureHelloFrame
   | BrowserCaptureOfferFrame
   | BrowserCaptureAnswerFrame
