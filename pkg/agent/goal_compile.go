@@ -89,8 +89,9 @@ type CompiledGoal struct {
 	// Definition is ADR-080 D-STATEMENT's compiled SMART restatement of the
 	// goal — one clear sentence, distinct from Prompt (the steering remainder)
 	// — rendered before the criteria in every echo surface. Populated by the
-	// compile-response parser (a later wave); zero-value until then, in which
-	// case formatGoalEcho's existing Prompt/Intent fallback still applies.
+	// compile-response parser (parseGoalCompileResponse); zero-value on the
+	// deterministic/marker paths, where formatGoalEcho's Prompt/Intent
+	// fallback applies.
 	Definition string `json:"definition,omitempty"`
 	// Criteria is the compiled criteria ladder: behavior (countables), check
 	// (deterministic machine), prose (subjective). Schema-validated via
@@ -98,7 +99,8 @@ type CompiledGoal struct {
 	Criteria []task.AcceptanceCriterion `json:"criteria"`
 	// DoD is ADR-080 D-DOD's Definition of Done — generic standing quality
 	// gates, DISTINCT from Criteria's outcome-specific checks, evaluated
-	// together (Criteria UNION DoD, a later wave's judged-set union). Every
+	// together (Criteria UNION DoD, the judged-set union in
+	// compiledGoalCriteriaFor). Every
 	// loaded goal carries at least one item — see dodFloorConstructor /
 	// loadCompiledGoal's legacy-goal backfill below, which guarantees this
 	// in-memory invariant even for a pre-ADR-080 persisted goal with no DoD.

@@ -808,10 +808,10 @@ func (al *AgentLoop) compileGoalIntentLLM(
 			}}
 		}
 		// Feasibility gate: unchanged, still last, still the only net (FR-007).
-		// Scoped to the outcome criteria ONLY — the DoD's own judged-set union
-		// into adjudication is a separate wave (verifier_adjudication.go);
-		// this wave compiles and persists DoD, it does not feasibility-gate
-		// or adjudicate it.
+		// Scoped to the outcome criteria ONLY — the DoD is adjudicated at
+		// judge time via the Criteria UNION DoD union (compiledGoalCriteriaFor),
+		// but it is deliberately NOT feasibility-gated here (standing quality
+		// gates are not subject to the outcome-criteria feasibility check).
 		if fc != nil {
 			if rej := feasibilityGate(normalized, fc); rej != nil {
 				return CompileResult{Rejection: rej}
@@ -824,7 +824,8 @@ func (al *AgentLoop) compileGoalIntentLLM(
 		}
 
 		// ADR-080 D-DOD: DoD items are AcceptanceCriterion-shaped (judged
-		// identically to criteria — a later wave's judged-set union) but
+		// identically to criteria via the Criteria UNION DoD union in
+		// compiledGoalCriteriaFor) but
 		// assembled and shape-validated (ID/status/judgment/provenance) here,
 		// separately from Criteria (Goal.dod is its own array, not merged in).
 		dodCriteria := make([]task.AcceptanceCriterion, 0, len(parsed.DoD))
