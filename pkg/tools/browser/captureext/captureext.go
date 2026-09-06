@@ -60,7 +60,7 @@ const ExtensionID = "nibcmjlmohchocjndnbajhmlhkeldobo"
 // UAT 2026-07-31 and none of them ran, while every layer reported success.
 // TestEmbeddedAssetsRequireVersionBump pins the embedded content hash to
 // this constant so that omission is now a test failure, not a silent no-op.
-const Version = "1.0.16"
+const Version = "1.0.17"
 
 // manifestKeyDoc is the minimal shape needed to read the "key" field back
 // out of the embedded manifest.json for ID verification. It is not a wire

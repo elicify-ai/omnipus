@@ -80,6 +80,12 @@ window.__omnipusState = {
   // constraints genuinely stuck on a settled sender, not just that this file
   // attempted to set them. Stays null until the first such success.
   senderConstraints: null,
+  // lastRecaptureSkipAt is stamped whenever a server-initiated recapture was
+  // answered by KEEPING the running stream instead of rebuilding it (see
+  // recaptureGeometryChangeReason). A live check that the panel-open path has
+  // stopped renegotiating a healthy connection reads this back over CDP; the
+  // reason for every rebuild that DID happen is in history.
+  lastRecaptureSkipAt: null,
   history: [],
 };
 
@@ -231,6 +237,142 @@ let lastPinnedCapDims = null;
 // (and the initial capture) grants 3 post-connect checks; self-heal
 // recaptures spend from the same budget — bounded convergence, no churn.
 let selfHealBudget = 3;
+
+// ---- "only rebuild if the size really changed" --------------------------------
+//
+// Every panel open used to destroy a working stream. The gateway answers a
+// viewer's offer and then, unconditionally, issues a corrective recapture
+// carrying the panel's CDP-verified viewport (browser_webrtc.go's
+// applyColdStartRecapture) — because on a cold start the capture really can
+// be running at launch geometry and nothing else will ever correct it. But
+// the SAME frame arrives on the ordinary warm case, where the capture is
+// already exactly right, and handleControlFrame's answer to it was to tear
+// the PeerConnection down and renegotiate from scratch at the precise moment
+// somebody started watching. Every rebuild is a fresh chance for the
+// connection to fail, and the comment above this one concedes that several
+// of them overlap during a panel spin-up.
+//
+// So: compare first, and rebuild only when the capture geometry genuinely
+// differs from what is already running.
+//
+// RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX is deliberately the SAME 8 CSS px this
+// file already uses in its two other "is this the same size?" judgements —
+// captureActiveTabStream's convergence poll (TOLERANCE_PX) and the
+// post-connect self-heal's drift check. Reusing it means the encoder holds
+// exactly one definition of "really changed": a difference the self-heal
+// would call drift is a difference a recapture rebuilds for, and a
+// difference it tolerates is one a recapture keeps. 8 px is far below any
+// resize a person can produce by dragging a panel edge, and comfortably
+// above the sub-pixel/scrollbar rounding that makes a re-reported viewport
+// jitter by a pixel without anything having moved.
+const RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX = 8;
+// Device scale is a float carried over JSON, so it needs an epsilon rather
+// than ===. 0.01 is two orders of magnitude below the smallest real step a
+// viewer can produce (Chrome's zoom ladder and every DPR a display reports
+// move in quarters at finest), so it separates "the same monitor" from "a
+// different one" without ever mistaking float noise for a change.
+const RECAPTURE_SAME_SCALE_EPSILON = 0.01;
+
+// appliedCaptureGeometry reports what the RUNNING capture actually is, or
+// null when there is nothing running to compare against (a genuinely cold
+// start, a torn-down or failed capture, a rebuild already in flight).
+//
+// The distinction that matters here: physW/physH come from the live
+// MediaStreamTrack's own getSettings(), i.e. what Chrome REPORTS IT
+// PRODUCED, not what we asked it for. cssW/cssH/scale are the pin
+// captureActiveTabStream converged on for that same capture. Returning both
+// lets the decision below refuse to skip on the strength of a value that was
+// merely requested: if the pin and the track disagree, the pin is not
+// trustworthy evidence about the picture on screen and we rebuild.
+function appliedCaptureGeometry() {
+  if (captureInFlight || !currentPC || !currentStream || !lastPinnedCapDims) return null;
+  // A PC that is not connected is not a stream worth protecting — rebuilding
+  // is the recovery path, and the recapture frame may well BE the recovery.
+  if (currentPC.connectionState !== 'connected') return null;
+  let track = null;
+  let settings = null;
+  try {
+    track = currentStream.getVideoTracks()[0] || null;
+    if (!track || track.readyState !== 'live') return null;
+    settings = typeof track.getSettings === 'function' ? track.getSettings() : null;
+  } catch (e) {
+    warn('appliedCaptureGeometry: could not read the running track, treating the capture as unknown', e);
+    return null;
+  }
+  if (!settings || !(settings.width > 0) || !(settings.height > 0)) return null;
+  return {
+    tabId: capturedTabId,
+    cssW: lastPinnedCapDims.w,
+    cssH: lastPinnedCapDims.h,
+    scale: lastPinnedCapDims.scale > 0 ? lastPinnedCapDims.scale : 1,
+    physW: settings.width,
+    physH: settings.height,
+  };
+}
+
+// recaptureGeometryChangeReason answers "would this recapture actually change
+// the picture?" — returning '' when it would not (so the running stream can
+// be kept) and a human-readable reason when it would.
+//
+// want is {cssW, cssH, scale} from the incoming control frame, or null when
+// the frame carried no CDP-verified hint. applied is appliedCaptureGeometry().
+// Every unknown is a rebuild: correctness (a right-sized picture) always wins
+// over stability (an undisturbed connection), so this only ever skips on
+// positive, applied evidence that the two agree. Pure — no globals, no
+// clock, no browser — so it is unit-testable off-browser.
+function recaptureGeometryChangeReason(want, applied) {
+  if (!applied) return 'no healthy capture is running';
+  if (!want || !(want.cssW > 0) || !(want.cssH > 0)) {
+    // A recapture with no geometry hint (an active-tab switch, live.go's
+    // plain Recapture()) carries nothing to compare against, so there is no
+    // evidence on which to keep the stream. Rebuild, exactly as before.
+    return 'the recapture carried no verified target geometry';
+  }
+  const wantScale = want.scale > 0 ? want.scale : 1;
+  if (Math.abs(wantScale - applied.scale) >= RECAPTURE_SAME_SCALE_EPSILON) {
+    return 'device scale ' + applied.scale + ' -> ' + wantScale;
+  }
+  if (
+    Math.abs(want.cssW - applied.cssW) > RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX ||
+    Math.abs(want.cssH - applied.cssH) > RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX
+  ) {
+    return (
+      'capture size ' + applied.cssW + 'x' + applied.cssH + ' -> ' + want.cssW + 'x' + want.cssH + ' css'
+    );
+  }
+  // The applied-vs-requested guard. Everything above compared the incoming
+  // request against the size we PINNED; this checks that the running track is
+  // in fact at that size. If Chrome delivered something else — a constraint
+  // it could not honour, a tab that resized under a stale pin — the pin is
+  // not evidence and the stream is not the one the viewer asked for.
+  // Expressed in physical pixels because that is the space getSettings()
+  // speaks, using the same 8 CSS px threshold scaled into it, so there is
+  // still only one tolerance in this file.
+  const implied = budgetedCaptureDims(applied.cssW, applied.cssH, applied.scale);
+  const physTolerance = RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX * Math.max(1, applied.scale);
+  if (
+    Math.abs(applied.physW - implied.w) > physTolerance ||
+    Math.abs(applied.physH - implied.h) > physTolerance
+  ) {
+    return (
+      'the running track is ' + applied.physW + 'x' + applied.physH +
+      ' physical, not the ' + implied.w + 'x' + implied.h + ' its pinned size implies'
+    );
+  }
+  return '';
+}
+
+// Debug/verification surface only -- never part of the wire protocol, same
+// contract as window.__omnipusState and window.__omnipusQualityAdapt. The
+// off-browser harness drives the rebuild decision through this.
+window.__omnipusRecapture = {
+  changeReason: recaptureGeometryChangeReason,
+  appliedGeometry: appliedCaptureGeometry,
+  constants: {
+    sizeToleranceCssPx: RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX,
+    scaleEpsilon: RECAPTURE_SAME_SCALE_EPSILON,
+  },
+};
 
 // DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
 // per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
@@ -1372,7 +1514,10 @@ async function captureActiveTabStream() {
       warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
     }
   }
-  lastPinnedCapDims = { w: capW, h: capH };
+  // scale rides along with the pin: recaptureGeometryChangeReason needs the
+  // deviceScaleFactor THIS capture was actually built at, and the module-level
+  // captureScale is a live value the next control frame overwrites.
+  lastPinnedCapDims = { w: capW, h: capH, scale: captureScale };
   const capDims = budgetedCaptureDims(capW, capH, captureScale);
   record(
     'captureActiveTabStream: capture size ' +
@@ -1665,7 +1810,12 @@ async function handleControlFrame(msg) {
     // fields must be present and numeric; anything else (either omitted, or
     // an older/malformed server) means "no CDP-verified hint" and this
     // recapture falls back to the historical two-agreeing-reads poll.
-    expectedCaptureDims =
+    //
+    // Held in a local until the rebuild decision below is taken, THEN
+    // published to expectedCaptureDims: a hint stored for a recapture that
+    // turns out to be redundant would sit unconsumed and be picked up by
+    // whatever recapture came next.
+    const hintedDims =
       typeof msg.expected_width === 'number' && typeof msg.expected_height === 'number'
         ? { w: msg.expected_width, h: msg.expected_height }
         : null;
@@ -1692,6 +1842,55 @@ async function handleControlFrame(msg) {
     captureScale =
       typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale) ? Math.min(4, Math.max(1, msg.capture_scale)) : 1;
     record('control frame: capture_scale=' + captureScale);
+
+    // Compare before acting (see recaptureGeometryChangeReason). The gateway
+    // sends this frame on EVERY panel open, not only when something changed,
+    // so answering it with an unconditional teardown is what turned "open the
+    // panel" into "destroy the working stream and renegotiate while the user
+    // watches". Keep the stream when nothing needs changing.
+    //
+    // captureScale is assigned ABOVE this, unconditionally, and deliberately
+    // so: the F3 contract ("absent means 1, never sticky") is about what the
+    // NEXT capture is built at, and the comparison below only ever skips when
+    // the value just assigned already matches the scale the running capture
+    // was built at (lastPinnedCapDims.scale), so a skip cannot leave the two
+    // disagreeing. expectedCaptureDims, by contrast, must NOT be set until we
+    // know we are rebuilding — an unconsumed hint would be handed to a later,
+    // unrelated recapture.
+    const applied = appliedCaptureGeometry();
+    const changeReason = recaptureGeometryChangeReason(
+      hintedDims ? { cssW: hintedDims.w, cssH: hintedDims.h, scale: captureScale } : null,
+      applied
+    );
+    if (changeReason === '') {
+      // Geometry agrees. The last thing to rule out is a recapture that is
+      // really about the SOURCE, not the size: an active-tab switch can land
+      // on a tab of identical dimensions, and keeping the stream there would
+      // leave the viewer watching the wrong page. Only paid for once every
+      // other check has already passed, so the rebuild path costs nothing.
+      let activeTabId = null;
+      let resolved = false;
+      try {
+        activeTabId = await findActiveTargetTab();
+        resolved = true;
+      } catch (e) {
+        warn('recapture: could not resolve the active tab, rebuilding rather than assuming', e);
+      }
+      if (resolved && activeTabId != null && activeTabId === applied.tabId) {
+        window.__omnipusState.lastRecaptureSkipAt = Date.now();
+        record(
+          'recapture: SKIPPED — the running capture is already tab ' + applied.tabId + ' at ' +
+            applied.cssW + 'x' + applied.cssH + ' css x' + applied.scale +
+            ' (' + applied.physW + 'x' + applied.physH + ' physical); keeping the connected stream'
+        );
+        return;
+      }
+      record('recapture: rebuilding — the active tab is no longer the captured one');
+    } else {
+      record('recapture: rebuilding — ' + changeReason);
+    }
+
+    expectedCaptureDims = hintedDims;
     // Each SERVER-initiated recapture gets one post-connect self-heal check;
     // a self-heal's own recapture deliberately does not re-arm this (no loop).
     selfHealBudget = 3;

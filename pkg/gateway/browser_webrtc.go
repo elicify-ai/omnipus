@@ -584,9 +584,31 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 // at launch geometry and nothing ever corrects it (the SPA won't re-send an
 // unchanged size). If a CDP-verified viewport is already cached for the live
 // tab, issue the corrective recapture with those dims, so the stream the
-// viewer is about to receive is built at the panel's real shape. Warm path
-// cost: one extra rebuild during attach churn when the capture was already
-// correct — accepted; the encoder converges on the expected dims either way.
+// viewer is about to receive is built at the panel's real shape.
+//
+// This fires on EVERY panel open, not only the cold ones, because nothing
+// here can tell the two apart: the gateway has no record of the geometry the
+// running capture actually has. That record exists only in the encoder page,
+// which holds both the size it pinned the capture to and the live
+// MediaStreamTrack's own getSettings() — what Chrome reports it PRODUCED, as
+// opposed to what anyone asked for. So the "warm path cost" this comment
+// used to accept (one extra rebuild whenever the capture was already correct)
+// is no longer paid here and is no longer paid at all: encoder.js's recapture
+// handler compares the requested geometry against the running one and keeps
+// the connected stream when they agree (recaptureGeometryChangeReason,
+// pkg/tools/browser/captureext/embedded/encoder.js). That mattered because
+// the cost was never really "one extra rebuild" — it was tearing a working
+// PeerConnection down and renegotiating it at the exact moment the operator
+// opened the panel to watch, and every renegotiation is a fresh chance to
+// fail.
+//
+// Do NOT try to re-take that decision on this side by remembering what was
+// last requested: a gateway-side record would be a second, parallel source of
+// truth that handleViewport's own RecaptureAt calls (browser_ws.go) would
+// silently desynchronise, and it would still only ever describe a request,
+// never an applied capture. If this side is ever to skip the frame entirely,
+// the encoder has to REPORT its applied geometry over the ingest socket
+// first — a contracts change, not a local one.
 //
 // Scale (F2 fix, external review 2026-08-13): the SAME timing gap drops
 // device_scale_factor, not just geometry — handleViewport's direct

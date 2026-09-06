@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Omnipus Live Browser Capture",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "Gateway-owned capture extension: streams the active tab's audio+video to the Omnipus gateway over WebRTC.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCP5dvct9AVPNMtk8+IaI//Nuroxa3Mpl8W6TpNzKx0NurzE164UaTyC5NnkbDoA2UgxxxSQaQMXbuUyfcorMhn0cjmw4f8Ji/kDt/7CUIjjjF/ZD5ySbMyrdY7KLXa7GdPDGbP/8Kw/bpI0S8fwHKEzhVi6hGrmrdy4jOir0xrDCDsQxX/tR3++tEZpez1kWhdITdi/C5ELln9s+2nNhdiezcl/wL3IX7l6o0J8QZUnKs8h3P0jSeE+/5tpdSEYZB5WJ0Q1trlYFv0qrho0AEmJ6QrMbmNpHRBedTkpoY3uZHhIYg1idkiGU61uoT6qAqTpvUoPMk1CrF3ekQ7fQQIDAQAB",
   "permissions": ["tabCapture", "tabs"],
