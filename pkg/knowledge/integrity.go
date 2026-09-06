@@ -54,7 +54,21 @@ const (
 
 	// IntegrityFindingsPerCategory is FR-075a's per-category clamp. Findings
 	// past it are dropped and the clamp is reported with the would-be total.
+	// It stays the default cap for callers that construct a sink directly (e.g.
+	// the restructure-trash listing); check_integrity itself now retains far
+	// more (IntegrityRetentionPerCategory) so its D3 cursor can page the
+	// remainder rather than pointing at findings a low cap already discarded.
 	IntegrityFindingsPerCategory = 500
+
+	// IntegrityRetentionPerCategory is how many findings ONE category keeps for
+	// the D3 cursor (Issue 8) to page through. It is far larger than any single
+	// response shows — the render layer samples a page at a time — so the cursor
+	// genuinely enumerates the remainder. It is still a bound: a category whose
+	// true total exceeds it drops the excess and reports it as a non-enumerable
+	// remnant with the same "narrow the scope" remedy the old clamp gave, which
+	// is FR-075a's guarantee preserved at a bound high enough that realistic
+	// vaults page in full.
+	IntegrityRetentionPerCategory = 5000
 )
 
 // IntegrityCategory is one kind of finding. The set is closed, and its order
@@ -80,6 +94,13 @@ const (
 	// CategoryOrphanRow — a row in the properties index whose note is gone
 	// (FR-020c, D16.5).
 	CategoryOrphanRow IntegrityCategory = "orphan row"
+	// CategoryAmbiguousName — two or more notes share a basename, so a bare
+	// wikilink like [[Composio]] is ambiguous (Issue 10 / V1). It resolves to
+	// exactly one of them by NoteIndex's tie-break rule and the others are
+	// silently unreachable by that name. This is a name-uniqueness check over
+	// the walk, not a typed one: it needs no properties index and runs on every
+	// build, which is why it is NOT in typedCategories below.
+	CategoryAmbiguousName IntegrityCategory = "ambiguous name"
 )
 
 // IntegrityCategories is the closed set, in render order. Typed categories
@@ -92,6 +113,7 @@ var IntegrityCategories = []IntegrityCategory{
 	CategoryOrphanRow,
 	CategoryBrokenLink,
 	CategoryOrphan,
+	CategoryAmbiguousName,
 }
 
 // typedCategories are the ones that need the properties index. On a build
@@ -738,11 +760,71 @@ func CheckIntegrity(ctx context.Context, opts IntegrityOptions) (*IntegrityRepor
 		sink.add(CategoryOrphan, n, fmt.Sprintf("%s — no note links to it", n))
 	}
 
+	// Issue 10 / V1 — colliding note names. Walked here, off walk.Files, rather
+	// than off the link graph's Ambiguous() edges: the ambiguity is a property
+	// of the vault's NAMESPACE (two notes share a basename), and it must be
+	// reported whether or not any wikilink currently points at the name. An
+	// edge-driven check would miss a collision nobody has linked to yet — the
+	// one an agent is about to create a broken reference into.
+	checkAmbiguousNames(sink, walk.Files, inScope)
+
 	return &IntegrityReport{
 		ScopeLabel: integrityScopeLabel(opts.CollectionName, opts.RecordType),
 		NotesSwept: notes,
 		Categories: sink.results(),
 	}, nil
+}
+
+// checkAmbiguousNames reports every basename shared by two or more markdown
+// notes in scope (Issue 10 / V1).
+//
+// The key is the CASE-FOLDED, extension-stripped basename, the exact key
+// NoteIndex resolves a bare [[wikilink]] against — so a collision reported here
+// is a collision a link would actually hit. One finding per colliding name; it
+// names every note that carries the name, in sorted order, because the operator
+// must decide which keeps it. A name only one note carries is not reported.
+//
+// A record_type scope narrows via inScope on the members: a collision is
+// reported when at least one of the colliding notes is in scope, since that is
+// the note whose links the scoped sweep is answering for.
+func checkAmbiguousNames(sink *findingSink, files []string, inScope func(string) bool) {
+	byName := map[string][]string{}
+	for _, f := range files {
+		if !IsMarkdownPath(f) {
+			continue
+		}
+		key := records.FoldKey(trimMarkdownExt(pathBase(f)))
+		if key == "" {
+			continue
+		}
+		byName[key] = append(byName[key], f)
+	}
+	keys := make([]string, 0, len(byName))
+	for k := range byName {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		paths := byName[k]
+		if len(paths) < 2 {
+			continue
+		}
+		anyInScope := false
+		for _, p := range paths {
+			if inScope(p) {
+				anyInScope = true
+				break
+			}
+		}
+		if !anyInScope {
+			continue
+		}
+		sort.Strings(paths)
+		display := trimMarkdownExt(pathBase(paths[0]))
+		sink.add(CategoryAmbiguousName, paths[0], fmt.Sprintf(
+			"[[%s]] is ambiguous — %d notes share this name: %s; rename one, or link by a path-qualified target",
+			display, len(paths), strings.Join(paths, ", ")))
+	}
 }
 
 // checkSweepLimit is FR-075a's refusal, as a pure function of a count.
