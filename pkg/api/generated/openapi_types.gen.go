@@ -16189,13 +16189,10 @@ type VaultRecord struct {
 	VersionToken *string `json:"version_token,omitempty"`
 }
 
-// VaultSearchNoteHit One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine; the snippet is a render-time excerpt of the note as it is on disk.
+// VaultSearchNoteHit One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine (hits arrive in that engine's relevance order); the snippet is a render-time excerpt of the note as it is on disk.
 type VaultSearchNoteHit struct {
 	// Path Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
 	Path string `json:"path"`
-
-	// Score Relevance score. Comparable only within one response.
-	Score float64 `json:"score"`
 
 	// Snippet A short excerpt of the note body around the first matched term, read from the file at query time. ABSENT when no term could be located in the current file (the match may have moved, or the file could not be read) — the hit is still returned with path and title rather than fabricating an excerpt or dropping the result.
 	Snippet *string `json:"snippet,omitempty"`
@@ -16217,9 +16214,6 @@ type VaultSearchRecordHit struct {
 
 	// RecordType The declared record type, when the row resolved one.
 	RecordType *string `json:"record_type,omitempty"`
-
-	// Score Relevance score. Comparable only within one response.
-	Score float64 `json:"score"`
 
 	// Title The record note's display title.
 	Title string `json:"title"`

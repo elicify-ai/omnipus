@@ -9,7 +9,6 @@ required:
   - path
   - title
   - cells
-  - score
 properties:
   path:
     type: string
@@ -38,8 +37,3 @@ properties:
     items:
       $ref: "./VaultFindCell.yaml"
       x-go-type: VaultFindCell
-  score:
-    type: number
-    format: double
-    description: Relevance score. Comparable only within one response.
-    example: 4.10

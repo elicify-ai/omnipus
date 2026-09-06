@@ -1,14 +1,14 @@
 title: VaultSearchNoteHit
 description: >
   One note matched by body text (library-b-c-design-2026-09-07 §C1). The match
-  decision and ranking come from the knowledge_find engine; the snippet is a
-  render-time excerpt of the note as it is on disk.
+  decision and ranking come from the knowledge_find engine (hits arrive in that
+  engine's relevance order); the snippet is a render-time excerpt of the note as
+  it is on disk.
 type: object
 additionalProperties: false
 required:
   - path
   - title
-  - score
 properties:
   path:
     type: string
@@ -30,8 +30,3 @@ properties:
       the hit is still returned with path and title rather than fabricating an
       excerpt or dropping the result.
     example: "…Landlock is per-thread and inherited, so the gateway and its children…"
-  score:
-    type: number
-    format: double
-    description: Relevance score. Comparable only within one response.
-    example: 7.42

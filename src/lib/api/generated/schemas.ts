@@ -849,7 +849,6 @@ type VaultSearchNoteHit = {
   path: string;
   title: string;
   snippet?: string | undefined;
-  score: number;
 };
 type VaultSearchRecordHit = {
   path: string;
@@ -857,7 +856,6 @@ type VaultSearchRecordHit = {
   id?: string | undefined;
   record_type?: string | undefined;
   cells: Array<VaultFindCell>;
-  score: number;
 };
 type VaultSearchViewHit = {
   view: string;
@@ -3957,7 +3955,6 @@ export const VaultSearchNoteHit: z.ZodType<VaultSearchNoteHit> = z.object({
   path: z.string().min(1),
   title: z.string(),
   snippet: z.string().optional(),
-  score: z.number(),
 });
 export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
   property: z.string().min(1),
@@ -3969,7 +3966,6 @@ export const VaultSearchRecordHit: z.ZodType<VaultSearchRecordHit> = z.object({
   id: z.string().optional(),
   record_type: z.string().optional(),
   cells: z.array(VaultFindCell),
-  score: z.number(),
 });
 export const VaultSearchViewHit: z.ZodType<VaultSearchViewHit> = z.object({
   view: z.string().min(1),

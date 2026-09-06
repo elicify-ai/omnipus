@@ -6761,7 +6761,7 @@ export interface components {
         };
         /**
          * VaultSearchNoteHit
-         * @description One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine; the snippet is a render-time excerpt of the note as it is on disk.
+         * @description One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine (hits arrive in that engine's relevance order); the snippet is a render-time excerpt of the note as it is on disk.
          */
         VaultSearchNoteHit: {
             /**
@@ -6779,12 +6779,6 @@ export interface components {
              * @example …Landlock is per-thread and inherited, so the gateway and its children…
              */
             snippet?: string;
-            /**
-             * Format: double
-             * @description Relevance score. Comparable only within one response.
-             * @example 7.42
-             */
-            score: number;
         };
         /**
          * VaultSearchRecordHit
@@ -6813,12 +6807,6 @@ export interface components {
             record_type?: string;
             /** @description The record's rendered typed property values, in the engine's column order. Always present — an empty array, never null. */
             cells: components["schemas"]["VaultFindCell"][];
-            /**
-             * Format: double
-             * @description Relevance score. Comparable only within one response.
-             * @example 4.1
-             */
-            score: number;
         };
         /**
          * VaultSearchViewHit
