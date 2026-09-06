@@ -195,6 +195,11 @@ import {
   KnowledgeSearchRequest as KnowledgeSearchRequestSchema,
   KnowledgeSearchResponse as KnowledgeSearchResponseSchema,
   KnowledgeOutline as KnowledgeOutlineSchema,
+  // B+C — human vault search, create-vault, PDF binary save (contract-first #8):
+  VaultSearchRequest as VaultSearchRequestSchema,
+  VaultSearchResponse as VaultSearchResponseSchema,
+  CreateVaultRequest as CreateVaultRequestSchema,
+  LibraryBinaryContentRequest as LibraryBinaryContentRequestSchema,
   KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
   // view-kinds-design-2026-09-03 §7 — the evaluated saved-view result the
   // Library's .base surface draws, and the list of views one .base owns
@@ -482,6 +487,11 @@ import type {
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
   KnowledgeOutline,
+  // B+C wire types:
+  VaultSearchRequest,
+  VaultSearchResponse,
+  CreateVaultRequest,
+  LibraryBinaryContentRequest,
   KnowledgeGraphResponse,
   // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
   ViewResult,
@@ -4399,6 +4409,61 @@ export function putLibraryContent(workspaceId: string, body: LibraryContentReque
     `/library/${encodeURIComponent(workspaceId)}/content`,
     { method: 'PUT', body: JSON.stringify(body) },
     LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Write binary file content (a filled PDF, image, any non-UTF-8 bytes) from the
+ * Library editor (feature B). Sibling of putLibraryContent — the text route
+ * cannot carry bytes. `content_base64` is standard base64; the server decodes,
+ * enforces a 25 MB decoded cap, and overwrites the file (PUT .../content-binary).
+ */
+export function putLibraryContentBinary(
+  workspaceId: string,
+  body: LibraryBinaryContentRequest,
+): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/content-binary`,
+    { method: 'PUT', body: JSON.stringify(LibraryBinaryContentRequestSchema.parse(body)) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Create a new Omnipus knowledge base ("vault") inside a workspace (feature C2).
+ * Scaffolds the `.omnipus-vault/` marker and returns the created directory entry.
+ * Rejects (409) if the target already exists (POST .../vaults).
+ */
+export function createVault(
+  workspaceId: string,
+  body: CreateVaultRequest,
+): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/vaults`,
+    { method: 'POST', body: JSON.stringify(CreateVaultRequestSchema.parse(body)) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Human vault search (feature C1) — text hits, records by typed property, and
+ * saved views, grouped as notes/records/views. Runs over the SAME index the
+ * agent's knowledge_find uses (POST .../knowledge/find). Never errors on an
+ * empty or not-yet-ready index — the response carries `complete`/`complete_reason`.
+ */
+export async function searchVault(
+  workspaceId: string,
+  body: VaultSearchRequest,
+  signal?: AbortSignal,
+): Promise<VaultSearchResponse> {
+  return request<VaultSearchResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/find`,
+    {
+      method: 'POST',
+      body: JSON.stringify(VaultSearchRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    },
+    VaultSearchResponseSchema as ZodType<VaultSearchResponse>,
   )
 }
 

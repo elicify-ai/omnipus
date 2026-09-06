@@ -3839,6 +3839,10 @@ export const LibraryContentRequest = z.object({
   path: z.string().min(1),
   content: z.string().max(10485760),
 });
+export const LibraryBinaryContentRequest = z.object({
+  path: z.string().min(1),
+  content_base64: z.string().min(1),
+});
 export const uploadLibraryFiles_Body = z
   .object({ files: z.array(z.instanceof(File)) })
   .partial()
@@ -3847,6 +3851,10 @@ export const LibraryUploadResponse: z.ZodType<LibraryUploadResponse> = z.object(
   { entries: z.array(LibraryEntry) }
 );
 export const LibraryMkdirRequest = z.object({ path: z.string().min(1) });
+export const CreateVaultRequest = z.object({
+  name: z.string().min(1),
+  parent_rel_path: z.string().optional(),
+});
 export const LibraryRenameRequest = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
@@ -7075,6 +7083,54 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "put",
+    path: "/library/:workspace_id/content-binary",
+    alias: "putLibraryContentBinary",
+    description: `Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest&#x27;s description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryBinaryContentRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/library/:workspace_id/download",
     alias: "downloadLibraryFile",
@@ -7838,6 +7894,59 @@ A view that cannot be answered — unknown, stored disabled (FR-105), refused at
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/vaults",
+    alias: "createVault",
+    description: `Creates a folder at parent_rel_path/name (or the work-tree root when parent_rel_path is omitted) and initialises it as an Omnipus knowledge base: the .omnipus-vault/ marker (FR-022/FR-023) plus empty records/ and views/ control-plane directories, so knowledge_configure can write record types and saved views into it immediately. Rejects (409) if an entry already exists at the resulting path — this endpoint never adopts or converts an existing folder. Returns 403 if the resulting path resolves outside the workspace&#x27;s work tree; 404 if parent_rel_path does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: CreateVaultRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
       {

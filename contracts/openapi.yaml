@@ -193,6 +193,10 @@ components:
       $ref: ./components/schemas/LibraryContentResponse.yaml
     LibraryContentRequest:
       $ref: ./components/schemas/LibraryContentRequest.yaml
+    LibraryBinaryContentRequest:
+      $ref: ./components/schemas/LibraryBinaryContentRequest.yaml
+    CreateVaultRequest:
+      $ref: ./components/schemas/CreateVaultRequest.yaml
     LibraryRenameRequest:
       $ref: ./components/schemas/LibraryRenameRequest.yaml
     LibraryUploadResponse:
@@ -7514,6 +7518,55 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
+  /library/{workspace_id}/content-binary:
+    put:
+      operationId: putLibraryContentBinary
+      summary: Write a file's BINARY content from the Library editor
+      description: >
+        Sibling of PUT .../content for content that is not valid UTF-8 text
+        (a filled PDF, an image, any other binary attachment) — see
+        LibraryBinaryContentRequest's description for why the text route
+        cannot carry it. Writes the base64-decoded bytes to the file at the
+        given workspace-relative path, creating the file if it does not
+        already exist and overwriting any existing content entirely.
+        Returns 400 if content_base64 is not valid base64 or decodes to more
+        than 25 MB. Returns 403 if path resolves outside the workspace's
+        work tree; 404 if the path's parent directory does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryBinaryContentRequest'
+      responses:
+        '200':
+          description: The written file's updated entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
   /library/{workspace_id}/upload:
     post:
       operationId: uploadLibraryFiles
@@ -7615,6 +7668,57 @@ paths:
                 $ref: '#/components/schemas/LibraryEntry'
         '201':
           description: The directory (and any missing intermediate directories) was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/vaults:
+    post:
+      operationId: createVault
+      summary: Create a new knowledge base ("vault") in a workspace's work tree
+      description: >
+        Creates a folder at parent_rel_path/name (or the work-tree root when
+        parent_rel_path is omitted) and initialises it as an Omnipus
+        knowledge base: the .omnipus-vault/ marker (FR-022/FR-023) plus
+        empty records/ and views/ control-plane directories, so
+        knowledge_configure can write record types and saved views into it
+        immediately. Rejects (409) if an entry already exists at the
+        resulting path — this endpoint never adopts or converts an existing
+        folder. Returns 403 if the resulting path resolves outside the
+        workspace's work tree; 404 if parent_rel_path does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVaultRequest'
+      responses:
+        '201':
+          description: The vault's directory entry.
           content:
             application/json:
               schema:

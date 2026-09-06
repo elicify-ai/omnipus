@@ -5,6 +5,9 @@
 package gateway
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +21,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -101,6 +106,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	case "content-binary":
+		if r.Method != http.MethodPut {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryContentBinaryPut(w, r, workspaceID)
 	case "upload":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -113,6 +124,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryMkdir(w, r, workspaceID)
+	case "vaults":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryCreateVault(w, r, workspaceID)
 	case "rename":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -424,6 +441,106 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	jsonOK(w, library.EntryFromInfo(rel, fi))
 }
 
+// maxLibraryBinaryContentBytes is the decoded-byte cap for PUT
+// .../content-binary (LibraryBinaryContentRequest.content_base64) — 25 MB,
+// matching the size a filled PDF or other binary attachment realistically
+// needs and the cap the schema documents. It intentionally does NOT reuse
+// library.MaxContentBytes (10 MB): that constant also gates GET .../content's
+// inline-render threshold for TEXT files, and binary attachments are never
+// rendered inline through that path.
+const maxLibraryBinaryContentBytes = 25 * 1024 * 1024
+
+// maxLibraryBinaryContentBodyBytes bounds the raw JSON request body read for
+// PUT .../content-binary. It is NOT decodeAndValidate's usual 1 MB cap:
+// standard base64 inflates the payload to ~4/3 of the decoded size, so a
+// legal 25 MB attachment needs room for its ~33.3 MB encoded form plus the
+// JSON envelope and the "path" field. The +4096 is slack for that envelope,
+// not part of the size budget being enforced.
+const maxLibraryBinaryContentBodyBytes = (maxLibraryBinaryContentBytes/3+1)*4 + 4096
+
+// handleLibraryContentBinaryPut is the binary-capable sibling of
+// handleLibraryContentPut: PUT .../content carries UTF-8 text as a JSON
+// string, which corrupts arbitrary bytes, so this route instead carries the
+// content as standard base64 (LibraryBinaryContentRequest.content_base64) and
+// writes the decoded bytes verbatim. It cannot go through decodeAndValidate
+// unmodified because that helper hard-caps the body read at 1 MB regardless
+// of schema — far too small for a base64-encoded PDF — so this handler reads
+// and validates the body itself, at a size ceiling sized for the 25 MB
+// decoded cap, before decoding into the generated type.
+func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	lr := io.LimitReader(r.Body, maxLibraryBinaryContentBodyBytes+1)
+	raw, err := io.ReadAll(lr)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	if int64(len(raw)) > maxLibraryBinaryContentBodyBytes {
+		jsonErr(w, http.StatusBadRequest, "content exceeds the 25 MB limit")
+		return
+	}
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "request body is required")
+		return
+	}
+
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if validateEnabled {
+		if errMsg, serverErr := validateBodyAgainstSchema("LibraryBinaryContentRequest", raw); errMsg != "" {
+			if serverErr {
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("request body does not match schema LibraryBinaryContentRequest: %s", errMsg))
+			}
+			return
+		}
+	}
+
+	var req gen.LibraryBinaryContentRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	rel, err := library.CleanRelPath(req.Path)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(req.ContentBase64)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "content_base64 is not valid base64")
+		return
+	}
+	if len(decoded) > maxLibraryBinaryContentBytes {
+		jsonErr(w, http.StatusBadRequest, "content exceeds the 25 MB limit")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	if !checkCreateName(w, root, rel, "put content", workspaceID) {
+		return
+	}
+
+	fi, err := root.WriteContent(rel, decoded)
+	if err != nil {
+		mapLibraryErr(w, "put content", workspaceID, err)
+		return
+	}
+	jsonOK(w, library.EntryFromInfo(rel, fi))
+}
+
 // --- POST /library/{workspace_id}/upload ---
 
 func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, workspaceID string) {
@@ -622,6 +739,138 @@ func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, wor
 	} else {
 		jsonOK(w, entry)
 	}
+}
+
+// handleLibraryCreateVault creates a new Omnipus knowledge base ("vault") at
+// parent_rel_path/name inside workspaceID's work tree.
+//
+// Unlike handleLibraryMkdir this is NOT idempotent and does NOT auto-create
+// missing intermediate directories: it behaves like content-put/rename
+// (requires the immediate parent to already exist, 404 otherwise) and rejects
+// (409) ANY entry — file, plain directory, or existing vault — already at
+// the target path, because adopting an existing folder into a vault or
+// silently reusing one is never this endpoint's job (CreateVaultRequest's
+// description).
+//
+// SEEDING DECISION: after knowledge.CreateInWorkspace writes the
+// .omnipus-vault/ marker, this handler additionally creates empty
+// records/ and views/ control-plane directories (records.SchemaDir,
+// records.ViewsDir) so knowledge_configure has somewhere to write into
+// immediately. It deliberately does NOT seed a starter saved view. A view
+// is validated against the vault's schema set and must name an existing
+// record TYPE (pkg/records/view.go's RejectViewMissingType /
+// ValidateViewAgainstSchemas) — a brand-new vault has zero record types, so
+// there is no type this handler could reference without inventing a schema
+// shape, which view.go's own doc comment reserves to knowledge_configure's
+// write path alone ("THERE IS NO WRITER [here], on purpose"). Empty
+// records/ + views/ plus the marker is a valid, detectable, immediately
+// usable vault; a fabricated view would not be.
+func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	var req gen.CreateVaultRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "CreateVaultRequest", &req, validateEnabled) {
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+		jsonErr(w, http.StatusBadRequest, "invalid vault name")
+		return
+	}
+
+	parentRel := ""
+	if req.ParentRelPath != nil {
+		cleaned, err := library.CleanRelPath(*req.ParentRelPath)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid parent_rel_path")
+			return
+		}
+		parentRel = cleaned
+	}
+	joined := name
+	if parentRel != "" {
+		joined = parentRel + "/" + name
+	}
+	rel, err := library.CleanRelPath(joined)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	if !checkCreateName(w, root, rel, "create vault", workspaceID) {
+		return
+	}
+	if parentRel != "" {
+		if _, err := root.StatDir(parentRel); err != nil {
+			mapLibraryErr(w, "create vault", workspaceID, err)
+			return
+		}
+	}
+
+	// ValidateCreateName only judges name SHAPE (FR-0001a), not collision —
+	// check for an existing entry at rel ourselves so this route can refuse
+	// with 409 rather than silently adopting or converting whatever is
+	// already there.
+	switch _, statErr := root.StatDir(rel); {
+	case statErr == nil, errors.Is(statErr, library.ErrNotDir):
+		jsonErr(w, http.StatusConflict, "an entry already exists at that path")
+		return
+	case errors.Is(statErr, library.ErrNotFound):
+		// Expected: nothing there yet.
+	default:
+		mapLibraryErr(w, "create vault", workspaceID, statErr)
+		return
+	}
+
+	collection, err := knowledge.CreateInWorkspace(a.homePath, workspaceID, rel, knowledge.Marker{DisplayName: name})
+	if err != nil {
+		switch {
+		case errors.Is(err, knowledge.ErrAlreadyKnowledgeBase):
+			jsonErr(w, http.StatusConflict, "an entry already exists at that path")
+		case errors.Is(err, knowledge.ErrMarkerInvalid):
+			jsonErr(w, http.StatusBadRequest, "invalid vault name")
+		case errors.Is(err, knowledge.ErrOutsideCollection):
+			jsonErr(w, http.StatusForbidden, "path resolves outside the workspace work tree")
+		default:
+			logger.ErrorCF("rest", "library: create vault failed",
+				map[string]any{"workspace_id": workspaceID, "path": rel, "error": err.Error()})
+			jsonErr(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+	}
+
+	if mkErr := os.MkdirAll(records.SchemaDir(collection.Root()), 0o755); mkErr != nil {
+		logger.ErrorCF("rest", "library: create vault: seed records dir failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": mkErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if mkErr := os.MkdirAll(records.ViewsDir(collection.Root()), 0o755); mkErr != nil {
+		logger.ErrorCF("rest", "library: create vault: seed views dir failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": mkErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	fi, err := root.StatDir(rel)
+	if err != nil {
+		mapLibraryErr(w, "create vault", workspaceID, err)
+		return
+	}
+	entry := library.EntryFromInfo(rel, fi)
+	a.logLibraryAudit(r, "library.create_vault", workspaceID, map[string]any{"path": rel})
+	jsonCreated(w, entry)
 }
 
 // rfc5987AttrChars is the punctuation RFC 5987 §3.2.1 lets an ext-value carry

@@ -2601,6 +2601,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/content-binary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Write a file's BINARY content from the Library editor
+         * @description Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest's description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB. Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist.
+         */
+        put: operations["putLibraryContentBinary"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/upload": {
         parameters: {
             query?: never;
@@ -2635,6 +2655,26 @@ export interface paths {
          * @description Creates the directory at path, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Idempotent: returns 200 if a directory already exists at path; 201 if a new directory (or chain of directories) was created. Returns 403 if path resolves outside the workspace's work tree; 409 if a regular FILE already exists at path.
          */
         post: operations["createLibraryDirectory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/vaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a new knowledge base ("vault") in a workspace's work tree
+         * @description Creates a folder at parent_rel_path/name (or the work-tree root when parent_rel_path is omitted) and initialises it as an Omnipus knowledge base: the .omnipus-vault/ marker (FR-022/FR-023) plus empty records/ and views/ control-plane directories, so knowledge_configure can write record types and saved views into it immediately. Rejects (409) if an entry already exists at the resulting path — this endpoint never adopts or converts an existing folder. Returns 403 if the resulting path resolves outside the workspace's work tree; 404 if parent_rel_path does not exist.
+         */
+        post: operations["createVault"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4015,6 +4055,38 @@ export interface components {
              *     Status: green.
              */
             content: string;
+        };
+        /**
+         * LibraryBinaryContentRequest
+         * @description Request body for PUT /api/v1/library/{workspace_id}/content-binary. Writes BINARY content to a file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. The sibling of LibraryContentRequest/PUT .../content, which is UTF-8 text only — a filled PDF or other binary attachment written through that route would corrupt, because its content field is a `string` decoded as UTF-8 text before being written as `[]byte(req.Content)`. This route instead carries the raw bytes as standard base64, so any byte sequence survives the JSON transport unmodified. The path's parent directory must already exist within the workspace's work tree.
+         */
+        LibraryBinaryContentRequest: {
+            /**
+             * @description Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Same validation as LibraryContentRequest.path.
+             * @example uploads/report.pdf
+             */
+            path: string;
+            /**
+             * @description Full replacement content for the file, as standard (RFC 4648 §4) base64 of the raw bytes — no URL-safe alphabet, no line wrapping. The DECODED byte length is capped at 26214400 bytes (25 MB); a base64 string decoding to more than that is rejected with 400 before any bytes are written.
+             * @example JVBERi0xLjQKJcOkw7zDtsO...
+             */
+            content_base64: string;
+        };
+        /**
+         * CreateVaultRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
+         */
+        CreateVaultRequest: {
+            /**
+             * @description The new vault folder's name — a single path segment, never containing "/" or "\" and never "." or "..". Also becomes the vault's marker display_name. Rejected (400) if it fails either check, or the workspace's own portable-name rules; rejected (409) if an entry already exists at the resulting path.
+             * @example Research
+             */
+            name: string;
+            /**
+             * @description Workspace-relative folder the vault is created inside, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Omit or pass "" to create the vault at the workspace's work-tree root.
+             * @example projects/2026
+             */
+            parent_rel_path?: string;
         };
         /**
          * LibraryRenameRequest
@@ -19507,6 +19579,38 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    putLibraryContentBinary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryBinaryContentRequest"];
+            };
+        };
+        responses: {
+            /** @description The written file's updated entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     uploadLibraryFiles: {
         parameters: {
             query?: {
@@ -19574,6 +19678,39 @@ export interface operations {
                 };
             };
             /** @description The directory (and any missing intermediate directories) was created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    createVault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateVaultRequest"];
+            };
+        };
+        responses: {
+            /** @description The vault's directory entry. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -20552,6 +20689,8 @@ export type LibraryEntry = components["schemas"]["LibraryEntry"];
 export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
+export type LibraryBinaryContentRequest = components["schemas"]["LibraryBinaryContentRequest"];
+export type CreateVaultRequest = components["schemas"]["CreateVaultRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
 export type LibraryTransferRequest = components["schemas"]["LibraryTransferRequest"];

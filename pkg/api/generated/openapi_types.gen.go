@@ -8662,6 +8662,15 @@ type CliValidateResponse struct {
 // CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
 type CliValidateResponseReason string
 
+// CreateVaultRequest Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
+type CreateVaultRequest struct {
+	// Name The new vault folder's name — a single path segment, never containing "/" or "\" and never "." or "..". Also becomes the vault's marker display_name. Rejected (400) if it fails either check, or the workspace's own portable-name rules; rejected (409) if an entry already exists at the resulting path.
+	Name string `json:"name"`
+
+	// ParentRelPath Workspace-relative folder the vault is created inside, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Omit or pass "" to create the vault at the workspace's work-tree root.
+	ParentRelPath *string `json:"parent_rel_path,omitempty"`
+}
+
 // CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
 type CredentialRotateRequest struct {
 	// NewPassphrase New passphrase used to derive the new vault key. Must not be empty.
@@ -10159,6 +10168,15 @@ type KnowledgeSearchResponseHitsExcerptUnavailable string
 
 // KnowledgeSearchResponseHitsKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
 type KnowledgeSearchResponseHitsKind string
+
+// LibraryBinaryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content-binary. Writes BINARY content to a file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. The sibling of LibraryContentRequest/PUT .../content, which is UTF-8 text only — a filled PDF or other binary attachment written through that route would corrupt, because its content field is a `string` decoded as UTF-8 text before being written as `[]byte(req.Content)`. This route instead carries the raw bytes as standard base64, so any byte sequence survives the JSON transport unmodified. The path's parent directory must already exist within the workspace's work tree.
+type LibraryBinaryContentRequest struct {
+	// ContentBase64 Full replacement content for the file, as standard (RFC 4648 §4) base64 of the raw bytes — no URL-safe alphabet, no line wrapping. The DECODED byte length is capped at 26214400 bytes (25 MB); a base64 string decoding to more than that is rejected with 400 before any bytes are written.
+	ContentBase64 string `json:"content_base64"`
+
+	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Same validation as LibraryContentRequest.path.
+	Path string `json:"path"`
+}
 
 // LibraryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
 type LibraryContentRequest struct {
@@ -17291,6 +17309,9 @@ type MintLibraryPreviewTokenJSONRequestBody = LibraryPreviewTokenRequest
 // PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
 type PutLibraryContentJSONRequestBody = LibraryContentRequest
 
+// PutLibraryContentBinaryJSONRequestBody defines body for PutLibraryContentBinary for application/json ContentType.
+type PutLibraryContentBinaryJSONRequestBody = LibraryBinaryContentRequest
+
 // FindVaultJSONRequestBody defines body for FindVault for application/json ContentType.
 type FindVaultJSONRequestBody = VaultSearchRequest
 
@@ -17305,6 +17326,9 @@ type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest
 
 // UploadLibraryFilesMultipartRequestBody defines body for UploadLibraryFiles for multipart/form-data ContentType.
 type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
+
+// CreateVaultJSONRequestBody defines body for CreateVault for application/json ContentType.
+type CreateVaultJSONRequestBody = CreateVaultRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
