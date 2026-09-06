@@ -2781,6 +2781,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/knowledge/find": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Human vault search — notes, records and views in one query
+         * @description The human-facing counterpart to the agent's knowledge_find tool (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text (with a snippet), records matched by their typed property values, and saved views matched by name or label.
+         *
+         *     It runs over the SAME engine the agent uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour — there is no second search engine.
+         *
+         *     Honest states: an empty result is EMPTY, not an error. When the index is not ready (never built, or still catching up with disk), the response is complete=false with a complete_reason carrying the freshness signal, so the UI can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns the same empty-but-complete shape rather than a permission error, so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a free-text query does not belong in a URL that lands in request logs.
+         */
+        post: operations["findVault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/knowledge/graph": {
         parameters: {
             query?: never;
@@ -6682,6 +6706,133 @@ export interface components {
              * @example 412
              */
             documents: number;
+        };
+        /**
+         * VaultSearchRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/knowledge/find — the HUMAN vault search (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text, records matched by their typed property values, and saved views matched by name or label.
+         *     It runs over the SAME engine the agent's knowledge_find tool uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour rather than standing up a second search path.
+         *     Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace, and a collection outside that scope yields an EMPTY result set rather than a permission error — so a caller can never use the error channel to probe for collections it may not see.
+         */
+        VaultSearchRequest: {
+            /**
+             * @description Free-text query, matched against note bodies, record properties and view names.
+             * @example landlock seccomp fallback
+             */
+            query: string;
+            /**
+             * @description The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description Maximum hits to return PER KIND (notes, records and views are counted separately). A value above the server cap is CLAMPED, not rejected.
+             * @default 20
+             * @example 20
+             */
+            limit: number;
+        };
+        /**
+         * VaultSearchResponse
+         * @description The human vault search result (library-b-c-design-2026-09-07 §C1): three grouped hit lists for one query, plus an honest completeness verdict.
+         *     An empty result is EMPTY, not an error — every hit array is always present and may be empty. When the index is not ready (never built, or still catching up with the files on disk), `complete` is false and `complete_reason` carries the engine's freshness signal, so the caller can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns this same empty-but-complete shape.
+         */
+        VaultSearchResponse: {
+            /**
+             * @description The collection this result covers, echoed from the request.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description True only when the search covered the whole vault: the index was built, current, and no kind's result was clamped or refused. False whenever the index is not ready — see complete_reason.
+             * @example true
+             */
+            complete: boolean;
+            /**
+             * @description Why the verdict is false, ready to render (e.g. "the text index has never finished indexing this vault — it currently reflects 3 of 68 files…"). Absent when complete is true.
+             * @example the text index has never finished indexing this vault
+             */
+            complete_reason?: string;
+            /** @description Notes matched by body text. Always present — an empty array, never null. */
+            notes: components["schemas"]["VaultSearchNoteHit"][];
+            /** @description Records matched by their typed property values. Always present — an empty array, never null. */
+            records: components["schemas"]["VaultSearchRecordHit"][];
+            /** @description Saved views whose name or label matched. Always present — an empty array, never null. */
+            views: components["schemas"]["VaultSearchViewHit"][];
+        };
+        /**
+         * VaultSearchNoteHit
+         * @description One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine (hits arrive in that engine's relevance order); the snippet is a render-time excerpt of the note as it is on disk.
+         */
+        VaultSearchNoteHit: {
+            /**
+             * @description Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty.
+             * @example Sandboxing
+             */
+            title: string;
+            /**
+             * @description A short excerpt of the note body around the first matched term, read from the file at query time. ABSENT when no term could be located in the current file (the match may have moved, or the file could not be read) — the hit is still returned with path and title rather than fabricating an excerpt or dropping the result.
+             * @example …Landlock is per-thread and inherited, so the gateway and its children…
+             */
+            snippet?: string;
+        };
+        /**
+         * VaultSearchRecordHit
+         * @description One record matched by the query (library-b-c-design-2026-09-07 §C1). A record is a note that declares a record type; its typed property values are carried as cells so the caller can see WHICH values matched without a second read.
+         */
+        VaultSearchRecordHit: {
+            /**
+             * @description Collection-relative path of the matched record note.
+             * @example crm/acme.md
+             */
+            path: string;
+            /**
+             * @description The record note's display title.
+             * @example Acme Corp
+             */
+            title: string;
+            /**
+             * @description The record identifier, byte-exact and never case-folded. Absent on a record note that declares no id.
+             * @example CO-0142
+             */
+            id?: string;
+            /**
+             * @description The declared record type, when the row resolved one.
+             * @example company
+             */
+            record_type?: string;
+            /** @description The record's rendered typed property values, in the engine's column order. Always present — an empty array, never null. */
+            cells: components["schemas"]["VaultFindCell"][];
+        };
+        /**
+         * VaultSearchViewHit
+         * @description One saved view (or imported base view) whose name or label matched the query (library-b-c-design-2026-09-07 §C1). Opening it evaluates the view — the same result the GET .../knowledge/view endpoint returns.
+         */
+        VaultSearchViewHit: {
+            /**
+             * @description The view's identifier, passed VERBATIM to GET .../knowledge/view.
+             * @example open-deals
+             */
+            view: string;
+            /**
+             * @description The view's display label — its declared label, falling back to its name.
+             * @example Open deals
+             */
+            label: string;
+            /**
+             * @description The view's declared kind, when it has one (table, board, gallery, …).
+             * @example table
+             */
+            kind?: string;
+            /**
+             * @description The record type the view is scoped to, when it declares one.
+             * @example deal
+             */
+            type?: string;
         };
         /**
          * ValidationReport
@@ -19637,6 +19788,39 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    findVault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VaultSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description The three grouped hit lists and the completeness verdict. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultSearchResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getKnowledgeGraph: {
         parameters: {
             query: {
@@ -20440,6 +20624,11 @@ export type VaultFindCounts = components["schemas"]["VaultFindCounts"];
 export type VaultFindPlanStep = components["schemas"]["VaultFindPlanStep"];
 export type VaultIndexState = components["schemas"]["VaultIndexState"];
 export type VaultTermCount = components["schemas"]["VaultTermCount"];
+export type VaultSearchRequest = components["schemas"]["VaultSearchRequest"];
+export type VaultSearchResponse = components["schemas"]["VaultSearchResponse"];
+export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];
+export type VaultSearchRecordHit = components["schemas"]["VaultSearchRecordHit"];
+export type VaultSearchViewHit = components["schemas"]["VaultSearchViewHit"];
 export type ValidationReport = components["schemas"]["ValidationReport"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];

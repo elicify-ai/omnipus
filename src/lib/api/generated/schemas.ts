@@ -837,6 +837,32 @@ type VaultFindPlanStep = {
     | undefined;
   detail: string;
 };
+type VaultSearchResponse = {
+  collection_id: string;
+  complete: boolean;
+  complete_reason?: string | undefined;
+  notes: Array<VaultSearchNoteHit>;
+  records: Array<VaultSearchRecordHit>;
+  views: Array<VaultSearchViewHit>;
+};
+type VaultSearchNoteHit = {
+  path: string;
+  title: string;
+  snippet?: string | undefined;
+};
+type VaultSearchRecordHit = {
+  path: string;
+  title: string;
+  id?: string | undefined;
+  record_type?: string | undefined;
+  cells: Array<VaultFindCell>;
+};
+type VaultSearchViewHit = {
+  view: string;
+  label: string;
+  kind?: string | undefined;
+  type?: string | undefined;
+};
 type ValidationReport = {
   complete: boolean;
   problems: Array<RecordProblem>;
@@ -3920,6 +3946,41 @@ export const KnowledgeSearchResponse: z.ZodType<KnowledgeSearchResponse> =
     limit_clamped: z.boolean(),
     limit_requested: z.number().int().gte(1).optional(),
   });
+export const VaultSearchRequest = z.object({
+  query: z.string().min(1).max(1024),
+  collection_id: z.string().min(1),
+  limit: z.number().int().gte(1).optional().default(20),
+});
+export const VaultSearchNoteHit: z.ZodType<VaultSearchNoteHit> = z.object({
+  path: z.string().min(1),
+  title: z.string(),
+  snippet: z.string().optional(),
+});
+export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
+  property: z.string().min(1),
+  value: z.string(),
+});
+export const VaultSearchRecordHit: z.ZodType<VaultSearchRecordHit> = z.object({
+  path: z.string().min(1),
+  title: z.string(),
+  id: z.string().optional(),
+  record_type: z.string().optional(),
+  cells: z.array(VaultFindCell),
+});
+export const VaultSearchViewHit: z.ZodType<VaultSearchViewHit> = z.object({
+  view: z.string().min(1),
+  label: z.string(),
+  kind: z.string().optional(),
+  type: z.string().optional(),
+});
+export const VaultSearchResponse: z.ZodType<VaultSearchResponse> = z.object({
+  collection_id: z.string().min(1),
+  complete: z.boolean(),
+  complete_reason: z.string().optional(),
+  notes: z.array(VaultSearchNoteHit),
+  records: z.array(VaultSearchRecordHit),
+  views: z.array(VaultSearchViewHit),
+});
 export const KnowledgeGraphNode: z.ZodType<KnowledgeGraphNode> = z.object({
   path: z.string().min(1),
   title: z.string().optional(),
@@ -4101,10 +4162,6 @@ export const ViewResultPart: z.ZodType<ViewResultPart> = z.object({
   excluded_paths: z.array(z.string().min(1)).optional(),
   series: z.array(ViewResultSeries).optional(),
   crosstab: ViewResultCrosstab.optional(),
-});
-export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
-  property: z.string().min(1),
-  value: z.string(),
 });
 export const VaultFindJoin: z.ZodType<VaultFindJoin> = z.object({
   relation: z.string().min(1),
@@ -7313,6 +7370,63 @@ A &#x60;.base&#x60; outside any knowledge base answers 200 with is_knowledge_bas
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/find",
+    alias: "findVault",
+    description: `The human-facing counterpart to the agent&#x27;s knowledge_find tool (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text (with a snippet), records matched by their typed property values, and saved views matched by name or label.
+
+It runs over the SAME engine the agent uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine&#x27;s prefix-matching, coverage and freshness behaviour — there is no second search engine.
+
+Honest states: an empty result is EMPTY, not an error. When the index is not ready (never built, or still catching up with disk), the response is complete&#x3D;false with a complete_reason carrying the freshness signal, so the UI can say &quot;still indexing&quot; rather than &quot;no results&quot;. A collection outside the caller&#x27;s workspace scope returns the same empty-but-complete shape rather than a permission error, so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a free-text query does not belong in a URL that lands in request logs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: VaultSearchRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: VaultSearchResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {
