@@ -353,10 +353,12 @@ func (s *findTextSearcher) IndexFreshness(ctx context.Context) (knowledgefind.Te
 	if s == nil || s.ix == nil {
 		return knowledgefind.TextIndexFreshness{}, nil
 	}
-	f, err := s.ix.Freshness(ctx)
-	if err != nil {
-		return knowledgefind.TextIndexFreshness{}, err
-	}
+	// FreshnessCached, not Freshness: this runs on the SEARCH hot path — once per
+	// successful words query and once per zero-hit refusal — so it must not pay a
+	// full filesystem walk or block on the reconcile lock every time (Finding 1).
+	// It serves a recent lock-free snapshot; a genuinely stale index still
+	// reports so, within one refresh interval.
+	f := s.ix.FreshnessCached(ctx)
 	return knowledgefind.TextIndexFreshness{
 		Built:        f.Built,
 		Fresh:        f.Fresh,
