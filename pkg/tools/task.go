@@ -428,7 +428,7 @@ func (t *TaskCreateTool) Description() string {
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
 		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
-		"with none is rejected. Before authoring acceptance criteria, load the define-done skill " +
+		"with none is rejected. Before authoring acceptance criteria, load the define-goal skill " +
 		"(via the Skill tool) and follow its quality bar. " +
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +

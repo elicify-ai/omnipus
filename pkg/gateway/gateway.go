@@ -2159,13 +2159,19 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 
 	// ADR-074 D4: durably record the one-shot skills-migration markers
 	// SeedConfig checked/wrote in memory (e.g. the define-done allowlist
-	// append). The agent-side appends were just persisted by
-	// persistSeededCoreAgents above; this writes the marker into config.json
-	// so the migration never re-runs. Best-effort like the default_agent_id
-	// persist above: a failure only means the (idempotent, additive) check
-	// runs again next boot — not a boot-time fatal. The helper skips the
-	// write entirely when the on-disk key already matches, so a settled
-	// install's boot performs no config.json write here at all.
+	// append). ADR-080 D-SKILL's own marker (adr080-define-goal-rename,
+	// the "define-done"→"define-goal" allowlist REWRITE — see
+	// coreagent.applyDefineGoalRenameMigration) rides the exact same
+	// cfg.SeededSkillGrants slice and is persisted by this same call; the
+	// matching skill-DIRECTORY cleanup (deleting the orphaned
+	// $OMNIPUS_HOME/skills/define-done/) is a separate, later step — see the
+	// call to skills.SeedDefaults below. The agent-side appends were just
+	// persisted by persistSeededCoreAgents above; this writes the marker into
+	// config.json so the migration never re-runs. Best-effort like the
+	// default_agent_id persist above: a failure only means the (idempotent,
+	// additive) check runs again next boot — not a boot-time fatal. The
+	// helper skips the write entirely when the on-disk key already matches,
+	// so a settled install's boot performs no config.json write here at all.
 	if len(cfg.SeededSkillGrants) > 0 {
 		if persistErr := persistSeededSkillGrants(configPath, cfg.SeededSkillGrants); persistErr != nil {
 			slog.Warn("gateway: could not persist seeded_skill_grants to config.json; "+
@@ -2717,6 +2723,46 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	} else if len(seedRes.Seeded) > 0 {
 		slog.Info("gateway: seeded default skills from embed",
 			"seeded", seedRes.Seeded, "skipped", seedRes.Skipped)
+	}
+
+	// ADR-080 D-SKILL §151 step (b): once coreagent.applyDefineGoalRenameMigration
+	// has recorded its marker in cfg.SeededSkillGrants (rewritten in memory
+	// during SeedConfig above, persisted to config.json by the
+	// persistSeededSkillGrants call earlier in this function), the embedded
+	// define-goal/ skill SeedDefaults just seeded above has fully superseded
+	// the old define-done/ directory — delete the orphan so no stale,
+	// manually-invokable skill serving OLD content survives
+	// (operator-ratified 2026-09-07, Q3). Guarded by the same marker: an
+	// install that has not yet run the rename (marker absent) never reaches
+	// this branch, so a pre-ADR-080 install's define-done/ stays untouched
+	// until its own boot actually rewrites its allowlists. Once removed, the
+	// path no longer exists on subsequent boots and os.RemoveAll is a clean
+	// no-op — idempotent by the directory's own absence, not a second
+	// on-disk marker. Accepted caveat: this removes any operator edits to
+	// the old define-done/ skill — acceptable because define-goal is an
+	// engine-authoritative built-in (ADR-074 D4's no-drift skill), not a
+	// user-customization surface.
+	defineGoalRenamed := false
+	for _, m := range cfg.SeededSkillGrants {
+		if m == coreagent.SkillsMigrationDefineGoalRename {
+			defineGoalRenamed = true
+			break
+		}
+	}
+	if defineGoalRenamed {
+		orphanedRenamedSkillDir := filepath.Join(skillsGlobalDir, "define-done")
+		if _, statErr := os.Stat(orphanedRenamedSkillDir); statErr == nil {
+			if rmErr := os.RemoveAll(orphanedRenamedSkillDir); rmErr != nil {
+				slog.Warn("gateway: could not delete orphaned define-done skill directory after the ADR-080 define-goal rename",
+					"dir", orphanedRenamedSkillDir, "error", rmErr)
+			} else {
+				slog.Info("gateway: deleted orphaned define-done skill directory after the ADR-080 define-goal rename",
+					"dir", orphanedRenamedSkillDir)
+			}
+		} else if !os.IsNotExist(statErr) {
+			slog.Warn("gateway: could not stat orphaned define-done skill directory",
+				"dir", orphanedRenamedSkillDir, "error", statErr)
+		}
 	}
 
 	sysSkillsLoader := skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)

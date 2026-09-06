@@ -12,7 +12,7 @@ import (
 //
 // Traces to: Spec-6 BDD "Default skills embedded and seeded on fresh install".
 func TestDefaultSkills_EmbeddedAndSeeded(t *testing.T) {
-	want := []string{"daily-briefing", "define-done", "plan", "skill-authoring", "summarize"}
+	want := []string{"daily-briefing", "define-goal", "plan", "skill-authoring", "summarize"}
 
 	// The embed FS must contain exactly the default set.
 	got := DefaultSkillNames()

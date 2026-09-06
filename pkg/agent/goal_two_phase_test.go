@@ -31,7 +31,7 @@ import (
 
 // scriptedCompileProvider is an LLM double for the goal-compile seam: script
 // receives the 1-based call number AND the messages, so tests can assert what
-// the engine put into the compile context (define-done injection, repair
+// the engine put into the compile context (define-goal injection, repair
 // feedback, the clarification answer) and script different responses per call.
 type scriptedCompileProvider struct {
 	mu     sync.Mutex
@@ -1036,17 +1036,17 @@ func TestGoalTwoPhase_NilAgentInst_FallbackNoLLM(t *testing.T) {
 	}
 }
 
-// --- Engine-side define-done injection (US-4 S5 seam, exercised here) ------
+// --- Engine-side define-goal injection (US-4 S5 seam, exercised here) ------
 
-func TestGoalTwoPhase_DefineDoneInjectedEngineSide(t *testing.T) {
+func TestGoalTwoPhase_DefineGoalInjectedEngineSide(t *testing.T) {
 	al, agentInst, provider, _, _, opts := twoPhaseHarness(t,
 		func(int, []providers.Message) (*providers.LLMResponse, error) {
 			return compileJSON("the report is saved"), nil
 		}, nil)
 
 	// The harness (newGoalLoopTestLoop) pins OMNIPUS_HOME to a temp dir; seed
-	// the define-done skill file where SeedDefaults would put it.
-	skillDir := filepath.Join(config.OmnipusHomeDir(), "skills", "define-done")
+	// the define-goal skill file where SeedDefaults would put it.
+	skillDir := filepath.Join(config.OmnipusHomeDir(), "skills", "define-goal")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1066,6 +1066,6 @@ func TestGoalTwoPhase_DefineDoneInjectedEngineSide(t *testing.T) {
 		}
 	}
 	if !strings.Contains(sysText, marker) {
-		t.Fatalf("define-done content must be injected engine-side into the compile call, got:\n%s", sysText)
+		t.Fatalf("define-goal content must be injected engine-side into the compile call, got:\n%s", sysText)
 	}
 }

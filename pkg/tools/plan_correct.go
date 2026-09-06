@@ -151,7 +151,7 @@ func (t *PlanCorrectTool) Description() string {
 		"member and MUST be that member's real id from the plan's member list, never a label like " +
 		"\"m2\" or a title. Corrections consume the plan's existing judge-round budget; they do not " +
 		"get a separate one. When a correction adds tail members you are authoring their acceptance " +
-		"criteria: before authoring acceptance criteria, load the define-done skill (via the Skill " +
+		"criteria: before authoring acceptance criteria, load the define-goal skill (via the Skill " +
 		"tool) and follow its quality bar."
 }
 

@@ -13,13 +13,13 @@
 //     stay byte-identical: compileGoalIntent (goal_compile.go) is untouched.
 //   - A prose/mixed goal runs ONE bounded provider call under the goal-bearing
 //     agent's own identity/model, in its own fresh context (never a
-//     spawnSubTurn — no delegation semantics), with the `define-done` skill
+//     spawnSubTurn — no delegation semantics), with the `define-goal` skill
 //     content injected engine-side when the seeded file exists (the skill's
 //     3-part statement/criteria/DoD pattern is the quality bar the compile
-//     prompt elicits — ADR-080 D-SKILL's define-done→define-goal rename is a
-//     later wave and does not touch this file's content or behavior). Output
-//     is schema-forced JSON: an assessment.clarity gate (ADR-079 D2) plus
-//     exactly one of {definition+criteria[]+dod[], clarifying_questions[]}.
+//     prompt elicits — ADR-080 D-SKILL renamed the skill define-done→
+//     define-goal; this file's load path and prompt copy carry that rename).
+//     Output is schema-forced JSON: an assessment.clarity gate (ADR-079 D2)
+//     plus exactly one of {definition+criteria[]+dod[], clarifying_questions[]}.
 //   - ADR-079 D1: every compile call (initial, resumed, and repair) also
 //     receives a bounded, UNTRUSTED session-transcript window
 //     (goalCompileWindowText, reusing sessionWindowText/
@@ -410,24 +410,25 @@ func joinClarifyingQuestions(qs []string) string {
 	return sb.String()
 }
 
-// defineDoneSkillPath returns the seeded define-done skill file's path under
+// defineGoalSkillPath returns the seeded define-goal skill file's path under
 // the runtime skills root ($OMNIPUS_HOME/skills — the SeedDefaults
 // destination, pkg/gateway boot). ADR-074 D4/D4a: the quality bar is injected
 // ENGINE-SIDE into every goal compile, independent of the goal-bearing
-// agent's own skill allowlist.
-func defineDoneSkillPath() string {
+// agent's own skill allowlist. ADR-080 D-SKILL renamed the skill
+// define-done→define-goal; the path below reflects the rename.
+func defineGoalSkillPath() string {
 	home := config.OmnipusHomeDir()
 	if home == "" {
 		return ""
 	}
-	return filepath.Join(home, "skills", "define-done", "SKILL.md")
+	return filepath.Join(home, "skills", "define-goal", "SKILL.md")
 }
 
-// loadDefineDoneSkillContent reads the seeded define-done skill content when
+// loadDefineGoalSkillContent reads the seeded define-goal skill content when
 // the file exists; "" when it does not (the compile proceeds without the
 // quality bar — the skill ships via ADR-074 D4's own rollout slot).
-func loadDefineDoneSkillContent() string {
-	p := defineDoneSkillPath()
+func loadDefineGoalSkillContent() string {
+	p := defineGoalSkillPath()
 	if p == "" {
 		return ""
 	}
@@ -489,7 +490,7 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 }
 
 // buildGoalCompileMessages assembles the compile call's fresh context: a
-// system message carrying the compile contract (+ the define-done quality
+// system message carrying the compile contract (+ the define-goal quality
 // bar when seeded, + ADR-080 D-CONTEXT2's AUTHORITATIVE workspace/project
 // instructions when resolvable), and one user message carrying ADR-079 D1's
 // UNTRUSTED session-transcript window (when non-empty) followed by the
@@ -548,8 +549,8 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 			"setter's approval — never silently invent a gate; use sparingly, only when clearly defensible.\n" +
 			"Every dod item's text must be SELF-CONTAINED: restate any workspace convention detail it " +
 			"relies on, since the reviewer will not see the workspace instructions again.\n")
-	if bar := loadDefineDoneSkillContent(); bar != "" {
-		sys.WriteString("\nQuality bar for the statement, criteria, and DoD you author (define-done):\n")
+	if bar := loadDefineGoalSkillContent(); bar != "" {
+		sys.WriteString("\nQuality bar for the statement, criteria, and DoD you author (define-goal):\n")
 		sys.WriteString(bar)
 		sys.WriteString("\n")
 	}

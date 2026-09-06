@@ -15,7 +15,8 @@ import (
 //	plan            → Jim
 //	skill-authoring → Ava
 //	daily-briefing  → Mia
-//	define-done     → all of the above (ADR-074 D4)
+//	define-goal     → all of the above (ADR-074 D4; renamed from define-done
+//	                  by ADR-080 D-SKILL)
 func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = nil // fresh install — no agents yet
@@ -23,10 +24,10 @@ func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 
 	want := map[string][]string{
-		"mia": {"daily-briefing", "define-done", "summarize"},
-		"ray": {"define-done", "summarize"},
-		"jim": {"define-done", "plan"},
-		"ava": {"define-done", "skill-authoring"},
+		"mia": {"daily-briefing", "define-goal", "summarize"},
+		"ray": {"define-goal", "summarize"},
+		"jim": {"define-goal", "plan"},
+		"ava": {"define-goal", "skill-authoring"},
 	}
 
 	byID := map[string][]string{}
@@ -58,7 +59,9 @@ func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 // D4 define-done migration: on the first boot without its marker, the
 // never-before-existing "define-done" grant is APPENDED to a non-empty
 // core-roster allowlist — the operator's own entries are never removed or
-// reordered.
+// reordered. ADR-080 D-SKILL then rewrites that same append, in the SAME
+// boot, from "define-done" to its renamed form "define-goal" — the final
+// on-disk token an operator ever sees.
 func TestSeedConfig_SkillAllowlist_RespectsOperatorEdits(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
@@ -80,9 +83,11 @@ func TestSeedConfig_SkillAllowlist_RespectsOperatorEdits(t *testing.T) {
 	if mia == nil {
 		t.Fatal("mia missing after seed")
 	}
-	// Operator entry preserved, in place, first; define-done appended once by
-	// the ADR-074 D4 migration (marker was absent on this "boot").
-	want := []string{"custom-skill", "define-done"}
+	// Operator entry preserved, in place, first; define-goal appended once by
+	// the ADR-074 D4 migration (marker was absent on this "boot") and
+	// immediately rewritten from define-done to define-goal by the ADR-080
+	// D-SKILL rename migration in the same pass.
+	want := []string{"custom-skill", "define-goal"}
 	if len(mia.Skills) != len(want) || mia.Skills[0] != want[0] || mia.Skills[1] != want[1] {
 		t.Errorf("operator skill allowlist not preserved+appended: got %v; want %v", mia.Skills, want)
 	}

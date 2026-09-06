@@ -1,10 +1,10 @@
 ---
-name: Define Done
+name: Define Goal
 description: Articulate a goal, its acceptance criteria, and its Definition of Done before creating a task, plan, or goal. Use whenever you author, rewrite, or amend a goal or its criteria — the pattern here governs goal-, criteria-, and DoD-writing everywhere.
 context: global
 ---
 
-# Define Done
+# Define Goal
 
 A well-formed goal has **three parts**, authored together:
 
