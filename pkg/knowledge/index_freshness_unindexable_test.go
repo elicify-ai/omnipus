@@ -65,8 +65,8 @@ func TestFreshness_UnindexableExcludedFromNew(t *testing.T) {
 	// If the file changes on disk (mod-time moves), it is worth retrying and
 	// counts as New again — the exclusion is not permanent amnesia.
 	retryAt := time.Unix(1_700_000_000, 0)
-	if err := os.Chtimes(abs, retryAt, retryAt); err != nil {
-		t.Fatal(err)
+	if chErr := os.Chtimes(abs, retryAt, retryAt); chErr != nil {
+		t.Fatal(chErr)
 	}
 	f, err = ix.Freshness(context.Background())
 	if err != nil {

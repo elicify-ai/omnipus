@@ -1066,7 +1066,7 @@ func populatedViewKeys(def generated.ViewDef) []string {
 }
 
 func viewFieldDeclaresSomething(f reflect.Value) bool {
-	if f.Kind() == reflect.Ptr {
+	if f.Kind() == reflect.Pointer {
 		if f.IsNil() {
 			return false
 		}

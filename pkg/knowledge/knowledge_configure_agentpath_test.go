@@ -122,7 +122,6 @@ func TestKnowledgeConfigure_AgentPath_EveryOpValidates(t *testing.T) {
 	ctx := a4Ctx("mia", ws)
 
 	for _, op := range vaultConfigureOps {
-		op := op
 		t.Run(op, func(t *testing.T) {
 			res := reg.ExecuteWithContext(ctx, "knowledge_configure", map[string]any{
 				"collection": "kb", "op": op, "type": "invoice",
