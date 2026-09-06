@@ -79,10 +79,12 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 	// at all) has zero policy entries, so every test in this file that goes
 	// through one of those 3 endpoints would 400 on the coverage check
 	// before ever reaching the behavior under test. A real installation
-	// gets an equivalent backfill automatically at gateway boot via
-	// config.RepairIncompleteToolPolicyCoverage; this harness constructs the
-	// agent loop directly (mustAgentLoop) and bypasses that boot sequence
-	// entirely, so the fixture must seed a complete map itself — matching
+	// gets an equivalent completeness automatically at gateway boot via
+	// config.ReconcileToolPolicyCeiling (ADR-076/ADR-077's two-layer model —
+	// the reconciled global ceiling covers any tool this agent's own map
+	// omits); this harness constructs the agent loop directly (mustAgentLoop)
+	// and bypasses that boot sequence entirely, so the fixture must seed a
+	// complete map itself — matching
 	// what a real post-migration (or freshly-created) agent looks like via
 	// coreagent.NewCustomAgentToolsCfg(), the same seed createAgent itself
 	// uses for a caller that sends no tools_cfg.

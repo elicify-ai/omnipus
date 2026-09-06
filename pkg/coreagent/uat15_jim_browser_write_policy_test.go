@@ -11,9 +11,11 @@
 // model actually reached for in the failing CI run: browser_click,
 // browser_screenshot, browser_navigate) through the REAL compositor, on a
 // fresh-install config, BOTH before and AFTER
-// config.RepairIncompleteToolPolicyCoverage runs — because the repair is what
-// silently stamps `deny` into an agent's own map for any catalog name the seed
-// missed, and it runs at every boot and every hot reload.
+// config.ReconcileToolPolicyCeiling runs — that reconcile is what the gateway
+// runs at every boot and every hot reload (ADR-076/ADR-077's two-layer
+// model); it only ever ADDS a shipped-default entry to the GLOBAL ceiling,
+// never touches a per-agent map, so it must never be able to change Jim's
+// resolved posture for these verbs.
 package coreagent_test
 
 import (
@@ -59,16 +61,11 @@ func TestUAT15_JimResolvesAllowForBrowserWriteVerbs(t *testing.T) {
 	for _, tool := range uat15Tools {
 		known[tool] = struct{}{}
 	}
-	repaired := config.RepairIncompleteToolPolicyCoverage(cfg, known)
-	for _, gap := range repaired {
-		if gap.AgentID == string(coreagent.IDJim) {
-			t.Logf("repair backfilled deny: (jim, %s)", gap.ToolName)
-		}
-	}
+	config.ReconcileToolPolicyCeiling(cfg, known)
 
 	for _, tool := range uat15Tools {
 		if got := resolveFor(t, cfg, string(coreagent.IDJim), tool, nil); got != "allow" {
-			t.Errorf("AFTER RepairIncompleteToolPolicyCoverage: (jim, %s) resolves %q, want \"allow\"", tool, got)
+			t.Errorf("AFTER ReconcileToolPolicyCeiling: (jim, %s) resolves %q, want \"allow\"", tool, got)
 		}
 	}
 }

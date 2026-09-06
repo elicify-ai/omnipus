@@ -4465,11 +4465,13 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 
 	// ADR-054 D1/D2/§11 checklist item 8: agents are no longer entities inside
 	// config.json — drop any legacy agents.list content (loudly, in-memory AND
-	// best-effort on disk) so it never round-trips forward. Must run before
-	// RepairMultipleDefaults/RepairIncompleteToolPolicyCoverage below so those
-	// per-agent repairs operate on the post-cutover (now-empty, until the agent
-	// registry separately populates it from entities/agents/) list, never on
-	// stale legacy JSON content. See legacy_agents_list.go.
+	// best-effort on disk) so it never round-trips forward. Must run before any
+	// later per-agent reconciliation (e.g. gateway.go's
+	// repairAndValidateToolPolicyCoverage, which runs config.ReconcileToolPolicyCeiling
+	// under the ADR-077 two-layer model) so that operates on the post-cutover
+	// (now-empty, until the agent registry separately populates it from
+	// entities/agents/) list, never on stale legacy JSON content. See
+	// legacy_agents_list.go.
 	stripLegacyAgentsList(cfg, path, onSelfHeal)
 
 	// NOTE (ADR-054 D6.4): this used to call RepairMultipleDefaults(cfg) here

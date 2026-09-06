@@ -1275,7 +1275,7 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		// inspect_session) are unioned in explicitly here, independent of
 		// their pkg/tools|pkg/sysagent/tools implementation landing, so the
 		// tool-policy coverage universe (config.ValidateToolPolicyCoverage /
-		// RepairIncompleteToolPolicyCoverage) recognizes them from the
+		// config.ReconcileToolPolicyCeiling) recognizes them from the
 		// config-seeding side immediately. Mirrors
 		// pkg/coreagent/core.go's allStaticToolNames literal-for-literal
 		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
@@ -1295,97 +1295,69 @@ var (
 	knownBuiltinToolNamesCache map[string]struct{}
 )
 
-// repairAndValidateToolPolicyCoverage runs the shared "backfill pre-existing
-// gaps, then hard-validate what remains" sequence used identically at boot
-// (RunContextWithOptions) and at hot-reload (executeReload) — CLAUDE.md hard
-// constraint 6. Both call sites previously hand-rolled this same
-// knownTools-assembly + repair + summary-log sequence independently; sharing
-// one helper means the two can no longer silently diverge on what "repair
-// then validate" means, mirroring the reasoning behind
-// config.RepairIncompleteToolPolicyCoverage now delegating to
-// config.ValidateToolPolicyCoverage instead of re-deriving its predicate.
+// repairAndValidateToolPolicyCoverage runs the shared "migrate legacy keys,
+// reconcile the global ceiling, then hard-validate the result" sequence used
+// identically at boot (RunContextWithOptions) and at hot-reload
+// (executeReload) — CLAUDE.md hard constraint 6. Both call sites previously
+// hand-rolled this same knownTools-assembly + repair + summary-log sequence
+// independently; sharing one helper means the two can no longer silently
+// diverge on what "reconcile then validate" means.
 //
-// Repairing first means installations whose on-disk config predates the
-// DefaultPolicy/default_policy fallback removal (sparse per-agent Policies
-// maps) get backfilled to explicit "deny" instead of tripping validation on
-// every restart/reload. Logs one WARN naming every backfilled (agent, tool)
-// pair (config.RepairIncompleteToolPolicyCoverage itself also logs one WARN
-// per repaired agent; this one is the gateway-level summary).
+// ADR-077 ratifies tool policy as exactly TWO layers, no implicit third: the
+// global ceiling (cfg.Sandbox.ToolPolicies, kept complete for the whole
+// static catalog by step 2 below) IS the default for every tool, and sparse
+// per-agent overrides only ever tighten below it. The fail-closed per-agent
+// "deny" backfill this helper used to run as a third step
+// (config.RepairIncompleteToolPolicyCoverage) is retired — see that
+// function's retirement comment in pkg/config/validate.go. Reconciling a
+// tool to its shipped default (including bash=allow) is intended, not a gap
+// to paper over.
+//
+// Order matters and must not be reshuffled (each step's own doc comment
+// explains why it must run where it does):
+//  1. config.MigrateLegacyToolPolicyKeys — rename retired keys forward first,
+//     so step 2 never reconciles a "missing" entry for a name that was only
+//     missing because it hadn't been renamed yet.
+//  2. config.ReconcileToolPolicyCeiling (ADR-076) — backfill the GLOBAL
+//     ceiling with the real shipped default for any static builtin tool
+//     added to pkg/config/defaults.go since this install's config.json was
+//     last written, so newly-added tools resolve to their intended
+//     allow/ask/deny posture from the ceiling itself.
+//  3. config.ValidateToolPolicyCoverage — a never-firing correctness
+//     tripwire (ADR-077 D4): after step 2 guarantees ceiling completeness
+//     for the static catalog, a both-sides gap can only mean a genuine
+//     internal drift (a catalog tool with no defaults.go entry), so this
+//     aborts boot loudly rather than resolving silently.
 //
 // Returns the remaining gaps (empty = fully covered) — the caller decides
 // what "remaining gaps" means for it (abort boot vs. reject the reload and
 // keep serving the previous config).
 func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
-	// ADR-071 §5.3.5a: this migration MUST run FIRST, before
-	// RepairIncompleteToolPolicyCoverage below — not merely before the
-	// validator. The repair backfills any (agent, tool) pair with no policy
-	// entry to an explicit "deny" (correct, fail-closed, for its own
-	// purpose), and ToolSearch/switch_agent are new names with no policy
+	// ADR-071 §5.3.5a: this migration MUST run FIRST, before the ceiling is
+	// reconciled below. ToolSearch/switch_agent are new names with no policy
 	// entry anywhere until this migration folds the retired load_tool /
 	// hand_off / return_to_default keys forward. Sequenced any later, the
-	// first post-upgrade boot would silently deny both on every agent —
-	// boot succeeds with no gap and no abort, and every agent silently
-	// loses hand-off (and, after D3, ToolSearch denies 71% of the catalog).
+	// first post-upgrade boot would reconcile a "missing" entry under the
+	// stale name instead of recognizing it as already migrated.
 	if config.MigrateLegacyToolPolicyKeys(cfg) {
 		slog.Info("gateway: migrated legacy tool-policy keys to their ADR-071 replacements",
 			"migrations", "load_tool->ToolSearch, hand_off/return_to_default->switch_agent",
 		)
 	}
 	knownTools := buildKnownBuiltinToolNames()
-	if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
-		agentIDs := make(map[string]struct{}, len(repaired))
-		for _, gap := range repaired {
-			agentIDs[gap.AgentID] = struct{}{}
-		}
-		slog.Warn("gateway: backfilled incomplete tool-policy coverage on load",
-			"agent_count", len(agentIDs),
-			"gap_count", len(repaired),
-			"gaps", joinCoverageGapMessages(repaired),
+
+	// ADR-076: reconcile the GLOBAL ceiling against the shipped static-catalog
+	// defaults. Must run after the legacy-key migration (a renamed key must
+	// not be re-added under its old name). Under ADR-077, this reconciled
+	// ceiling IS the default for every tool a per-agent map does not mention
+	// — there is no further backfill step after this one.
+	if added := config.ReconcileToolPolicyCeiling(cfg, knownTools); len(added) > 0 {
+		slog.Info("gateway: reconciled global tool-policy ceiling with shipped static-catalog defaults",
+			"added_count", len(added),
+			"added", strings.Join(added, ", "),
 		)
 	}
-	// Report — loudly, by name — every agent that has its OWN policy map but is
-	// missing an explicit entry for a static builtin tool, so that tool resolves
-	// for it from the global ceiling alone.
-	//
-	// This is NOT what config.ValidateToolPolicyCoverage below measures, and the
-	// difference matters. Coverage counts a tool as covered when EITHER side has
-	// an entry, and pkg/config/defaults.go seeds the global ceiling with an
-	// explicit entry for the whole static catalog — so on a default install the
-	// coverage check reports zero gaps for every agent regardless of what that
-	// agent's own map contains, the repair above therefore has nothing to
-	// backfill, and the abort at the caller is unreachable. A UAT round
-	// (2026-09-02, batch 4 S84) read that as "boot-time validation does not
-	// abort on a real on-disk gap"; the validator does run and does abort, but
-	// only on a hole present on BOTH sides, which a seeded global ceiling makes
-	// practically impossible to reach.
-	//
-	// The state that IS dangerous — and was invisible until now — is the
-	// one-sided hole this scan names: the runtime merge is "one side is enough"
-	// (pkg/tools/compositor.go's resolveEffectivePolicyWith), so an agent
-	// deliberately tightened to deny a tool silently becomes ALLOWED the moment
-	// its own entry for that tool goes missing and the permissive ceiling
-	// decides alone.
-	//
-	// Logged at Error, not aborted: cfg.Sandbox.ToolPolicies is loaded from
-	// config.json verbatim (no merge against defaults.go), so any future
-	// addition to the static tool catalog necessarily puts every already-
-	// installed system into this state on first boot after upgrade. Aborting
-	// would hard-brick those upgrades. Making the state named and loud is the
-	// part that can be enforced today; a durable fix needs a config migration
-	// marker that does not exist yet.
-	if inherited := config.ValidateAgentOwnToolPolicyCoverage(cfg, knownTools); len(inherited) > 0 {
-		agentIDs := make(map[string]struct{}, len(inherited))
-		for _, gap := range inherited {
-			agentIDs[gap.AgentID] = struct{}{}
-		}
-		slog.Error("gateway: agent has no explicit tool-policy entry of its own for one or more static "+
-			"builtin tools; those tools resolve from the global sandbox.tool_policies ceiling alone, so any "+
-			"per-agent tightening for them is not in effect (CLAUDE.md hard constraint 6)",
-			"agent_count", len(agentIDs),
-			"inherited_count", len(inherited),
-			"details", joinCoverageGapMessages(inherited),
-		)
-	}
+
 	return config.ValidateToolPolicyCoverage(cfg, knownTools)
 }
 
@@ -2516,17 +2488,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// never asked for. The gap list is logged in full so the failure is
 		// immediately actionable.
 		//
-		// repairAndValidateToolPolicyCoverage runs the shared "backfill
-		// pre-existing gaps, then hard-validate what remains" sequence: it
-		// migrates installations whose on-disk config predates the
-		// DefaultPolicy/default_policy fallback removal (sparse Policies
-		// maps that relied on the deleted default field) by backfilling every
-		// missing entry to explicit "deny". Without this, upgrading an
-		// existing installation would find a coverage gap for nearly every
-		// static tool on nearly every agent and abort boot on every restart.
-		// After the repair, validation should almost always find zero gaps —
-		// it remains as the hard backstop for anything the repair cannot
-		// close (e.g. a genuinely corrupt config).
+		// repairAndValidateToolPolicyCoverage runs the shared "reconcile the
+		// global ceiling, then hard-validate what remains" sequence (ADR-077
+		// two-layer model): it migrates installations whose on-disk config
+		// predates a newly-added static builtin tool by reconciling the
+		// GLOBAL ceiling with that tool's real shipped default from
+		// pkg/config/defaults.go. Without this, upgrading an existing
+		// installation would find a coverage gap for every newly-shipped
+		// tool on every agent and abort boot on every restart. After the
+		// reconcile, validation should almost always find zero gaps — it
+		// remains as a never-firing correctness tripwire for anything
+		// reconcile cannot close (e.g. a genuinely corrupt config, or a
+		// catalog/defaults.go drift).
 		if gaps := repairAndValidateToolPolicyCoverage(cfg); len(gaps) > 0 {
 			for _, g := range gaps {
 				slog.Error("gateway: tool-policy coverage gap", "detail", g.String())
@@ -4092,11 +4065,11 @@ func executeReload(
 	// write handlers. Without this check, a hand-edited config.json picked
 	// up by hot-reload would bypass coverage enforcement entirely, silently
 	// reintroducing a runtime-default gap this whole change eliminated.
-	// repairAndValidateToolPolicyCoverage repairs first (same migration
-	// semantics as boot: backfill any missing entry to explicit "deny"), then
-	// validates as the hard backstop. A genuine gap rejects the reload and
-	// keeps serving the PREVIOUS live config — mirrors the
-	// credential-injection-failure rejection pattern immediately below.
+	// repairAndValidateToolPolicyCoverage reconciles the global ceiling first
+	// (same migration semantics as boot), then validates as a never-firing
+	// correctness tripwire. A genuine gap rejects the reload and keeps
+	// serving the PREVIOUS live config — mirrors the credential-injection-
+	// failure rejection pattern immediately below.
 	if gaps := repairAndValidateToolPolicyCoverage(newCfg); len(gaps) > 0 {
 		for _, g := range gaps {
 			slog.Error("gateway: reload tool-policy coverage gap", "detail", g.String())

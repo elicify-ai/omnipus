@@ -13,12 +13,13 @@
 //
 // IT MUST NOT BOOT A GATEWAY, and that is the whole reason it lives in
 // pkg/config rather than pkg/gateway. pkg/gateway's boot path runs
-// config.RepairIncompleteToolPolicyCoverage BEFORE
-// config.ValidateToolPolicyCoverage; the repair backfills every gap with an
-// explicit `deny` first, so a boot-based version of this test reports zero
-// gaps on a build with NO SEED AT ALL. Calling the validator directly, on a
-// config that has not been through the repair, is what keeps the criterion
-// from being empty.
+// config.ReconcileToolPolicyCeiling BEFORE config.ValidateToolPolicyCoverage
+// (ADR-076/ADR-077's two-layer model); the reconcile backfills the GLOBAL
+// ceiling with shipped defaults first, so a boot-based version of this test
+// would still report zero gaps on a build with NO SEED AT ALL — every
+// unmentioned tool simply resolves from the reconciled ceiling. Calling the
+// validator directly, on a config that has not been through reconcile, is
+// what keeps the criterion from being empty.
 
 package config
 

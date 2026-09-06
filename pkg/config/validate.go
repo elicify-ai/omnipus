@@ -433,12 +433,13 @@ func (g CoverageGap) String() string {
 // "agent × tool" list in a single validation pass. Callers decide the
 // disposition:
 //   - Boot (pkg/gateway/gateway.go): any gap aborts startup with the full
-//     gap list logged, so the failure is immediately actionable. Since
-//     upgrading installations can have sparse, pre-existing policy maps
-//     (from before the DefaultPolicy/default_policy fallback was removed),
-//     the boot sequence should call RepairIncompleteToolPolicyCoverage
-//     immediately before this function — see that function's doc comment
-//     for the exact call site.
+//     gap list logged, so the failure is immediately actionable. Under the
+//     ADR-077 two-layer model this is a never-firing correctness tripwire:
+//     the boot sequence calls ReconcileToolPolicyCeiling immediately before
+//     this function, which keeps the GLOBAL ceiling complete for the whole
+//     static catalog, so a gap here can only mean a genuine internal drift
+//     (a catalog tool with no defaults.go entry) rather than a normal
+//     upgrade state.
 //   - Agent create/update/tools-write REST handlers: any gap rejects the
 //     write with 400 instead of silently persisting an uncovered tool.
 //
@@ -624,181 +625,40 @@ func ValidateSubmittedToolPolicyMap[V ~string](
 	return defects
 }
 
-// ValidateAgentOwnToolPolicyCoverage reports every (agent, tool) pair where an
-// agent that HAS its own builtin policy map is nonetheless missing an explicit
-// entry for a static builtin tool — i.e. the tool resolves for that agent from
-// the GLOBAL ceiling alone.
-//
-// This is deliberately a different question from ValidateToolPolicyCoverage,
-// which counts such a tool as fully covered (an entry on either side is enough,
-// exactly as CLAUDE.md hard constraint 6 words it: "global sandbox.tool_policies
-// and/or an agent's tools.builtin.policies"). Both readings are correct for
-// their own purpose, and the difference is why the boot-time coverage check
-// could not detect the failure UAT found live:
-//
-//   - Coverage (ValidateToolPolicyCoverage) asks "is this tool decidable at
-//     all?" — a genuine no-entry-anywhere hole would make the compositor fail
-//     closed to deny with an Error log, so it must abort boot.
-//   - Own-coverage (this function) asks "is this agent's own posture complete?"
-//     — a hole here is silently DECIDED BY THE CEILING, which on a default
-//     install is permissive ("allow" for most tools, pkg/config/defaults.go).
-//     An agent explicitly tightened to deny a tool, whose entry for that tool
-//     is then lost, silently becomes allowed. That is a real, observed
-//     regression (a `bash: deny` agent executing bash after a malformed
-//     tools-write emptied its map) and it is invisible to coverage validation.
-//
-// Agents with no Tools block at all are skipped: they never asserted a
-// per-agent posture, so riding the global ceiling for every tool is their
-// intended, documented configuration rather than a lost tightening. An agent
-// whose Tools block exists but whose Policies map is empty or partial IS
-// reported — an empty map is precisely the shape the malformed-body defect
-// produced.
-//
-// Pure and side-effect-free; returns every finding, sorted by (AgentID,
-// ToolName). Callers decide the disposition. The gateway boot/reload path logs
-// these at Error rather than aborting: the global ceiling is loaded from
-// config.json as-is with no merge against pkg/config/defaults.go, so every
-// future addition to the static tool catalog necessarily produces this state on
-// an already-installed system, and aborting on it would hard-brick every
-// upgrade. Making it loud and named is the enforceable half; making it fatal is
-// not, without a config migration marker that does not exist yet.
-func ValidateAgentOwnToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) []CoverageGap {
-	if cfg == nil || len(knownTools) == 0 {
-		return nil
-	}
-	var gaps []CoverageGap
-	for _, agentCfg := range cfg.Agents.List {
-		if agentCfg.Tools == nil {
-			continue // no per-agent posture asserted — global ceiling by design
-		}
-		agentPolicies := agentCfg.Tools.Builtin.Policies
-		for toolName := range knownTools {
-			if _, ok := agentPolicies[toolName]; ok {
-				continue
-			}
-			gaps = append(gaps, CoverageGap{AgentID: agentCfg.ID, ToolName: toolName})
-		}
-	}
-	sort.Slice(gaps, func(i, j int) bool {
-		if gaps[i].AgentID != gaps[j].AgentID {
-			return gaps[i].AgentID < gaps[j].AgentID
-		}
-		return gaps[i].ToolName < gaps[j].ToolName
-	})
-	return gaps
-}
+// NOTE (ADR-077 D5): ValidateAgentOwnToolPolicyCoverage used to live here — it
+// reported every (agent, tool) pair where an agent with its own builtin
+// policy map was missing an explicit entry for a static builtin tool (i.e.
+// the tool resolved for that agent from the GLOBAL ceiling alone), logged at
+// boot as an ERROR by pkg/gateway/gateway.go's
+// repairAndValidateToolPolicyCoverage. It is retired, not merely renamed:
+// under the ratified two-layer model (ADR-077 D1), an agent riding the global
+// ceiling for a tool it never mentions is the NORMAL, intended state — Layer
+// 2 (per-agent overrides) is deliberately sparse and only ever tightens
+// below the ceiling. An ERROR-level log naming every such pair fired for the
+// overwhelming majority of the agent×tool matrix on a healthy install,
+// trained operators to ignore it, and asserted a per-agent-completeness
+// expectation the model explicitly rejects. The concern it named — a lost
+// per-agent tightening — is still guarded at the write boundary by
+// ValidateSubmittedToolPolicyMap (agent create/update/tools-write, 400 on an
+// incomplete submitted map), which is where a tightening can actually be
+// dropped. Removed by operator decision, ADR-077 — do not reintroduce.
 
-// RepairIncompleteToolPolicyCoverage backfills any missing tool-policy
-// coverage in cfg.Agents.List with explicit "deny" entries (the safe,
-// fail-closed direction) before ValidateToolPolicyCoverage is enforced.
-// This exists to migrate installations whose on-disk config predates the
-// removal of the DefaultPolicy/default_policy fallback (CLAUDE.md hard
-// constraint 6) — those agents have sparse Policies maps that relied on
-// the deleted default field to cover every unlisted tool. Without this
-// repair, ValidateToolPolicyCoverage would find a gap for nearly every
-// static tool on every such agent and abort boot, bricking any existing
-// installation on upgrade.
-//
-// Intended call site: pkg/gateway/gateway.go's shared
-// repairAndValidateToolPolicyCoverage helper, immediately BEFORE the existing
-// config.ValidateToolPolicyCoverage(cfg, buildKnownBuiltinToolNames()) call.
-// That helper is called identically from both the boot sequence
-// (RunContextWithOptions) and the hot-reload path (executeReload):
-//
-//	func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
-//	    knownTools := buildKnownBuiltinToolNames()
-//	    if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
-//	        // ... log a WARN naming every backfilled (agent, tool) pair ...
-//	    }
-//	    return config.ValidateToolPolicyCoverage(cfg, knownTools)
-//	}
-//
-// Calling the repair first means the validation call should almost always
-// find zero gaps afterward — the repair IS the fix; validation remains as
-// the hard backstop for any gap the repair (by construction) cannot close,
-// e.g. if knownTools itself is empty/nil.
-//
-// Mutates cfg.Agents.List in place. For every agent, for every name in
-// knownTools not covered by either the global cfg.Sandbox.ToolPolicies map
-// or that agent's own Tools.Builtin.Policies map, adds an explicit "deny"
-// entry to the AGENT's map (never touches the global map — a missing global
-// entry is not this function's concern, since per-agent coverage alone is
-// sufficient). Logs one WARN per repaired agent naming the count and list of
-// backfilled tools, so operators can review/loosen the auto-tightened policy
-// afterward via the UI. Idempotent — a fully-covered config is a no-op, and
-// repeated calls after the first repair find nothing left to backfill.
-//
-// Returns every (AgentID, ToolName) pair that was actually backfilled — the
-// exact gap list ValidateToolPolicyCoverage(cfg, knownTools) returned
-// immediately before the repair ran (every gap found gets backfilled to
-// "deny", so the two lists are identical in content). Empty/nil when cfg or
-// knownTools is nil/empty, or when coverage was already complete — callers
-// that only care about "was anything repaired" can check len(repaired) > 0,
-// while callers that want structured detail (e.g. a future UI review screen)
-// get real (agent, tool) pairs instead of a bare count.
-func RepairIncompleteToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) (repaired []CoverageGap) {
-	if cfg == nil || len(knownTools) == 0 {
-		return nil
-	}
-
-	// Delegate the "(agent, tool) is covered?" predicate entirely to
-	// ValidateToolPolicyCoverage rather than re-deriving it here — the two
-	// functions must never be able to silently diverge on what "covered"
-	// means. The returned gaps are already sorted by (AgentID, ToolName).
-	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
-	if len(gaps) == 0 {
-		return nil
-	}
-
-	agentIndex := make(map[string]*AgentConfig, len(cfg.Agents.List))
-	for i := range cfg.Agents.List {
-		agentIndex[cfg.Agents.List[i].ID] = &cfg.Agents.List[i]
-	}
-
-	// Backfill every gap to an explicit "deny" entry on the agent's OWN
-	// Tools.Builtin.Policies map (never the global map — a missing global
-	// entry is not this function's concern; per-agent coverage alone is
-	// sufficient, exactly as before). Track per-agent tool names purely for
-	// the one-WARN-per-agent log below; agentOrder preserves first-seen
-	// order from gaps (already AgentID-sorted) for deterministic log output.
-	agentOrder := make([]string, 0)
-	backfilledByAgent := make(map[string][]string)
-	for _, gap := range gaps {
-		agentCfg, ok := agentIndex[gap.AgentID]
-		if !ok {
-			// Defensive: unreachable in practice since gaps are derived from
-			// cfg.Agents.List itself, but never mutate a nonexistent agent.
-			continue
-		}
-		if agentCfg.Tools == nil {
-			agentCfg.Tools = &AgentToolsCfg{}
-		}
-		if agentCfg.Tools.Builtin.Policies == nil {
-			agentCfg.Tools.Builtin.Policies = make(map[string]ToolPolicy)
-		}
-		agentCfg.Tools.Builtin.Policies[gap.ToolName] = ToolPolicyDeny
-
-		if _, seen := backfilledByAgent[gap.AgentID]; !seen {
-			agentOrder = append(agentOrder, gap.AgentID)
-		}
-		backfilledByAgent[gap.AgentID] = append(backfilledByAgent[gap.AgentID], gap.ToolName)
-	}
-
-	for _, agentID := range agentOrder {
-		toolNames := backfilledByAgent[agentID]
-		sort.Strings(toolNames)
-		slog.Warn(
-			"config: agent had incomplete tool-policy coverage; backfilled missing tools to \"deny\" "+
-				"(migration from pre-DefaultPolicy-removal config shape; CLAUDE.md hard constraint 6 — "+
-				"review/loosen via the UI if any backfilled tool should actually be allow/ask)",
-			"agent_id", agentID,
-			"backfilled_count", len(toolNames),
-			"backfilled_tools", toolNames,
-		)
-	}
-
-	return gaps
-}
+// NOTE (ADR-077 D3): RepairIncompleteToolPolicyCoverage used to live here —
+// it backfilled any missing (agent, tool) coverage with explicit per-agent
+// "deny" entries before ValidateToolPolicyCoverage was enforced, called from
+// pkg/gateway/gateway.go's repairAndValidateToolPolicyCoverage immediately
+// before that validation. It is retired, not merely renamed: with
+// ReconcileToolPolicyCeiling (ADR-076) keeping the GLOBAL ceiling complete
+// for the whole static catalog on every load, a both-sides gap for a catalog
+// tool became impossible — this function's premise was gone, and it could
+// only misfire, silently denying a newly-shipped "allow" tool (e.g. a fresh
+// bash=allow default) on some code path Reconcile didn't precede. That is a
+// code-branch default in all but name: the answer "deny" was chosen by code,
+// not by seeded data, in direct tension with CLAUDE.md hard constraint 6.
+// Tool policy is now exactly two layers — the reconciled global ceiling IS
+// the default; sparse per-agent overrides only tighten — with no fail-closed
+// backfill between them. Removed by operator decision, ADR-077 — do not
+// reintroduce.
 
 // legacyToolPolicyKeyMigrations maps a retired tool-policy key to the key it
 // folds into. Both ADR-071 renames are handled by the same pass, at the same
@@ -889,24 +749,20 @@ func migrateLegacyToolPolicyMap[T ~string](m map[string]T) bool {
 // legacy keys. See migrateLegacyToolPolicyMap's doc comment for the fold
 // rule and idempotency argument.
 //
-// MUST run before RepairIncompleteToolPolicyCoverage, not merely before
-// ValidateToolPolicyCoverage (ADR-071 §5.3.5a). That repair backfills any
-// (agent, tool) pair with no policy entry to an explicit "deny" — the
-// fail-closed direction, correct for its own purpose but catastrophic here:
-// ToolSearch and switch_agent are new names with no policy entry anywhere
-// until this migration folds the legacy keys forward. Sequenced any later,
-// the FIRST post-upgrade boot silently writes "deny" for both on every
-// agent, boot succeeds with no visible error, and every agent loses hand-off
-// (and, once D3 ships, all lazy-tool loading — ToolSearch is how 71% of the
-// catalog becomes reachable). The intended call site is gateway.go's shared
+// MUST run before ReconcileToolPolicyCeiling, not merely before
+// ValidateToolPolicyCoverage (ADR-071 §5.3.5a). ToolSearch and switch_agent
+// are new names with no policy entry anywhere until this migration folds the
+// legacy keys forward; sequenced any later, ReconcileToolPolicyCeiling would
+// reconcile a "missing" entry for the new name under a value derived while
+// the legacy key was still present, rather than recognizing it as already
+// migrated. The intended call site is gateway.go's shared
 // repairAndValidateToolPolicyCoverage helper, as the FIRST statement inside
-// it, before config.RepairIncompleteToolPolicyCoverage — that helper already
-// runs identically at boot (RunContextWithOptions) and hot-reload
-// (executeReload), so a migration placed there cannot diverge between the
-// two call sites.
+// it, before config.ReconcileToolPolicyCeiling — that helper already runs
+// identically at boot (RunContextWithOptions) and hot-reload (executeReload),
+// so a migration placed there cannot diverge between the two call sites.
 //
 // Mutates cfg in place. Returns true if anything changed — informational
-// only; callers are not required to act on it (RepairIncompleteToolPolicyCoverage
+// only; callers are not required to act on it (ReconcileToolPolicyCeiling
 // and ValidateToolPolicyCoverage below both re-derive their own view of
 // coverage from the mutated cfg regardless).
 func MigrateLegacyToolPolicyKeys(cfg *Config) bool {
@@ -924,4 +780,86 @@ func MigrateLegacyToolPolicyKeys(cfg *Config) bool {
 		}
 	}
 	return changed
+}
+
+// ReconcileToolPolicyCeiling backfills cfg.Sandbox.ToolPolicies (the GLOBAL
+// tool-policy ceiling) with a real, shipped-default entry for every static
+// builtin tool named in knownTools that the ceiling has no entry for yet —
+// ADR-076. This closes the gap CLAUDE.md hard constraint 6's "no
+// default-policy fallback" model left open on upgrade: an existing install's
+// config.json is a point-in-time snapshot of whatever pkg/config/defaults.go
+// enumerated at the time it was written, so every static builtin tool added
+// to defaults.go afterward is missing from that install's ceiling until
+// something adds it. Under the ADR-077 two-layer model this function's
+// output IS the default for that tool — there is no further per-agent
+// backfill layer to fall back on if it resolves to the wrong thing, so
+// reconciling to the real shipped default here matters more, not less: a
+// brand-new tool like AskUserQuestion — shipped "allow" — must resolve
+// "allow" from this reconciled ceiling on every pre-existing install,
+// without an operator needing to notice and edit config.json by hand.
+//
+// knownTools MUST be the exact same static-catalog set the Constraint-6
+// validator uses (buildKnownBuiltinToolNames() at the gateway.go call site)
+// — passing the identical map instance, not a re-derived one, is what makes
+// "coverage and reconciliation can never disagree" true by construction
+// rather than by convention. The shipped default VALUE for each name comes
+// from DefaultConfig().Sandbox.ToolPolicies, which pkg/config/defaults.go's
+// own doc comment states mirrors pkg/coreagent/core.go's allStaticToolNames
+// literal-for-literal — i.e. the same static catalog knownTools represents.
+//
+// Rules (never deviate from these — see ADR-076 for the rationale):
+//   - A tool name in knownTools with NO existing cfg.Sandbox.ToolPolicies
+//     entry gets one added, at exactly DefaultConfig()'s shipped value for
+//     that name (never a blanket "allow" — e.g. browser_upload_file ships
+//     "ask").
+//   - A tool name that ALREADY has an entry — operator-set, migrated, or
+//     from an earlier reconciliation — is never touched. This function only
+//     ever ADDS a missing entry; it never overwrites one, regardless of
+//     value.
+//   - A key in cfg.Sandbox.ToolPolicies that is NOT in knownTools (a
+//     retired/legacy key, an MCP-namespaced key, an operator's own custom
+//     entry) is left completely alone — reconciliation is additive-only
+//     against the current static catalog, never a cleanup pass.
+//   - A name in knownTools that DefaultConfig().Sandbox.ToolPolicies has no
+//     entry for (a catalog/defaults drift that TestBuildKnownBuiltinToolNames_
+//     MatchesCoreagentStaticToolCatalog guards against separately) is
+//     skipped rather than guessed at — this function never invents a value.
+//
+// Mutates cfg in place; allocates cfg.Sandbox.ToolPolicies if it was nil.
+// Returns every "tool=policy" pair actually added, sorted, for the caller to
+// log — nil when nothing needed adding, including on a second call over an
+// already-reconciled config (idempotent by construction: an added entry is
+// present on the next call, so the "no existing entry" guard skips it).
+//
+// Intended call site: pkg/gateway/gateway.go's shared
+// repairAndValidateToolPolicyCoverage helper, immediately AFTER
+// MigrateLegacyToolPolicyKeys (so a renamed legacy key is not treated as
+// "missing" and reconciled to a possibly-different default) and BEFORE
+// ValidateToolPolicyCoverage — the two-layer model (ADR-077) has no further
+// backfill step after this one; the reconciled ceiling IS the default.
+func ReconcileToolPolicyCeiling(cfg *Config, knownTools map[string]struct{}) []string {
+	if cfg == nil || len(knownTools) == 0 {
+		return nil
+	}
+	defaultPolicies := DefaultConfig().Sandbox.ToolPolicies
+	if len(defaultPolicies) == 0 {
+		return nil
+	}
+	if cfg.Sandbox.ToolPolicies == nil {
+		cfg.Sandbox.ToolPolicies = make(map[string]string, len(knownTools))
+	}
+	var added []string
+	for name := range knownTools {
+		if _, ok := cfg.Sandbox.ToolPolicies[name]; ok {
+			continue // never overwrite an existing entry, operator-set or otherwise
+		}
+		defVal, ok := defaultPolicies[name]
+		if !ok {
+			continue // no shipped default to reconcile from — skip rather than guess
+		}
+		cfg.Sandbox.ToolPolicies[name] = defVal
+		added = append(added, name+"="+defVal)
+	}
+	sort.Strings(added)
+	return added
 }

@@ -109,14 +109,16 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 			"global ceiling must seed 'allow' for inspect_session (raises the ceiling only; per-agent deny does the real gating)")
 	})
 
-	t.Run("missing entry backfilled to explicit deny, boots (no abort)", func(t *testing.T) {
+	t.Run("missing entry resolves from the reconciled global ceiling, boots (no abort), no per-agent deny backfill", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		require.True(t, coreagent.SeedConfig(cfg))
 
 		// Simulate a config that predates ADR-052: strip the seeded entries
 		// for the new tools from one agent (Mia) and the global ceiling, then
-		// confirm coverage validation finds the gap and the repair backfills
-		// it to explicit "deny" rather than aborting boot (GS-03).
+		// confirm coverage validation finds the gap and — under the ADR-077
+		// two-layer model — ReconcileToolPolicyCeiling closes it by restoring
+		// the GLOBAL ceiling to its shipped default, never by backfilling a
+		// per-agent deny onto Mia.
 		for i := range cfg.Agents.List {
 			if cfg.Agents.List[i].ID != string(coreagent.IDMia) {
 				continue
@@ -137,16 +139,20 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 		gapsBefore := config.ValidateToolPolicyCoverage(cfg, known)
 		require.NotEmpty(t, gapsBefore, "stripping both sides must produce a coverage gap")
 
-		repaired := config.RepairIncompleteToolPolicyCoverage(cfg, known)
-		require.NotEmpty(t, repaired, "repair must backfill the induced gap")
+		added := config.ReconcileToolPolicyCeiling(cfg, known)
+		require.NotEmpty(t, added, "reconcile must backfill the induced global-ceiling gap")
 
 		gapsAfter := config.ValidateToolPolicyCoverage(cfg, known)
-		assert.Empty(t, gapsAfter, "coverage must be complete (boots) after repair — no abort")
+		assert.Empty(t, gapsAfter, "coverage must be complete (boots) after reconcile — no abort")
 
 		mia := findSeeded(t, cfg, string(coreagent.IDMia))
 		for _, tool := range planExecutionTools {
-			assert.Equalf(t, config.ToolPolicyDeny, mia.Tools.Builtin.Policies[tool],
-				"backfilled gap for %q must resolve to explicit deny (fail-closed), never an implicit allow", tool)
+			_, hasOwnEntry := mia.Tools.Builtin.Policies[tool]
+			assert.Falsef(t, hasOwnEntry,
+				"ADR-077: reconcile must never write a per-agent entry — Mia must keep riding the "+
+					"global ceiling for %q, not gain a synthesized deny", tool)
+			assert.Equalf(t, config.DefaultConfig().Sandbox.ToolPolicies[tool], cfg.Sandbox.ToolPolicies[tool],
+				"the induced gap for %q must resolve from the reconciled ceiling's shipped default", tool)
 		}
 	})
 }

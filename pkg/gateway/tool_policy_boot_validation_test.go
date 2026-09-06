@@ -2,35 +2,32 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// These tests pin what boot-time tool-policy validation ACTUALLY does, because
-// a UAT round (2026-09-02, batch 4 S84) reported that it "does not abort boot on
-// a real on-disk gap" and CLAUDE.md hard constraint 6 claims it does ("at boot
-// (aborts with a listed `agent × tool` report on any gap)"). Both statements are
-// partly right, and the difference is exactly what these tests make explicit so
-// the next reader does not have to re-derive it:
+// These tests pin what boot-time tool-policy validation ACTUALLY does under
+// the ADR-077 two-layer model: the global ceiling (cfg.Sandbox.ToolPolicies),
+// kept complete for the whole static catalog by config.ReconcileToolPolicyCeiling
+// (ADR-076), IS the default for every tool; sparse per-agent overrides only
+// ever tighten below it. There is no third layer and no fail-closed per-agent
+// deny backfill between them — config.RepairIncompleteToolPolicyCoverage and
+// config.ValidateAgentOwnToolPolicyCoverage, which used to live in this
+// package's call path, are retired (see their retirement comments in
+// pkg/config/validate.go).
 //
-//  1. The validator DOES run and its abort IS live code — see the caller in
-//     gateway.go's RunContextWithOptions (boot) and executeReload (hot-reload),
-//     both of which return an error on any remaining gap.
+//  1. The validator (config.ValidateToolPolicyCoverage) DOES run and its
+//     abort IS live code — see the caller in gateway.go's RunContextWithOptions
+//     (boot) and executeReload (hot-reload), both of which return an error on
+//     any remaining gap.
 //
-//  2. But config.RepairIncompleteToolPolicyCoverage runs immediately BEFORE it
-//     and closes every gap it can see, backfilling to explicit "deny". Since
-//     gaps are derived from cfg.Agents.List itself, there is no gap the repair
-//     cannot close — so in practice the abort never fires. That is the code's
-//     own stated intent ("the repair IS the fix"), and it is narrower than
-//     CLAUDE.md's wording.
+//  2. But config.ReconcileToolPolicyCeiling runs immediately BEFORE it and
+//     keeps the GLOBAL ceiling complete for the whole static catalog, so a
+//     both-sides gap for a catalog tool is impossible in practice — the abort
+//     is a never-firing correctness tripwire, not a normal-operation path.
 //
-//  3. S84's specific reproduction — deleting `plan_correct` from ONE agent's
-//     stored map — was never a gap by the definition CLAUDE.md itself gives
-//     ("global sandbox.tool_policies AND/OR an agent's tools.builtin.policies"),
-//     because pkg/config/defaults.go seeds the global ceiling with
-//     `plan_correct: allow`. Not aborting was correct there.
-//
-//  4. The state that IS dangerous, and was invisible to every check, is the
-//     one-sided hole: an agent that HAS its own policy map but is missing an
-//     entry, so the permissive ceiling decides alone. That is what emptied a
-//     `bash: deny` agent's map into a working bash call in UAT batch 2, and it
-//     is what config.ValidateAgentOwnToolPolicyCoverage now names at Error.
+//  3. A tool an agent never mentions in its own map — e.g. bash for an agent
+//     with no explicit bash entry — resolves from the reconciled ceiling's
+//     shipped default. For bash that is "allow" (CLAUDE.md hard constraint 6:
+//     bash is registered for every agent and the kernel sandbox is the
+//     protective layer). That is the intended, ratified behaviour, not a gap
+//     to paper over with a fail-closed backfill.
 package gateway
 
 import (
@@ -42,20 +39,22 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// TestRepairAndValidate_BothSidesGap_IsRepairedNotAborted documents point 2
-// above with a live assertion rather than a comment: given a tool with NO entry
-// on either side, the shared boot/reload helper backfills it to explicit "deny"
-// and returns ZERO remaining gaps — so the caller's abort branch is not taken.
+// TestRepairAndValidate_BothSidesGap_ResolvesFromReconciledCeiling_NoDenyBackfill
+// documents the ADR-077 two-layer model with a live assertion rather than a
+// comment: given an agent with an EMPTY per-agent policy map and a
+// deliberately EMPTY global ceiling, the shared boot/reload helper reconciles
+// the global ceiling to the shipped static-catalog defaults (never touching
+// the agent's own map), returns ZERO remaining gaps, and bash resolves
+// "allow" purely from that reconciled ceiling.
 //
-// This is the behaviour that makes CLAUDE.md's "aborts on any gap" wording an
-// over-claim. Pinning it means a future change that removes the repair (making
-// the abort reachable again) fails here loudly and deliberately, instead of
-// silently turning every catalog addition into a boot-brick on upgraded
-// installs — the exact reason the repair exists.
-func TestRepairAndValidate_BothSidesGap_IsRepairedNotAborted(t *testing.T) {
+// This is the guard called for by ADR-077 D6 Guard 1: if a fail-closed
+// per-agent deny backfill is ever reintroduced into the load path, this test
+// fails loudly — either the agent's own policies map stops being empty, or
+// bash stops resolving "allow" from the ceiling alone.
+func TestRepairAndValidate_BothSidesGap_ResolvesFromReconciledCeiling_NoDenyBackfill(t *testing.T) {
 	cfg := &config.Config{
-		// A deliberately EMPTY global ceiling: without it, every static tool is
-		// a genuine both-sides gap for this agent.
+		// A deliberately EMPTY global ceiling: without ReconcileToolPolicyCeiling
+		// closing it, every static tool would be a genuine both-sides gap.
 		Sandbox: config.OmnipusSandboxConfig{ToolPolicies: map[string]string{}},
 		Agents: config.AgentsConfig{List: []config.AgentConfig{{
 			ID:    "legacy-agent",
@@ -65,84 +64,23 @@ func TestRepairAndValidate_BothSidesGap_IsRepairedNotAborted(t *testing.T) {
 
 	gaps := repairAndValidateToolPolicyCoverage(cfg)
 	assert.Empty(t, gaps,
-		"the repair closes every closable gap before validation runs, so the boot abort is "+
-			"unreachable in practice — if this ever becomes non-empty, the abort semantics changed")
+		"ReconcileToolPolicyCeiling closes every gap by filling the GLOBAL ceiling with shipped "+
+			"defaults, so the boot abort is unreachable in practice for a catalog tool")
 
+	// The agent's OWN policy map must stay empty — no per-agent deny backfill.
 	require.NotNil(t, cfg.Agents.List[0].Tools)
 	policies := cfg.Agents.List[0].Tools.Builtin.Policies
-	require.NotEmpty(t, policies, "the repair must have materialized explicit entries")
-	assert.Equal(t, config.ToolPolicyDeny, policies["bash"],
-		"the backfill direction must be fail-closed deny, never allow")
+	assert.Empty(t, policies,
+		"ADR-077: there must be no fail-closed per-agent backfill; an agent that never mentions a "+
+			"tool must ride the global ceiling, not gain a synthesized entry of its own")
 
-	// And the repaired config is genuinely complete by the coverage definition.
+	// bash resolves "allow" from the reconciled global ceiling alone.
+	require.Contains(t, cfg.Sandbox.ToolPolicies, "bash", "ReconcileToolPolicyCeiling must have filled bash into the global ceiling")
+	wantBash := config.DefaultConfig().Sandbox.ToolPolicies["bash"]
+	require.Equal(t, "allow", wantBash, "fixture assumption: bash ships allow by default")
+	assert.Equal(t, wantBash, cfg.Sandbox.ToolPolicies["bash"],
+		"bash must resolve to its shipped default (allow) from the reconciled ceiling, not a deny backfill")
+
+	// And the reconciled config is genuinely complete by the coverage definition.
 	assert.Empty(t, config.ValidateToolPolicyCoverage(cfg, buildKnownBuiltinToolNames()))
-}
-
-// TestRepairAndValidate_PerAgentHoleUnderSeededCeiling_IsDetected is S84's
-// scenario, run against the REAL seeded global ceiling: an agent whose own map
-// is complete except for one deliberately deleted key.
-//
-// Coverage validation reports nothing (correctly — the ceiling covers it), the
-// repair therefore backfills nothing, and boot proceeds. What must NOT happen is
-// that the state goes entirely unnoticed: ValidateAgentOwnToolPolicyCoverage has
-// to name the exact (agent, tool) pair, because that tool's policy is now
-// decided by the ceiling alone and any per-agent tightening for it is dead.
-func TestRepairAndValidate_PerAgentHoleUnderSeededCeiling_IsDetected(t *testing.T) {
-	known := buildKnownBuiltinToolNames()
-	require.Contains(t, known, "plan_correct", "fixture depends on the tool S84 deleted")
-
-	policies := make(map[string]config.ToolPolicy, len(known))
-	for name := range known {
-		policies[name] = config.ToolPolicyAllow
-	}
-	// The hand-edit S84 performed on disk.
-	delete(policies, "plan_correct")
-
-	seeded := config.DefaultConfig()
-	cfg := &config.Config{
-		Sandbox: config.OmnipusSandboxConfig{ToolPolicies: seeded.Sandbox.ToolPolicies},
-		Agents: config.AgentsConfig{List: []config.AgentConfig{{
-			ID:    "tampered-agent",
-			Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{Policies: policies}},
-		}}},
-	}
-	require.NotEmpty(t, cfg.Sandbox.ToolPolicies,
-		"this test is only meaningful against the real seeded ceiling")
-	require.Contains(t, cfg.Sandbox.ToolPolicies, "plan_correct",
-		"the seeded ceiling covers plan_correct — which is precisely why S84 saw no boot abort")
-
-	// Coverage is satisfied, so boot does not abort. Asserting this explicitly
-	// records WHY, rather than leaving the UAT's "it should have aborted" claim
-	// standing unexamined.
-	assert.Empty(t, repairAndValidateToolPolicyCoverage(cfg),
-		"the global ceiling covers plan_correct, so this is not a coverage gap and boot "+
-			"correctly proceeds — S84's expectation of an abort did not match the documented "+
-			"'global and/or per-agent' definition")
-
-	// The finding that DOES matter, and that nothing reported before.
-	own := config.ValidateAgentOwnToolPolicyCoverage(cfg, known)
-	require.Len(t, own, 1, "exactly the one deleted key must be reported")
-	assert.Equal(t, "tampered-agent", own[0].AgentID)
-	assert.Equal(t, "plan_correct", own[0].ToolName)
-}
-
-// TestRepairAndValidate_HealthySeededConfig_ProducesNoFindings guards against
-// the new Error-level report crying wolf on every boot: a config whose agents
-// carry complete maps must produce zero own-coverage findings. Without this,
-// the detector could be trivially "correct" by reporting everything always, and
-// operators would learn to ignore it.
-func TestRepairAndValidate_HealthySeededConfig_ProducesNoFindings(t *testing.T) {
-	known := buildKnownBuiltinToolNames()
-	policies := make(map[string]config.ToolPolicy, len(known))
-	for name := range known {
-		policies[name] = config.ToolPolicyAsk
-	}
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{List: []config.AgentConfig{{
-			ID:    "healthy-agent",
-			Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{Policies: policies}},
-		}}},
-	}
-	assert.Empty(t, config.ValidateAgentOwnToolPolicyCoverage(cfg, known))
-	assert.Empty(t, repairAndValidateToolPolicyCoverage(cfg))
 }

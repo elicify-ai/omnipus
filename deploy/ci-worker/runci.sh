@@ -136,6 +136,10 @@ run_lint() {
   bash scripts/check-no-tool-error-from-status.sh || return 1
   # ADR-061 regression guard: the deleted JPEG screencast path must not return.
   bash scripts/check-no-jpeg-screencast.sh || return 1
+  # ADR-077 regression guard: the deleted fail-closed per-agent tool-policy
+  # backfill (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
+  # must not return.
+  bash scripts/check-no-fail-closed-backfill.sh || return 1
   # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
   # single-slot session_token_hash and invalidates the shared storageState cookie
   # for every LATER spec — a failure that lands in an unrelated file). Self-test
