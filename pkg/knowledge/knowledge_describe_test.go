@@ -7,6 +7,7 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -242,9 +243,19 @@ func TestDescribe_IncludeTrimsSections(t *testing.T) {
 	}
 }
 
-// TestDescribe_MinimalDetailOmitsEnumValues — the `detail` parameter, whose
-// whole purpose is the token budget.
-func TestDescribe_MinimalDetailOmitsEnumValues(t *testing.T) {
+// TestDescribe_MinimalDetailKeepsEnumValues — D4 (Issue 9). The behaviour
+// CHANGED and this test changed with it: enum value lists are shown at EVERY
+// detail level now, minimal included.
+//
+// The old test asserted minimal OMITS enum values, encoding the exact bug a
+// tester hit — minimal reported task.status was an enum while hiding that
+// "open" was one of its values, so an agent could neither filter on it nor set
+// it without a second, wider call. An enum's permitted set is the property's
+// domain, not elaboration on it, so minimal keeps it. Minimal is still smaller
+// than standard, but the saving now comes from the per-type view-creation hints
+// (renderAvailableViews) minimal drops, never from blinding the reader to an
+// enum's domain.
+func TestDescribe_MinimalDetailKeepsEnumValues(t *testing.T) {
 	root := describeFixtureVault(t)
 	d := describeFixtureData(t, root, nil)
 
@@ -252,17 +263,25 @@ func TestDescribe_MinimalDetailOmitsEnumValues(t *testing.T) {
 	d.Detail = DetailMinimal
 	minimal := RenderDescribe(d)
 
-	if !strings.Contains(standard, "draft | shipped | withdrawn") {
-		t.Fatalf("standard detail must list enum values:\n%s", standard)
-	}
-	if strings.Contains(minimal, "draft | shipped | withdrawn") {
-		t.Errorf("minimal detail must omit enum value lists:\n%s", minimal)
+	for name, text := range map[string]string{"standard": standard, "minimal": minimal} {
+		if !strings.Contains(text, "draft | shipped | withdrawn") {
+			t.Errorf("%s detail must list enum values (the property's domain):\n%s", name, text)
+		}
 	}
 	if !strings.Contains(collapseSpaces(minimal), "state enum") {
 		t.Errorf("minimal detail must still name the property and its type:\n%s", minimal)
 	}
+	// The available-views block is what minimal actually trims — it must be
+	// present at standard and gone at minimal, so the size win is real and comes
+	// from there rather than from the enum domains.
+	if !strings.Contains(standard, "views you can create here:") {
+		t.Fatalf("standard detail must carry the view-creation hints:\n%s", standard)
+	}
+	if strings.Contains(minimal, "views you can create here:") {
+		t.Errorf("minimal detail must drop the view-creation hints (that is the token saving):\n%s", minimal)
+	}
 	if len(minimal) >= len(standard) {
-		t.Errorf("minimal (%d bytes) must be smaller than standard (%d bytes)", len(minimal), len(standard))
+		t.Errorf("minimal (%d bytes) must still be smaller than standard (%d bytes)", len(minimal), len(standard))
 	}
 }
 
@@ -445,8 +464,12 @@ func TestDescribeTool_DescriptionFitsTheBudgetAndNamesTheWidestOperation(t *test
 	}
 }
 
-// TestDescribeTool_ParametersAreExactlyTheSpecifiedFive.
-func TestDescribeTool_ParametersAreExactlyTheSpecifiedFive(t *testing.T) {
+// TestDescribeTool_ParametersAreExactlyTheSpecifiedSix.
+//
+// D3 (Issue 8) added `cursor` to page integrity findings, so the closed set is
+// now six. It stays CLOSED: an argument outside it is refused as unknown, which
+// is the whole reason this test pins the exact set.
+func TestDescribeTool_ParametersAreExactlyTheSpecifiedSix(t *testing.T) {
 	schema := (&DescribeTool{}).Parameters()
 	props, ok := schema["properties"].(map[string]any)
 	if !ok {
@@ -454,11 +477,11 @@ func TestDescribeTool_ParametersAreExactlyTheSpecifiedFive(t *testing.T) {
 	}
 	want := map[string]bool{
 		"collection": true, "record_type": true, "include": true,
-		"check_integrity": true, "detail": true,
+		"check_integrity": true, "detail": true, "cursor": true,
 	}
 	for name := range props {
 		if !want[name] {
-			t.Errorf("undeclared parameter %q — spec 4.1.1 lists exactly five", name)
+			t.Errorf("undeclared parameter %q — the closed set is exactly six", name)
 		}
 		delete(want, name)
 	}
@@ -652,5 +675,145 @@ func TestDescribe_IntegrityRenderedArtifact(t *testing.T) {
 		if !strings.Contains(text, c.want) {
 			t.Errorf("the integrity report must carry %s — %q missing from:\n%s", c.what, c.want, text)
 		}
+	}
+}
+
+// TestDescribe_ManyViewsAreCataloguedNotDumped — D4 (Issue 9). Above the inline
+// threshold the standard response must switch to a compact per-type catalog
+// (names + counts) instead of dumping every view's full definition, which
+// flooded the context a model reads at the start of every session. detail=full
+// brings the definitions back on demand.
+func TestDescribe_ManyViewsAreCataloguedNotDumped(t *testing.T) {
+	root := t.TempDir()
+	writeUnderMarker(t, root, "records", "widget.yaml", describeViewWidgetSchema)
+	writeUnderMarker(t, root, "records", "foundry.yaml", describeViewFoundrySchema)
+	schemas, sreport, err := records.LoadSchemas(root)
+	if err != nil {
+		t.Fatalf("LoadSchemas: %v", err)
+	}
+	if !sreport.OK() {
+		t.Fatalf("fixture schemas rejected: %v", sreport.Rejections)
+	}
+
+	// More views than viewsInlineThreshold, so the standard response must
+	// catalogue rather than inline. Two types, so per-type grouping is exercised.
+	const nWidget = 10
+	const nFoundry = 5
+	if nWidget+nFoundry <= viewsInlineThreshold {
+		t.Fatalf("fixture precondition: %d views must exceed the inline threshold %d",
+			nWidget+nFoundry, viewsInlineThreshold)
+	}
+	for i := 0; i < nWidget; i++ {
+		writeUnderMarker(t, root, "views", fmt.Sprintf("w%02d.yaml", i),
+			fmt.Sprintf("name: widget-view-%02d\ntype: widget\nfilter: {property: state, op: \"=\", value: shipped}\n", i))
+	}
+	for i := 0; i < nFoundry; i++ {
+		writeUnderMarker(t, root, "views", fmt.Sprintf("f%02d.yaml", i),
+			fmt.Sprintf("name: foundry-view-%02d\ntype: foundry\nfilter: {property: region, op: \"=\", value: north}\n", i))
+	}
+	views, vreport, err := records.LoadViews(root, schemas)
+	if err != nil {
+		t.Fatalf("LoadViews: %v", err)
+	}
+	if !vreport.OK() {
+		t.Fatalf("fixture views rejected: %v", vreport.Rejections)
+	}
+	if views.Len() != nWidget+nFoundry {
+		t.Fatalf("expected %d views, got %d", nWidget+nFoundry, views.Len())
+	}
+
+	d := DescribeData{
+		Collection: "workbench",
+		Schemas:    schemas,
+		Views:      views,
+		Sections:   map[string]bool{DescribeSectionViews: true},
+	}
+
+	standard := RenderDescribe(d)
+	if !strings.Contains(standard, fmt.Sprintf("VIEWS (%d)", nWidget+nFoundry)) {
+		t.Errorf("the catalog must count the views:\n%s", standard)
+	}
+	if !strings.Contains(standard, fmt.Sprintf("widget (%d):", nWidget)) {
+		t.Errorf("the catalog must group view names by type with a per-type count:\n%s", standard)
+	}
+	if !strings.Contains(standard, fmt.Sprintf("foundry (%d):", nFoundry)) {
+		t.Errorf("the catalog must list each type's views:\n%s", standard)
+	}
+	if !strings.Contains(standard, "widget-view-00") {
+		t.Errorf("the catalog must name individual views so an agent can ask for one:\n%s", standard)
+	}
+	if !strings.Contains(standard, "detail=full") {
+		t.Errorf("the catalog must say how to get the full definitions:\n%s", standard)
+	}
+	// The flood being fixed: the standard response must NOT inline view bodies.
+	if strings.Contains(standard, "filter state = shipped") {
+		t.Errorf("above the threshold the standard response must NOT dump view bodies:\n%s", standard)
+	}
+
+	// detail=full inlines the definitions, however many there are.
+	d.Detail = DetailFull
+	full := RenderDescribe(d)
+	if !strings.Contains(full, "filter state = shipped") {
+		t.Errorf("detail=full must inline the view definitions on demand:\n%s", full)
+	}
+	if len(full) <= len(standard) {
+		t.Errorf("detail=full (%d bytes) must be larger than the catalog (%d bytes)", len(full), len(standard))
+	}
+}
+
+// TestDescribe_IntegrityCursorPagesPastFiveHundred — D3 (Issue 8), end to end
+// through tools.go. It proves three things the render-only version could not:
+// the per-category total reaches the response, the response is a bounded sample
+// with a cursor rather than a full dump, and the cursor actually pages PAST 500
+// findings — which only works because the retention wired in tools.go kept them.
+func TestDescribe_IntegrityCursorPagesPastFiveHundred(t *testing.T) {
+	home := b5Home(t)
+	vault := b5Vault(t, filepath.Join(b5Real(t, t.TempDir()), "vault"), "Vault")
+	const notes = 560 // > 500, so paging must cross the old clamp boundary
+	for i := 0; i < notes; i++ {
+		b5Note(t, vault, fmt.Sprintf("n%04d.md", i), fmt.Sprintf("see [[missing-%04d]]\n", i))
+	}
+	ws := b5Workspace(t, home)
+	b5Mount(t, home, ws, "notes", vault)
+
+	tool := NewDescribeTool(ToolDeps{Home: home}, nil)
+
+	page1 := tool.Execute(b5Ctx("mia", ws), map[string]any{
+		"collection":      "notes",
+		"check_integrity": true,
+		"include":         []any{DescribeSectionIndex},
+	})
+	if page1 == nil || page1.IsError {
+		t.Fatalf("page 1 errored: %v", page1)
+	}
+	p1 := page1.ForLLM
+	if !strings.Contains(p1, fmt.Sprintf("broken link %d", notes)) {
+		t.Errorf("the per-category totals line must carry the true count:\n%s", p1)
+	}
+	wantSample := fmt.Sprintf("broken link: showing 1-%d of %d — next page: cursor=broken link#%d",
+		integrityFindingsPageSize, notes, integrityFindingsPageSize)
+	if !strings.Contains(p1, wantSample) {
+		t.Fatalf("page 1 must show a bounded sample and a cursor; want %q in:\n%s", wantSample, p1)
+	}
+	if got := strings.Count(p1, "ordinary wikilink, not a relation"); got > integrityFindingsPageSize {
+		t.Errorf("page 1 must be a bounded sample, not the whole category; got %d finding lines", got)
+	}
+
+	page2 := tool.Execute(b5Ctx("mia", ws), map[string]any{
+		"collection":      "notes",
+		"check_integrity": true,
+		"include":         []any{DescribeSectionIndex},
+		"cursor":          "broken link#500",
+	})
+	if page2 == nil || page2.IsError {
+		t.Fatalf("cursor page errored: %v", page2)
+	}
+	p2 := page2.ForLLM
+	wantPast500 := fmt.Sprintf("broken link: showing 501-520 of %d", notes)
+	if !strings.Contains(p2, wantPast500) {
+		t.Fatalf("the cursor must page PAST 500 (retention + cursor wired through tools.go); want %q in:\n%s", wantPast500, p2)
+	}
+	if strings.Contains(p2, "showing 1-20") {
+		t.Errorf("the cursor page must not re-show page 1:\n%s", p2)
 	}
 }

@@ -471,6 +471,12 @@ describe('LibraryPreviewPane — the untrusted-content boundary (US-2 AS-4 / FR-
     expect(boundary).toHaveTextContent(/untrusted/i)
     // Dies on: deleting the `{kind === 'html' && <UntrustedContentBoundary/>}`
     // line, or moving it inside the scrolling body.
+
+    // A3/Issue 1 — explicit "exactly one", not just "at least one".
+    // `findByTestId` above already throws on a second match, but that failure
+    // reads as "ambiguous query", not "duplicate banner" — this assertion
+    // names the actual regression it guards.
+    expect(screen.queryAllByTestId('library-preview-untrusted-boundary')).toHaveLength(1)
   })
 
   it('does not mark content Omnipus renders itself as untrusted', async () => {
@@ -497,6 +503,19 @@ describe('LibraryPreviewPane — preview unavailable, never a blank frame (FR-00
     // Dies on: returning null (or an empty <iframe>) when the minter is absent
     // — a blank pane the reader cannot distinguish from a page that rendered
     // nothing.
+
+    // A3/Issue 1: the "no minter wired" state is a real, intentional build
+    // state (PREVIEW_TOKEN_MINTER is `null` until the wave-3 preview-token
+    // endpoint ships, FR-003f) — it must render this notice AND the
+    // untrusted-content boundary ABOVE it, exactly once each, never the
+    // boundary twice. `queryAllByTestId` (not `getByTestId`/`findByTestId`,
+    // which only assert "at least one" by throwing on zero but say nothing
+    // about a second copy) is the one query that actually catches a
+    // duplicate render regressing back in.
+    expect(screen.queryAllByTestId('library-preview-untrusted-boundary')).toHaveLength(1)
+    // Dies on: a second `<UntrustedContentBoundary/>` mount anywhere in the
+    // pane's tree for an html entry (e.g. one rendered per html-handling
+    // branch instead of once in the shared pane chrome).
   })
 
   it('offers a retry that re-mints when minting fails', async () => {

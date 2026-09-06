@@ -384,6 +384,142 @@ func TestKnowledgeEdit_WrongArity_NamesTheFix(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Issue 6 / F3 — a comma-joined scalar auto-splits into a list for a
+// many-valued property, matching the corpus's own on-disk convention
+// (`tags: a, b`) so an agent that reads a note and writes its tags back
+// unmodified no longer fails every time.
+// ---------------------------------------------------------------------------
+
+func TestKnowledgeEdit_SetProperty_ManyValuedCommaString_AutoSplits(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	veSchema(t, root)
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+	a4Note(t, root, "Deals/Acme.md", "---\ntype: deal\nstatus: prospect\n---\nBody.\n")
+	v := a4Version(t, root, "Deals/Acme.md")
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "set_property", "path": "Deals/Acme.md",
+		"property": "tags", "value": "a, b", "expect_version": v,
+	})
+	require.False(t, res.IsError, "a comma-joined scalar for a many-valued property must auto-split: %s", res.ForLLM)
+
+	got := a4Read(t, root, "Deals/Acme.md")
+	if !strings.Contains(got, "- a\n") || !strings.Contains(got, "- b\n") {
+		t.Fatalf("tags must be stored as a two-element list [a, b]:\n%s", got)
+	}
+}
+
+// TestKnowledgeEdit_Create_ManyValuedCommaString_AutoSplits is the same fix,
+// exercised through create's frontmatter argument rather than
+// set_property's value argument — the other call site sharing
+// decodeValueArg/knowledgeEditAutoSplitCommaList.
+func TestKnowledgeEdit_Create_ManyValuedCommaString_AutoSplits(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	veSchema(t, root)
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create", "path": "Deals/NewCo.md",
+		"frontmatter": map[string]any{"type": "deal", "tags": "a, b"},
+	})
+	require.False(t, res.IsError, "create's frontmatter.tags comma-string must auto-split: %s", res.ForLLM)
+
+	got := a4Read(t, root, "Deals/NewCo.md")
+	if !strings.Contains(got, "- a\n") || !strings.Contains(got, "- b\n") {
+		t.Fatalf("tags must be stored as a two-element list [a, b]:\n%s", got)
+	}
+}
+
+// TestKnowledgeEdit_SetProperty_ManyValuedSingleScalar_AutoSplitsToOneElement
+// covers the N=1 boundary: a scalar with NO comma is still the same
+// comma-joined shape (a one-element list), so it must split too, not just
+// the two-or-more-element case.
+func TestKnowledgeEdit_SetProperty_ManyValuedSingleScalar_AutoSplitsToOneElement(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	veSchema(t, root)
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+	a4Note(t, root, "Deals/Acme.md", "---\ntype: deal\nstatus: prospect\n---\nBody.\n")
+	v := a4Version(t, root, "Deals/Acme.md")
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "set_property", "path": "Deals/Acme.md",
+		"property": "tags", "value": "solo", "expect_version": v,
+	})
+	require.False(t, res.IsError, "a bare scalar for a many-valued property must auto-split to a one-element list: %s", res.ForLLM)
+
+	got := a4Read(t, root, "Deals/Acme.md")
+	if !strings.Contains(got, "- solo\n") {
+		t.Fatalf("tags must be stored as a one-element list [solo]:\n%s", got)
+	}
+}
+
+// TestKnowledgeEdit_SetProperty_ManyValuedExplicitList_NotReSplit documents
+// the escape hatch: a caller who sends an EXPLICIT JSON list is never
+// auto-split, so an element containing a literal comma survives exactly as
+// sent — the ambiguity auto-split cannot resolve on its own is resolved by
+// the caller choosing the unambiguous shape.
+func TestKnowledgeEdit_SetProperty_ManyValuedExplicitList_NotReSplit(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	veSchema(t, root)
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+	a4Note(t, root, "Deals/Acme.md", "---\ntype: deal\nstatus: prospect\n---\nBody.\n")
+	v := a4Version(t, root, "Deals/Acme.md")
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "set_property", "path": "Deals/Acme.md",
+		"property": "tags", "value": []any{"New York, NY"}, "expect_version": v,
+	})
+	require.False(t, res.IsError, "an explicit list must not be refused: %s", res.ForLLM)
+
+	got := a4Read(t, root, "Deals/Acme.md")
+	if !strings.Contains(got, "New York, NY") {
+		t.Fatalf("an explicit list's element must survive its literal comma unsplit:\n%s", got)
+	}
+}
+
+// TestKnowledgeEdit_SetProperty_ManyValuedEnum_InvalidElementAfterSplit_StillRefused
+// proves enum validation stays intact across the split (the brief's
+// explicit requirement): a comma string auto-splits into elements, and one
+// of those elements failing the property's OWN enum constraint must still
+// be refused, exactly as an explicit list with the same invalid element
+// would be.
+func TestKnowledgeEdit_SetProperty_ManyValuedEnum_InvalidElementAfterSplit_StillRefused(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	dir := filepath.Join(root, records.VaultMarkerDirName, records.RecordsDirName)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	yaml := "schema_version: 1\n" +
+		"type: contact\n" +
+		"properties:\n" +
+		"  labels: { type: enum, many: true, values: [alpha, beta] }\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "contact.yaml"), []byte(yaml), 0o600))
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+	a4Note(t, root, "People/Jo.md", "---\ntype: contact\n---\nBody.\n")
+	v := a4Version(t, root, "People/Jo.md")
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "set_property", "path": "People/Jo.md",
+		"property": "labels", "value": "alpha, gamma", "expect_version": v,
+	})
+	if !res.IsError {
+		t.Fatalf("an invalid enum element surviving the split must still be refused: %s", res.ForLLM)
+	}
+	for _, want := range []string{"gamma", "alpha", "beta"} {
+		if !strings.Contains(res.ForLLM, want) {
+			t.Fatalf("refusal must name the offending value and the permitted set (missing %q): %s", want, res.ForLLM)
+		}
+	}
+	got := a4Read(t, root, "People/Jo.md")
+	if strings.Contains(got, "gamma") {
+		t.Fatalf("refused write must not change the file: %s", got)
+	}
+}
+
 func TestKnowledgeEdit_WrongType_NamesExpectedShape(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
 	veSchema(t, root)

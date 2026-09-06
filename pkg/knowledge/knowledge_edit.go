@@ -389,7 +389,14 @@ func (t *EditTool) execCreate(ctx context.Context, target mutationTarget, args m
 		// reports governance for the note as a WHOLE (G1/G3), which is the
 		// answer that also covers properties this loop never touches (raw
 		// body/template bytes).
-		next, eerr := knowledgeEditSetPropertyEdit(set, report, p.Key, p.Values, p.IsList, nil)(content)
+		//
+		// knowledgeEditAutoSplitCommaList runs first (Issue 6/F3): `type`
+		// is sorted to the front by frontmatterArgToPairs, so by the time a
+		// later pair such as `tags` is spliced, `content` already carries
+		// whatever `type:` this same call set, and the schema for it is
+		// resolvable from the bytes as they stand right now.
+		values, isList := knowledgeEditAutoSplitCommaList(set, content, p.Key, p.Values, p.IsList)
+		next, eerr := knowledgeEditSetPropertyEdit(set, report, p.Key, values, isList, nil)(content)
 		if eerr != nil {
 			return t.deps.refuse(AuthorOpCreate, target, []string{rel},
 				fmt.Sprintf("frontmatter.%s: %v", p.Key, eerr))
@@ -528,7 +535,16 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 		if verr != nil {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, verr.Error())
 		}
-		edit = knowledgeEditSetPropertyEdit(set, report, property, values, isList, &gov)
+		// knowledgeEditAutoSplitCommaList (Issue 6/F3) needs the note's OWN
+		// bytes to resolve its `type:` and schema, and — unlike execCreate,
+		// which already holds `content` at this point — set_property's
+		// target file is only read inside EditNote, synchronously, right
+		// before this closure runs. So the split has to happen INSIDE the
+		// closure, against the `src` EditNote hands it, not out here.
+		edit = func(src []byte) ([]byte, error) {
+			splitValues, splitIsList := knowledgeEditAutoSplitCommaList(set, src, property, values, isList)
+			return knowledgeEditSetPropertyEdit(set, report, property, splitValues, splitIsList, &gov)(src)
+		}
 	}
 
 	res, err := EditNote(OSLinkFS(), target.collection, EditNoteRequest{
@@ -866,6 +882,95 @@ func renderVersionConflict(e *ConflictError) string {
 // ---------------------------------------------------------------------------
 // Argument decoding shared by create.frontmatter and set_property.value
 // ---------------------------------------------------------------------------
+
+// knowledgeEditAutoSplitCommaList is Issue 6/F3's fix for a specific,
+// unambiguous round-trip failure: a many-valued property (`many: true`)
+// whose note stores its value as a plain comma-joined scalar — e.g.
+// `tags: a, b` — rather than a real YAML sequence. knowledge_describe /
+// knowledge_read hand that scalar back to an agent exactly as written; the
+// agent, having no reason to suspect the plain-looking string it just read
+// is not "a value", sends it straight back into create/set_property and
+// hits vault_edit_schema.go's arity refusal ("declared as a list; got a
+// single value — send a list") on every attempt, because a bare scalar was
+// never a legal shape for a many-valued property to begin with (see
+// records.Property.Many's own doc comment: "a list property is never
+// silently a scalar").
+//
+// That "never silently" rule is about a VALIDATED value disagreeing with
+// its declaration — this function runs strictly BEFORE validation, on the
+// caller's raw argument shape, and turns exactly one case of "obviously
+// meant a list" into the list it names. It is the one caller of this
+// package's decodeValueArg that ever changes the shape decodeValueArg
+// reported, so the two only ever seem to disagree at this one, deliberate
+// site.
+//
+// WHY AUTO-SPLIT (over sharpening the refusal's wording, the brief's other
+// option): a bare scalar sent for a many-valued property was ALWAYS
+// refused before this fix, in EVERY case — there is no existing legal
+// scalar-for-many usage this could ever break, only a shape this function
+// makes newly acceptable. Splitting is applied unconditionally whenever the
+// property is many-valued and the caller sent a scalar (not only when the
+// scalar contains a comma), because a zero-comma scalar is just the N=1
+// case of the same comma-joined shape the corpus already uses.
+//
+// THE DOCUMENTED BOUNDARY (per the brief's "document the boundary"): this
+// is inherently ambiguous for a many-valued property whose OWN elements may
+// legitimately contain a literal comma — "New York, NY" as one tag reads
+// identically to two tags "New York" and "NY". This function cannot tell
+// those apart from a bare string and does not try; it always chooses "N
+// values". A caller that means one value containing a literal comma MUST
+// send an explicit JSON list (`["New York, NY"]`) — decodeValueArg reports
+// that shape as isList==true already, and this function is a no-op
+// whenever isList is already true, so an explicit list always passes
+// through untouched.
+//
+// Each split element is whitespace-trimmed (the corpus's own comma-joined
+// convention, e.g. "a, b", puts a space after the comma) and an empty
+// element (from a leading/trailing/doubled comma) is dropped. If every
+// element is empty after trimming, the value is left unchanged — an empty
+// string sent for a many-valued property is not "obviously a list" and is
+// better left to the ordinary arity refusal than silently turned into an
+// empty list.
+//
+// Enum validation is NOT this function's job and is untouched by it:
+// splitting only changes the SHAPE (scalar -> list) that gets handed to
+// knowledgeEditSetPropertyEdit; that function still runs records.ParseValue
+// against every resulting element exactly as it does for a list the caller
+// sent directly, so an invalid enum member is refused exactly as before —
+// this function has no way to see, and no need to see, what the property's
+// type is beyond its declared arity.
+func knowledgeEditAutoSplitCommaList(set *records.SchemaSet, content []byte, property string, values []string, isList bool) ([]string, bool) {
+	if set == nil || isList || len(values) != 1 {
+		return values, isList
+	}
+	fm, ferr := records.ParseFrontmatter(content)
+	if ferr != nil {
+		return values, isList
+	}
+	typeName := (records.Record{Frontmatter: fm}).TypeName()
+	if typeName == "" {
+		return values, isList
+	}
+	schema, ok := set.Get(typeName)
+	if !ok {
+		return values, isList
+	}
+	prop, ok := schema.Property(property)
+	if !ok || !prop.Many {
+		return values, isList
+	}
+	parts := strings.Split(values[0], ",")
+	split := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			split = append(split, trimmed)
+		}
+	}
+	if len(split) == 0 {
+		return values, isList
+	}
+	return split, true
+}
 
 // decodeValueArg reads a "value" (or one frontmatter entry) that may be a
 // scalar (text, a number, a boolean) or a list of those, and reports which
