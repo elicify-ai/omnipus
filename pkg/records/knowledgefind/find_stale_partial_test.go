@@ -33,6 +33,7 @@ func TestFind_StalePartialTextIndex_NonZeroHits_IsNotClaimedComplete(t *testing.
 	f.text.fresh = &TextIndexFreshness{
 		Built: true, Fresh: false,
 		ScannedFiles: 4, IndexedFiles: 1, PendingFiles: 3,
+		NewFiles: 3, // the 3 unindexed files are on disk but not in the index at all
 	}
 
 	resp := mustFind(t, f.deps(), req(withType("plant"), withWords("Fern")))

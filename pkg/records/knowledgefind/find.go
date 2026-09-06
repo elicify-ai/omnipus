@@ -91,6 +91,24 @@ type TextIndexFreshness struct {
 	ScannedFiles int
 	IndexedFiles int
 	PendingFiles int
+	// NewFiles / ChangedFiles / RemovedFiles break PendingFiles down, and the
+	// split is what lets the A2(d) coverage warning fire ONLY on genuine
+	// under-reporting (Finding 2):
+	//
+	//   - NewFiles are on disk but not in the index at all. These, and ONLY
+	//     these, can make a `words` result under-report — a matching file that
+	//     is not indexed cannot appear. This is the count the warning keys on.
+	//   - ChangedFiles are already in the index; a stat moved (an mtime touch
+	//     from a git checkout, rsync or backup restore reads as Changed even
+	//     when the bytes are identical). They still return their hits, so they
+	//     do not under-report — and must not downgrade an otherwise-complete
+	//     answer.
+	//   - RemovedFiles are in the index but gone from disk. They can only
+	//     OVER-report, never under-report, so they do not trigger the warning
+	//     either.
+	NewFiles     int
+	ChangedFiles int
+	RemovedFiles int
 }
 
 // TextFreshnessReporter is an OPTIONAL capability a TextSearcher may implement
@@ -679,13 +697,26 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// new one is a wire-contract change owned elsewhere.
 	if q.words != "" {
 		if fr, ok := d.Text.(TextFreshnessReporter); ok {
-			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 &&
-				(!fresh.Fresh || fresh.PendingFiles > 0 || fresh.IndexedFiles < fresh.ScannedFiles) {
+			// GENUINE incompleteness is NewFiles > 0: files on disk that are not
+			// in the index AT ALL, so a matching one cannot appear in this
+			// result — the exact "term in 68 notes, returned for 1" symptom.
+			// It must NOT fire on the other ways an index can differ from disk,
+			// because none of them under-report (Finding 2):
+			//   - a mtime-only touch reads as Changed (git checkout / rsync /
+			//     backup restore); the file is still indexed and still returns
+			//     its hits, so !Fresh / PendingFiles>0 alone must not downgrade.
+			//   - a Removed file is in the index but gone from disk — it can
+			//     only over-report, never under-report.
+			//   - an unreadable/permanently-skipped file leaves
+			//     IndexedFiles<ScannedFiles forever; keying on that disjunct
+			//     made every search incomplete for good. NewFiles excludes it
+			//     (the index accounts for it as unindexable, not pending).
+			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 && fresh.NewFiles > 0 {
 				ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
 					fmt.Sprintf("the text index has not finished indexing this vault — it currently reflects "+
 						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
 						"under-report: matching files that are not yet indexed cannot appear here",
-						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.NewFiles)),
 					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state")})
 			}
 		}

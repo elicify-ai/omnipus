@@ -67,6 +67,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
@@ -446,6 +447,22 @@ type Index struct {
 	rebuildReason string
 
 	mu sync.Mutex // serializes writes (Sync); scorch is read-safe concurrently
+
+	// freshMu guards the cached freshness snapshot below. It is deliberately
+	// NOT ix.mu: a freshness read on the search hot path must never wait behind
+	// a running SyncWith, so it takes only this short-lived lock and never holds
+	// it across a scan or any os/fileutil call (Finding 1).
+	freshMu       sync.Mutex
+	cachedFresh   *IndexFreshness
+	cachedFreshAt time.Time
+	// unindexable records files the latest completed SyncWith found on disk but
+	// could not index (unreadable), keyed by rel path to the mod-time at the
+	// failure. computeFreshness excludes such a file from New — it is not "not
+	// yet indexed" (pending work a re-index clears) but "cannot be indexed", and
+	// counting it as New made one permanently-unreadable file report the whole
+	// vault incomplete on every search forever (Finding 2c). A file whose
+	// mod-time has since moved is worth retrying, so it counts as New again.
+	unindexable map[string]int64
 
 	// regKey is the registry key (the resolved real root) this handle is shared
 	// under. Empty for a handle the registry does not manage.
@@ -1243,20 +1260,130 @@ type IndexFreshness struct {
 	Pending int
 }
 
-// Freshness computes an IndexFreshness snapshot. It takes the same lock
-// Index.SyncWith does (ctx-answerable, so it never blocks uninterruptibly
-// behind a long reconcile) and reads only stat metadata and the manifest — no
-// file content, no index mutation.
+// freshnessScan is the stat-only collection walk Freshness/computeFreshness
+// use, indirected through a package var so a test can count exactly how often
+// the freshness path walks the filesystem — the Scan seam Finding 1's proof
+// asserts stays at zero on the search hot path.
+var freshnessScan = Scan
+
+// freshnessCacheTTL bounds how often FreshnessCached will pay a filesystem
+// walk. Within one TTL of the last computed snapshot it serves cached counts
+// with no scan and no lock, which is what keeps a busy search hot path off the
+// disk and off ix.mu (Finding 1). It is a var, not a const, so a test can pin
+// it to force or forbid a refresh deterministically.
+var freshnessCacheTTL = 3 * time.Second
+
+// Freshness computes an IndexFreshness snapshot from a fresh stat-only walk of
+// the collection diffed against the manifest — no file content, no index
+// mutation, and (deliberately) NO ix.mu.
+//
+// It used to take ix.mu, the same lock SyncWith holds for its entire reconcile.
+// That made a freshness read issued during a long sweep block until its own ctx
+// expired — the exact hot-path stall Finding 1 removes. The lock is not needed
+// for correctness: this reads only immutable Index fields (root, manifestPath),
+// the manifest file (written atomically by SyncWith, so a concurrent write is
+// seen whole or not at all), and the directory tree. It never touches ix.idx.
 //
 // A never-built collection returns Built=false, Fresh=false, with New equal to
 // whatever is on disk. An unreadable/corrupt manifest is reported through the
 // error rather than papered over as fresh: a freshness answer this call could
 // not actually compute must not read as "all good".
+//
+// Freshness always walks. The search hot path wants FreshnessCached, which
+// serves a recent snapshot without walking.
 func (ix *Index) Freshness(ctx context.Context) (IndexFreshness, error) {
-	if err := ix.lockCtx(ctx); err != nil {
+	f, err := ix.computeFreshness(ctx)
+	if err != nil {
 		return IndexFreshness{}, err
 	}
-	defer ix.mu.Unlock()
+	ix.storeFreshness(f)
+	return f, nil
+}
+
+// FreshnessCached is the SEARCH HOT PATH's freshness read (Finding 1). It serves
+// the last computed snapshot with no filesystem walk and no lock a running
+// SyncWith holds, for as long as that snapshot is younger than
+// freshnessCacheTTL; only past the TTL does it pay a single lock-free walk to
+// refresh. A successful search therefore no longer stats the whole vault or
+// blocks on the reconcile lock on every query — it reads counts a recent walk
+// (this call's own, a prior search's, an explicit Freshness, or SyncWith)
+// already produced.
+//
+// It never returns an error: a walk that fails falls back to the most recent
+// cached snapshot, or to a zero-value snapshot (Scanned == 0) that every
+// freshness check treats as inert — a freshness WARNING that cannot be computed
+// must degrade to silence, never to a spurious refusal or a hard error on the
+// success path.
+func (ix *Index) FreshnessCached(ctx context.Context) IndexFreshness {
+	ix.freshMu.Lock()
+	if ix.cachedFresh != nil && time.Since(ix.cachedFreshAt) < freshnessCacheTTL {
+		f := *ix.cachedFresh
+		ix.freshMu.Unlock()
+		return f
+	}
+	ix.freshMu.Unlock()
+
+	f, err := ix.computeFreshness(ctx)
+	if err != nil {
+		ix.freshMu.Lock()
+		defer ix.freshMu.Unlock()
+		if ix.cachedFresh != nil {
+			return *ix.cachedFresh
+		}
+		return IndexFreshness{}
+	}
+	ix.storeFreshness(f)
+	return f
+}
+
+// storeFreshness publishes a freshly computed snapshot for FreshnessCached to
+// serve. It holds freshMu only for the pointer swap — never across a scan or
+// any os/fileutil call — so a freshness read can never stall a search.
+func (ix *Index) storeFreshness(f IndexFreshness) {
+	snap := f
+	ix.freshMu.Lock()
+	ix.cachedFresh = &snap
+	ix.cachedFreshAt = time.Now()
+	ix.freshMu.Unlock()
+}
+
+// unindexableSnapshot returns a copy of the unindexable set for a lock-free
+// diff. nil when empty, which the caller treats as "exclude nothing".
+func (ix *Index) unindexableSnapshot() map[string]int64 {
+	ix.freshMu.Lock()
+	defer ix.freshMu.Unlock()
+	if len(ix.unindexable) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(ix.unindexable))
+	for k, v := range ix.unindexable {
+		out[k] = v
+	}
+	return out
+}
+
+// recordUnindexable replaces the set of files the latest completed SyncWith
+// found on disk but could not index. Replacing (not merging) is correct: a file
+// that has since become readable, was deleted, or was indexed successfully on
+// this run must drop out, and the run just observed the whole collection. An
+// empty result clears the set.
+func (ix *Index) recordUnindexable(failed map[string]int64) {
+	ix.freshMu.Lock()
+	if len(failed) == 0 {
+		ix.unindexable = nil
+	} else {
+		ix.unindexable = failed
+	}
+	ix.freshMu.Unlock()
+}
+
+// computeFreshness is the actual stat-walk-and-diff, factored out so both the
+// always-fresh Freshness and the throttled FreshnessCached share one
+// implementation.
+func (ix *Index) computeFreshness(ctx context.Context) (IndexFreshness, error) {
+	if err := ctx.Err(); err != nil {
+		return IndexFreshness{}, err
+	}
 
 	var f IndexFreshness
 	built, err := ManifestExists(ix.manifestPath)
@@ -1265,7 +1392,7 @@ func (ix *Index) Freshness(ctx context.Context) (IndexFreshness, error) {
 	}
 	f.Built = built
 
-	scan, err := Scan(ix.root)
+	scan, err := freshnessScan(ix.root)
 	if err != nil {
 		return IndexFreshness{}, err
 	}
@@ -1291,10 +1418,23 @@ func (ix *Index) Freshness(ctx context.Context) (IndexFreshness, error) {
 	}
 	f.Indexed = manifest.Len()
 
+	// A snapshot of the unindexable set, taken once so the per-entry diff below
+	// does not touch freshMu in the loop.
+	skip := ix.unindexableSnapshot()
+
 	seen := make(map[string]struct{}, len(scan.Entries))
 	for _, entry := range scan.Entries {
 		seen[entry.RelPath] = struct{}{}
 		if _, ok := manifest.Get(entry.RelPath); !ok {
+			// On disk, not in the manifest. Ordinarily "new, not yet indexed" —
+			// but a file the last sweep tried and could not read is not pending
+			// work a re-index would clear, so it must not report the vault
+			// incomplete forever (Finding 2c). It counts as New again only if
+			// its mod-time has moved since the failure, i.e. it is worth
+			// retrying.
+			if failedAt, isSkip := skip[entry.RelPath]; isSkip && failedAt == entry.ModTimeNanos {
+				continue
+			}
 			f.New++
 			continue
 		}
@@ -1561,6 +1701,11 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 		stats.ManifestRebuilt = true
 	}
 	seen := make(map[string]struct{}, len(scan.Entries))
+	// failed records files this sweep found on disk but could not index, keyed to
+	// the mod-time at the failure, so a freshness read can exclude them from New
+	// rather than reporting the vault incomplete forever over a file that cannot
+	// be indexed at all (Finding 2c).
+	failed := make(map[string]int64)
 	progress := newProgressCoalescer(opts.OnProgress, len(scan.Entries), opts.ProgressInterval, time.Now)
 
 	for _, entry := range scan.Entries {
@@ -1611,6 +1756,7 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 			stats.Problems = append(stats.Problems, ScanProblem{
 				RelPath: entry.RelPath, Reason: ScanProblemUnreadable, Detail: segErr.Error(),
 			})
+			failed[entry.RelPath] = entry.ModTimeNanos
 			continue
 		}
 		stats.Indexed++
@@ -1645,6 +1791,25 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 	if err := enforceIndexPermissions(ix.dir); err != nil {
 		return stats, err
 	}
+
+	// Publish which files this sweep could not index, so a subsequent freshness
+	// read excludes them from New instead of reporting the vault incomplete over
+	// a file that cannot be indexed at all (Finding 2c).
+	ix.recordUnindexable(failed)
+
+	// Warm the freshness cache from what this completed reconcile just observed,
+	// without a second walk: every scanned file is now either indexed or a
+	// removed one purged, so the collection is Fresh with nothing pending. This
+	// is what lets the search hot path read up-to-date counts via
+	// FreshnessCached with no filesystem walk of its own (Finding 1). Indexed
+	// can be below Scanned when a file could not be read — that is not pending
+	// work a re-index would clear, so Fresh stays true.
+	ix.storeFreshness(IndexFreshness{
+		Built:   true,
+		Fresh:   true,
+		Scanned: stats.Scanned,
+		Indexed: manifest.Len(),
+	})
 	return stats, nil
 }
 
@@ -2463,6 +2628,47 @@ func foldFieldTerm(field, term string) string {
 }
 
 // searchRaw executes one bleve query and returns the raw per-SEGMENT hits.
+// prefixSearchTokenizer tokenizes a query for the prefix pass EXACTLY as the
+// prose ("en") field analyzer tokenizes text for indexing — the Unicode UAX#29
+// word tokenizer — so a prefix token is compared against the term dictionary on
+// the same word boundaries the dictionary was built with. It is stateless and
+// safe to share.
+var prefixSearchTokenizer = unicode.NewUnicodeTokenizer()
+
+// prefixSearchTokens returns the lower-cased query tokens the prefix pass
+// prefix-matches against the prose dictionaries.
+//
+// It MUST tokenize the way the prose analyzer does, NOT the way
+// foldName/foldTokens does. foldName collapses EVERY non-alphanumeric rune —
+// the underscore included — to a break, so it split "keyword_new" into
+// "keyword" and "new". A PrefixQuery("keyword") then matched the unrelated
+// indexed term "keyword_old", because the "en" analyzer keeps "keyword_old" as
+// ONE term (Unicode word segmentation treats "_" as an ExtendNumLet connector).
+// That over-match made an edited note findable by its NEW term BEFORE the edit
+// and by its OLD term AFTER — the round-2 regression. Tokenizing with the same
+// Unicode tokenizer keeps "keyword_new" whole, so its prefix matches only terms
+// that actually begin "keyword_new"; "compos" still tokenizes to "compos" and
+// still prefix-matches "composio".
+//
+// Case is folded with Unicode lower-casing, which is what the "en" analyzer's
+// to_lower filter applied when building the dictionary — deliberately NOT
+// records.FoldKey (the name-ranking fold), which folds more aggressively
+// (ß→ss) than the dictionary was built and would therefore MISS a term rather
+// than over-match it. Stemming is deliberately skipped for the reason above.
+func prefixSearchTokens(query string) []string {
+	tokens := prefixSearchTokenizer.Tokenize([]byte(query))
+	if len(tokens) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if term := strings.ToLower(string(tok.Term)); term != "" {
+			out = append(out, term)
+		}
+	}
+	return out
+}
+
 func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 	var q bleveQuery.Query
 	if strings.TrimSpace(query) == "" {
@@ -2503,17 +2709,21 @@ func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 		// honour what the suggestion promises rather than only naming it.
 		//
 		// A bleve PrefixQuery matches the term DICTIONARY by raw byte prefix and
-		// performs no analysis of its own, so the prefix must arrive folded the
-		// same way the prose analyzer folds (lowercased) — foldTokens does that
-		// and, deliberately, does NOT stem: a stem would shorten the prefix past
-		// the very characters the caller typed. These disjuncts only ever ADD
-		// matches to the exact ones above; they never remove one, so a query
-		// that already matched exactly is unaffected. Only the PROSE fields get
-		// a prefix pass — a keyword field (path/prop_key/prop) stores each value
-		// as one whole term where prefixing would silently change what an exact
-		// pair or key query means.
+		// performs no analysis of its own, so the prefix must arrive tokenized
+		// and folded the SAME way the prose analyzer built the dictionary —
+		// prefixSearchTokens does that (Unicode word tokenizer + lower-case, no
+		// stem). It deliberately does NOT stem: a stem would shorten the prefix
+		// past the very characters the caller typed. It also must not use
+		// foldTokens, which splits on the underscore the "en" analyzer keeps
+		// inside a token — see prefixSearchTokens for the over-match that caused
+		// (round-2 regression). These disjuncts only ever ADD matches to the
+		// exact ones above; they never remove one, so a query that already
+		// matched exactly is unaffected. Only the PROSE fields get a prefix pass
+		// — a keyword field (path/prop_key/prop) stores each value as one whole
+		// term where prefixing would silently change what an exact pair or key
+		// query means.
 		prefixFields := []string{fieldName, fieldBody, fieldTitle, fieldHeadings, fieldPropValue}
-		for _, token := range foldTokens(query) {
+		for _, token := range prefixSearchTokens(query) {
 			// vocabularyPrefixMin guards against a 1–2 character prefix matching
 			// a large fraction of the dictionary — the same floor the
 			// vocabulary suggester uses for the same reason.
