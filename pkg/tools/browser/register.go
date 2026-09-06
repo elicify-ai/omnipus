@@ -216,13 +216,14 @@ func RegisterTools(
 	//
 	// EVERY ONE OF THESE LINES LANDS IN THE SAME COMMIT AS ITS POLICY SEED
 	// (pkg/coreagent/core.go's allStaticToolNames + per-agent maps and
-	// pkg/config/defaults.go's global ceiling). A registered tool with no
-	// seeded policy does NOT abort boot: RepairIncompleteToolPolicyCoverage
-	// backfills every gap to an explicit deny before validation runs, and
-	// compositor.go fails closed to deny anyway. The result is a tool that is
-	// registered, listed in the catalog, and refuses every call on every
-	// agent — with at most one WARN and, in the ordering where the catalog
-	// edit lands first, none at all.
+	// pkg/config/defaults.go's global ceiling). Under the ADR-077 two-layer
+	// model, a registered tool with no pkg/config/defaults.go ceiling entry
+	// DOES abort boot: ReconcileToolPolicyCeiling has no shipped default to
+	// reconcile from, so ValidateToolPolicyCoverage finds a genuine
+	// both-sides gap and aborts loudly (the never-firing tripwire, firing).
+	// A tool with a global ceiling entry but no per-agent seed simply rides
+	// that ceiling value for every agent — the intended, normal state, not a
+	// defect.
 	registry.RegisterReplacing(&SelectOptionTool{res: res})
 	registry.RegisterReplacing(&PressKeyTool{res: res})
 	registry.RegisterReplacing(&HoverTool{res: res})

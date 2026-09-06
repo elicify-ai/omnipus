@@ -166,93 +166,12 @@ func TestValidateSubmittedToolPolicyMap_DefectMessageTruncatesButKeepsExactCount
 		"truncation must actually bound the number of names spelled out")
 }
 
-// --- ValidateAgentOwnToolPolicyCoverage ---
-
-// TestValidateAgentOwnToolPolicyCoverage_DetectsHoleCoveredOnlyByGlobalCeiling
-// is the finding ValidateToolPolicyCoverage structurally cannot report, and the
-// reason the boot-time check looked like it "did not abort on a real on-disk
-// gap": the agent asserted its own posture, one tool is missing from it, and the
-// seeded global ceiling silently decides that tool instead.
-func TestValidateAgentOwnToolPolicyCoverage_DetectsHoleCoveredOnlyByGlobalCeiling(t *testing.T) {
-	known := testKnownTools("bash", "read_file")
-	cfg := &Config{
-		Sandbox: OmnipusSandboxConfig{ToolPolicies: map[string]string{
-			"bash":      "allow",
-			"read_file": "allow",
-		}},
-		Agents: AgentsConfig{List: []AgentConfig{{
-			ID: "curated",
-			Tools: &AgentToolsCfg{Builtin: AgentBuiltinToolsCfg{
-				Policies: map[string]ToolPolicy{"read_file": ToolPolicyAllow},
-			}},
-		}}},
-	}
-
-	// The existing coverage check is satisfied — that is the whole problem.
-	require.Empty(t, ValidateToolPolicyCoverage(cfg, known),
-		"the global ceiling covers every tool, so coverage validation reports nothing "+
-			"— this is exactly why a per-agent hole was invisible")
-
-	own := ValidateAgentOwnToolPolicyCoverage(cfg, known)
-	require.Len(t, own, 1)
-	assert.Equal(t, "curated", own[0].AgentID)
-	assert.Equal(t, "bash", own[0].ToolName)
-}
-
-// TestValidateAgentOwnToolPolicyCoverage_EmptyPolicyMapIsReported is the exact
-// on-disk shape the malformed `PUT /agents/{id}/tools` body produced
-// (`"tools":{"builtin":{},"mcp":{}}`). The agent DID have a posture and lost it,
-// so every tool must be reported — silence here is what let a `bash: deny`
-// agent run bash.
-func TestValidateAgentOwnToolPolicyCoverage_EmptyPolicyMapIsReported(t *testing.T) {
-	known := testKnownTools("bash", "read_file")
-	cfg := &Config{
-		Sandbox: OmnipusSandboxConfig{ToolPolicies: map[string]string{"bash": "allow", "read_file": "allow"}},
-		Agents: AgentsConfig{List: []AgentConfig{{
-			ID:    "wiped",
-			Tools: &AgentToolsCfg{},
-		}}},
-	}
-	own := ValidateAgentOwnToolPolicyCoverage(cfg, known)
-	require.Len(t, own, 2)
-	assert.Equal(t, "bash", own[0].ToolName)
-	assert.Equal(t, "read_file", own[1].ToolName)
-}
-
-// TestValidateAgentOwnToolPolicyCoverage_AgentWithNoToolsBlockIsSkipped: an
-// agent that never asserted a per-agent posture rides the global ceiling by
-// design ("global sandbox.tool_policies and/or an agent's tools.builtin.policies"
-// — CLAUDE.md hard constraint 6). Reporting it would bury the real findings in
-// noise.
-func TestValidateAgentOwnToolPolicyCoverage_AgentWithNoToolsBlockIsSkipped(t *testing.T) {
-	known := testKnownTools("bash", "read_file")
-	cfg := &Config{
-		Sandbox: OmnipusSandboxConfig{ToolPolicies: map[string]string{"bash": "allow", "read_file": "allow"}},
-		Agents:  AgentsConfig{List: []AgentConfig{{ID: "ceiling-only"}}},
-	}
-	assert.Empty(t, ValidateAgentOwnToolPolicyCoverage(cfg, known))
-}
-
-// TestValidateAgentOwnToolPolicyCoverage_CompleteAgentMapIsClean: the healthy,
-// seeded shape must produce zero findings, or the boot log would cry wolf on
-// every install and the real signal would be ignored.
-func TestValidateAgentOwnToolPolicyCoverage_CompleteAgentMapIsClean(t *testing.T) {
-	known := testKnownTools("bash", "read_file")
-	cfg := &Config{
-		Agents: AgentsConfig{List: []AgentConfig{{
-			ID: "healthy",
-			Tools: &AgentToolsCfg{Builtin: AgentBuiltinToolsCfg{Policies: map[string]ToolPolicy{
-				"bash":      ToolPolicyDeny,
-				"read_file": ToolPolicyAllow,
-			}}},
-		}}},
-	}
-	assert.Empty(t, ValidateAgentOwnToolPolicyCoverage(cfg, known))
-}
-
-// TestValidateAgentOwnToolPolicyCoverage_NilInputs_NoFindings mirrors
-// ValidateToolPolicyCoverage's defensive contract.
-func TestValidateAgentOwnToolPolicyCoverage_NilInputs_NoFindings(t *testing.T) {
-	assert.Empty(t, ValidateAgentOwnToolPolicyCoverage(nil, testKnownTools("bash")))
-	assert.Empty(t, ValidateAgentOwnToolPolicyCoverage(&Config{}, nil))
-}
+// NOTE (ADR-077 D5): the ValidateAgentOwnToolPolicyCoverage test suite that
+// used to live here (TestValidateAgentOwnToolPolicyCoverage_DetectsHoleCoveredOnlyByGlobalCeiling,
+// _EmptyPolicyMapIsReported, _AgentWithNoToolsBlockIsSkipped,
+// _CompleteAgentMapIsClean, _NilInputs_NoFindings) is retired along with the
+// function it tested. Under the ratified two-layer model, an agent riding the
+// global ceiling for a tool it never mentions is the NORMAL, intended state —
+// see ValidateAgentOwnToolPolicyCoverage's retirement comment in
+// pkg/config/validate.go. Removed by operator decision, ADR-077 — do not
+// reintroduce.

@@ -443,6 +443,11 @@ lint-tool-error-status:
 lint-no-jpeg-screencast:
 	bash scripts/check-no-jpeg-screencast.sh
 
+## lint-no-fail-closed-backfill: Fail if the deleted fail-closed per-agent tool-policy backfill reappears
+## Regression guard for ADR-077 — see scripts/check-no-fail-closed-backfill.sh's header comment.
+lint-no-fail-closed-backfill:
+	bash scripts/check-no-fail-closed-backfill.sh
+
 ## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
 ## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the
 ## shared storageState cookie for every spec that runs later. Self-test first (a guard that cannot

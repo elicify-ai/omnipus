@@ -836,6 +836,17 @@ jobs:
         # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
         run: bash scripts/check-no-jpeg-screencast.sh
 
+      - name: Run fail-closed tool-policy backfill removal guard
+        # ADR-077: the fail-closed per-agent tool-policy deny backfill
+        # (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
+        # is deleted — tool policy is exactly two layers, the reconciled
+        # global ceiling IS the default. Long-lived branches cut before the
+        # removal still contain both functions and their wiring, so a merge
+        # re-adds them as an ordinary, conflict-free addition. This is the
+        # mechanical half of CLAUDE.md's "Retired surfaces — do NOT
+        # reintroduce" rule.
+        run: bash scripts/check-no-fail-closed-backfill.sh
+
       - name: Run E2E auth cross-talk guard
         # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
         # invalidating the shared storageState cookie for every spec that runs

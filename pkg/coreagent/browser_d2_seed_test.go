@@ -7,12 +7,14 @@
 // THIS FILE.
 //
 // Tool-policy COVERAGE is not the gate here and cannot be. At boot and at hot
-// reload, pkg/gateway runs config.RepairIncompleteToolPolicyCoverage BEFORE
-// config.ValidateToolPolicyCoverage: the repair backfills every (agent, tool)
-// gap with an explicit `deny` and logs one WARN, and validation then reports
-// zero gaps. Worse, if allStaticToolNames gains the six names while the
-// per-agent maps do not, denyAllThenOverride stamps `deny` for all six on
-// every seeded agent, coverage is COMPLETE, and there is no WARN at all.
+// reload, pkg/gateway runs config.ReconcileToolPolicyCeiling BEFORE
+// config.ValidateToolPolicyCoverage (ADR-076/ADR-077's two-layer model): the
+// reconcile keeps the GLOBAL ceiling complete for the whole static catalog,
+// so an unmentioned tool simply resolves from the ceiling's shipped default
+// and validation reports zero gaps. Likewise, if allStaticToolNames gains six
+// names while the per-agent maps do not, denyAllThenOverride stamps `deny`
+// for all six on every seeded agent, coverage is COMPLETE, and there is no
+// signal at all either way.
 //
 // So coverage passes in BOTH failure directions. What can actually go red is
 // the RESOLVED value, per seeded agent, through the real production

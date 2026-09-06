@@ -408,11 +408,10 @@ var allStaticToolNames = []string{
 	// so the per-agent maps cannot precede it — and this literal must not
 	// precede THEM either: denyAllThenOverride stamps an explicit deny for
 	// every name here that an agent does not override, which COMPLETES policy
-	// coverage and therefore suppresses the one WARN
-	// RepairIncompleteToolPolicyCoverage would have logged. Landing this line
-	// alone ships tools that are registered, listed in the catalog, and refuse
-	// every call on every agent, with no signal anywhere. See the capability
-	// spec §2.5.
+	// coverage with no signal anywhere that the seed itself is one-sided.
+	// Landing this line alone ships tools that are registered, listed in the
+	// catalog, and refuse every call on every agent, with no signal anywhere.
+	// See the capability spec §2.5.
 	//
 	// browser_upload_file's NAME is here while its REGISTRATION is held by
 	// FR-029 (issue #659). Held means unregistered, not unseeded: the catalog

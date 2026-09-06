@@ -433,210 +433,26 @@ func TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap(t *t
 	)
 }
 
-// --- RepairIncompleteToolPolicyCoverage tests ---
-
-// TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny simulates a
-// pre-existing installation whose on-disk agent config predates the removal
-// of the DefaultPolicy/default_policy fallback: the agent's
-// Tools.Builtin.Policies map is genuinely sparse (only a handful of entries,
-// as if every unlisted tool used to fall through to a deleted default).
-// After RepairIncompleteToolPolicyCoverage runs, every gap must be backfilled
-// to "deny", pre-existing entries must survive untouched, the returned
-// []CoverageGap must name exactly the backfilled (agent, tool) pairs, and a
-// subsequent ValidateToolPolicyCoverage call must find zero gaps.
-func TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny(t *testing.T) {
-	cfg := &Config{
-		Agents: AgentsConfig{
-			List: []AgentConfig{
-				{
-					ID: "legacy-agent",
-					Tools: &AgentToolsCfg{
-						Builtin: AgentBuiltinToolsCfg{
-							// Sparse: only 3 of the 6 known tools have an entry, as a
-							// pre-DefaultPolicy-removal config would have.
-							Policies: map[string]ToolPolicy{
-								"read_file":  ToolPolicyAllow,
-								"write_file": ToolPolicyAsk,
-								"bash":       ToolPolicyAllow,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	knownTools := map[string]struct{}{
-		"read_file": {}, "write_file": {}, "bash": {},
-		"delete_agent": {}, "create_agent": {}, "send_message": {},
-	}
-
-	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	require.Len(t, repaired, 3, "exactly three gaps should have been repaired")
-
-	wantGaps := []CoverageGap{
-		{AgentID: "legacy-agent", ToolName: "create_agent"},
-		{AgentID: "legacy-agent", ToolName: "delete_agent"},
-		{AgentID: "legacy-agent", ToolName: "send_message"},
-	}
-	assert.ElementsMatch(t, wantGaps, repaired, "repaired must name exactly the backfilled (agent, tool) pairs")
-
-	agentPolicies := cfg.Agents.List[0].Tools.Builtin.Policies
-
-	// Pre-existing entries survive untouched.
-	assert.Equal(t, ToolPolicyAllow, agentPolicies["read_file"], "pre-existing entry must be untouched")
-	assert.Equal(t, ToolPolicyAsk, agentPolicies["write_file"], "pre-existing entry must be untouched")
-	assert.Equal(t, ToolPolicyAllow, agentPolicies["bash"], "pre-existing entry must be untouched")
-
-	// Every gap is backfilled to "deny" (the safe, fail-closed direction).
-	for _, name := range []string{"delete_agent", "create_agent", "send_message"} {
-		assert.Equal(t, ToolPolicyDeny, agentPolicies[name], "gap for %q must be backfilled to deny", name)
-	}
-
-	// The subsequent hard-validation pass must now find zero gaps.
-	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, gaps, "after repair, coverage validation must find no remaining gaps")
-}
-
-// TestRepairIncompleteToolPolicyCoverage_GlobalEntryCoversGap_NoRedundantPerAgentEntry
-// verifies that a tool already covered globally (cfg.Sandbox.ToolPolicies)
-// does NOT get a redundant per-agent entry added by the repair — the repair
-// must respect the same "either layer counts as covered" rule
-// ValidateToolPolicyCoverage enforces, not just backfill everything
-// unconditionally onto the agent.
-func TestRepairIncompleteToolPolicyCoverage_GlobalEntryCoversGap_NoRedundantPerAgentEntry(t *testing.T) {
-	cfg := &Config{
-		Sandbox: OmnipusSandboxConfig{
-			ToolPolicies: map[string]string{"send_message": "allow"},
-		},
-		Agents: AgentsConfig{
-			List: []AgentConfig{
-				{
-					ID: "agent-j",
-					Tools: &AgentToolsCfg{
-						Builtin: AgentBuiltinToolsCfg{
-							Policies: map[string]ToolPolicy{"read_file": ToolPolicyAllow},
-						},
-					},
-				},
-			},
-		},
-	}
-	knownTools := map[string]struct{}{"read_file": {}, "send_message": {}}
-
-	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, repaired, "a tool already covered globally must not be reported as repaired")
-
-	agentPolicies := cfg.Agents.List[0].Tools.Builtin.Policies
-	_, hasPerAgentEntry := agentPolicies["send_message"]
-	assert.False(t, hasPerAgentEntry, "globally-covered tool must not gain a redundant per-agent entry")
-	assert.Equal(t, ToolPolicyAllow, agentPolicies["read_file"], "pre-existing entry must be untouched")
-}
-
-// TestRepairIncompleteToolPolicyCoverage_DelegatesToValidate is a
-// characterization test locking in that the repair function derives its gap
-// list by CALLING ValidateToolPolicyCoverage rather than re-implementing the
-// coverage predicate a second time. It exercises the exact
-// "both-sides-present-different-values-not-a-gap" scenario
-// TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap locks
-// in for ValidateToolPolicyCoverage: if the repair ever grew its own,
-// independent notion of "covered" that disagreed with ValidateToolPolicyCoverage
-// (the exact class of bug this whole session's work fixed elsewhere), this
-// test would catch the divergence by asserting repair finds nothing to do
-// here even though a naive re-implementation might.
-func TestRepairIncompleteToolPolicyCoverage_DelegatesToValidate(t *testing.T) {
-	cfg := &Config{
-		Sandbox: OmnipusSandboxConfig{
-			ToolPolicies: map[string]string{"read_file": "ask"},
-		},
-		Agents: AgentsConfig{
-			List: []AgentConfig{
-				{
-					ID: "agent-k",
-					Tools: &AgentToolsCfg{
-						Builtin: AgentBuiltinToolsCfg{
-							// Deliberately disagrees with the global "ask" value above —
-							// mere presence on either side satisfies coverage, so this must
-							// NOT be treated as a gap by the repair either.
-							Policies: map[string]ToolPolicy{"read_file": ToolPolicyDeny},
-						},
-					},
-				},
-			},
-		},
-	}
-	knownTools := map[string]struct{}{"read_file": {}}
-
-	// Sanity check: ValidateToolPolicyCoverage (the authority) finds no gap.
-	require.Empty(t, ValidateToolPolicyCoverage(cfg, knownTools))
-
-	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(
-		t,
-		repaired,
-		"repair must agree with ValidateToolPolicyCoverage: value disagreement across layers is not a gap",
-	)
-	assert.Equal(
-		t, ToolPolicyDeny, cfg.Agents.List[0].Tools.Builtin.Policies["read_file"],
-		"pre-existing per-agent value must be left untouched, not overwritten to deny",
-	)
-}
-
-// TestRepairIncompleteToolPolicyCoverage_Idempotent verifies that repairing
-// an already-fully-covered config is a no-op: repaired is empty and no
-// existing policy values change.
-func TestRepairIncompleteToolPolicyCoverage_Idempotent(t *testing.T) {
-	cfg := &Config{
-		Agents: AgentsConfig{
-			List: []AgentConfig{
-				{
-					ID: "fully-covered-agent",
-					Tools: &AgentToolsCfg{
-						Builtin: AgentBuiltinToolsCfg{
-							Policies: map[string]ToolPolicy{
-								"read_file":  ToolPolicyAllow,
-								"write_file": ToolPolicyDeny,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	knownTools := map[string]struct{}{"read_file": {}, "write_file": {}}
-
-	// First call repairs nothing (already covered).
-	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, repaired, "an already-fully-covered config must not be reported as repaired")
-	assert.Equal(t, ToolPolicyAllow, cfg.Agents.List[0].Tools.Builtin.Policies["read_file"])
-	assert.Equal(t, ToolPolicyDeny, cfg.Agents.List[0].Tools.Builtin.Policies["write_file"])
-
-	// Calling it again is still a no-op.
-	repairedAgain := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, repairedAgain, "repeated repair calls on a covered config must stay a no-op")
-}
-
-// TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp verifies the
-// "nothing to repair" guard mirrors ValidateToolPolicyCoverage's own guard.
-func TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp(t *testing.T) {
-	assert.Empty(t, RepairIncompleteToolPolicyCoverage(nil, map[string]struct{}{"read_file": {}}))
-
-	cfg := &Config{Agents: AgentsConfig{List: []AgentConfig{{ID: "agent-i"}}}}
-	assert.Empty(t, RepairIncompleteToolPolicyCoverage(cfg, nil))
-	assert.Empty(t, RepairIncompleteToolPolicyCoverage(cfg, map[string]struct{}{}))
-}
+// NOTE (ADR-077 D3): the RepairIncompleteToolPolicyCoverage test suite that
+// used to live here (TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny,
+// _GlobalEntryCoversGap_NoRedundantPerAgentEntry, _DelegatesToValidate,
+// _Idempotent, _NilOrEmptyInputs_NoOp) is retired along with the function it
+// tested. See RepairIncompleteToolPolicyCoverage's retirement comment in
+// pkg/config/validate.go — removed by operator decision, ADR-077 — do not
+// reintroduce.
 
 // --- MigrateLegacyToolPolicyKeys (ADR-071 §5.3.5, D1+D4 policy-key migration) ---
 //
 // Required tests per ADR-071 §5.3.5b, cases (i)-(iv), plus D1's load_tool
 // equivalent and the nil/empty guard.
 
-// TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_MigratesWithoutDenyBackfill
-// is required test (i): a config with only "hand_off": "allow" must boot with
-// "switch_agent": "allow" — NOT get "switch_agent": "deny" backfilled by
-// RepairIncompleteToolPolicyCoverage. This is the ADR-071 §5.3.5a regression
-// this whole migration exists to prevent: proves the full ordered sequence
-// (migrate -> repair -> validate) rather than just the migration in isolation.
-func TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_MigratesWithoutDenyBackfill(t *testing.T) {
+// TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_Migrates is required test
+// (i): a config with only "hand_off": "allow" must boot with
+// "switch_agent": "allow", not some other value invented downstream. Under
+// the ADR-077 two-layer model there is no per-agent deny backfill to prove
+// absent — this asserts the migration's own output survives unchanged
+// through ValidateToolPolicyCoverage, which is the real downstream consumer.
+func TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_Migrates(t *testing.T) {
 	cfg := &Config{
 		Sandbox: OmnipusSandboxConfig{
 			ToolPolicies: map[string]string{"hand_off": "allow"},
@@ -651,16 +467,11 @@ func TestMigrateLegacyToolPolicyKeys_HandOffAllowOnly_MigratesWithoutDenyBackfil
 	_, legacyStillPresent := cfg.Sandbox.ToolPolicies["hand_off"]
 	assert.False(t, legacyStillPresent, "legacy hand_off key must be deleted")
 
-	// Now run the exact sequence repairAndValidateToolPolicyCoverage uses:
-	// migrate (already done above) -> repair -> validate. If the ordering
-	// regression this migration exists to prevent were present, the repair
-	// would instead see "switch_agent" as wholly uncovered and backfill it
-	// to "deny" for the agent below.
+	// The migrated global entry alone must satisfy coverage for any agent —
+	// no repair/backfill step exists between migration and validation.
 	cfg.Agents.List = []AgentConfig{{ID: "some-agent"}}
-	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, repaired, "switch_agent must already be covered by the migrated global entry — nothing to repair")
 	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, gaps, "switch_agent must be fully covered after migration, with no deny backfill")
+	assert.Empty(t, gaps, "switch_agent must be fully covered by the migrated global entry alone")
 }
 
 // TestMigrateLegacyToolPolicyKeys_Idempotent_SecondRunIsNoOp is required test
@@ -802,8 +613,9 @@ func TestMigrateLegacyToolPolicyKeys_PerAgentMap(t *testing.T) {
 	assert.Nil(t, cfg.Agents.List[1].Tools, "an agent with no Tools config must be left alone, not panic")
 }
 
-// TestMigrateLegacyToolPolicyKeys_NilOrEmpty_NoOp mirrors
-// TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp's guard shape.
+// TestMigrateLegacyToolPolicyKeys_NilOrEmpty_NoOp mirrors the nil/empty
+// no-op guard shape ValidateToolPolicyCoverage and ReconcileToolPolicyCeiling
+// both use.
 func TestMigrateLegacyToolPolicyKeys_NilOrEmpty_NoOp(t *testing.T) {
 	assert.False(t, MigrateLegacyToolPolicyKeys(nil))
 
@@ -977,7 +789,7 @@ func TestReconcileToolPolicyCeiling_RunsAfterMigration_NoDuplicateOrStaleName(t 
 
 // TestReconcileToolPolicyCeiling_NilOrEmptyInputs_NoOp mirrors the
 // nil/empty-guard shape shared by MigrateLegacyToolPolicyKeys and
-// RepairIncompleteToolPolicyCoverage.
+// ValidateToolPolicyCoverage.
 func TestReconcileToolPolicyCeiling_NilOrEmptyInputs_NoOp(t *testing.T) {
 	assert.Empty(t, ReconcileToolPolicyCeiling(nil, reconcileTestKnownTools()))
 
