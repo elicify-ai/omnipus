@@ -62,6 +62,14 @@ function parseIntStrict(raw: string): number | null {
  * criterion added with no interaction defaults to `boolean` (the catch-all
  * for yes/no and honestly-subjective outcomes), matching the server's own
  * `InferJudgment` default for `prose`.
+ *
+ * The judgment selector is COUPLED to the payload expander so the author can
+ * never build a kind/judgment pair the server's `InferJudgment`
+ * (pkg/task/criterion.go) hard-rejects: a technical check (`kind: 'check'`)
+ * is always `boolean`, an action-count check (`kind: 'behavior'`) is always
+ * `quantitative` — the selector is locked to that value and disabled while
+ * either expander is open, with a hint explaining why. Only a plain
+ * (`prose`) criterion keeps the free boolean/quantitative/artifact choice.
  */
 export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, emptyHint }: AcceptanceCriteriaEditorProps) {
   const [text, setText] = useState('')
@@ -80,8 +88,17 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
   const [maxCount, setMaxCount] = useState('')
   const [scope, setScope] = useState<BehaviorScope>('task_session')
   // ADR-080 D-TYPES — what SHAPE of claim this criterion is. Defaults to the
-  // catch-all `boolean`; the author picks a different value explicitly.
+  // catch-all `boolean`; the author picks a different value explicitly. Only
+  // meaningful for `prose` — a technical expander overrides it, see below.
   const [judgment, setJudgment] = useState<Judgment>('boolean')
+
+  // A technical check is always boolean, an action-count check is always
+  // quantitative (matches task.InferJudgment's hard rule) — locked/non-null
+  // whenever a payload expander is open. `null` while authoring plain prose,
+  // where the free selector applies.
+  const lockedJudgment: Judgment | null =
+    expander === 'check' ? 'boolean' : expander === 'behavior' ? 'quantitative' : null
+  const effectiveJudgment: Judgment = lockedJudgment ?? judgment
 
   function toggleExpander(next: 'check' | 'behavior') {
     setExpander((cur) => (cur === next ? null : next))
@@ -116,7 +133,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         ...criteria,
         {
           kind: 'check',
-          judgment,
+          judgment: effectiveJudgment,
           text: trimmedText,
           check: { command: command.trim(), expected_exit_code: code },
           author: currentAuthor,
@@ -152,7 +169,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         ...criteria,
         {
           kind: 'behavior',
-          judgment,
+          judgment: effectiveJudgment,
           text: trimmedText,
           behavior: {
             tool: tool.trim(),
@@ -171,7 +188,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
     } else {
       onChange([
         ...criteria,
-        { kind: 'prose', judgment, text: trimmedText, author: currentAuthor, status: 'pending' },
+        { kind: 'prose', judgment: effectiveJudgment, text: trimmedText, author: currentAuthor, status: 'pending' },
       ])
     }
     setError('')
@@ -201,12 +218,14 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
               >
                 <div className="flex-1 min-w-0 space-y-0.5">
                   <div className="flex items-start gap-1.5">
-                    <span
-                      data-testid="criterion-judgment-badge"
-                      className="mt-[1px] shrink-0 rounded border border-[var(--color-border)] px-1 py-[1px] text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
-                    >
-                      {c.judgment}
-                    </span>
+                    {c.judgment && (
+                      <span
+                        data-testid="criterion-judgment-badge"
+                        className="mt-[1px] shrink-0 rounded border border-[var(--color-border)] px-1 py-[1px] text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
+                      >
+                        {c.judgment}
+                      </span>
+                    )}
                     <p className="text-[var(--color-secondary)] flex-1 min-w-0">{c.text}</p>
                   </div>
                   {verifiesVia && (
@@ -265,10 +284,17 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         {/* ADR-080 D-TYPES — judgment selector. Every criterion carries a
             required judgment (what SHAPE of claim it is); this is the human
             authoring surface, so the author picks it explicitly. Defaults to
-            `boolean` (the catch-all for yes/no and subjective outcomes). */}
+            `boolean` (the catch-all for yes/no and subjective outcomes).
+            Locked + disabled while a technical-check or action-count
+            expander is open — task.InferJudgment hard-rejects any other
+            pairing, so the mismatch can never be built in the first place. */}
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-[var(--color-muted)]">Judgment</span>
-          <Select value={judgment} onValueChange={(v) => { setJudgment(v as Judgment); setError('') }}>
+          <Select
+            value={effectiveJudgment}
+            disabled={lockedJudgment !== null}
+            onValueChange={(v) => { setJudgment(v as Judgment); setError('') }}
+          >
             <SelectTrigger aria-label="Judgment" className="h-8 text-xs w-40 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
               <SelectValue />
             </SelectTrigger>
@@ -278,6 +304,12 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
               <SelectItem value="artifact" className="text-xs">Artifact (a thing exists)</SelectItem>
             </SelectContent>
           </Select>
+          {lockedJudgment === 'boolean' && (
+            <span className="text-[10px] italic text-[var(--color-muted)]">checks are always boolean</span>
+          )}
+          {lockedJudgment === 'quantitative' && (
+            <span className="text-[10px] italic text-[var(--color-muted)]">action-count checks are always quantitative</span>
+          )}
         </div>
 
         {expander === 'check' && (

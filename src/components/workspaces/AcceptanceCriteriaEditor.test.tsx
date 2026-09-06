@@ -153,6 +153,89 @@ describe('AcceptanceCriteriaEditor — judgment selector (ADR-080 D-TYPES)', () 
   })
 })
 
+// The judgment selector is COUPLED to the payload expander so the author can
+// never build a kind/judgment pair task.InferJudgment (pkg/task/criterion.go)
+// hard-rejects: kind:'check' is always judgment:'boolean', kind:'behavior' is
+// always judgment:'quantitative'. The selector is locked to that value while
+// either expander is open — attempting to pick a different judgment through
+// it has no effect on what gets stamped.
+describe('AcceptanceCriteriaEditor — judgment/kind coupling (server InferJudgment parity)', () => {
+  it('a technical check always stamps judgment: boolean, even if a mismatched option was clicked first', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'tests pass')
+    // Pick a mismatched judgment BEFORE opening the check expander.
+    await user.click(screen.getByRole('option', { name: /Artifact/i }))
+    await user.click(screen.getByRole('button', { name: '+ Add technical check' }))
+    await user.type(screen.getByLabelText('Command'), 'go test ./...')
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    expect(added.kind).toBe('check')
+    expect(added.judgment).toBe('boolean')
+  })
+
+  it('an action-count check always stamps judgment: quantitative, even if a mismatched option was clicked first', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'searched enough')
+    // Pick a mismatched judgment BEFORE opening the behavior expander.
+    await user.click(screen.getByRole('option', { name: /Artifact/i }))
+    await user.click(screen.getByRole('button', { name: '+ Add action-count check' }))
+    await user.type(screen.getByLabelText('Tool name'), 'search_web')
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    expect(added.kind).toBe('behavior')
+    expect(added.judgment).toBe('quantitative')
+  })
+
+  it('a prose criterion still honors the author-selected judgment (no coupling applies)', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'a signed release artifact exists')
+    await user.click(screen.getByRole('option', { name: /Artifact/i }))
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    expect(added.kind).toBe('prose')
+    expect(added.judgment).toBe('artifact')
+  })
+
+  it('shows the "checks are always boolean" hint while the check expander is open', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    await user.click(screen.getByRole('option', { name: /Quantitative/i }))
+    await user.click(screen.getByRole('button', { name: '+ Add technical check' }))
+    expect(screen.getByText('checks are always boolean')).toBeInTheDocument()
+  })
+
+  it('the Judgment selector shows the locked value and hint while the action-count expander is open', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    await user.click(screen.getByRole('button', { name: '+ Add action-count check' }))
+    expect(screen.getByText('action-count checks are always quantitative')).toBeInTheDocument()
+  })
+
+  it('closing an expander (back to prose) restores the free judgment choice', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.click(screen.getByRole('button', { name: '+ Add technical check' }))
+    expect(screen.getByText('checks are always boolean')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '+ Add technical check' })) // collapse
+    expect(screen.queryByText('checks are always boolean')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'a signed artifact exists')
+    await user.click(screen.getByRole('option', { name: /Artifact/i }))
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+    const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    expect(added.judgment).toBe('artifact')
+  })
+})
+
 describe('AcceptanceCriteriaEditor — technical-check expander', () => {
   it('reveals command + exit code, and produces a check payload', async () => {
     const user = userEvent.setup()
@@ -310,9 +393,11 @@ describe('AcceptanceCriteriaEditor — action-count expander (ADR-052 FR-034 beh
 
     expect(onChange).toHaveBeenCalledTimes(1)
     const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    // ADR-080/task.InferJudgment coupling: a behavior criterion is always
+    // quantitative, regardless of what the (locked, disabled) selector shows.
     expect(added).toEqual({
       kind: 'behavior',
-      judgment: 'boolean',
+      judgment: 'quantitative',
       text: 'research actually searched the web',
       behavior: { tool: 'search_web', min_count: 1, scope: 'task_session' },
       author: AUTHOR,
