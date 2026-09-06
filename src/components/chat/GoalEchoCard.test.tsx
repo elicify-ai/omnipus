@@ -1,8 +1,8 @@
 // GoalEchoCard.test.tsx — ADR-053 FE-8 / US-3 / D11; criteria breakdown per
 // ADR-074 D5.2 / judgment-first FR-011 (US-6, test 19 component half).
 
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { GoalEchoCard } from './GoalEchoCard'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
@@ -110,11 +110,52 @@ describe('GoalEchoCard', () => {
     expect(screen.queryByTestId('goal-echo-criteria')).not.toBeInTheDocument()
   })
 
-  it('shows the conversational confirmation prompt (no buttons/form)', () => {
+  // ADR-078 D1: the card now also offers click-to-confirm buttons. The prose
+  // hint stays as a secondary line below them (a channel user with no card
+  // can still confirm by typing).
+  it('shows the conversational confirmation prompt AND the Confirm/Cancel/Amend buttons in the queued state', () => {
     render(<GoalEchoCard frame={makeGoal()} />)
     expect(screen.getByText(/Reply to confirm/)).toBeInTheDocument()
-    // No form elements — conversational confirm only
+    expect(screen.getByTestId('goal-echo-actions')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /amend/i })).toBeInTheDocument()
+  })
+
+  // ADR-078 D1: Confirm sends the bare confirm token, Cancel sends
+  // `/goal clear`, Amend pre-fills the composer and sends nothing — each
+  // button fires exactly its own callback.
+  it('fires onConfirm/onCancel/onAmend on click, and only the clicked one', () => {
+    const onConfirm = vi.fn()
+    const onCancel = vi.fn()
+    const onAmend = vi.fn()
+    render(<GoalEchoCard frame={makeGoal()} onConfirm={onConfirm} onCancel={onCancel} onAmend={onAmend} />)
+
+    fireEvent.click(screen.getByTestId('goal-echo-confirm'))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(onAmend).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('goal-echo-cancel'))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onAmend).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('goal-echo-amend'))
+    expect(onAmend).toHaveBeenCalledTimes(1)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  // ADR-078 D1 / G-5 negative: the buttons render ONLY while the card is
+  // pending confirmation (`queued`) — a card left mounted for any other
+  // status (e.g. an active goal) shows no buttons.
+  it('does NOT render the action buttons when the frame is not in the queued state', () => {
+    render(<GoalEchoCard frame={makeGoal({ state: 'active' })} />)
+    expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    // Prose hint still shown regardless of state (existing behavior).
+    expect(screen.getByText(/Reply to confirm/)).toBeInTheDocument()
   })
 
   it('shows singular "loop" when cap is 1', () => {
