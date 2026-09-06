@@ -658,6 +658,39 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 				"the full narrowed candidate population, not this fanout")})
 	}
 
+	// A2(d): a NON-ZERO `words` result can still UNDER-REPORT when the text
+	// index does not yet reflect the whole vault — the query returns the hits
+	// the partial index happens to hold while more matching files sit on disk
+	// unindexed. The zero-hit branch above (checkTextIndexPopulated) is the
+	// ONLY place the freshness signal was wired, so a partial index that
+	// returned SOME hits skipped it and would otherwise answer complete:true
+	// with no signal anywhere the caller reads — a false-completeness claim
+	// (R1), and the exact non-zero symptom the tester reported ("words=X
+	// returns 1 hit while 68 files contain it").
+	//
+	// When the searcher can report its freshness and it is behind, record a
+	// non-fatal coverage problem. finishVerdict derives complete:false from
+	// any recorded problem, so the caller is told the answer may be short and
+	// by how much — never silently told it is whole. A fresh, fully-swept
+	// index (Fresh, nothing pending, indexed == scanned) records nothing, so a
+	// healthy vault is not dragged incomplete. It reuses IndexUnavailable — the
+	// same code the zero-hit refusal uses for the identical "the index cannot
+	// be trusted to be whole" fact — because there is no narrower code and a
+	// new one is a wire-contract change owned elsewhere.
+	if q.words != "" {
+		if fr, ok := d.Text.(TextFreshnessReporter); ok {
+			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 &&
+				(!fresh.Fresh || fresh.PendingFiles > 0 || fresh.IndexedFiles < fresh.ScannedFiles) {
+				ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
+					fmt.Sprintf("the text index has not finished indexing this vault — it currently reflects "+
+						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
+						"under-report: matching files that are not yet indexed cannot appear here",
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
+					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state")})
+			}
+		}
+	}
+
 	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
 	//
 	// It counts SURVIVORS and aborts the stream. It is not a precondition and
