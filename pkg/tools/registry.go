@@ -358,7 +358,8 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// literal <arg_key>/<arg_value> template tag AND a per-call hex sentinel —
 	// the fingerprint of a genuine leak, so a legitimate value that merely
 	// mentions the tag is left untouched (A1).
-	if repairLeakedToolArgs(args) {
+	if repaired, ok := repairLeakedToolArgs(args); ok {
+		args = repaired
 		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
 			map[string]any{"tool": name})
 	}

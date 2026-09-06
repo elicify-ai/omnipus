@@ -20,7 +20,7 @@ func TestRepairLeakedToolArgs_RecoversCapturedGLMLeak(t *testing.T) {
 		"kind":       "table",
 	}
 
-	changed := repairLeakedToolArgs(args)
+	args, changed := repairLeakedToolArgs(args)
 	if !changed {
 		t.Fatal("expected repair to fire on leaked template tokens")
 	}
@@ -45,7 +45,7 @@ func TestRepairLeakedToolArgs_NoOpOnCleanArgs(t *testing.T) {
 	}
 	before := map[string]any{"op": "create_view", "type": "note", "view": "v1"}
 
-	if repairLeakedToolArgs(args) {
+	if _, changed := repairLeakedToolArgs(args); changed {
 		t.Fatal("repair must not fire on clean, well-formed arguments")
 	}
 	for k, v := range before {
@@ -64,7 +64,7 @@ func TestRepairLeakedToolArgs_HexAloneDoesNotTrigger(t *testing.T) {
 		"op":    "write_view",
 		"value": "commit <deadbeef> landed",
 	}
-	if repairLeakedToolArgs(args) {
+	if _, changed := repairLeakedToolArgs(args); changed {
 		t.Fatal("hex-only value must not trigger repair")
 	}
 	if args["value"] != "commit <deadbeef> landed" {
@@ -79,7 +79,7 @@ func TestRepairLeakedToolArgs_DoesNotClobberRealArg(t *testing.T) {
 		"op":   "create_view</arg_value><5b656597><arg_key><2b53f23f>type</arg_key><ac7a3bd7><arg_value><b88a6f17>note",
 		"type": "invoice",
 	}
-	repairLeakedToolArgs(args)
+	args, _ = repairLeakedToolArgs(args)
 	if args["op"] != "create_view" {
 		t.Fatalf("op not recovered: %q", args["op"])
 	}
@@ -98,11 +98,84 @@ func TestRepairLeakedToolArgs_LegitimateTagMentionNotMangled(t *testing.T) {
 	cmd := "echo 'the model leaked </arg_value> into the value' > notes.txt"
 	args := map[string]any{"command": cmd}
 
-	if repairLeakedToolArgs(args) {
+	if _, changed := repairLeakedToolArgs(args); changed {
 		t.Fatalf("repair must not fire on a legitimate tag mention: value became %q", args["command"])
 	}
 	if args["command"] != cmd {
 		t.Fatalf("legitimate command was mangled: got %q want %q", args["command"], cmd)
+	}
+}
+
+func TestRepairLeakedToolArgs_TagMentionPlusSeparateHexNotMangled(t *testing.T) {
+	// FINDING 6: a legitimate value that mentions a structural tag AND, quite
+	// separately, contains an 8-hex-in-brackets token (a short SHA fragment, or
+	// test data discussing this very grammar) must be left untouched. The two
+	// tokens are present but NOT in the contiguous shape the real leak produces,
+	// so this is not a leak. Before the adjacency tightening, "tag anywhere AND
+	// hex anywhere" fired and this value was silently truncated, its tail
+	// reinterpreted as arguments and then executed.
+	note := "grammar note: the leak wraps values in </arg_value> and uses a random sentinel such as <5b656597> as a separator"
+	args := map[string]any{"body": note}
+
+	if _, changed := repairLeakedToolArgs(args); changed {
+		t.Fatalf("repair must not fire when tag and hex are present but not adjacent: value became %q", args["body"])
+	}
+	if args["body"] != note {
+		t.Fatalf("legitimate note was mangled: got %q want %q", args["body"], note)
+	}
+}
+
+func TestRepairLeakedToolArgs_ContiguousLeakShapeStillRecovered(t *testing.T) {
+	// FINDING 6 counterpart: the genuine leak — a structural tag IMMEDIATELY
+	// followed by an 8-hex sentinel (</arg_value><5b656597>, <arg_key><2b53f23f>,
+	// <arg_value><b88a6f17>) — must still be detected and recovered after the
+	// trigger is tightened to that adjacency.
+	args := map[string]any{
+		"op": "create_view</arg_value><5b656597><arg_key><2b53f23f>type</arg_key><ac7a3bd7><arg_value><b88a6f17>note",
+	}
+	args, changed := repairLeakedToolArgs(args)
+	if !changed {
+		t.Fatal("expected repair to fire on the contiguous leaked shape")
+	}
+	if args["op"] != "create_view" {
+		t.Fatalf("op not recovered: got %q want %q", args["op"], "create_view")
+	}
+	if args["type"] != "note" {
+		t.Fatalf("type not recovered: got %q want %q", args["type"], "note")
+	}
+}
+
+func TestRepairLeakedToolArgs_DoesNotMutateCallerMap(t *testing.T) {
+	// FINDING 5 repro: the caller's own map must NOT be mutated when a repair
+	// fires. In-place mutation only stays safe by an unenforced convention that
+	// every caller passes a private clone; a caller sharing a map with
+	// transcript/session state would have that state truncated in place.
+	orig := map[string]any{
+		"collection": "kb",
+		"op":         "create_view</arg_value><5b656597><arg_key><2b53f23f>type</arg_key><ac7a3bd7><arg_value><b88a6f17>note",
+		"view":       "jim-tooltest--recent",
+	}
+	const leakedOp = "create_view</arg_value><5b656597><arg_key><2b53f23f>type</arg_key><ac7a3bd7><arg_value><b88a6f17>note"
+
+	repaired, changed := repairLeakedToolArgs(orig)
+	if !changed {
+		t.Fatal("expected repair to fire on the captured leak")
+	}
+
+	// The caller's original map must be byte-for-byte untouched.
+	if orig["op"] != leakedOp {
+		t.Fatalf("caller map was mutated in place: op became %q", orig["op"])
+	}
+	if _, ok := orig["type"]; ok {
+		t.Fatalf("recovered key leaked into the caller's map: %#v", orig)
+	}
+
+	// The recovery is delivered on the returned map instead.
+	if repaired["op"] != "create_view" {
+		t.Fatalf("repaired map missing recovered op: got %q", repaired["op"])
+	}
+	if repaired["type"] != "note" {
+		t.Fatalf("repaired map missing recovered type: got %q", repaired["type"])
 	}
 }
 

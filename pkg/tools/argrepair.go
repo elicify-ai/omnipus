@@ -56,31 +56,37 @@ import (
 // discussing the grammar) would be silently truncated and then executed,
 // which is worse than the enum error the repair exists to fix.
 //
-// Repair fires ONLY when a string value contains BOTH:
+// Repair fires ONLY when a string value contains the CONTIGUOUS shape the
+// leak actually produces: a structural tag IMMEDIATELY followed by a per-call
+// 8-hex sentinel, with nothing between them — e.g. "</arg_value><5b656597>",
+// "<arg_key><2b53f23f>", "<arg_value><b88a6f17>". Every tag the leak emits
+// carries this adjacency (see the captured example above); the template that
+// produced them always emits the sentinel flush against the tag.
 //
-//	1. a literal structural tag (<arg_key>/<arg_value>, open or close); AND
-//	2. at least one per-call 8-hex sentinel token (e.g. <5b656597>).
-//
-// The sentinels are the model's random per-call separators — they are the
-// distinctive fingerprint of a genuine template leak and are effectively
-// never present in real tool-argument text. Requiring them alongside the
-// structural tags means:
+// The adjacency — not merely "a tag somewhere AND a hex token somewhere" — is
+// the fingerprint that matters:
 //   - the structural tag ALONE no longer triggers repair, so a legitimate
 //     value that merely mentions "</arg_value>" is left untouched; and
-//   - a hex-looking token ALONE ("<deadbeef>") still never triggers repair.
+//   - a hex-looking token ALONE ("<deadbeef>") still never triggers repair; and
+//   - a value that separately mentions a tag AND, elsewhere, a bracketed hex
+//     token (a note discussing this grammar, a short SHA fragment) is left
+//     untouched, because the two are not adjacent.
 //
 // A false positive now requires a caller to legitimately send a structural
-// tag AND a random 8-hex token in the same string value, which no real tool
-// argument does. Every captured leak carries the sentinels (see the header
-// example); the template that produced them always emits them.
+// tag flush against a random 8-hex token in the same string value, which no
+// real tool argument does.
 
 var (
-	// leakedArgTag matches the STRUCTURAL template tags.
-	leakedArgTag = regexp.MustCompile(`</?arg_(?:key|value)>`)
-
-	// leakedSentinel matches a per-call 8-hex sentinel token. Its presence
-	// alongside a structural tag is what confirms a genuine template leak.
-	leakedSentinel = regexp.MustCompile(`<[0-9a-fA-F]{8}>`)
+	// leakedLeakShape matches the ACTUAL fingerprint of a genuine template
+	// leak: a structural tag IMMEDIATELY followed by a per-call 8-hex sentinel,
+	// with no text between them. Every tag the leak emits carries this shape —
+	// </arg_value><5b656597>, <arg_key><2b53f23f>, <arg_value><b88a6f17> (see the
+	// captured example in the file header). Requiring the adjacency, rather than
+	// merely "a tag somewhere AND a hex token somewhere", is what keeps a
+	// legitimate value that separately mentions a tag and a bracketed hex token
+	// (a note discussing this grammar, a short SHA fragment) from being
+	// truncated (A1).
+	leakedLeakShape = regexp.MustCompile(`</?arg_(?:key|value)><[0-9a-fA-F]{8}>`)
 
 	// leakedAnyToken matches every control token — the structural tags AND
 	// the per-call 8-hex sentinels — used to tokenise a value once it has
@@ -89,27 +95,34 @@ var (
 )
 
 // isLeakedValue reports whether s carries the fingerprint of a genuine
-// tool-call template leak: a structural tag AND at least one hex sentinel.
-// Both are required so that legitimate content mentioning only one of them is
+// tool-call template leak: a structural tag CONTIGUOUSLY followed by a per-call
+// 8-hex sentinel (e.g. "</arg_value><5b656597>"). The adjacency is what the
+// leak grammar actually produces; requiring it means a legitimate value that
+// merely mentions a tag and, separately, contains a bracketed hex token is
 // never mistaken for a leak (A1).
 func isLeakedValue(s string) bool {
-	return leakedArgTag.MatchString(s) && leakedSentinel.MatchString(s)
+	return leakedLeakShape.MatchString(s)
 }
 
-// repairLeakedToolArgs rewrites args in place, recovering values corrupted by
-// leaked tool-call template tokens (see the file header). It returns true
-// when it changed anything, so the caller can log that a repair fired.
+// repairLeakedToolArgs recovers values corrupted by leaked tool-call template
+// tokens (see the file header). It returns the arguments to use downstream and
+// true when it changed anything, so the caller can log that a repair fired.
 //
-// The map is mutated directly; callers on the execution path already own a
-// clone of the model's arguments (loop.go's cloneStringAnyMap), so this does
-// not mutate shared transcript state.
-func repairLeakedToolArgs(args map[string]any) bool {
+// Safety is ENFORCED, not conventional: the caller's map is never mutated. On
+// the common no-op path (no leak in any value) the very same map is returned
+// with no copy and no allocation. Only when a repair actually fires is the map
+// defensively cloned and the recovery written to the clone — so a caller that
+// (now or in future) shares its map with transcript/session state can never
+// have that state truncated in place on a rare leak match.
+func repairLeakedToolArgs(args map[string]any) (map[string]any, bool) {
 	if len(args) == 0 {
-		return false
+		return args, false
 	}
 
-	changed := false
-	recovered := map[string]string{}
+	// out and recovered stay nil until the first leak is seen, keeping the
+	// no-op path allocation-free.
+	var out map[string]any
+	var recovered map[string]string
 
 	for k, v := range args {
 		s, ok := v.(string)
@@ -120,8 +133,11 @@ func repairLeakedToolArgs(args map[string]any) bool {
 			continue
 		}
 		clean, pairs := splitLeakedValue(s)
-		args[k] = clean
-		changed = true
+		if out == nil {
+			out = cloneArgsMap(args)
+			recovered = map[string]string{}
+		}
+		out[k] = clean
 		for pk, pv := range pairs {
 			// A pair recovered from an EARLIER key wins over a later one only
 			// by map iteration order, which is nondeterministic — but the
@@ -132,6 +148,11 @@ func repairLeakedToolArgs(args map[string]any) bool {
 		}
 	}
 
+	if out == nil {
+		// No leak fired: caller's map is returned untouched.
+		return args, false
+	}
+
 	// Fill recovered fields only where the model did not also send a real one.
 	// A correctly-emitted argument is authoritative over anything unpacked
 	// from a leaked blob.
@@ -139,13 +160,24 @@ func repairLeakedToolArgs(args map[string]any) bool {
 		if pk == "" {
 			continue
 		}
-		if _, exists := args[pk]; !exists {
-			args[pk] = pv
-			changed = true
+		if _, exists := out[pk]; !exists {
+			out[pk] = pv
 		}
 	}
 
-	return changed
+	return out, true
+}
+
+// cloneArgsMap returns a shallow copy of src. A shallow copy suffices for the
+// repair: it only ever reassigns top-level string entries and adds top-level
+// keys, never mutating a nested slice/map value, so the caller's original map
+// (and any structure it shares) is left fully intact.
+func cloneArgsMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // splitLeakedValue separates a leaked string into its true leading value and
