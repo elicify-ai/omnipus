@@ -106,6 +106,12 @@ function baseAgent(overrides: Record<string, unknown> = {}) {
 function baseCriterion(overrides: Record<string, unknown> = {}) {
   return {
     kind: 'behavior',
+    // ADR-080 D-TYPES — `judgment` is required on the canonical
+    // AcceptanceCriterion schema; `behavior` infers `quantitative`
+    // server-side, but any valid enum value satisfies this fixture's own
+    // schema (this file is a fixed `behavior`-kind, `judgment` is not the
+    // field under test here).
+    judgment: 'quantitative',
     text: 'Called web_search at least 5 times',
     author: { kind: 'agent', id: 'jim' },
     status: 'pending',

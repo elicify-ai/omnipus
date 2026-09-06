@@ -13,6 +13,7 @@ import { formatVerifiesVia } from '@/components/shared/CriteriaBreakdown'
 import type { AcceptanceCriterion } from '@/lib/api'
 
 type BehaviorScope = NonNullable<AcceptanceCriterion['behavior']>['scope']
+type Judgment = AcceptanceCriterion['judgment']
 
 interface AcceptanceCriteriaEditorProps {
   criteria: AcceptanceCriterion[]
@@ -53,6 +54,14 @@ function parseIntStrict(raw: string): number | null {
  * cards: text primary, a mono "verifies via:" chip when a payload is
  * attached, and the author stamp. No kind classification label is shown
  * (spec §4: no user-facing `[kind]` tokens).
+ *
+ * ADR-080 D-TYPES: every criterion also carries a REQUIRED `judgment` (what
+ * SHAPE of claim it is — `boolean`/`quantitative`/`artifact` — orthogonal to
+ * `kind`, which mechanism verifies it). This is the human authoring surface,
+ * so a small "Judgment" selector lets the author set it explicitly; a
+ * criterion added with no interaction defaults to `boolean` (the catch-all
+ * for yes/no and honestly-subjective outcomes), matching the server's own
+ * `InferJudgment` default for `prose`.
  */
 export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, emptyHint }: AcceptanceCriteriaEditorProps) {
   const [text, setText] = useState('')
@@ -70,6 +79,9 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
   const [minCount, setMinCount] = useState('1')
   const [maxCount, setMaxCount] = useState('')
   const [scope, setScope] = useState<BehaviorScope>('task_session')
+  // ADR-080 D-TYPES — what SHAPE of claim this criterion is. Defaults to the
+  // catch-all `boolean`; the author picks a different value explicitly.
+  const [judgment, setJudgment] = useState<Judgment>('boolean')
 
   function toggleExpander(next: 'check' | 'behavior') {
     setExpander((cur) => (cur === next ? null : next))
@@ -104,6 +116,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         ...criteria,
         {
           kind: 'check',
+          judgment,
           text: trimmedText,
           check: { command: command.trim(), expected_exit_code: code },
           author: currentAuthor,
@@ -139,6 +152,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         ...criteria,
         {
           kind: 'behavior',
+          judgment,
           text: trimmedText,
           behavior: {
             tool: tool.trim(),
@@ -157,12 +171,13 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
     } else {
       onChange([
         ...criteria,
-        { kind: 'prose', text: trimmedText, author: currentAuthor, status: 'pending' },
+        { kind: 'prose', judgment, text: trimmedText, author: currentAuthor, status: 'pending' },
       ])
     }
     setError('')
     setText('')
     setExpander(null)
+    setJudgment('boolean')
   }
 
   function removeCriterion(idx: number) {
@@ -185,7 +200,15 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
                 className="flex items-start gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
               >
                 <div className="flex-1 min-w-0 space-y-0.5">
-                  <p className="text-[var(--color-secondary)]">{c.text}</p>
+                  <div className="flex items-start gap-1.5">
+                    <span
+                      data-testid="criterion-judgment-badge"
+                      className="mt-[1px] shrink-0 rounded border border-[var(--color-border)] px-1 py-[1px] text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
+                    >
+                      {c.judgment}
+                    </span>
+                    <p className="text-[var(--color-secondary)] flex-1 min-w-0">{c.text}</p>
+                  </div>
                   {verifiesVia && (
                     <p className="inline-flex max-w-full items-baseline gap-1 rounded bg-[var(--color-surface-1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
                       <span className="shrink-0">verifies via:</span>
@@ -237,6 +260,24 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
           >
             + Add action-count check
           </button>
+        </div>
+
+        {/* ADR-080 D-TYPES — judgment selector. Every criterion carries a
+            required judgment (what SHAPE of claim it is); this is the human
+            authoring surface, so the author picks it explicitly. Defaults to
+            `boolean` (the catch-all for yes/no and subjective outcomes). */}
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-[var(--color-muted)]">Judgment</span>
+          <Select value={judgment} onValueChange={(v) => { setJudgment(v as Judgment); setError('') }}>
+            <SelectTrigger aria-label="Judgment" className="h-8 text-xs w-40 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="boolean" className="text-xs">Boolean (yes/no)</SelectItem>
+              <SelectItem value="quantitative" className="text-xs">Quantitative (value vs. threshold)</SelectItem>
+              <SelectItem value="artifact" className="text-xs">Artifact (a thing exists)</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {expander === 'check' && (

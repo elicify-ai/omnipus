@@ -71,7 +71,7 @@ describe('AcceptanceCriteriaEditor — prose-first default (US-7 S1)', () => {
 
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(onChange).toHaveBeenCalledWith([
-      { kind: 'prose', text: 'The report reads clearly', author: AUTHOR, status: 'pending' },
+      { kind: 'prose', judgment: 'boolean', text: 'The report reads clearly', author: AUTHOR, status: 'pending' },
     ])
   })
 
@@ -98,6 +98,61 @@ describe('AcceptanceCriteriaEditor — prose-first default (US-7 S1)', () => {
   })
 })
 
+// ADR-080 D-TYPES — the editor is the human authoring surface for
+// `judgment`: a small selector lets the author pick boolean/quantitative/
+// artifact explicitly; a criterion added with no interaction defaults to
+// `boolean`.
+describe('AcceptanceCriteriaEditor — judgment selector (ADR-080 D-TYPES)', () => {
+  it('shows a Judgment selector defaulting to boolean', () => {
+    renderEditor()
+    expect(screen.getByLabelText('Judgment')).toBeInTheDocument()
+  })
+
+  it('an author-selected judgment (quantitative) is carried on the added criterion', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'at least 3 sources cited')
+    await user.click(screen.getByRole('option', { name: /Quantitative/i }))
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    expect(added.judgment).toBe('quantitative')
+  })
+
+  it('an author-selected judgment (artifact) is carried on the added criterion', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'a signed release artifact exists')
+    await user.click(screen.getByRole('option', { name: /Artifact/i }))
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+
+    const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
+    expect(added.judgment).toBe('artifact')
+  })
+
+  it('resets to boolean after a successful add', async () => {
+    const user = userEvent.setup()
+    const { onChange } = renderEditor()
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'first')
+    await user.click(screen.getByRole('option', { name: /Artifact/i }))
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+    expect((onChange.mock.calls[0][0] as AcceptanceCriterion[])[0].judgment).toBe('artifact')
+
+    await user.type(screen.getByLabelText(TEXT_FIELD), 'second')
+    await user.click(screen.getByRole('button', { name: /Add criterion/i }))
+    const secondCall = onChange.mock.calls[1][0] as AcceptanceCriterion[]
+    expect(secondCall[secondCall.length - 1].judgment).toBe('boolean')
+  })
+
+  it('renders a judgment badge on an existing criterion card', () => {
+    renderEditor({
+      criteria: [{ kind: 'prose', judgment: 'quantitative', text: 'x', author: AUTHOR, status: 'pending' }],
+    })
+    expect(screen.getByTestId('criterion-judgment-badge')).toHaveTextContent('quantitative')
+  })
+})
+
 describe('AcceptanceCriteriaEditor — technical-check expander', () => {
   it('reveals command + exit code, and produces a check payload', async () => {
     const user = userEvent.setup()
@@ -111,6 +166,7 @@ describe('AcceptanceCriteriaEditor — technical-check expander', () => {
     expect(onChange).toHaveBeenCalledWith([
       {
         kind: 'check',
+        judgment: 'boolean',
         text: 'tests pass',
         check: { command: 'go test ./...', expected_exit_code: 0 },
         author: AUTHOR,
@@ -256,6 +312,7 @@ describe('AcceptanceCriteriaEditor — action-count expander (ADR-052 FR-034 beh
     const [added] = onChange.mock.calls[0][0] as AcceptanceCriterion[]
     expect(added).toEqual({
       kind: 'behavior',
+      judgment: 'boolean',
       text: 'research actually searched the web',
       behavior: { tool: 'search_web', min_count: 1, scope: 'task_session' },
       author: AUTHOR,
@@ -333,9 +390,10 @@ describe('AcceptanceCriteriaEditor — action-count expander (ADR-052 FR-034 beh
 
 describe('AcceptanceCriteriaEditor — cards: "verifies via:" chip, no [kind] labels', () => {
   const CARD_CRITERIA: AcceptanceCriterion[] = [
-    { kind: 'prose', text: 'Reads clearly', author: AUTHOR, status: 'pending' },
+    { kind: 'prose', judgment: 'boolean', text: 'Reads clearly', author: AUTHOR, status: 'pending' },
     {
       kind: 'check',
+      judgment: 'boolean',
       text: 'tests pass',
       check: { command: 'go test ./...', expected_exit_code: 0 },
       author: AUTHOR,
@@ -343,6 +401,7 @@ describe('AcceptanceCriteriaEditor — cards: "verifies via:" chip, no [kind] la
     },
     {
       kind: 'behavior',
+      judgment: 'quantitative',
       text: 'actually searched',
       behavior: { tool: 'search_web', min_count: 3, max_count: 5, scope: 'task_session' },
       author: AUTHOR,
@@ -377,9 +436,10 @@ describe('AcceptanceCriteriaEditor — author stamp (FR-3 rule 3)', () => {
   it('shows the author identity on an existing criterion', () => {
     renderEditor({
       criteria: [
-        { kind: 'prose', text: 'Reviewed by a human', author: { kind: 'user', id: 'daniel' }, status: 'pending' },
+        { kind: 'prose', judgment: 'boolean', text: 'Reviewed by a human', author: { kind: 'user', id: 'daniel' }, status: 'pending' },
         {
           kind: 'check',
+          judgment: 'boolean',
           text: 'lints clean',
           check: { command: 'golangci-lint run', expected_exit_code: 0 },
           author: { kind: 'agent', id: 'jim' },
@@ -409,7 +469,7 @@ describe('AcceptanceCriteriaEditor — D5 zero-criteria soft hint', () => {
 
   it('does not show the hint once at least one criterion exists', () => {
     renderEditor({
-      criteria: [{ kind: 'prose', text: 'x', author: AUTHOR, status: 'pending' }],
+      criteria: [{ kind: 'prose', judgment: 'boolean', text: 'x', author: AUTHOR, status: 'pending' }],
       emptyHint: 'No criteria added — judged against title/description (D5).',
     })
     expect(screen.queryByText('No criteria added — judged against title/description (D5).')).not.toBeInTheDocument()
@@ -425,8 +485,8 @@ describe('AcceptanceCriteriaEditor — D5 zero-criteria soft hint', () => {
 describe('AcceptanceCriteriaEditor — remove criterion', () => {
   it('clicking the remove button calls onChange with that criterion filtered out', async () => {
     const user = userEvent.setup()
-    const keep: AcceptanceCriterion = { kind: 'prose', text: 'keep me', author: AUTHOR, status: 'pending' }
-    const drop: AcceptanceCriterion = { kind: 'prose', text: 'drop me', author: AUTHOR, status: 'pending' }
+    const keep: AcceptanceCriterion = { kind: 'prose', judgment: 'boolean', text: 'keep me', author: AUTHOR, status: 'pending' }
+    const drop: AcceptanceCriterion = { kind: 'prose', judgment: 'boolean', text: 'drop me', author: AUTHOR, status: 'pending' }
     const { onChange } = renderEditor({ criteria: [keep, drop] })
 
     await user.click(screen.getByRole('button', { name: 'Remove criterion drop me' }))
