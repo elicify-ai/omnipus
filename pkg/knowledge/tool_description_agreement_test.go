@@ -358,7 +358,7 @@ func TestDescribeViews_UnusableViewIsMarkedInTheListing(t *testing.T) {
 	require.Truef(t, report.OK(), "the fixture views were rejected: %v", report.Rejections)
 
 	var b strings.Builder
-	renderViews(&b, DescribeData{Views: views})
+	renderViews(&b, DescribeData{Views: views}, DetailStandard)
 	out := b.String()
 
 	require.Contains(t, out, "DISABLED",
@@ -508,6 +508,7 @@ var integrityCategoryPhrase = map[IntegrityCategory]string{
 	CategoryBrokenLink:         "broken wikilinks",
 	CategoryOrphan:             "orphan notes",
 	CategoryOrphanRow:          "index rows with no note",
+	CategoryAmbiguousName:      "ambiguous note names",
 }
 
 // TestDescribeDescription_NamesEveryIntegrityCategory — FR-079 requires the

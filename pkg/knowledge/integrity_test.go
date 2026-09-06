@@ -248,8 +248,16 @@ func asSweepTooLarge(err error, out **SweepTooLargeError) bool {
 // large enough to EXCEED the bound rather than a stubbed counter.
 //
 // 620 notes, each linking to a target that does not exist, and each linked to
-// by nothing. That is 620 broken links and 620 orphans: both categories clamp,
-// and both must say what they hid.
+// by nothing. That is 620 broken links and 620 orphans. With retention driven
+// down to 500 (FindingsPerCategory override) both categories overflow the
+// retention cap, and both must say what they hid.
+//
+// WORDING UPDATED FOR D3 (Issue 8): the response now shows a bounded SAMPLE and
+// a cursor rather than dumping all 500 retained findings, so the visible lines
+// are "showing 1-20 of 620 — next page: cursor=..." plus a separate "120 more
+// findings exceed the retention cap of 500 ... narrow" line rather than the old
+// single "showing 500 of 620". The substance the test guards is unchanged: the
+// count that was hidden and the remedy must both be visible on the first page.
 func TestIntegrity_PerCategoryClampReportsWhatItHid(t *testing.T) {
 	const notes = 620
 	const clamp = 500
@@ -299,8 +307,9 @@ func TestIntegrity_PerCategoryClampReportsWhatItHid(t *testing.T) {
 		Sections:   map[string]bool{},
 	})
 	for _, want := range []string{
-		"broken link: showing 500 of 620",
-		"orphan: showing 500 of 620",
+		"broken link: showing 1-20 of 620",
+		"orphan: showing 1-20 of 620",
+		"120 more findings exceed the retention cap",
 		"narrow with collection=",
 		"record_type=",
 	} {

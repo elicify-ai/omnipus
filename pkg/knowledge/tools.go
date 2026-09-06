@@ -1184,8 +1184,8 @@ func (t *DescribeTool) Description() string {
 		"its typed properties and enum values, the note templates, and index freshness. Call " +
 		"this first — a guessed property, type or template name is refused, and the real ones " +
 		"are here. check_integrity also sweeps the WHOLE vault for duplicate identifiers, " +
-		"relations resolving to nothing or the wrong type, broken wikilinks, orphan notes and " +
-		"index rows with no note; bounded, and says when it clamps. Reads only."
+		"relations resolving to nothing or the wrong type, broken wikilinks, orphan notes, " +
+		"index rows with no note and ambiguous note names; bounded, and says when it clamps. Reads only."
 }
 
 // Scope classifies the tool for per-agent visibility filtering.
@@ -1198,7 +1198,7 @@ func (t *DescribeTool) Category() tools.ToolCategory { return tools.CategoryMemo
 // is REFUSED with the accepted names listed — the posture FR-024 takes for an
 // unknown property, applied to the request envelope, because a silently
 // ignored argument is a caller that believes it narrowed something.
-var describeArgNames = []string{"collection", "record_type", "include", "check_integrity", "detail"}
+var describeArgNames = []string{"collection", "record_type", "include", "check_integrity", "detail", "cursor"}
 
 // Parameters is the JSON schema the model fills in. Kept terse: FR-079's
 // correction establishes that the WHOLE parameter schema is re-sent on every
@@ -1226,8 +1226,12 @@ func (t *DescribeTool) Parameters() map[string]any {
 			},
 			"detail": map[string]any{
 				"type":        "string",
-				"enum":        []string{DetailStandard, DetailMinimal},
-				"description": "minimal omits enum value lists.",
+				"enum":        []string{DetailStandard, DetailMinimal, DetailFull},
+				"description": "minimal drops the per-type view-creation hints; full inlines every saved view's definition (otherwise many views are listed by name only).",
+			},
+			"cursor": map[string]any{
+				"type":        "string",
+				"description": "Page more integrity findings from a previous check_integrity response, e.g. 'broken link#20'. Copy the cursor token the report prints.",
 			},
 		},
 	}
@@ -1255,10 +1259,11 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 	switch detail {
 	case "", DetailStandard:
 		detail = DetailStandard
-	case DetailMinimal:
+	case DetailMinimal, DetailFull:
 	default:
 		return tools.ErrorResult(fmt.Sprintf(
-			"knowledge_describe: unknown detail %q; accepted: %s, %s", detail, DetailStandard, DetailMinimal))
+			"knowledge_describe: unknown detail %q; accepted: %s, %s, %s",
+			detail, DetailStandard, DetailMinimal, DetailFull))
 	}
 
 	scope, _ := ResolveTurnScope(ctx, t.deps.Home)
@@ -1277,6 +1282,7 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 		Detail:         detail,
 		RecordType:     strings.TrimSpace(stringArg(args["record_type"])),
 		CheckIntegrity: boolArg(args["check_integrity"]),
+		Cursor:         strings.TrimSpace(stringArg(args["cursor"])),
 	})
 	if execErr != nil {
 		return tools.ErrorResult("knowledge_describe: " + execErr.Error())
@@ -1289,6 +1295,9 @@ type gatherOptions struct {
 	Detail         string
 	RecordType     string
 	CheckIntegrity bool
+	// Cursor pages integrity findings ("<category>#<offset>"). Empty renders
+	// the first page of each category.
+	Cursor string
 }
 
 // gather does the reads. Every failure it can survive is folded into the
@@ -1336,6 +1345,7 @@ func (t *DescribeTool) gather(
 		OnlyType:           opts.RecordType,
 		Sections:           opts.Sections,
 		Detail:             opts.Detail,
+		IntegrityCursor:    opts.Cursor,
 	}
 
 	if opts.Sections[DescribeSectionTemplates] {
@@ -1404,6 +1414,12 @@ func (t *DescribeTool) gather(
 			Schemas:        schemas,
 			Store:          store,
 			RecordType:     opts.RecordType,
+			// D3 (Issue 8): retain far more findings per category than one
+			// response shows, so the cursor can page the remainder instead of
+			// pointing at findings a low cap already discarded. The render layer
+			// samples a page at a time; only a category above this retention cap
+			// reports a non-enumerable remnant.
+			FindingsPerCategory: IntegrityRetentionPerCategory,
 		})
 		if ierr != nil {
 			return nil, ierr

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -102,7 +103,37 @@ var describeSectionOrder = []string{
 const (
 	DetailStandard = "standard"
 	DetailMinimal  = "minimal"
+	// DetailFull forces every SAVED VIEW's full definition inline, even when
+	// there are too many to show at DetailStandard. It is the "on demand" half
+	// of D4 (Issue 9): the default response names the views and counts them per
+	// type, and a caller who actually needs a view's query asks for it with
+	// detail=full rather than paying for 69 view bodies on every orientation
+	// read.
+	DetailFull = "full"
 )
+
+// viewsInlineThreshold is how many saved views DetailStandard will render in
+// full before it switches to the compact per-type catalog (D4 / Issue 9). Below
+// it, a reader gets every view's query without asking — the common small-vault
+// case, and the shape the definition-of-done artifact pins. Above it, the full
+// bodies would flood the context window a model reads at the start of every
+// session, so the response lists names grouped by type and points at
+// detail=full for the definitions.
+const viewsInlineThreshold = 12
+
+// integrityFindingsPageSize is how many findings ONE integrity category shows
+// in a single response — both the default sample and the size of a cursor page
+// (D3 / Issue 8). It is deliberately small: the whole point of the per-category
+// totals and the cursor is that the orientation response no longer dumps
+// hundreds of finding lines a model must read past. The remainder is reached by
+// paging, not by making one response longer.
+const integrityFindingsPageSize = 20
+
+// integrityCursorSep separates the category from the offset in an integrity
+// paging cursor ("broken link#20"). It is a character no IntegrityCategory
+// contains, so the category — which itself contains spaces — parses back
+// unambiguously by splitting on the LAST separator.
+const integrityCursorSep = "#"
 
 // ---------------------------------------------------------------------------
 // The data the renderer projects
@@ -145,6 +176,12 @@ type DescribeData struct {
 	TemplatesDir string
 
 	Integrity *IntegrityReport
+	// IntegrityCursor, when set, pages the INTEGRITY findings. It names one
+	// category and an offset into that category's findings ("broken link#20"),
+	// and the render shows that one page plus the token for the next. Empty
+	// renders the first page (a bounded sample) of every category. It is only
+	// meaningful alongside a non-nil Integrity.
+	IntegrityCursor string
 
 	// Sections is which of describeSectionOrder to render.
 	Sections map[string]bool
@@ -162,10 +199,7 @@ type DescribeData struct {
 // literal text an operator typed.
 func RenderDescribe(d DescribeData) string {
 	var b strings.Builder
-	detail := d.Detail
-	if detail != DetailMinimal {
-		detail = DetailStandard
-	}
+	detail := normalizeDetail(d.Detail)
 	sections := d.Sections
 	if sections == nil {
 		sections = allDescribeSections()
@@ -181,15 +215,27 @@ func RenderDescribe(d DescribeData) string {
 		case DescribeSectionTypes:
 			renderTypes(&b, d, detail)
 		case DescribeSectionViews:
-			renderViews(&b, d)
+			renderViews(&b, d, detail)
 		case DescribeSectionTemplates:
 			renderTemplates(&b, d)
 		}
 	}
 	if d.Integrity != nil {
-		renderIntegrity(&b, d.Integrity)
+		renderIntegrity(&b, d.Integrity, d.IntegrityCursor)
 	}
 	return strings.TrimRight(b.String(), "\n") + "\n"
+}
+
+// normalizeDetail collapses any unrecognised detail to DetailStandard, so the
+// renderer has exactly three states to reason about and an unknown string
+// never silently reads as "minimal".
+func normalizeDetail(detail string) string {
+	switch detail {
+	case DetailMinimal, DetailFull:
+		return detail
+	default:
+		return DetailStandard
+	}
 }
 
 func allDescribeSections() map[string]bool {
@@ -310,7 +356,7 @@ func renderTypes(b *strings.Builder, d DescribeData, detail string) {
 			head += " " + quoteDisplay(sc.Label)
 		}
 		b.WriteString(head + "\n")
-		renderProperties(b, sc, detail)
+		renderProperties(b, sc)
 		renderAvailableViews(b, sc, detail)
 	}
 	renderSchemaRejections(b, d.SchemaReport)
@@ -324,9 +370,11 @@ func renderTypes(b *strings.Builder, d DescribeData, detail string) {
 // shared with knowledge_configure's create_view composer, so the two can
 // never disagree about which kind is offered.
 //
-// Skipped at DetailMinimal for the same reason an enum's value list is
-// (renderProperties above): it is elaboration on a property this section
-// already named, not the fact of the property's existence.
+// Skipped at DetailMinimal: it is elaboration on properties this section
+// already named — which of the eight view kinds each type could back — not the
+// fact of a property's existence. This is now the ONLY thing minimal trims from
+// the TYPES section; enum value lists stayed, because a value list is the
+// property's domain rather than elaboration on it (renderProperties above).
 func renderAvailableViews(b *strings.Builder, sc *records.Schema, detail string) {
 	if detail == DetailMinimal {
 		return
@@ -334,7 +382,17 @@ func renderAvailableViews(b *strings.Builder, sc *records.Schema, detail string)
 	b.WriteString("    " + RenderAvailableViews(sc) + "\n")
 }
 
-func renderProperties(b *strings.Builder, sc *records.Schema, detail string) {
+// renderProperties lists a record type's properties and their types.
+//
+// ENUM VALUES ARE SHOWN AT EVERY DETAIL LEVEL, DetailMinimal included (D4 /
+// Issue 9). They were once hidden at minimal as "elaboration", but the
+// permitted set of an enum is not elaboration — it is the property's domain,
+// and hiding it made a minimal describe report that `task.status` is an enum
+// while withholding that "open" is one of the values it accepts, so an agent
+// could neither filter on it nor set it without a second, wider call. The
+// token cost minimal is for comes from the available-views block
+// (renderAvailableViews), which minimal still skips.
+func renderProperties(b *strings.Builder, sc *records.Schema) {
 	names := sc.PropertyNames()
 	width := 0
 	for _, n := range names {
@@ -364,7 +422,7 @@ func renderProperties(b *strings.Builder, sc *records.Schema, detail string) {
 			kind += " -> " + p.To
 		}
 		line := fmt.Sprintf("    %-*s  %s", width, n, kind)
-		if p.Type == records.TypeEnum && detail != DetailMinimal {
+		if p.Type == records.TypeEnum {
 			// The declared set is UNORDERED and a reader must not infer a
 			// sort order from this sequence — R-5 sorts lexically over the
 			// folded value. It is rendered in DECLARATION order so the
@@ -385,7 +443,21 @@ func renderSchemaRejections(b *strings.Builder, r *records.SchemaLoadReport) {
 	}
 }
 
-func renderViews(b *strings.Builder, d DescribeData) {
+// renderViews lists the saved views, in one of two shapes (D4 / Issue 9).
+//
+// A vault with a handful of views gets each one in FULL — its query on one
+// line, so a reader can reuse it without opening the file. A vault with dozens
+// (the shape that motivated this: 69 views rendered inline flooded the context
+// a model reads at the start of every session) gets a COMPACT CATALOG instead —
+// names grouped by type, counted, with the definitions available on demand via
+// detail=full. DetailMinimal always takes the catalog; DetailFull always takes
+// the full bodies, however many there are.
+//
+// Either way the two safety facts a reader must not miss are kept: a REJECTED
+// view file is reported (renderViewRejections), and a DISABLED or NOT SERVABLE
+// view is flagged even in the catalog — an agent that picks one of those off a
+// bare name list has chosen a view that can never answer.
+func renderViews(b *strings.Builder, d DescribeData, detail string) {
 	views := d.Views.Views()
 	// Built once for the whole listing rather than per view: the loader is a
 	// thin wrapper over the set this function already holds, and asking it is
@@ -393,30 +465,133 @@ func renderViews(b *strings.Builder, d DescribeData) {
 	loader := records.NewViewFindLoader(d.Views)
 	if len(views) == 0 {
 		b.WriteString("VIEWS (0) — no saved views; a query here starts from scratch\n")
-	} else {
+		renderViewRejections(b, d.ViewReport)
+		return
+	}
+	if renderViewsInFull(detail, len(views)) {
 		fmt.Fprintf(b, "VIEWS (%d) — ask for one by name before inventing a filter\n", len(views))
+		for _, v := range views {
+			renderViewFull(b, loader, v)
+		}
+		renderViewRejections(b, d.ViewReport)
+		return
 	}
-	for _, v := range views {
-		// ViewDef.Type is a *string since FR-018b made `type` optional (an
-		// untyped view spans record types). Rendered through %s a nil — or a
-		// non-nil — pointer prints an ADDRESS, which is why go vet flags it:
-		// an operator reading "type 0xc000123456" learns nothing and cannot
-		// tell it from a real type name.
-		viewType := "(untyped)"
-		if v.Def.Type != nil {
-			viewType = *v.Def.Type
-		}
-		head := fmt.Sprintf("  %s  type %s", v.Name(), viewType)
-		if lbl := v.DisplayLabel(); lbl != v.Name() {
-			head += " " + quoteDisplay(lbl)
-		}
-		b.WriteString(head + "\n")
-		if body := renderViewBody(v); body != "" {
-			b.WriteString(body)
-		}
-		b.WriteString(renderViewServeRefusal(loader, v))
-	}
+	renderViewCatalog(b, loader, views)
 	renderViewRejections(b, d.ViewReport)
+}
+
+// renderViewsInFull decides between the full bodies and the compact catalog.
+func renderViewsInFull(detail string, count int) bool {
+	switch detail {
+	case DetailFull:
+		return true
+	case DetailMinimal:
+		return false
+	default:
+		return count <= viewsInlineThreshold
+	}
+}
+
+// renderViewFull renders one view's head line and its whole query — the shape
+// the definition-of-done artifact pins and the shape detail=full always gives.
+func renderViewFull(b *strings.Builder, loader *records.ViewFindLoader, v *records.SavedView) {
+	// ViewDef.Type is a *string since FR-018b made `type` optional (an
+	// untyped view spans record types). Rendered through %s a nil — or a
+	// non-nil — pointer prints an ADDRESS, which is why go vet flags it:
+	// an operator reading "type 0xc000123456" learns nothing and cannot
+	// tell it from a real type name.
+	head := fmt.Sprintf("  %s  type %s", v.Name(), viewTypeLabel(v))
+	if lbl := v.DisplayLabel(); lbl != v.Name() {
+		head += " " + quoteDisplay(lbl)
+	}
+	b.WriteString(head + "\n")
+	if body := renderViewBody(v); body != "" {
+		b.WriteString(body)
+	}
+	b.WriteString(renderViewServeRefusal(loader, v))
+}
+
+// renderViewCatalog is D4's compact answer to the 69-view flood: view names
+// grouped by declared type, counted, with the full definitions one detail=full
+// call away. Untyped views are listed last, under their own heading, because
+// "(untyped)" is a real category (a view that spans record types) rather than a
+// missing value.
+func renderViewCatalog(b *strings.Builder, loader *records.ViewFindLoader, views []*records.SavedView) {
+	fmt.Fprintf(b, "VIEWS (%d) — names by type; ask for one by name before inventing a filter; "+
+		"call knowledge_describe with detail=full for the definitions\n", len(views))
+
+	byType := map[string][]*records.SavedView{}
+	for _, v := range views {
+		byType[viewTypeLabel(v)] = append(byType[viewTypeLabel(v)], v)
+	}
+	typed := make([]string, 0, len(byType))
+	hasUntyped := false
+	for k := range byType {
+		if k == "(untyped)" {
+			hasUntyped = true
+			continue
+		}
+		typed = append(typed, k)
+	}
+	sort.Strings(typed)
+	if hasUntyped {
+		typed = append(typed, "(untyped)")
+	}
+
+	// Attention lines are collected while the names are listed, so the reader
+	// sees WHICH names carry a "*" and then, once, WHY — without the catalog
+	// having to interleave a warning between two names.
+	var attention []string
+	for _, key := range typed {
+		group := byType[key]
+		names := make([]string, 0, len(group))
+		for _, v := range group {
+			name := v.Name()
+			if note := viewAttentionNote(loader, v); note != "" {
+				name += "*"
+				attention = append(attention, fmt.Sprintf("    %s — %s", v.Name(), note))
+			}
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Fprintf(b, "  %s (%d): %s\n", key, len(group), strings.Join(names, ", "))
+	}
+	if len(attention) > 0 {
+		sort.Strings(attention)
+		fmt.Fprintf(b, "  !! %d view(s) marked * cannot answer as listed:\n", len(attention))
+		for _, line := range attention {
+			b.WriteString(line + "\n")
+		}
+	}
+}
+
+// viewTypeLabel is the declared record type a view is filed under, or
+// "(untyped)" for one that spans record types (FR-018b made `type` optional).
+func viewTypeLabel(v *records.SavedView) string {
+	if v.Def.Type != nil && *v.Def.Type != "" {
+		return *v.Def.Type
+	}
+	return "(untyped)"
+}
+
+// viewAttentionNote returns why a view cannot answer as listed — disabled, or
+// refused by knowledge_find — or "" when it is fine. It is the compact
+// catalog's equivalent of the inline DISABLED / NOT SERVABLE lines the full
+// listing prints, so no reader picks a dead view off a bare name list.
+func viewAttentionNote(loader *records.ViewFindLoader, v *records.SavedView) string {
+	if v == nil {
+		return ""
+	}
+	if v.Def.Disabled != nil && *v.Def.Disabled {
+		return "DISABLED; stored but never applied, returns nothing"
+	}
+	if loader != nil {
+		if refusal, refused := loader.ServeRefusal(v.Name()); refused && refusal.Code != records.ServeRefusalDisabled {
+			return fmt.Sprintf("NOT SERVABLE by knowledge_find: %s (%s) — %s",
+				refusal.Reason, refusal.Code, refusal.Remedy)
+		}
+	}
+	return ""
 }
 
 // renderViewServeRefusal states, per view, whether knowledge_find will
@@ -1017,7 +1192,24 @@ func shortTemplatesDir(abs string) string {
 	return filepath.ToSlash(abs) + "/"
 }
 
-func renderIntegrity(b *strings.Builder, r *IntegrityReport) {
+// renderIntegrity renders the health sweep (D3 / Issue 8).
+//
+// THE PROBLEM IT SOLVES: a sweep that found 849 findings used to dump every
+// retained finding line inline, with no per-category totals and no way to reach
+// the ones the per-category cap had dropped. A model reading an orientation
+// response had to scroll past hundreds of lines to find the counts, and could
+// never see finding 501.
+//
+// So the response now leads with a per-category TOTALS line, shows a bounded
+// SAMPLE of each category (integrityFindingsPageSize), and hands back a CURSOR
+// for any category with more — `cursor=<category>#<offset>` on the next
+// knowledge_describe call renders the next page. The category retains far more
+// findings than one page shows (IntegrityRetentionPerCategory), so the cursor
+// genuinely enumerates the remainder rather than paging within a truncated
+// sample; only a category whose true total exceeds even the retention cap
+// reports a non-enumerable remnant, with the same "narrow the scope" remedy the
+// old clamp gave.
+func renderIntegrity(b *strings.Builder, r *IntegrityReport, cursor string) {
 	ran, notRun := 0, 0
 	for _, c := range r.Categories {
 		if c.NotRun != "" {
@@ -1031,6 +1223,8 @@ func renderIntegrity(b *strings.Builder, r *IntegrityReport) {
 		header += fmt.Sprintf(", %d categories NOT CHECKED", notRun)
 	}
 	fmt.Fprintf(b, "%s (scope: %s, %s notes swept)\n", header, r.ScopeLabel, group(r.NotesSwept))
+
+	renderIntegrityTotals(b, r)
 
 	width := 0
 	for _, c := range IntegrityCategories {
@@ -1055,24 +1249,116 @@ func renderIntegrity(b *strings.Builder, r *IntegrityReport) {
 		fmt.Fprintf(b, "    %s\n", reason)
 	}
 
+	// A cursor pages ONE category. A bad cursor is reported, never silently
+	// ignored — a caller that believes it is paging and is not has been told
+	// something false.
+	if cat, offset, ok := parseIntegrityCursor(cursor); ok {
+		c := r.Category(IntegrityCategory(cat))
+		if c == nil || c.NotRun != "" || c.Total == 0 {
+			fmt.Fprintf(b, "  cursor names no category with findings to page: %q\n", cat)
+			return
+		}
+		renderIntegrityCategoryPage(b, width, c, offset)
+		return
+	}
+
 	for _, c := range r.Categories {
 		if c.NotRun != "" {
 			continue
 		}
-		for _, f := range c.Findings {
-			fmt.Fprintf(b, "  %-*s  %s\n", width, string(c.Category), f.Detail)
-		}
-		if c.Clamped() {
-			// FR-075a — a clamp that does not name what it hid is a
-			// truncation. The would-be count is mandatory and is not itself
-			// clampable.
-			fmt.Fprintf(b, "  %s: showing %s of %s — narrow with collection=<name> or record_type=<name>\n",
-				string(c.Category), group(len(c.Findings)), group(c.Total))
-		}
+		renderIntegrityCategoryPage(b, width, c, 0)
 	}
 	if ran == 0 && notRun == 0 {
 		b.WriteString("  nothing to report\n")
 	}
+}
+
+// renderIntegrityTotals is D3's per-category count line: every category that
+// found something, with its full pre-sample total, so a reader learns the shape
+// of the report before reading a single finding line. Categories with nothing
+// are omitted here (they contribute nothing to read) and NOT-CHECKED ones are
+// named in their own block instead.
+func renderIntegrityTotals(b *strings.Builder, r *IntegrityReport) {
+	parts := make([]string, 0, len(r.Categories))
+	for _, c := range r.Categories {
+		if c.NotRun != "" || c.Total == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", string(c.Category), group(c.Total)))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(b, "  by category: %s\n", strings.Join(parts, ", "))
+	}
+}
+
+// renderIntegrityCategoryPage renders one category's findings from offset up to
+// one page, then the status line that says what remains and how to reach it.
+func renderIntegrityCategoryPage(b *strings.Builder, width int, c *CategoryResult, offset int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(c.Findings) {
+		offset = len(c.Findings)
+	}
+	end := offset + integrityFindingsPageSize
+	if end > len(c.Findings) {
+		end = len(c.Findings)
+	}
+	for _, f := range c.Findings[offset:end] {
+		fmt.Fprintf(b, "  %-*s  %s\n", width, string(c.Category), f.Detail)
+	}
+	renderIntegrityCategoryStatus(b, c, offset, end)
+}
+
+// renderIntegrityCategoryStatus prints, for one category, the paging line and —
+// independently — the retention-overflow line.
+//
+// The two are separate FACTS and must not be conflated: the paging line says
+// how to reach the next RETAINED findings, and the overflow line says how many
+// findings the retention cap dropped entirely, which are not reachable by any
+// cursor. The overflow is a property of the category, not of the page, so it is
+// stated on EVERY page it applies to — a reader on page 1 must not have to walk
+// to the last page to learn that findings were discarded (FR-075a's "say when
+// it clamps"). A category that fits one page with nothing dropped prints
+// neither line, which is the common case the definition-of-done artifact pins.
+func renderIntegrityCategoryStatus(b *strings.Builder, c *CategoryResult, offset, end int) {
+	cat := string(c.Category)
+	switch {
+	case end < len(c.Findings):
+		// More findings are RETAINED — the cursor reaches them.
+		fmt.Fprintf(b, "  %s: showing %s-%s of %s — next page: cursor=%s%s%d\n",
+			cat, group(offset+1), group(end), group(c.Total), cat, integrityCursorSep, end)
+	case offset > 0 || len(c.Findings) > integrityFindingsPageSize:
+		// A multi-page category fully walked — say so, so the reader knows the
+		// cursor has run out rather than wondering whether it broke.
+		fmt.Fprintf(b, "  %s: showing %s-%s of %s — end\n",
+			cat, group(offset+1), group(end), group(c.Total))
+	}
+	if c.Total > len(c.Findings) {
+		// The sweep found more than the retention cap kept. Name how many were
+		// dropped and how to narrow, because those findings are not enumerable
+		// by paging at all.
+		fmt.Fprintf(b, "  %s: %s more findings exceed the retention cap of %s and are not enumerable — narrow with collection=<name> or record_type=<name>\n",
+			cat, group(c.Total-len(c.Findings)), group(len(c.Findings)))
+	}
+}
+
+// parseIntegrityCursor splits a "<category>#<offset>" cursor. The category may
+// contain spaces but never the separator, so the split is on the LAST one.
+func parseIntegrityCursor(cursor string) (category string, offset int, ok bool) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" {
+		return "", 0, false
+	}
+	i := strings.LastIndex(cursor, integrityCursorSep)
+	if i <= 0 || i == len(cursor)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(cursor[i+1:])
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return cursor[:i], n, true
 }
 
 // group renders an integer with thousands separators, because these numbers
