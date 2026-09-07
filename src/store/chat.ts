@@ -5292,13 +5292,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // change again?), not a render decision (should it be shown right
           // now?) — the render policy the comment above still refers to is
           // untouched.
+          //
+          // ADR-081 D5 store hygiene: an EMPTY-goal_id frame (the '_default'
+          // key) was root cause #2 of the 2026-09-07 UX trace — the deleted
+          // `queued` emission carried no `goal_id`, landed on '_default', and
+          // was never overwritten once the later keyed `active` frame arrived
+          // under a different key, so the stale card rendered forever. The
+          // `queued` emission itself is gone (ADR-081 D9), but a keyed frame
+          // arriving for this session still evicts any lingering '_default'
+          // pill defensively — harmless once no frame is ever emitted with an
+          // empty goal_id, cheap insurance against any stale/legacy one.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
           const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
-          withBucket(targetSid, (b) => ({
-            goalStatus: goalFrame,
-            goalPills: evictGoalPillsOverCap({ ...(b.goalPills ?? {}), [pillKey]: goalFrame }),
-          }))
+          withBucket(targetSid, (b) => {
+            const merged = { ...(b.goalPills ?? {}), [pillKey]: goalFrame }
+            if (pillKey !== '_default') {
+              delete merged['_default']
+            }
+            return {
+              goalStatus: goalFrame,
+              goalPills: evictGoalPillsOverCap(merged),
+            }
+          })
           break
         }
 

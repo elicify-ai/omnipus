@@ -183,3 +183,55 @@ describe('chat handleFrame — goalPills bound (regression fix, bc66345f follow-
     expect(pills.g2?.state).toBe('active')
   })
 })
+
+// ── Regression coverage: ADR-081 D5 store hygiene — '_default' eviction ────
+//
+// Root cause #2 of the 2026-09-07 UX trace (ADR-081 §"The live evidence"):
+// the deleted `queued` emission carried no `goal_id`, landed on the
+// `'_default'` key, and was never overwritten once a later KEYED `active`
+// frame arrived under a different key — the stale card rendered forever.
+// The `queued` emission itself is gone (ADR-081 D9), but this is the
+// defensive store-hygiene half of the fix (D5): any keyed (non-empty
+// goal_id) frame arriving for a session evicts a lingering `'_default'`
+// pill for that SAME session, so a stale empty-id entry (however it got
+// there — a pre-upgrade session, a legacy client) can never survive
+// alongside a real, keyed goal.
+describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed frame (ADR-081 D5)', () => {
+  it('evicts a lingering \'_default\' pill once a keyed frame arrives for the same session', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: SID_A })
+      // A stale, empty-goal_id frame lands first (no `goal_id` field at all).
+      useChatStore.getState().handleFrame(makeFrame({ state: 'active' }))
+    })
+    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.['_default']).toBeDefined()
+
+    act(() => {
+      // The real, keyed frame for the actual goal arrives next.
+      useChatStore.getState().handleFrame(makeFrame({ goal_id: 'g1', state: 'active', round: 1 }))
+    })
+    const pills = useChatStore.getState().sessionsById[SID_A]?.goalPills ?? {}
+    expect(pills['_default']).toBeUndefined()
+    expect(pills.g1?.round).toBe(1)
+  })
+
+  it('does not evict \'_default\' when the incoming frame is itself unkeyed (no-op case)', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: SID_A })
+      useChatStore.getState().handleFrame(makeFrame({ state: 'active', round: 1 }))
+      useChatStore.getState().handleFrame(makeFrame({ state: 'active', round: 2 }))
+    })
+    const pills = useChatStore.getState().sessionsById[SID_A]?.goalPills ?? {}
+    expect(pills['_default']?.round).toBe(2)
+  })
+
+  it('does not disturb a DIFFERENT session\'s \'_default\' pill', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: SID_A })
+      useChatStore.getState().handleFrame(makeFrame({ session_id: SID_B, state: 'active' }))
+      useChatStore.getState().handleFrame(makeFrame({ session_id: SID_A, goal_id: 'g1', state: 'active' }))
+    })
+    expect(useChatStore.getState().sessionsById[SID_B]?.goalPills?.['_default']).toBeDefined()
+    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.['_default']).toBeUndefined()
+    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.g1).toBeDefined()
+  })
+})

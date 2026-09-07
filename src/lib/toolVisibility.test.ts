@@ -76,6 +76,35 @@ describe('shouldRenderToolCall — Skill (ADR-072 D3)', () => {
   })
 })
 
+// ADR-081 D5/A-3 (work-first goal flow): `set_goal` is hidden by default —
+// the record card (GoalEchoCard, rendered by GoalThreadTailCards from the
+// `goal_status` frame) is the visible surface for a reader, same rationale
+// as `delegate`'s hide. Unlike `ToolSearch`/`Skill`, there is NO error
+// exception (mirrors `delegate`/background-`bash`): a rejected submission
+// is a bounded-retry validation loop the calling agent handles inline.
+describe('shouldRenderToolCall — set_goal (ADR-081 D5/A-3)', () => {
+  it.each([
+    [undefined, false, false],
+    [{}, false, false],
+    [{ mode: 'register' }, false, false],
+    [{ mode: 'update' }, false, false],
+    [undefined, true, true],
+    [{}, true, true],
+  ])('params=%o verbose=%s → %s', (params, verbose, expected) => {
+    expect(shouldRenderToolCall('set_goal', params as Record<string, unknown> | undefined, verbose)).toBe(
+      expected,
+    )
+  })
+
+  it('stays hidden on a validation-error/rejected submission (non-verbose) — no isError exception', () => {
+    expect(shouldRenderToolCall('set_goal', { mode: 'register' }, false, true)).toBe(false)
+  })
+
+  it('becomes visible on error only once verbose chat is enabled', () => {
+    expect(shouldRenderToolCall('set_goal', { mode: 'register' }, true, true)).toBe(true)
+  })
+})
+
 describe('shouldRenderToolCall — delegate', () => {
   // Fix 2 (user-approved 2026-07-16, revised same day): a 'run' delegation
   // is hidden regardless of async — this INVERTS the pre-fix behavior for
@@ -169,6 +198,10 @@ describe('shouldRenderToolCall — verbose override', () => {
 
   it('a hidden background delegate call becomes visible when verbose', () => {
     expect(shouldRenderToolCall('delegate', undefined, true)).toBe(true)
+  })
+
+  it('a hidden set_goal call becomes visible when verbose', () => {
+    expect(shouldRenderToolCall('set_goal', undefined, true)).toBe(true)
   })
 
   it('a hidden bash poll/read call becomes visible when verbose', () => {
