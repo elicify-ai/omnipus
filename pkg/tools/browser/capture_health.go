@@ -32,6 +32,7 @@ func (cs *CaptureSession) RecordIngestHeartbeat(epoch uint64, sample *CaptureHea
 	cs.lastPingAt = now
 	if sample != nil {
 		cs.captureHealth = *sample
+		cs.captureHealth.BindingEpoch = epoch
 		cs.captureHealth.ObservedAt = now
 	}
 	return true
@@ -56,13 +57,12 @@ func (cs *CaptureSession) ReportCaptureFailure() {
 	cs.onIngestLost()
 }
 
+func (cs *CaptureSession) ReportCaptureFailureForObservation(sample CaptureHealthObservation) bool {
+	return cs.reportIngestLoss(&sample)
+}
+
 // RecordVideoProgress completes a recovery when a reused ingest connection
 // resumes forwarding without producing another track-arrival callback.
 func (cs *CaptureSession) RecordVideoProgress() {
-	cs.mu.Lock()
-	recovering := cs.ingestRecoveryAttempts > 0 || cs.ingestRecoveryGaveUp
-	cs.mu.Unlock()
-	if recovering {
-		cs.onIngestVideoLive()
-	}
+	cs.recordIngestVideoLive(true)
 }

@@ -930,19 +930,20 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 				haveBaseline = false
 			}
 			if stallTicks >= encoderLivenessVideoStallTicks {
-				slog.Warn(
-					"browser-webrtc: capture stage failed; requesting bounded recovery",
-					"stage", stageFailure,
-					"agent_id",
-					agentID,
-					"video_packets",
-					stats.VideoPackets,
-					"stall_ticks",
-					stallTicks,
-					"check_interval",
-					checkInterval,
-				)
-				cs.ReportCaptureFailure()
+				if cs.ReportCaptureFailureForObservation(health) {
+					slog.Warn(
+						"browser-webrtc: capture stage failed; requesting bounded recovery",
+						"stage", stageFailure,
+						"agent_id",
+						agentID,
+						"video_packets",
+						stats.VideoPackets,
+						"stall_ticks",
+						stallTicks,
+						"check_interval",
+						checkInterval,
+					)
+				}
 				stallTicks = 0
 			}
 

@@ -17,6 +17,8 @@ Integration branch: `browser-improvements`. Base: `fbcbc5edc9845f1fbecb01b423f15
 
 ## Wave 2 — frame/target correctness
 
+- [ ] Resolve incremental independent health review: retain finite-repaint evidence across fresh complete samples; require progress after loss before completing recovery; reject superseded observations atomically. Separate relay ingress from partial viewer-write failures. Earlier focused green results did not cover these timelines.
+
 - [ ] Capture generation changes on actual target or CSS geometry changes; peer reuse is restricted to unchanged target/geometry until exact frame correlation can be proven.
 - [x] Verify exact source identity bridge on installed Chrome 151: read-only `chrome.debugger.getTargets()` mapped duplicate-URL page IDs to distinct tab IDs; capturing requested red tab while blue tab was foreground produced a red frame. Implementation requires documented debugger permission in the managed extension, without debugger attachment.
 - [ ] Immutable offer generation/target, first-forwarded RTP timestamp boundary strictly after every old-forwarded timestamp, generation fence at relay writes.

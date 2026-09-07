@@ -406,6 +406,8 @@ type CaptureSession struct {
 	// ingestRecoveryAttempts counts automatic recaptures issued since video
 	// was last confirmed live. Reset to 0 by onIngestVideoLive.
 	ingestRecoveryAttempts int
+	// Progress at the latest loss; only later packets may complete recovery.
+	ingestRecoveryProgressBaseline int64
 	// ingestRecoveryTimer is the single armed evaluation of the recovery state
 	// machine; nil when none is pending. Exactly one may exist at a time —
 	// that is what stops a burst of loss notifications becoming a burst of

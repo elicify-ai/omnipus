@@ -165,24 +165,33 @@ func (cs *CaptureSession) noteRecaptureIssued() {
 // loss notifications — several of which the relay can legitimately produce
 // around one teardown — from becoming a burst of captures.
 func (cs *CaptureSession) onIngestLost() {
+	cs.reportIngestLoss(nil)
+}
+
+// reportIngestLoss validates sampled evidence while claiming the loss under the
+// same lock. Relay callbacks use nil because they report a live connection
+// event rather than a copied watchdog observation.
+func (cs *CaptureSession) reportIngestLoss(sample *CaptureHealthObservation) bool {
 	cs.mu.Lock()
-	if cs.stopped {
+	if cs.stopped || sample != nil && (sample.BindingEpoch == 0 || sample.BindingEpoch != cs.ingestEpoch || cs.ingestSend == nil || *sample != cs.captureHealth) {
 		cs.mu.Unlock()
-		return
+		return false
 	}
 	cs.ingestVideoLive = false
+	// Stats does not invoke capture callbacks; lock order is capture -> relay.
+	cs.ingestRecoveryProgressBaseline = cs.relay.Stats().VideoPackets
 	if cs.ingestRecoveryGaveUp {
 		// Already reported unrecoverable. Retrying now would be the unbounded
 		// loop this whole file exists to prevent.
 		cs.mu.Unlock()
 		cs.logf("capture[%s]: ingest lost again after automatic recovery was exhausted — not retrying", cs.agentID)
-		return
+		return true
 	}
 	if cs.ingestRecoveryTimer != nil {
 		// An evaluation is already scheduled; this loss is part of the same
 		// episode. One timer, one recapture.
 		cs.mu.Unlock()
-		return
+		return true
 	}
 	// If a recapture is plausibly still in flight, wait out the rest of ITS
 	// window before judging anything — this loss is most likely its teardown.
@@ -193,7 +202,7 @@ func (cs *CaptureSession) onIngestLost() {
 		cs.mu.Unlock()
 		cs.logf("capture[%s]: ingest lost while a recapture was still in flight — waiting %s for it rather than stacking another",
 			cs.agentID, delay.Round(time.Millisecond))
-		return
+		return true
 	}
 	cs.mu.Unlock()
 
@@ -206,6 +215,7 @@ func (cs *CaptureSession) onIngestLost() {
 	// zero-duration timer: the first automatic recapture is issued on the same
 	// goroutine that observed the death, with no scheduling latency.
 	cs.runIngestRecovery()
+	return true
 }
 
 // onIngestVideoLive is the relay's SetOnIngestLive callback: a video feed is
@@ -214,12 +224,20 @@ func (cs *CaptureSession) onIngestLost() {
 // reopening the panel, a tab change's recapture) is fully re-armed for the
 // next failure rather than staying permanently unprotected.
 func (cs *CaptureSession) onIngestVideoLive() {
+	cs.recordIngestVideoLive(false)
+}
+
+func (cs *CaptureSession) recordIngestVideoLive(requireProgress bool) {
 	cs.mu.Lock()
 	if cs.stopped {
 		cs.mu.Unlock()
 		return
 	}
 	wasFailing := cs.ingestRecoveryAttempts > 0 || cs.ingestRecoveryGaveUp
+	if requireProgress && (!wasFailing || cs.relay.Stats().VideoPackets <= cs.ingestRecoveryProgressBaseline) {
+		cs.mu.Unlock()
+		return
+	}
 	cs.ingestVideoLive = true
 	cs.ingestRecoveryAttempts = 0
 	cs.ingestRecoveryGaveUp = false

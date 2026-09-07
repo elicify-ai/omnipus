@@ -69,6 +69,7 @@ func TestCaptureHealthCurrentHeartbeatPreservesMeasuredSample(t *testing.T) {
 		t.Fatalf("sample observation not stamped at receipt: %v", got.ObservedAt)
 	}
 	want := sample
+	want.BindingEpoch = epoch
 	want.ObservedAt = got.ObservedAt
 	if got != want {
 		t.Fatalf("measured sample changed: got %+v want %+v", got, want)
