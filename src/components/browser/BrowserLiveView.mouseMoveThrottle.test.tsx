@@ -13,6 +13,7 @@
 // video painting). There is now exactly ONE code path, so nothing here needs to
 // steer which branch runs — the tests drive it purely with fake timers.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -51,6 +52,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
  * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
@@ -68,6 +70,7 @@ function decodeFirstFrame() {
   Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 const initialChatState = useChatStore.getState()

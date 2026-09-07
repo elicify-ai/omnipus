@@ -5,7 +5,7 @@
 // gateway's Pion SFU relay — ADR-047 D1) across its lifecycle: idle →
 // offering → connected → fallback. Deliberately knows NOTHING about the
 // signaling transport (no WebSocket import here) — the caller supplies a
-// `sendOffer(sdp)` callback to `start()` and feeds inbound
+// `sendOffer(offer)` callback to `start()` and feeds inbound
 // `browser_webrtc_answer`/`browser_webrtc_state` frames in via
 // `applyAnswer`/`applyState`. This keeps the class unit-testable with an
 // injected fake RTCPeerConnection factory (jsdom has no real WebRTC
@@ -55,6 +55,19 @@
 // regular short `answerTimeoutMs`. This applies to every attempt made while
 // still cold — including the one automatic retry above, if that retry also
 // starts from `hasConnectedOnce === false`.
+
+import type { BrowserWebRTCAnswerFrame, BrowserWebRTCOfferFrame } from '@/lib/api/generated/asyncapi-types'
+
+export type BrowserViewerOffer = Pick<BrowserWebRTCOfferFrame, 'sdp' | 'offer_id' | 'capture_id' | 'capture_generation'>
+
+/** Local identity of a server capture; never serialized directly. */
+export interface BrowserCaptureIdentity {
+  captureId: string
+  generation: number
+}
+export interface BrowserPeerIdentity extends BrowserCaptureIdentity {
+  offerId: number
+}
 
 /** The four states this machine is ever in. 'failed' is folded into
  * 'fallback' as a *reason string* passed to `onFallback` rather than a
@@ -320,7 +333,11 @@ export class BrowserWebRTCSession {
    * `void`/`undefined` return (a caller that doesn't report send success) is
    * treated as "no signal, assume it went out" for backward compatibility —
    * only a literal `false` is a failure signal. */
-  private sendOfferFn: ((sdp: string) => boolean | void) | null = null
+  private sendOfferFn: ((offer: BrowserViewerOffer) => boolean | void) | null = null
+  private offerId = 0
+  private expectedCapture: BrowserCaptureIdentity | undefined
+  private peerIdentity: BrowserPeerIdentity | null = null
+  private answerPending = false
 
   private _state: BrowserWebRTCState = 'idle'
   private stopped = true
@@ -333,7 +350,7 @@ export class BrowserWebRTCSession {
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private iceGatheringTimer: ReturnType<typeof setTimeout> | null = null
 
-  private streamCb: ((stream: MediaStream) => void) | null = null
+  private streamCb: ((stream: MediaStream, identity: BrowserPeerIdentity) => void) | null = null
   private inputOpenCb: (() => void) | null = null
   private inputCloseCb: (() => void) | null = null
   private fallbackCb: ((reason: string, detail?: string) => void) | null = null
@@ -388,7 +405,7 @@ export class BrowserWebRTCSession {
   // how BrowserLiveView wires exactly one machine per WS-connection effect
   // instance; re-registering overwrites, it does not fan out to many). ──
 
-  onStream(cb: (stream: MediaStream) => void): void {
+  onStream(cb: (stream: MediaStream, identity: BrowserPeerIdentity) => void): void {
     this.streamCb = cb
   }
 
@@ -419,7 +436,7 @@ export class BrowserWebRTCSession {
    * is treated as "assume it sent," so existing callers that don't report
    * send success are unaffected.
    */
-  start(sendOffer: (sdp: string) => boolean | void): void {
+  start(sendOffer: (offer: BrowserViewerOffer) => boolean | void, expectedCapture?: BrowserCaptureIdentity): void {
     if (this._state === 'offering' || this._state === 'connected') return
     // Bugfix (HIGH, fix-wave B): a pending automatic-retry timer armed by an
     // earlier fallback must be cleared here too, not just in stop(). Without
@@ -435,18 +452,32 @@ export class BrowserWebRTCSession {
     this.stopped = false
     this.retryCount = 0
     this.sendOfferFn = sendOffer
+    this.expectedCapture = expectedCapture ? { ...expectedCapture } : undefined
     void this._beginOffer()
   }
 
-  /** Feed in the gateway's `browser_webrtc_answer.sdp` once it arrives. */
-  applyAnswer(sdp: string): void {
-    if (!this.pc || this._state !== 'offering') return
-    this._clearAnswerTimeout()
+  /** Reject stale answers before they can touch the current peer. */
+  applyAnswer(frame: BrowserWebRTCAnswerFrame): boolean {
+    if (!this.pc || this._state !== 'offering' || this.answerPending || frame.offer_id !== this.offerId) return false
+    const generation = frame.capture_generation
+    if (!frame.capture_id || !Number.isSafeInteger(generation) || generation === undefined || generation <= 0) {
+      this._fallback('answer-identity-missing')
+      return false
+    }
+    if (this.expectedCapture && (frame.capture_id !== this.expectedCapture.captureId || generation !== this.expectedCapture.generation)) return false
+    const identity = { captureId: frame.capture_id, generation, offerId: this.offerId }
     const pc = this.pc
-    pc.setRemoteDescription({ type: 'answer', sdp }).catch((err: unknown) => {
-      if (this.pc !== pc) return // superseded by a stop()/retry in the meantime
+    this.answerPending = true
+    void pc.setRemoteDescription({ type: 'answer', sdp: frame.sdp }).then(() => {
+      if (this.pc !== pc) return
+      this._clearAnswerTimeout()
+      this.peerIdentity = identity
+      if (this.remoteStream) this.streamCb?.(this.remoteStream, identity)
+    }).catch((err: unknown) => {
+      if (this.pc !== pc) return
       this._fallback(`set-remote-description-failed: ${err instanceof Error ? err.message : String(err)}`)
     })
+    return true
   }
 
   /**
@@ -558,6 +589,13 @@ export class BrowserWebRTCSession {
       return
     }
     this.pc = pc
+    this.offerId += 1
+    if (!Number.isSafeInteger(this.offerId)) {
+      this._fallback('offer-identity-exhausted')
+      return
+    }
+    const offerId = this.offerId
+    const expectedCapture = this.expectedCapture
     this._wirePeerConnectionEvents(pc)
 
     try {
@@ -587,7 +625,10 @@ export class BrowserWebRTCSession {
       // answer that was never going to arrive. A `void`/`undefined` return
       // (existing callers/tests that don't report send success) is NOT
       // treated as failure — only a literal `false` is.
-      const sendResult = this.sendOfferFn?.(sdp)
+      const sendResult = this.sendOfferFn?.({
+        sdp, offer_id: offerId,
+        ...(expectedCapture ? { capture_id: expectedCapture.captureId, capture_generation: expectedCapture.generation } : {}),
+      })
       if (sendResult === false) {
         this._fallback('offer-send-failed')
         return
@@ -668,6 +709,7 @@ export class BrowserWebRTCSession {
 
   private _wirePeerConnectionEvents(pc: RTCPeerConnection): void {
     pc.ontrack = (event: RTCTrackEvent) => {
+      if (this.pc !== pc || this.stopped) return
       // Remote-CONTROL latency fix (live report, macOS 2026-08-13: "scrolling
       // is terrible... like the inputs are queued and reach the browser with
       // a lot of delay"). Chrome's receiver runs an ADAPTIVE jitter buffer
@@ -679,7 +721,7 @@ export class BrowserWebRTCSession {
       // then runs that far behind their hand, so a direction change keeps
       // showing old-direction motion until the buffer drains: exactly the
       // reported stickiness, with no queue anywhere in the input path (the
-      // server DROPS over-limit input, it never queues).
+      // latency can arise in video playback independently of input dispatch).
       //
       // Remote-desktop apps disable this buffering; so do we.
       // jitterBufferTarget (spec'd, ms) with playoutDelayHint (older Chrome)
@@ -709,10 +751,11 @@ export class BrowserWebRTCSession {
       } else {
         return
       }
-      this.streamCb?.(this.remoteStream)
+      if (this.peerIdentity) this.streamCb?.(this.remoteStream, this.peerIdentity)
     }
 
     pc.oniceconnectionstatechange = () => {
+      if (this.pc !== pc || this.stopped) return
       const iceState = pc.iceConnectionState
       if (iceState === 'connected' || iceState === 'completed') {
         this._clearAnswerTimeout()
@@ -829,14 +872,17 @@ export class BrowserWebRTCSession {
       }
       this.inputChannel = null
     }
-    if (this.pc) {
+    const pc = this.pc
+    this.pc = null
+    if (pc) {
       try {
-        this.pc.close()
+        pc.close()
       } catch {
         // best-effort
       }
-      this.pc = null
     }
     this.remoteStream = null
+    this.peerIdentity = null
+    this.answerPending = false
   }
 }

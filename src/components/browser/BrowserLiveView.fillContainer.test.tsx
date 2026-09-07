@@ -23,6 +23,7 @@
 //      false in-content coordinate the way the pre-fix, uncorrected
 //      `rect` math would.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -63,6 +64,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
  * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
@@ -82,6 +84,7 @@ function decodeFirstFrame() {
   Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 function connectFrameAndDrive() {
@@ -203,36 +206,17 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
 })
 
 describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 revert-proof)', () => {
-  // THE key regression test: before the fix, `mapPointerToDeviceCoords` fed
-  // `mapClientToDevice` the RAW container rect unconditionally. For a
-  // container whose aspect ratio doesn't match the content (exactly what
-  // `fillContainer` introduces), that mis-reports where the content edge
-  // actually is — a click in what's actually dead pillarbox space would be
-  // reported as landing 25.6px into the live page instead of clamping to the
-  // content's left edge (x: 0). Run this test against the pre-fix
-  // `mapPointerToDeviceCoords` (rect passed straight through, no
-  // `computeObjectContainRect` correction) and it fails with `x: 25.6`
-  // instead of `x: 0` — restoring that behavior locally and re-running
-  // confirms the regression.
-  it('clamps a click inside the pillarboxed dead-zone to the content edge, not a false in-content coordinate', () => {
+  // Padding is outside the page; it cannot authorize a remote click.
+  it('ignores a click inside the pillarboxed dead zone', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     connectFrameAndDrive()
     const container = stubMismatchedContainerRect()
-
-    // Content (1280x720, aspect 1.7778) pillarboxed inside the 1000x500
-    // (aspect 2.0) box: visible width = 500 * 1.7778 = 888.89, so visible
-    // content starts at x = (1000 - 888.89) / 2 = 55.56. A click at
-    // clientX=20 is well inside the dead zone to its left.
+    // A 1280×720 page contained in a 1000×500 box starts at x=55.56.
+    // A click at x=20 is padding and must never become a page-edge click.
     mockSendInput.mockClear()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 250 })
-
-    expect(mockSendInput).toHaveBeenCalledTimes(1)
-    const sent = mockSendInput.mock.calls[0][0] as { kind: string; x: number; y: number }
-    expect(sent.kind).toBe('mouse_down')
-    // Uncorrected (pre-fix) math would report x ≈ 25.6 (20 * 1280/1000) — a
-    // coordinate inside the live page, when the click never actually
-    // reached visible content at all.
-    expect(sent.x).toBe(0)
+    fireEvent.pointerUp(container, { clientX: 20, clientY: 250 })
+    expect(mockSendInput.mock.calls).toEqual([])
   })
 
   it('maps a click at the exact box center to the exact content center (sanity check both pre- and post-fix agree here)', () => {

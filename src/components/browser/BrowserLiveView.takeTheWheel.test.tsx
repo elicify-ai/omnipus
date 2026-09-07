@@ -1,4 +1,5 @@
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -44,6 +45,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Every render
  * call below supplies it via the `mediaStream` test/override seam (see
@@ -66,6 +68,7 @@ function connectAndFrame() {
     Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
     Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
     fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
   })
 }
 
@@ -270,7 +273,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     fireEvent.keyDown(container, { key: 'a' })
     fireEvent.keyUp(container, { key: 'a' })
 
-    expect(mockSendInput).toHaveBeenCalledExactlyOnceWith({ kind: 'text', text: 'a', modifiers: 0 })
+    expect(mockSendInput).toHaveBeenCalledExactlyOnceWith({ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 })
   })
 
   // Reviewer finding coverage: the wheel listener now consults the same
@@ -1101,8 +1104,8 @@ describe('BrowserLiveView — shared human input reliability', () => {
     fireEvent.keyDown(frame, { key: 'Shift', code: 'ShiftLeft', keyCode: 16, shiftKey: true })
     fireEvent.blur(frame)
     expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
-      { kind: 'key_down', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 8 },
-      { kind: 'key_up', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 0 },
+      { kind: 'key_down', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 8, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'key_up', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
     ])
   })
 })
@@ -1130,6 +1133,6 @@ it('reports failed input without trying another transport or replaying text', ()
   connectAndFrame()
   mockSendInput.mockReturnValueOnce(false)
   fireEvent.keyDown(stubFrameRect(), { key: 'x', code: 'KeyX' })
-  expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'text', text: 'x', modifiers: 0 }])
+  expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'text', text: 'x', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }])
   expect(useUiStore.getState().toasts.map(t => t.message)).toEqual(['Browser input was not sent. Check the connection and try again.'])
 })

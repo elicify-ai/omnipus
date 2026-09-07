@@ -14,6 +14,7 @@
 // and browserWebRTC.test.ts). Mocks BrowserLiveWsConnection the same way
 // BrowserLiveView.takeTheWheel.test.tsx does.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -54,6 +55,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** A fake MediaStream stand-in — jsdom has no real WebRTC/MediaStream
  * implementation, and this only needs `video.srcObject = mediaStream`
@@ -78,6 +80,7 @@ function decodeFrame(width = 1280, height = 720) {
   Object.defineProperty(video, 'videoWidth', { value: width, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: height, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 /** Mirrors the sibling suites' technique: jsdom reports all-zero rects by

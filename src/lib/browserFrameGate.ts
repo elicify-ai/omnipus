@@ -48,6 +48,14 @@ export class BrowserFrameGate {
     this.considerFrame()
   }
 
+  /** A lost feed cannot authorize input until recovery commits a new boundary. */
+  suspend(): void {
+    this.marker = null
+    this.latestFrame = null
+    this.displayAt = null
+    this.freshViewer = false
+  }
+
   bindStream(stream: object | null): void {
     if (stream === this.stream) return
     this.stream = stream

@@ -16,6 +16,7 @@
 // videoWidth/videoHeight, mirroring how a real browser reports intrinsic
 // size once metadata loads.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -48,6 +49,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Matches FIRST_FRAME_TIMEOUT_MS in BrowserLiveView.tsx.
  *
@@ -75,6 +77,7 @@ function decodeFirstFrame() {
     Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
     Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
     fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
   })
 }
 
@@ -212,4 +215,15 @@ describe('BrowserLiveView — first-frame timeout', () => {
     expect(screen.getByText('This session already has a controller.')).toBeInTheDocument()
     expect(screen.queryByText(/No video received/i)).not.toBeInTheDocument()
   })
+  it('does not treat metadata as a displayed frame or cancel the first-frame deadline', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    act(() => callbacksRef.current?.onConnected?.())
+    const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 1280 })
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 720 })
+    fireEvent.loadedMetadata(video)
+    act(() => vi.advanceTimersByTime(FIRST_FRAME_TIMEOUT_MS + 1))
+    expect(screen.getByText(/No video received from the live browser/i)).toBeInTheDocument()
+  })
+
 })

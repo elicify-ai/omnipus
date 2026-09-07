@@ -27,14 +27,13 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { BrowserLiveWsConnection, describeVideoHealth, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
-import { BrowserWebRTCSession, translateWebRTCFallbackReason, DEFAULT_FIRST_ANSWER_TIMEOUT_MS } from '@/lib/browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason, DEFAULT_FIRST_ANSWER_TIMEOUT_MS, type BrowserPeerIdentity } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
   computeObjectContainRect,
   framePixelToDeviceCoords,
   isPrintableKey,
-  mapClientToDeviceVideo,
   mapClientToFramePixels,
   mapMouseButton,
   scaleCropToImagePixels,
@@ -42,6 +41,8 @@ import {
   type FrameCropRect,
   type RectLike,
 } from '@/lib/browserLiveCoords'
+import { mapClientToBrowserCss } from '@/lib/browserFrameCoords'
+import { BrowserFrameGate, type BrowserFrameGateState } from '@/lib/browserFrameGate'
 import { resolveOmniboxInput } from '@/lib/browserLiveUrl'
 import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
 import { useUiStore } from '@/store/ui'
@@ -167,16 +168,6 @@ function computeDriveMode(state: {
   return 'idle'
 }
 
-/**
- * Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md)
- * — builds the `capture_width`/`capture_height` keys for a coordinate-
- * carrying `BrowserInputFrame`, or an empty object before the video has
- * reported real dimensions yet. A plain `capture_width: undefined` field
- * would survive property-existence checks (and any consumer reading the
- * object before it hits `JSON.stringify`, which is the only place
- * `undefined` values actually vanish) — spreading this return value keeps
- * the keys genuinely absent, not merely undefined.
- */
 // Toolbar icon buttons share ONE shape (operator direction, 2026-08-04: "the
 // buttons should be icons ... it needs to be flatter"). Back, refresh, annotate,
 // mute and the degraded-retry all render as a bare 32px glyph with no border and
@@ -190,10 +181,6 @@ const TOOLBAR_ICON_BTN =
   'disabled:cursor-not-allowed disabled:opacity-40 ' +
   'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
 
-function captureDimsFields(dims: { captureWidth?: number; captureHeight?: number }): { capture_width?: number; capture_height?: number } {
-  if (dims.captureWidth === undefined || dims.captureHeight === undefined) return {}
-  return { capture_width: dims.captureWidth, capture_height: dims.captureHeight }
-}
 
 // The visible border/frame around the browser panel is REMOVED per operator
 // direction. The header chip (agent identity + drive-status) is the sole
@@ -468,16 +455,9 @@ export function BrowserLiveView({
   const annotateDraggingRef = useRef(false)
   const selectionStartClientRef = useRef<{ x: number; y: number } | null>(null)
   const pendingAnnotationRef = useRef<PendingAnnotation | null>(null)
-  // mouse_move RAF-coalescing (see handlePointerMove below): only the latest
-  // pointer position per animation frame is ever sent, so the highest rate
-  // this can flood the server's input rate limiter at is one frame's worth
-  // of paint cadence — never the native pointermove rate (60-120Hz+, higher
-  // on gaming mice/some trackpads).
-  // captureWidth/captureHeight travel with x/y (not re-read at flush time) —
-  // see handlePointerMove's own comment on why the capture dims must be the
-  // SAME ones the position was mapped against, not whatever is live when the
-  // coalesced flush eventually fires.
-  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number; captureWidth?: number; captureHeight?: number } | null>(null)
+  // Coalesce mouse moves on the input timer. Store final CSS coordinates so
+  // later encoder adaptation cannot reinterpret an already mapped position.
+  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number } | null>(null)
   // Wheel is coalesced on the SAME pacer as moves, with deltas ACCUMULATED
   // (position = latest). Un-paced wheel was the second half of the operator's
   // "clicks work only sometimes": a trackpad/momentum scroll emits wheel at the
@@ -491,8 +471,6 @@ export function BrowserLiveView({
     modifiers: number
     deltaX: number
     deltaY: number
-    captureWidth?: number
-    captureHeight?: number
   } | null>(null)
   // Guards re-scheduling of the shared move+wheel flush, and OWNS the timer
   // handle. Storing the id is what makes cancellation real: clearing the flag
@@ -539,15 +517,10 @@ export function BrowserLiveView({
   // perfectly healthy — which is exactly the case that used to look like
   // nothing at all for a full FIRST_FRAME_TIMEOUT_MS.
   const [videoHealth, setVideoHealth] = useState<BrowserVideoHealthFrame | null>(null)
-  // True once the `<video>` sink has decoded its first real frame
-  // (`onLoadedMetadata` — the point `videoWidth`/`videoHeight` become
-  // non-zero). This is the direct replacement for the old JPEG-era `frame`
-  // state: it is what gates the "waiting for first frame" overlay, the
-  // FIRST_FRAME_TIMEOUT_MS honesty deadline, and (via `activeFrameDims`)
-  // every coordinate-mapping/annotate-crop call. Reset to false whenever the
-  // bound stream changes (a fresh stream must prove it decodes too) — see
-  // the srcObject-binding effect and the WS lifecycle effect's
-  // onFallback/onDisconnected handlers.
+  // True after this stream's first frame reaches its expected presentation
+  // time. Controls the waiting overlay and first-frame deadline; input has a
+  // separate capture-generation proof. Browsers without frame callbacks can
+  // show read-only video after loadeddata, but cannot authorize interaction.
   const [videoReady, setVideoReady] = useState(false)
   // Starts MUTED (autoplay-safe: browsers block autoplaying audio without a
   // prior user gesture; the video itself still autoplays fine muted).
@@ -652,6 +625,80 @@ export function BrowserLiveView({
   const mediaStream = mediaStreamProp ?? webrtcStream
   const hasAudio = mediaStreamProp !== null ? hasAudioProp : webrtcHasAudio
 
+  // Each capture owns its own gate: generation counters can restart on replacement.
+  const captureRef = useRef<{ id: string | null; generation: number; marker: number | null; css: { width: number; height: number } | null; gate: BrowserFrameGate; retired: Set<string> }>({ id: null, generation: 0, marker: null, css: null, gate: new BrowserFrameGate(), retired: new Set() })
+  const streamIdentityRef = useRef<BrowserPeerIdentity | null>(null)
+  const currentStreamRef = useRef<MediaStream | null>(mediaStream)
+  const freshViewerRef = useRef<string | null>(null)
+  const requiresFreshViewerRef = useRef(false)
+  const captureViewerNeededRef = useRef(false)
+  const requestFreshViewerRef = useRef<() => void>(() => {})
+  const [frameGateState, setFrameGateState] = useState<BrowserFrameGateState>({ status: 'locked', reason: 'generation-required' })
+  const publishedFrameGateStateRef = useRef(frameGateState)
+  const [frameCallbacksUnavailable, setFrameCallbacksUnavailable] = useState(false)
+  const [frameGeometryReady, setFrameGeometryReady] = useState(false)
+  const framePresentationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suppliedStreamRef = useRef(mediaStreamProp)
+  suppliedStreamRef.current = mediaStreamProp
+  const refreshFrameGate = useCallback((): void => {
+    const gate = captureRef.current.gate
+    const state = gate.read(performance.now())
+    if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
+    framePresentationTimerRef.current = null
+    if (state.status === 'presenting') {
+      framePresentationTimerRef.current = setTimeout(() => {
+        if (captureRef.current.gate === gate) refreshFrameGate()
+      }, Math.ceil(Math.max(0, state.displayAt - performance.now())))
+    }
+    const previous = publishedFrameGateStateRef.current
+    const unchanged =
+      (previous.status === 'ready' && state.status === 'ready' && previous.generation === state.generation) ||
+      (previous.status === 'locked' && state.status === 'locked' && previous.reason === state.reason) ||
+      (previous.status === 'presenting' && state.status === 'presenting' && previous.generation === state.generation && previous.displayAt === state.displayAt) ||
+      (previous.status === 'needs-fresh-viewer' && state.status === 'needs-fresh-viewer' && previous.generation === state.generation)
+    if (!unchanged) {
+      publishedFrameGateStateRef.current = state
+      setFrameGateState(state)
+    }
+    if (state.status === 'needs-fresh-viewer') {
+      requiresFreshViewerRef.current = true
+      requestFreshViewerRef.current()
+    }
+  }, [])
+  const acceptCapture = useCallback((id: string, generation: number): boolean => {
+    const current = captureRef.current
+    if (current.retired.has(id)) return false
+    if (current.id !== id) {
+      if (current.id) {
+        captureViewerNeededRef.current = true
+        releaseInputsRef.current()
+        current.retired.add(current.id)
+      }
+      const gate = new BrowserFrameGate()
+      gate.expectGeneration(generation)
+      // An explicit supplied stream has no signaling callback; its first capture
+      // still requires a matching received timestamp. Never reuse it on replacement.
+      if (streamIdentityRef.current?.captureId === id || (current.id === null && suppliedStreamRef.current)) {
+        gate.bindStream(currentStreamRef.current)
+      }
+      captureRef.current = { id, generation, marker: null, css: null, gate, retired: current.retired }
+      freshViewerRef.current = null
+      setFrameGeometryReady(false)
+    } else {
+      if (generation < current.generation) return false
+      if (generation > current.generation) {
+        releaseInputsRef.current()
+        current.css = null
+        setFrameGeometryReady(false)
+        current.marker = null
+        freshViewerRef.current = null
+      }
+      current.generation = generation
+      current.gate.expectGeneration(generation)
+    }
+    return true
+  }, [])
+
   // Sync `muted` to the DOM PROPERTY, imperatively.
   //
   // React writes `muted` on a <video> as an ATTRIBUTE. The browser reads that
@@ -735,10 +782,15 @@ export function BrowserLiveView({
   // guess about a stale tab.
   const videoHealthMessage = describeVideoHealth(videoHealth)
 
+  const frameSupportError = frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
+    ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
+    : null
+
   const displayError =
     connError ??
     webrtcErrorMessage ??
     videoHealthMessage ??
+    frameSupportError ??
     (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null) ??
     (firstFrameTimedOut && !videoReady
       ? 'No video received from the live browser. The capture may be bound to a tab that is no longer active — try switching tabs or reloading the page.'
@@ -907,9 +959,30 @@ export function BrowserLiveView({
   // reconnect within an existing mount, handled by onConnected/onDisconnected
   // below) always starts from a clean signaling slate.
   useEffect(() => {
+    captureRef.current = { id: null, generation: 0, marker: null, css: null, gate: new BrowserFrameGate(), retired: new Set() }
+    streamIdentityRef.current = null
+    freshViewerRef.current = null
+    captureViewerNeededRef.current = false
+    connectedRef.current = false
+    setConnected(false)
+    setWebrtcStream(null)
+    refreshFrameGate()
     const machine = new BrowserWebRTCSession()
     webrtcRef.current = machine
-    machine.onStream((stream) => {
+    machine.onStream((stream, identity) => {
+      if (!identity) return
+      if (captureRef.current.id !== identity.captureId && !acceptCapture(identity.captureId, identity.generation)) return
+      const current = captureRef.current
+      if (requiresFreshViewerRef.current && identity.generation !== current.generation) return
+      streamIdentityRef.current = identity
+      currentStreamRef.current = stream
+      if (freshViewerRef.current === `${identity.captureId}:${identity.generation}`) {
+        if (!current.gate.bindFreshViewer(stream, identity.generation)) return
+      } else {
+        current.gate.bindStream(stream)
+      }
+      captureViewerNeededRef.current = false
+      refreshFrameGate()
       setWebrtcStream(stream)
       setWebrtcError(null) // recovered
       setWebrtcErrorDetail(null)
@@ -924,9 +997,7 @@ export function BrowserLiveView({
     // video path left; there is nothing to silently swap to any more. Every
     // reason lands here, unconditionally: drops the stream, resets
     // `videoReady` (a fresh attempt must decode its own first frame), clears
-    // the DC-open flag so `dispatchInput` stops trying the data channel
-    // immediately rather than waiting for a stale readyState check to catch
-    // up, and records `reason` as a persistent, honest, user-visible error
+    // the legacy DC-open flag, and records `reason` as a persistent error
     // (`webrtcError` → `displayError`/`webrtcErrorMessage` above) — never a
     // toast that could auto-dismiss unnoticed. `console.warn` always fires
     // too, for a support engineer reading the console. The machine itself
@@ -945,6 +1016,8 @@ export function BrowserLiveView({
       } else {
         console.warn('[browser-live] WebRTC failed:', reason, detail)
       }
+      captureRef.current.gate.bindStream(null)
+      refreshFrameGate()
       setWebrtcStream(null)
       setWebrtcHasAudio(false)
       setVideoReady(false)
@@ -956,6 +1029,16 @@ export function BrowserLiveView({
       inputChannelOpenRef.current = false
     }
     machine.onFallback(applyWebrtcFailure)
+    requestFreshViewerRef.current = () => {
+      const current = captureRef.current
+      if (!current.id || current.marker === null) return
+      const key = `${current.id}:${current.generation}`
+      if (freshViewerRef.current === key) return
+      freshViewerRef.current = key
+      current.gate.bindStream(null)
+      machine.stop()
+      machine.start((offer) => wsRef.current?.sendWebRTCOffer(offer) ?? false, { captureId: current.id, generation: current.generation })
+    }
 
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       // ADR-041 D4 — tab list + active index, broadcast on any
@@ -1003,6 +1086,16 @@ export function BrowserLiveView({
           setControlledByOther(f.controlled_by_other ?? false)
           return
         }
+        if (f.operation_only) {
+          if (Date.now() - inputFailureAtRef.current >= 3000) {
+            inputFailureAtRef.current = Date.now()
+            useUiStore.getState().addToast({
+              message: f.message ? translateBrowserErrorMessage(f.message) : 'The browser operation failed. Try again.',
+              variant: 'error',
+            })
+          }
+          return
+        }
         // FE-7: only error-state messages get the raw-Go-string treatment —
         // other states' messages (if ever present) are left alone.
         setStatusMessage(f.state === 'error' && f.message ? translateBrowserErrorMessage(f.message) : f.message ?? null)
@@ -1018,7 +1111,19 @@ export function BrowserLiveView({
       // offer this connection sent (via the machine's `start` callback
       // below). Feeding a stale/unexpected answer is harmless — `applyAnswer`
       // itself no-ops unless the machine is actually `offering`.
-      onWebRTCAnswer: (f) => machine.applyAnswer(f.sdp),
+      onWebRTCAnswer: (f) => {
+        const current = captureRef.current
+        if (f.capture_id && current.retired.has(f.capture_id)) return
+        if (f.capture_id && current.id && f.capture_id !== current.id) {
+          captureViewerNeededRef.current = true
+          requestFreshViewerRef.current()
+          return
+        }
+        if (machine.applyAnswer(f) && f.capture_id && f.capture_generation !== undefined) {
+          acceptCapture(f.capture_id, f.capture_generation)
+          refreshFrameGate()
+        }
+      },
       // ADR-047 — sent after attach and again on any availability change.
       // `applyState` handles the "fell over mid-session" fallback path;
       // starting the machine on an available:true signal is THIS
@@ -1075,25 +1180,33 @@ export function BrowserLiveView({
           applyWebrtcFailure(f.reason ?? 'unavailable', f.reason_detail)
         }
       },
-      // Issue #674 — the gateway telling us, promptly, what happened to the
-      // shared capture. Deliberately does NOT tear the WebRTC session down:
-      // the relay's shared local tracks outlive an ingest replacement, so a
-      // successful automatic recapture resumes THIS PeerConnection with no
-      // renegotiation. Tearing it down here would turn a recoverable blip
-      // into a full re-offer, which is slower and can fail on its own.
-      // `recovered` clears the state rather than storing it: the panel's job
-      // then is to stop showing an error, not to show a different one.
-      //
-      // Deliberately does NOT reset `videoReady`. The frozen last frame stays
-      // on screen under an honest error strip, which is better than the two
-      // alternatives: blanking to the "waiting for the first frame" overlay
-      // throws away the only picture the user has, and — because the shared
-      // relay tracks survive a recapture — `onLoadedMetadata` need never fire
-      // again, so `videoReady` would stay false and the FIRST_FRAME_TIMEOUT_MS
-      // deadline would raise a SECOND, wrong error 45s after a recovery that
-      // actually worked. It would also drop `activeFrameDims`, breaking
-      // click-coordinate mapping for the whole recovery window.
+      // Keep the last picture visible through capture recovery, but revoke
+      // input proof until the recovered boundary is actually presented. RTP
+      // metadata can prove a new generation on the existing peer; browsers
+      // without it require a fresh peer authorized for the committed boundary.
       onVideoHealth: (f) => {
+        if (f.capture_id && f.capture_generation !== undefined) {
+          if (!acceptCapture(f.capture_id, f.capture_generation)) return
+          if (f.css_width !== undefined && f.css_height !== undefined) {
+            captureRef.current.css = { width: f.css_width, height: f.css_height }
+            setFrameGeometryReady(true)
+          }
+          if (f.state === 'transitioning') releaseInputsRef.current()
+          if (f.state === 'recovered' && f.rtp_timestamp !== undefined) {
+            if (captureRef.current.marker !== f.rtp_timestamp) freshViewerRef.current = null
+            captureRef.current.marker = f.rtp_timestamp
+            captureRef.current.gate.acceptBoundary({ generation: f.capture_generation, rtpTimestamp: f.rtp_timestamp })
+            if (requiresFreshViewerRef.current || captureViewerNeededRef.current || (streamIdentityRef.current && streamIdentityRef.current.captureId !== f.capture_id)) requestFreshViewerRef.current()
+          }
+          refreshFrameGate()
+        }
+        if (f.state === 'lost' || f.state === 'recovering' || f.state === 'unrecoverable') {
+          releaseInputsRef.current()
+          captureRef.current.gate.suspend()
+          captureRef.current.marker = null
+          freshViewerRef.current = null
+          refreshFrameGate()
+        }
         setVideoHealth(f.state === 'recovered' ? null : f)
       },
       onError: (message) => setConnError(message),
@@ -1102,6 +1215,12 @@ export function BrowserLiveView({
         setConnError(null)
       },
       onDisconnected: () => {
+        captureRef.current = { id: null, generation: 0, marker: null, css: null, gate: new BrowserFrameGate(), retired: new Set() }
+        streamIdentityRef.current = null
+        captureViewerNeededRef.current = false
+        currentStreamRef.current = null
+        freshViewerRef.current = null
+        refreshFrameGate()
         pressedInputsRef.current.clear()
         setConnected(false)
         // The WebRTC session's fate is unknown once the signaling transport
@@ -1153,9 +1272,10 @@ export function BrowserLiveView({
       wsRef.current = null
       machine.stop()
       webrtcRef.current = null
+      requestFreshViewerRef.current = () => {}
+      if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     }
-     
-  }, [sessionId, agentId])
+  }, [sessionId, agentId, acceptCapture, refreshFrameGate])
 
   // ── Bind the <video> sink's srcObject imperatively. React has no
   // `srcObject` JSX prop (it's a DOM property, not an attribute) — this is
@@ -1166,16 +1286,56 @@ export function BrowserLiveView({
   // `attached`/`mediaStream` is truthy, in the SAME render, so there is no
   // separate "element exists yet?" gap to bridge any more). Also resets
   // `videoReady` on every rebind — a new stream must prove it decodes its
-  // own first frame before the "waiting" overlay clears; `onLoadedMetadata`
-  // on the element (JSX below) is what flips it back to true. No-ops
+  // own first frame before the "waiting" overlay clears; the frame callback
+  // below confirms its expected presentation time. No-ops
   // whenever the element isn't currently mounted (mediaStream null →
   // nothing renders — see the "attached" gate in the JSX further down).
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
     video.srcObject = mediaStream ?? null
+    currentStreamRef.current = mediaStream
+    const current = captureRef.current
+    if (current.id === null || streamIdentityRef.current?.captureId === current.id || mediaStream === mediaStreamProp) {
+      // A replaced capture stays unbound until its new negotiated stream arrives.
+      if (current.retired.size === 0 || streamIdentityRef.current?.captureId === current.id) current.gate.bindStream(mediaStream)
+    }
     setVideoReady(false)
-  }, [mediaStream])
+    setFrameCallbacksUnavailable(typeof video.requestVideoFrameCallback !== 'function')
+    if (!mediaStream || typeof video.requestVideoFrameCallback !== 'function') return
+    const stream = mediaStream
+    let cancelled = false
+    let callbackId = 0
+    let firstDisplayAt: number | null = null
+    let firstPresented = false
+    let firstPresentationTimer: ReturnType<typeof setTimeout> | undefined
+    const confirmFirstPresentation = () => {
+      if (cancelled || video.srcObject !== stream || firstDisplayAt === null || firstPresented) return
+      if (performance.now() >= firstDisplayAt) {
+        firstPresented = true
+        setVideoReady(true)
+      } else {
+        firstPresentationTimer = setTimeout(confirmFirstPresentation, Math.ceil(firstDisplayAt - performance.now()))
+      }
+    }
+    const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
+      if (cancelled || video.srcObject !== stream) return
+      if (firstDisplayAt === null && Number.isFinite(metadata.expectedDisplayTime) && metadata.expectedDisplayTime > 0) {
+        firstDisplayAt = metadata.expectedDisplayTime
+        confirmFirstPresentation()
+      }
+      const gate = captureRef.current.gate
+      gate.observeFrame(stream, metadata, performance.now())
+      refreshFrameGate()
+      callbackId = video.requestVideoFrameCallback(onFrame)
+    }
+    callbackId = video.requestVideoFrameCallback(onFrame)
+    return () => {
+      cancelled = true
+      video.cancelVideoFrameCallback(callbackId)
+      if (firstPresentationTimer !== undefined) clearTimeout(firstPresentationTimer)
+    }
+  }, [mediaStream, mediaStreamProp, refreshFrameGate])
 
   // ── The single "what are the video sink's real pixel dimensions right
   // now" resolver — null until the <video> element has actually reported its
@@ -1193,39 +1353,24 @@ export function BrowserLiveView({
   }, [mediaStream])
 
   // ── The ONE place a client-space pointer coordinate is turned into the
-  // device-space coordinate CDP dispatch/BrowserInputFrame expects. Replaces
+  // CSS-page coordinate CDP dispatch/BrowserInputFrame expects. Replaces
   // four previously-duplicated call sites (wheel/pointerMove/pointerDown/
   // pointerUp below) with one routed call.
   const mapPointerToDeviceCoords = useCallback(
-    (clientX: number, clientY: number, rect: RectLike): (DeviceCoords & { captureWidth?: number; captureHeight?: number }) | null => {
+    (clientX: number, clientY: number, rect: RectLike, allowOutside = false): DeviceCoords | null => {
       const dims = activeFrameDims()
-      if (!dims) return null
-      // BUG 1 fix — `fillContainer` layouts (the pop-out route) let the media
-      // element grow past its intrinsic size via `object-fit: contain`,
-      // which can letterbox/pillarbox within `rect` whenever the container's
-      // aspect ratio doesn't match the content's. `computeObjectContainRect`
-      // is a no-op when they already match (the docked panel's historical
-      // layout, and most fillContainer frames too) — safe to route through
-      // unconditionally rather than branching on the `fillContainer` prop
-      // here, so this stays correct even if a future container size doesn't
-      // match its content for some other reason.
-      const contentRect = computeObjectContainRect(rect, dims.width, dims.height)
-      const coords = mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
-      if (!coords) return null
-      // Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
-      // the video sink's intrinsic size can silently drift from the page's CSS
-      // pixel space (measured 319x158 vs ~1280 page — the encoder downscales
-      // under load). Report the SAME `dims` this call just mapped into, so
-      // the server can rescale instead of assuming videoWidth == page pixels.
-      return { ...coords, captureWidth: dims.width, captureHeight: dims.height }
+      const css = captureRef.current.css
+      if (!dims || !css) return null
+      return mapClientToBrowserCss(clientX, clientY, rect, dims.width, dims.height, css.width, css.height, allowOutside)
     },
     [activeFrameDims],
   )
 
   // Shared human input is independent of control ownership and chat state.
+  const canIssueCommands = useCallback(() => connectedRef.current && driveModeRef.current !== 'annotating', [])
   const canDispatchInput = useCallback(() => {
-    return connectedRef.current && driveModeRef.current !== 'annotating'
-  }, [])
+    return canIssueCommands() && captureRef.current.gate.read(performance.now()).status === 'ready'
+  }, [canIssueCommands])
 
   // All human input shares the ordered control socket. Successful send means
   // queued locally, never proof that Chrome executed it. Do not replay on a
@@ -1234,8 +1379,15 @@ export function BrowserLiveView({
   const releaseInputsRef = useRef<() => void>(() => {})
   const inputFailureAtRef = useRef(-Infinity)
   const dispatchInput = useCallback(
-    (input: Omit<BrowserInputFrame, 'type'>): boolean => {
-      const sent = wsRef.current?.sendInput(input) ?? false
+    (input: Omit<BrowserInputFrame, 'type'>, cleanup = false): boolean => {
+      const initiating = ['navigate', 'back', 'forward', 'reload'].includes(input.kind)
+      const current = captureRef.current
+      const proof = current.gate.read(performance.now())
+      if (!initiating && !cleanup && proof.status !== 'ready') return false
+      const payload = !initiating && !cleanup && proof.status === 'ready' && current.id
+        ? { ...input, capture_id: current.id, capture_generation: proof.generation }
+        : input
+      const sent = wsRef.current?.sendInput(payload) ?? false
       if (!sent) {
         if (Date.now() - inputFailureAtRef.current >= 3000) {
           inputFailureAtRef.current = Date.now()
@@ -1244,9 +1396,9 @@ export function BrowserLiveView({
         return false
       }
       const held = pressedInputsRef.current
-      if (input.kind === 'key_down') held.set(`key:${input.code || input.key}`, { ...input, kind: 'key_up', modifiers: 0 })
+      if (input.kind === 'key_down') held.set(`key:${input.code || input.key}`, { ...payload, kind: 'key_up', modifiers: 0 })
       if (input.kind === 'key_up') held.delete(`key:${input.code || input.key}`)
-      if (input.kind === 'mouse_down') held.set(`button:${input.button}`, { ...input, kind: 'mouse_up', modifiers: 0 })
+      if (input.kind === 'mouse_down') held.set(`button:${input.button}`, { ...payload, kind: 'mouse_up', modifiers: 0 })
       if (input.kind === 'mouse_up') held.delete(`button:${input.button}`)
       if (input.kind === 'mouse_move') {
         for (const [key, release] of held) {
@@ -1261,7 +1413,7 @@ export function BrowserLiveView({
     pendingWheelRef.current = null
     const releases = [...pressedInputsRef.current.values()]
     pressedInputsRef.current.clear()
-    for (const release of releases) dispatchInput(release)
+    for (const release of releases) dispatchInput(release, true)
   }, [dispatchInput])
   useEffect(() => {
     releaseInputsRef.current = releasePressedInputs
@@ -1506,7 +1658,7 @@ export function BrowserLiveView({
     if (!pending) return
     pendingMoveRef.current = null
     // Reviewer finding (queued-move leak): re-validate the drive gate at
-    // FLUSH time, not just at schedule time — the agent can start working
+    // FLUSH time, not just at schedule time — the generation can change
     // (or the connection can drop, or annotate mode can engage) in the gap
     // between the pointermove that scheduled this flush and the animation
     // frame/timer actually firing. Without this, a queued position captured
@@ -1519,9 +1671,6 @@ export function BrowserLiveView({
         x: pending.x,
         y: pending.y,
         modifiers: pending.modifiers,
-        // Carried from handlePointerMove's own mapping call, not re-derived
-        // here — see pendingMoveRef's and captureDimsFields's doc comments.
-        ...captureDimsFields(pending),
       },
     )
   }, [canDispatchInput, dispatchInput])
@@ -1544,7 +1693,7 @@ export function BrowserLiveView({
     const pending = pendingWheelRef.current
     if (!pending) return
     pendingWheelRef.current = null
-    // Same flush-time re-validation as the move drain: the agent can take over,
+    // Same flush-time re-validation as the move drain: the capture can change,
     // annotate mode can engage, or the socket can drop between the wheel event
     // and this tick.
     if (!canDispatchInput()) return
@@ -1555,10 +1704,6 @@ export function BrowserLiveView({
       delta_x: pending.deltaX,
       delta_y: pending.deltaY,
       modifiers: pending.modifiers,
-      // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
-      // captureDimsFields's doc comment for why this is a spread, not a
-      // direct assignment.
-      ...captureDimsFields(pending),
     })
   }, [canDispatchInput, dispatchInput])
 
@@ -1612,8 +1757,6 @@ export function BrowserLiveView({
         modifiers: computeModifiers(e),
         deltaX: (prev?.deltaX ?? 0) + e.deltaX,
         deltaY: (prev?.deltaY ?? 0) + e.deltaY,
-        captureWidth: device.captureWidth,
-        captureHeight: device.captureHeight,
       }
       scheduleInputFlush()
     }
@@ -1767,7 +1910,7 @@ export function BrowserLiveView({
       e.preventDefault()
       const resolved = resolveOmniboxInput(urlInput)
       if (!resolved) return
-      if (!canDispatchInput()) return
+      if (!canIssueCommands()) return
       setStatusMessage(null)
       setStatusIsError(false)
       takeWheelIfNeeded()
@@ -1776,50 +1919,50 @@ export function BrowserLiveView({
       setUrlInput(resolved)
       urlBarEditingRef.current = false
     },
-    [urlInput, takeWheelIfNeeded, canDispatchInput, dispatchInput, releasePressedInputs],
+    [urlInput, takeWheelIfNeeded, canIssueCommands, dispatchInput, releasePressedInputs],
   )
 
   const handleToolbarNav = useCallback(
     (kind: 'navigate_back' | 'reload') => {
-      if (!canDispatchInput()) return
+      if (!canIssueCommands()) return
       setStatusMessage(null)
       setStatusIsError(false)
       takeWheelIfNeeded()
       releasePressedInputs()
       dispatchInput({ kind })
     },
-    [takeWheelIfNeeded, canDispatchInput, dispatchInput, releasePressedInputs],
+    [takeWheelIfNeeded, canIssueCommands, dispatchInput, releasePressedInputs],
   )
 
   const handleTabSwitch = useCallback((index: number) => {
-    if (!canDispatchInput()) return
+    if (!canIssueCommands()) return
     releasePressedInputs()
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('switch', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not switch tabs — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded, canDispatchInput, releasePressedInputs])
+  }, [takeWheelIfNeeded, canIssueCommands, releasePressedInputs])
 
   const handleTabClose = useCallback((index: number) => {
-    if (!canDispatchInput()) return
+    if (!canIssueCommands()) return
     releasePressedInputs()
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('close', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not close that tab — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded, canDispatchInput, releasePressedInputs])
+  }, [takeWheelIfNeeded, canIssueCommands, releasePressedInputs])
 
   const handleTabOpen = useCallback(() => {
-    if (!canDispatchInput()) return
+    if (!canIssueCommands()) return
     releasePressedInputs()
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('open')
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not open a new tab — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded, canDispatchInput, releasePressedInputs])
+  }, [takeWheelIfNeeded, canIssueCommands, releasePressedInputs])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1835,18 +1978,11 @@ export function BrowserLiveView({
     // pointer at full native resolution.
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    // captureWidth/captureHeight are captured HERE, at the same event that
-    // computed x/y, and ride through to the coalesced flush unchanged — not
-    // re-read from activeFrameDims() at flush time. The stream geometry can
-    // drift between this event and the next animation frame (encoder rebuild
-    // mid-gesture); re-reading at flush would report a capture size that no
-    // longer matches the x/y that were already mapped against the old one.
+    // Keep the CSS position computed at this event through the deferred send.
     pendingMoveRef.current = {
       x: device.x,
       y: device.y,
       modifiers: computeModifiers(e),
-      captureWidth: device.captureWidth,
-      captureHeight: device.captureHeight,
     }
     scheduleInputFlush()
   }, [scheduleInputFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
@@ -1884,42 +2020,15 @@ export function BrowserLiveView({
       setSelectionCurrent(point)
       return
     }
-    // Bugfix (MED, external review F5, 2026-08-13): the interactive
-    // container mounts the instant a WebRTC stream ATTACHES (`attached`),
-    // independently of whether it has decoded a real first frame yet — the
-    // "Waiting for the first frame…" overlay covering it is deliberately
-    // `pointer-events-none` so a click reaches THIS handler once a frame IS
-    // actually showing (see the overlay's own doc comment). Before this fix,
-    // the mode branch below ran regardless: for a click during that gap
-    // while the agent was mid-turn, `takeWheelIfNeeded` (further down)
-    // paused the agent via `cancelStream` and grabbed the control lock for a
-    // click that could never have landed on the page at all —
-    // `mapPointerToDeviceCoords` (via `activeFrameDims`) would have returned
-    // null anyway, but only AFTER the turn was already aborted. That window
-    // is the entire WebRTC cold start (seconds to tens of seconds), and the
-    // black box gives no visual reason not to click it. Bail out before any
-    // take/dispatch decision — not just before dispatch — so a click here is
-    // a true no-op, matching how it already LOOKS (nothing to click on yet).
-    // Reuses `activeFrameDims()` — the SAME "is there a real decoded frame to
-    // map coordinates against" check `mapPointerToDeviceCoords` already runs
-    // further down — rather than the `videoReady` React state directly: the
-    // two are meant to always agree in production (both driven by the same
-    // `onLoadedMetadata` event), but `activeFrameDims()` is what the rest of
-    // this file already treats as the canonical "ready" signal, so gating on
-    // it here keeps a single source of truth instead of introducing a
-    // second, parallel one.
+    // Require a presented current page and valid content coordinates before
+    // changing the control indicator or capturing the pointer.
     if (!attachedRef.current || !activeFrameDims() || !containerRef.current) return
-    if (!connectedRef.current) return
-    if (driveModeRef.current !== 'you-driving') {
-      takeWheelIfNeeded()
-    }
-    // attachedRef/containerRef are already guarded by the readiness check at
-    // the top of this handler (which also requires a real activeFrameDims())
-    // — no need to re-check either here.
-    focusAndCapturePointer(e)
+    if (!canDispatchInput()) return
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
+    if (driveModeRef.current !== 'you-driving') takeWheelIfNeeded()
+    focusAndCapturePointer(e)
 
     // Drop any coalesced move still waiting to be sent (operator report,
     // 2026-08-04: a click on the video's fullscreen button "did not show the
@@ -1946,13 +2055,11 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
-        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
-        // captureDimsFields's doc comment.
-        ...captureDimsFields(device),
       },
     )
   }, [
     annotateMode,
+    canDispatchInput,
     activeFrameDims,
     focusAndCapturePointer,
     takeWheelIfNeeded,
@@ -1983,8 +2090,13 @@ export function BrowserLiveView({
     // duration, not the just-cleared one.
     if (!canDispatchInput() || !attachedRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
-    if (!device) return
+    const release = pressedInputsRef.current.get(`button:${mapMouseButton(e.button)}`)
+    if (!release) return
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect, true)
+    if (!device) {
+      dispatchInput(release, true)
+      return
+    }
     // Same supersede-the-stale-move rule as handlePointerDown, applied to the
     // OTHER end of the gesture. mouse_up maps its own fresh coordinates, so a
     // coalesced move captured up to MOVE_FLUSH_MS earlier would land AFTER the
@@ -2003,9 +2115,6 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
-        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
-        // captureDimsFields's doc comment.
-        ...captureDimsFields(device),
       },
     )
   }, [
@@ -2196,6 +2305,10 @@ export function BrowserLiveView({
     setVideoHealth(null)
     setFirstFrameTimedOut(false)
     setFirstFrameDeadlineNonce((n) => n + 1)
+    releaseInputsRef.current()
+    captureRef.current.gate.bindStream(null)
+    freshViewerRef.current = null
+    refreshFrameGate()
     webrtcRef.current?.stop()
     webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
   }
@@ -2522,9 +2635,9 @@ export function BrowserLiveView({
           >
             {/* The ONLY video sink — mounted the instant a WebRTC stream is
                 attached (`attached`), independently of whether it has
-                decoded a real frame yet (`videoReady`, tracked via
-                onLoadedMetadata below) — the element has to exist and be
-                bound before it can ever report metadata. The "waiting for
+                presented a real frame yet (`videoReady`, tracked by the
+                frame callback) — the element has to exist and be
+                bound before it can ever report a frame. The "waiting for
                 first frame" overlay just below covers the gap honestly
                 instead of showing a silent black box. Starts muted
                 (autoplay-safe) — see the mute toggle button in the header
@@ -2537,7 +2650,9 @@ export function BrowserLiveView({
               autoPlay
               playsInline
               muted={videoMuted}
-              onLoadedMetadata={() => setVideoReady(true)}
+              onLoadedData={(event) => {
+                if (typeof event.currentTarget.requestVideoFrameCallback !== 'function') setVideoReady(true)
+              }}
               aria-label="Live browser session"
               data-testid="browser-live-video"
               // BUG 1 fix: fillContainer stretches to 100% of the
@@ -2555,8 +2670,8 @@ export function BrowserLiveView({
                 the stream can be attached (ICE connected, track live) while
                 no real pixels ever decode, because the capture is bound to a
                 tab that is no longer the one being shown. Overlays the still
-                (black) video rather than un-mounting it, so `loadedmetadata`
-                stays reachable and a late recovery clears this without a
+                (black) video rather than un-mounting it, so frame callbacks
+                remain reachable and a late recovery clears this without a
                 remount. `firstFrameTimedOut` promotes the spinner to the
                 same honest, actionable error + Retry the top-level empty
                 state uses once FIRST_FRAME_TIMEOUT_MS elapses with nothing
@@ -2724,6 +2839,17 @@ export function BrowserLiveView({
           one. `webrtcError` never reaches this branch: a WebRTC failure
           clears `mediaStream`, which flips `attached` false and routes the
           user to the top-level empty-state error instead. */}
+      {attached && videoReady && !displayError && (frameGateState.status !== 'ready' || !frameGeometryReady) && (
+        <div role="status" className="shrink-0 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+          {frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
+            ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
+            : frameGateState.status === 'ready' && !frameGeometryReady
+              ? 'Pointer input is unavailable until the page size is confirmed.'
+            : frameGateState.status === 'needs-fresh-viewer'
+              ? 'Reconnecting video to restore browser input…'
+              : 'Waiting for the current page to appear before enabling browser input…'}
+        </div>
+      )}
       {attached && videoReady && displayError && (
         <div role="alert" className="shrink-0 border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
           {displayError}

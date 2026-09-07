@@ -9,9 +9,11 @@
 // what THIS component is responsible for: wiring browser_webrtc_state/answer
 // frames into the machine, and choosing DC vs WS per input event.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame, emitBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
+import type { BrowserPeerIdentity } from '@/lib/browserWebRTC'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useUiStore } from '@/store/ui'
 
@@ -46,7 +48,7 @@ const {
   mockMachineStop: vi.fn(),
   machineCallbacksRef: {
     current: {
-      onStream: null as ((s: MediaStream) => void) | null,
+      onStream: null as ((s: MediaStream, identity: BrowserPeerIdentity) => void) | null,
       onInputChannelOpen: null as (() => void) | null,
       onInputChannelClose: null as (() => void) | null,
       onFallback: null as ((r: string) => void) | null,
@@ -127,7 +129,7 @@ vi.mock('@/lib/browserWebRTC', async (importOriginal) => {
       get retryAttempts() {
         return machineRetryAttemptsRef.current
       },
-      onStream: (cb: (s: MediaStream) => void) => {
+      onStream: (cb: (s: MediaStream, identity: BrowserPeerIdentity) => void) => {
         machineCallbacksRef.current.onStream = cb
       },
       onInputChannelOpen: (cb: () => void) => {
@@ -145,6 +147,7 @@ vi.mock('@/lib/browserWebRTC', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream (see
  * BrowserLiveView.webrtcSink.test.tsx's own note). */
@@ -156,6 +159,8 @@ function connectAndFrame() {
   act(() => {
     wsCallbacksRef.current?.onConnected?.()
   })
+  const video = screen.queryByTestId('browser-live-video') as HTMLVideoElement | null
+  if (video) confirmBrowserFrame(wsCallbacksRef.current, video)
 }
 
 function stubFrameRect() {
@@ -354,14 +359,10 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
   })
 })
 
-// Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
-// the video sink's intrinsic size can silently drift from the page's real CSS
-// pixel space once the encoder downscales under load (measured 319x158 vs
-// ~1280 page) — coordinate-carrying input frames must report the capture
-// geometry they were mapped into so the server can rescale instead of
-// assuming videoWidth == page pixels.
-describe('BrowserLiveView — capture_width/capture_height on coordinate-carrying input (Fault 3 fix)', () => {
-  it('mouse_down carries capture_width/capture_height equal to the mocked video sink intrinsic size', () => {
+// Confirmed page geometry lets the client send CSS pixels directly, including
+// when the encoder changes its resolution between input events.
+describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
+  it('mouse_down sends confirmed CSS pixels without server rescaling', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -375,7 +376,7 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
     expect(mockSendInput).toHaveBeenCalledTimes(1)
     const payload = mockSendInput.mock.calls[0][0]
     expect(payload).toEqual(
-      expect.objectContaining({ kind: 'mouse_down', capture_width: 1280, capture_height: 720 }),
+      { kind: 'mouse_down', x: 10, y: 10, button: 'left', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
     )
   })
 
@@ -388,15 +389,11 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
     expect(mockMachineSendInput).not.toHaveBeenCalled()
-    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).not.toHaveBeenCalled()
   })
 
-  // Wheel is COALESCED onto the shared input pacer (deltas accumulated,
-  // position = latest), so it no longer dispatches synchronously. The dims
-  // must survive that deferral: they are captured at the wheel event that
-  // computed x/y, not re-read from a possibly-since-drifted video element when
-  // the flush fires.
-  it('video mode: wheel frames also carry capture_width/capture_height', async () => {
+  // Wheel deltas accumulate, while its CSS position is fixed at event time.
+  it('video mode: wheel frames send confirmed CSS pixels', async () => {
     vi.useFakeTimers()
     try {
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
@@ -415,7 +412,7 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
         .filter((p) => p.kind === 'wheel')
       expect(wheels).toHaveLength(1)
       expect(wheels[0]).toEqual(
-        expect.objectContaining({ kind: 'wheel', capture_width: 1280, capture_height: 720 }),
+        { kind: 'wheel', x: 10, y: 10, delta_x: 0, delta_y: 120, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
       )
     } finally {
       vi.useRealTimers()
@@ -473,14 +470,8 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
     expect(payload).not.toHaveProperty('capture_height')
   })
 
-  // Coalesced mouse_move is the one dispatch site that doesn't send
-  // synchronously — the capture dims must be captured at the pointermove
-  // event that computed x/y, not re-read from the (possibly-since-drifted)
-  // live video element when the deferred flush actually fires. Forces the
-  // setTimeout(0) fallback (document hidden) the same way
-  // BrowserLiveView.mouseMoveThrottle.test.tsx does, since jsdom's RAF isn't
-  // deterministically triggerable via fake timers.
-  it('video mode: a coalesced mouse_move flush still carries the capture dims read at the ORIGINAL pointermove, even if the video sink has since resized', () => {
+  // A later encoder resize must not reinterpret an already mapped CSS point.
+  it('video mode: a coalesced mouse_move preserves CSS coordinates computed before the video sink resized', () => {
     // Local, not restoreAllMocks — this file's `vi.fn(() => true)` doubles
     // (mockSendInput et al.) are shared module-level state across every test
     // in this file; restoreAllMocks would strip their default implementation
@@ -511,7 +502,7 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
       expect(mockSendInput).toHaveBeenCalledTimes(1)
       const payload = mockSendInput.mock.calls[0][0]
       expect(payload).toEqual(
-        expect.objectContaining({ kind: 'mouse_move', capture_width: 1280, capture_height: 720 }),
+        { kind: 'mouse_move', x: 10, y: 10, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
       )
     } finally {
       vi.useRealTimers()
@@ -611,7 +602,7 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
       wsCallbacksRef.current?.onWebRTCAnswer?.({ type: 'browser_webrtc_answer', sdp: 'answer-sdp' })
     })
 
-    expect(mockMachineApplyAnswer).toHaveBeenCalledWith('answer-sdp')
+    expect(mockMachineApplyAnswer).toHaveBeenCalledWith({ type: 'browser_webrtc_answer', sdp: 'answer-sdp' })
   })
 
   it('renders the <video> sink once the machine reports a stream via onStream (no mediaStream prop override)', () => {
@@ -621,7 +612,7 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
     expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
     expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
 
-    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream(), { captureId: 'capture-test', generation: 1, offerId: 1 }))
 
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
   })
@@ -633,7 +624,7 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
   it('on fallback, unmounts the interactive surface entirely and stops routing input (nothing left to click)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream(), { captureId: 'capture-test', generation: 1, offerId: 1 }))
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
 
@@ -651,7 +642,7 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
   it('on WS disconnect, stops the machine and unmounts the interactive surface', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream(), { captureId: 'capture-test', generation: 1, offerId: 1 }))
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
 
     act(() => wsCallbacksRef.current?.onDisconnected?.())
@@ -705,7 +696,7 @@ describe('BrowserLiveView — surfacing WebRTC fallback reasons (honest failure,
   it('unmounts the video sink for a capability-gate reason exactly like any other fallback reason', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream(), { captureId: 'capture-test', generation: 1, offerId: 1 }))
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
 
     act(() => machineCallbacksRef.current.onFallback?.('lite_build'))
@@ -753,7 +744,7 @@ describe('BrowserLiveView — Retry must actually retry for a firstFrameTimedOut
     try {
       render(<BrowserLiveView sessionId="s1" agentId="a1" />)
       connectAndFrame()
-      act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+      act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream(), { captureId: 'capture-test', generation: 1, offerId: 1 }))
       // Deliberately never fire `loadedmetadata` — this is the
       // firstFrameTimedOut path (the machine reports a live stream via
       // onStream, i.e. NOT an onFallback reason), not a machine-level
@@ -777,5 +768,111 @@ describe('BrowserLiveView — Retry must actually retry for a firstFrameTimedOut
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+
+describe('BrowserLiveView fresh viewer fallback for missing received timestamps', () => {
+  function boundary(generation: number, rtpTimestamp: number) {
+    act(() => wsCallbacksRef.current!.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: generation, rtp_timestamp: rtpTimestamp }))
+  }
+  function incoming(offerId: number, generation = 1) {
+    const stream = fakeMediaStream(`peer-${offerId}`)
+    act(() => machineCallbacksRef.current.onStream?.(stream, { captureId: 'capture-test', generation, offerId }))
+    return screen.getByTestId('browser-live-video') as HTMLVideoElement
+  }
+  function presentWithoutRtp(video: HTMLVideoElement) {
+    act(() => emitBrowserFrame(video, { expectedDisplayTime: performance.now() - 1 }))
+  }
+  function typeA() { fireEvent.keyDown(screen.getByTestId('browser-live-frame'), { key: 'a' }) }
+
+  it('restarts for a replacement capture even before the old peer publishes a stream', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    boundary(1, 100)
+    mockMachineStart.mockClear()
+    act(() => wsCallbacksRef.current!.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-replacement', capture_generation: 1, rtp_timestamp: 200 }))
+    expect(mockMachineStart.mock.calls).toEqual([[expect.any(Function), { captureId: 'capture-replacement', generation: 1 }]])
+    expect(mockMachineStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('cannot replace current health identity with an unknown old answer capture', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    boundary(1, 100)
+    mockMachineStart.mockClear()
+    mockMachineApplyAnswer.mockClear()
+    act(() => wsCallbacksRef.current!.onWebRTCAnswer({ type: 'browser_webrtc_answer', sdp: 'old-answer', offer_id: 1, capture_id: 'capture-never-observed', capture_generation: 1 }))
+    expect(mockMachineApplyAnswer.mock.calls).toEqual([])
+    expect(mockMachineStart.mock.calls).toEqual([[expect.any(Function), { captureId: 'capture-test', generation: 1 }]])
+  })
+
+  it('waits for a committed boundary before replacing a mismatched pending viewer', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => wsCallbacksRef.current!.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'transitioning', capture_id: 'capture-test', capture_generation: 1 }))
+    mockMachineStart.mockClear()
+    act(() => wsCallbacksRef.current!.onWebRTCAnswer({ type: 'browser_webrtc_answer', sdp: 'old-answer', offer_id: 1, capture_id: 'capture-never-observed', capture_generation: 1 }))
+    expect(mockMachineApplyAnswer.mock.calls).toEqual([])
+    expect(mockMachineStart.mock.calls).toEqual([])
+    boundary(1, 100)
+    expect(mockMachineStart.mock.calls).toEqual([[expect.any(Function), { captureId: 'capture-test', generation: 1 }]])
+  })
+
+  it('negotiates a fresh peer for the committed generation before allowing timestamp-free input', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const original = incoming(1)
+    boundary(1, 100)
+    presentWithoutRtp(original)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([])
+    expect(mockMachineStop).toHaveBeenCalledTimes(1)
+    expect(mockMachineStart).toHaveBeenCalledWith(expect.any(Function), { captureId: 'capture-test', generation: 1 })
+    const fresh = incoming(2)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([])
+    presentWithoutRtp(fresh)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    expect(mockMachineStart).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires a new fresh peer when a recovery changes the marker within the same generation', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const original = incoming(1)
+    boundary(1, 100)
+    presentWithoutRtp(original)
+    const firstFresh = incoming(2)
+    presentWithoutRtp(firstFresh)
+    mockMachineStart.mockClear()
+    boundary(1, 200)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([])
+    expect(mockMachineStart).toHaveBeenCalledWith(expect.any(Function), { captureId: 'capture-test', generation: 1 })
+    const secondFresh = incoming(3)
+    presentWithoutRtp(secondFresh)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+  })
+
+  it('cannot authorize an old fallback peer when another generation commits during negotiation', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const original = incoming(1)
+    boundary(1, 100)
+    presentWithoutRtp(original)
+    act(() => wsCallbacksRef.current!.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'transitioning', capture_id: 'capture-test', capture_generation: 2 }))
+    incoming(2, 1)
+    mockMachineStart.mockClear()
+    boundary(2, 200)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([])
+    expect(mockMachineStart).toHaveBeenCalledWith(expect.any(Function), { captureId: 'capture-test', generation: 2 })
+    const current = incoming(3, 2)
+    presentWithoutRtp(current)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 2 }]])
   })
 })
