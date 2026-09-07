@@ -29,6 +29,9 @@ func (s *browserConnState) cancelAttachmentLocked() {
 func (s *browserConnState) commandAttachment() browserAttachmentSnapshot {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
+	if s.attachmentPending {
+		return browserAttachmentSnapshot{ctx: s.commandContextLocked()}
+	}
 	return browserAttachmentSnapshot{mgr: s.mgr, sessionID: s.sessionID, panelSessionID: s.panelSessionID, ctx: s.commandContextLocked()}
 }
 

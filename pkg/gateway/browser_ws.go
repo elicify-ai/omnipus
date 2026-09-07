@@ -143,9 +143,11 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// are established and torn down separately on the same connection, and
 	// handleViewport legitimately needs both — folding them into one lock
 	// would mean holding the WebRTC lock across a CDP-bound resize.
-	attachMu         sync.Mutex
-	attachmentCtx    context.Context
-	attachmentCancel context.CancelFunc
+	attachMu          sync.Mutex
+	attachmentCtx     context.Context
+	attachmentCancel  context.CancelFunc
+	attachmentReady   chan struct{}
+	attachmentPending bool
 	// attachEpoch is the attach-path twin of webrtcEpoch below, and works
 	// identically: bumped synchronously on readLoop's goroutine the instant
 	// a browser_attach frame is dispatched (beginAttach, called from
@@ -302,6 +304,9 @@ func (s *browserConnState) beginAttach() uint64 {
 	defer s.attachMu.Unlock()
 	s.cancelAttachmentLocked()
 	s.attachEpoch++
+	s.attachmentCtx, s.attachmentCancel = context.WithCancel(context.Background())
+	s.attachmentReady = make(chan struct{})
+	s.attachmentPending = true
 	return s.attachEpoch
 }
 
@@ -336,17 +341,19 @@ func (s *browserConnState) bindAttachment(
 ) bool {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
-	if s.attachEpoch != epoch {
+	if s.attachEpoch != epoch || (s.attachmentCtx != nil && s.attachmentCtx.Err() != nil) || (s.attachmentReady != nil && !s.attachmentPending) {
 		return false
 	}
-	if s.attachmentCancel != nil {
-		s.attachmentCancel()
+	s.commandContextLocked()
+	if s.attachmentReady == nil {
+		s.attachmentReady = make(chan struct{})
 	}
-	s.attachmentCtx, s.attachmentCancel = context.WithCancel(context.Background())
 
 	s.mgr = mgr
 	s.sessionID = sessionID
 	s.panelSessionID = panelSessionID
+	s.attachmentPending = false
+	close(s.attachmentReady)
 	return true
 }
 
@@ -1351,6 +1358,14 @@ func (h *BrowserWSHandler) handleAttach(
 	epoch uint64,
 ) {
 	runBrowserConnWorkHook(workKindAttach) // test-only seam; nil in production
+	defer state.abandonAttachment(epoch)
+	prev, prevSession, prevPanel, current := state.takePreviousAttachment(epoch)
+	if !current {
+		return
+	}
+	if prev != nil && prevSession != "" {
+		h.detach(prev, prevSession, prevPanel, viewerID, userID)
+	}
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
 		wc.sendCriticalGen(errorStatus("browser_attach: invalid frame"), dropContext("", viewerID, "attach-invalid"))
@@ -1360,10 +1375,6 @@ func (h *BrowserWSHandler) handleAttach(
 		wc.sendCriticalGen(errorStatus("browser_attach: agent_id and session_id are required"),
 			dropContext(frame.SessionId, viewerID, "attach-missing-fields"))
 		return
-	}
-
-	if prev, prevSession, prevPanel := state.clearAttachment(); prev != nil && prevSession != "" {
-		h.detach(prev, prevSession, prevPanel, viewerID, userID)
 	}
 
 	// FR-017: the workspace is resolved on the SERVER from the attaching chat
