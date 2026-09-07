@@ -418,14 +418,16 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
-	"1.0.1": "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",
-	"1.0.2": "366cea35b3775142c81c0a5d922b1a30db750731d4d277876303075a0b4b2d28",
-	"1.0.3": "58cc11f1bbeac2bfdcf98917fd163aef577873b349630d880560ff46a2f1a0b5",
-	"1.0.4": "b4452db3f20ccb56f733ea645f0d56f8142b6707fa5182df0298bc9f0b144575",
-	"1.0.5": "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
-	"1.0.6": "27002761ba1ae644d9c86ffa85d7dfed0bb09a33a879a0dfd531ee8d644a31f0",
-	"1.0.7": "3d3421dcd59363f8ce3c0fe6c6463082c16125577fbeed01b5ed499accfd4b56",
-	"1.0.8": "95d494bd8751af4a33a801a85503dff81100e68720d4ac09ec8b68b1148dd3cb",
+	// 1.0.18: hardware-aligned capture, demand-aware adaptation, health, and track replacement.
+	"1.0.18": "d0618b373f7086c7eebbb4a35691b6c03e87bf441ff4c80acbd1db5e775a9337",
+	"1.0.1":  "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",
+	"1.0.2":  "366cea35b3775142c81c0a5d922b1a30db750731d4d277876303075a0b4b2d28",
+	"1.0.3":  "58cc11f1bbeac2bfdcf98917fd163aef577873b349630d880560ff46a2f1a0b5",
+	"1.0.4":  "b4452db3f20ccb56f733ea645f0d56f8142b6707fa5182df0298bc9f0b144575",
+	"1.0.5":  "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
+	"1.0.6":  "27002761ba1ae644d9c86ffa85d7dfed0bb09a33a879a0dfd531ee8d644a31f0",
+	"1.0.7":  "3d3421dcd59363f8ce3c0fe6c6463082c16125577fbeed01b5ed499accfd4b56",
+	"1.0.8":  "95d494bd8751af4a33a801a85503dff81100e68720d4ac09ec8b68b1148dd3cb",
 	// 1.0.9 — round-2 F2/F7: the quality-adaptation loop no longer outlives
 	// the evidence behind it (ADAPT_EVIDENCE_TTL_MS + adaptCarryOverIndex, so
 	// a viewer never inherits a resolution a viewerless boot warm-up settled

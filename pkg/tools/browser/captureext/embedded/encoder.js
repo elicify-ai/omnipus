@@ -147,6 +147,7 @@ async function findActiveTargetTab() {
 
 let currentStream = null;
 let currentPC = null;
+let captureGeneration = 0;
 let ws = null;
 let shuttingDown = false;
 let lastGoodIceTime = Date.now();
@@ -196,17 +197,25 @@ const CAPTURE_PIXEL_BUDGET = 1280 * 720;
 // budgetedCaptureDims returns the physical capture size to request, clamped
 // to CAPTURE_PIXEL_BUDGET. Scaling is uniform (sqrt of the overshoot) so the
 // aspect ratio is preserved and the server-side coordinate rescale stays
-// proportional. Dimensions are rounded to even numbers because H.264 chroma
-// subsampling requires it. Pure function -- unit-tested without a browser.
+// proportional. Dimensions use a twelve-pixel grid so H.264 chroma
+// subsampling stays valid at all application adaptation levels. Pure function -- unit-tested without a browser.
 function budgetedCaptureDims(cssW, cssH, scale) {
-  const w0 = Math.max(2, Math.round(cssW * scale));
-  const h0 = Math.max(2, Math.round(cssH * scale));
-  const px = w0 * h0;
-  if (!(px > CAPTURE_PIXEL_BUDGET)) return { w: w0, h: h0, clamped: false };
-  const k = Math.sqrt(CAPTURE_PIXEL_BUDGET / px);
-  const w = Math.max(2, Math.round((w0 * k) / 2) * 2);
-  const h = Math.max(2, Math.round((h0 * k) / 2) * 2);
-  return { w: w, h: h, clamped: true };
+  if (![cssW, cssH, scale, cssW * scale, cssH * scale].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)) {
+    throw new RangeError('capture dimensions and scale must be finite and positive');
+  }
+  // Twelve is the smallest grid that yields even dimensions at every
+  // supported scale (1, 1.5, 2). Tiny viewports use one grid cell.
+  const w0 = Math.max(12, cssW * scale);
+  const h0 = Math.max(12, cssH * scale);
+  const k = Math.min(1, Math.sqrt(CAPTURE_PIXEL_BUDGET / w0 / h0));
+  let w = Math.max(12, Math.floor(w0 * k / 12) * 12);
+  let h = Math.max(12, Math.floor(h0 * k / 12) * 12);
+  // One extremely thin dimension can hit the minimum after the uniform
+  // scale; re-bound the other dimension so the budget remains absolute.
+  h = Math.min(h, CAPTURE_PIXEL_BUDGET / 12);
+  w = Math.min(w, Math.floor(CAPTURE_PIXEL_BUDGET / h / 12) * 12);
+  h = Math.min(h, Math.floor(CAPTURE_PIXEL_BUDGET / w / 12) * 12);
+  return { w, h, clamped: k < 1 };
 }
 
 // Tab id of the CURRENTLY captured tab — recorded at capture time so the
@@ -862,16 +871,22 @@ function qualityAdaptDecide(sample, prev, now) {
     return { state: st, action: 'hold', note: 'no framesPerSecond in sender stats' };
   }
 
-  // Any cpu-limited sample -- at whatever frame rate -- is fresh evidence
+  const sourceFps = typeof sample.sourceFramesPerSecond === 'number' && isFinite(sample.sourceFramesPerSecond)
+    ? sample.sourceFramesPerSecond : null;
+  // A CPU label can survive after the source goes idle. Only fresh source
+  // demand can justify retaining or increasing a resolution reduction.
+  const activeDemand = sourceFps !== null && sourceFps >= ADAPT_TARGET_FPS;
+
+  // Any cpu-limited sample with active source demand is fresh evidence
   // that the encoder is the bottleneck, and is what keeps an existing step
   // down justified (ADAPT_EVIDENCE_TTL_MS). Recorded before the thresholds
   // below so a machine that is cpu-limited but still delivering (say 15 fps
   // at scale 1.5, i.e. the step WORKED) does not read as stale evidence.
-  if (reason === 'cpu') {
+  if (reason === 'cpu' && activeDemand) {
     st.lastPressureAt = now;
   }
 
-  if (reason === 'cpu' && fps < ADAPT_TARGET_FPS) {
+  if (reason === 'cpu' && fps < ADAPT_TARGET_FPS && activeDemand) {
     st.goodStreak = 0;
     st.badStreak += 1;
     if (st.badStreak >= ADAPT_DOWN_SAMPLES && st.index < ADAPT_MAX_STEP_INDEX) {
@@ -979,22 +994,45 @@ function adaptCarryOverIndex(prev, cycleCount, now) {
   return index;
 }
 
-// readVideoSenderSample pulls the two fields the loop needs off the SENDER's
-// own stats -- qualityLimitationReason is the encoder telling us, in its own
-// words, that CPU is what is holding quality back; framesPerSecond is what
-// the viewer actually gets. No gateway round-trip is involved.
+// Sender output rate is not viewer delivery rate. Match the outbound report
+// to its source so a naturally idle capture is not mistaken for slow encoding.
+const previousSenderSamples = new WeakMap();
+
 async function readVideoSenderSample(pc) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender || typeof sender.getStats !== 'function') return null;
   const report = await sender.getStats();
   if (!report || typeof report.forEach !== 'function') return null;
   let out = null;
+  const sources = new Map();
   report.forEach((s) => {
+    if (s && s.type === 'media-source' && s.kind === 'video') sources.set(s.id, s);
     if (s && s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) out = s;
   });
   if (!out) return null;
+  const source = sources.get(out.mediaSourceId);
+  const prior = previousSenderSamples.get(sender);
+  const timestamp = out.timestamp;
+  const fresh = Number.isFinite(timestamp) && (!prior || timestamp > prior.timestamp);
+  let sourceRate;
+  if (fresh && source && Number.isFinite(source.timestamp) && Math.abs(source.timestamp - timestamp) <= 1000) {
+    if (prior && prior.sourceId === source.id && Number.isFinite(prior.frames) && Number.isFinite(source.frames) &&
+        source.frames >= prior.frames && timestamp - prior.timestamp <= 10000) {
+      sourceRate = (source.frames - prior.frames) * 1000 / (timestamp - prior.timestamp);
+    } else if (!prior && Number.isFinite(source.framesPerSecond)) {
+      sourceRate = source.framesPerSecond;
+    }
+  }
+  if (fresh) previousSenderSamples.set(sender, { timestamp, sourceId: source && source.id, frames: source && source.frames });
   return {
-    framesPerSecond: out.framesPerSecond,
+    sourceFramesPerSecond: sourceRate,
+    sourceFrames: source && source.frames,
+    encodedFrames: out.framesEncoded,
+    packetsSent: out.packetsSent,
+    sampleTimestampMs: out.timestamp,
+    totalEncodeTime: out.totalEncodeTime,
+    encoderImplementation: out.encoderImplementation,
+    framesPerSecond: fresh ? out.framesPerSecond : undefined,
     qualityLimitationReason: out.qualityLimitationReason,
     frameWidth: out.frameWidth,
     frameHeight: out.frameHeight,
@@ -1340,6 +1378,7 @@ function mungeVideoStartBitrate(sdp) {
 }
 
 function teardownCapture() {
+  captureGeneration += 1;
   clearOfferAnswerTimeout();
   // Stop sampling BEFORE the PC goes away, so a tick in flight cannot call
   // getStats()/setParameters() on a closing sender. Whether the learned scale
@@ -1694,10 +1733,48 @@ async function runCaptureAndOffer() {
 }
 
 async function runCaptureAndOfferOnce() {
+  const existing = currentPC;
+  if (existing && existing.connectionState === 'connected' && currentStream) {
+    const generation = ++captureGeneration;
+    setStatus('capturing');
+    // Chrome forbids a second active capture of the same tab. Stop the
+    // source, retaining its sender and negotiated connection (verified with
+    // Chrome 151, H.264 VideoToolbox and Opus).
+    currentStream.getTracks().forEach((track) => track.stop());
+    currentStream = null;
+    try {
+      const replacement = await captureActiveTabStream();
+      if (shuttingDown || currentPC !== existing || captureGeneration !== generation) {
+        replacement.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      currentStream = replacement;
+      const senders = existing.getSenders();
+      for (const track of replacement.getTracks()) {
+        const sender = senders.find((candidate) => candidate.track && candidate.track.kind === track.kind);
+        if (!sender) throw new Error('recapture has no negotiated ' + track.kind + ' sender');
+        await queueSenderParams(() => sender.replaceTrack(track));
+      }
+      if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
+      applyVideoSenderConstraints(existing, { context: 'track-replacement', recordSuccess: true });
+      setStatus('connected');
+      record('recapture: replaced tracks, retained ingest connection');
+      return;
+    } catch (e) {
+      if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
+      warn('recapture track replacement failed; renegotiating ingest', e);
+      record('recapture: replacement failed, renegotiating: ' + String(e));
+    }
+  }
   teardownCapture();
+  const generation = ++captureGeneration;
   setStatus('capturing');
 
   const stream = await captureActiveTabStream();
+  if (shuttingDown || captureGeneration !== generation) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
   currentStream = stream;
 
   setStatus('offering');
@@ -1747,6 +1824,7 @@ async function runCaptureAndOfferOnce() {
   await pc.setLocalDescription(offer);
   await waitIceGatheringComplete(pc);
 
+  if (shuttingDown || currentPC !== pc || captureGeneration !== generation) return;
   record('runCaptureAndOffer: sending browser_capture_offer');
   sendFrame({ type: 'browser_capture_offer', sdp: pc.localDescription.sdp });
   armOfferAnswerTimeout();
@@ -2163,11 +2241,49 @@ function stopWatchdog() {
 // schema describes. Distinct from the ICE-state watchdog above: this beacon
 // exists so the gateway can detect a hung-but-still-WS-open encoder even
 // when no ICE state change would otherwise reveal it.
+// Reports capture stages separately. A timed-out stats read still sends track
+// and peer state, without relabelling an old counter sample as fresh.
+async function sendCaptureHealth() {
+  const pc = currentPC;
+  const generation = captureGeneration;
+  const track = currentStream && currentStream.getVideoTracks()[0];
+  const health = {
+    generation,
+    track_state: track ? track.readyState : 'absent',
+    track_muted: !!(track && track.muted),
+    peer_state: pc ? pc.connectionState : 'absent',
+  };
+  if (pc && pc.connectionState === 'connected') {
+    let timer;
+    try {
+      const sample = await Promise.race([
+        readVideoSenderSample(pc),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), 1500); }),
+      ]);
+      if (sample) {
+        const fields = { source_frames: sample.sourceFrames, encoded_frames: sample.encodedFrames, packets_sent: sample.packetsSent };
+        for (const [key, value] of Object.entries(fields)) {
+          if (Number.isSafeInteger(value) && value >= 0) health[key] = value;
+        }
+        if (Number.isFinite(sample.sampleTimestampMs) && sample.sampleTimestampMs >= 0) {
+          health.sample_timestamp_ms = sample.sampleTimestampMs;
+        }
+      }
+    } catch (e) {
+      warn('capture health: stats unavailable', e);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (shuttingDown || currentPC !== pc || captureGeneration !== generation) return;
+  sendFrame({ type: 'browser_capture_control', action: 'ping', capture_health: health });
+}
+
 function startPingBeacon() {
   if (pingBeaconTimer) return;
   pingBeaconTimer = setInterval(() => {
     if (shuttingDown) return;
-    sendFrame({ type: 'browser_capture_control', action: 'ping' });
+    sendCaptureHealth().catch((e) => warn('capture health: beacon failed', e));
   }, PING_BEACON_INTERVAL_MS);
 }
 

@@ -228,7 +228,9 @@ function makePC(state) {
     track: { kind: 'video' },
     getParameters: function () { return { encodings: [{ ssrc: 1 }] }; },
     setParameters: function () { return Promise.resolve(); },
+    replaceTrack: function (track) { this.track = track; return Promise.resolve(); },
   };
+  const audioSender = {track: {kind:'audio'}, replaceTrack: function(track) {this.track=track;return Promise.resolve();}};
   return {
     connectionState: state,
     signalingState: 'stable',
@@ -236,7 +238,7 @@ function makePC(state) {
     closed: false,
     localDescription: { type: 'offer', sdp: 'v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n' },
     close: function () { this.closed = true; },
-    getSenders: function () { return [sender]; },
+    getSenders: function () { return [sender, audioSender]; },
     getTransceivers: function () { return []; },
     addTrack: function () { return sender; },
     createOffer: function () { return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n' }); },
@@ -381,21 +383,23 @@ function currentGlobals() {
     harness.captureCalls === 0 && live.stream.video.stopped === false,
     'captureActiveTabStream calls=' + harness.captureCalls + ', video track stopped=' + live.stream.video.stopped);
 
-  // (b) genuinely changed geometry -> it MUST still rebuild, and the new
-  // capture must be built against the new size.
+  // (b) changed geometry replaces the source while retaining the connected
+  // transport; both senders must reference the new capture tracks.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   await sendRecapture(recaptureFrame(615, 744, 1));
   after = currentGlobals();
-  check('real_resize_still_rebuilds',
-    harness.captureCalls === 1 && after.pc === harness.nextPC && after.stream === harness.nextStream &&
-      live.pc.closed === true && live.stream.video.stopped === true,
+  check('real_resize_replaces_source_preserving_peer',
+    harness.captureCalls === 1 && after.pc === live.pc && after.stream === harness.nextStream &&
+      live.pc.closed === false && live.stream.video.stopped === true &&
+      after.pc.getSenders()[0].track === after.stream.getVideoTracks()[0] &&
+      after.pc.getSenders()[1].track === after.stream.getAudioTracks()[0],
     'captureActiveTabStream calls=' + harness.captureCalls + ', old pc closed=' + live.pc.closed +
       ', old track stopped=' + live.stream.video.stopped + ', pc swapped=' + (after.pc === harness.nextPC));
 
-  // (b2) a scale change alone must rebuild — a Retina viewer taking over.
+  // (b2) a scale change alone must replace capture — a Retina viewer taking over.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   await sendRecapture(recaptureFrame(1280, 720, 2));
-  check('scale_change_still_rebuilds',
+  check('scale_change_replaces_source',
     harness.captureCalls === 1,
     'captureActiveTabStream calls=' + harness.captureCalls);
 
@@ -407,11 +411,11 @@ function currentGlobals() {
     harness.captureCalls === 1 && after.pc === harness.nextPC && after.stream === harness.nextStream,
     'captureActiveTabStream calls=' + harness.captureCalls + ' with no capture running (want 1)');
 
-  // (d) same size, DIFFERENT tab -> rebuild, or the viewer watches the wrong page.
+  // (d) same size, DIFFERENT tab -> replace capture, or the viewer watches the wrong page.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   harness.activeTabId = 99;
   await sendRecapture(recaptureFrame(1280, 720, 1));
-  check('tab_switch_at_identical_size_still_rebuilds',
+  check('tab_switch_at_identical_size_replaces_source',
     harness.captureCalls === 1,
     'captureActiveTabStream calls=' + harness.captureCalls + ' after the active tab moved 7 -> 99');
   harness.activeTabId = 7;
@@ -424,19 +428,19 @@ function currentGlobals() {
     harness.captureCalls === 1,
     'captureActiveTabStream calls=' + harness.captureCalls + ' with connectionState=failed');
 
-  // (f) same size but the live track ended -> rebuild.
+  // (f) same size but the live track ended -> replace capture.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   live.stream.video.readyState = 'ended';
   await sendRecapture(recaptureFrame(1280, 720, 1));
-  check('ended_track_still_rebuilds',
+  check('ended_track_replaces_source',
     harness.captureCalls === 1,
     'captureActiveTabStream calls=' + harness.captureCalls + ' with an ended video track');
 
-  // (g) a recapture with NO geometry hint (an active-tab switch) must rebuild
+  // (g) a recapture with NO geometry hint (an active-tab switch) must replace capture
   // — there is no verified target to compare against.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   await sendRecapture(recaptureFrame(null, null, null));
-  check('unhinted_recapture_still_rebuilds',
+  check('unhinted_recapture_replaces_source',
     harness.captureCalls === 1,
     'captureActiveTabStream calls=' + harness.captureCalls + ' for a recapture carrying no expected dims');
 

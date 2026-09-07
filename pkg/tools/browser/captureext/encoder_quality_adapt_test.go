@@ -287,15 +287,19 @@ function makePC(sample, opts) {
   // opts.placeholderEncodings reproduces Chrome's PRE-negotiation [{}],
   // which is the shape that made setParameters throw InvalidStateError.
   let params = { encodings: opts.emptyEncodings ? [] : (opts.placeholderEncodings ? [{}] : [{ ssrc: 424242 }]) };
+  let statsTime = 1000;
+  let sourceFrames = 0;
   const sender = {
     track: { kind: 'video' },
     getStats: function () {
+      statsTime += 2000;
+      sourceFrames += 2 * (sample.reason === 'cpu' ? 30 : sample.fps);
       return Promise.resolve(new Map([['out', {
-        type: 'outbound-rtp', kind: 'video',
+        type: 'outbound-rtp', kind: 'video', mediaSourceId: 'source', timestamp:statsTime,
         framesPerSecond: sample.fps,
         qualityLimitationReason: sample.reason,
         frameWidth: 1266, frameHeight: 1372,
-      }]]));
+      }], ['source', {id: 'source',type: 'media-source',kind: 'video',timestamp:statsTime,frames:sourceFrames,framesPerSecond:sample.reason === 'cpu' ? 30 : sample.fps}]]));
     },
     getParameters: function () { return JSON.parse(JSON.stringify(params)); },
     setParameters: function (p) {

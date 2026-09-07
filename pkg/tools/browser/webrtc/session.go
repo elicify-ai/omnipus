@@ -42,7 +42,7 @@ var Available = true
 // from whichever upstream ingest connection is currently feeding it, and (2)
 // this package additionally rewrites each packet's SEQUENCE NUMBER by a
 // constant per-connection offset anchored on a session-lifetime high-water
-// mark per kind (videoLastOutSeq/audioLastOutSeq below) --
+// mark per kind (mediaForwarder below) --
 // without that second rewrite, a fresh ingest connection's independently-
 // randomized packetizer sequence numbers cause every already-attached
 // viewer's SRTP receive window to silently discard the "replayed"/
@@ -153,18 +153,9 @@ type Session struct {
 	// the moment a video track arrives on a live connection.
 	pliDeferred atomic.Bool
 
-	// videoLastOutSeq/audioLastOutSeq are the session-lifetime OUTGOING
-	// sequence-number high-water marks (RFC 1982 16-bit serial space, stored
-	// widened) for the two shared local tracks. attachIngestTrack anchors
-	// each new ingest connection's constant rewrite offset on them, and
-	// advances them only forward as packets are forwarded. See the long
-	// comment on attachIngestTrack in ingest.go for why a rewrite -- not
-	// just the SSRC/PayloadType rewriting Pion already does per viewer
-	// binding -- is required for ingest replacement to work at all, and the
-	// forward-loop comment there for why it must be a constant offset, never
-	// read-order renumbering (2026-08-13 corruption incident).
-	videoLastOutSeq atomic.Uint32
-	audioLastOutSeq atomic.Uint32
+	// Each media kind has one generation-aware RTP/RTCP write owner.
+	videoForward mediaForwarder
+	audioForward mediaForwarder
 
 	connSeq atomic.Int64
 
@@ -624,6 +615,8 @@ func (s *Session) Close() error {
 	// dead-panel failure the feed tokens exist to prevent.
 	s.videoFeedID = 0
 	s.audioFeedID = 0
+	s.videoForward.retire()
+	s.audioForward.retire()
 	s.mu.Unlock()
 
 	var errs []error
