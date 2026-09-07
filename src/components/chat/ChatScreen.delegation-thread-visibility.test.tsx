@@ -394,7 +394,8 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
 // no trailing assistant message (chat.ts) — no prior `token` frame needed to
 // seed one.
 
-const THINKING_TEXT_RE = /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/
+const THINKING_TEXT_RE =
+  /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/
 
 describe('ChatScreen — Fix 3: ghost bubble when the only content is a hidden delegation', () => {
   it('a delegate call that has already FINISHED, on an otherwise-empty still-streaming message, shows the thinking placeholder and no bare Copy bar', async () => {

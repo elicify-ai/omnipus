@@ -226,14 +226,40 @@ function SystemMessage() {
   )
 }
 
-// Animated thinking indicator with rotating status messages
+// Animated thinking indicator with rotating status messages. The first
+// shown phrase is always 'Thinking…' (deterministic opening beat); every
+// tick after that picks a random phrase from the pool, never immediately
+// repeating the one just shown. A caller (InlineThinkingIndicator) can
+// override the rotation entirely with a stable, context-specific `label`
+// — e.g. naming the hidden tool currently running — via ThinkingIndicator's
+// `label` prop.
 const THINKING_MESSAGES = [
   'Thinking…',
-  'Composing response…',
+  'Working on it…',
+  'Composing a response…',
   'Processing your request…',
   'Analyzing…',
-  'Generating…',
+  'Considering the details…',
+  'Piecing it together…',
+  'Reasoning it through…',
+  'Working through this…',
+  'Gathering my thoughts…',
+  'Figuring out the approach…',
+  'Reviewing the context…',
+  'Drafting a response…',
+  'Making sense of it…',
+  'Weighing the options…',
 ]
+
+/** Picks a random phrase from THINKING_MESSAGES that differs from `current` — never an immediate repeat. */
+function pickNextThinkingPhrase(current: string): string {
+  if (THINKING_MESSAGES.length <= 1) return THINKING_MESSAGES[0]
+  let next = current
+  while (next === current) {
+    next = THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)]
+  }
+  return next
+}
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content
 // in VirtualAssistantMessageRow (historical/replay render path). Mirrors
@@ -241,15 +267,143 @@ const THINKING_MESSAGES = [
 // truncated length when a provider's error payload is verbose.
 const ERROR_DETAIL_MAX_CHARS = 512
 
-function ThinkingIndicator() {
-  const [msgIndex, setMsgIndex] = useState(0)
+// Caps a context-specific thinking label (a bash `description`) to a single
+// line and ~48 chars — long enough to be informative, short enough to read
+// as a status word rather than a wrapped paragraph.
+const THINKING_LABEL_MAX_CHARS = 48
+
+/** Trims `value` to its first line and caps it at THINKING_LABEL_MAX_CHARS, appending an ellipsis when cut. */
+function truncateThinkingLabel(value: string): string {
+  const firstLine = value.split(/\r?\n/, 1)[0]?.trim() ?? ''
+  if (firstLine.length === 0) return ''
+  if (firstLine.length <= THINKING_LABEL_MAX_CHARS) return firstLine
+  return `${firstLine.slice(0, THINKING_LABEL_MAX_CHARS).trimEnd()}…`
+}
+
+// Maps the first token of a background `bash` command to a short verb
+// phrase for the thinking indicator (deriveBashThinkingLabel's step 2).
+// Deliberately closed/exact-match — an unrecognized command falls through
+// to the generic "Running a command…" rather than guessing.
+const BASH_COMMAND_VERBS: Record<string, string> = {
+  git: 'Running git…',
+  npm: 'Running npm…',
+  npx: 'Running npm…',
+  pnpm: 'Running npm…',
+  yarn: 'Running npm…',
+  go: 'Running Go…',
+  python: 'Running a script…',
+  python3: 'Running a script…',
+  curl: 'Fetching…',
+  wget: 'Fetching…',
+  docker: 'Running Docker…',
+  make: 'Building…',
+  bash: 'Running a script…',
+  sh: 'Running a script…',
+}
+
+/**
+ * Derives the thinking-indicator label for an in-progress `bash` call that
+ * is hidden from the thread (background dispatch, or the poll/read
+ * sub-case on an already-running background session — toolVisibility.ts).
+ * NEVER renders the raw `command` string (length + secret-leak risk) —
+ * only the call's own `description` (capped to one line/~48 chars) or a
+ * verb mapped from the command's first token.
+ */
+function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): string {
+  const description = typeof args?.description === 'string' ? args.description : ''
+  const truncatedDescription = truncateThinkingLabel(description)
+  if (truncatedDescription) return truncatedDescription
+
+  const command = typeof args?.command === 'string' ? args.command.trim() : ''
+  if (command) {
+    const firstToken = command.split(/\s+/)[0] ?? ''
+    const verbKey = firstToken.split('/').pop() ?? firstToken
+    return BASH_COMMAND_VERBS[verbKey] ?? 'Running a command…'
+  }
+
+  return 'Working in the background…'
+}
+
+/**
+ * Derives the thinking-indicator label for an in-progress `delegate` call's
+ * "run" sub-case — the only delegate sub-case with a specific label (its
+ * `status`-poll sub-case, and any other hidden tool with no rule, fall
+ * through to the generic pool). Resolves the target agent's display name
+ * from the call's `agent_id` arg (pkg/tools/delegate.go's Parameters())
+ * against the agents list; never invents a name — falls back to a bare
+ * "Delegating…" when the id is absent or unresolvable.
+ */
+function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, agents: Agent[]): string {
+  const agentId = typeof args?.agent_id === 'string' ? args.agent_id : ''
+  const target = agentId ? agents.find((a) => a.id === agentId) : undefined
+  return target?.name ? `Delegating to ${target.name}…` : 'Delegating…'
+}
+
+/**
+ * Finds the LAST tool-call part in a live message's `content` whose live
+ * status (looked up in the store's resolved ToolCall record, keyed by
+ * toolCallId — the same lookup FallbackToolUI uses) is still 'running', and
+ * — only when that call is hidden from the thread per toolVisibility.ts's
+ * shouldRenderToolCall — derives a specific, stable label for it.
+ *
+ * Returns null (generic rotating pool applies) when: the tool is visible
+ * (its own chip already shows progress), it's ToolSearch or any other
+ * hidden tool with no specific-label rule, or nothing is currently running.
+ * Defensive: never throws — an unexpected message/part shape falls back to
+ * the generic pool via the null return, exactly like "nothing found".
+ */
+function deriveHiddenRunningToolLabel(
+  content: unknown,
+  storeToolCalls: Record<string, { status?: string }>,
+  verboseChatEnabled: boolean,
+  agents: Agent[],
+): string | null {
+  try {
+    if (!Array.isArray(content)) return null
+    for (let i = content.length - 1; i >= 0; i--) {
+      const part = content[i] as
+        | { type?: string; toolCallId?: string; toolName?: string; args?: unknown }
+        | undefined
+      if (!part || part.type !== 'tool-call') continue
+      const { toolCallId, toolName } = part
+      if (typeof toolCallId !== 'string' || typeof toolName !== 'string') continue
+
+      const liveStatus = storeToolCalls[toolCallId]?.status
+      if (liveStatus !== 'running') continue // not the current in-progress step
+
+      const args = part.args as Record<string, unknown> | undefined
+      if (shouldRenderToolCall(toolName, args, verboseChatEnabled, false)) {
+        // Visible — its own chip already communicates progress.
+        return null
+      }
+
+      if (toolName === 'delegate') {
+        const action = typeof args?.action === 'string' ? args.action : 'run'
+        return action === 'run' ? deriveDelegateThinkingLabel(args, agents) : null
+      }
+      if (toolName === 'bash') {
+        return deriveBashThinkingLabel(args)
+      }
+      return null // ToolSearch, or any other hidden tool with no rule — generic pool.
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function ThinkingIndicator({ label }: { label?: string | null } = {}) {
+  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_MESSAGES[0])
 
   useEffect(() => {
+    if (label) return // a stable context-specific label overrides rotation entirely.
     const interval = setInterval(() => {
-      setMsgIndex((i) => (i + 1) % THINKING_MESSAGES.length)
+      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
     }, 2000)
     return () => clearInterval(interval)
-  }, [])
+  }, [label])
+
+  const displayText = label ?? rotatingPhrase
 
   return (
     <span className="text-[var(--color-muted)] italic flex items-center gap-2.5 py-1">
@@ -258,7 +412,7 @@ function ThinkingIndicator() {
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
       </span>
-      <span className="text-xs transition-opacity duration-300">{THINKING_MESSAGES[msgIndex]}</span>
+      <span className="text-xs transition-opacity duration-300">{displayText}</span>
     </span>
   )
 }
@@ -296,11 +450,28 @@ function AssistantTextPart() {
 // Stays visible the entire turn — including between tool-call steps after some
 // text has streamed — so the user always knows the agent is still working.
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
+//
+// Context-aware: when the current in-progress step is a HIDDEN tool call
+// (ToolSearch, background bash, delegate — see toolVisibility.ts) whose
+// tool-call part is present in message.content but rendered invisible, this
+// shows a specific, stable label for it (e.g. "Delegating to Ray…",
+// "Running the test suite…") instead of the generic rotating pool — see
+// deriveHiddenRunningToolLabel above.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
+  const storeToolCalls = useChatStore((s) => s.toolCalls)
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const { data: agents = [] } = useQuery<Agent[]>({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
+
   if (!isRunning) return null
-  return <ThinkingIndicator />
+
+  const label = deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled, agents)
+  return <ThinkingIndicator label={label} />
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
