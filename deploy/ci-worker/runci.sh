@@ -140,6 +140,11 @@ run_lint() {
   # backfill (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
   # must not return.
   bash scripts/check-no-fail-closed-backfill.sh || return 1
+  # ADR-081 regression guard: the deleted /goal confirm-gate machinery
+  # (confirmPendingGoal / IsGoalConfirm / proposeGoalAmendment / buildGoalPendingNote
+  # / useGoalCompilingIndicator, …) must not return — goals activate instantly,
+  # the agent authors the record via set_goal, steering replaces confirmation.
+  bash scripts/check-no-goal-confirm-gate.sh || return 1
   # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
   # single-slot session_token_hash and invalidates the shared storageState cookie
   # for every LATER spec — a failure that lands in an unrelated file). Self-test

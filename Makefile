@@ -448,6 +448,11 @@ lint-no-jpeg-screencast:
 lint-no-fail-closed-backfill:
 	bash scripts/check-no-fail-closed-backfill.sh
 
+## lint-no-goal-confirm-gate: Fail if the deleted /goal confirm-gate machinery reappears
+## Regression guard for ADR-081 — see scripts/check-no-goal-confirm-gate.sh's header comment.
+lint-no-goal-confirm-gate:
+	bash scripts/check-no-goal-confirm-gate.sh
+
 ## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
 ## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the
 ## shared storageState cookie for every spec that runs later. Self-test first (a guard that cannot
