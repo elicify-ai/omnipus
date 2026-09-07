@@ -353,3 +353,42 @@ func TestGrepTool_BusyReturnsStructuredError(t *testing.T) {
 		t.Fatalf("expected Execute to have waited close to the 2s busy budget before refusing, only waited %s", elapsed)
 	}
 }
+
+// TestGrepTool_ScopedSearchHonorsAncestorIgnore — the caller half of the
+// engine's ancestor-ignore support: narrowing a search with `path` must not
+// change WHICH files are ignored. Before the roots carried ScopePrefix and
+// AncestorIgnore, `grep x` and `grep x path:"src"` disagreed about the very
+// same file — the scoped call re-rooted the fs.FS, so the workspace-root
+// .gitignore that pruned src/build simply was not read any more. Same file,
+// same query, same reported stats, opposite answer, and nothing in the
+// response said the rules had changed.
+func TestGrepTool_ScopedSearchHonorsAncestorIgnore(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src", "build"), 0o700); err != nil {
+		t.Fatalf("seed dirs: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(dir, ".gitignore"), "build/\n")
+	mustWriteFile(t, filepath.Join(dir, "src", "main.go"), "needle in real source\n")
+	mustWriteFile(t, filepath.Join(dir, "src", "build", "generated.go"), "needle in generated output\n")
+	tool := newTestGrepTool(t, dir)
+
+	unscoped := tool.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	if unscoped.IsError {
+		t.Fatalf("unscoped search errored: %s", unscoped.ForLLM)
+	}
+	if strings.Contains(unscoped.ForLLM, "generated.go") {
+		t.Fatalf("precondition failed: the root .gitignore should prune src/build, got:\n%s", unscoped.ForLLM)
+	}
+
+	scoped := tool.Execute(context.Background(), map[string]any{"pattern": "needle", "path": "src"})
+	if scoped.IsError {
+		t.Fatalf("scoped search errored: %s", scoped.ForLLM)
+	}
+	if !strings.Contains(scoped.ForLLM, "main.go") {
+		t.Fatalf("scoping to src must still find src/main.go, got:\n%s", scoped.ForLLM)
+	}
+	if strings.Contains(scoped.ForLLM, "generated.go") {
+		t.Fatalf("scoping to src must not un-ignore what the workspace-root .gitignore prunes; "+
+			"the ancestor layer above the scope was dropped. got:\n%s", scoped.ForLLM)
+	}
+}

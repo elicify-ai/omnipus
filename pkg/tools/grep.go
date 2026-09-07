@@ -364,6 +364,8 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 			m := mounts[idx]
 			name := m.Name
 			var fsys fs.FS
+			var scopePrefix string
+			var ancestor []filegrep.AncestorIgnoreLayer
 			mr, mErr := os.OpenRoot(m.HostPath)
 			if mErr != nil {
 				fsys = unreachableRootFS{err: mErr}
@@ -371,6 +373,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 				opened = append(opened, mr)
 				anchor, confined := m.HostPath, mr.FS()
 				if rest != "" {
+					ancestor = filegrep.LoadAncestorIgnore(mr.FS(), rest)
 					sub, sErr := mr.OpenRoot(rest)
 					if sErr != nil {
 						return nil, closeAll, fmt.Errorf("path %q not found inside mount %q: %w", rest, m.Name, sErr)
@@ -378,10 +381,14 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 					opened = append(opened, sub)
 					anchor, confined = filepath.Join(m.HostPath, filepath.FromSlash(rest)), sub.FS()
 					name = m.Name + "/" + rest
+					scopePrefix = rest
 				}
 				fsys = guardCarveOuts(anchor, home, confined, policy)
 			}
-			return []filegrep.Root{{Name: name, FS: fsys}}, closeAll, nil
+			return []filegrep.Root{{
+				Name: name, FS: fsys,
+				ScopePrefix: scopePrefix, AncestorIgnore: ancestor,
+			}}, closeAll, nil
 		}
 
 		wr, wErr := os.OpenRoot(policy.WorkDir)
@@ -389,13 +396,17 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 			return nil, closeAll, fmt.Errorf("cannot open your workspace root: %w", wErr)
 		}
 		opened = append(opened, wr)
+		ancestor := filegrep.LoadAncestorIgnore(wr.FS(), scope)
 		sub, sErr := wr.OpenRoot(scope)
 		if sErr != nil {
 			return nil, closeAll, fmt.Errorf("path %q not found in your workspace: %w", scope, sErr)
 		}
 		opened = append(opened, sub)
 		anchor := filepath.Join(policy.WorkDir, filepath.FromSlash(scope))
-		return []filegrep.Root{{Name: scope, FS: guardCarveOuts(anchor, home, sub.FS(), policy)}}, closeAll, nil
+		return []filegrep.Root{{
+			Name: scope, FS: guardCarveOuts(anchor, home, sub.FS(), policy),
+			ScopePrefix: scope, AncestorIgnore: ancestor,
+		}}, closeAll, nil
 	}
 
 	wr, wErr := os.OpenRoot(policy.WorkDir)

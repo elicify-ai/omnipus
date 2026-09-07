@@ -424,7 +424,9 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		opened = append(opened, mr)
 		mfs := mr.FS()
 		_, rest, _ := strings.Cut(rel, "/")
+		var ancestor []filegrep.AncestorIgnoreLayer
 		if rest != "" {
+			ancestor = filegrep.LoadAncestorIgnore(mfs, rest)
 			sub, subErr := fs.Sub(mfs, rest)
 			if subErr != nil {
 				closeAll()
@@ -432,7 +434,10 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 			}
 			mfs = sub
 		}
-		return []filegrep.Root{{Name: rel, FS: mfs}}, closeAll, nil
+		return []filegrep.Root{{
+			Name: rel, FS: mfs,
+			ScopePrefix: rest, AncestorIgnore: ancestor,
+		}}, closeAll, nil
 	}
 
 	workDirPath, err := workspace.SafeWorkDir(homePath, workspaceID)
@@ -446,7 +451,9 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 	opened = append(opened, wr)
 	wfs := wr.FS()
 	name := rel
+	var wsAncestor []filegrep.AncestorIgnoreLayer
 	if rel != "" {
+		wsAncestor = filegrep.LoadAncestorIgnore(wfs, rel)
 		sub, subErr := fs.Sub(wfs, rel)
 		if subErr != nil {
 			closeAll()
@@ -454,7 +461,10 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		}
 		wfs = sub
 	}
-	roots := []filegrep.Root{{Name: name, FS: wfs}}
+	roots := []filegrep.Root{{
+		Name: name, FS: wfs,
+		ScopePrefix: rel, AncestorIgnore: wsAncestor,
+	}}
 
 	if rel == "" {
 		mounts, ok := workspace.LoadMounts(homePath, workspaceID)
