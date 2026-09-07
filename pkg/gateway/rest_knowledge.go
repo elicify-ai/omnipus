@@ -7,7 +7,6 @@ package gateway
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +26,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -39,8 +37,7 @@ import (
 // the operator's four read endpoints:
 //
 //	GET  /api/v1/library/{workspace_id}/knowledge          detection + identity
-//	POST /api/v1/library/{workspace_id}/knowledge/search    relevance search
-//	POST /api/v1/library/{workspace_id}/knowledge/find      human vault search (notes+records+views, rest_knowledge_find.go)
+//	POST /api/v1/library/{workspace_id}/knowledge/find      human vault search (notes+records+views+attachments, rest_knowledge_find.go — US-5/ADR-081 retired the former relevance-search endpoint here; this is the ONE surviving human search)
 //	GET  /api/v1/library/{workspace_id}/knowledge/graph     links/backlinks/…
 //	GET  /api/v1/library/{workspace_id}/knowledge/outline   heading outline
 //	GET  /api/v1/library/{workspace_id}/knowledge/view      saved-view result (rest_knowledge_view.go)
@@ -74,25 +71,18 @@ import (
 // convenient it looks.
 // ---------------------------------------------------------------------------
 
-// Rate limiting for the two expensive retrieval endpoints (FR-055's principle,
-// applied to the operator surface).
+// Rate limiting for the knowledge-base retrieval endpoints (FR-055's
+// principle, applied to the operator surface): find, graph and outline all
+// check this ONE limiter, keyed per workspace, before doing any real work.
 //
-// TWO INSTANCES, ONE POLICY, AND THE SPLIT IS DELIBERATE. The inner limiter is
-// the one pkg/knowledge's SearchTool checks for itself — that check is the
-// package's own stated guarantee and must not be disabled or bypassed. The
-// outer limiter is the one THIS layer checks, because only this layer can turn
-// a refusal into the 429 (with Retry-After) that contracts/openapi.yaml
-// documents; the tool answers with prose, which would land as a 500.
-//
-// They carry identical policy and see the same call stream keyed the same way,
-// so the outer one always reaches the ceiling first and the inner one is a
-// backstop that never fires in normal operation. Sharing ONE instance between
-// them would consume two admissions per request and silently halve the
-// configured rate — a limiter that lies about its own limit.
-var (
-	knowledgeRESTLimiter = knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{})
-	knowledgeToolLimiter = knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{})
-)
+// It used to be a pair — this outer instance plus an inner one
+// knowledge.SearchTool checked for itself, split because only this layer
+// could turn a refusal into the 429 (with Retry-After) that
+// contracts/openapi.yaml documents. US-5/ADR-081 retired the REST search
+// endpoint that was SearchTool's only caller here, so the inner instance
+// (knowledgeToolLimiter) went with it — there is no longer a second call site
+// for it to guard.
+var knowledgeRESTLimiter = knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{})
 
 // knowledgeRateKey is the bucket one caller shares. It is the WORKSPACE, not
 // the process: a runaway Library tab in one workspace must not rate-limit
@@ -148,12 +138,6 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 			return
 		}
 		a.handleKnowledgeInfo(w, r, workspaceID)
-	case "search":
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.handleKnowledgeSearch(w, r, workspaceID)
 	case "find":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -421,322 +405,6 @@ func knowledgeTemplatePath(realRoot string, m knowledge.Marker) (string, bool) {
 		return "", false
 	}
 	return filepath.ToSlash(rel), true
-}
-
-// ---------------------------------------------------------------------------
-// POST /library/{workspace_id}/knowledge/search
-// ---------------------------------------------------------------------------
-
-// knowledgeToolSearchPayload decodes what knowledge.SearchTool.Execute produced.
-//
-// WHY THE SEARCH ENDPOINT GOES THROUGH THE TOOL AT ALL. FR-050 requires every
-// hit to carry path, TITLE and a matched EXCERPT, and FR-050a requires that
-// excerpt to be re-read from the file at query time under a shared budget, with
-// a machine-readable reason whenever it could not be. All of that machinery —
-// excerptAt, titleFor, the containment re-check on every hit path — is
-// unexported inside pkg/knowledge and is reachable only through the tool. The
-// alternative was a second copy of it here, which is exactly what this file
-// says it will not do. One search implementation, one honesty layer, one
-// excerpt budget, for the agent and the operator alike.
-type knowledgeToolSearchPayload struct { // not-wire-format: decodes the in-process JSON of a tool result produced and consumed inside this one binary; it never crosses the gateway/SPA boundary — the response that does is the generated gen.KnowledgeSearchResponse built from it below
-	Results []struct {
-		Path               string  `json:"path"`
-		Title              string  `json:"title"`
-		Kind               string  `json:"kind"`
-		Score              float64 `json:"score"`
-		Excerpt            string  `json:"excerpt"`
-		ExcerptUnavailable string  `json:"excerpt_unavailable"`
-	} `json:"results"`
-	Report struct {
-		Complete      bool   `json:"complete"`
-		Indeterminate bool   `json:"indeterminate"`
-		Found         int    `json:"found"`
-		Indexed       int    `json:"indexed"`
-		Total         int    `json:"total"`
-		Statement     string `json:"statement"`
-	} `json:"report"`
-	IndexState string `json:"index_state"`
-}
-
-func (a *restAPI) handleKnowledgeSearch(w http.ResponseWriter, r *http.Request, workspaceID string) {
-	var req gen.KnowledgeSearchRequest
-	if !decodeAndValidate(w, r, "KnowledgeSearchRequest", &req, a.agentLoop.GetConfig().Gateway.ValidateInbound) {
-		return
-	}
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
-		jsonErr(w, http.StatusBadRequest, "query is required")
-		return
-	}
-	if strings.TrimSpace(req.CollectionId) == "" {
-		jsonErr(w, http.StatusBadRequest, "collection_id is required")
-		return
-	}
-
-	// FR-037: a limit above the cap is CLAMPED and the clamp is REPORTED —
-	// never rejected, never silently applied.
-	requested := knowledge.SearchDefaultTopN
-	if req.Limit != nil && *req.Limit > 0 {
-		requested = *req.Limit
-	}
-	applied := requested
-	clamped := false
-	if applied > knowledge.SearchMaxTopN {
-		applied = knowledge.SearchMaxTopN
-		clamped = true
-	}
-	offset := 0
-	if req.Offset != nil && *req.Offset > 0 {
-		offset = *req.Offset
-	}
-
-	// US-9/FR-053: out of scope is an EMPTY ANSWER, not an error. Resolved
-	// BEFORE the rate limiter so that probing for another workspace's
-	// collections cannot be distinguished by timing a 429 either.
-	col, inScope := a.resolveScopedCollection(workspaceID, req.CollectionId)
-	if !inScope {
-		jsonOK(w, knowledgeEmptySearchResponse(req.CollectionId, requested, applied, clamped))
-		return
-	}
-
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
-		return
-	}
-
-	// How many hits to ask the index for.
-	//
-	// Two REST-only concerns are folded in here, and neither may reach the
-	// package's own clamp reporting: `offset` pages through an answer the
-	// package has no notion of, and `kinds` filters one it produced. Both are
-	// applied to a WIDER fetch so that a filtered or paged view is still the
-	// real ranking rather than the leftovers of a narrower one — the same
-	// reason SearchOptions.Folder is applied before the clamp and not after.
-	// The fetch never exceeds the cap, so the package never reports a clamp of
-	// its own and the clamp on the response is unambiguously the CALLER's.
-	fetch := applied + offset
-	if len(knowledgeRequestedKinds(req.Kinds)) > 0 {
-		fetch = knowledge.SearchMaxTopN
-	}
-	if fetch > knowledge.SearchMaxTopN {
-		fetch = knowledge.SearchMaxTopN
-	}
-
-	tool := knowledgeSearchTool(a.homePath)
-	if tool == nil {
-		logger.ErrorCF("rest", "knowledge: search tool not registered", map[string]any{"workspace_id": workspaceID})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	ctx := tools.WithAgentID(
-		tools.WithWorkspaceID(r.Context(), workspaceID),
-		knowledgeRateKey(workspaceID),
-	)
-	res := tool.Execute(ctx, map[string]any{
-		// The collection is named by its RESOLVED ROOT, which Scope.Select
-		// matches only against collections already in this workspace's scope.
-		// The caller's own collection_id never reaches the tool.
-		"collection": col.Root,
-		"query":      query,
-		"top_n":      fetch,
-	})
-	if res == nil || res.IsError {
-		detail := "no result"
-		if res != nil {
-			detail = res.ForLLM
-		}
-		logger.ErrorCF("rest", "knowledge: search failed",
-			map[string]any{"workspace_id": workspaceID, "error": detail})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	var payload knowledgeToolSearchPayload
-	if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
-		logger.ErrorCF("rest", "knowledge: decode search result",
-			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	resp := knowledgeEmptySearchResponse(req.CollectionId, requested, applied, clamped)
-	kinds := knowledgeRequestedKinds(req.Kinds)
-	skipped := 0
-	for _, hit := range payload.Results {
-		kind := gen.KnowledgeSearchHitKindNote
-		if hit.Kind == string(knowledge.ScanKindAttachment) {
-			kind = gen.KnowledgeSearchHitKindAttachment
-		}
-		if len(kinds) > 0 {
-			if _, want := kinds[kind]; !want {
-				continue
-			}
-		}
-		if skipped < offset {
-			skipped++
-			continue
-		}
-		if len(resp.Hits) >= applied {
-			break
-		}
-		resp.Hits = append(resp.Hits, knowledgeSearchHit(hit.Path, hit.Title, hit.Excerpt, hit.ExcerptUnavailable, kind, hit.Score))
-	}
-
-	// FR-035: the statement travels in the SAME payload as the results, and it
-	// is composed here rather than by the client so a partial answer can never
-	// be phrased as a whole one.
-	resp.Incompleteness.Complete = payload.Report.Complete && payload.IndexState == "ready"
-	resp.Incompleteness.TotalKnown = !payload.Report.Indeterminate && payload.IndexState == "ready"
-	switch {
-	case payload.Report.Indeterminate:
-		// FR-036: the tree is still being walked. Report the running count and
-		// NO denominator — a ratio invented here is the confidently-wrong
-		// answer the whole requirement exists to prevent.
-		found := int64(payload.Report.Found)
-		resp.Incompleteness.IndexedFiles = &found
-	case !resp.Incompleteness.Complete && payload.Report.Total > 0:
-		indexed := int64(payload.Report.Indexed)
-		total := int64(payload.Report.Total)
-		resp.Incompleteness.IndexedFiles = &indexed
-		resp.Incompleteness.TotalFiles = &total
-	}
-	resp.Incompleteness.Statement = knowledgeStatement(payload, clamped, requested)
-
-	jsonOK(w, resp)
-}
-
-// knowledgeSearchHit builds one wire hit.
-//
-// The excerpt and its absence are a matched pair, with NO carve-out: a hit
-// carries an excerpt, or it carries the machine-readable reason there is none
-// (FR-050a a). That invariant used to have a hole exactly where it was least
-// defensible — an ATTACHMENT, whose contents are never opened for any reason
-// (FR-039a) and which therefore has no body excerpt by construction. The
-// contract's enum had no member for it, so the reason pkg/knowledge already
-// emitted ("attachment_not_read") was dropped here and the hit reached the SPA
-// with neither field: no quote, and no word about why. FR-050a(a)'s amendment
-// added the member; this function no longer drops it.
-func knowledgeSearchHit(relPath, title, excerpt, unavailable string, kind gen.KnowledgeSearchHitKind, score float64) gen.KnowledgeSearchHit {
-	out := gen.KnowledgeSearchHit{Kind: kind, Path: relPath, Score: score, Title: title}
-	if excerpt != "" {
-		e := excerpt
-		out.Excerpt = &e
-		return out
-	}
-	if reason, ok := knowledgeExcerptReason(unavailable); ok {
-		out.ExcerptUnavailable = &reason
-	}
-	return out
-}
-
-// knowledgeExcerptReason maps pkg/knowledge's reason onto the contract's enum.
-//
-// The two vocabularies are not identical and the differences are stated rather
-// than papered over:
-//
-//   - match_not_found → match_moved. Same fact under two names: the note
-//     matched when it was indexed, the term is not there now.
-//   - path_not_contained → file_unreadable. The indexed path no longer resolves
-//     inside the collection, so nothing was opened. "file_unreadable" is the
-//     only value in the contract's enum that does not assert something untrue
-//     about it; "file_missing" would, since the file is very much there.
-//   - attachment_not_read → attachment_not_read. Passed through verbatim now
-//     that the contract has the member (FR-050a a). It is NOT a failure and
-//     must not be worded as one: nothing went wrong, nothing was even tried —
-//     an attachment is matched on its name and path and its bytes are never
-//     opened (FR-039a).
-func knowledgeExcerptReason(reason string) (gen.KnowledgeSearchHitExcerptUnavailable, bool) {
-	switch knowledge.ExcerptReason(reason) {
-	case knowledge.ExcerptFileMissing:
-		return gen.KnowledgeSearchHitExcerptUnavailableFileMissing, true
-	case knowledge.ExcerptFileUnreadable, knowledge.ExcerptNotContained:
-		return gen.KnowledgeSearchHitExcerptUnavailableFileUnreadable, true
-	case knowledge.ExcerptMatchNotFound:
-		return gen.KnowledgeSearchHitExcerptUnavailableMatchMoved, true
-	case knowledge.ExcerptBudgetExhausted:
-		return gen.KnowledgeSearchHitExcerptUnavailableBudgetExhausted, true
-	case knowledge.ExcerptAttachment:
-		return gen.KnowledgeSearchHitExcerptUnavailableAttachmentNotRead, true
-	default:
-		return "", false
-	}
-}
-
-// knowledgeStatement writes the sentence that rides beside the results.
-//
-// It is never empty — the contract requires the field, and "absent" would be
-// ambiguous between "complete" and "the server forgot". A finished index still
-// says so in words; US-6 AS-4's "no incompleteness statement is shown" is the
-// CLIENT's rendering decision, taken from incompleteness.complete.
-func knowledgeStatement(payload knowledgeToolSearchPayload, clamped bool, requested int) string {
-	parts := make([]string, 0, 2)
-	switch {
-	case payload.IndexState == "not_built":
-		parts = append(parts,
-			"This knowledge base has not been indexed yet, so these results cover none of it. "+
-				"Indexing runs on mount and on a schedule.")
-	case payload.Report.Statement != "":
-		parts = append(parts, payload.Report.Statement)
-	default:
-		parts = append(parts, "Searched the whole of this knowledge base; its index was complete at query time.")
-	}
-	if clamped {
-		parts = append(parts, fmt.Sprintf(
-			"The requested result count of %d was clamped to the maximum of %d.",
-			requested, knowledge.SearchMaxTopN))
-	}
-	return strings.Join(parts, " ")
-}
-
-// knowledgeEmptySearchResponse is the zero answer: no hits, and an
-// incompleteness object that still says something true.
-//
-// It is what an out-of-scope collection_id returns (FR-053) — complete, because
-// the empty set IS the whole of what this workspace may see — and the base
-// every populated answer is built on, so a field can never be forgotten on one
-// path and set on the other.
-func knowledgeEmptySearchResponse(collectionID string, requested, applied int, clamped bool) gen.KnowledgeSearchResponse {
-	resp := gen.KnowledgeSearchResponse{
-		CollectionId: collectionID,
-		LimitApplied: applied,
-		LimitClamped: clamped,
-	}
-	// An EMPTY ARRAY, never null. The contract says "always present — an empty
-	// array, never null — so a client may map over it without a nil check",
-	// and a nil Go slice marshals to null, which is a different answer.
-	resp.Hits = []gen.KnowledgeSearchHit{}
-	resp.Incompleteness.Complete = true
-	resp.Incompleteness.TotalKnown = true
-	resp.Incompleteness.Statement = "No knowledge base with that identifier is available in this workspace."
-	if clamped {
-		resp.LimitRequested = &requested
-	}
-	return resp
-}
-
-// knowledgeRequestedKinds turns the optional kinds filter into a set.
-func knowledgeRequestedKinds(kinds *[]gen.KnowledgeSearchRequestKinds) map[gen.KnowledgeSearchHitKind]struct{} {
-	if kinds == nil || len(*kinds) == 0 {
-		return nil
-	}
-	out := make(map[gen.KnowledgeSearchHitKind]struct{}, len(*kinds))
-	for _, k := range *kinds {
-		out[gen.KnowledgeSearchHitKind(k)] = struct{}{}
-	}
-	return out
-}
-
-// knowledgeSearchTool builds the retrieval tool this endpoint delegates to.
-//
-// It is looked up BY NAME out of knowledge.RetrievalTools rather than by
-// position, so a future third tool inserted ahead of it cannot silently turn
-// this endpoint into something else.
-func knowledgeSearchTool(home string) tools.Tool {
-	for _, t := range knowledge.RetrievalTools(knowledge.ToolDeps{Home: home, RateLimiter: knowledgeToolLimiter}) {
-		if t.Name() == "knowledge_search" {
-			return t
-		}
-	}
-	return nil
 }
 
 // allowKnowledgeRetrieval admits one retrieval call, or writes the 429 itself.

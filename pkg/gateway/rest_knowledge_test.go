@@ -6,18 +6,20 @@
 // docs/internal/specs/adr-067-knowledge-base-and-preview-spec.md §6 (US-4…
 // US-11) and §14 (FR-030…FR-055).
 //
-// The load-bearing one is TestKnowledgeSearch_WorkspaceAIsolatedFromB_US9: it
-// is the P0, and it carries its own anti-vacuity half — workspace B searching
-// the SAME collection id for the SAME phrase must find the note, or "zero
-// results in A" would pass with search broken entirely.
+// The load-bearing one is TestKnowledgeGraph_OtherWorkspaceNotAddressable_US9AS2:
+// it is the P0 for this file, and it carries its own anti-vacuity half — the
+// owning workspace's own graph query, over the SAME collection id, must find
+// the real edge, or "zero results in the other workspace" would pass with the
+// endpoint broken entirely. The human vault-search endpoint's own workspace
+// isolation (US-9) is covered in rest_knowledge_find_test.go
+// (TestVaultSearch_OutOfScopeCollectionIsEmptyNotError); the retired
+// /knowledge/search REST endpoint's isolation test (ADR-081/US-5) went with it.
 
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,18 +85,6 @@ func knowledgeGet(t *testing.T, api *restAPI, target string) *httptest.ResponseR
 	// the one edit this unit made outside its own files, so every test drives
 	// the real dispatch rather than assuming it.
 	api.HandleLibraryTree(w, httptest.NewRequest(http.MethodGet, target, nil))
-	return w
-}
-
-func knowledgeSearchPost(t *testing.T, api *restAPI, workspaceID string, body map[string]any) *httptest.ResponseRecorder {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost,
-		"/api/v1/library/"+workspaceID+"/knowledge/search", bytes.NewReader(raw))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleLibraryTree(w, r)
 	return w
 }
 
@@ -219,62 +209,6 @@ func TestKnowledgeInfo_UndecidableFoldersFailLoudly_E9(t *testing.T) {
 
 // --- US-9 (P0): workspace isolation -----------------------------------------
 
-// TestKnowledgeSearch_WorkspaceAIsolatedFromB_US9 is the P0 requirement.
-//
-// A knowledge base exists only in workspace B and contains a phrase that
-// appears nowhere else. An agent in workspace A, given B's own collection id,
-// must receive ZERO results — and not a permission error, because a 403 would
-// confirm the collection exists, which is itself the disclosure (FR-053).
-//
-// The second half is what stops this test passing vacuously: workspace B, with
-// the same id and the same query, must FIND the note. Without it, a search that
-// returned nothing to everybody would look like isolation.
-func TestKnowledgeSearch_WorkspaceAIsolatedFromB_US9(t *testing.T) {
-	api, wsA := buildLibraryTestAPI(t)
-	wsB := seedLibraryWorkspace(t, api, "Workspace B")
-
-	vaultB := filepath.Join(workDir(api, wsB), "vault")
-	makeKnowledgeBase(t, vaultB, "B's vault")
-	writeNote(t, vaultB, "secret.md", "# Secret\n\nThe passphrase is zarquon-seven, do not share it.\n")
-	indexKnowledgeBase(t, api.homePath, vaultB)
-
-	// Workspace A has a knowledge base of its own, so "A finds nothing" cannot
-	// be explained by A having no knowledge bases at all.
-	vaultA := filepath.Join(workDir(api, wsA), "vault")
-	makeKnowledgeBase(t, vaultA, "A's vault")
-	writeNote(t, vaultA, "own.md", "# Own\n\nNothing of interest here.\n")
-	indexKnowledgeBase(t, api.homePath, vaultA)
-
-	idB := collectionIDOf(t, api, wsB, "vault")
-
-	t.Run("workspace B finds it", func(t *testing.T) {
-		w := knowledgeSearchPost(t, api, wsB, map[string]any{
-			"query": "zarquon-seven", "collection_id": idB,
-		})
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		resp := decodeJSON[gen.KnowledgeSearchResponse](t, w)
-		require.Len(t, resp.Hits, 1, "the owning workspace must be able to find its own note")
-		assert.Equal(t, "secret.md", resp.Hits[0].Path)
-	})
-
-	t.Run("workspace A finds nothing and is not told why", func(t *testing.T) {
-		w := knowledgeSearchPost(t, api, wsA, map[string]any{
-			"query": "zarquon-seven", "collection_id": idB,
-		})
-		require.Equal(t, http.StatusOK, w.Code,
-			"an out-of-scope collection is an empty answer, never a permission error")
-		resp := decodeJSON[gen.KnowledgeSearchResponse](t, w)
-		assert.Empty(t, resp.Hits, "workspace A must not see workspace B's note")
-		assert.True(t, resp.Incompleteness.Complete,
-			"the empty set IS the whole of what this workspace may see")
-		assert.Contains(t, w.Body.String(), `"hits":[]`,
-			"hits is always an array, never null — the client maps over it without a nil check")
-		assert.NotEmpty(t, resp.Incompleteness.Statement)
-		assert.NotContains(t, w.Body.String(), "secret.md")
-		assert.NotContains(t, w.Body.String(), "zarquon")
-	})
-}
-
 // TestKnowledgeGraph_OtherWorkspaceNotAddressable_US9AS2 — the same boundary on
 // the graph endpoint: another workspace's knowledge base is not addressable at
 // all, and asking produces an empty graph rather than an error.
@@ -300,150 +234,6 @@ func TestKnowledgeGraph_OtherWorkspaceNotAddressable_US9AS2(t *testing.T) {
 	assert.Empty(t, other.Nodes)
 	assert.NotNil(t, other.Skipped, "skipped is always an array, never null")
 	assert.NotContains(t, wA.Body.String(), "index.md")
-}
-
-// --- US-6 / US-8: search honesty --------------------------------------------
-
-// TestKnowledgeSearch_CompleteIndexAnswersWithTitleAndExcerpt_FR050 — a
-// finished index returns ranked hits carrying path, title and a matched
-// excerpt, and says the answer is complete.
-func TestKnowledgeSearch_CompleteIndexAnswersWithTitleAndExcerpt_FR050(t *testing.T) {
-	api, ws := buildLibraryTestAPI(t)
-	vault := filepath.Join(workDir(api, ws), "vault")
-	makeKnowledgeBase(t, vault, "Vault")
-	writeNote(t, vault, "architecture/sandboxing.md",
-		"# Sandboxing\n\nLandlock is per-thread and inherited, so the gateway is confined too.\n")
-	writeNote(t, vault, "unrelated.md", "# Unrelated\n\nGardening notes.\n")
-	indexKnowledgeBase(t, api.homePath, vault)
-
-	w := knowledgeSearchPost(t, api, ws, map[string]any{
-		"query": "landlock", "collection_id": collectionIDOf(t, api, ws, "vault"),
-	})
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	resp := decodeJSON[gen.KnowledgeSearchResponse](t, w)
-
-	require.Len(t, resp.Hits, 1)
-	hit := resp.Hits[0]
-	assert.Equal(t, "architecture/sandboxing.md", hit.Path)
-	assert.Equal(t, "Sandboxing", hit.Title, "the title is the note's first heading, not its filename")
-	assert.Equal(t, gen.KnowledgeSearchHitKindNote, hit.Kind)
-	require.NotNil(t, hit.Excerpt, "FR-050 requires a matched excerpt")
-	assert.Contains(t, *hit.Excerpt, "Landlock")
-	assert.Nil(t, hit.ExcerptUnavailable, "excerpt_unavailable accompanies an ABSENT excerpt only")
-
-	assert.True(t, resp.Incompleteness.Complete)
-	assert.True(t, resp.Incompleteness.TotalKnown)
-	assert.NotEmpty(t, resp.Incompleteness.Statement, "the statement is required, never absent")
-	assert.Equal(t, knowledge.SearchDefaultTopN, resp.LimitApplied)
-	assert.False(t, resp.LimitClamped)
-	assert.Nil(t, resp.LimitRequested, "limit_requested is present only when the limit was clamped")
-}
-
-// TestKnowledgeSearch_NeverIndexedIsNotAConfidentZero_US6 — a knowledge base
-// nobody has indexed yet returns no hits, and MUST NOT describe that as the
-// complete answer. "0 results" and "we have not read your notes yet" are
-// different statements and the caller has to be able to tell them apart.
-func TestKnowledgeSearch_NeverIndexedIsNotAConfidentZero_US6(t *testing.T) {
-	api, ws := buildLibraryTestAPI(t)
-	vault := filepath.Join(workDir(api, ws), "vault")
-	makeKnowledgeBase(t, vault, "Vault")
-	writeNote(t, vault, "note.md", "# Note\n\nzarquon-seven\n")
-	// Deliberately NOT indexed.
-
-	w := knowledgeSearchPost(t, api, ws, map[string]any{
-		"query": "zarquon-seven", "collection_id": collectionIDOf(t, api, ws, "vault"),
-	})
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	resp := decodeJSON[gen.KnowledgeSearchResponse](t, w)
-
-	assert.Empty(t, resp.Hits)
-	assert.False(t, resp.Incompleteness.Complete,
-		"an unindexed collection must never report a complete answer")
-	assert.False(t, resp.Incompleteness.TotalKnown,
-		"nothing has been enumerated, so no total is known")
-	assert.Nil(t, resp.Incompleteness.TotalFiles,
-		"FR-036: no denominator may be invented when the total is unknown")
-	assert.Contains(t, resp.Incompleteness.Statement, "not been indexed")
-}
-
-// TestKnowledgeSearch_LimitAboveCapIsClampedAndReported_FR037 — a requested
-// count above the server cap is CLAMPED, not rejected, and the clamping is
-// reported rather than silently applied (US-8 AS-3).
-func TestKnowledgeSearch_LimitAboveCapIsClampedAndReported_FR037(t *testing.T) {
-	api, ws := buildLibraryTestAPI(t)
-	vault := filepath.Join(workDir(api, ws), "vault")
-	makeKnowledgeBase(t, vault, "Vault")
-	writeNote(t, vault, "note.md", "# Note\n\nlandlock\n")
-	indexKnowledgeBase(t, api.homePath, vault)
-
-	const asked = 400
-	w := knowledgeSearchPost(t, api, ws, map[string]any{
-		"query": "landlock", "collection_id": collectionIDOf(t, api, ws, "vault"), "limit": asked,
-	})
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	resp := decodeJSON[gen.KnowledgeSearchResponse](t, w)
-
-	assert.True(t, resp.LimitClamped, "the clamp is reported, never silent")
-	assert.Equal(t, knowledge.SearchMaxTopN, resp.LimitApplied)
-	require.NotNil(t, resp.LimitRequested)
-	assert.Equal(t, asked, *resp.LimitRequested, "the caller can see exactly what was refused")
-	assert.Contains(t, resp.Incompleteness.Statement, fmt.Sprintf("%d", asked))
-	assert.Contains(t, resp.Incompleteness.Statement, fmt.Sprintf("%d", knowledge.SearchMaxTopN))
-}
-
-// TestKnowledgeSearch_RejectsIncompleteRequests — the two required fields.
-func TestKnowledgeSearch_RejectsIncompleteRequests(t *testing.T) {
-	api, ws := buildLibraryTestAPI(t)
-	for name, body := range map[string]map[string]any{
-		"no query":         {"query": "  ", "collection_id": "kb_whatever"},
-		"no collection_id": {"query": "anything", "collection_id": ""},
-	} {
-		t.Run(name, func(t *testing.T) {
-			w := knowledgeSearchPost(t, api, ws, body)
-			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-		})
-	}
-}
-
-// TestKnowledgeSearch_InboundSchemaValidationPath_FR080 — with
-// gateway.validate_inbound on (the production-hardening posture), the request
-// body is checked against the CONTRACT's own KnowledgeSearchRequest schema
-// before it is decoded.
-//
-// This covers the path every other test in this file skips: the default test
-// config leaves validation off, so a schema name that does not resolve would
-// 500 in production and pass here forever. The valid half proves the schema is
-// embedded and compiles; the invalid half proves a bad body is a 400 that names
-// the schema, not a 500.
-func TestKnowledgeSearch_InboundSchemaValidationPath_FR080(t *testing.T) {
-	api, ws := buildLibraryTestAPI(t)
-	api.agentLoop.GetConfig().Gateway.ValidateInbound = true
-
-	vault := filepath.Join(workDir(api, ws), "vault")
-	makeKnowledgeBase(t, vault, "Vault")
-	writeNote(t, vault, "note.md", "# Note\n\nlandlock\n")
-	indexKnowledgeBase(t, api.homePath, vault)
-	id := collectionIDOf(t, api, ws, "vault")
-
-	t.Run("a contract-valid body is served", func(t *testing.T) {
-		w := knowledgeSearchPost(t, api, ws, map[string]any{"query": "landlock", "collection_id": id})
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		assert.Len(t, decodeJSON[gen.KnowledgeSearchResponse](t, w).Hits, 1)
-	})
-
-	t.Run("a contract-invalid body is refused with 400", func(t *testing.T) {
-		// limit has minimum 1 in the schema, and the schema is closed
-		// (additionalProperties: false), so both of these are refusals.
-		for _, body := range []map[string]any{
-			{"query": "landlock", "collection_id": id, "limit": 0},
-			{"query": "landlock", "collection_id": id, "not_a_field": true},
-		} {
-			w := knowledgeSearchPost(t, api, ws, body)
-			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-			assert.Contains(t, w.Body.String(), "KnowledgeSearchRequest",
-				"the refusal names the schema that refused it")
-		}
-	})
 }
 
 // --- US-7 / US-8 / US-10: the graph -----------------------------------------

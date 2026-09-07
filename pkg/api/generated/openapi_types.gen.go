@@ -2699,114 +2699,6 @@ func (e KnowledgeMountConflictErrorCode) Valid() bool {
 	}
 }
 
-// Defines values for KnowledgeSearchHitExcerptUnavailable.
-const (
-	KnowledgeSearchHitExcerptUnavailableAttachmentNotRead KnowledgeSearchHitExcerptUnavailable = "attachment_not_read"
-	KnowledgeSearchHitExcerptUnavailableBudgetExhausted   KnowledgeSearchHitExcerptUnavailable = "budget_exhausted"
-	KnowledgeSearchHitExcerptUnavailableFileMissing       KnowledgeSearchHitExcerptUnavailable = "file_missing"
-	KnowledgeSearchHitExcerptUnavailableFileUnreadable    KnowledgeSearchHitExcerptUnavailable = "file_unreadable"
-	KnowledgeSearchHitExcerptUnavailableMatchMoved        KnowledgeSearchHitExcerptUnavailable = "match_moved"
-)
-
-// Valid indicates whether the value is a known member of the KnowledgeSearchHitExcerptUnavailable enum.
-func (e KnowledgeSearchHitExcerptUnavailable) Valid() bool {
-	switch e {
-	case KnowledgeSearchHitExcerptUnavailableAttachmentNotRead:
-		return true
-	case KnowledgeSearchHitExcerptUnavailableBudgetExhausted:
-		return true
-	case KnowledgeSearchHitExcerptUnavailableFileMissing:
-		return true
-	case KnowledgeSearchHitExcerptUnavailableFileUnreadable:
-		return true
-	case KnowledgeSearchHitExcerptUnavailableMatchMoved:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for KnowledgeSearchHitKind.
-const (
-	KnowledgeSearchHitKindAttachment KnowledgeSearchHitKind = "attachment"
-	KnowledgeSearchHitKindNote       KnowledgeSearchHitKind = "note"
-)
-
-// Valid indicates whether the value is a known member of the KnowledgeSearchHitKind enum.
-func (e KnowledgeSearchHitKind) Valid() bool {
-	switch e {
-	case KnowledgeSearchHitKindAttachment:
-		return true
-	case KnowledgeSearchHitKindNote:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for KnowledgeSearchRequestKinds.
-const (
-	KnowledgeSearchRequestKindsAttachment KnowledgeSearchRequestKinds = "attachment"
-	KnowledgeSearchRequestKindsNote       KnowledgeSearchRequestKinds = "note"
-)
-
-// Valid indicates whether the value is a known member of the KnowledgeSearchRequestKinds enum.
-func (e KnowledgeSearchRequestKinds) Valid() bool {
-	switch e {
-	case KnowledgeSearchRequestKindsAttachment:
-		return true
-	case KnowledgeSearchRequestKindsNote:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for KnowledgeSearchResponseHitsExcerptUnavailable.
-const (
-	KnowledgeSearchResponseHitsExcerptUnavailableAttachmentNotRead KnowledgeSearchResponseHitsExcerptUnavailable = "attachment_not_read"
-	KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted   KnowledgeSearchResponseHitsExcerptUnavailable = "budget_exhausted"
-	KnowledgeSearchResponseHitsExcerptUnavailableFileMissing       KnowledgeSearchResponseHitsExcerptUnavailable = "file_missing"
-	KnowledgeSearchResponseHitsExcerptUnavailableFileUnreadable    KnowledgeSearchResponseHitsExcerptUnavailable = "file_unreadable"
-	KnowledgeSearchResponseHitsExcerptUnavailableMatchMoved        KnowledgeSearchResponseHitsExcerptUnavailable = "match_moved"
-)
-
-// Valid indicates whether the value is a known member of the KnowledgeSearchResponseHitsExcerptUnavailable enum.
-func (e KnowledgeSearchResponseHitsExcerptUnavailable) Valid() bool {
-	switch e {
-	case KnowledgeSearchResponseHitsExcerptUnavailableAttachmentNotRead:
-		return true
-	case KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted:
-		return true
-	case KnowledgeSearchResponseHitsExcerptUnavailableFileMissing:
-		return true
-	case KnowledgeSearchResponseHitsExcerptUnavailableFileUnreadable:
-		return true
-	case KnowledgeSearchResponseHitsExcerptUnavailableMatchMoved:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for KnowledgeSearchResponseHitsKind.
-const (
-	KnowledgeSearchResponseHitsKindAttachment KnowledgeSearchResponseHitsKind = "attachment"
-	KnowledgeSearchResponseHitsKindNote       KnowledgeSearchResponseHitsKind = "note"
-)
-
-// Valid indicates whether the value is a known member of the KnowledgeSearchResponseHitsKind enum.
-func (e KnowledgeSearchResponseHitsKind) Valid() bool {
-	switch e {
-	case KnowledgeSearchResponseHitsKindAttachment:
-		return true
-	case KnowledgeSearchResponseHitsKindNote:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for LibraryInlineDispositionDisposition.
 const (
 	LibraryInlineDispositionDispositionAttachment LibraryInlineDispositionDisposition = "attachment"
@@ -8551,19 +8443,19 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 
 // Defines values for ListCommandsParamsSurface.
 const (
-	ListCommandsParamsSurfaceChannel ListCommandsParamsSurface = "channel"
-	ListCommandsParamsSurfaceCli     ListCommandsParamsSurface = "cli"
-	ListCommandsParamsSurfaceWeb     ListCommandsParamsSurface = "web"
+	Channel ListCommandsParamsSurface = "channel"
+	Cli     ListCommandsParamsSurface = "cli"
+	Web     ListCommandsParamsSurface = "web"
 )
 
 // Valid indicates whether the value is a known member of the ListCommandsParamsSurface enum.
 func (e ListCommandsParamsSurface) Valid() bool {
 	switch e {
-	case ListCommandsParamsSurfaceChannel:
+	case Channel:
 		return true
-	case ListCommandsParamsSurfaceCli:
+	case Cli:
 		return true
-	case ListCommandsParamsSurfaceWeb:
+	case Web:
 		return true
 	default:
 		return false
@@ -12304,110 +12196,6 @@ type KnowledgeOutlineHeading struct {
 	// Text Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
 	Text string `json:"text"`
 }
-
-// KnowledgeSearchHit One relevance hit from a knowledge-base search (FR-050). Carries path, title and a matched excerpt.
-// A note larger than the segment size is indexed as several consecutive index documents (FR-034a) — no note is ever refused, skipped or truncated. Hits from several segments of one note COLLAPSE INTO ONE hit here, scored by its best segment, so a caller never has to de-duplicate by path.
-type KnowledgeSearchHit struct {
-	// ByteOffset ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
-	ByteOffset *int64 `json:"byte_offset,omitempty"`
-
-	// Excerpt Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
-	Excerpt *string `json:"excerpt,omitempty"`
-
-	// ExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
-	// "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
-	ExcerptUnavailable *KnowledgeSearchHitExcerptUnavailable `json:"excerpt_unavailable,omitempty"`
-
-	// Kind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
-	Kind KnowledgeSearchHitKind `json:"kind"`
-
-	// Path Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
-	Path string `json:"path"`
-
-	// Score Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
-	Score float64 `json:"score"`
-
-	// Title Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
-	Title string `json:"title"`
-}
-
-// KnowledgeSearchHitExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
-// "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
-type KnowledgeSearchHitExcerptUnavailable string
-
-// KnowledgeSearchHitKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
-type KnowledgeSearchHitKind string
-
-// KnowledgeSearchIncompleteness The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
-// Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
-type KnowledgeSearchIncompleteness struct {
-	// Complete True when the index covered the whole collection at query time, so these results are the whole answer.
-	Complete bool `json:"complete"`
-
-	// IndexedFiles Files indexed and therefore searchable at query time.
-	IndexedFiles *int64 `json:"indexed_files,omitempty"`
-
-	// Statement Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
-	Statement string `json:"statement"`
-
-	// TotalFiles Total files in the collection. Present only when total_known is true.
-	TotalFiles *int64 `json:"total_files,omitempty"`
-
-	// TotalKnown False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
-	TotalKnown bool `json:"total_known"`
-}
-
-// KnowledgeSearchRequest Request body for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Relevance search over one knowledge base's index.
-// Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace (FR-052), and a collection outside that scope yields an EMPTY result set rather than a permission error (FR-053) — so a caller can never use the error channel to probe for collections it may not see.
-type KnowledgeSearchRequest struct {
-	// CollectionId The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections (FR-026).
-	CollectionId string `json:"collection_id"`
-
-	// Kinds Restrict hits to these entry kinds. Omitted means both. Attachments are indexed by FILENAME AND PATH ONLY — their contents are never opened (FR-039a) — so an attachment hit never carries a body excerpt.
-	Kinds *[]KnowledgeSearchRequestKinds `json:"kinds,omitempty"`
-
-	// Limit Maximum hits to return. A value above the server cap is CLAMPED, not rejected, and the clamp is reported on the response (limit_clamped / limit_applied, FR-037).
-	Limit *int `json:"limit,omitempty"`
-
-	// Offset Number of hits to skip, for paging through a large result set.
-	Offset *int `json:"offset,omitempty"`
-
-	// Query Free-text relevance query.
-	Query string `json:"query"`
-}
-
-// KnowledgeSearchRequestKinds defines model for KnowledgeSearchRequest.Kinds.
-type KnowledgeSearchRequestKinds string
-
-// KnowledgeSearchResponse Response for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Hits plus the incompleteness statement, in the SAME response (FR-035) — a caller cannot obtain results without also obtaining the statement qualifying them.
-// A collection outside the caller's workspace scope yields hits: [] with incompleteness.complete = true, not an error (FR-053).
-type KnowledgeSearchResponse struct {
-	// CollectionId The collection these hits came from, echoed from the request.
-	CollectionId string `json:"collection_id"`
-
-	// Hits Matched entries, best-scored first. Always present — an empty array, never null — so a client may map over it without a nil check.
-	Hits []KnowledgeSearchHit `json:"hits"`
-
-	// Incompleteness The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
-	// Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
-	Incompleteness KnowledgeSearchIncompleteness `json:"incompleteness"`
-
-	// LimitApplied The result cap actually used for this query.
-	LimitApplied int `json:"limit_applied"`
-
-	// LimitClamped True when the requested limit exceeded the server cap and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-037).
-	LimitClamped bool `json:"limit_clamped"`
-
-	// LimitRequested The limit the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
-	LimitRequested *int `json:"limit_requested,omitempty"`
-}
-
-// KnowledgeSearchResponseHitsExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
-// "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
-type KnowledgeSearchResponseHitsExcerptUnavailable string
-
-// KnowledgeSearchResponseHitsKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
-type KnowledgeSearchResponseHitsKind string
 
 // LibraryBinaryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content-binary. Writes BINARY content to a file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. The sibling of LibraryContentRequest/PUT .../content, which is UTF-8 text only — a filled PDF or other binary attachment written through that route would corrupt, because its content field is a `string` decoded as UTF-8 text before being written as `[]byte(req.Content)`. This route instead carries the raw bytes as standard base64, so any byte sequence survives the JSON transport unmodified. The path's parent directory must already exist within the workspace's work tree.
 type LibraryBinaryContentRequest struct {
@@ -19960,9 +19748,6 @@ type SearchFilesJSONRequestBody = FileSearchRequest
 
 // FindVaultJSONRequestBody defines body for FindVault for application/json ContentType.
 type FindVaultJSONRequestBody = VaultSearchRequest
-
-// SearchKnowledgeBaseJSONRequestBody defines body for SearchKnowledgeBase for application/json ContentType.
-type SearchKnowledgeBaseJSONRequestBody = KnowledgeSearchRequest
 
 // CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
 type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest

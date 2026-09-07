@@ -296,14 +296,6 @@ components:
       $ref: ./components/schemas/LibraryPreviewTokenResponse.yaml
     KnowledgeBaseInfo:
       $ref: ./components/schemas/KnowledgeBaseInfo.yaml
-    KnowledgeSearchRequest:
-      $ref: ./components/schemas/KnowledgeSearchRequest.yaml
-    KnowledgeSearchResponse:
-      $ref: ./components/schemas/KnowledgeSearchResponse.yaml
-    KnowledgeSearchHit:
-      $ref: ./components/schemas/KnowledgeSearchHit.yaml
-    KnowledgeSearchIncompleteness:
-      $ref: ./components/schemas/KnowledgeSearchIncompleteness.yaml
     KnowledgeGraphResponse:
       $ref: ./components/schemas/KnowledgeGraphResponse.yaml
     KnowledgeGraphNode:
@@ -8753,69 +8745,6 @@ paths:
         # collection as an error. KnowledgeMountConflictError stays in
         # components/schemas and belongs to the operation that MOUNTS, where
         # Collection.AttachRoot is the real enforcement point.
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-
-  /library/{workspace_id}/knowledge/search:
-    post:
-      operationId: searchKnowledgeBase
-      summary: Relevance search over one knowledge base
-      description: >
-        Returns ranked hits with path, title and a matched excerpt (FR-050),
-        AND — in the same response — the incompleteness statement qualifying
-        them (FR-035). A caller cannot obtain results without also obtaining
-        the statement, which is the point: a partial answer that looks whole
-        is worse than no answer.
-
-
-        The excerpt is re-read from the file at query time and never stored
-        in the index (FR-050a), so it always matches disk. When the re-read
-        cannot be done — the file moved, became unreadable, or the latency
-        budget ran out — the hit is still returned with path and title and a
-        machine-readable excerpt_unavailable reason. Never a fabricated
-        excerpt; never a silently dropped result.
-
-
-        A limit above the server cap is clamped and the clamp is reported
-        (FR-037). A collection outside the caller's workspace scope returns
-        an EMPTY result set rather than a permission error (FR-052, FR-053),
-        so the error channel cannot be used to probe for collections the
-        caller may not see. POST rather than GET because a query plus its
-        filters does not belong in a URL that lands in request logs.
-      tags:
-      - Knowledge
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Workspace ID.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/KnowledgeSearchRequest'
-      responses:
-        '200':
-          description: Hits and the incompleteness statement qualifying them.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/KnowledgeSearchResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '429':
-          $ref: '#/components/responses/429TooManyRequests'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

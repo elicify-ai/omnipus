@@ -2957,30 +2957,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/library/{workspace_id}/knowledge/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Relevance search over one knowledge base
-         * @description Returns ranked hits with path, title and a matched excerpt (FR-050), AND — in the same response — the incompleteness statement qualifying them (FR-035). A caller cannot obtain results without also obtaining the statement, which is the point: a partial answer that looks whole is worse than no answer.
-         *
-         *     The excerpt is re-read from the file at query time and never stored in the index (FR-050a), so it always matches disk. When the re-read cannot be done — the file moved, became unreadable, or the latency budget ran out — the hit is still returned with path and title and a machine-readable excerpt_unavailable reason. Never a fabricated excerpt; never a silently dropped result.
-         *
-         *     A limit above the server cap is clamped and the clamp is reported (FR-037). A collection outside the caller's workspace scope returns an EMPTY result set rather than a permission error (FR-052, FR-053), so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a query plus its filters does not belong in a URL that lands in request logs.
-         */
-        post: operations["searchKnowledgeBase"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/library/{workspace_id}/files/search": {
         parameters: {
             query?: never;
@@ -4681,153 +4657,6 @@ export interface components {
                  */
                 message: string;
             };
-        };
-        /**
-         * KnowledgeSearchRequest
-         * @description Request body for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Relevance search over one knowledge base's index.
-         *     Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace (FR-052), and a collection outside that scope yields an EMPTY result set rather than a permission error (FR-053) — so a caller can never use the error channel to probe for collections it may not see.
-         */
-        KnowledgeSearchRequest: {
-            /**
-             * @description Free-text relevance query.
-             * @example landlock seccomp fallback
-             */
-            query: string;
-            /**
-             * @description The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections (FR-026).
-             * @example kb_3d1c9a7e5b2f4806
-             */
-            collection_id: string;
-            /**
-             * @description Maximum hits to return. A value above the server cap is CLAMPED, not rejected, and the clamp is reported on the response (limit_clamped / limit_applied, FR-037).
-             * @default 20
-             * @example 20
-             */
-            limit: number;
-            /**
-             * @description Number of hits to skip, for paging through a large result set.
-             * @default 0
-             * @example 0
-             */
-            offset: number;
-            /**
-             * @description Restrict hits to these entry kinds. Omitted means both. Attachments are indexed by FILENAME AND PATH ONLY — their contents are never opened (FR-039a) — so an attachment hit never carries a body excerpt.
-             * @example [
-             *       "note"
-             *     ]
-             */
-            kinds?: ("note" | "attachment")[];
-        };
-        /**
-         * KnowledgeSearchResponse
-         * @description Response for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Hits plus the incompleteness statement, in the SAME response (FR-035) — a caller cannot obtain results without also obtaining the statement qualifying them.
-         *     A collection outside the caller's workspace scope yields hits: [] with incompleteness.complete = true, not an error (FR-053).
-         */
-        KnowledgeSearchResponse: {
-            /**
-             * @description The collection these hits came from, echoed from the request.
-             * @example kb_3d1c9a7e5b2f4806
-             */
-            collection_id: string;
-            /** @description Matched entries, best-scored first. Always present — an empty array, never null — so a client may map over it without a nil check. */
-            hits: components["schemas"]["KnowledgeSearchHit"][];
-            incompleteness: components["schemas"]["KnowledgeSearchIncompleteness"];
-            /**
-             * @description The result cap actually used for this query.
-             * @example 20
-             */
-            limit_applied: number;
-            /**
-             * @description True when the requested limit exceeded the server cap and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-037).
-             * @example false
-             */
-            limit_clamped: boolean;
-            /**
-             * @description The limit the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
-             * @example 5000
-             */
-            limit_requested?: number;
-        };
-        /**
-         * KnowledgeSearchHit
-         * @description One relevance hit from a knowledge-base search (FR-050). Carries path, title and a matched excerpt.
-         *     A note larger than the segment size is indexed as several consecutive index documents (FR-034a) — no note is ever refused, skipped or truncated. Hits from several segments of one note COLLAPSE INTO ONE hit here, scored by its best segment, so a caller never has to de-duplicate by path.
-         */
-        KnowledgeSearchHit: {
-            /**
-             * @description Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
-             * @example architecture/sandboxing.md
-             */
-            path: string;
-            /**
-             * @description Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
-             * @example Sandboxing
-             */
-            title: string;
-            /**
-             * Format: double
-             * @description Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
-             * @example 7.42
-             */
-            score: number;
-            /**
-             * @description Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
-             * @example note
-             * @enum {string}
-             */
-            kind: "note" | "attachment";
-            /**
-             * @description Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
-             * @example …Landlock is per-thread and inherited, so the gateway and its children…
-             */
-            excerpt?: string;
-            /**
-             * @description Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
-             *     "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
-             * @example budget_exhausted
-             * @enum {string}
-             */
-            excerpt_unavailable?: "file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted" | "attachment_not_read";
-            /**
-             * Format: int64
-             * @description ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
-             * @example 20481
-             */
-            byte_offset?: number;
-        };
-        /**
-         * KnowledgeSearchIncompleteness
-         * @description The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
-         *     Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
-         */
-        KnowledgeSearchIncompleteness: {
-            /**
-             * @description True when the index covered the whole collection at query time, so these results are the whole answer.
-             * @example false
-             */
-            complete: boolean;
-            /**
-             * @description False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
-             * @example true
-             */
-            total_known: boolean;
-            /**
-             * @description Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
-             * @example Searched 4,120 of 12,880 notes — indexing is still running.
-             */
-            statement: string;
-            /**
-             * Format: int64
-             * @description Files indexed and therefore searchable at query time.
-             * @example 4120
-             */
-            indexed_files?: number;
-            /**
-             * Format: int64
-             * @description Total files in the collection. Present only when total_known is true.
-             * @example 12880
-             */
-            total_files?: number;
         };
         /**
          * KnowledgeGraphResponse
@@ -21416,39 +21245,6 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
-    searchKnowledgeBase: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace ID. */
-                workspace_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["KnowledgeSearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Hits and the incompleteness statement qualifying them. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KnowledgeSearchResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            404: components["responses"]["404NotFound"];
-            429: components["responses"]["429TooManyRequests"];
-            500: components["responses"]["500InternalServerError"];
-        };
-    };
     searchFiles: {
         parameters: {
             query?: never;
@@ -22264,10 +22060,6 @@ export type LibraryInlineDisposition = components["schemas"]["LibraryInlineDispo
 export type LibraryPreviewTokenRequest = components["schemas"]["LibraryPreviewTokenRequest"];
 export type LibraryPreviewTokenResponse = components["schemas"]["LibraryPreviewTokenResponse"];
 export type KnowledgeBaseInfo = components["schemas"]["KnowledgeBaseInfo"];
-export type KnowledgeSearchRequest = components["schemas"]["KnowledgeSearchRequest"];
-export type KnowledgeSearchResponse = components["schemas"]["KnowledgeSearchResponse"];
-export type KnowledgeSearchHit = components["schemas"]["KnowledgeSearchHit"];
-export type KnowledgeSearchIncompleteness = components["schemas"]["KnowledgeSearchIncompleteness"];
 export type KnowledgeGraphResponse = components["schemas"]["KnowledgeGraphResponse"];
 export type KnowledgeGraphNode = components["schemas"]["KnowledgeGraphNode"];
 export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdge"];

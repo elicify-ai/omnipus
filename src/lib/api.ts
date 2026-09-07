@@ -197,11 +197,11 @@ import {
   LibraryContentResponse as LibraryContentResponseSchema,
   LibraryUploadResponse as LibraryUploadResponseSchema,
   // ADR-067 stage 2 — the knowledge-base READ surface (contract-first #8).
-  // Every one of the four endpoints validates through its generated schema;
-  // none of them hand-writes a wire type.
+  // Every one of the three surviving endpoints validates through its
+  // generated schema; none of them hand-writes a wire type. (The relevance
+  // search endpoint retired US-5/ADR-081 — the human vault-search endpoint
+  // below is the ONE surviving human search.)
   KnowledgeBaseInfo as KnowledgeBaseInfoSchema,
-  KnowledgeSearchRequest as KnowledgeSearchRequestSchema,
-  KnowledgeSearchResponse as KnowledgeSearchResponseSchema,
   KnowledgeOutline as KnowledgeOutlineSchema,
   // B+C — human vault search, create-vault, PDF binary save (contract-first #8):
   VaultSearchRequest as VaultSearchRequestSchema,
@@ -511,8 +511,6 @@ import type {
   LibraryTransferRequest,
   // ADR-067 stage 2 — the knowledge-base read surface (contract-first #8):
   KnowledgeBaseInfo,
-  KnowledgeSearchRequest,
-  KnowledgeSearchResponse,
   KnowledgeOutline,
   // B+C wire types:
   VaultSearchRequest,
@@ -4462,43 +4460,6 @@ export function fetchKnowledgeBaseInfo(workspaceId: string, path = ''): Promise<
     `/library/${encodeURIComponent(workspaceId)}/knowledge?${qs}`,
     undefined,
     KnowledgeBaseInfoSchema as ZodType<KnowledgeBaseInfo>,
-  )
-}
-
-/**
- * Relevance search over one knowledge base
- * (ADR-067 FR-035/FR-036/FR-037, POST /library/{workspace_id}/knowledge/search).
- *
- * WHY IT LIVES HERE AND NOT IN THE COMPONENT. It used to build its own
- * `fetch()` inside `useKnowledgeSearch.ts`, which meant it silently opted out
- * of everything `request()` does for every other wire call: the schema-error
- * counter (`_recordApiSchemaError`), the dev-mode toast, `ApiSchemaError` with
- * the raw body attached, `ApiError.fromResponse`, and the CSRF re-mint retry.
- * Constraint #8 asks for "drop + counter + dev-mode toast on failure"; a bare
- * `Schema.parse()` throwing a raw ZodError with no telemetry is half of that.
- *
- * The REQUEST body is validated too, not just the response: `limit` has a
- * contract minimum and a query has a minimum length, and sending a body the
- * contract forbids is a client bug worth failing on here rather than reading
- * back as a 400 with no context.
- */
-// `async` deliberately: `KnowledgeSearchRequestSchema.parse` THROWS, and a
-// function that sometimes throws synchronously and sometimes returns a rejected
-// promise is a trap for every caller with a `.catch()` chain. Marking it async
-// makes both failures arrive the same way.
-export async function searchKnowledge(
-  workspaceId: string,
-  body: KnowledgeSearchRequest,
-  signal?: AbortSignal,
-): Promise<KnowledgeSearchResponse> {
-  return request<KnowledgeSearchResponse>(
-    `/library/${encodeURIComponent(workspaceId)}/knowledge/search`,
-    {
-      method: 'POST',
-      body: JSON.stringify(KnowledgeSearchRequestSchema.parse(body)),
-      ...(signal ? { signal } : {}),
-    },
-    KnowledgeSearchResponseSchema as ZodType<KnowledgeSearchResponse>,
   )
 }
 
