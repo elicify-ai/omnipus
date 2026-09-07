@@ -60,3 +60,83 @@ func captureStageFailure(previous, current browser.CaptureHealthObservation, now
 	}
 	return ""
 }
+
+// captureHealthTracker is scoped to one watchdog goroutine. A finite repaint
+// remains unresolved until its downstream stage progresses; another repaint
+// is not required to keep fresh failure evidence alive.
+type captureHealthTracker struct { // not-wire-format: internal watchdog state.
+	previous browser.CaptureHealthObservation
+	failure  string
+}
+
+func (t *captureHealthTracker) observe(sample browser.CaptureHealthObservation, now time.Time, staleAfter time.Duration) string {
+	if sample.ObservedAt.IsZero() || now.Sub(sample.ObservedAt) > staleAfter {
+		*t = captureHealthTracker{}
+		return ""
+	}
+	previous := t.previous
+	t.previous = sample
+	// Track/peer terminal states are independently measured, including when
+	// counters are absent or the source is muted.
+	if failure := captureStageFailure(browser.CaptureHealthObservation{}, sample, now, staleAfter); failure != "" {
+		t.failure = failure
+		return failure
+	}
+	if sample.TrackMuted {
+		*t = captureHealthTracker{}
+		return ""
+	}
+	if previous.BindingEpoch != sample.BindingEpoch || previous.Generation != sample.Generation ||
+		(previous.HasSourceFrames && sample.HasSourceFrames && sample.SourceFrames < previous.SourceFrames) ||
+		(previous.HasEncodedFrames && sample.HasEncodedFrames && sample.EncodedFrames < previous.EncodedFrames) ||
+		(previous.HasPacketsSent && sample.HasPacketsSent && sample.PacketsSent < previous.PacketsSent) {
+		t.failure = ""
+		previous = browser.CaptureHealthObservation{}
+	}
+	// Polling one snapshot repeatedly is expected. A newly received but
+	// nonadvancing stats timestamp cannot refresh old counter evidence.
+	if !previous.ObservedAt.IsZero() && sample.ObservedAt != previous.ObservedAt && sample.SampleTimestampMS <= previous.SampleTimestampMS {
+		*t = captureHealthTracker{}
+		return ""
+	}
+	switch t.failure {
+	case "source frames advanced but encoding stopped":
+		if !sample.HasSourceFrames || !sample.HasEncodedFrames {
+			*t = captureHealthTracker{}
+			return ""
+		}
+		if sample.EncodedFrames > previous.EncodedFrames {
+			t.failure = ""
+		}
+	case "encoded frames advanced but sending stopped":
+		if !sample.HasEncodedFrames || !sample.HasPacketsSent {
+			*t = captureHealthTracker{}
+			return ""
+		}
+		if sample.PacketsSent > previous.PacketsSent {
+			t.failure = ""
+		}
+	case "encoder sent packets but relay delivery stopped":
+		if !sample.HasPacketsSent {
+			*t = captureHealthTracker{}
+			return ""
+		}
+	default:
+		// A fresh nonterminal state retires an earlier explicit track/peer
+		// failure, but may provide new counter-based evidence below.
+		t.failure = ""
+	}
+	if t.failure == "" {
+		t.failure = captureStageFailure(previous, sample, now, staleAfter)
+	}
+	return t.failure
+}
+
+// noteRelayProgress reports receipt at the relay, not viewer presentation.
+// Return the updated verdict so a caller cannot reuse a stale local string.
+func (t *captureHealthTracker) noteRelayProgress() string {
+	if t.failure == "encoder sent packets but relay delivery stopped" {
+		t.failure = ""
+	}
+	return t.failure
+}
