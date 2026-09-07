@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -55,6 +56,17 @@ func withShortGoalJudgeTimeout(t *testing.T, d time.Duration) {
 // activity timestamp in the past (so the idle quiet window is already elapsed)
 // — the idle-settlement precondition. Uses the back-compat single-prose
 // criterion path (empty GoalCriteriaJSON) so the canned judge providers match.
+//
+// ADR-081 D3 caveat: an empty GoalCriteriaJSON on an ACTIVE goal is now the
+// recordless/D6c-nudge transient state (goal_triggers.go's
+// maybeSettleGoalIdle routes it to the nudge ladder, never the Judge, at
+// idle) — this helper's old "empty criteria still reaches the Judge via
+// compiledGoalCriteriaFor's back-compat synthesis" property therefore no
+// longer holds AT IDLE TIME (it still holds on the CLAIM path, which never
+// consulted GoalCriteriaJSON's emptiness). A test that specifically wants to
+// exercise the recordless nudge ladder (or a claim-path scenario) still uses
+// this helper as before; a test that wants IDLE-PATH JUDGE ADJUDICATION uses
+// setGoalRoundsArmedRecorded below instead.
 func setGoalRoundsArmed(t *testing.T, store *session.UnifiedStore, sid, condition string, roundsUsed int, lastActivity time.Time) {
 	t.Helper()
 	empty := ""
@@ -67,6 +79,60 @@ func setGoalRoundsArmed(t *testing.T, store *session.UnifiedStore, sid, conditio
 		GoalMaxRounds:      &maxRounds,
 		GoalLastActivityAt: &past,
 		GoalStartedAt:      &past,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setGoalRoundsArmedRecorded is setGoalRoundsArmed's ADR-081 counterpart for
+// tests that exercise IDLE-PATH JUDGE ADJUDICATION specifically: the SAME
+// single "goal-condition"-id prose criterion every canned judge provider in
+// this file expects (unmetJudgeProvider/metJudgeProvider's fixed JSON
+// shape), but populated EXPLICITLY into GoalCriteriaJSON rather than left
+// empty — a RECORDED goal, per D3, so maybeSettleGoalIdle evaluates the
+// FR-014b zero-output triple / normal adjudication path instead of routing
+// to the D6c nudge ladder.
+func setGoalRoundsArmedRecorded(t *testing.T, store *session.UnifiedStore, sid, condition string, roundsUsed int, lastActivity time.Time) {
+	t.Helper()
+	criteria := fmt.Sprintf(
+		`{"intent":%q,"prompt":%q,"criteria":[{"id":"goal-condition","kind":"prose","text":%q,"judgment":"boolean"}]}`,
+		condition, condition, condition,
+	)
+	maxRounds := 5
+	past := lastActivity.UTC().Format(time.RFC3339)
+	if err := store.SetMeta(sid, session.MetaPatch{
+		GoalCondition:      &condition,
+		GoalCriteriaJSON:   &criteria,
+		GoalRoundsUsed:     &roundsUsed,
+		GoalMaxRounds:      &maxRounds,
+		GoalLastActivityAt: &past,
+		GoalStartedAt:      &past,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// primeGoalZeroOutputTripleFalse seeds an outputWatermarks entry and a prior
+// transcript entry for sid so ADR-081 FR-014b's zero-adjudicable-output
+// triple evaluates FALSE on the very next idle check for this goal-id — the
+// pre-existing tests below were written before ADR-081 D6a and assumed idle
+// settlement always judges immediately regardless of whether any real work
+// had happened yet (root cause 4, "judge-on-empty", that D6a deliberately
+// changes: a genuinely fresh/untouched goal-id's FIRST observation now
+// dispatches a bounded push instead, goalZeroOutputTripleHolds' own
+// degenerate-baseline rule). Priming keeps these tests exercising their OWN
+// original concern (round advance, claimless empty-claim-text, self-race,
+// per-goal-id independence, judge-unavailable marker clearing) instead of
+// incidentally exercising the new zero-output push ladder.
+func primeGoalZeroOutputTripleFalse(t *testing.T, store *session.UnifiedStore, sid, agentID string) {
+	t.Helper()
+	goalTriggersSingleton.mu.Lock()
+	goalTriggersSingleton.outputWatermarks[sid] = time.Now().Add(-2 * time.Hour)
+	goalTriggersSingleton.mu.Unlock()
+	if err := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID:   fmt.Sprintf("prime-%s-%d", sid, time.Now().UnixNano()),
+		Type: session.EntryTypeMessage, Role: "assistant",
+		Content: "earlier real work", Timestamp: time.Now().Add(-90 * time.Minute), AgentID: agentID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,10 +303,12 @@ func TestIdleSettlement_FiresOnceConsumesRoundRearms_G2(t *testing.T) {
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "goal A", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmedRecorded(t, store, sid, "goal A", 0, time.Now().Add(-1*time.Hour))
 
 	cp := unmetJudgeProvider("not yet")
 	judgeInst.Provider = cp
+
+	primeGoalZeroOutputTripleFalse(t, store, sid, agentInst.ID)
 
 	// Fire 1: the quiet window elapsed (activity was 1h ago) → one adjudication.
 	al.goalQuietWindowSettle(time.Now())
@@ -280,10 +348,12 @@ func TestIdleSettlement_ClaimlessPassesEmptyClaimText_G3(t *testing.T) {
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
 	// No worker turn ever claimed on this session — purely idle.
-	setGoalRoundsArmed(t, store, sid, "goal idle", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmedRecorded(t, store, sid, "goal idle", 0, time.Now().Add(-1*time.Hour))
 
 	cp := unmetJudgeProvider("no evidence of completion")
 	judgeInst.Provider = cp
+
+	primeGoalZeroOutputTripleFalse(t, store, sid, agentInst.ID)
 
 	al.goalQuietWindowSettle(time.Now())
 	if cp.callCount() != 1 {
@@ -457,7 +527,7 @@ func TestVerifierInFlight_SuppressesIdle_NoSelfRace_F5(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "goal F5", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmedRecorded(t, store, sid, "goal F5", 0, time.Now().Add(-1*time.Hour))
 
 	cp := unmetJudgeProvider("x")
 	judgeInst.Provider = cp
@@ -468,6 +538,8 @@ func TestVerifierInFlight_SuppressesIdle_NoSelfRace_F5(t *testing.T) {
 	t.Cleanup(pe.Stop)
 	// Simulate a verifier turn currently in flight for this goal.
 	pe.VerifierRegistry().Register(verifierUnitForGoal(sid), "fake-verifier-session")
+
+	primeGoalZeroOutputTripleFalse(t, store, sid, agentInst.ID)
 
 	al.goalQuietWindowSettle(time.Now())
 	if cp.callCount() != 0 {
@@ -497,12 +569,14 @@ func TestPerGoalId_TwoSessionsIndependent_FR107(t *testing.T) {
 	_, sidB := newGoalTestSession(t, al, agentInst.ID)
 	al.recordGoalRouting(sidA, "webchat", "c1", "sk1", agentInst.ID)
 	al.recordGoalRouting(sidB, "webchat", "c2", "sk2", agentInst.ID)
-	setGoalRoundsArmed(t, store, sidA, "goal A", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmedRecorded(t, store, sidA, "goal A", 0, time.Now().Add(-1*time.Hour))
 	// Goal B: activity is RECENT — its quiet window has NOT elapsed.
-	setGoalRoundsArmed(t, store, sidB, "goal B", 0, time.Now())
+	setGoalRoundsArmedRecorded(t, store, sidB, "goal B", 0, time.Now())
 
 	cpA := unmetJudgeProvider("A not yet")
 	judgeInst.Provider = cpA
+
+	primeGoalZeroOutputTripleFalse(t, store, sidA, agentInst.ID)
 
 	al.goalQuietWindowSettle(time.Now())
 	if cpA.calls != 1 {
@@ -651,7 +725,8 @@ func TestIdleSettle_JudgeUnavailable_ClearsIdleSettling_Refires_corrMAJOR2(t *te
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "goal wedge", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmedRecorded(t, store, sid, "goal wedge", 0, time.Now().Add(-1*time.Hour))
+	primeGoalZeroOutputTripleFalse(t, store, sid, agentInst.ID)
 
 	// Fire 1: quiet window elapsed → adjudication fires → Judge unavailable.
 	al.goalQuietWindowSettle(time.Now())
@@ -667,7 +742,8 @@ func TestIdleSettle_JudgeUnavailable_ClearsIdleSettling_Refires_corrMAJOR2(t *te
 	// RE-ATTEMPT, not early-return on a stale marker. The re-fire's
 	// maybeSettleGoalIdle bumps GoalLastActivityAt to ~now before dispatching; if
 	// it had early-returned the activity clock would still equal the re-armed past.
-	setGoalRoundsArmed(t, store, sid, "goal wedge", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmedRecorded(t, store, sid, "goal wedge", 0, time.Now().Add(-1*time.Hour))
+	primeGoalZeroOutputTripleFalse(t, store, sid, agentInst.ID)
 	beforeAct, _ := store.GetMeta(sid)
 	al.goalQuietWindowSettle(time.Now())
 	afterAct, _ := store.GetMeta(sid)

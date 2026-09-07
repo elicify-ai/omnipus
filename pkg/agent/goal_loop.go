@@ -736,7 +736,7 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// check-then-act guard misses.
 		if al.goalAdjudicationInFlight(sessionID) {
 			logger.InfoCF("agent", "goal claim: adjudication already in-flight; dropping claim (idle path will resolve)",
-				map[string]any{"session_id": sessionID})
+				map[string]any{"session_id": sessionID, "goal_id": meta.GoalID})
 			return
 		}
 		// Clear any bounce streak (the worker satisfied the evidence gate).

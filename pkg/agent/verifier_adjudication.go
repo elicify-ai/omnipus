@@ -807,6 +807,88 @@ func (al *AgentLoop) resolveVerifierDiffText(in JudgeCriteriaInput) string {
 	return renderDiffEvidence(ev)
 }
 
+// resolveGoalScopedDiffEmpty is ADR-081 D6a/FR-014b's GOAL-SCOPED variant of
+// resolveVerifierDiffText, used by the zero-adjudicable-output triple
+// (goal_triggers.go's goalZeroOutputTripleHolds) to answer one question:
+// "has THIS goal's own work changed anything in its workspace since we last
+// looked?" — never resolveVerifierDiffText's own AttemptDiff(nil) ("the
+// whole latest boundary commit"), which a co-tenant session sharing the SAME
+// WorkspaceID can populate and so wrongly mask THIS goal's emptiness
+// (round-2 B-4: two goals sharing one WorkspaceID, goal B produced nothing —
+// B's diff term must still correctly read empty even though
+// AttemptDiff(nil) at that moment would show goal A's commit).
+//
+// SCOPING MECHANISM (deviation from the ADR's literal "AttemptDiff takes a
+// scope argument" phrasing, reported per the lane brief): AttemptDiff's own
+// scope argument is a PATH write-set filter, and goal sessions — unlike
+// plan-member tasks (task.AcceptanceCriterion has no path/write-set field of
+// their own) — have no declared write-set to pass it. This function instead
+// scopes by COMMIT RANGE: it tracks, per goal-id, the git HEAD hash observed
+// the last time this function was called for that session
+// (goalTriggerState.diffBoundaryHash, refreshed on every call), and diffs
+// FROM that boundary TO the current HEAD via Repo.Diff(boundary, head, nil)
+// — "this session's write set since this goal's own last look" read as a
+// commit-range scope rather than a path scope. A co-tenant's commit that
+// landed BEFORE this goal-id's own boundary was first captured is excluded
+// by construction; a co-tenant's commit landing WITHIN the observation
+// window is a residual, documented limitation (no per-path attribution
+// exists for goal-scope commits today — see this function's own boundary
+// field doc comment).
+//
+// Returns true ("diff term empty/zero") on every degenerate case: an unbound
+// goal (workspaceID == "" — FR-014b: "the diff term degenerates away and the
+// triple is deliberately a pair"), no repo, an unborn/inaccessible HEAD, the
+// FIRST-EVER observation for this goal-id (nothing to compare against yet —
+// the boundary is baselined to current HEAD and this call reports empty),
+// or any gitevidence error (best-effort, mirroring resolveVerifierDiffText's
+// own contract — never fail-closed into an unwarranted push denial).
+func (al *AgentLoop) resolveGoalScopedDiffEmpty(sessionID, workspaceID string) bool {
+	wsID := strings.TrimSpace(workspaceID)
+	if wsID == "" {
+		return true // unbound chat goal — diff term degenerates away (FR-014b)
+	}
+	home := config.OmnipusHomeDir()
+	if home == "" {
+		return true
+	}
+	dir, err := workspace.SafeWorkDir(home, wsID)
+	if err != nil {
+		return true // invalid workspace id — not a diff-feed concern
+	}
+	repo, err := gitevidence.Open(dir)
+	if err != nil {
+		return true // nested user repo or any other Open error — degrade
+	}
+	head, err := repo.Head()
+	if err != nil || head == "" {
+		return true // unborn HEAD — nothing committed, trivially empty
+	}
+
+	gts := goalTriggers()
+	gts.mu.Lock()
+	boundary, hadBoundary := gts.diffBoundaryHash[sessionID]
+	gts.diffBoundaryHash[sessionID] = head
+	gts.mu.Unlock()
+
+	if !hadBoundary {
+		// First observation for this goal-id: baseline to current HEAD and
+		// report empty — the OTHER two triple terms (evidence, transcript
+		// output) still gate the free-push decision independently, so a
+		// trivial baseline here cannot by itself trigger an unwarranted push.
+		return true
+	}
+	if boundary == head {
+		return true // nothing committed since the last look
+	}
+	ev, err := repo.Diff(boundary, head, nil)
+	if err != nil {
+		logger.WarnCF("agent", "goal trigger: could not read goal-scoped workspace diff",
+			map[string]any{"session_id": sessionID, "workspace_id": wsID, "error": err.Error()})
+		return true // best-effort degrade — never fail-closed
+	}
+	return ev == nil || len(ev.Files) == 0
+}
+
 // renderDiffEvidence formats a DiffEvidence as the concise text block the prose
 // Judge consumes. Empty (no files / unborn HEAD) → "". The patch text is
 // capped per-file so a single huge diff cannot blow the verifier's context.

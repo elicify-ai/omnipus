@@ -88,6 +88,24 @@ var goalIdleQuietWindow = 60 * time.Second //nolint:gochecknoglobals
 // never the idle path's full quiet-window cost).
 const goalBareClaimCostThreshold = 2
 
+// goalZeroOutputPushMax is ADR-081 FR-014b/FR-017's "N=2" bound — SHARED by
+// TWO ladders through the SAME persisted GoalZeroOutputPushes field
+// (session.UnifiedMeta), a deliberate decision (reported per the lane
+// brief, not an oversight): a RECORDED goal's bounded zero-output
+// continue-push count (FR-014b) and a RECORDLESS goal's nudge count
+// (FR-017/D6c). The spec names no second counter for the nudge ladder, and
+// the two states are mutually exclusive at any single idle check (a goal's
+// GoalCriteriaJSON is either empty XOR populated when maybeSettleGoalIdle
+// evaluates it), so one field safely counts "consecutive keeper
+// free-actions" across both without ever conflating a push with a nudge.
+// Reset to 0 on: a successful set_goal write (wave 2a's responsibility —
+// NOT duplicated here), the zero-output triple evaluating false at an idle
+// (settleZeroOutputRecordedGoal's caller), and an engine-authored fallback
+// registration (dispatchGoalFallbackCompile — the goal transitions from
+// recordless to recorded, so the recorded-ladder's counter must start
+// fresh).
+const goalZeroOutputPushMax = 2
+
 // goalRoute captures the channel/chat/sessionKey a goal's chat lives on, so an
 // idle-settlement unmet verdict can re-inject a steering turn via the
 // async-notifier (the SAME re-inject seam checkGoalLoopAfterTurn uses via
@@ -135,6 +153,47 @@ type goalTriggerState struct {
 	// activity (a turn bumping GoalLastActivityAt, or the steer re-dispatch
 	// itself — which IS new activity, G-2).
 	idleSettling map[string]bool
+
+	// diffBoundaryHash is ADR-081 D6a/FR-014b's per-goal-id git-commit
+	// boundary for the zero-output triple's diff term (resolveGoalScopedDiffEmpty,
+	// verifier_adjudication.go): the HEAD hash observed the last time this
+	// goal-id's diff term was evaluated, refreshed on every evaluation. This
+	// is what makes the term "goal-scoped" (round-2 B-4) — a co-tenant
+	// session sharing the same WorkspaceID that committed something BEFORE
+	// this goal-id's own boundary was first captured can never mask this
+	// goal's emptiness, since the scoped diff only ever looks at commits
+	// AFTER this goal's own last look. In-memory only, like the rest of
+	// this singleton (a restart simply re-baselines on the next check —
+	// safe, because the OTHER two triple terms still gate the free-push
+	// decision independently, and GoalZeroOutputPushes — the field that
+	// actually bounds the loop — IS persisted).
+	diffBoundaryHash map[string]string
+
+	// outputWatermarks is the transcript-output term's own per-goal-id
+	// "since" boundary — deliberately NOT session.UnifiedMeta.GoalLastActivityAt,
+	// which THIS SAME zero-output evaluation's own dispatched continue-push/
+	// nudge turn bumps forward via bumpGoalActivityOnTurn once that turn
+	// runs. Using GoalLastActivityAt as the "since" boundary would compare
+	// every check against a timestamp chronologically AFTER the very
+	// output that produced it, making the transcript-output term read
+	// "zero" forever regardless of real activity. This watermark is
+	// refreshed to "now" (the wall-clock time AT evaluation) on every call,
+	// so the NEXT check correctly sees any transcript growth that happened
+	// in between. In-memory only, cleared on goal clear.
+	outputWatermarks map[string]time.Time
+
+	// sessionStoreResolver is FR-031's session-store seam for routeFor's
+	// persisted-routing rehydration. routeFor is called as a bare
+	// goalTriggers().routeFor(sessionID) — no *AgentLoop receiver, by
+	// design (wave 2a's set_goal channel-echo path calls it exactly that
+	// way) — so it cannot itself resolve al.GetSessionStore(). Populated
+	// opportunistically (idempotent, first-writer-wins) by every method in
+	// this file that already has an *AgentLoop in scope and runs
+	// regularly regardless of any specific goal's activation
+	// (recordGoalRouting, goalQuietWindowSettle) — see routeFor's doc
+	// comment for the one residual cold-boot gap this leaves and the
+	// recommended follow-up.
+	sessionStoreResolver func() *session.UnifiedStore
 }
 
 // goalTriggersMu guards goalTriggersSingleton (the package-wide seam).
@@ -142,10 +201,12 @@ var goalTriggersMu sync.RWMutex //nolint:gochecknoglobals // package-wide seam, 
 
 //nolint:gochecknoglobals // package-wide singleton; one AgentLoop per process.
 var goalTriggersSingleton = &goalTriggerState{
-	bareClaimStreak: make(map[string]int),
-	waitingOnUser:   make(map[string]bool),
-	routing:         make(map[string]goalRoute),
-	idleSettling:    make(map[string]bool),
+	bareClaimStreak:  make(map[string]int),
+	waitingOnUser:    make(map[string]bool),
+	routing:          make(map[string]goalRoute),
+	idleSettling:     make(map[string]bool),
+	diffBoundaryHash: make(map[string]string),
+	outputWatermarks: make(map[string]time.Time),
 }
 
 // goalTriggers returns the package-wide goalTriggerState singleton. The idle
@@ -169,6 +230,9 @@ func resetGoalTriggerStateForTest() {
 	s.waitingOnUser = make(map[string]bool)
 	s.routing = make(map[string]goalRoute)
 	s.idleSettling = make(map[string]bool)
+	s.diffBoundaryHash = make(map[string]string)
+	s.outputWatermarks = make(map[string]time.Time)
+	s.sessionStoreResolver = nil
 }
 
 // --- per-goal-id state accessors (methods on AgentLoop via the singleton) --
@@ -177,15 +241,38 @@ func resetGoalTriggerStateForTest() {
 // on, so a later idle-settlement unmet verdict can re-inject a steering turn.
 // Called from applyGoalCommandPrompt when a goal activates/activates-from-
 // pending. Idempotent; cleared by clearGoalTriggerState on /goal clear.
+//
+// ADR-081 FR-031 (round-2 M-9): the route is ALSO persisted onto the goal
+// record's GoalRoute* meta fields, not just the in-memory map — a gateway
+// restart used to silently disable both the keeper's idle-steer re-inject
+// and the channel record echo, since neither had anything durable to read.
+// routeFor (below) is the matching read side: in-memory first, persisted
+// fallback. This also opportunistically wires sessionStoreResolver (see its
+// doc comment) so routeFor can reach the store on a bare, receiverless call.
 func (al *AgentLoop) recordGoalRouting(sessionID, channel, chatID, sessionKey, agentID string) {
 	if sessionID == "" {
 		return
 	}
 	s := goalTriggers()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.routing[sessionID] = goalRoute{
 		channel: channel, chatID: chatID, sessionKey: sessionKey, agentID: agentID,
+	}
+	if s.sessionStoreResolver == nil {
+		s.sessionStoreResolver = al.GetSessionStore
+	}
+	s.mu.Unlock()
+
+	if store := al.GetSessionStore(); store != nil {
+		if perr := store.SetMeta(sessionID, session.MetaPatch{
+			GoalRouteChannel:    &channel,
+			GoalRouteChatID:     &chatID,
+			GoalRouteSessionKey: &sessionKey,
+			GoalRouteAgentID:    &agentID,
+		}); perr != nil {
+			logger.WarnCF("agent", "goal trigger: could not persist goal routing",
+				map[string]any{"session_id": sessionID, "error": perr.Error()})
+		}
 	}
 }
 
@@ -205,6 +292,8 @@ func (al *AgentLoop) clearGoalTriggerState(sessionID string) {
 	delete(s.waitingOnUser, sessionID)
 	delete(s.routing, sessionID)
 	delete(s.idleSettling, sessionID)
+	delete(s.diffBoundaryHash, sessionID)
+	delete(s.outputWatermarks, sessionID)
 }
 
 // goalIsWaitingOnUser reports whether sessionID's goal is currently paused via
@@ -381,6 +470,13 @@ func (al *AgentLoop) runGoalAdjudication(
 
 	verdict := jr.Verdict
 	al.writeGoalVerdictTranscript(store, sessionID, verdict)
+	// ADR-081 D8: the verdict summary — the event D8 names that this file
+	// previously had no INFO line for at all.
+	logger.InfoCF("agent", "goal: verdict computed",
+		map[string]any{
+			"session_id": sessionID, "goal_id": meta.GoalID,
+			"met": verdict != nil && verdict.Met, "attempt": attempt,
+		})
 
 	if verdict != nil && verdict.Met {
 		// Use the constant, not a bare literal. clearGoal switches on this note
@@ -465,6 +561,19 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 	if store == nil {
 		return
 	}
+	// FR-031: opportunistically wire routeFor's session-store seam. This
+	// tick runs regardless of any specific goal's activation, so by the
+	// time ANY idle-triggered routeFor call happens downstream of THIS
+	// function, the resolver is guaranteed set — closing the restart gap
+	// for the common case (see sessionStoreResolver's doc comment for the
+	// one residual cold-boot path this does not cover).
+	gs := goalTriggers()
+	gs.mu.Lock()
+	if gs.sessionStoreResolver == nil {
+		gs.sessionStoreResolver = al.GetSessionStore
+	}
+	gs.mu.Unlock()
+
 	sessions, err := store.ListSessions()
 	if err != nil {
 		logger.WarnCF("agent", "goal idle settle: list sessions failed", map[string]any{"error": err.Error()})
@@ -484,6 +593,17 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedStore, s *session.UnifiedMeta) {
 	sessionID := s.ID
 
+	// ADR-081 D6a/FR-016: a parked AskUserQuestion card suppresses BOTH idle
+	// settlement and the D6c nudge ladder — the goal is waiting on the
+	// operator in the same sense as the waiting_on_user marker pause below.
+	// Checked in the SAME early, silent position as goalIsWaitingOnUser
+	// (neither logs on every tick — both are routine, long-lived states, not
+	// "genuinely became idle" moments). The expiry sweep (goalIdleExpirySweep,
+	// this function's caller) is unaffected — it runs its own multi-day
+	// calendar check before ever reaching here.
+	if al.goalHasParkedCard(sessionID) {
+		return
+	}
 	// G-5: suppress idle settlement while a waiting_on_user pause holds.
 	if al.goalIsWaitingOnUser(sessionID) {
 		return
@@ -506,6 +626,22 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	}
 	if now.Sub(last) < goalIdleQuietWindow {
 		return // quiet window not yet elapsed
+	}
+
+	// ADR-081 D6a/FR-013: a live turn for this goal's session — its own root
+	// turn OR any delegated descendant — counts as activity. Idle settlement
+	// (and the D6c nudge ladder, which shares this same gate) is suppressed
+	// while one exists; the window re-arms so the NEXT check waits a full
+	// quiet window rather than re-testing every tick.
+	if al.goalHasLiveTurn(sessionID) {
+		logger.InfoCF("agent", "goal idle settle: suppressed, turn in flight",
+			map[string]any{"session_id": sessionID, "goal_id": s.GoalID})
+		activityNow := now.UTC().Format(time.RFC3339)
+		if perr := store.SetMeta(sessionID, session.MetaPatch{GoalLastActivityAt: &activityNow}); perr != nil {
+			logger.WarnCF("agent", "goal idle settle: could not re-arm activity clock (in-flight turn)",
+				map[string]any{"session_id": sessionID, "error": perr.Error()})
+		}
+		return
 	}
 
 	agentInst := resolveGoalAgent(al, s)
@@ -533,21 +669,46 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	}
 
 	// FR-102: mark fired + bump activity so the next tick (still inside this
-	// quiet spell) does NOT fire a second adjudication. The mark clears inside
-	// runGoalAdjudication once a real judge round runs (genuine activity); the
-	// activity bump also re-arms the multi-day idle-expiry clock. Persist the
-	// marker BEFORE dispatch so a concurrent tick observes it (single-instance
-	// overlap guard makes this a no-op in practice, but the ordering is
-	// load-bearing if the guard ever widens).
-	al.goalMarkIdleSettling(sessionID, true)
-	activityNow := now.UTC().Format(time.RFC3339)
-	if perr := store.SetMeta(sessionID, session.MetaPatch{GoalLastActivityAt: &activityNow}); perr != nil {
-		logger.WarnCF("agent", "goal idle settle: could not bump activity clock",
-			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	// quiet spell) does NOT fire a second adjudication/nudge/push. The mark
+	// clears once a real judge round runs OR a dispatched follow-up turn
+	// completes (genuine activity); the activity bump also re-arms the
+	// multi-day idle-expiry clock. Persist the marker BEFORE dispatch so a
+	// concurrent tick observes it.
+	al.markGoalIdleFired(store, sessionID, now)
+
+	if s.GoalCriteriaJSON == "" {
+		// ADR-081 D3/FR-014/D6c: a RECORDLESS goal (active ∧ empty record) is
+		// NEVER judged at idle — there is nothing to adjudicate. The keeper's
+		// only action is the nudge ladder.
+		al.settleRecordlessGoal(store, s, agentInst)
+		return
 	}
 
+	// ADR-081 D6a/FR-014b: a RECORDED goal — evaluate the zero-adjudicable-
+	// output triple BEFORE judging. Only when it is false (genuine
+	// adjudicable material exists) does normal claimless adjudication run.
+	if al.goalZeroOutputTripleHolds(store, s, now) {
+		al.settleZeroOutputRecordedGoal(store, s, agentInst)
+		return
+	}
+	if s.GoalZeroOutputPushes != 0 {
+		zero := 0
+		if perr := store.SetMeta(sessionID, session.MetaPatch{GoalZeroOutputPushes: &zero}); perr != nil {
+			logger.WarnCF("agent", "goal trigger: could not reset zero-output push count",
+				map[string]any{"session_id": sessionID, "error": perr.Error()})
+		}
+	}
+	al.settleGoalNormally(store, s, agentInst)
+}
+
+// settleGoalNormally is the pre-ADR-081 idle-settlement tail (unchanged
+// behavior): a real claimless adjudication via the shared runGoalAdjudication
+// body. Reached only when the goal is RECORDED and the FR-014b zero-output
+// triple does not hold — i.e. there is genuinely something to judge.
+func (al *AgentLoop) settleGoalNormally(store *session.UnifiedStore, s *session.UnifiedMeta, agentInst *AgentInstance) {
+	sessionID := s.ID
 	logger.InfoCF("agent", "goal idle settle: firing claimless adjudication after quiet window",
-		map[string]any{"session_id": sessionID, "quiet_window_s": int(goalIdleQuietWindow.Seconds())})
+		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "quiet_window_s": int(goalIdleQuietWindow.Seconds())})
 
 	// G-3: claimText is EMPTY — the Judge bypasses rung-0 and reads persisted
 	// evidence (artifacts, write-set-scoped diffs, latest checkpoint). This
@@ -560,47 +721,455 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	)
 }
 
+// settleZeroOutputRecordedGoal is ADR-081 FR-014b's action for a RECORDED
+// goal whose zero-adjudicable-output triple holds at idle: dispatch a
+// bounded continue-push (never a verdict, never a round) UNLESS the push
+// budget (goalZeroOutputPushMax, persisted on GoalZeroOutputPushes) is
+// already spent — in which case normal adjudication runs anyway, so a
+// genuinely stuck goal still terminates via the standard rounds bound
+// rather than pushing forever.
+func (al *AgentLoop) settleZeroOutputRecordedGoal(store *session.UnifiedStore, s *session.UnifiedMeta, agentInst *AgentInstance) {
+	sessionID := s.ID
+	if s.GoalZeroOutputPushes >= goalZeroOutputPushMax {
+		al.settleGoalNormally(store, s, agentInst)
+		return
+	}
+	newCount := s.GoalZeroOutputPushes + 1
+	if perr := store.SetMeta(sessionID, session.MetaPatch{GoalZeroOutputPushes: &newCount}); perr != nil {
+		logger.WarnCF("agent", "goal trigger: could not persist zero-output push count",
+			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	}
+	logger.InfoCF("agent", "goal idle settle: suppressed, zero-output continue-push dispatched",
+		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "push_count": newCount})
+	al.dispatchGoalAsyncFollowUp(sessionID, goalContinuePushPrompt(s.GoalCondition))
+}
+
+// settleRecordlessGoal is ADR-081 D6c's nudge ladder for a RECORDLESS active
+// goal at idle (no parked card, quiet turn machinery): dispatch a nudge
+// telling the working agent to register its record via set_goal, up to
+// goalZeroOutputPushMax (N=2) times; on the (N+1)th observation (still
+// recordless after two nudges) run the D7 engine fallback compile instead.
+func (al *AgentLoop) settleRecordlessGoal(store *session.UnifiedStore, s *session.UnifiedMeta, agentInst *AgentInstance) {
+	sessionID := s.ID
+	if s.GoalZeroOutputPushes >= goalZeroOutputPushMax {
+		al.dispatchGoalFallbackCompile(store, s, agentInst)
+		return
+	}
+	newCount := s.GoalZeroOutputPushes + 1
+	if perr := store.SetMeta(sessionID, session.MetaPatch{GoalZeroOutputPushes: &newCount}); perr != nil {
+		logger.WarnCF("agent", "goal trigger: could not persist nudge count",
+			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	}
+	logger.InfoCF("agent", "goal: keeper nudge dispatched",
+		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "nudge_count": newCount})
+	al.dispatchGoalAsyncFollowUp(sessionID, goalNudgePrompt(s.GoalCondition, newCount))
+}
+
+// markGoalIdleFired records that THIS idle check is about to take an action
+// (adjudicate, push, or nudge) — the shared FR-102 re-arm bookkeeping every
+// action branch needs before dispatching: mark idleSettling so a concurrent/
+// next tick does not double-fire, and bump GoalLastActivityAt so the
+// multi-day idle-expiry clock and the quiet-window math both reflect "we
+// just looked at this goal". Extracted so all four action paths
+// (settleGoalNormally, settleZeroOutputRecordedGoal, settleRecordlessGoal,
+// dispatchGoalFallbackCompile) share one implementation.
+func (al *AgentLoop) markGoalIdleFired(store *session.UnifiedStore, sessionID string, now time.Time) {
+	al.goalMarkIdleSettling(sessionID, true)
+	activityNow := now.UTC().Format(time.RFC3339)
+	if perr := store.SetMeta(sessionID, session.MetaPatch{GoalLastActivityAt: &activityNow}); perr != nil {
+		logger.WarnCF("agent", "goal idle settle: could not bump activity clock",
+			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	}
+}
+
+// goalNudgePrompt is D6c's nudge turn content: a system-authored prompt
+// telling the agent to register its goal record now, citing the durable
+// GoalCondition (never the transcript — E8/S-38: the window may have
+// trimmed the original goal message away, but the durable record survives).
+func goalNudgePrompt(condition string, nudgeCount int) string {
+	return fmt.Sprintf(
+		"You have an active goal but have not yet registered a working record for it.\n\n"+
+			"Goal: %s\n\n"+
+			"Call set_goal now (mode: register) with your restated statement, acceptance criteria, "+
+			"and Definition of Done — your best understanding is enough; state any assumptions. "+
+			"(nudge %d of %d before the engine registers one for you)",
+		condition, nudgeCount, goalZeroOutputPushMax,
+	)
+}
+
+// goalContinuePushPrompt is FR-014b's bounded continue-push content: no
+// verdict is being reported (nothing to report — the triple held), just a
+// nudge to keep working, sourced from the durable GoalCondition (E8/S-38).
+func goalContinuePushPrompt(condition string) string {
+	return fmt.Sprintf(
+		"Continue working toward the goal: %s\n\n"+
+			"No new output has been observed since the last check. Keep going.",
+		condition,
+	)
+}
+
+// dispatchGoalFallbackCompile is ADR-081 D6c/D7's engine-authored fallback:
+// after goalZeroOutputPushMax recordless nudges the agent still has not
+// called set_goal, so the engine runs compileGoalIntentLLM ITSELF — the
+// same call the pre-ADR-081 front path used to make, D7-repointed at the
+// Judge system agent's model by wave 2a — with the goal's own durable
+// condition as intent, and registers whatever comes back directly via the
+// session meta patch (bypassing the set_goal tool entirely: there is no
+// worker turn to call it from). compileGoalIntentLLM's own EC-4/D7
+// fallback-of-a-fallback (nil agent instance / no provider → the
+// deterministic marker parser) still applies underneath this call, so SOME
+// record lands either way, closing FR-017's invariant that every active
+// goal ends up judgeable.
+func (al *AgentLoop) dispatchGoalFallbackCompile(store *session.UnifiedStore, s *session.UnifiedMeta, agentInst *AgentInstance) {
+	sessionID := s.ID
+	logger.WarnCF("agent", "goal fallback compile invoked after nudge exhaustion",
+		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "nudges": s.GoalZeroOutputPushes})
+
+	var fc FeasibilityContext
+	if agentInst != nil {
+		fc = agentFeasibilityContext{agentInst: agentInst}
+	}
+	fallbackCtx, cancel := context.WithTimeout(context.Background(), goalJudgeRoundTimeout)
+	defer cancel()
+	outcome := al.compileGoalIntentLLM(fallbackCtx, agentInst, fc, s.GoalCondition, sessionID, "", "", false, s.WorkspaceID)
+
+	if outcome.Result.Rejection != nil || outcome.Result.Goal == nil {
+		reason := "fallback compile produced no usable record"
+		if outcome.Result.Rejection != nil {
+			reason = outcome.Result.Rejection.Reason
+		}
+		logger.ErrorCF("agent", "goal fallback compile produced no usable record",
+			map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "reason": reason})
+		return
+	}
+
+	criteriaJSON, merr := marshalCompiledGoal(outcome.Result.Goal)
+	if merr != nil {
+		logger.ErrorCF("agent", "goal fallback compile: could not marshal compiled record",
+			map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "error": merr.Error()})
+		return
+	}
+	zero := 0
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	reason := "engine-authored fallback record registered after nudge exhaustion"
+	if perr := store.SetMeta(sessionID, session.MetaPatch{
+		GoalCriteriaJSON:     &criteriaJSON,
+		GoalZeroOutputPushes: &zero, // the recorded-goal ladder starts fresh (goalZeroOutputPushMax's shared-field rule)
+		GoalLastActivityAt:   &nowStr,
+		GoalLatestReason:     &reason,
+	}); perr != nil {
+		logger.ErrorCF("agent", "goal fallback compile: could not persist engine-authored record",
+			map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "error": perr.Error()})
+		return
+	}
+	logger.InfoCF("agent", "goal: engine-authored fallback record registered",
+		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "used_deterministic_parser": outcome.UsedFallback})
+	al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, s.GoalID, s.GoalCondition, s.GoalRoundsUsed, s.GoalMaxRounds, "", goalPillActive,
+		outcome.Result.Goal.Definition, outcome.Result.Goal.Criteria, outcome.Result.Goal.DoD)
+}
+
+// --- D6a repairs: in-flight suppression, parked-card suppression, and the
+// FR-014b zero-adjudicable-output triple -------------------------------
+
+// goalHasParkedCard reports whether sessionID currently has a pending
+// AskUserQuestion set (FR-016): a parked card suppresses BOTH idle
+// settlement and the D6c nudge ladder — the goal is waiting on the operator,
+// not idle in the sense either mechanism exists to police. A nil registry
+// (unwired) or nothing pending is "no parked card".
+func (al *AgentLoop) goalHasParkedCard(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	reg := al.getAskUserRegistry()
+	if reg == nil {
+		return false
+	}
+	_, ok := reg.PendingForSession(sessionID)
+	return ok
+}
+
+// goalHasLiveTurn is D6a's FR-013 in-flight-suppression predicate: reports
+// whether a LIVE turn exists for sessionID — its own root turn OR any
+// delegated descendant.
+//
+// MECHANISM (deviation from the ADR's literal "transcriptSessionID" wording,
+// reported per the lane brief): resolved via collectDescendantTurnIDs
+// (steering.go), which matches turnState.routingSessionID, NOT a bare
+// transcriptSessionID comparison. A delegated child's transcriptSessionID is
+// its OWN distinct id (ADR-057 D2/FR-011 gave every delegate its own
+// store-backed session); matching on transcriptSessionID alone would find
+// ONLY the goal's own root turn and miss every live delegate entirely — the
+// exact "goal whose agent is waiting on a delegate is working, not idle"
+// case D6a requires. routingSessionID, by contrast, is inherited verbatim
+// through the whole delegation subtree from the chat root (turn.go's
+// routingSessionID doc comment) — precisely "root turn or delegated
+// descendant" in one match. This is the SAME mechanism ADR-057's chat-wide
+// Stop cascade uses for an identical "reach the whole subtree" need.
+func (al *AgentLoop) goalHasLiveTurn(sessionID string) bool {
+	ids := al.collectDescendantTurnIDs(sessionID)
+	if len(ids) == 0 {
+		return false
+	}
+	return len(al.liveTurnStatesAmong(ids)) > 0
+}
+
+// goalZeroOutputTripleHolds evaluates FR-014b's named triple for a RECORDED
+// goal at idle: zero evidence records ∧ zero goal-scoped workspace diff ∧
+// zero transcript output (counting delegated descendants). All three terms
+// are independently best-effort (a read failure degrades toward "zero" —
+// never toward a fail-closed push denial) so a storage hiccup cannot itself
+// force a push/nudge.
+//
+// The "since" boundary for the transcript-output term is this goal-id's own
+// outputWatermarks entry — refreshed to `now` on EVERY call, never derived
+// from GoalLastActivityAt (see outputWatermarks' doc comment for why: this
+// SAME evaluation's own dispatched push/nudge turn bumps GoalLastActivityAt
+// forward once it runs, which would make every later check compare against
+// a boundary chronologically AFTER the very output that produced it). On the
+// FIRST-EVER observation for a goal-id (fresh goal, or a post-restart
+// re-baseline — this watermark is in-memory only) there is nothing to
+// compare against yet: the triple is conservatively treated as holding
+// (a harmless extra push/nudge at worst, never a premature fail-closed
+// verdict) and tracking starts from here.
+func (al *AgentLoop) goalZeroOutputTripleHolds(store *session.UnifiedStore, s *session.UnifiedMeta, now time.Time) bool {
+	sessionID := s.ID
+	gs := goalTriggers()
+	gs.mu.Lock()
+	prevWatermark, hadWatermark := gs.outputWatermarks[sessionID]
+	gs.outputWatermarks[sessionID] = now
+	gs.mu.Unlock()
+
+	evidenceZero := al.goalZeroEvidenceRecords(sessionID)
+	diffZero := al.resolveGoalScopedDiffEmpty(sessionID, s.WorkspaceID)
+
+	if !hadWatermark {
+		return true
+	}
+
+	outputZero := !al.goalHasTranscriptOutputSince(store, sessionID, prevWatermark)
+	return evidenceZero && diffZero && outputZero
+}
+
+// goalZeroEvidenceRecords is FR-014b's first triple term: whether ANY
+// task.EvidenceRecord exists under sessionID's own key in the machine-check
+// evidence store.
+//
+// HONEST CAVEAT (reported per the lane brief, not hidden): under TODAY's
+// wiring, NOTHING writes an EvidenceRecord under a goal-session-keyed id —
+// judge.go's persistEvidence takes its taskID from JudgeCriteriaInput.TaskID,
+// which is always empty for task.VerdictScopeGoal (goal-scope adjudication
+// carries GoalSessionID, never TaskID — see judge.go's Validate). So this
+// term is currently vacuously true for every goal. It is kept as its own
+// real, independently-evaluated conjunct — rather than folded away or
+// dropped — because task.EvidenceStore is a data source genuinely DISJOINT
+// from transcript content (a separate on-disk store, not
+// session.TranscriptEntry), and becomes meaningful the moment any future
+// change wires goal-scoped machine-check evidence under this key. A read
+// failure degrades toward "zero" (best-effort), matching every other term.
+func (al *AgentLoop) goalZeroEvidenceRecords(sessionID string) bool {
+	if sessionID == "" {
+		return true
+	}
+	es := al.evidenceStore()
+	recs, err := es.List(sessionID)
+	if err != nil {
+		logger.WarnCF("agent", "goal trigger: could not list evidence records for zero-output check",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return true
+	}
+	return len(recs) == 0
+}
+
+// goalHasTranscriptOutputSince is FR-014b's third triple term (negated):
+// reports whether sessionID OR any of its delegated descendant sessions
+// recorded any transcript entry timestamped strictly after since. A goal
+// whose agent delegated ALL of its work MUST NOT read as empty (US-6 A2) —
+// each delegate owns its own store-backed transcript post-ADR-057, so a
+// scan of the root session alone would silently miss real work.
+//
+// Descendants are resolved via the DURABLE ParentSessionID chain over
+// store.ListSessions() — NOT al.goalHasLiveTurn's in-memory turnState scan,
+// which only sees turns still ACTIVE right now. A delegate that already
+// finished and cleared from al.activeTurnStates still needs to count here
+// (its transcript output persisted regardless of whether the turn is still
+// live).
+func (al *AgentLoop) goalHasTranscriptOutputSince(store *session.UnifiedStore, sessionID string, since time.Time) bool {
+	if store == nil || sessionID == "" {
+		return false
+	}
+	all, err := store.ListSessions()
+	if err != nil {
+		logger.WarnCF("agent", "goal trigger: could not list sessions for descendant transcript scan",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return false
+	}
+	for _, id := range goalDescendantSessionIDs(all, sessionID) {
+		if al.sessionHasTranscriptOutputSince(store, id, since) {
+			return true
+		}
+	}
+	return false
+}
+
+// goalDescendantSessionIDs returns rootID plus every session in all whose
+// ParentSessionID chain leads back to rootID, at any depth — the DURABLE
+// (on-disk) counterpart to steering.go's collectLiveDescendantTurnStates,
+// which only sees turns still registered in al.activeTurnStates. Uses
+// exactly the same reader surface (store.ListSessions +
+// session.UnifiedMeta.ParentSessionID) every existing session-listing call
+// site in this package already has — no new pkg/session surface needed.
+func goalDescendantSessionIDs(all []*session.UnifiedMeta, rootID string) []string {
+	if rootID == "" {
+		return nil
+	}
+	byParent := make(map[string][]string, len(all))
+	for _, m := range all {
+		if m == nil || m.ParentSessionID == "" {
+			continue
+		}
+		byParent[m.ParentSessionID] = append(byParent[m.ParentSessionID], m.ID)
+	}
+	ids := []string{rootID}
+	reached := map[string]bool{rootID: true}
+	for i := 0; i < len(ids); i++ {
+		for _, child := range byParent[ids[i]] {
+			if !reached[child] {
+				reached[child] = true
+				ids = append(ids, child)
+			}
+		}
+	}
+	return ids
+}
+
+// sessionHasTranscriptOutputSince reports whether sessionID's OWN transcript
+// (not its descendants — the caller walks those separately) has any entry
+// timestamped strictly after since. Best-effort: a read failure is treated
+// as "no output", never a hard failure of the wider sweep.
+func (al *AgentLoop) sessionHasTranscriptOutputSince(store *session.UnifiedStore, sessionID string, since time.Time) bool {
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Timestamp.After(since) {
+			return true
+		}
+	}
+	return false
+}
+
 // idleSteerDeliverer returns a deliverSteer func that re-injects an unmet
 // idle verdict's steering via the async-notifier — the SAME re-inject seam
 // checkGoalLoopAfterTurn uses via result.followUps, adapted for the tick path
 // (which has no turnResult to attach to). An unmet verdict's steer
 // re-dispatch IS new activity (G-2): the Notify-originated turn bumps
 // GoalLastActivityAt via checkGoalLoopAfterTurn's activity path, re-arming the
-// quiet window. Best-effort: a notify failure is logged (the round was already
-// consumed + persisted; the user can still drive the next turn manually).
+// quiet window.
+//
+// ADR-081 D6b (the un-wedge fix): dispatchGoalAsyncFollowUp stamps the
+// notify event's SenderCanonicalID as goalLoopFollowUpSenderID — the SAME
+// sentinel checkGoalLoopAfterTurn's origin gate accepts. Before this, the
+// notifier's default "async:<kind>" stamping meant the re-injected steer
+// turn was silently DROPPED at the gate: activity never bumped, idleSettling
+// never cleared, and the idle keeper fired exactly once per goal, then
+// wedged forever (the defect this ADR names verbatim).
 func (al *AgentLoop) idleSteerDeliverer(sessionID string) func(steer string) {
 	return func(steer string) {
-		if steer == "" || al.asyncNotifier == nil {
-			return
-		}
-		route := goalTriggers().routeFor(sessionID)
-		if route.channel == "" || route.chatID == "" {
-			logger.WarnCF("agent", "goal idle settle: no routing to re-inject steer; left for next turn",
-				map[string]any{"session_id": sessionID})
-			return
-		}
-		notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
-			Channel:             route.channel,
-			ChatID:              route.chatID,
-			AgentID:             route.agentID,
-			TranscriptSessionID: sessionID,
-			SourceKind:          "goal_idle_settle",
-			Content:             steer,
-		}); err != nil {
-			logger.WarnCF("agent", "goal idle settle: steer re-inject failed",
-				map[string]any{"session_id": sessionID, "error": err.Error()})
-		}
+		al.dispatchGoalAsyncFollowUp(sessionID, steer)
 	}
 }
 
-// routeFor returns the captured routing for sessionID (helper on the singleton
-// kept separate so the idle deliverer can read it under the lock).
+// dispatchGoalAsyncFollowUp re-injects content as a NEW turn on sessionID's
+// recorded goal routing, stamped as the goal-loop's own sender
+// (goalLoopFollowUpSenderID) so checkGoalLoopAfterTurn's origin gate accepts
+// it (D6b). The single shared dispatch primitive behind the idle-steer
+// re-inject (idleSteerDeliverer, above), the D6c recordless-goal nudge, and
+// the FR-014b recorded-goal zero-output continue-push — all three are "the
+// tick path has no turnResult to attach a followUp to, so re-inject via the
+// async-notifier instead" with an identical shape. Best-effort throughout: an
+// empty content, an unwired notifier, or missing routing (WARNed by routeFor
+// itself when genuinely absent on both sides, FR-031) are all silent no-ops
+// here — the NEXT idle check gets another chance, never a hard failure of
+// the sweep.
+func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, content string) {
+	if content == "" || al.asyncNotifier == nil {
+		return
+	}
+	route := goalTriggers().routeFor(sessionID)
+	if route.channel == "" || route.chatID == "" {
+		// routeFor itself already WARNed + persisted latest_reason when the
+		// route is missing on BOTH sides (FR-031); nothing further to log
+		// here beyond what it already did.
+		return
+	}
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
+		Channel:             route.channel,
+		ChatID:              route.chatID,
+		AgentID:             route.agentID,
+		TranscriptSessionID: sessionID,
+		SourceKind:          "goal_idle_settle",
+		SenderCanonicalID:   goalLoopFollowUpSenderID,
+		Content:             content,
+	}); err != nil {
+		logger.WarnCF("agent", "goal: follow-up turn dispatch failed",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+	}
+}
+
+// routeFor returns the captured routing for sessionID: the in-memory entry
+// when present, else FR-031's persisted fallback — the four GoalRoute* meta
+// fields recordGoalRouting wrote — rehydrated into the in-memory map on a
+// hit so subsequent reads in this process are O(1). Called as a bare
+// goalTriggers().routeFor(sessionID) by both this file's own dispatch
+// helpers and wave 2a's set_goal channel-echo path — see
+// sessionStoreResolver's doc comment for why this method cannot take an
+// *AgentLoop receiver and how it still reaches the session store. A route
+// that is missing on BOTH sides (in-memory AND persisted) WARNs and writes
+// a one-line GoalLatestReason note instead of degrading silently (FR-031).
 func (s *goalTriggerState) routeFor(sessionID string) goalRoute {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.routing[sessionID]
+	route, ok := s.routing[sessionID]
+	resolver := s.sessionStoreResolver
+	s.mu.Unlock()
+	if ok && route.channel != "" && route.chatID != "" {
+		return route
+	}
+	if resolver == nil {
+		return route
+	}
+	store := resolver()
+	if store == nil {
+		return route
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return route
+	}
+	persisted := goalRoute{
+		channel:    meta.GoalRouteChannel,
+		chatID:     meta.GoalRouteChatID,
+		sessionKey: meta.GoalRouteSessionKey,
+		agentID:    meta.GoalRouteAgentID,
+	}
+	if persisted.channel == "" || persisted.chatID == "" {
+		if route.channel == "" && route.chatID == "" {
+			logger.WarnCF("agent", "goal trigger: no routing available (neither in-memory nor persisted) — keeper cannot reach the goal's channel",
+				map[string]any{"session_id": sessionID})
+			lostReason := "keeper cannot reach the goal's channel — routing lost"
+			if perr := store.SetMeta(sessionID, session.MetaPatch{GoalLatestReason: &lostReason}); perr != nil {
+				logger.WarnCF("agent", "goal trigger: could not persist routing-lost reason",
+					map[string]any{"session_id": sessionID, "error": perr.Error()})
+			}
+		}
+		return route
+	}
+	s.mu.Lock()
+	s.routing[sessionID] = persisted
+	s.mu.Unlock()
+	return persisted
 }
 
 // resolveGoalAgent resolves the AgentInstance that runs the goal-bearing
