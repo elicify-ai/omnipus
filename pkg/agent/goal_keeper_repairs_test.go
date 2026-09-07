@@ -460,6 +460,9 @@ func TestKeeper_NudgeLadderToFallback(t *testing.T) {
 	if after2.GoalCriteriaJSON != "" {
 		t.Fatal("after nudge 2: the goal must still be recordless")
 	}
+	if got := cp.callCount(); got != 0 {
+		t.Fatalf("Judge-provider calls during the nudge phase = %d, want 0 — nudging never touches any model", got)
+	}
 
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
@@ -473,8 +476,16 @@ func TestKeeper_NudgeLadderToFallback(t *testing.T) {
 	if after3.GoalZeroOutputPushes != 0 {
 		t.Fatalf("engine-authored fallback registration must reset the shared push counter; got %d, want 0", after3.GoalZeroOutputPushes)
 	}
-	if got := cp.callCount(); got != 0 {
-		t.Fatalf("Judge calls = %d, want 0 — a recordless goal is only ever nudged/fallback-compiled, never judged", got)
+	// D7/FR-018 (wave-2 integration): the engine's fallback COMPILE runs on
+	// the Judge system agent's model, so the judge PROVIDER legitimately
+	// serves at most one call here — the compile, not an adjudication. The
+	// "never judged" invariant is asserted structurally instead: no verdict
+	// round was ever consumed and no judge reason was recorded.
+	if got := cp.callCount(); got > 1 {
+		t.Fatalf("Judge-provider calls = %d, want <=1 (the single D7 fallback compile) — a recordless goal is never adjudicated", got)
+	}
+	if after3.GoalRoundsUsed != 0 {
+		t.Fatalf("GoalRoundsUsed = %d, want 0 — the fallback compile must not consume a verdict round", after3.GoalRoundsUsed)
 	}
 }
 
