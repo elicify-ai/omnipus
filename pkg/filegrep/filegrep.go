@@ -347,14 +347,18 @@ func (s *state) chargeOutput(h Hit) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Both caps are checked against the hit being admitted NOW, before it is
+	// appended: truncation is what happened to a REJECTED hit, never a
+	// property of the last one that fit (a request with exactly Matches
+	// hits and nothing more is not truncated).
+	if len(s.res.Hits) >= s.lim.Matches {
+		return budgetError{ReasonMaxMatches}
+	}
 	if s.output+n > s.lim.OutputBytes {
 		return budgetError{ReasonMaxOutput}
 	}
 	s.output += n
 	s.res.Hits = append(s.res.Hits, h)
-	if len(s.res.Hits) >= s.lim.Matches {
-		return budgetError{ReasonMaxMatches}
-	}
 	return nil
 }
 

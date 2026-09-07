@@ -71,6 +71,21 @@ func TestFileGrep_BoundsMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("max_matches exactly met is not truncated", func(t *testing.T) {
+		res := mustSearch(t, oneRoot(buildFS(map[string]string{
+			"m.txt": "this line has the needle in it\n",
+		})), Options{
+			Query:  "needle",
+			Limits: Limits{Matches: 1},
+		})
+		if res.Truncated {
+			t.Fatalf("want truncated=false (exactly Matches hits and nothing more), got truncated=%v reason=%v", res.Truncated, res.TruncatedReason)
+		}
+		if len(res.Hits) != 1 {
+			t.Fatalf("want exactly 1 hit, got %d", len(res.Hits))
+		}
+	})
+
 	t.Run("max_matches_per_file", func(t *testing.T) {
 		var b strings.Builder
 		for i := 0; i < 20; i++ {
