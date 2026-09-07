@@ -304,6 +304,15 @@ func newSPAHandler() http.Handler {
 		// No embedded SPA - return nil to signal gateway to skip registration
 		return nil
 	}
+	return newSPAHandlerFor(sub)
+}
+
+// newSPAHandlerFor builds the SPA-serving handler over an arbitrary filesystem.
+// It is split from newSPAHandler so the path→CSP routing — notably the one path
+// (pdfJSWorkerPath) that carries spaPdfWorkerContentSecurityPolicy — can be
+// exercised in tests over a fixture FS, deterministically and without depending
+// on a built SPA embed being present in the binary under test.
+func newSPAHandlerFor(sub fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 
 	spaHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

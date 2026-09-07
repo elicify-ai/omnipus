@@ -24,12 +24,14 @@
 package gateway
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,17 +72,28 @@ func spaResponse(t *testing.T, target string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// spaIsCIStub reports whether the embedded SPA is the CI stub (an index.html
-// with no built assets), not a real `npm run build` output. The unit/go-test
-// gates embed that stub (deploy/ci-worker/runci.sh ensure_spa_stub) because they
-// do not build the SPA, so assertions about real embedded assets (PDF.js worker,
-// wasm) cannot run there and skip. Detection keys off the stub's exact marker,
-// so a REAL build that is missing the asset still fails the assertion rather
-// than silently skipping — the skip is scoped to "no SPA was built", never to
-// "the asset is gone".
-func spaIsCIStub(t *testing.T) bool {
+// spaFixtureFS is a minimal in-memory SPA embed used to exercise the handler's
+// path→CSP routing WITHOUT a built SPA. It carries the one file the worker-CSP
+// rule keys on (pdfJSWorkerPath) plus an index and a wasm asset, so the routing
+// is tested for real and deterministically on any machine — including the
+// root-user, stub-SPA CI worker, where fetching the real embedded worker 404s.
+func spaFixtureFS() fs.FS {
+	return fstest.MapFS{
+		"index.html":    {Data: []byte("<!doctype html><title>fixture</title>")},
+		pdfJSWorkerPath: {Data: []byte("// pdf.js worker (fixture)")},
+		pdfJSAssetPathPrefix + "wasm/qcms_bg.wasm": {Data: []byte("\x00asm\x01\x00\x00\x00")},
+	}
+}
+
+// spaResponseFromFS drives newSPAHandlerFor over a caller-supplied filesystem,
+// so a test can assert the real routing without depending on the embedded SPA.
+func spaResponseFromFS(t *testing.T, fsys fs.FS, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	return strings.Contains(spaResponse(t, "/").Body.String(), "ci-stub")
+	handler := newSPAHandlerFor(fsys)
+	require.NotNil(t, handler)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	return rec
 }
 
 // TestSpaServedWithCSP is spec test 68.
@@ -366,16 +379,20 @@ func TestSpaEmbed_PdfJsPrefixMatchesTheBuild(t *testing.T) {
 // while re-permitting WebAssembly on the main thread — which is precisely what
 // the Shiki entry in embed.go tells the next reader not to do.
 func TestSpaCsp_PdfWorkerCarriesTheWasmPolicy(t *testing.T) {
+	// Driven over a fixture FS (not the embedded SPA) so the routing is tested
+	// deterministically on any machine — the go-test gate embeds a stub SPA with
+	// no PDF.js worker, so fetching the real embedded worker would 404. The
+	// fixture carries the worker at its real path, so a broken route (missing or
+	// mis-scoped header) still fails here. That the REAL build actually embeds
+	// the worker is covered where the SPA is built: the embed-build/e2e gates and
+	// tests/e2e/csp-assumptions.spec.ts (which reads the verdict in the worker's
+	// own realm).
+	fixture := spaFixtureFS()
+
 	t.Run("the worker script is served with 'wasm-unsafe-eval'", func(t *testing.T) {
-		if spaIsCIStub(t) {
-			t.Skip("SPA is the CI stub build (deploy/ci-worker/runci.sh ensure_spa_stub embeds " +
-				"index.html only, no PDF.js assets); this end-to-end embed assertion runs where the " +
-				"real SPA is built — GitHub Tests and the embed-build/e2e gates. Keyed to the stub " +
-				"marker, so a real build missing the worker still FAILS below rather than skipping.")
-		}
-		rec := spaResponse(t, "/"+pdfJSWorkerPath)
+		rec := spaResponseFromFS(t, fixture, "/"+pdfJSWorkerPath)
 		require.Equal(t, http.StatusOK, rec.Code,
-			"the worker must actually be embedded, or this asserts headers on a 404")
+			"the worker path must serve the embedded worker file, not fall through to a 404")
 
 		policies := rec.Header().Values("Content-Security-Policy")
 		require.Len(t, policies, 1,
@@ -388,7 +405,7 @@ func TestSpaCsp_PdfWorkerCarriesTheWasmPolicy(t *testing.T) {
 
 	t.Run("every other SPA response keeps the unwidened policy", func(t *testing.T) {
 		for _, target := range []string{"/", "/library", "/assets", "/" + pdfJSAssetPathPrefix + "wasm/qcms_bg.wasm"} {
-			rec := spaResponse(t, target)
+			rec := spaResponseFromFS(t, fixture, target)
 			assert.NotContains(t, rec.Header().Get("Content-Security-Policy"), "wasm-unsafe-eval",
 				"%s must NOT be able to compile WebAssembly: the allowance is scoped to the "+
 					"PDF.js worker realm, which is what keeps Shiki's pure-JavaScript engine a "+

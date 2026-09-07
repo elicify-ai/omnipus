@@ -352,14 +352,7 @@ func TestSync_TrashedNoteIsRemoved(t *testing.T) {
 func TestSync_UnreadableNoteIsRemovedNotLeftStale(t *testing.T) {
 	skipWithoutSQLite(t)
 	if runtime.GOOS == "windows" {
-		t.Skip("POSIX permission bits do not apply on windows")
-	}
-	if os.Geteuid() == 0 {
-		// root ignores the 0o000 mode and reads the note anyway, so the
-		// unreadable-note precondition this test rests on cannot hold (seen on
-		// the root-user CI worker). It still runs for every non-root context —
-		// dev machines and GitHub CI.
-		t.Skip("runs as root cannot make a file unreadable via chmod 0o000")
+		t.Skip("symlink creation needs a privilege on windows; this is a POSIX-only fixture")
 	}
 	home := syncHome(t)
 	root := syncVault(t, map[string]string{
@@ -375,11 +368,21 @@ func TestSync_UnreadableNoteIsRemovedNotLeftStale(t *testing.T) {
 	}
 	assertPathsIndexed(t, home, root, map[string]bool{"Plants/Fern.md": true})
 
+	// Make the note unreadable in a way that holds for EVERY user, root
+	// included. A chmod 0o000 does not: root ignores the mode bits, which is why
+	// the root-user CI worker could still read it and this assertion failed
+	// there. Replacing the note with a symlink instead trips Sync's FR-044
+	// containment guard (ResolveContainedNoSymlink) — a note reached through a
+	// symlink is refused as unreadable, its stale rows removed and the failure
+	// reported, which is exactly the behaviour under test, and it is refused by
+	// path shape, not by permission, so no user can bypass it.
 	notePath := filepath.Join(root, "Plants", "Fern.md")
-	if chmodErr := os.Chmod(notePath, 0o000); chmodErr != nil {
-		t.Fatalf("chmod: %v", chmodErr)
+	if rmErr := os.Remove(notePath); rmErr != nil {
+		t.Fatalf("remove note: %v", rmErr)
 	}
-	t.Cleanup(func() { _ = os.Chmod(notePath, 0o600) }) // let TempDir cleanup remove it
+	if symErr := os.Symlink(filepath.Join(root, "Plants", "does-not-exist.md"), notePath); symErr != nil {
+		t.Fatalf("symlink: %v", symErr)
+	}
 
 	stats, err := Sync(context.Background(), home, root, SyncOptions{})
 	if err != nil {
