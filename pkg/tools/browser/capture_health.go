@@ -6,6 +6,8 @@ import "time"
 // capture stages. Counter presence is explicit: zero is a valid measurement.
 type CaptureHealthObservation struct { // not-wire-format: gateway maps the generated contract into this snapshot.
 	BindingEpoch      uint64 // Assigned by the server; never trusted from an encoder payload.
+	CaptureGeneration uint64 // Server-assigned frame generation, separate from the local attempt.
+	TargetID          string
 	Generation        int64
 	TrackState        string
 	TrackMuted        bool
@@ -20,8 +22,9 @@ type CaptureHealthObservation struct { // not-wire-format: gateway maps the gene
 	ObservedAt        time.Time
 }
 
-// RecordIngestHeartbeat updates liveness and optional stage evidence together,
-// only while the sender still owns the authenticated ingest binding.
+// RecordIngestHeartbeat admits liveness only from the current authenticated
+// binding. Its return value reports socket admission; frame evidence additionally
+// requires the sampled peer to match the current measured capture frame.
 func (cs *CaptureSession) RecordIngestHeartbeat(epoch uint64, sample *CaptureHealthObservation) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -30,7 +33,7 @@ func (cs *CaptureSession) RecordIngestHeartbeat(epoch uint64, sample *CaptureHea
 	}
 	now := time.Now()
 	cs.lastPingAt = now
-	if sample != nil {
+	if sample != nil && cs.healthMatchesFrameLocked(*sample) {
 		cs.captureHealth = *sample
 		cs.captureHealth.BindingEpoch = epoch
 		cs.captureHealth.ObservedAt = now
@@ -65,4 +68,25 @@ func (cs *CaptureSession) ReportCaptureFailureForObservation(sample CaptureHealt
 // resumes forwarding without producing another track-arrival callback.
 func (cs *CaptureSession) RecordVideoProgress() {
 	cs.recordIngestVideoLive(true)
+}
+
+// Caller holds cs.mu. Legacy unbound test adapters have no frame identity;
+// authenticated context-bound encoders must name their actual sampled frame.
+func (cs *CaptureSession) healthMatchesFrameLocked(sample CaptureHealthObservation) bool {
+	if cs.ingestBindingCtx == nil {
+		return true
+	}
+	frame := cs.frames.snapshot()
+	return sample.CaptureGeneration != 0 && sample.CaptureGeneration == frame.Generation &&
+		sample.TargetID != "" && sample.TargetID == frame.Geometry.TargetID &&
+		frame.Geometry.Width > 0 && frame.Geometry.Height > 0
+}
+
+// StopIfIngestHeartbeatStale atomically claims shutdown only while the sampled
+// binding and heartbeat are still current. Shutdown I/O occurs outside cs.mu.
+func (cs *CaptureSession) StopIfIngestHeartbeatStale(epoch uint64, sampled, now time.Time, staleAfter time.Duration) bool {
+	return cs.stopWhen(func() bool {
+		return epoch != 0 && epoch == cs.ingestEpoch && !sampled.IsZero() &&
+			cs.lastPingAt.Equal(sampled) && now.Sub(sampled) > staleAfter
+	})
 }

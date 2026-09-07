@@ -2157,8 +2157,11 @@ function stopWatchdog() {
 // and peer state, without relabelling an old counter sample as fresh.
 async function sendCaptureHealth() {
   const pc = currentPC;
+  const stream = currentStream;
+  const command = currentCaptureCommand;
+  const socket = ws;
   const generation = captureGeneration;
-  const track = currentStream && currentStream.getVideoTracks()[0];
+  const track = stream && stream.getVideoTracks()[0];
   const health = {
     generation,
     track_state: track ? track.readyState : 'absent',
@@ -2187,8 +2190,20 @@ async function sendCaptureHealth() {
       clearTimeout(timer);
     }
   }
-  if (shuttingDown || currentPC !== pc || captureGeneration !== generation) return;
-  sendFrame({ type: 'browser_capture_control', action: 'ping', capture_health: health });
+  if (shuttingDown || ws !== socket) return;
+  const frame = { type: 'browser_capture_control', action: 'ping' };
+  if (currentPC !== pc || currentStream !== stream || currentCaptureCommand !== command || captureGeneration !== generation) {
+    // A changed sample cannot describe the new peer, but the original socket
+    // can still prove it is alive while capture transitions are pending.
+    sendFrame(frame);
+    return;
+  }
+  frame.capture_health = health;
+  if (pc && command) {
+    frame.capture_generation = command.capture_generation;
+    frame.target_id = command.target_id;
+  }
+  sendFrame(frame);
 }
 
 function startPingBeacon() {

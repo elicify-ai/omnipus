@@ -171,7 +171,7 @@ func TestCaptureIngestWireHeartbeatsStayFreshDuringNegotiation(t *testing.T) {
 	conn := ingestWireConnect(t, cs, url)
 	ingestWireSendOffer(t, conn, 1, 1, "page-a")
 	ingestWireAwaitOffer(t, r)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"browser_capture_control","action":"ping","capture_health":{"generation":1,"track_state":"live","track_muted":false,"peer_state":"connected","source_frames":21,"encoded_frames":20,"packets_sent":30,"sample_timestamp_ms":120}}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"browser_capture_control","action":"ping","capture_generation":1,"target_id":"page-a","capture_health":{"generation":1,"track_state":"live","track_muted":false,"peer_state":"connected","source_frames":21,"encoded_frames":20,"packets_sent":30,"sample_timestamp_ms":120}}`)))
 	require.Eventually(t, func() bool { return cs.CaptureHealth().SampleTimestampMS == 120 }, time.Second, time.Millisecond)
 	require.Equal(t, uint64(1), cs.CaptureHealth().BindingEpoch)
 }

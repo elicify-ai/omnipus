@@ -20,7 +20,7 @@ func TestCaptureHealthCanceledBindingCannotRefreshHeartbeat(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			epoch := adapterBind(t, cs, ctx)
-			current := CaptureHealthObservation{Generation: 1, TrackState: "live", SampleTimestampMS: 10}
+			current := CaptureHealthObservation{CaptureGeneration: 1, TargetID: "page-a", Generation: 1, TrackState: "live", SampleTimestampMS: 10}
 			if !cs.RecordIngestHeartbeat(epoch, &current) {
 				t.Fatal("current binding heartbeat rejected")
 			}
@@ -31,7 +31,7 @@ func TestCaptureHealthCanceledBindingCannotRefreshHeartbeat(t *testing.T) {
 			cancel()
 			var late *CaptureHealthObservation
 			if structured {
-				late = &CaptureHealthObservation{Generation: 2, TrackState: "ended", SampleTimestampMS: 20}
+				late = &CaptureHealthObservation{CaptureGeneration: 1, TargetID: "page-a", Generation: 2, TrackState: "ended", SampleTimestampMS: 20}
 			}
 			if cs.RecordIngestHeartbeat(epoch, late) {
 				t.Error("canceled connection refreshed heartbeat")
@@ -54,7 +54,7 @@ func TestCaptureHealthCanceledBindingCannotTriggerRecovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	epoch := adapterBind(t, cs, ctx)
-	failed := CaptureHealthObservation{Generation: 1, TrackState: "ended"}
+	failed := CaptureHealthObservation{CaptureGeneration: 1, TargetID: "page-a", Generation: 1, TrackState: "ended"}
 	if !cs.RecordIngestHeartbeat(epoch, &failed) {
 		t.Fatal("current binding heartbeat rejected")
 	}

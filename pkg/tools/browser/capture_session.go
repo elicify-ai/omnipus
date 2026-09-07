@@ -1793,10 +1793,16 @@ func (cs *CaptureSession) SetOnStopped(fn func()) {
 // explicit Stop from browser-death detection) and safe to use directly as a
 // time.AfterFunc callback (see RemoveViewer).
 func (cs *CaptureSession) Stop() {
+	cs.stopWhen(nil)
+}
+
+// stopWhen evaluates an optional ownership predicate and claims stopped under
+// the same lock. The predicate must not perform I/O or re-enter CaptureSession.
+func (cs *CaptureSession) stopWhen(allowed func() bool) bool {
 	cs.mu.Lock()
-	if cs.stopped {
+	if cs.stopped || (allowed != nil && !allowed()) {
 		cs.mu.Unlock()
-		return
+		return false
 	}
 	cs.stopped = true
 	cs.cancelIngestBindingLocked()
@@ -1839,6 +1845,7 @@ func (cs *CaptureSession) Stop() {
 	if onStopped != nil {
 		onStopped()
 	}
+	return true
 }
 
 // Stats returns the relay's current point-in-time stats (viewer count,

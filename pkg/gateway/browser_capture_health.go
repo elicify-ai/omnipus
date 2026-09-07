@@ -13,6 +13,12 @@ func recordCaptureHealth(cs *browser.CaptureSession, epoch uint64, frame generat
 		return cs.RecordIngestHeartbeat(epoch, nil)
 	}
 	s := browser.CaptureHealthObservation{Generation: int64(h.Generation), TrackState: h.TrackState, TrackMuted: h.TrackMuted, PeerState: h.PeerState}
+	if frame.CaptureGeneration != nil && *frame.CaptureGeneration > 0 {
+		s.CaptureGeneration = uint64(*frame.CaptureGeneration)
+	}
+	if frame.TargetId != nil {
+		s.TargetID = *frame.TargetId
+	}
 	if h.SourceFrames != nil {
 		s.SourceFrames = int64(*h.SourceFrames)
 		s.HasSourceFrames = true
@@ -86,7 +92,7 @@ func (t *captureHealthTracker) observe(sample browser.CaptureHealthObservation, 
 		*t = captureHealthTracker{}
 		return ""
 	}
-	if previous.BindingEpoch != sample.BindingEpoch || previous.Generation != sample.Generation ||
+	if previous.BindingEpoch != sample.BindingEpoch || previous.CaptureGeneration != sample.CaptureGeneration || previous.TargetID != sample.TargetID || previous.Generation != sample.Generation ||
 		(previous.HasSourceFrames && sample.HasSourceFrames && sample.SourceFrames < previous.SourceFrames) ||
 		(previous.HasEncodedFrames && sample.HasEncodedFrames && sample.EncodedFrames < previous.EncodedFrames) ||
 		(previous.HasPacketsSent && sample.HasPacketsSent && sample.PacketsSent < previous.PacketsSent) {

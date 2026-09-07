@@ -90,10 +90,10 @@ func TestEncoderHealthReportsOriginalSampleAndOmitsMissingCounters(t *testing.T)
   sandbox.stream={getVideoTracks:()=>[{readyState:'live',muted:false}]};sandbox.socket={readyState:1,send:s=>frames.push(JSON.parse(s))};
   run('currentPC=pc;currentStream=stream;ws=socket;captureGeneration=4;');
   await run('sendCaptureHealth()');await run('sendCaptureHealth()');
-  const expected={type:'browser_capture_control',action:'ping',capture_health:{generation:4,track_state:'live',track_muted:false,peer_state:'connected',source_frames:9,encoded_frames:7,packets_sent:19,sample_timestamp_ms:12345}};
+  const expected={type:'browser_capture_control',action:'ping',capture_generation:1,target_id:'fixture',capture_health:{generation:4,track_state:'live',track_muted:false,peer_state:'connected',source_frames:9,encoded_frames:7,packets_sent:19,sample_timestamp_ms:12345}};
   assert.deepEqual(frames,[expected,expected],'same old stats must retain old sample timestamp');
   frames.length=0;report.clear();await run('sendCaptureHealth()');
-  assert.deepEqual(frames,[{type:'browser_capture_control',action:'ping',capture_health:{generation:4,track_state:'live',track_muted:false,peer_state:'connected'}}],'missing counters must remain absent');
+  assert.deepEqual(frames,[{type:'browser_capture_control',action:'ping',capture_generation:1,target_id:'fixture',capture_health:{generation:4,track_state:'live',track_muted:false,peer_state:'connected'}}],'missing counters must remain absent');
  })().catch(e=>{console.error(e);process.exitCode=1});
  `)
 }
