@@ -105,7 +105,7 @@ func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Requ
 	// collections cannot be distinguished by timing a 429 either.
 	col, inScope := a.resolveScopedCollection(workspaceID, req.CollectionId)
 	if !inScope {
-		jsonOK(w, emptyVaultSearchResponse(req.CollectionId))
+		jsonOK(w, outOfScopeVaultSearchResponse(req.CollectionId, requestedLimit, limitClamped))
 		return
 	}
 
@@ -149,6 +149,51 @@ func emptyVaultSearchResponse(collectionID string) gen.VaultSearchResponse {
 		Attachments:  &[]gen.VaultSearchAttachmentHit{},
 		Statement:    &statement,
 	}
+}
+
+// outOfScopeVaultSearchResponse is the handler's answer for a collection_id
+// this workspace cannot address (US-9/FR-053). It builds on
+// emptyVaultSearchResponse and layers in ONLY the limit-clamp disclosure —
+// never the notes_searched/notes_total_known coverage numbers, and never a
+// statement composed from them. Those numbers describe a REAL collection's
+// index state; an out-of-scope collection has none this workspace may read,
+// so the only way to avoid either fabricating them or leaking another
+// workspace's real ones is to omit them, exactly as buildVaultSearchResult
+// itself omits them for an in-scope collection with nothing to disclose (see
+// its own honesty-fields comment) — that is what keeps the two cases
+// byte-indistinguishable. The limit clamp, by contrast, is safe to disclose
+// unconditionally: it is derived only from the caller's own requested limit
+// and the public server cap (vaultSearchMaxLimit), never from collection
+// state, so withholding it here would gain no privacy and would cost a real
+// caller the disclosure FR-037 requires.
+func outOfScopeVaultSearchResponse(collectionID string, requestedLimit int, limitClamped bool) gen.VaultSearchResponse {
+	out := emptyVaultSearchResponse(collectionID)
+	applyVaultSearchLimitDisclosure(&out, limitClamped, requestedLimit)
+	statement := vaultSearchStatement(out)
+	out.Statement = &statement
+	return out
+}
+
+// applyVaultSearchLimitDisclosure sets limit_clamped/limit_requested (MV-9/
+// FR-037) when the caller's requested limit was clamped down to the server
+// cap. Shared by buildVaultSearchResult and outOfScopeVaultSearchResponse so
+// the two paths can never drift on how — or whether — this disclosure is
+// composed.
+func applyVaultSearchLimitDisclosure(out *gen.VaultSearchResponse, limitClamped bool, requestedLimit int) {
+	if !limitClamped {
+		return
+	}
+	clamped := true
+	out.LimitClamped = &clamped
+	requested := requestedLimit
+	out.LimitRequested = &requested
+}
+
+// vaultSearchHasAnyHit reports whether out carries at least one real hit in
+// any group (notes, records, views or attachments).
+func vaultSearchHasAnyHit(out gen.VaultSearchResponse) bool {
+	return len(out.Notes) > 0 || len(out.Records) > 0 || len(out.Views) > 0 ||
+		(out.Attachments != nil && len(*out.Attachments) > 0)
 }
 
 // buildVaultSearchResult runs the four searches (records, notes, views,
@@ -233,23 +278,34 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 	// walk could not be trusted (ScannedFiles == 0, the same threshold the
 	// engine's own coverage checks use) the denominator is OMITTED rather than
 	// reported as zero.
+	//
+	// WITHHELD (FR-053) when the search is complete AND every group came back
+	// empty: that state is the one an out-of-scope collection_id ALSO
+	// produces (outOfScopeVaultSearchResponse), and US-9/FR-053 requires the
+	// two to be indistinguishable — including the prose, not only the hit
+	// arrays. A real notes_searched/notes_total_known pair here would be
+	// exactly the signal a caller probing for another workspace's collection
+	// ids needs: present only for a collection that genuinely exists. Once
+	// there is at least one real hit, or the search is itself incomplete, the
+	// response already carries collection-specific content beyond "nothing
+	// matched" — at that point the coverage numbers add honesty without
+	// opening a new channel, so they are disclosed as before.
 	if fr, ok := env.Deps.Text.(knowledgefind.TextFreshnessReporter); ok {
 		if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
-			searched := fresh.IndexedFiles
-			total := fresh.ScannedFiles
-			out.NotesSearched = &searched
-			out.NotesTotalKnown = &total
+			if hasHits := vaultSearchHasAnyHit(out); hasHits || !out.Complete {
+				searched := fresh.IndexedFiles
+				total := fresh.ScannedFiles
+				out.NotesSearched = &searched
+				out.NotesTotalKnown = &total
+			}
 		}
 	}
 
 	// LIMIT CLAMP DISCLOSURE (MV-9/FR-037): the handler clamps a request above
 	// knowledgefind.MaxLimit to that cap; the clamp is reported, never silent.
-	if limitClamped {
-		clamped := true
-		out.LimitClamped = &clamped
-		requested := requestedLimit
-		out.LimitRequested = &requested
-	}
+	// Not scope-sensitive (see applyVaultSearchLimitDisclosure) — shared with
+	// outOfScopeVaultSearchResponse so both paths disclose it identically.
+	applyVaultSearchLimitDisclosure(&out, limitClamped, requestedLimit)
 
 	statement := vaultSearchStatement(out)
 	out.Statement = &statement

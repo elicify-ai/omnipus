@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,6 +151,86 @@ func TestLibraryFilesSearch_ErrTaxonomy(t *testing.T) {
 		}
 		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"x"}`)
 		assert.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	})
+}
+
+// TestLibraryFilesSearch_GlobBoundsEnforcedRegardlessOfValidateInbound is a
+// code-review regression (2026-09-07, G2): the contract's include_globs/
+// exclude_globs maxItems:32/maxLength:512 bounds
+// (contracts/components/schemas/FileSearchRequest.yaml) were declared but
+// never enforced by the handler — fileSearchOptionsFromRequest copied
+// *req.IncludeGlobs/*req.ExcludeGlobs verbatim into filegrep.Options, and
+// filegrep.Limits.Normalize only clamps files/bytes/matches/depth/deadline/
+// output, never glob count or length. The contract-schema check that WOULD
+// catch this is itself gated behind gateway.validate_inbound, a plain
+// omitempty bool defaulting to false (decodeAndValidate's fast path skips it
+// entirely) — so on a default-configured server, an authenticated caller
+// could post thousands of globs and force globAllowed to run
+// O(len(include)+len(exclude)) doublestar.Match calls per visited file,
+// burning a shared MV-11 walk slot for its full deadline. buildLibraryTestAPI
+// leaves ValidateInbound at its zero value (false), so this test exercises
+// exactly that default-configured, unvalidated path — matching MV-1's 400
+// "invalid body" bucket, the same taxonomy TestLibraryFilesSearch_ErrTaxonomy
+// covers for this endpoint's other bad-request cases.
+func TestLibraryFilesSearch_GlobBoundsEnforcedRegardlessOfValidateInbound(t *testing.T) {
+	t.Run("include_globs over the 32-item cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		require.False(t, api.agentLoop.GetConfig().Gateway.ValidateInbound,
+			"this test must exercise the unvalidated default, not the schema-validated path")
+
+		globs := make([]string, 33)
+		for i := range globs {
+			globs[i] = "**/*.md"
+		}
+		body, err := json.Marshal(map[string]any{"query": "x", "include_globs": globs})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("exclude_globs over the 32-item cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		globs := make([]string, 33)
+		for i := range globs {
+			globs[i] = "**/*.log"
+		}
+		body, err := json.Marshal(map[string]any{"query": "x", "exclude_globs": globs})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("a single glob entry over the 512-char cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		body, err := json.Marshal(map[string]any{
+			"query":         "x",
+			"include_globs": []string{"**/" + strings.Repeat("a", 513) + ".md"},
+		})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("globs within both caps are accepted", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+		globs := make([]string, 32)
+		for i := range globs {
+			globs[i] = "**/*.md"
+		}
+		body, err := json.Marshal(map[string]any{"query": "report", "include_globs": globs})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		resp := decodeJSON[gen.FileSearchResponse](t, w)
+		require.Len(t, resp.Hits, 1)
 	})
 }
 

@@ -48,6 +48,17 @@ import (
 // caller for any meaningful time.
 const filesSearchWalkSlotWait = 150 * time.Millisecond
 
+// fileSearchMaxGlobItems / fileSearchMaxGlobLength are the contract's
+// include_globs/exclude_globs maxItems/maxLength bounds
+// (contracts/components/schemas/FileSearchRequest.yaml). Neither filegrep nor
+// Options.Limits.Normalize enforces them — see validateFileSearchGlobs — so
+// the handler is the only place these are checked; they must stay in sync
+// with the contract by hand (not generated).
+const (
+	fileSearchMaxGlobItems  = 32
+	fileSearchMaxGlobLength = 512
+)
+
 // filegrepSearchFn is a swappable seam over filegrep.Search, mirroring this
 // codebase's established swappable-seam convention for test observability
 // (e.g. pkg/session's sessionLockAcquireFn/sessionLockReleaseFn — see
@@ -74,6 +85,21 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	req.Query = query
+
+	// The contract's include_globs/exclude_globs maxItems/maxLength bounds
+	// (contracts/components/schemas/FileSearchRequest.yaml) are enforced HERE,
+	// unconditionally — decodeAndValidate's schema pass above only runs when
+	// gateway.validate_inbound is true (default false), and neither
+	// fileSearchOptionsFromRequest nor filegrep.Limits.Normalize clamps glob
+	// count or length (Normalize only clamps files/bytes/matches/depth/
+	// deadline/output). Left unenforced, an over-large glob list turns every
+	// visited file into O(len(include)+len(exclude)) doublestar.Match calls
+	// (filegrep's globAllowed), which can burn a shared MV-11 walk slot for
+	// its full deadline.
+	if err := validateFileSearchGlobs(req.IncludeGlobs, req.ExcludeGlobs); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	pathParam := ""
 	if req.Path != nil {
@@ -147,6 +173,36 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 	}
 
 	jsonOK(w, fileSearchResponseFromResult(result))
+}
+
+// validateFileSearchGlobs enforces the contract's include_globs/
+// exclude_globs maxItems:fileSearchMaxGlobItems / maxLength:
+// fileSearchMaxGlobLength bounds unconditionally — independent of
+// gateway.validate_inbound (decodeAndValidate's schema pass is entirely
+// opt-in, see its fast path). Unlike every bound in filegrep.Limits, glob
+// count and per-glob length are never touched by Options.Limits.Normalize,
+// so this is the only enforcement point for them.
+func validateFileSearchGlobs(include, exclude *[]string) error {
+	for _, group := range []struct {
+		field string
+		globs *[]string
+	}{
+		{"include_globs", include},
+		{"exclude_globs", exclude},
+	} {
+		if group.globs == nil {
+			continue
+		}
+		if len(*group.globs) > fileSearchMaxGlobItems {
+			return fmt.Errorf("%s must not contain more than %d entries", group.field, fileSearchMaxGlobItems)
+		}
+		for _, g := range *group.globs {
+			if len(g) > fileSearchMaxGlobLength {
+				return fmt.Errorf("%s entries must not exceed %d characters", group.field, fileSearchMaxGlobLength)
+			}
+		}
+	}
+	return nil
 }
 
 // fileSearchOptionsFromRequest maps the wire request onto filegrep.Options.
