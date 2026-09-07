@@ -1225,6 +1225,17 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 			lv.cssViewportH = int(cssH)
 			require.True(t, lv.takeControl("viewerA"))
 
+			if tc.in.Kind == "mouse_up" {
+				// Releases now require this viewer's accepted press. Keep the
+				// coordinate assertions focused on the release under test.
+				down := tc.in
+				down.Kind = "mouse_down"
+				require.NoError(t, lv.dispatchInput("viewerA", down))
+				mu.Lock()
+				actions = nil
+				mu.Unlock()
+			}
+
 			err := lv.dispatchInput("viewerA", tc.in)
 			require.NoError(t, err)
 

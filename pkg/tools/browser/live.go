@@ -1034,7 +1034,9 @@ func broadcastStatus(sinks []StatusSink, message string) {
 //
 // Must be called with no LiveView lock held (it makes CDP calls).
 func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH int) (int64, int64, error) {
-	deadline := time.Now().Add(viewportSettleBudget)
+	settleCtx, cancel := context.WithTimeout(tabCtx, viewportSettleBudget)
+	defer cancel()
+	deadline, _ := settleCtx.Deadline()
 	var (
 		lastW, lastH int64
 		haveRead     bool
@@ -1042,7 +1044,11 @@ func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH i
 	)
 	for {
 		var w, h int64
-		err := lv.runCDP(tabCtx, viewportSetTimeout, layoutMetricsAction{w: &w, h: &h})
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		err := lv.runCDP(settleCtx, remaining, layoutMetricsAction{w: &w, h: &h})
 		switch {
 		case err != nil:
 			lastErr = err
@@ -1060,14 +1066,14 @@ func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH i
 		if !time.Now().Before(deadline) {
 			break
 		}
-		timer := time.NewTimer(viewportSettlePollInterval)
+		timer := time.NewTimer(min(viewportSettlePollInterval, time.Until(deadline)))
 		select {
-		case <-tabCtx.Done():
+		case <-settleCtx.Done():
 			timer.Stop()
 			if haveRead {
 				return lastW, lastH, nil
 			}
-			return 0, 0, tabCtx.Err()
+			return 0, 0, settleCtx.Err()
 		case <-timer.C:
 		}
 	}
@@ -1075,7 +1081,10 @@ func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH i
 		return lastW, lastH, nil
 	}
 	if lastErr == nil {
-		lastErr = errors.New("no CSS viewport read completed")
+		lastErr = settleCtx.Err()
+		if lastErr == nil {
+			lastErr = errors.New("no CSS viewport read completed")
+		}
 	}
 	return 0, 0, lastErr
 }
@@ -1235,21 +1244,10 @@ func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
 	return lv.cssViewportW, lv.cssViewportH, true
 }
 
-// Input dispatches a viewer input event via CDP, but ONLY when viewerID
-// currently holds control of sessionID (ADR-038 D6). Returns an error
-// (nothing is applied) when the viewer doesn't hold control, no live view is
-// active for the session, or the event is rate-limited.
+// Input dispatches an attached viewer's event with a bounded lifetime. Human
+// viewers share input; the presentation-only control label is not a gate.
 func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error {
-	sessionID = r.resolveSessionID(sessionID)
-	lv, ok := r.lookup(sessionID)
-	if !ok {
-		// Real, not benign (ADR-038 finding #4): nobody has ever attached
-		// (or the tab was torn down entirely), which the caller needs to
-		// know about — unlike a not-controller/rate-limit rejection, this
-		// isn't an expected steady-state occurrence.
-		return realInputError("browser live: no active live view for session %q", sessionID)
-	}
-	return lv.dispatchInput(viewerID, in)
+	return r.InputContext(context.Background(), sessionID, viewerID, in)
 }
 
 // TakeControl grants viewerID exclusive interactive control of sessionID's
@@ -1344,6 +1342,7 @@ type LiveView struct {
 	sessionID string
 
 	mu         sync.Mutex
+	inputState *liveInputState // bookkeeping under mu; commands serialize through its gate
 	tabCtx     context.Context
 	listenCtx  context.Context // child of tabCtx; canceling it stops the death watch without touching the tab
 	stopListen context.CancelFunc
@@ -1580,6 +1579,9 @@ func (lv *LiveView) attach(
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	lv.viewers[viewerID] = struct{}{}
+	if lv.inputState != nil {
+		delete(lv.inputState.retired, tabCtx)
+	}
 	if onStatus != nil {
 		lv.statusSinks[viewerID] = onStatus
 	}
@@ -1654,11 +1656,13 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	// needsRebind/tabCtx. Guarded on lastKnownActiveCtx != nil so the very
 	// first onTabsChanged call (which only establishes the baseline) never
 	// counts as a "change".
-	activeTabChanged := lv.lastKnownActiveCtx != nil && lv.lastKnownActiveCtx != newCtx
+	oldInputTarget := lv.lastKnownActiveCtx
+	activeTabChanged := oldInputTarget != nil && oldInputTarget != newCtx
 	lv.lastKnownActiveCtx = newCtx
 	lv.mu.Unlock()
 
 	if activeTabChanged {
+		lv.retireInputTarget(oldInputTarget, newCtx)
 		// The cached CSS viewport described the tab we just LEFT. Every
 		// coordinate mapped through it from here on would be wrong, so it is
 		// dropped rather than carried across — a stale-but-positive cache is
@@ -2054,6 +2058,7 @@ func (lv *LiveView) detach(viewerID string) {
 	// own detach/disconnect cleanup path — see broadcastControl's doc
 	// comment.
 	broadcastControl(otherSinks, false)
+	lv.detachInput(viewerID)
 
 	if stopListen != nil {
 		stopListen()
@@ -2133,129 +2138,10 @@ func IsBenignLiveInputError(err error) bool {
 	return errors.As(err, &liveErr) && liveErr.Kind == LiveInputErrorBenign
 }
 
-// dispatchInput validates control + rate limit, then dispatches one CDP
-// input action. Called with no locks held by the caller.
+// dispatchInput is the internal compatibility entry point. Public callers use
+// InputContext, which also verifies viewer attachment and binds its lifetime.
 func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
-	lv.mu.Lock()
-	// NO CONTROL GATE (operator directive, 2026-08-03). The live panel is a
-	// REAL BROWSER the human uses normally, and the agent can steer it too —
-	// both, concurrently. Input is never refused because some other viewer
-	// "holds the wheel".
-	//
-	// This replaced an exclusive single-controller lock that refused every
-	// event unless viewerID matched lv.controller. Measured consequence: a
-	// second attached viewer (another panel, a pop-out, an automation session
-	// that never detached) left the actual human with a dead mouse, dead
-	// keyboard, and a URL bar that would not submit — the panel showed
-	// "Someone else is driving" and silently dropped everything the user did.
-	// A browser that refuses input is not a browser.
-	//
-	// lv.controller is retained for PRESENTATION only (who to show as active
-	// in the header, the ADR-039 controlSinks broadcast); it must never again
-	// become an authorization decision on this path.
-	if !lv.allowInputLocked(in.Kind) {
-		lv.mu.Unlock()
-		limit := maxDiscreteInputEventsPerSecond
-		if isCoalescibleInputKind(in.Kind) {
-			limit = maxCoalescibleInputEventsPerSecond
-		}
-		return benignInputError("browser live: input rate limit exceeded for %s (%d/s)", in.Kind, limit)
-	}
-	tabCtx := lv.tabCtx
-	lv.mu.Unlock()
-
-	if tabCtx == nil {
-		return realInputError("browser live: session is not attached")
-	}
-
-	// Root-cause doc Fault 3: x/y arrive in the CLIENT's capture-frame pixel
-	// space, which is no longer guaranteed to equal the tab's CSS pixel
-	// space now that SetViewport (Fault 1 fix, above) can resize the tab
-	// independently of what the encoder's downscaling happens to produce.
-	// Only pointer-position kinds carry a meaningful position to rescale —
-	// wheel's DeltaX/DeltaY are scroll deltas, not positions, and key/text
-	// carry no coordinates at all.
-	switch in.Kind {
-	case "mouse_move", "mouse_down", "mouse_up", "wheel":
-		if in.HasXY && in.CaptureWidth > 0 && in.CaptureHeight > 0 {
-			rx, ry, ok := lv.rescaleToCSSViewport(tabCtx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
-			if !ok {
-				// DROP rather than dispatch at an unmapped coordinate — see
-				// rescaleToCSSViewport's doc comment: unscaled coordinates
-				// land ~34% off (measured), i.e. on the wrong element, and a
-				// mis-aimed click can navigate away, delete or submit.
-				//
-				// Classification matters as much as the drop. A one-off miss
-				// is a transient the user retries past, so it stays benign and
-				// silent. But a SUSTAINED streak means the CDP transport is
-				// wedged or the tab is dead — and LiveInputErrorReal's own doc
-				// comment names exactly that as the thing that must reach the
-				// user ("a dead browser looked identical to a healthy, idle
-				// one", ADR-038 finding #4). Without this escalation a crashed
-				// tab would swallow every click forever with no error, since
-				// pointer kinds bail out here and never reach the real-error
-				// CDP dispatch below.
-				lv.mu.Lock()
-				failures := lv.viewportFetchFailures
-				lv.mu.Unlock()
-				if failures >= viewportFetchFailureEscalation {
-					return realInputError(
-						"browser live: cannot read the tab's CSS viewport after %d consecutive attempts — the browser tab may have crashed or the CDP transport is wedged",
-						failures,
-					)
-				}
-				return benignInputError(
-					"browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch",
-					in.Kind,
-				)
-			}
-			in.X, in.Y = rx, ry
-		}
-	}
-
-	action, err := buildInputAction(in)
-	if err != nil {
-		return realInputError("%w", err)
-	}
-
-	// ADR-039 D-A2 (BLOCKING): a user-driven navigate MUST pass the same
-	// SSRF/scheme gate the agent's browser_navigate tool applies
-	// (BrowserManager.ValidateURL — tools.go's NavigateTool.Execute) before
-	// ever reaching CDP. The live-WS input path otherwise has no URL gate of
-	// its own. A blocked URL is a real, user-visible failure (not the benign
-	// not-controller/rate-limit kind) so the gateway surfaces it as a
-	// browser_status(error) frame instead of silently dropping it.
-	//
-	// 7-reviewer BLOCKER: ValidateURL's SSRF check does DNS resolution
-	// (resolver.LookupIPAddr) with no deadline of its own. tabCtx is the
-	// live agent tab's own context — it does not expire on any per-call
-	// schedule — so calling ValidateURL(tabCtx, ...) directly means a
-	// blackholed/slow-DNS hostname can hang this call for however long the
-	// resolver is willing to wait (its own internal ceiling, 10-30s+ or
-	// unbounded). Because handleInput (browser_ws.go) runs synchronously in
-	// the connection's single readLoop goroutine, that hang freezes the
-	// WHOLE connection — it can't even process a browser_detach — which is
-	// exactly the unbounded-wait hazard the ADR-038 deadlock postmortem
-	// documented in this file (see runCDPWithTimeout's doc comment) exists
-	// to prevent. Mirror that same fix here: bound the call to a
-	// context.WithTimeout child of tabCtx, so even a wedged resolver fails
-	// this one navigate attempt in bounded time instead of hanging forever.
-	if in.Kind == "navigate" {
-		validateCtx, cancel := context.WithTimeout(tabCtx, lv.mgr.PageTimeout())
-		err := lv.mgr.ValidateURL(validateCtx, in.URL)
-		cancel()
-		if err != nil {
-			return realInputError("browser live: navigate blocked: %w", err)
-		}
-	}
-
-	// No lock held here (already released above) — bounded via lv.runCDP so
-	// a wedged transport can't hang the caller (the gateway's input-handling
-	// goroutine) forever.
-	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), action); err != nil {
-		return realInputError("browser live: input dispatch failed: %w", err)
-	}
-	return nil
+	return lv.dispatchInputContext(context.Background(), viewerID, in)
 }
 
 // rescaleToCSSViewport maps (x, y) from the client's capture-frame pixel
@@ -2308,6 +2194,11 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 
 		var w, h int64
 		err := lv.runCDP(tabCtx, viewportInputFetchTimeout, layoutMetricsAction{w: &w, h: &h})
+		// A canceled caller abandoned this read. It says nothing about the
+		// target's health and must not put subsequent input into backoff.
+		if tabCtx.Err() != nil {
+			return 0, 0, false
+		}
 		if err != nil || w <= 0 || h <= 0 {
 			logger.WarnCF(
 				"browser",
@@ -2835,20 +2726,20 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 		if in.URL == "" {
 			return nil, fmt.Errorf("browser live: navigate input requires a non-empty url field")
 		}
-		return chromedp.Navigate(in.URL), nil
+		return navigationInputAction{url: in.URL}, nil
 	case "navigate_back":
 		// History back — no URL (goes to a previously-navigated page, already
 		// SSRF-cleared on its original navigate). Discrete, like navigate.
 		if in.HasXY || in.URL != "" {
 			return nil, fmt.Errorf("browser live: navigate_back input must not carry x/y or url")
 		}
-		return chromedp.NavigateBack(), nil
+		return historyBackInputAction{}, nil
 	case "reload":
 		// Reload the current URL (already SSRF-cleared). Discrete, like navigate.
 		if in.HasXY || in.URL != "" {
 			return nil, fmt.Errorf("browser live: reload input must not carry x/y or url")
 		}
-		return chromedp.Reload(), nil
+		return page.Reload(), nil
 	default:
 		return nil, fmt.Errorf("browser live: unknown input kind %q", in.Kind)
 	}
