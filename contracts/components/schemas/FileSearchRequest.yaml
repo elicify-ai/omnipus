@@ -1,0 +1,121 @@
+title: FileSearchRequest
+description: >
+  Request body for POST /api/v1/library/{workspace_id}/files/search — the
+  bounded, index-free file search over a workspace's confined Library root
+  (work tree + mounts), per ADR-081 and
+  docs/internal/specs/unified-search-and-grep-spec.md.
+
+  The HUMAN bar always sends regex:false — a person's query is a literal with
+  smart-case (FR-016) and can never produce a regex parse error. regex:true is
+  the explicit opt-in used by API callers and by the agent grep tool's shared
+  engine semantics.
+
+  Every bound is a downward-only override of the server defaults (MV-3); an
+  override above a cap is CLAMPED and the clamp is disclosed in the response's
+  limits_applied echo — never silent. Bounds are deliberately not
+  operator-configurable in v1.
+type: object
+additionalProperties: false
+required:
+  - query
+properties:
+  query:
+    type: string
+    minLength: 1
+    maxLength: 1024
+    description: >
+      The search text. With regex:false (default) it is matched literally
+      under the selected case mode against file names/paths and text-file
+      content. With regex:true it is an RE2 pattern (linear-time; no
+      backreferences/lookaround — which is what makes agent-supplied patterns
+      safe).
+    example: "quarterly report"
+  path:
+    type: string
+    description: >
+      Workspace-relative folder to scope the search to. Omitted or empty means
+      the workspace root. Must resolve inside the confined root; a path outside
+      it is refused with the Library's standard taxonomy.
+    example: "01-Areas/Finance"
+  regex:
+    type: boolean
+    default: false
+    description: Treat query as an RE2 pattern. The SPA bar never sets this.
+  case:
+    type: string
+    enum: [smart, sensitive, insensitive]
+    default: smart
+    description: >
+      Case mode for BOTH name and content matching. smart (default) derives
+      the mode from the pattern: any uppercase letter makes it sensitive,
+      otherwise insensitive.
+  include_hidden:
+    type: boolean
+    default: false
+    description: >
+      Include dot-prefixed USER files/directories. Regardless of this flag,
+      .git/, .library/ and .omnipus-vault/ are always pruned — Omnipus
+      internals and git object noise are never scanned. .gitignore files are
+      still read for pruning even when hidden files are excluded from results.
+  include_globs:
+    type: array
+    items:
+      type: string
+      maxLength: 512
+    maxItems: 32
+    description: >
+      doublestar patterns (e.g. "**/*.md"); when non-empty, only matching
+      paths are considered.
+  exclude_globs:
+    type: array
+    items:
+      type: string
+      maxLength: 512
+    maxItems: 32
+    description: doublestar patterns removed from consideration.
+  context_lines:
+    type: integer
+    minimum: 0
+    maximum: 5
+    default: 0
+    description: >
+      Lines of context to attach before and after each content hit. Carried on
+      REST for API parity with the agent grep tool; the SPA does not use it in
+      v1 (recorded decision, spec R2-MIN-005).
+  limits:
+    type: object
+    additionalProperties: false
+    description: >
+      Downward-only overrides of the server bounds (MV-3). Values above the
+      server defaults are clamped and disclosed via limits_applied.
+    properties:
+      files:
+        type: integer
+        minimum: 1
+        description: Max files visited (server default 50000).
+      bytes:
+        type: integer
+        minimum: 1
+        description: Max content bytes scanned (server default 268435456).
+      matches:
+        type: integer
+        minimum: 1
+        description: Max total hits (server default 1000).
+      matches_per_file:
+        type: integer
+        minimum: 1
+        description: Max hits contributed by one file (server default 50).
+      depth:
+        type: integer
+        minimum: 1
+        description: Max directory depth (server default 32).
+      deadline_ms:
+        type: integer
+        minimum: 50
+        description: >
+          Wall-clock budget in milliseconds (server default 10000; the SPA
+          sends 3000 for interactive searches).
+      output_bytes:
+        type: integer
+        minimum: 1024
+        description: Accumulated output budget (server default 1048576).

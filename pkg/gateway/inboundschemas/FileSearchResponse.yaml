@@ -1,0 +1,82 @@
+title: FileSearchResponse
+description: >
+  Response from POST /api/v1/library/{workspace_id}/files/search (ADR-081).
+
+  HONESTY CONTRACT: a bounded result is never presented as complete. Whenever
+  any request-level bound stopped the walk, `truncated` is true and
+  `truncated_reason` names which bound (MV-3). Layering rule (MV-3a): the
+  ENGINE enforces the accumulated output-byte budget (reason "max_output");
+  the agent grep tool's 64,000-char serialization cap is applied after and
+  only overrides the reason when the engine set none. The per-file content cap
+  is a per-file skip counted in stats, NOT a request-level truncation.
+
+  Every array is always present — empty means [], never null (MV-5).
+type: object
+additionalProperties: false
+required:
+  - hits
+  - truncated
+  - limits_applied
+  - stats
+properties:
+  hits:
+    type: array
+    items:
+      $ref: './FileSearchHit.yaml'
+    description: The bounded hit list. Ordering is deterministic path-lexicographic (spec A3).
+  truncated:
+    type: boolean
+    description: True whenever any request-level bound stopped the search early.
+  truncated_reason:
+    type: string
+    enum: [max_files, max_bytes, max_matches, max_depth, deadline, max_output, root_lost]
+    description: >
+      Which bound fired (present exactly when truncated is true). root_lost
+      means the walk root or a mount root became unreadable mid-search — a
+      visible outcome, never a quiet empty result (FR-021).
+  limits_applied:
+    type: object
+    additionalProperties: false
+    description: >
+      Echo of the EFFECTIVE limits after clamping (R2-MIN-007) — the clamp
+      disclosure that keeps this surface as honest as the vault search's
+      limit_clamped. Compare against what you requested to detect a clamp.
+    required: [files, bytes, matches, matches_per_file, depth, deadline_ms, output_bytes]
+    properties:
+      files: { type: integer }
+      bytes: { type: integer }
+      matches: { type: integer }
+      matches_per_file: { type: integer }
+      depth: { type: integer }
+      deadline_ms: { type: integer }
+      output_bytes: { type: integer }
+  stats:
+    type: object
+    additionalProperties: false
+    description: Walk accounting — what was covered and what was skipped, observable not silent.
+    required:
+      - files_visited
+      - bytes_scanned
+      - files_skipped_problems
+      - files_pruned_ignored
+      - files_skipped_per_file_cap
+      - hits_capped_per_file
+    properties:
+      files_visited:
+        type: integer
+        description: Files the walk reached (name-checked).
+      bytes_scanned:
+        type: integer
+        description: Content bytes actually scanned.
+      files_skipped_problems:
+        type: integer
+        description: Files skipped because unreadable/vanished mid-walk (per-file failures; a lost ROOT is truncated_reason root_lost instead).
+      files_pruned_ignored:
+        type: integer
+        description: Entries pruned by .gitignore/.ignore or the always-pruned set — hidden-by-ignore is observable.
+      files_skipped_per_file_cap:
+        type: integer
+        description: Files whose content remainder was skipped at the per-file byte cap.
+      hits_capped_per_file:
+        type: integer
+        description: Files whose hits were cut at the per-file match cap.

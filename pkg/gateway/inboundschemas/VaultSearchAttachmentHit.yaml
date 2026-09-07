@@ -1,0 +1,23 @@
+title: VaultSearchAttachmentHit
+description: >
+  One attachment matched by FILENAME (ADR-081 / spec CRIT-001 parity: the
+  retired knowledge-search surface answered attachments by name, and the
+  surviving bar must too). Attachments are never content-scanned by this
+  surface — the text index records an attachment by filename and path only
+  (pkg/knowledge/index.go::indexAttachment); this hit reflects exactly that.
+type: object
+additionalProperties: false
+required:
+  - path
+  - name
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: Collection-relative path of the attachment, forward-slash separated.
+    example: "assets/contract-final.pdf"
+  name:
+    type: string
+    minLength: 1
+    description: The attachment's basename — what the query matched against.
+    example: "contract-final.pdf"

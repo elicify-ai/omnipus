@@ -1225,6 +1225,14 @@ components:
       $ref: ./components/schemas/VaultIndexState.yaml
     VaultTermCount:
       $ref: ./components/schemas/VaultTermCount.yaml
+    FileSearchRequest:
+      $ref: ./components/schemas/FileSearchRequest.yaml
+    FileSearchHit:
+      $ref: ./components/schemas/FileSearchHit.yaml
+    FileSearchResponse:
+      $ref: ./components/schemas/FileSearchResponse.yaml
+    VaultSearchAttachmentHit:
+      $ref: ./components/schemas/VaultSearchAttachmentHit.yaml
     VaultSearchRequest:
       $ref: ./components/schemas/VaultSearchRequest.yaml
     VaultSearchResponse:
@@ -8798,6 +8806,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/KnowledgeSearchResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/files/search:
+    post:
+      operationId: searchFiles
+      summary: Bounded file search over a workspace's Library root (names + text content)
+      description: >
+        ADR-081 / unified-search-and-grep-spec.md workstream B: the index-free,
+        bounded file search over the workspace's confined Library root (work
+        tree and mounts). Names/paths always match; text-file content matches
+        under the byte/match/depth/deadline bounds; binaries (NUL heuristic)
+        and per-file-cap remainders are skipped and counted.
+
+
+        HONESTY: any bound stopping the walk sets truncated with a
+        machine-readable reason; limit clamps are echoed in limits_applied;
+        a walk/mount root lost mid-search is root_lost, never a quiet empty
+        result. The SPA bar sends regex:false always (a person's query is a
+        literal with smart-case); regex:true is the explicit API/tool opt-in.
+
+
+        Concurrency: at most 2 walks run per gateway (shared with the agent
+        grep tool); excess requests receive 429 with Retry-After. A client
+        disconnect cancels the server-side walk. POST rather than GET because
+        a free-text query does not belong in a URL that lands in request logs.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileSearchRequest'
+      responses:
+        '200':
+          description: The bounded hit list, effective limits echo, and walk stats.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileSearchResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

@@ -55,3 +55,47 @@ properties:
     items:
       $ref: "./VaultSearchViewHit.yaml"
       x-go-type: VaultSearchViewHit
+  attachments:
+    type: array
+    description: >
+      Attachments matched by FILENAME (ADR-081 attachment parity). The HANDLER
+      always sends it (empty array, never null); it is wire-OPTIONAL only for
+      additive compatibility with pre-existing clients and fixtures (MV-9's
+      additive rule) — a consumer treats absence as []. PLATFORM CARVE-OUT (spec MV-9): on
+      builds without the properties index (records_no_sqlite, mipsle, netbsd,
+      freebsd-arm) this group is empty WITH complete=false and the engine's
+      refusal reason in complete_reason — never a silently bare empty group.
+    items:
+      $ref: "./VaultSearchAttachmentHit.yaml"
+      x-go-type: VaultSearchAttachmentHit
+  notes_searched:
+    type: integer
+    minimum: 0
+    description: >
+      How many notes the engine actually searched for this answer (the "X" of
+      the coverage statement). OMITTED when unknown — never fabricated
+      (FR-036's never-invent-a-denominator rule).
+  notes_total_known:
+    type: integer
+    minimum: 0
+    description: >
+      The engine's best-known total note count (the "Y"). OMITTED when the
+      total is not known; a renderer must then say "X so far", not invent Y.
+  notes_capped_at_limit:
+    type: boolean
+    description: >
+      True when the notes group was cut at the per-kind limit — the count is a
+      lower bound and the UI renders "N+", never an exact total.
+  statement:
+    type: string
+    description: >
+      Server-authored, render-ready coverage sentence (composed by the
+      HANDLER, mirroring the retired surface's knowledgeStatement). The one
+      string a UI may show verbatim for the partial-results notice.
+  limit_clamped:
+    type: boolean
+    description: True when the requested limit exceeded the server cap and was clamped (the clamp is REPORTED, never silent).
+  limit_requested:
+    type: integer
+    minimum: 1
+    description: The limit the caller asked for, echoed when a clamp occurred.

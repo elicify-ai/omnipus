@@ -2981,6 +2981,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/files/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bounded file search over a workspace's Library root (names + text content)
+         * @description ADR-081 / unified-search-and-grep-spec.md workstream B: the index-free, bounded file search over the workspace's confined Library root (work tree and mounts). Names/paths always match; text-file content matches under the byte/match/depth/deadline bounds; binaries (NUL heuristic) and per-file-cap remainders are skipped and counted.
+         *
+         *     HONESTY: any bound stopping the walk sets truncated with a machine-readable reason; limit clamps are echoed in limits_applied; a walk/mount root lost mid-search is root_lost, never a quiet empty result. The SPA bar sends regex:false always (a person's query is a literal with smart-case); regex:true is the explicit API/tool opt-in.
+         *
+         *     Concurrency: at most 2 walks run per gateway (shared with the agent grep tool); excess requests receive 429 with Retry-After. A client disconnect cancels the server-side walk. POST rather than GET because a free-text query does not belong in a URL that lands in request logs.
+         */
+        post: operations["searchFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/knowledge/find": {
         parameters: {
             query?: never;
@@ -7110,6 +7134,148 @@ export interface components {
             documents: number;
         };
         /**
+         * FileSearchRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/files/search — the bounded, index-free file search over a workspace's confined Library root (work tree + mounts), per ADR-081 and docs/internal/specs/unified-search-and-grep-spec.md.
+         *     The HUMAN bar always sends regex:false — a person's query is a literal with smart-case (FR-016) and can never produce a regex parse error. regex:true is the explicit opt-in used by API callers and by the agent grep tool's shared engine semantics.
+         *     Every bound is a downward-only override of the server defaults (MV-3); an override above a cap is CLAMPED and the clamp is disclosed in the response's limits_applied echo — never silent. Bounds are deliberately not operator-configurable in v1.
+         */
+        FileSearchRequest: {
+            /**
+             * @description The search text. With regex:false (default) it is matched literally under the selected case mode against file names/paths and text-file content. With regex:true it is an RE2 pattern (linear-time; no backreferences/lookaround — which is what makes agent-supplied patterns safe).
+             * @example quarterly report
+             */
+            query: string;
+            /**
+             * @description Workspace-relative folder to scope the search to. Omitted or empty means the workspace root. Must resolve inside the confined root; a path outside it is refused with the Library's standard taxonomy.
+             * @example 01-Areas/Finance
+             */
+            path?: string;
+            /**
+             * @description Treat query as an RE2 pattern. The SPA bar never sets this.
+             * @default false
+             */
+            regex: boolean;
+            /**
+             * @description Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
+             * @default smart
+             * @enum {string}
+             */
+            case: "smart" | "sensitive" | "insensitive";
+            /**
+             * @description Include dot-prefixed USER files/directories. Regardless of this flag, .git/, .library/ and .omnipus-vault/ are always pruned — Omnipus internals and git object noise are never scanned. .gitignore files are still read for pruning even when hidden files are excluded from results.
+             * @default false
+             */
+            include_hidden: boolean;
+            /** @description doublestar patterns (e.g. "**\/*.md"); when non-empty, only matching paths are considered. */
+            include_globs?: string[];
+            /** @description doublestar patterns removed from consideration. */
+            exclude_globs?: string[];
+            /**
+             * @description Lines of context to attach before and after each content hit. Carried on REST for API parity with the agent grep tool; the SPA does not use it in v1 (recorded decision, spec R2-MIN-005).
+             * @default 0
+             */
+            context_lines: number;
+            /** @description Downward-only overrides of the server bounds (MV-3). Values above the server defaults are clamped and disclosed via limits_applied. */
+            limits?: {
+                /** @description Max files visited (server default 50000). */
+                files?: number;
+                /** @description Max content bytes scanned (server default 268435456). */
+                bytes?: number;
+                /** @description Max total hits (server default 1000). */
+                matches?: number;
+                /** @description Max hits contributed by one file (server default 50). */
+                matches_per_file?: number;
+                /** @description Max directory depth (server default 32). */
+                depth?: number;
+                /** @description Wall-clock budget in milliseconds (server default 10000; the SPA sends 3000 for interactive searches). */
+                deadline_ms?: number;
+                /** @description Accumulated output budget (server default 1048576). */
+                output_bytes?: number;
+            };
+        };
+        /**
+         * FileSearchHit
+         * @description One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
+         */
+        FileSearchHit: {
+            /**
+             * @description Workspace-relative path of the matched file.
+             * @example 01-Areas/Finance/Q3 report.md
+             */
+            path: string;
+            /**
+             * @description Whether the file matched by its name/path or by a content line.
+             * @enum {string}
+             */
+            match_kind: "name" | "content";
+            /** @description 1-based line number of the matching line (content hits only). */
+            line?: number;
+            /** @description Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable. */
+            excerpt?: string;
+            /** @description Up to context_lines lines preceding the match, in file order. */
+            context_before?: string[];
+            /** @description Up to context_lines lines following the match, in file order. */
+            context_after?: string[];
+        };
+        /**
+         * FileSearchResponse
+         * @description Response from POST /api/v1/library/{workspace_id}/files/search (ADR-081).
+         *     HONESTY CONTRACT: a bounded result is never presented as complete. Whenever any request-level bound stopped the walk, `truncated` is true and `truncated_reason` names which bound (MV-3). Layering rule (MV-3a): the ENGINE enforces the accumulated output-byte budget (reason "max_output"); the agent grep tool's 64,000-char serialization cap is applied after and only overrides the reason when the engine set none. The per-file content cap is a per-file skip counted in stats, NOT a request-level truncation.
+         *     Every array is always present — empty means [], never null (MV-5).
+         */
+        FileSearchResponse: {
+            /** @description The bounded hit list. Ordering is deterministic path-lexicographic (spec A3). */
+            hits: components["schemas"]["FileSearchHit"][];
+            /** @description True whenever any request-level bound stopped the search early. */
+            truncated: boolean;
+            /**
+             * @description Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021).
+             * @enum {string}
+             */
+            truncated_reason?: "max_files" | "max_bytes" | "max_matches" | "max_depth" | "deadline" | "max_output" | "root_lost";
+            /** @description Echo of the EFFECTIVE limits after clamping (R2-MIN-007) — the clamp disclosure that keeps this surface as honest as the vault search's limit_clamped. Compare against what you requested to detect a clamp. */
+            limits_applied: {
+                files: number;
+                bytes: number;
+                matches: number;
+                matches_per_file: number;
+                depth: number;
+                deadline_ms: number;
+                output_bytes: number;
+            };
+            /** @description Walk accounting — what was covered and what was skipped, observable not silent. */
+            stats: {
+                /** @description Files the walk reached (name-checked). */
+                files_visited: number;
+                /** @description Content bytes actually scanned. */
+                bytes_scanned: number;
+                /** @description Files skipped because unreadable/vanished mid-walk (per-file failures; a lost ROOT is truncated_reason root_lost instead). */
+                files_skipped_problems: number;
+                /** @description Entries pruned by .gitignore/.ignore or the always-pruned set — hidden-by-ignore is observable. */
+                files_pruned_ignored: number;
+                /** @description Files whose content remainder was skipped at the per-file byte cap. */
+                files_skipped_per_file_cap: number;
+                /** @description Files whose hits were cut at the per-file match cap. */
+                hits_capped_per_file: number;
+            };
+        };
+        /**
+         * VaultSearchAttachmentHit
+         * @description One attachment matched by FILENAME (ADR-081 / spec CRIT-001 parity: the retired knowledge-search surface answered attachments by name, and the surviving bar must too). Attachments are never content-scanned by this surface — the text index records an attachment by filename and path only (pkg/knowledge/index.go::indexAttachment); this hit reflects exactly that.
+         */
+        VaultSearchAttachmentHit: {
+            /**
+             * @description Collection-relative path of the attachment, forward-slash separated.
+             * @example assets/contract-final.pdf
+             */
+            path: string;
+            /**
+             * @description The attachment's basename — what the query matched against.
+             * @example contract-final.pdf
+             */
+            name: string;
+        };
+        /**
          * VaultSearchRequest
          * @description Request body for POST /api/v1/library/{workspace_id}/knowledge/find — the HUMAN vault search (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text, records matched by their typed property values, and saved views matched by name or label.
          *     It runs over the SAME engine the agent's knowledge_find tool uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour rather than standing up a second search path.
@@ -7160,6 +7326,20 @@ export interface components {
             records: components["schemas"]["VaultSearchRecordHit"][];
             /** @description Saved views whose name or label matched. Always present — an empty array, never null. */
             views: components["schemas"]["VaultSearchViewHit"][];
+            /** @description Attachments matched by FILENAME (ADR-081 attachment parity). The HANDLER always sends it (empty array, never null); it is wire-OPTIONAL only for additive compatibility with pre-existing clients and fixtures (MV-9's additive rule) — a consumer treats absence as []. PLATFORM CARVE-OUT (spec MV-9): on builds without the properties index (records_no_sqlite, mipsle, netbsd, freebsd-arm) this group is empty WITH complete=false and the engine's refusal reason in complete_reason — never a silently bare empty group. */
+            attachments?: components["schemas"]["VaultSearchAttachmentHit"][];
+            /** @description How many notes the engine actually searched for this answer (the "X" of the coverage statement). OMITTED when unknown — never fabricated (FR-036's never-invent-a-denominator rule). */
+            notes_searched?: number;
+            /** @description The engine's best-known total note count (the "Y"). OMITTED when the total is not known; a renderer must then say "X so far", not invent Y. */
+            notes_total_known?: number;
+            /** @description True when the notes group was cut at the per-kind limit — the count is a lower bound and the UI renders "N+", never an exact total. */
+            notes_capped_at_limit?: boolean;
+            /** @description Server-authored, render-ready coverage sentence (composed by the HANDLER, mirroring the retired surface's knowledgeStatement). The one string a UI may show verbatim for the partial-results notice. */
+            statement?: string;
+            /** @description True when the requested limit exceeded the server cap and was clamped (the clamp is REPORTED, never silent). */
+            limit_clamped?: boolean;
+            /** @description The limit the caller asked for, echoed when a clamp occurred. */
+            limit_requested?: number;
         };
         /**
          * VaultSearchNoteHit
@@ -7181,6 +7361,8 @@ export interface components {
              * @example …Landlock is per-thread and inherited, so the gateway and its children…
              */
             snippet?: string;
+            /** @description True when no excerpt could be produced for this hit (the match moved, or the file could not be re-read). A deliberate reduction of the retired surface's 5-reason enum to a boolean — the find path cannot attribute the old re-read reasons (spec R2-MIN-010). The hit still renders by title and path; an absent snippet with this flag false simply means no term was located. */
+            excerpt_unavailable?: boolean;
         };
         /**
          * VaultSearchRecordHit
@@ -21267,6 +21449,39 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    searchFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description The bounded hit list, effective limits echo, and walk stats. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileSearchResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     findVault: {
         parameters: {
             query?: never;
@@ -22113,6 +22328,10 @@ export type VaultFindCounts = components["schemas"]["VaultFindCounts"];
 export type VaultFindPlanStep = components["schemas"]["VaultFindPlanStep"];
 export type VaultIndexState = components["schemas"]["VaultIndexState"];
 export type VaultTermCount = components["schemas"]["VaultTermCount"];
+export type FileSearchRequest = components["schemas"]["FileSearchRequest"];
+export type FileSearchHit = components["schemas"]["FileSearchHit"];
+export type FileSearchResponse = components["schemas"]["FileSearchResponse"];
+export type VaultSearchAttachmentHit = components["schemas"]["VaultSearchAttachmentHit"];
 export type VaultSearchRequest = components["schemas"]["VaultSearchRequest"];
 export type VaultSearchResponse = components["schemas"]["VaultSearchResponse"];
 export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];

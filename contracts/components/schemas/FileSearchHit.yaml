@@ -1,0 +1,45 @@
+title: FileSearchHit
+description: >
+  One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the
+  first match position on that line is what `line` reports; two matches on one
+  line are still one hit. A name/path match is one hit with match_kind "name"
+  and no line.
+type: object
+additionalProperties: false
+required:
+  - path
+  - match_kind
+properties:
+  path:
+    type: string
+    description: Workspace-relative path of the matched file.
+    example: "01-Areas/Finance/Q3 report.md"
+  match_kind:
+    type: string
+    enum: [name, content]
+    description: Whether the file matched by its name/path or by a content line.
+  line:
+    type: integer
+    minimum: 1
+    description: 1-based line number of the matching line (content hits only).
+  excerpt:
+    type: string
+    maxLength: 2048
+    description: >
+      Bounded window of the matching line around the first match — at most 512
+      BYTES (MV-6; maxLength here is a character-level outer guard), always
+      valid UTF-8 (runes never split). Omitted when unavailable.
+  context_before:
+    type: array
+    items:
+      type: string
+      maxLength: 2048
+    maxItems: 5
+    description: Up to context_lines lines preceding the match, in file order.
+  context_after:
+    type: array
+    items:
+      type: string
+      maxLength: 2048
+    maxItems: 5
+    description: Up to context_lines lines following the match, in file order.

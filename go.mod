@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.53.1
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/blevesearch/bleve_index_api v1.4.1
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
@@ -26,6 +27,7 @@ require (
 	github.com/gomarkdown/markdown v0.0.0-20260411013819-759bbc3e3207
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853
 	github.com/h2non/filetype v1.1.3
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.4
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
@@ -44,6 +46,7 @@ require (
 	github.com/pion/webrtc/v4 v4.2.16
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.35.1
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/slack-go/slack v0.24.0
 	github.com/spf13/cobra v1.10.2

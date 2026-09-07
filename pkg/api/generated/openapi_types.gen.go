@@ -1949,6 +1949,96 @@ func (e ExternalCliTool) Valid() bool {
 	}
 }
 
+// Defines values for FileSearchHitMatchKind.
+const (
+	FileSearchHitMatchKindContent FileSearchHitMatchKind = "content"
+	FileSearchHitMatchKindName    FileSearchHitMatchKind = "name"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchHitMatchKind enum.
+func (e FileSearchHitMatchKind) Valid() bool {
+	switch e {
+	case FileSearchHitMatchKindContent:
+		return true
+	case FileSearchHitMatchKindName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchRequestCase.
+const (
+	Insensitive FileSearchRequestCase = "insensitive"
+	Sensitive   FileSearchRequestCase = "sensitive"
+	Smart       FileSearchRequestCase = "smart"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchRequestCase enum.
+func (e FileSearchRequestCase) Valid() bool {
+	switch e {
+	case Insensitive:
+		return true
+	case Sensitive:
+		return true
+	case Smart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchResponseHitsMatchKind.
+const (
+	FileSearchResponseHitsMatchKindContent FileSearchResponseHitsMatchKind = "content"
+	FileSearchResponseHitsMatchKindName    FileSearchResponseHitsMatchKind = "name"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchResponseHitsMatchKind enum.
+func (e FileSearchResponseHitsMatchKind) Valid() bool {
+	switch e {
+	case FileSearchResponseHitsMatchKindContent:
+		return true
+	case FileSearchResponseHitsMatchKindName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchResponseTruncatedReason.
+const (
+	Deadline   FileSearchResponseTruncatedReason = "deadline"
+	MaxBytes   FileSearchResponseTruncatedReason = "max_bytes"
+	MaxDepth   FileSearchResponseTruncatedReason = "max_depth"
+	MaxFiles   FileSearchResponseTruncatedReason = "max_files"
+	MaxMatches FileSearchResponseTruncatedReason = "max_matches"
+	MaxOutput  FileSearchResponseTruncatedReason = "max_output"
+	RootLost   FileSearchResponseTruncatedReason = "root_lost"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchResponseTruncatedReason enum.
+func (e FileSearchResponseTruncatedReason) Valid() bool {
+	switch e {
+	case Deadline:
+		return true
+	case MaxBytes:
+		return true
+	case MaxDepth:
+		return true
+	case MaxFiles:
+		return true
+	case MaxMatches:
+		return true
+	case MaxOutput:
+		return true
+	case RootLost:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GatewayRestartResponseStatus.
 const (
 	Restarting GatewayRestartResponseStatus = "restarting"
@@ -11338,6 +11428,156 @@ type FallbackModel struct {
 	Provider *string `json:"provider,omitempty"`
 }
 
+// FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
+type FileSearchHit struct {
+	// ContextAfter Up to context_lines lines following the match, in file order.
+	ContextAfter *[]string `json:"context_after,omitempty"`
+
+	// ContextBefore Up to context_lines lines preceding the match, in file order.
+	ContextBefore *[]string `json:"context_before,omitempty"`
+
+	// Excerpt Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable.
+	Excerpt *string `json:"excerpt,omitempty"`
+
+	// Line 1-based line number of the matching line (content hits only).
+	Line *int `json:"line,omitempty"`
+
+	// MatchKind Whether the file matched by its name/path or by a content line.
+	MatchKind FileSearchHitMatchKind `json:"match_kind"`
+
+	// Path Workspace-relative path of the matched file.
+	Path string `json:"path"`
+}
+
+// FileSearchHitMatchKind Whether the file matched by its name/path or by a content line.
+type FileSearchHitMatchKind string
+
+// FileSearchRequest Request body for POST /api/v1/library/{workspace_id}/files/search — the bounded, index-free file search over a workspace's confined Library root (work tree + mounts), per ADR-081 and docs/internal/specs/unified-search-and-grep-spec.md.
+// The HUMAN bar always sends regex:false — a person's query is a literal with smart-case (FR-016) and can never produce a regex parse error. regex:true is the explicit opt-in used by API callers and by the agent grep tool's shared engine semantics.
+// Every bound is a downward-only override of the server defaults (MV-3); an override above a cap is CLAMPED and the clamp is disclosed in the response's limits_applied echo — never silent. Bounds are deliberately not operator-configurable in v1.
+type FileSearchRequest struct {
+	// Case Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
+	Case *FileSearchRequestCase `json:"case,omitempty"`
+
+	// ContextLines Lines of context to attach before and after each content hit. Carried on REST for API parity with the agent grep tool; the SPA does not use it in v1 (recorded decision, spec R2-MIN-005).
+	ContextLines *int `json:"context_lines,omitempty"`
+
+	// ExcludeGlobs doublestar patterns removed from consideration.
+	ExcludeGlobs *[]string `json:"exclude_globs,omitempty"`
+
+	// IncludeGlobs doublestar patterns (e.g. "**/*.md"); when non-empty, only matching paths are considered.
+	IncludeGlobs *[]string `json:"include_globs,omitempty"`
+
+	// IncludeHidden Include dot-prefixed USER files/directories. Regardless of this flag, .git/, .library/ and .omnipus-vault/ are always pruned — Omnipus internals and git object noise are never scanned. .gitignore files are still read for pruning even when hidden files are excluded from results.
+	IncludeHidden *bool `json:"include_hidden,omitempty"`
+
+	// Limits Downward-only overrides of the server bounds (MV-3). Values above the server defaults are clamped and disclosed via limits_applied.
+	Limits *struct {
+		// Bytes Max content bytes scanned (server default 268435456).
+		Bytes *int `json:"bytes,omitempty"`
+
+		// DeadlineMs Wall-clock budget in milliseconds (server default 10000; the SPA sends 3000 for interactive searches).
+		DeadlineMs *int `json:"deadline_ms,omitempty"`
+
+		// Depth Max directory depth (server default 32).
+		Depth *int `json:"depth,omitempty"`
+
+		// Files Max files visited (server default 50000).
+		Files *int `json:"files,omitempty"`
+
+		// Matches Max total hits (server default 1000).
+		Matches *int `json:"matches,omitempty"`
+
+		// MatchesPerFile Max hits contributed by one file (server default 50).
+		MatchesPerFile *int `json:"matches_per_file,omitempty"`
+
+		// OutputBytes Accumulated output budget (server default 1048576).
+		OutputBytes *int `json:"output_bytes,omitempty"`
+	} `json:"limits,omitempty"`
+
+	// Path Workspace-relative folder to scope the search to. Omitted or empty means the workspace root. Must resolve inside the confined root; a path outside it is refused with the Library's standard taxonomy.
+	Path *string `json:"path,omitempty"`
+
+	// Query The search text. With regex:false (default) it is matched literally under the selected case mode against file names/paths and text-file content. With regex:true it is an RE2 pattern (linear-time; no backreferences/lookaround — which is what makes agent-supplied patterns safe).
+	Query string `json:"query"`
+
+	// Regex Treat query as an RE2 pattern. The SPA bar never sets this.
+	Regex *bool `json:"regex,omitempty"`
+}
+
+// FileSearchRequestCase Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
+type FileSearchRequestCase string
+
+// FileSearchResponse Response from POST /api/v1/library/{workspace_id}/files/search (ADR-081).
+// HONESTY CONTRACT: a bounded result is never presented as complete. Whenever any request-level bound stopped the walk, `truncated` is true and `truncated_reason` names which bound (MV-3). Layering rule (MV-3a): the ENGINE enforces the accumulated output-byte budget (reason "max_output"); the agent grep tool's 64,000-char serialization cap is applied after and only overrides the reason when the engine set none. The per-file content cap is a per-file skip counted in stats, NOT a request-level truncation.
+// Every array is always present — empty means [], never null (MV-5).
+type FileSearchResponse struct {
+	// Hits The bounded hit list. Ordering is deterministic path-lexicographic (spec A3).
+	Hits []struct {
+		// ContextAfter Up to context_lines lines following the match, in file order.
+		ContextAfter *[]string `json:"context_after,omitempty"`
+
+		// ContextBefore Up to context_lines lines preceding the match, in file order.
+		ContextBefore *[]string `json:"context_before,omitempty"`
+
+		// Excerpt Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable.
+		Excerpt *string `json:"excerpt,omitempty"`
+
+		// Line 1-based line number of the matching line (content hits only).
+		Line *int `json:"line,omitempty"`
+
+		// MatchKind Whether the file matched by its name/path or by a content line.
+		MatchKind FileSearchResponseHitsMatchKind `json:"match_kind"`
+
+		// Path Workspace-relative path of the matched file.
+		Path string `json:"path"`
+	} `json:"hits"`
+
+	// LimitsApplied Echo of the EFFECTIVE limits after clamping (R2-MIN-007) — the clamp disclosure that keeps this surface as honest as the vault search's limit_clamped. Compare against what you requested to detect a clamp.
+	LimitsApplied struct {
+		Bytes          int `json:"bytes"`
+		DeadlineMs     int `json:"deadline_ms"`
+		Depth          int `json:"depth"`
+		Files          int `json:"files"`
+		Matches        int `json:"matches"`
+		MatchesPerFile int `json:"matches_per_file"`
+		OutputBytes    int `json:"output_bytes"`
+	} `json:"limits_applied"`
+
+	// Stats Walk accounting — what was covered and what was skipped, observable not silent.
+	Stats struct {
+		// BytesScanned Content bytes actually scanned.
+		BytesScanned int `json:"bytes_scanned"`
+
+		// FilesPrunedIgnored Entries pruned by .gitignore/.ignore or the always-pruned set — hidden-by-ignore is observable.
+		FilesPrunedIgnored int `json:"files_pruned_ignored"`
+
+		// FilesSkippedPerFileCap Files whose content remainder was skipped at the per-file byte cap.
+		FilesSkippedPerFileCap int `json:"files_skipped_per_file_cap"`
+
+		// FilesSkippedProblems Files skipped because unreadable/vanished mid-walk (per-file failures; a lost ROOT is truncated_reason root_lost instead).
+		FilesSkippedProblems int `json:"files_skipped_problems"`
+
+		// FilesVisited Files the walk reached (name-checked).
+		FilesVisited int `json:"files_visited"`
+
+		// HitsCappedPerFile Files whose hits were cut at the per-file match cap.
+		HitsCappedPerFile int `json:"hits_capped_per_file"`
+	} `json:"stats"`
+
+	// Truncated True whenever any request-level bound stopped the search early.
+	Truncated bool `json:"truncated"`
+
+	// TruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021).
+	TruncatedReason *FileSearchResponseTruncatedReason `json:"truncated_reason,omitempty"`
+}
+
+// FileSearchResponseHitsMatchKind Whether the file matched by its name/path or by a content line.
+type FileSearchResponseHitsMatchKind string
+
+// FileSearchResponseTruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021).
+type FileSearchResponseTruncatedReason string
+
 // GatewayRestartResponse Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts the request, replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). The SPA uses this response to start polling /health (and the WS reconnect path) to detect the gateway going down and coming back up.
 type GatewayRestartResponse struct {
 	// DrainSeconds Approximate number of seconds the gateway will wait for in-flight work to drain before re-execing. The SPA can use this as a lower bound before it starts polling /health for the gateway to come back.
@@ -18562,8 +18802,20 @@ type VaultRecord struct {
 	VersionToken *string `json:"version_token,omitempty"`
 }
 
+// VaultSearchAttachmentHit One attachment matched by FILENAME (ADR-081 / spec CRIT-001 parity: the retired knowledge-search surface answered attachments by name, and the surviving bar must too). Attachments are never content-scanned by this surface — the text index records an attachment by filename and path only (pkg/knowledge/index.go::indexAttachment); this hit reflects exactly that.
+type VaultSearchAttachmentHit struct {
+	// Name The attachment's basename — what the query matched against.
+	Name string `json:"name"`
+
+	// Path Collection-relative path of the attachment, forward-slash separated.
+	Path string `json:"path"`
+}
+
 // VaultSearchNoteHit One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine (hits arrive in that engine's relevance order); the snippet is a render-time excerpt of the note as it is on disk.
 type VaultSearchNoteHit struct {
+	// ExcerptUnavailable True when no excerpt could be produced for this hit (the match moved, or the file could not be re-read). A deliberate reduction of the retired surface's 5-reason enum to a boolean — the find path cannot attribute the old re-read reasons (spec R2-MIN-010). The hit still renders by title and path; an absent snippet with this flag false simply means no term was located.
+	ExcerptUnavailable *bool `json:"excerpt_unavailable,omitempty"`
+
 	// Path Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
 	Path string `json:"path"`
 
@@ -18609,6 +18861,9 @@ type VaultSearchRequest struct {
 // VaultSearchResponse The human vault search result (library-b-c-design-2026-09-07 §C1): three grouped hit lists for one query, plus an honest completeness verdict.
 // An empty result is EMPTY, not an error — every hit array is always present and may be empty. When the index is not ready (never built, or still catching up with the files on disk), `complete` is false and `complete_reason` carries the engine's freshness signal, so the caller can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns this same empty-but-complete shape.
 type VaultSearchResponse struct {
+	// Attachments Attachments matched by FILENAME (ADR-081 attachment parity). The HANDLER always sends it (empty array, never null); it is wire-OPTIONAL only for additive compatibility with pre-existing clients and fixtures (MV-9's additive rule) — a consumer treats absence as []. PLATFORM CARVE-OUT (spec MV-9): on builds without the properties index (records_no_sqlite, mipsle, netbsd, freebsd-arm) this group is empty WITH complete=false and the engine's refusal reason in complete_reason — never a silently bare empty group.
+	Attachments *[]VaultSearchAttachmentHit `json:"attachments,omitempty"`
+
 	// CollectionId The collection this result covers, echoed from the request.
 	CollectionId string `json:"collection_id"`
 
@@ -18618,11 +18873,29 @@ type VaultSearchResponse struct {
 	// CompleteReason Why the verdict is false, ready to render (e.g. "the text index has never finished indexing this vault — it currently reflects 3 of 68 files…"). Absent when complete is true.
 	CompleteReason *string `json:"complete_reason,omitempty"`
 
+	// LimitClamped True when the requested limit exceeded the server cap and was clamped (the clamp is REPORTED, never silent).
+	LimitClamped *bool `json:"limit_clamped,omitempty"`
+
+	// LimitRequested The limit the caller asked for, echoed when a clamp occurred.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+
 	// Notes Notes matched by body text. Always present — an empty array, never null.
 	Notes []VaultSearchNoteHit `json:"notes"`
 
+	// NotesCappedAtLimit True when the notes group was cut at the per-kind limit — the count is a lower bound and the UI renders "N+", never an exact total.
+	NotesCappedAtLimit *bool `json:"notes_capped_at_limit,omitempty"`
+
+	// NotesSearched How many notes the engine actually searched for this answer (the "X" of the coverage statement). OMITTED when unknown — never fabricated (FR-036's never-invent-a-denominator rule).
+	NotesSearched *int `json:"notes_searched,omitempty"`
+
+	// NotesTotalKnown The engine's best-known total note count (the "Y"). OMITTED when the total is not known; a renderer must then say "X so far", not invent Y.
+	NotesTotalKnown *int `json:"notes_total_known,omitempty"`
+
 	// Records Records matched by their typed property values. Always present — an empty array, never null.
 	Records []VaultSearchRecordHit `json:"records"`
+
+	// Statement Server-authored, render-ready coverage sentence (composed by the HANDLER, mirroring the retired surface's knowledgeStatement). The one string a UI may show verbatim for the partial-results notice.
+	Statement *string `json:"statement,omitempty"`
 
 	// Views Saved views whose name or label matched. Always present — an empty array, never null.
 	Views []VaultSearchViewHit `json:"views"`
@@ -19681,6 +19954,9 @@ type PutLibraryContentJSONRequestBody = LibraryContentRequest
 
 // PutLibraryContentBinaryJSONRequestBody defines body for PutLibraryContentBinary for application/json ContentType.
 type PutLibraryContentBinaryJSONRequestBody = LibraryBinaryContentRequest
+
+// SearchFilesJSONRequestBody defines body for SearchFiles for application/json ContentType.
+type SearchFilesJSONRequestBody = FileSearchRequest
 
 // FindVaultJSONRequestBody defines body for FindVault for application/json ContentType.
 type FindVaultJSONRequestBody = VaultSearchRequest

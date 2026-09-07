@@ -876,6 +876,46 @@ type VaultFindPlanStep = {
     | undefined;
   detail: string;
 };
+type FileSearchResponse = {
+  hits: Array<FileSearchHit>;
+  truncated: boolean;
+  truncated_reason?:
+    | (
+        | "max_files"
+        | "max_bytes"
+        | "max_matches"
+        | "max_depth"
+        | "deadline"
+        | "max_output"
+        | "root_lost"
+      )
+    | undefined;
+  limits_applied: {
+    files: number;
+    bytes: number;
+    matches: number;
+    matches_per_file: number;
+    depth: number;
+    deadline_ms: number;
+    output_bytes: number;
+  };
+  stats: {
+    files_visited: number;
+    bytes_scanned: number;
+    files_skipped_problems: number;
+    files_pruned_ignored: number;
+    files_skipped_per_file_cap: number;
+    hits_capped_per_file: number;
+  };
+};
+type FileSearchHit = {
+  path: string;
+  match_kind: "name" | "content";
+  line?: number | undefined;
+  excerpt?: string | undefined;
+  context_before?: Array<string> | undefined;
+  context_after?: Array<string> | undefined;
+};
 type VaultSearchResponse = {
   collection_id: string;
   complete: boolean;
@@ -883,11 +923,19 @@ type VaultSearchResponse = {
   notes: Array<VaultSearchNoteHit>;
   records: Array<VaultSearchRecordHit>;
   views: Array<VaultSearchViewHit>;
+  attachments?: Array<VaultSearchAttachmentHit> | undefined;
+  notes_searched?: number | undefined;
+  notes_total_known?: number | undefined;
+  notes_capped_at_limit?: boolean | undefined;
+  statement?: string | undefined;
+  limit_clamped?: boolean | undefined;
+  limit_requested?: number | undefined;
 };
 type VaultSearchNoteHit = {
   path: string;
   title: string;
   snippet?: string | undefined;
+  excerpt_unavailable?: boolean | undefined;
 };
 type VaultSearchRecordHit = {
   path: string;
@@ -901,6 +949,10 @@ type VaultSearchViewHit = {
   label: string;
   kind?: string | undefined;
   type?: string | undefined;
+};
+type VaultSearchAttachmentHit = {
+  path: string;
+  name: string;
 };
 type ValidationReport = {
   complete: boolean;
@@ -4378,6 +4430,71 @@ export const KnowledgeSearchResponse: z.ZodType<KnowledgeSearchResponse> =
     limit_clamped: z.boolean(),
     limit_requested: z.number().int().gte(1).optional(),
   });
+export const FileSearchRequest = z.object({
+  query: z.string().min(1).max(1024),
+  path: z.string().optional(),
+  regex: z.boolean().optional().default(false),
+  case: z
+    .enum(["smart", "sensitive", "insensitive"])
+    .optional()
+    .default("smart"),
+  include_hidden: z.boolean().optional().default(false),
+  include_globs: z.array(z.string().max(512)).max(32).optional(),
+  exclude_globs: z.array(z.string().max(512)).max(32).optional(),
+  context_lines: z.number().int().gte(0).lte(5).optional().default(0),
+  limits: z
+    .object({
+      files: z.number().int().gte(1),
+      bytes: z.number().int().gte(1),
+      matches: z.number().int().gte(1),
+      matches_per_file: z.number().int().gte(1),
+      depth: z.number().int().gte(1),
+      deadline_ms: z.number().int().gte(50),
+      output_bytes: z.number().int().gte(1024),
+    })
+    .partial()
+    .optional(),
+});
+export const FileSearchHit: z.ZodType<FileSearchHit> = z.object({
+  path: z.string(),
+  match_kind: z.enum(["name", "content"]),
+  line: z.number().int().gte(1).optional(),
+  excerpt: z.string().max(2048).optional(),
+  context_before: z.array(z.string().max(2048)).max(5).optional(),
+  context_after: z.array(z.string().max(2048)).max(5).optional(),
+});
+export const FileSearchResponse: z.ZodType<FileSearchResponse> = z.object({
+  hits: z.array(FileSearchHit),
+  truncated: z.boolean(),
+  truncated_reason: z
+    .enum([
+      "max_files",
+      "max_bytes",
+      "max_matches",
+      "max_depth",
+      "deadline",
+      "max_output",
+      "root_lost",
+    ])
+    .optional(),
+  limits_applied: z.object({
+    files: z.number().int(),
+    bytes: z.number().int(),
+    matches: z.number().int(),
+    matches_per_file: z.number().int(),
+    depth: z.number().int(),
+    deadline_ms: z.number().int(),
+    output_bytes: z.number().int(),
+  }),
+  stats: z.object({
+    files_visited: z.number().int(),
+    bytes_scanned: z.number().int(),
+    files_skipped_problems: z.number().int(),
+    files_pruned_ignored: z.number().int(),
+    files_skipped_per_file_cap: z.number().int(),
+    hits_capped_per_file: z.number().int(),
+  }),
+});
 export const VaultSearchRequest = z.object({
   query: z.string().min(1).max(1024),
   collection_id: z.string().min(1),
@@ -4387,6 +4504,7 @@ export const VaultSearchNoteHit: z.ZodType<VaultSearchNoteHit> = z.object({
   path: z.string().min(1),
   title: z.string(),
   snippet: z.string().optional(),
+  excerpt_unavailable: z.boolean().optional(),
 });
 export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
   property: z.string().min(1),
@@ -4405,6 +4523,8 @@ export const VaultSearchViewHit: z.ZodType<VaultSearchViewHit> = z.object({
   kind: z.string().optional(),
   type: z.string().optional(),
 });
+export const VaultSearchAttachmentHit: z.ZodType<VaultSearchAttachmentHit> =
+  z.object({ path: z.string().min(1), name: z.string().min(1) });
 export const VaultSearchResponse: z.ZodType<VaultSearchResponse> = z.object({
   collection_id: z.string().min(1),
   complete: z.boolean(),
@@ -4412,6 +4532,13 @@ export const VaultSearchResponse: z.ZodType<VaultSearchResponse> = z.object({
   notes: z.array(VaultSearchNoteHit),
   records: z.array(VaultSearchRecordHit),
   views: z.array(VaultSearchViewHit),
+  attachments: z.array(VaultSearchAttachmentHit).optional(),
+  notes_searched: z.number().int().gte(0).optional(),
+  notes_total_known: z.number().int().gte(0).optional(),
+  notes_capped_at_limit: z.boolean().optional(),
+  statement: z.string().optional(),
+  limit_clamped: z.boolean().optional(),
+  limit_requested: z.number().int().gte(1).optional(),
 });
 export const KnowledgeGraphNode: z.ZodType<KnowledgeGraphNode> = z.object({
   path: z.string().min(1),
@@ -7688,6 +7815,63 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/files/search",
+    alias: "searchFiles",
+    description: `ADR-081 / unified-search-and-grep-spec.md workstream B: the index-free, bounded file search over the workspace&#x27;s confined Library root (work tree and mounts). Names/paths always match; text-file content matches under the byte/match/depth/deadline bounds; binaries (NUL heuristic) and per-file-cap remainders are skipped and counted.
+
+HONESTY: any bound stopping the walk sets truncated with a machine-readable reason; limit clamps are echoed in limits_applied; a walk/mount root lost mid-search is root_lost, never a quiet empty result. The SPA bar sends regex:false always (a person&#x27;s query is a literal with smart-case); regex:true is the explicit API/tool opt-in.
+
+Concurrency: at most 2 walks run per gateway (shared with the agent grep tool); excess requests receive 429 with Retry-After. A client disconnect cancels the server-side walk. POST rather than GET because a free-text query does not belong in a URL that lands in request logs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: FileSearchRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: FileSearchResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {

@@ -30,3 +30,12 @@ properties:
       the hit is still returned with path and title rather than fabricating an
       excerpt or dropping the result.
     example: "…Landlock is per-thread and inherited, so the gateway and its children…"
+  excerpt_unavailable:
+    type: boolean
+    description: >
+      True when no excerpt could be produced for this hit (the match moved, or
+      the file could not be re-read). A deliberate reduction of the retired
+      surface's 5-reason enum to a boolean — the find path cannot attribute the
+      old re-read reasons (spec R2-MIN-010). The hit still renders by title and
+      path; an absent snippet with this flag false simply means no term was
+      located.
