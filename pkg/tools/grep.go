@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -289,6 +290,16 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // see ResolveTurnFSPolicy's own doc comment for why the two resolutions must
 // never disagree.
 //
+// The entries themselves come from workspace.LoadMounts, which is the
+// VALIDATING reader: loadMountStore runs Mount.Validate over every entry and
+// drops the failures with a WARN before returning any of them, so a
+// hand-edited or partially-migrated record cannot contribute a search root
+// here any more than it can contribute a write grant through
+// workspace.AllowedMountRoots (itself LoadMounts plus a repeat of that same
+// check). AllowedMountRoots is not used here only because it discards the
+// mount NAMES a filegrep.Root needs. That the two readers return the same set
+// is asserted in grep_mountvalidation_test.go, not assumed.
+//
 // # scope
 //
 // "" searches the whole workspace: the root plus every mount, each its own
@@ -309,6 +320,21 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // into Result.Truncated + filegrep.ReasonRootLost (FR-021) through that
 // single existing code path, rather than a quiet reduction in coverage or a
 // second, tool-local notion of "root lost".
+//
+// # The secret set is subtracted from every root
+//
+// An os.Root confines the walk to one host directory; it says nothing about
+// WHICH files inside it an agent may see. Every root handed to the engine is
+// therefore wrapped in carveOutFS, which applies fspolicy.IsCarveOut — the
+// same predicate ResolvePath consults before it looks at a mount at all — to
+// every entry the engine can list, name-match, or open. Without it a mount on
+// an ANCESTOR of $OMNIPUS_HOME (warn-and-allow per workspace.CheckMountTarget,
+// which hard-refuses only a target inside $OMNIPUS_HOME) makes credentials.json,
+// master.key, cli.token, the config backups and system/audit.jsonl greppable —
+// every one of them refused to read_file on the same turn, and every one of
+// them covered by the warning CheckMountTarget prints when the operator creates
+// that mount ("the installation's own secrets remain protected independently of
+// this mount").
 func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scope string) ([]filegrep.Root, func(), error) {
 	var opened []*os.Root
 	closeAll := func() {
@@ -343,16 +369,17 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 				fsys = unreachableRootFS{err: mErr}
 			} else {
 				opened = append(opened, mr)
-				fsys = mr.FS()
+				anchor, confined := m.HostPath, mr.FS()
 				if rest != "" {
 					sub, sErr := mr.OpenRoot(rest)
 					if sErr != nil {
 						return nil, closeAll, fmt.Errorf("path %q not found inside mount %q: %w", rest, m.Name, sErr)
 					}
 					opened = append(opened, sub)
-					fsys = sub.FS()
+					anchor, confined = filepath.Join(m.HostPath, filepath.FromSlash(rest)), sub.FS()
 					name = m.Name + "/" + rest
 				}
+				fsys = guardCarveOuts(anchor, home, confined, policy)
 			}
 			return []filegrep.Root{{Name: name, FS: fsys}}, closeAll, nil
 		}
@@ -367,7 +394,8 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 			return nil, closeAll, fmt.Errorf("path %q not found in your workspace: %w", scope, sErr)
 		}
 		opened = append(opened, sub)
-		return []filegrep.Root{{Name: scope, FS: sub.FS()}}, closeAll, nil
+		anchor := filepath.Join(policy.WorkDir, filepath.FromSlash(scope))
+		return []filegrep.Root{{Name: scope, FS: guardCarveOuts(anchor, home, sub.FS(), policy)}}, closeAll, nil
 	}
 
 	wr, wErr := os.OpenRoot(policy.WorkDir)
@@ -375,7 +403,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 		return nil, closeAll, fmt.Errorf("cannot open your workspace root: %w", wErr)
 	}
 	opened = append(opened, wr)
-	roots := []filegrep.Root{{Name: "", FS: wr.FS()}}
+	roots := []filegrep.Root{{Name: "", FS: guardCarveOuts(policy.WorkDir, home, wr.FS(), policy)}}
 	for _, m := range mounts {
 		mr, mErr := os.OpenRoot(m.HostPath)
 		if mErr != nil {
@@ -383,9 +411,189 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 			continue
 		}
 		opened = append(opened, mr)
-		roots = append(roots, filegrep.Root{Name: m.Name, FS: mr.FS()})
+		roots = append(roots, filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, home, mr.FS(), policy)})
 	}
 	return roots, closeAll, nil
+}
+
+// guardCarveOuts wraps an os.Root-backed fs.FS so that no path the secret
+// carve-out refuses (fspolicy.IsCarveOut) can be listed, name-matched, or
+// opened through it. hostAbs is the host directory fsys is anchored at; it is
+// resolved through symlinks here because IsCarveOut judges containment by
+// filesystem identity and needs the real location (an os.Root may itself have
+// been opened through a symlinked component that stayed inside the root).
+//
+// The anchor is resolved by resolveRealpathUnderWorkDir — this package's own
+// sanctioned resolver, the same one ResolvePath uses for both its work dir and
+// its candidate path (FR-034 routes every path resolution in pkg/tools through
+// that one function rather than a locally glued filepath.EvalSymlinks).
+//
+// A hostAbs that cannot be resolved yields an unreachableRootFS rather than an
+// unguarded FS: without a trustworthy anchor there is no way to name the files
+// this FS would expose, and an unnameable file cannot be judged. That surfaces
+// through filegrep's existing ReasonRootLost path (see grepRoots' "A broken
+// mount is never silently dropped"), so the coverage loss is stated to the
+// caller rather than silently taken.
+//
+// home is $OMNIPUS_HOME. An empty or unresolvable home makes every directory
+// take the exhaustive listing path below — the conservative direction.
+func guardCarveOuts(hostAbs, home string, fsys fs.FS, policy fspolicy.FSPolicy) fs.FS {
+	resolved, err := resolveRealpathUnderWorkDir(hostAbs, "")
+	if err != nil {
+		logger.WarnCF("tool", "grep: cannot resolve a search root — refusing to search it unguarded", map[string]any{
+			"path": hostAbs, "error": err.Error(),
+		})
+		return unreachableRootFS{err: err}
+	}
+	guard := carveOutFS{fsys: fsys, root: resolved, policy: policy}
+	if home != "" {
+		if info, sErr := os.Stat(home); sErr == nil {
+			guard.home = info
+		}
+	}
+	return guard
+}
+
+// carveOutFS subtracts the secret carve-out from one confined root.
+//
+// The engine reaches a file through exactly three fs calls — fs.Stat(".") to
+// prove the root opens, fs.ReadDir to enumerate a directory, and Open to read
+// a file's content (also how fs.ReadFile loads a .gitignore) — and all three
+// are guarded here. The ReadDir guard depends on this type satisfying
+// fs.ReadDirFS, so fs.ReadDir dispatches to it rather than falling back to
+// Open + ReadDirFile; if a caller ever enumerates a directory through the
+// Open path instead, that listing is unfiltered, and only Open's own check
+// (below) still applies to what it then reads.
+//
+// # Where each half of the guarantee is enforced
+//
+// Open is the CONTENT boundary and is checked unconditionally, for every byte
+// the engine reads: full fspolicy.IsCarveOut parity with ResolvePath, alias
+// leg included. It doubles as the I/O-time re-check ResolvePath performs at
+// its own I/O boundary, covering a rename that moves a secret into an
+// already-listed directory mid-walk.
+//
+// ReadDir is the EXISTENCE boundary: filtering here prunes the walk, so a
+// denied directory is never descended into and a denied file is never
+// name-matched (a name hit discloses that a file exists and its exact path,
+// which is precisely what an agent probing for $OMNIPUS_HOME wants).
+//
+// # Why ReadDir does not run the full check on every entry
+//
+// IsCarveOut judges containment by filesystem identity, so it stats the
+// candidate's whole ancestor chain and each carve-out root — measured at
+// 120-200us per call on APFS. Running it per entry on the (single-threaded)
+// walker adds several seconds to a 50,000-file search, which is the engine's
+// own file cap: an exhaustive-by-default guard would convert searches that
+// complete today into deadline truncations.
+//
+// It is not needed per entry, because of what the carve-out roots ARE. Every
+// one of them (fspolicy's appCarveOutSecretPaths) is a DIRECT CHILD of
+// $OMNIPUS_HOME, and the backup-prefix rule (CoversSecretBackup) likewise
+// only covers files sitting directly in $OMNIPUS_HOME. So for a directory D
+// that is not $OMNIPUS_HOME itself and whose own check already passed, a
+// child C = D/leaf cannot newly become denied by a path rule:
+//
+//   - C == some carve-out root R would make D == R's parent == $OMNIPUS_HOME,
+//     which is excluded;
+//   - C strictly under some R implies D is under-or-equal R, so R already
+//     covered D — and the own-tree exception that cleared D clears C too,
+//     since C lies inside D and therefore inside the same work dir;
+//   - the backup-prefix rule needs C directly in $OMNIPUS_HOME, i.e. D ==
+//     $OMNIPUS_HOME, excluded.
+//
+// A directory that IS $OMNIPUS_HOME (reachable when a mount covers an
+// ancestor of it — warn-and-allow, workspace.CheckMountTarget) takes the
+// exhaustive path, which is what suppresses master.key, credentials.json and
+// every other secret entry by name.
+//
+// The one rule this skips is IsCarveOut's hard-link ALIAS leg, which is
+// path-independent: a file anywhere may share an inode with a file inside a
+// directory-shaped carve-out. That leg can therefore still admit an entry's
+// NAME here — and only its name, which is a name the agent chose for a file
+// in its own tree and discloses nothing about the aliased secret. The alias's
+// CONTENT stays refused, because Open runs the full check.
+type carveOutFS struct {
+	fsys   fs.FS
+	root   string      // absolute, symlink-resolved host path fsys is anchored at
+	home   os.FileInfo // $OMNIPUS_HOME, for identity comparison; nil disables the fast path
+	policy fspolicy.FSPolicy
+}
+
+// abs maps one slash-separated path relative to the root onto its host path.
+// "." and "" name the root itself.
+func (c carveOutFS) abs(name string) string {
+	if name == "." || name == "" {
+		return c.root
+	}
+	return filepath.Join(c.root, filepath.FromSlash(name))
+}
+
+// denied is the full check — the same predicate, with the same policy, that
+// ResolvePath applies before it looks at a mount at all.
+func (c carveOutFS) denied(name string) bool {
+	return fspolicy.IsCarveOut(c.abs(name), c.policy)
+}
+
+func (c carveOutFS) refusal(op, name string) error {
+	return &fs.PathError{Op: op, Path: name, Err: fs.ErrPermission}
+}
+
+func (c carveOutFS) Open(name string) (fs.File, error) {
+	if c.denied(name) {
+		return nil, c.refusal("open", name)
+	}
+	return c.fsys.Open(name)
+}
+
+func (c carveOutFS) Stat(name string) (fs.FileInfo, error) {
+	if c.denied(name) {
+		return nil, c.refusal("stat", name)
+	}
+	return fs.Stat(c.fsys, name)
+}
+
+func (c carveOutFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if c.denied(name) {
+		return nil, c.refusal("readdir", name)
+	}
+	entries, err := fs.ReadDir(c.fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	if !c.holdsCarveOutRoots(name) {
+		return entries, nil
+	}
+	kept := make([]fs.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		child := e.Name()
+		if name != "." && name != "" {
+			child = name + "/" + e.Name()
+		}
+		if c.denied(child) {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept, nil
+}
+
+// holdsCarveOutRoots reports whether this directory is $OMNIPUS_HOME — the
+// only directory whose entries can be carve-out roots or secret backups (see
+// carveOutFS's doc comment). Compared by filesystem identity, never by bytes:
+// on a case-insensitive volume $OMNIPUS_HOME and $OMNIPUS_home are one
+// directory and two strings, and it is the deny side that must not be fooled.
+// Anything unanswerable — no home to compare against, an unstattable
+// directory — returns true, so the exhaustive check runs.
+func (c carveOutFS) holdsCarveOutRoots(name string) bool {
+	if c.home == nil {
+		return true
+	}
+	info, err := os.Stat(c.abs(name))
+	if err != nil {
+		return true
+	}
+	return os.SameFile(info, c.home)
 }
 
 // splitGrepScopeMount reports whether scope's first path segment names one
