@@ -354,6 +354,13 @@ func TestSync_UnreadableNoteIsRemovedNotLeftStale(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits do not apply on windows")
 	}
+	if os.Geteuid() == 0 {
+		// root ignores the 0o000 mode and reads the note anyway, so the
+		// unreadable-note precondition this test rests on cannot hold (seen on
+		// the root-user CI worker). It still runs for every non-root context —
+		// dev machines and GitHub CI.
+		t.Skip("runs as root cannot make a file unreadable via chmod 0o000")
+	}
 	home := syncHome(t)
 	root := syncVault(t, map[string]string{
 		".omnipus-vault/records/plant.yaml": plantSchema,

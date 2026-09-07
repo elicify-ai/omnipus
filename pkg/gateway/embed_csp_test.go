@@ -70,6 +70,19 @@ func spaResponse(t *testing.T, target string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// spaIsCIStub reports whether the embedded SPA is the CI stub (an index.html
+// with no built assets), not a real `npm run build` output. The unit/go-test
+// gates embed that stub (deploy/ci-worker/runci.sh ensure_spa_stub) because they
+// do not build the SPA, so assertions about real embedded assets (PDF.js worker,
+// wasm) cannot run there and skip. Detection keys off the stub's exact marker,
+// so a REAL build that is missing the asset still fails the assertion rather
+// than silently skipping — the skip is scoped to "no SPA was built", never to
+// "the asset is gone".
+func spaIsCIStub(t *testing.T) bool {
+	t.Helper()
+	return strings.Contains(spaResponse(t, "/").Body.String(), "ci-stub")
+}
+
 // TestSpaServedWithCSP is spec test 68.
 func TestSpaServedWithCSP(t *testing.T) {
 	want := specSPAPolicy(t)
@@ -354,6 +367,12 @@ func TestSpaEmbed_PdfJsPrefixMatchesTheBuild(t *testing.T) {
 // the Shiki entry in embed.go tells the next reader not to do.
 func TestSpaCsp_PdfWorkerCarriesTheWasmPolicy(t *testing.T) {
 	t.Run("the worker script is served with 'wasm-unsafe-eval'", func(t *testing.T) {
+		if spaIsCIStub(t) {
+			t.Skip("SPA is the CI stub build (deploy/ci-worker/runci.sh ensure_spa_stub embeds " +
+				"index.html only, no PDF.js assets); this end-to-end embed assertion runs where the " +
+				"real SPA is built — GitHub Tests and the embed-build/e2e gates. Keyed to the stub " +
+				"marker, so a real build missing the worker still FAILS below rather than skipping.")
+		}
 		rec := spaResponse(t, "/"+pdfJSWorkerPath)
 		require.Equal(t, http.StatusOK, rec.Code,
 			"the worker must actually be embedded, or this asserts headers on a 404")
