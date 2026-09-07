@@ -107,7 +107,8 @@ func (p *Provider) buildRequestBody(
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
 	nativeSearch, _ := options["native_search"].(bool)
 	nativeSearch = nativeSearch && isNativeSearchHost(p.apiBase)
-	if len(tools) > 0 || nativeSearch {
+	hasTools := len(tools) > 0 || nativeSearch
+	if hasTools {
 		requestBody["tools"] = buildToolsList(tools, nativeSearch)
 		requestBody["tool_choice"] = "auto"
 	}
@@ -153,6 +154,36 @@ func (p *Provider) buildRequestBody(
 	// These are injected last so they take precedence over defaults.
 	for k, v := range p.extraBody {
 		requestBody[k] = v
+	}
+
+	// ADR-081 D3 [G-B1]: a caller-forced tool_choice (protocoltypes.ToolChoice
+	// threaded through options[protocoltypes.OptionKeyToolChoice]) is applied
+	// AFTER the extraBody merge above, not folded into the block that sets
+	// the "auto" default. extraBody is deliberately last-wins for every other
+	// field; without re-applying here, an operator's own
+	// extra_body.tool_choice (or a stale value from a previous config edit)
+	// would silently defeat a goal turn's forced two-door choice — exactly
+	// the failure ADR-081 D3 calls out. When extraBody already carried its
+	// own tool_choice, the forced value still wins, but the collision is
+	// WARN-logged so it is never silent (FR-008: win or WARN, never both
+	// silent — this does both, win AND log).
+	//
+	// Guarded on hasTools: "required" with no tools offered is a guaranteed
+	// 400 from every OpenAI-compatible backend, so an empty tool list always
+	// degrades to "no tool_choice at all" regardless of what was requested.
+	// The engine is expected to guard this too (never force with no tools
+	// narrowed in) — this is belt-and-suspenders at the provider boundary.
+	if tc, ok := protocoltypes.ResolveToolChoice(options, "openai_compat"); ok && hasTools {
+		wire := string(tc.Mode)
+		if existing, hadOverride := p.extraBody["tool_choice"]; hadOverride {
+			if existingStr, _ := existing.(string); existingStr != wire {
+				logger.WarnCF("openai_compat", "forced tool_choice defeated by extra_body; re-applying the forced value", map[string]any{
+					"forced":     wire,
+					"extra_body": existing,
+				})
+			}
+		}
+		requestBody["tool_choice"] = wire
 	}
 
 	return requestBody
