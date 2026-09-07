@@ -3814,6 +3814,13 @@ components:
             Server-issued target and CSS geometry generation, scoped to the capture
             session. Input names the generation actually displayed; stale generations
             must be rejected. Viewer answers bind the negotiated stream to this value.
+        capture_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Non-secret opaque capture-session identity. Generation claims are valid
+            only within this capture; replacement invalidates all previous claims.
 
     BrowserControlFrame:
       title: BrowserControlFrame
@@ -4074,6 +4081,21 @@ components:
             Server-issued target and CSS geometry generation, scoped to the capture
             session. Input names the generation actually displayed; stale generations
             must be rejected. Viewer answers bind the negotiated stream to this value.
+        capture_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Non-secret opaque capture-session identity. Generation claims are valid
+            only within this capture; replacement invalidates all previous claims.
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Viewer negotiation attempt identity, unique on this WebSocket connection.
+            The server echoes the offer value in its answer. A client must reject an
+            answer for another attempt even when the capture generation is unchanged.
 
     BrowserWebRTCAnswerFrame:
       title: BrowserWebRTCAnswerFrame
@@ -4109,6 +4131,21 @@ components:
             Server-issued target and CSS geometry generation, scoped to the capture
             session. Input names the generation actually displayed; stale generations
             must be rejected. Viewer answers bind the negotiated stream to this value.
+        capture_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Non-secret opaque capture-session identity. Generation claims are valid
+            only within this capture; replacement invalidates all previous claims.
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Viewer negotiation attempt identity, unique on this WebSocket connection.
+            The server echoes the offer value in its answer. A client must reject an
+            answer for another attempt even when the capture generation is unchanged.
 
     BrowserWebRTCStateFrame:
       title: BrowserWebRTCStateFrame
@@ -4295,6 +4332,13 @@ components:
             must observe presentation of this or a later frame from the matching
             stream before enabling input. Serial comparison uses 32-bit wrap rules;
             attach requires a current boundary to avoid half-range ambiguity.
+        capture_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Non-secret opaque capture-session identity. Generation claims are valid
+            only within this capture; replacement invalidates all previous claims.
 
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame

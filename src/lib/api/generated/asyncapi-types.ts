@@ -573,6 +573,7 @@ export interface BrowserInputFrame {
   modifiers?: number;
   url?: string;
   capture_generation?: number;
+  capture_id?: string;
 }
 
 export interface BrowserControlFrame {
@@ -630,6 +631,8 @@ export interface BrowserWebRTCOfferFrame {
   session_id: string;
   sdp: string;
   capture_generation?: number;
+  capture_id?: string;
+  offer_id?: number;
 }
 
 export interface BrowserWebRTCAnswerFrame {
@@ -637,6 +640,8 @@ export interface BrowserWebRTCAnswerFrame {
   session_id?: string;
   sdp: string;
   capture_generation?: number;
+  capture_id?: string;
+  offer_id?: number;
 }
 
 export interface BrowserWebRTCStateFrame {
@@ -664,6 +669,7 @@ export interface BrowserVideoHealthFrame {
   capture_generation?: number;
   target_id?: string;
   rtp_timestamp?: number;
+  capture_id?: string;
 }
 
 export interface BrowserCaptureHelloFrame {

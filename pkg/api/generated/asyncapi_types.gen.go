@@ -179,6 +179,8 @@ type BrowserInputFrame struct {
 	CaptureGeneration *int `json:"capture_generation,omitempty"`
 	// Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
 	CaptureHeight *float64 `json:"capture_height,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
 	// Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP dispatch. Absent (older client) means x/y are already CSS pixels.
 	CaptureWidth *float64 `json:"capture_width,omitempty"`
 	Code         *string  `json:"code,omitempty"`
@@ -239,6 +241,8 @@ type BrowserVideoHealthFrame struct {
 	Attempt *int `json:"attempt,omitempty"`
 	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
 	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
 	// Optional free-text cause for the operator to read and act on, carried on `lost` and `unrecoverable`. Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
 	Detail *string `json:"detail,omitempty"`
 	// The attempt budget the gateway will spend before declaring the feed unrecoverable. Present so the panel can say "2 of 3" rather than implying an unbounded retry.
@@ -271,6 +275,10 @@ type BrowserViewportFrame struct {
 type BrowserWebRTCAnswerFrame struct {
 	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
 	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
+	// Viewer negotiation attempt identity, unique on this WebSocket connection. The server echoes the offer value in its answer. A client must reject an answer for another attempt even when the capture generation is unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP answer (application/sdp body) from the gateway's Pion viewer PeerConnection, ICE-gathering-complete (non-trickle).
 	Sdp string `json:"sdp"`
 	// Echoes the session_id from the triggering browser_webrtc_offer, for client-side correlation only.
@@ -284,6 +292,10 @@ type BrowserWebRTCOfferFrame struct {
 	AgentId string `json:"agent_id"`
 	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
 	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
+	// Viewer negotiation attempt identity, unique on this WebSocket connection. The server echoes the offer value in its answer. A client must reject an answer for another attempt even when the capture generation is unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP offer (application/sdp body), gathered with ICE candidates already resolved (non-trickle, ADR-047 D4).
 	Sdp string `json:"sdp"`
 	// The client's chat session id. Exactly as in BrowserAttachFrame, it RESOLVES the browsing context under ADR-075 FR-017 — the gateway reads this session's own workspace_id server-side and targets that workspace's browser and its single capture session. It is still echoed back on browser_webrtc_answer / browser_webrtc_state so the client can match them to this offer. A session that names no workspace degrades to the agent's own unambiguous membership, and to FR-033's refusal when the agent is on more than one workspace. agent_id is no longer the binding key.

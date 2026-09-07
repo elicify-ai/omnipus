@@ -114,3 +114,10 @@ properties:
       Server-issued target and CSS geometry generation, scoped to the capture
       session. Input names the generation actually displayed; stale generations
       must be rejected. Viewer answers bind the negotiated stream to this value.
+  capture_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      Non-secret opaque capture-session identity. Generation claims are valid
+      only within this capture; replacement invalidates all previous claims.

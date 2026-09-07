@@ -637,6 +637,7 @@ export const BrowserInputFrame = z
     modifiers: z.number().int().min(0).max(15).optional(),
     url: z.string().max(2048).optional(),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    capture_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -710,6 +711,8 @@ export const BrowserWebRTCOfferFrame = z
     session_id: z.string().min(1).max(128),
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    capture_id: z.string().min(1).max(128).optional(),
+    offer_id: z.number().int().min(1).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -719,6 +722,8 @@ export const BrowserWebRTCAnswerFrame = z
     session_id: z.string().max(128).optional(),
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    capture_id: z.string().min(1).max(128).optional(),
+    offer_id: z.number().int().min(1).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -752,6 +757,7 @@ export const BrowserVideoHealthFrame = z
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     target_id: z.string().min(1).max(128).optional(),
     rtp_timestamp: z.number().int().min(0).max(4294967295).optional(),
+    capture_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
