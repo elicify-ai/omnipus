@@ -8229,9 +8229,22 @@ func (al *AgentLoop) processSystemMessage(
 	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:          sessionKey,
-		Channel:             originChannel,
-		ChatID:              originChatID,
+		SessionKey: sessionKey,
+		Channel:    originChannel,
+		ChatID:     originChatID,
+		// ADR-081 D6b: mirrors processMessage's own SenderID threading
+		// (msg.Sender.CanonicalID, above in this file) — without it, EVERY
+		// system-channel-dispatched turn (not just the goal loop's) reaches
+		// checkGoalLoopAfterTurn's origin gate with opts.SenderID always
+		// empty, regardless of what Sender.CanonicalID the producer stamped
+		// on the bus message. This is what let the goal-loop's idle-steer/
+		// nudge/continue-push turns (pkg/agent/goal_triggers.go's
+		// dispatchGoalAsyncFollowUp, which stamps
+		// AsyncNotifyEvent.SenderCanonicalID = goalLoopFollowUpSenderID) be
+		// silently dropped at the gate even after that stamping fix —
+		// discovered while regression-testing D6b (goal_keeper_repairs_test.go's
+		// TestKeeper_SenderGateUnwedged_TwoFullIdleCycles).
+		SenderID:            msg.Sender.CanonicalID,
 		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse:     "Background task completed.",
 		SendResponse:        true,
