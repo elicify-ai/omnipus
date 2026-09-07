@@ -214,9 +214,11 @@ type BrowserStatusFrame struct {
 	ControlledByOther *bool   `json:"controlled_by_other,omitempty"`
 	Controller        *string `json:"controller,omitempty"`
 	Message           *string `json:"message,omitempty"`
-	SessionId         *string `json:"session_id,omitempty"`
-	State             string  `json:"state"`
-	Type              string  `json:"type"`
+	// True only with state=error for a failed input or tab command. Show the operation error without changing attachment, control ownership, capture health or displayed-frame authorization. It does not assert browser death and must not be combined with control_only. Absent/false retains ordinary lifecycle status semantics.
+	OperationOnly *bool   `json:"operation_only,omitempty"`
+	SessionId     *string `json:"session_id,omitempty"`
+	State         string  `json:"state"`
+	Type          string  `json:"type"`
 }
 
 // BrowserTabActionFrame — Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab, or open a new (blank) tab. Honoured the same way as browser_input/browser_control — switch/close target the active browsing context's tab set. index is required for switch/close, ignored for open. See ADR-041.
@@ -251,6 +253,10 @@ type BrowserVideoHealthFrame struct {
 	CaptureGeneration *int `json:"capture_generation,omitempty"`
 	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
 	CaptureId *string `json:"capture_id,omitempty"`
+	// Confirmed source CSS viewport height for capture_generation.
+	CssHeight *int `json:"css_height,omitempty"`
+	// Confirmed source CSS viewport width for capture_generation. Together with css_height and decoded video dimensions, identifies padding inside the encoded frame; pointer coordinates must exclude that padding.
+	CssWidth *int `json:"css_width,omitempty"`
 	// Optional free-text cause for the operator to read and act on, carried on `lost` and `unrecoverable`. Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
 	Detail *string `json:"detail,omitempty"`
 	// The attempt budget the gateway will spend before declaring the feed unrecoverable. Present so the panel can say "2 of 3" rather than implying an unbounded retry.

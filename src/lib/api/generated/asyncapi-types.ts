@@ -594,6 +594,7 @@ export interface BrowserStatusFrame {
   controlled_by_other?: boolean;
   control_only?: boolean;
   session_id?: string;
+  operation_only?: boolean;
 }
 
 export interface BrowserViewportFrame {
@@ -670,6 +671,8 @@ export interface BrowserVideoHealthFrame {
   target_id?: string;
   rtp_timestamp?: number;
   capture_id?: string;
+  css_width?: number;
+  css_height?: number;
 }
 
 export interface BrowserCaptureHelloFrame {

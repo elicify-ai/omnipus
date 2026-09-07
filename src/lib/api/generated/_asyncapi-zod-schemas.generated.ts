@@ -664,6 +664,7 @@ export const BrowserStatusFrame = z
     controlled_by_other: z.boolean().optional(),
     control_only: z.boolean().optional(),
     session_id: z.string().optional(),
+    operation_only: z.boolean().optional(),
   })
   .strict();
 
@@ -758,6 +759,8 @@ export const BrowserVideoHealthFrame = z
     target_id: z.string().min(1).max(128).optional(),
     rtp_timestamp: z.number().int().min(0).max(4294967295).optional(),
     capture_id: z.string().min(1).max(128).optional(),
+    css_width: z.number().int().min(1).max(16384).optional(),
+    css_height: z.number().int().min(1).max(16384).optional(),
   })
   .strict();
 

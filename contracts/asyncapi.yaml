@@ -3900,6 +3900,15 @@ components:
             untouched.
         session_id:
           type: string
+        operation_only:
+          type: boolean
+          description: >-
+            True only with state=error for a failed input or tab command. Show the
+            operation error without changing attachment, control ownership, capture
+            health or displayed-frame authorization. It does not assert browser death
+            and must not be combined with control_only. Absent/false retains ordinary
+            lifecycle status semantics.
+
     BrowserViewportFrame:
       title: BrowserViewportFrame
       description: 'Client → server. Reports the live-browser panel''s current render box so the gateway can size the
@@ -4339,6 +4348,19 @@ components:
           description: >-
             Non-secret opaque capture-session identity. Generation claims are valid
             only within this capture; replacement invalidates all previous claims.
+        css_width:
+          type: integer
+          minimum: 1
+          maximum: 16384
+          description: >-
+            Confirmed source CSS viewport width for capture_generation. Together
+            with css_height and decoded video dimensions, identifies padding inside
+            the encoded frame; pointer coordinates must exclude that padding.
+        css_height:
+          type: integer
+          minimum: 1
+          maximum: 16384
+          description: Confirmed source CSS viewport height for capture_generation.
 
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame

@@ -59,3 +59,11 @@ properties:
       lifecycle/error/attach frame, applied normally.
   session_id:
     type: string
+  operation_only:
+    type: boolean
+    description: >-
+      True only with state=error for a failed input or tab command. Show the
+      operation error without changing attachment, control ownership, capture
+      health or displayed-frame authorization. It does not assert browser death
+      and must not be combined with control_only. Absent/false retains ordinary
+      lifecycle status semantics.
