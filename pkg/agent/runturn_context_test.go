@@ -363,11 +363,28 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 		first:  map[string]any{"turn_range": "1-1"},
 		script: []func() (*providers.LLMResponse, error){bigCall("d5-1", "one"), bigCall("d5-2", "two")},
 	}
-	// W = 50,000 → B ≈ 44k tokens: the span (+ the small window + this
-	// fixture's ~20k-token full tool surface, which decideRecallInjection
-	// counts) fits comfortably, while two door-capped 60,000-char results
-	// (~22k tokens each) push the D6 total over B mid-turn.
-	al, agent := recallInjectionFixture(t, provider, 50_000, 1_000, turns)
+	// W was 50,000 (B ≈ 44k) until the feat/library-improvements merge
+	// (integrate/library-improvements-v0.1.1) unconditionally registered the
+	// knowledge tool family for EVERY agent (registerKnowledgeTools,
+	// instance.go — ADR-067 D7), growing this fixture's full tool surface
+	// (decideRecallInjection's sentToolSurfaceTokens-based check, which
+	// charges FULL schemas for every ManifestFull/Infra-tier tool regardless
+	// of allow/deny policy) from the ~20k this comment used to describe to
+	// ~45.2k measured — more than the whole 50,000-token window, so the span
+	// could never fit and the precondition ("the span WAS injected into
+	// request 2") failed outright. This is the same tool-catalog-growth
+	// class both merge parents independently hit and fixed in
+	// eventbus_test.go's own DefaultContextWindow pin (ADR-066 D2 rung 3).
+	//
+	// 55,000 (B ≈ 48.6k) restores the original two-sided margin: large
+	// enough that the ~45.2k tool surface + the small seeded window + the
+	// 410-token span fit at injection time, but still small enough that the
+	// mid-turn D6 check's OWN (much smaller — compressed-manifest-only, no
+	// full-schema charge) overhead plus two door-capped 60,000-char results
+	// pushes the D6 total over B, so the injected span is still the first
+	// thing dropped under pressure. Confirmed empirically against this
+	// fixture's live budget: the passing window is roughly [53,000, 57,000].
+	al, agent := recallInjectionFixture(t, provider, 55_000, 1_000, turns)
 	al.RegisterTool(&bigResultTool{size: 60_000})
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{

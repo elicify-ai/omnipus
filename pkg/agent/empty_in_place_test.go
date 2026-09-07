@@ -206,10 +206,34 @@ func newLiveReloadHarness(t *testing.T, home string, provider *testutil.Scenario
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "scripted-model"}
 	cfg.Agents.Defaults.MaxTokens = 2000
 	cfg.Agents.Defaults.MaxToolIterations = 10
-	// ADR-066 D2: the ladder's global default pins W = 40,000 → B ≈ 36,000
-	// estimator tokens minus the pinned core; four 30,000-char results
-	// (12,000 tokens each) overflow it, two empties bring it back.
-	cfg.Context.DefaultContextWindow = intPtr(40_000)
+	// ADR-066 D2: the ladder's global default pins W → B estimator tokens
+	// minus the pinned core; four 30,000-char results (12,000 tokens each)
+	// overflow it, two empties bring it back.
+	//
+	// W was 40,000 (B ≈ 36,000) until the feat/library-improvements merge
+	// (integrate/library-improvements-v0.1.1) unconditionally registered the
+	// knowledge tool family for EVERY agent (registerKnowledgeTools,
+	// instance.go — ADR-067 D7). That grows both budget sites' tool-surface
+	// estimate: the mid-turn D6 check's compressed-manifest note
+	// (manifestNoteTokens, midturn_budget.go) AND windowTrim's
+	// sentToolSurfaceTokens (which additionally charges FULL schemas for
+	// every ManifestFull/Infra-tier tool, unaffected by allow/deny policy —
+	// loop.go). At W=40,000 the grown mid-turn overhead alone pushed the
+	// check over budget after only 3 of the 4 results (36,006 estimator
+	// tokens, right at the old B≈36,000 edge), firing two PREMATURE mid-turn
+	// empties before the scripted overflow error at step 5 ever arrived, and
+	// windowTrim's larger tool-surface estimate then needed a THIRD empty on
+	// top of those two — three empties total instead of the two this test
+	// pins, mirroring the same tool-catalog-growth class both merge parents
+	// independently hit and fixed in eventbus_test.go's own DefaultContextWindow
+	// pin (ADR-066 D2 rung 3). 54,000 (B ≈ 45,404 for this fixture) restores
+	// the original margin: the two site's overhead terms diverge enough
+	// with the grown catalog that only a narrow window keeps ALL of steps
+	// 1-4 under B (no premature mid-turn empty) while still needing exactly
+	// two empties, oldest-first, at the retry to fit — confirmed empirically
+	// against the live sentToolSurfaceTokens/agentContextBudget values for
+	// this fixture's agent+tools (passing range roughly [48,000, 59,000]).
+	cfg.Context.DefaultContextWindow = intPtr(54_000)
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })
