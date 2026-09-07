@@ -75,7 +75,8 @@ type Session struct {
 	// installed ingest connection dies — see the OnConnectionStateChange
 	// handler in ingest.go. The owner uses it to ask the encoder for a fresh
 	// capture; nil is a valid no-op.
-	onIngestLost func()
+	onIngestLost    func()
+	onVideoBoundary func(uint64, string, uint32)
 
 	// onBitrateTarget is invoked (no lock held) when the viewer leg's own RTCP
 	// receiver reports move the congestion target. ADR-069 Finding 2: without
@@ -154,8 +155,10 @@ type Session struct {
 	pliDeferred atomic.Bool
 
 	// Each media kind has one generation-aware RTP/RTCP write owner.
-	videoForward mediaForwarder
-	audioForward mediaForwarder
+	videoGeneration uint64
+	videoTargetID   string
+	videoForward    mediaForwarder
+	audioForward    mediaForwarder
 
 	connSeq atomic.Int64
 
@@ -657,4 +660,27 @@ func (s *Session) Close() error {
 		msg += " " + e.Error() + ";"
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// SetOnVideoBoundary registers the first forwarded video timestamp of each
+// ingest connection. Callbacks run without Session locks held.
+func (s *Session) SetOnVideoBoundary(cb func(uint64, string, uint32)) {
+	s.mu.Lock()
+	s.onVideoBoundary = cb
+	s.mu.Unlock()
+}
+
+// CurrentVideoBoundary returns the current feed's latest display boundary.
+func (s *Session) CurrentVideoBoundary() (uint64, string, uint32, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.videoGeneration == 0 {
+		return 0, "", 0, false
+	}
+	// Match the same Session -> forwarder lock order as begin and retire.
+	_, timestamp, ok := s.videoForward.boundary(s.videoFeedID)
+	if !ok {
+		return 0, "", 0, false
+	}
+	return s.videoGeneration, s.videoTargetID, timestamp, true
 }

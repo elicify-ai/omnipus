@@ -140,7 +140,7 @@ func TestSeed_ContentIntegrity(t *testing.T) {
 	if manifest.Key == "" {
 		t.Error("manifest key is empty")
 	}
-	wantPerms := map[string]bool{"tabCapture": false, "tabs": false}
+	wantPerms := map[string]bool{"tabCapture": false, "tabs": false, "debugger": false}
 	for _, p := range manifest.Permissions {
 		if _, ok := wantPerms[p]; ok {
 			wantPerms[p] = true
@@ -224,9 +224,9 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 	// (a2) …and capDims must still be derived from the captured tab's own
 	// viewport. Without this, (a) alone would pass if capDims were pinned to
 	// some constant, which is the same letterbox bug in a new shape.
-	if !strings.Contains(content, "const capDims = budgetedCaptureDims(capW, capH, captureScale);") {
+	if !strings.Contains(content, "const capDims = budgetedCaptureDims(capW, capH, commandScale);") {
 		t.Error(
-			"encoder.js: capDims must be computed as budgetedCaptureDims(capW, capH, captureScale) — the capture " +
+			"encoder.js: capDims must be computed as budgetedCaptureDims(capW, capH, commandScale) — the capture " +
 				"request has to track the tab's real viewport, clamped only by the pixel budget",
 		)
 	}
@@ -270,26 +270,9 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 		)
 	}
 
-	// (d) F3 (external review, 2026-08-13): capture_scale must define an
-	// ABSENT field as 1, not leave captureScale sticky at whatever it was
-	// last set to. A shared per-agent CaptureSession can serve a viewer that
-	// drops from DPR 2 to DPR 1 (monitor change, or a second viewer joining
-	// at 1x); the server sends capture_scale only when scale > 1, so
-	// "absent means unchanged" pinned the encoder at 2x forever — 4x the
-	// pixels against a tab now rendering at 1x. Pinned as an exact string:
-	// the assignment must be unconditional (a ternary with an explicit `: 1`
-	// fallback), not an `if (...) { captureScale = ... }` with no else,
-	// which is exactly the sticky shape this guards against reintroducing.
-	if !strings.Contains(
-		content,
-		"captureScale =\n      typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale) ? Math.min(4, Math.max(1, msg.capture_scale)) : 1;",
-	) {
-		t.Error(
-			"encoder.js: capture_scale handling must unconditionally assign captureScale with an explicit `: 1` " +
-				"fallback for an absent/invalid field (F3) — a bare `if (...) { captureScale = ... }` with no else " +
-				"reintroduces the sticky-across-recaptures bug",
-		)
-	}
+	// (d) F3's scale-default guarantee is exercised by the actual module in
+	// TestEncoderCaptureScaleDefaultsPerCommand. Its old exact-string guard
+	// could not verify immutable command snapshots or absent-field behavior.
 
 	// (e) and (f): extract mungeVideoStartBitrate's function body in
 	// isolation (bounded by the next top-level function declaration) so the
@@ -418,6 +401,8 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
+	// 1.0.19: exact source identity, capture generations and correlated offers.
+	"1.0.19": "debaf0fdad82a09ae5fa8b6d0153d22ca9209be1a837331cf6099524086dacb0",
 	// 1.0.18: hardware-aligned capture, demand-aware adaptation, health, and track replacement.
 	"1.0.18": "d0618b373f7086c7eebbb4a35691b6c03e87bf441ff4c80acbd1db5e775a9337",
 	"1.0.1":  "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",

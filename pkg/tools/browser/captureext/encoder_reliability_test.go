@@ -13,6 +13,9 @@ func runEncoderReliabilityJS(t *testing.T, body string) {
  const sandbox={window:{},console:{log(){},warn(){}},setTimeout,clearTimeout,setInterval,clearInterval,WebSocket:{OPEN:1},chrome:{runtime:{getManifest(){return {version:'test'}}}}};
  vm.createContext(sandbox); vm.runInContext(require('node:fs').readFileSync(0,'utf8'),sandbox);
  const run=(code)=>vm.runInContext(code,sandbox);
+ sandbox.window.__omnipusCapture={token:'test',ingestUrl:'ws://fixture',target_id:'fixture',capture_generation:1,expected_width:633,expected_height:741,capture_scale:1};
+ sandbox.chrome.debugger={getTargets:async()=>[{id:'fixture',type:'page',tabId:7}]};
+ run('desiredCaptureCommand=captureCommandFrom(window.__omnipusCapture);currentCaptureCommand=desiredCaptureCommand;');
  `
 	cmd := exec.Command("node", "-e", bootstrap+body)
 	cmd.Stdin = strings.NewReader(embeddedEncoderJS(t))

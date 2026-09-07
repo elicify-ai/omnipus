@@ -75,7 +75,11 @@ var audioGraceTimeout = 2 * time.Second
 // OnTrack fires. This is the one deliberate deviation from the spike's
 // relay.go, which allocated a fresh local track on every attach and would
 // have orphaned existing viewers on reconnect.
-func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) {
+func (s *Session) HandleIngestOffer(sdpOffer string) (string, error) {
+	return s.handleIngestOffer(sdpOffer, 0, "")
+}
+
+func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string) (answer string, err error) {
 	if sdpOffer == "" {
 		return "", fmt.Errorf("webrtc: ingest offer: empty SDP")
 	}
@@ -189,7 +193,7 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		go func() {
 			<-installedDone
-			s.attachIngestTrack(prefix, pc, track, receiver)
+			s.attachIngestTrack(prefix, pc, track, receiver, generation, targetID)
 		}()
 	})
 
@@ -259,6 +263,17 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 
 	s.logf("%s answer sent to encoder", prefix)
 	return local.SDP, nil
+}
+
+// HandleIngestOfferForGeneration binds an ingest to the server's display lineage.
+func (s *Session) HandleIngestOfferForGeneration(sdp string, generation uint64, targetID string) (string, error) {
+	if generation == 0 || generation > 9007199254740991 {
+		return "", fmt.Errorf("webrtc: capture generation must be a positive safe integer")
+	}
+	if len(targetID) == 0 || len(targetID) > 128 {
+		return "", fmt.Errorf("webrtc: capture target must contain 1 to 128 bytes")
+	}
+	return s.handleIngestOffer(sdp, generation, targetID)
 }
 
 // ingestDisconnectGracePeriod bounds how long the INSTALLED ingest connection
@@ -525,7 +540,7 @@ func (s *Session) endFeed(prefix string, kind webrtc.RTPCodecType, feedID int64)
 	}
 }
 
-func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver, generation uint64, targetID string) {
 	codec := remote.Codec()
 	kind := remote.Kind()
 	// Minted before any lock is taken so the token is unique even if two
@@ -565,12 +580,16 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 	}
 	forward.begin(feedID, codec.ClockRate)
 	var live func()
+	var boundary func(uint64, string, uint32)
 	switch kind {
 	case webrtc.RTPCodecTypeVideo:
 		s.videoSSRC = remote.SSRC()
 		s.videoCodec = codec.MimeType
 		s.videoFeedID = feedID
+		s.videoGeneration = generation
+		s.videoTargetID = targetID
 		live = s.onIngestLive
+		boundary = s.onVideoBoundary
 	case webrtc.RTPCodecTypeAudio:
 		s.audioCodec = codec.MimeType
 		s.audioFeedID = feedID
@@ -637,6 +656,7 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 
 	buf := make([]byte, 1500)
 	var lastLog time.Time
+	boundarySent := false
 	for {
 		n, _, err := remote.Read(buf)
 		if err != nil {
@@ -664,6 +684,15 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 				s.logf("%s forward write failed: kind=%s err=%v", prefix, kind, err)
 			}
 			continue
+		}
+		if !boundarySent && boundary != nil && generation > 0 {
+			if timestamp, _, current := forward.boundary(feedID); current {
+				boundarySent = true
+				// Consumers recheck immutable identity when this queued
+				// callback arrives. The first mapped timestamp is the floor
+				// even if an earlier write partially failed for a viewer.
+				go boundary(generation, targetID, timestamp)
+			}
 		}
 		count := pktCounter.Add(1)
 		if time.Since(lastLog) > 5*time.Second {

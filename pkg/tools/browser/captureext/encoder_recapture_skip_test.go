@@ -27,65 +27,9 @@ func init() {
 	versionContentHashes["1.0.17"] = "a38a7f7ee336657fb970d0f1d5a853c78a9818354e7ff60b76ae755979e84491"
 }
 
-// TestEncoderJS_RecaptureSkipGuards is the no-node backstop: it pins the
-// SHAPE of the fix into the embedded asset, so a merge that resurrects the
-// unconditional teardown fails here even on a machine with no JS runtime.
-// The behavioural proof is TestEncoderJS_RecaptureSkipsUnchangedGeometry.
-func TestEncoderJS_RecaptureSkipGuards(t *testing.T) {
-	src := embeddedEncoderJS(t)
-
-	// The decision must exist and must be consulted from the recapture
-	// control handler — a decision function nobody calls is the classic
-	// green-but-dead shape.
-	if !strings.Contains(src, "function recaptureGeometryChangeReason(want, applied)") {
-		t.Error("encoder.js: recaptureGeometryChangeReason must exist — it is the whole 'only rebuild if the " +
-			"size really changed' decision")
-	}
-	if !strings.Contains(src, "const changeReason = recaptureGeometryChangeReason(") {
-		t.Error("encoder.js: the recapture control handler must consult recaptureGeometryChangeReason before " +
-			"rebuilding, or every panel open destroys a working stream again")
-	}
-
-	// The skip must be reachable: an early return on the no-change path.
-	if !strings.Contains(src, "recapture: SKIPPED") {
-		t.Error("encoder.js: the no-change path must return without rebuilding, and must say so in the " +
-			"diagnostic history — an invisible optimisation cannot be verified in the field")
-	}
-
-	// The applied-vs-requested guard. Skipping on a value we merely ASKED for
-	// is how a stale-geometry picture becomes permanent.
-	if !strings.Contains(src, "track.getSettings()") {
-		t.Error("encoder.js: appliedCaptureGeometry must read the running track's getSettings() — the pinned " +
-			"size is what was requested, only the track reports what Chrome actually produced")
-	}
-	if !strings.Contains(src, "if (captureInFlight || !currentPC || !currentStream || !lastPinnedCapDims) return null;") {
-		t.Error("encoder.js: appliedCaptureGeometry must report 'nothing running' on a cold start or during a " +
-			"rebuild, so a needed capture is never skipped")
-	}
-	if !strings.Contains(src, "if (currentPC.connectionState !== 'connected') return null;") {
-		t.Error("encoder.js: a capture whose PeerConnection is not connected is not a stream worth protecting — " +
-			"the recapture may well BE the recovery")
-	}
-
-	// One tolerance, shared with the two judgements this file already makes.
-	if !strings.Contains(src, "const RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX = 8;") {
-		t.Error("encoder.js: the same-size tolerance must stay 8 CSS px — the value captureActiveTabStream's " +
-			"convergence poll and the post-connect self-heal already use for 'this is the same size'")
-	}
-
-	// The source-tab check: identical dimensions on a DIFFERENT tab must
-	// still rebuild, or a tab switch leaves the viewer on the wrong page.
-	if !strings.Contains(src, "activeTabId === applied.tabId") {
-		t.Error("encoder.js: the skip must also require the active tab to still be the captured one — an " +
-			"active-tab switch can land on a tab of identical size")
-	}
-
-	// The scale must be pinned WITH the capture, not read off the live
-	// module variable a later control frame overwrites.
-	if !strings.Contains(src, "lastPinnedCapDims = { w: capW, h: capH, scale: captureScale };") {
-		t.Error("encoder.js: lastPinnedCapDims must record the scale the capture was actually built at")
-	}
-}
+// The release's source-string skip guard was superseded by
+// TestEncoderRequestedRecoveryIsNotSkippedForHealthyLookingGeometry: no-op
+// deduplication belongs to the backend; explicit recovery must always run.
 
 // TestEncoderJS_RecaptureSkipsUnchangedGeometry is the behavioural proof. It
 // loads the embedded encoder.js into a Node vm context and drives the REAL
@@ -282,7 +226,8 @@ function installRunningCapture(opts) {
     'currentPC = globalThis.__harnessLivePC;' +
     'capturedTabId = ' + (opts.tabId === undefined ? 7 : opts.tabId) + ';' +
     'captureScale = ' + scale + ';' +
-    'lastPinnedCapDims = { w: ' + cssW + ', h: ' + cssH + ', scale: ' + scale + ' };',
+    'lastPinnedCapDims = { w: ' + cssW + ', h: ' + cssH + ', scale: ' + scale + ' };' +
+    'currentCaptureCommand={target_id:"tab-' + (opts.tabId === undefined ? 7 : opts.tabId) + '",capture_generation:1,expected_width:' + cssW + ',expected_height:' + cssH + ',capture_scale:' + scale + '};desiredCaptureCommand=currentCaptureCommand;',
     sandbox
   );
   return { stream: stream, pc: pc };
@@ -295,7 +240,10 @@ function armRebuildTargets() {
   harness.nextPC = makePC('connecting');
 }
 function recaptureFrame(w, h, scale) {
-  const f = { type: 'browser_capture_control', action: 'recapture' };
+  const previous=vm.runInContext('currentCaptureCommand',sandbox);
+  const target='tab-'+harness.activeTabId;
+  const changed=previous && (previous.target_id!==target || (w!==null && (previous.expected_width!==w || previous.expected_height!==h || previous.capture_scale!==(scale || 1))));
+  const f = { type: 'browser_capture_control', action: 'recapture',target_id:target,capture_generation:previous ? previous.capture_generation + (changed ? 1 : 0) : 1 };
   if (w !== null) { f.expected_width = w; f.expected_height = h; }
   if (scale !== null && scale !== undefined) { f.capture_scale = scale; }
   return f;
@@ -362,37 +310,31 @@ function currentGlobals() {
 
   // ================= part 2: the real control-frame handler =============
 
-  // (a) same geometry -> the working stream must SURVIVE, untouched.
+  // (a) explicit same-generation recovery replaces source and retains peer.
   harness.activeTabId = 7;
   let live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   await sendRecapture(recaptureFrame(1280, 720, 1));
   let after = currentGlobals();
-  check('panel_open_at_same_size_keeps_the_stream',
-    harness.captureCalls === 0 && harness.pcCalls === 0 &&
-      after.pc === live.pc && after.stream === live.stream &&
-      live.pc.closed === false && live.stream.video.stopped === false &&
-      typeof win.__omnipusState.lastRecaptureSkipAt === 'number',
-    'captureActiveTabStream calls=' + harness.captureCalls + ', pc rebuilt=' + (after.pc !== live.pc) +
-      ', pc.closed=' + live.pc.closed + ', video track stopped=' + live.stream.video.stopped +
-      ', lastRecaptureSkipAt=' + win.__omnipusState.lastRecaptureSkipAt);
+  check('explicit_recovery_at_same_size_replaces_source',
+    harness.captureCalls === 1 && harness.pcCalls === 0 &&
+      after.pc === live.pc && after.stream === harness.nextStream &&
+      live.pc.closed === false && live.stream.video.stopped === true,
+    'capture calls=' + harness.captureCalls + ', source replaced=' + (after.stream !== live.stream));
 
-  // (a2) a one-pixel difference is still the same panel.
+  // (a2) a committed one-pixel CSS change has a new server generation.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   await sendRecapture(recaptureFrame(1281, 719, 1));
-  check('one_pixel_jitter_keeps_the_stream',
-    harness.captureCalls === 0 && live.stream.video.stopped === false,
+  check('committed_one_pixel_change_starts_new_generation',
+    harness.captureCalls === 1 && live.stream.video.stopped === true && live.pc.closed === true,
     'captureActiveTabStream calls=' + harness.captureCalls + ', video track stopped=' + live.stream.video.stopped);
 
-  // (b) changed geometry replaces the source while retaining the connected
-  // transport; both senders must reference the new capture tracks.
+  // (b) changed geometry creates fresh receiver lineage for frame proof.
   live = installRunningCapture({ cssW: 1280, cssH: 720, scale: 1, tabId: 7 });
   await sendRecapture(recaptureFrame(615, 744, 1));
   after = currentGlobals();
-  check('real_resize_replaces_source_preserving_peer',
-    harness.captureCalls === 1 && after.pc === live.pc && after.stream === harness.nextStream &&
-      live.pc.closed === false && live.stream.video.stopped === true &&
-      after.pc.getSenders()[0].track === after.stream.getVideoTracks()[0] &&
-      after.pc.getSenders()[1].track === after.stream.getAudioTracks()[0],
+  check('real_resize_replaces_source_and_peer',
+    harness.captureCalls === 1 && after.pc === harness.nextPC && after.stream === harness.nextStream &&
+      live.pc.closed === true && live.stream.video.stopped === true,
     'captureActiveTabStream calls=' + harness.captureCalls + ', old pc closed=' + live.pc.closed +
       ', old track stopped=' + live.stream.video.stopped + ', pc swapped=' + (after.pc === harness.nextPC));
 
