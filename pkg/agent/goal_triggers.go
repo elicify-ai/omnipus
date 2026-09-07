@@ -249,6 +249,21 @@ func resetGoalTriggerStateForTest() {
 // routeFor (below) is the matching read side: in-memory first, persisted
 // fallback. This also opportunistically wires sessionStoreResolver (see its
 // doc comment) so routeFor can reach the store on a bare, receiverless call.
+// SetGoalRouteSessionStore wires FR-031's session-store resolver at BOOT,
+// closing the cold-start gap the opportunistic wiring below leaves open: a
+// channel record echo (set_goal write) or keeper action firing in a fresh
+// process BEFORE any /goal command or quiet-window tick would otherwise find
+// routeFor without a store and degrade. Called from gateway boot next to
+// SetAskUserRegistry (W2b deviation #6 fast-follow, ADR-081 FR-031).
+func (al *AgentLoop) SetGoalRouteSessionStore() {
+	s := goalTriggers()
+	s.mu.Lock()
+	if s.sessionStoreResolver == nil {
+		s.sessionStoreResolver = al.GetSessionStore
+	}
+	s.mu.Unlock()
+}
+
 func (al *AgentLoop) recordGoalRouting(sessionID, channel, chatID, sessionKey, agentID string) {
 	if sessionID == "" {
 		return
