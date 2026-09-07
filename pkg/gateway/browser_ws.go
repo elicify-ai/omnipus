@@ -217,7 +217,8 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 
 	// work is this connection's serial worker for the slow frame handlers
 	// (browser_attach, browser_viewport). See browserConnWorkQueue.
-	work browserConnWorkQueue
+	work     browserConnWorkQueue
+	commands browserCommandQueue
 
 	// webrtcMu guards webrtc and webrtcEpoch below (FIX WAVE A finding 1).
 	// browser_webrtc_offer processing now runs off readLoop's own goroutine
@@ -412,6 +413,8 @@ type browserConnWorkKind uint8
 const (
 	workKindAttach browserConnWorkKind = iota
 	workKindViewport
+	workKindInput
+	workKindTabAction
 )
 
 // browserConnWork is one queued job.
@@ -1115,6 +1118,7 @@ func (h *BrowserWSHandler) readLoop(
 		// exactly one of the two paths, so the viewer is detached once and
 		// only once.
 		state.work.close()
+		state.commands.close()
 		state.invalidateAttach()
 		if mgr, sessionID, panelSessionID := state.clearAttachment(); mgr != nil && sessionID != "" {
 			h.detach(mgr, sessionID, panelSessionID, viewerID, userID)
@@ -1190,11 +1194,11 @@ func (h *BrowserWSHandler) readLoop(
 			// duration. See browserConnWorkQueue and beginAttach.
 			h.dispatchAttach(wc, &state, viewerID, userID, data, cfg)
 		case string(generated.WsFrameTypeBrowserInput):
-			h.handleInput(wc, &state, viewerID, data)
+			h.dispatchBrowserCommand(wc, &state, viewerID, userID, data, typ.Type, cfg)
 		case string(generated.WsFrameTypeBrowserControl):
-			h.handleControl(wc, &state, viewerID, userID, data, cfg)
+			h.dispatchBrowserCommand(wc, &state, viewerID, userID, data, typ.Type, cfg)
 		case string(generated.WsFrameTypeBrowserTabAction):
-			h.handleTabAction(wc, &state, viewerID, data)
+			h.dispatchBrowserCommand(wc, &state, viewerID, userID, data, typ.Type, cfg)
 		case string(generated.WsFrameTypeBrowserViewport):
 			// FIX WAVE B finding A, same reasoning as browser_attach above.
 			// handleViewport -> SetViewport was MEASURED at 6.95s against a
@@ -1203,6 +1207,7 @@ func (h *BrowserWSHandler) readLoop(
 			// connection could read nothing at all.
 			h.dispatchViewport(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
+			state.commands.discard()
 			h.handleDetach(wc, &state, viewerID, userID)
 			// Unconditional for the same reason as readLoop's own cleanup
 			// defer above: an in-flight background offer (dispatchWebRTCOffer)
@@ -1500,6 +1505,7 @@ func (h *BrowserWSHandler) handleAttach(
 // the exact same blocked URL) would leave the user looking at no error at
 // all after their retry was refused again.
 func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+	runBrowserConnWorkHook(workKindInput)
 	// Read the attachment ONCE, under attachMu, and use that snapshot for the
 	// whole handler: browser_attach now commits from the worker goroutine, so
 	// re-reading state.mgr/state.sessionID field-by-field could observe an
@@ -1725,6 +1731,7 @@ func (h *BrowserWSHandler) handleControl(
 // tabs.go) are UNAFFECTED — they call BrowserManager.SwitchTab/CloseTab/
 // OpenTab directly, never through this WS handler.
 func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+	runBrowserConnWorkHook(workKindTabAction)
 	// One snapshot under attachMu for the whole handler — see handleInput.
 	mgr, chatSessionID, panelSessionID := state.attachment()
 	if mgr == nil || chatSessionID == "" {
