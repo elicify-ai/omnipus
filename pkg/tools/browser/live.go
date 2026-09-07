@@ -206,14 +206,18 @@ const (
 // mirrors the AsyncAPI BrowserInputFrame `kind` enum exactly: mouse_move,
 // mouse_down, mouse_up, wheel, key_down, key_up, text, navigate.
 type LiveInput struct {
-	Kind   string
-	X, Y   float64
-	HasXY  bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
-	Button string // none|left|middle|right|back|forward ("" treated as none)
-	DeltaX float64
-	DeltaY float64
-	Key    string
-	Code   string
+	// CaptureID and CaptureGeneration are the viewer's claim about the
+	// displayed picture.
+	CaptureID         string
+	CaptureGeneration uint64
+	Kind              string
+	X, Y              float64
+	HasXY             bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
+	Button            string // none|left|middle|right|back|forward ("" treated as none)
+	DeltaX            float64
+	DeltaY            float64
+	Key               string
+	Code              string
 	// KeyCode is the Windows virtual key code for key_down/key_up (the DOM
 	// KeyboardEvent.keyCode, e.g. Backspace=8, Enter=13, Delete=46,
 	// arrows=37-40). CDP's Input.dispatchKeyEvent needs it to actually PERFORM

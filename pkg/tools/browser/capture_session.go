@@ -326,12 +326,15 @@ type CaptureSession struct {
 	startErr  error
 	// captureScale is the controlling viewer's devicePixelRatio (see
 	// SetCaptureScale). Guarded by mu. Zero means "never set" -> treated as 1.
-	captureScale float64
-	extVersion   string
-	lastPingAt   time.Time
-	tabCtx       context.Context
-	tabCancel    context.CancelFunc
-	started      bool
+	captureScale  float64
+	extVersion    string
+	lastPingAt    time.Time
+	captureHealth CaptureHealthObservation
+	frames        captureFrameTracker
+	onFrameState  func(CaptureFrameState)
+	tabCtx        context.Context
+	tabCancel     context.CancelFunc
+	started       bool
 	// starting is true only for the narrow window between Start() entering
 	// its one-time startOnce.Do body and cs.startEncoder returning (success
 	// or failure) — see IsStarting's doc comment for why the gateway's
