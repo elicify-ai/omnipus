@@ -155,9 +155,12 @@ type Session struct {
 	viewersMu sync.Mutex
 	viewers   map[string]*viewerConn
 
-	videoPktCount atomic.Int64
-	audioPktCount atomic.Int64
-	pliBursting   atomic.Bool
+	videoPktCount          atomic.Int64
+	audioPktCount          atomic.Int64
+	inputShedPositional    atomic.Int64
+	inputDroppedPositional atomic.Int64
+	inputDroppedDiscrete   atomic.Int64
+	pliBursting            atomic.Bool
 	// pliDeferred records that a keyframe request was asked for while the
 	// ingest connection was not yet able to carry one (see sendPLI's
 	// not-connected branch). attachIngestTrack redeems it via flushDeferredPLI
@@ -530,17 +533,20 @@ func (s *Session) Stats() Stats {
 		// this is what the gateway turns into the panel's has_audio and what
 		// an operator reads in a stats dump. Reporting a track that nothing
 		// feeds as present is the same lie waitForTracks used to tell.
-		HasVideo:             s.videoTrack != nil && s.videoFeedID != 0,
-		HasAudio:             s.audioTrack != nil && s.audioFeedID != 0,
-		VideoCodec:           s.videoCodec,
-		AudioCodec:           s.audioCodec,
-		VideoPackets:         s.videoPktCount.Load(),
-		AudioPackets:         s.audioPktCount.Load(),
-		VideoReceivedPackets: s.videoForward.receivedPackets.Load(),
-		AudioReceivedPackets: s.audioForward.receivedPackets.Load(),
-		VideoForwardFailures: s.videoForward.forwardFailures.Load(),
-		AudioForwardFailures: s.audioForward.forwardFailures.Load(),
-		IngestBindingToken:   s.ingestInstalledBindingToken,
+		HasVideo:               s.videoTrack != nil && s.videoFeedID != 0,
+		HasAudio:               s.audioTrack != nil && s.audioFeedID != 0,
+		VideoCodec:             s.videoCodec,
+		AudioCodec:             s.audioCodec,
+		VideoPackets:           s.videoPktCount.Load(),
+		AudioPackets:           s.audioPktCount.Load(),
+		VideoReceivedPackets:   s.videoForward.receivedPackets.Load(),
+		AudioReceivedPackets:   s.audioForward.receivedPackets.Load(),
+		VideoForwardFailures:   s.videoForward.forwardFailures.Load(),
+		AudioForwardFailures:   s.audioForward.forwardFailures.Load(),
+		IngestBindingToken:     s.ingestInstalledBindingToken,
+		InputShedPositional:    s.inputShedPositional.Load(),
+		InputDroppedPositional: s.inputDroppedPositional.Load(),
+		InputDroppedDiscrete:   s.inputDroppedDiscrete.Load(),
 	}
 }
 

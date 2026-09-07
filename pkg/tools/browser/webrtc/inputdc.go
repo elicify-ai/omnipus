@@ -267,50 +267,42 @@ func (s *Session) wireInputDataChannel(parent context.Context, endSource context
 		// asynchronously.
 		raw := make([]byte, len(msg.Data))
 		copy(raw, msg.Data)
-		s.enqueueInput(prefix, viewerID, queue, raw)
+		if s.enqueueInput(prefix, viewerID, queue, raw) == pushDroppedIncomingDiscrete {
+			// A lost release can leave held input behind. End this exact
+			// source before the peer's removal callback requests cleanup.
+			cancel()
+			endSource()
+		}
 	})
 }
 
-// enqueueInput pushes raw onto queue without ever blocking the caller (Pion's
-// own OnMessage callback -- see wireInputDataChannel's doc comment): if the
-// queue is full, the OLDEST queued item is dropped to make room, not the new
-// one, mirroring live.go's queueAck coalescing discipline. Logged at
-// Session's normal logf (the gateway's webrtcRelayLogf classifies a line
-// with neither "failed" nor "warning" in it to Debug, matching the fix's
-// "log drops at Debug" requirement).
-// Revised 2026-07-30 (UAT): the shed decision is now TYPE-AWARE — see
-// isCoalescableInputKind for the failure that forced this. A full queue no
-// longer blindly evicts whatever is at the head:
-//
-//   - An incoming COALESCABLE event (mouse_move/wheel) is dropped outright.
-//     It must never evict a queued click or keystroke; the next move is
-//     along in ~10ms and supersedes it anyway.
-//   - An incoming DISCRETE event (mouse_down/up, key_down/up) always gets
-//     in, evicting the head to make room. Under the flood that causes
-//     congestion the head is overwhelmingly a move, so in practice this
-//     sheds a move to admit a click — exactly the intended trade.
-//
-// Order is still preserved (the queue is only ever appended to at the tail
-// and consumed from the head), and the function is still non-blocking, so
-// Pion's OnMessage callback is never stalled.
-func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw []byte) {
-	switch queue.push(raw, inputQueueCapacity) {
+// enqueueInput preserves queued discrete events under congestion, shedding
+// positional events first. If an all-discrete backlog forces a discrete drop,
+// the caller must cancel the originating source and request its cleanup.
+// Counters distinguish overflow loss from lossless dequeue-time coalescing.
+func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw []byte) pushOutcome {
+	outcome := queue.push(raw, inputQueueCapacity)
+	switch outcome {
 	case pushAccepted, pushClosed:
-		return
+		return outcome
 	case pushShedOldestPositional:
+		s.inputShedPositional.Add(1)
 		// Normal, expected backpressure under a sustained cursor stream.
 		s.logf("%s input queue full for viewer %s, shed oldest positional event to admit a newer one", prefix, viewerID)
 	case pushDroppedIncomingPositional:
+		s.inputDroppedPositional.Add(1)
 		s.logf(
 			"%s input queue full for viewer %s, dropped incoming positional event (backlog is all discrete)",
 			prefix,
 			viewerID,
 		)
 	case pushDroppedIncomingDiscrete:
+		s.inputDroppedDiscrete.Add(1)
 		// Real input loss, not routine backpressure — WARNING so
 		// webrtcRelayLogf escalates it above debug.
 		s.logf("%s WARNING: input queue full for viewer %s, dropped a discrete input event", prefix, viewerID)
 	}
+	return outcome
 }
 
 // runInputQueue preserves the legacy queue-drain contract for callers that

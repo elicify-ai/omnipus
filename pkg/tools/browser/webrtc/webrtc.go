@@ -152,4 +152,8 @@ type Stats struct {
 	AudioForwardFailures int64
 	// IngestBindingToken belongs to the installed peer, not a pending offer.
 	IngestBindingToken uint64
+	// Input overflow counters exclude lossless dequeue-time coalescing.
+	InputShedPositional    int64
+	InputDroppedPositional int64
+	InputDroppedDiscrete   int64
 }
