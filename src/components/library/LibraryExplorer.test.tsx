@@ -34,6 +34,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchKnowledgeOutline: vi.fn(),
     fetchKnowledgeGraph: vi.fn(),
     searchKnowledge: vi.fn(),
+    // unified-search-and-grep-spec.md US-1/US-2: LibrarySearchBar (mounted by
+    // LibraryExplorer for every workspace folder, not only KnowledgePanel's
+    // vault-only surface any more) reaches these two directly. Same reasoning
+    // as the ADR-067-stage-2 comment above — leaving either real would send
+    // this whole file's tests to the real fetch the moment any test typed
+    // into the bar.
+    searchVault: vi.fn(),
+    searchFiles: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
   }
 })
@@ -50,6 +58,8 @@ import {
   fetchKnowledgeBaseInfo,
   fetchKnowledgeOutline,
   fetchKnowledgeGraph,
+  searchVault,
+  searchFiles,
   searchKnowledge,
   ApiError,
 } from '@/lib/api'
@@ -66,6 +76,8 @@ const mockedKnowledgeInfo = vi.mocked(fetchKnowledgeBaseInfo)
 const mockedKnowledgeOutline = vi.mocked(fetchKnowledgeOutline)
 const mockedKnowledgeGraph = vi.mocked(fetchKnowledgeGraph)
 const mockedKnowledgeSearch = vi.mocked(searchKnowledge)
+const mockedSearchVault = vi.mocked(searchVault)
+const mockedSearchFiles = vi.mocked(searchFiles)
 
 import { LibraryExplorer } from './LibraryExplorer'
 
@@ -155,6 +167,38 @@ beforeEach(() => {
     incompleteness: { complete: true, total_known: true, statement: 'Searched the whole collection.' },
     limit_applied: 20,
     limit_clamped: false,
+  })
+  // Defaults for LibrarySearchBar's two search clients (unified-search-and-
+  // grep-spec.md US-1/US-2) — empty-but-complete, matching the same "the
+  // common case makes the surface render nothing" reasoning as the mocks
+  // above. Tests that actually type into the bar override these.
+  mockedSearchVault.mockResolvedValue({
+    collection_id: 'kb_1',
+    complete: true,
+    notes: [],
+    records: [],
+    views: [],
+  })
+  mockedSearchFiles.mockResolvedValue({
+    hits: [],
+    truncated: false,
+    limits_applied: {
+      files: 50000,
+      bytes: 268435456,
+      matches: 1000,
+      matches_per_file: 50,
+      depth: 32,
+      deadline_ms: 3000,
+      output_bytes: 1048576,
+    },
+    stats: {
+      files_visited: 0,
+      bytes_scanned: 0,
+      files_skipped_problems: 0,
+      files_pruned_ignored: 0,
+      files_skipped_per_file_cap: 0,
+      hits_capped_per_file: 0,
+    },
   })
   useKnowledgeIndexStore.setState({ byCollection: {} })
 })
@@ -1220,9 +1264,11 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
     await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalledWith('ws-1', 'notes'))
   })
 
-  it('renders the collection surface for a knowledge base, with its search box', async () => {
+  it('renders the collection surface for a knowledge base, with the ONE search box (MV-10)', async () => {
     // DIES ON: removing the KnowledgePanel mount, or gating it on something
-    // other than "a workspace is open".
+    // other than "a workspace is open". Search itself is LibrarySearchBar's
+    // (unified-search-and-grep-spec.md US-5) — this used to also assert a
+    // `knowledge-search` testid, KnowledgePanel's own now-retired box.
     mockedFetchWorkspaces.mockResolvedValue([])
     entriesByDir({ '': [makeEntry({ name: 'a.md', path: 'a.md' })] })
     mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ root_path: '.' }))
@@ -1230,7 +1276,8 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
     renderExplorer('ws-1')
 
     expect(await screen.findByTestId('knowledge-panel')).toBeInTheDocument()
-    expect(await screen.findByTestId('knowledge-search')).toBeInTheDocument()
+    expect(await screen.findByTestId('library-search-bar')).toBeInTheDocument()
+    expect(screen.getAllByRole('searchbox')).toHaveLength(1)
   })
 
   it('renders NO knowledge chrome at all for an ordinary folder (US-4 AS-3)', async () => {
@@ -1253,7 +1300,6 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
     await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalled())
     expect(screen.queryByTestId('knowledge-panel')).not.toBeInTheDocument()
     expect(screen.queryByTestId('knowledge-state-not-a-knowledge-base')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('knowledge-search')).not.toBeInTheDocument()
   })
 
   it('does not render the panel at the virtual root — there is no folder to ask about', async () => {
@@ -1265,8 +1311,14 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
   })
 
   it('opens the note a search hit names, translated to a workspace-relative path', async () => {
-    // DIES ON: blanking the onOpenNote handler at the KnowledgePanel mount, or
-    // dropping collectionPathToWorkspacePath — a hit at `a.md` inside a
+    // unified-search-and-grep-spec.md US-1/US-5: search now lives entirely in
+    // LibrarySearchBar (the ONE bar, MV-10) — KnowledgePanel no longer mounts
+    // its own KnowledgeSearch box. This test used to type into THAT box; it
+    // now types into the surviving bar and asserts the SAME translation
+    // guarantee.
+    //
+    // DIES ON: blanking the onOpenNote handler at the LibrarySearchBar mount,
+    // or dropping collectionPathToWorkspacePath — a hit at `a.md` inside a
     // collection mounted at `notes/` opens `notes/a.md`, not `a.md`.
     mockedFetchWorkspaces.mockResolvedValue([])
     entriesByDir({
@@ -1274,12 +1326,12 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
       notes: [makeEntry({ name: 'a.md', path: 'notes/a.md' })],
     })
     mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ root_path: 'notes' }))
-    mockedKnowledgeSearch.mockResolvedValue({
+    mockedSearchVault.mockResolvedValue({
       collection_id: 'kb_1',
-      hits: [{ path: 'a.md', title: 'A note', score: 1, kind: 'note' }],
-      incompleteness: { complete: true, total_known: true, statement: 'Searched the whole collection.' },
-      limit_applied: 20,
-      limit_clamped: false,
+      complete: true,
+      notes: [{ path: 'a.md', title: 'A note' }],
+      records: [],
+      views: [],
     })
     const onAddressChange = vi.fn()
 
@@ -1292,8 +1344,14 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
     fireEvent.click(await screen.findByTestId('library-row-notes'))
     await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalledWith('ws-1', 'notes'))
 
-    fireEvent.change(await screen.findByLabelText('Search notes'), { target: { value: 'landlock' } })
-    const results = await screen.findByTestId('knowledge-search-results')
+    // MV-10: exactly one search input in this view, even though a vault
+    // folder now composes both KnowledgePanel (indexing status) and
+    // LibrarySearchBar (search) — the shipped duplication US-1/US-5 exist to
+    // fix.
+    expect(screen.getAllByRole('searchbox')).toHaveLength(1)
+
+    fireEvent.change(await screen.findByLabelText('Search this vault'), { target: { value: 'landlock' } })
+    const results = await screen.findByTestId('library-search-results')
     fireEvent.click(within(results).getByRole('button'))
 
     await waitFor(() =>

@@ -28,14 +28,13 @@
 // are all real, so a break in any of them fails these tests.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { KnowledgeIndexProgressFrame } from '@/lib/api/generated/asyncapi-types'
 import type { KnowledgeBaseInfo } from '@/lib/api/generated/openapi-types'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 
-import type { KnowledgeSearchFn } from './useKnowledgeSearch'
 import {
   KnowledgePanel,
   knowledgeDisplayName,
@@ -74,17 +73,6 @@ function makeProgress(
     ...over,
   }
 }
-
-/** A search stub that answers with nothing. Module scope because more than one
- *  describe needs it — the panel mounts the real KnowledgeSearch whenever the
- *  folder is a collection, and an unstubbed search would reach the network. */
-const noSearch: KnowledgeSearchFn = vi.fn().mockResolvedValue({
-  collection_id: COLLECTION_ID,
-  hits: [],
-  incompleteness: { complete: true, total_known: true, statement: 'Search covered every note.' },
-  limit_applied: 20,
-  limit_clamped: false,
-})
 
 function renderPanel(props: Partial<React.ComponentProps<typeof KnowledgePanel>> = {}) {
   const loadInfo = props.loadInfo ?? vi.fn().mockResolvedValue(makeInfo())
@@ -436,9 +424,9 @@ describe('KnowledgePanel — reads the live progress frame from the store (FR-08
     useKnowledgeIndexStore.getState().apply(
       makeProgress({ phase: 'idle', indexed_files: 4200, total_known: true, total_files: 4200 }),
     )
-    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()), searchFn: noSearch })
+    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()) })
 
-    await waitFor(() => expect(screen.getByTestId('knowledge-search')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('knowledge-panel-surface')).toBeInTheDocument())
     expect(screen.queryByTestId('knowledge-state-index-status-unknown')).not.toBeInTheDocument()
     expect(screen.queryByTestId('knowledge-state-empty')).not.toBeInTheDocument()
   })
@@ -451,7 +439,7 @@ describe('KnowledgePanel — reads the live progress frame from the store (FR-08
     useKnowledgeIndexStore.getState().apply(
       makeProgress({ phase: 'idle', indexed_files: 0, total_known: true, total_files: 0 }),
     )
-    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()), searchFn: noSearch })
+    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()) })
 
     expect(await screen.findByTestId('knowledge-state-empty')).toBeInTheDocument()
   })
@@ -462,20 +450,22 @@ describe('KnowledgePanel — reads the live progress frame from the store (FR-08
     useKnowledgeIndexStore.getState().apply(
       makeProgress({ collection_id: 'kb_somebody_else', phase: 'idle', indexed_files: 4200 }),
     )
-    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()), searchFn: noSearch })
+    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()) })
 
     expect(await screen.findByTestId('knowledge-state-index-status-unknown')).toBeInTheDocument()
   })
 })
 
 describe('KnowledgePanel — composition (US-4: features on for the right folders, off elsewhere)', () => {
+  // unified-search-and-grep-spec.md US-5: this panel no longer mounts search
+  // itself (that duplicated LibrarySearchBar's box — MV-10). "The knowledge
+  // surface" is now just the first-run/indexing answer plus whatever the
+  // caller composes as `children`.
   const child = <div data-testid="kb-surface-child">caller-supplied surface</div>
 
-  it('renders the knowledge surface — search included — for a real collection', async () => {
-    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()), children: child, searchFn: noSearch })
+  it('renders the knowledge surface — composed children included — for a real collection', async () => {
+    renderPanel({ loadInfo: vi.fn().mockResolvedValue(makeInfo()), children: child })
     expect(await screen.findByTestId('knowledge-panel-surface')).toBeInTheDocument()
-    // Composed, not duplicated: KnowledgeSearch is the real component.
-    expect(screen.getByTestId('knowledge-search')).toBeInTheDocument()
     expect(screen.getByTestId('kb-surface-child')).toBeInTheDocument()
   })
 
@@ -484,7 +474,6 @@ describe('KnowledgePanel — composition (US-4: features on for the right folder
       loadInfo: vi.fn().mockResolvedValue(makeInfo()),
       progress: makeProgress({ phase: 'indexing' }),
       children: child,
-      searchFn: noSearch,
     })
     expect(await screen.findByTestId('knowledge-panel-surface')).toBeInTheDocument()
     expect(screen.getByTestId('knowledge-state-indexing')).toBeInTheDocument()
@@ -496,12 +485,10 @@ describe('KnowledgePanel — composition (US-4: features on for the right folder
         .fn()
         .mockResolvedValue(makeInfo({ is_knowledge_base: false, marker: 'none', collection_id: undefined })),
       children: child,
-      searchFn: noSearch,
       onCreateCollection: vi.fn(),
     })
     await screen.findByTestId('knowledge-state-not-a-knowledge-base')
     expect(screen.queryByTestId('knowledge-panel-surface')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('knowledge-search')).not.toBeInTheDocument()
     expect(screen.queryByTestId('kb-surface-child')).not.toBeInTheDocument()
   })
 
@@ -520,7 +507,6 @@ describe('KnowledgePanel — composition (US-4: features on for the right folder
         .fn()
         .mockResolvedValue(makeInfo({ is_knowledge_base: false, marker: 'none', collection_id: undefined })),
       children: child,
-      searchFn: noSearch,
     })
     await waitFor(() =>
       expect(screen.queryByTestId('knowledge-panel-checking')).not.toBeInTheDocument(),
@@ -536,7 +522,6 @@ describe('KnowledgePanel — composition (US-4: features on for the right folder
         makeInfo({ detection_error: { code: 'marker_unreadable', message: 'permission denied' } }),
       ),
       children: child,
-      searchFn: noSearch,
     })
     await screen.findByTestId('knowledge-state-detection-error')
     expect(screen.queryByTestId('knowledge-panel-surface')).not.toBeInTheDocument()
@@ -544,55 +529,14 @@ describe('KnowledgePanel — composition (US-4: features on for the right folder
   })
 })
 
-describe('KnowledgePanel — opening a search hit lands on a Library address (FR-012)', () => {
-  // Search hits are COLLECTION-relative (the contract's KnowledgeSearchHit.path
-  // is a path inside the collection); the Library address is WORKSPACE-relative
-  // (LibraryAddress.path). Handing a collection-relative path straight to the
-  // Library opens the wrong file, or nothing — and it fails silently, because
-  // both are plausible-looking relative paths.
-  const hit = {
-    path: 'topics/landlock.md',
-    title: 'Landlock',
-    score: 1,
-    kind: 'note' as const,
-    excerpt: 'kernel sandbox',
-  }
-  const searchFn: KnowledgeSearchFn = vi.fn().mockResolvedValue({
-    collection_id: COLLECTION_ID,
-    hits: [hit],
-    incompleteness: { complete: true, total_known: true, statement: 'Search covered every note.' },
-    limit_applied: 20,
-    limit_clamped: false,
-  })
-
-  it("joins the hit onto the collection's own root before handing it to the caller", async () => {
-    const onOpenNote = vi.fn()
-    renderPanel({
-      loadInfo: vi.fn().mockResolvedValue(makeInfo({ root_path: 'notes/vault' })),
-      onOpenNote,
-      searchFn,
-    })
-    const box = await screen.findByTestId('knowledge-search')
-    fireEvent.change(within(box).getByRole('searchbox'), { target: { value: 'landlock' } })
-    const link = await screen.findByText('Landlock')
-    fireEvent.click(link)
-    await waitFor(() =>
-      expect(onOpenNote).toHaveBeenCalledWith('notes/vault/topics/landlock.md'),
-    )
-  })
-
-  it('leaves the path alone when the collection IS the workspace root', async () => {
-    const onOpenNote = vi.fn()
-    renderPanel({
-      loadInfo: vi.fn().mockResolvedValue(makeInfo({ root_path: '' })),
-      path: '',
-      onOpenNote,
-      searchFn,
-    })
-    const box = await screen.findByTestId('knowledge-search')
-    fireEvent.change(within(box).getByRole('searchbox'), { target: { value: 'landlock' } })
-    const link = await screen.findByText('Landlock')
-    fireEvent.click(link)
-    await waitFor(() => expect(onOpenNote).toHaveBeenCalledWith('topics/landlock.md'))
-  })
-})
+// The retired "opening a search hit lands on a Library address (FR-012)"
+// describe block lived here — it typed into KnowledgePanel's OWN
+// KnowledgeSearch box and asserted the collection-relative→workspace-relative
+// translation on the hit it returned. unified-search-and-grep-spec.md US-5
+// moved search (and that translation) entirely into LibrarySearchBar, so the
+// same guarantee is now pinned by LibrarySearchBar.test.tsx's "opens a note
+// hit via onOpenNote, translated to a workspace-relative path" and "opens a
+// record hit the same way, by its declaring note" tests, plus
+// LibraryExplorer.test.tsx's "opens the note a search hit names, translated
+// to a workspace-relative path" (rewritten against the surviving bar in the
+// same change that retired this block).
