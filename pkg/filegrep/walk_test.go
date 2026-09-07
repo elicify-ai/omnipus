@@ -5,6 +5,7 @@
 package filegrep
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -299,6 +300,23 @@ func TestFileGrep_ContextLines(t *testing.T) {
 		}
 		if !equalStrings(h2.ContextAfter, []string{"bar"}) {
 			t.Fatalf("hit 2 (line 2) ContextAfter = %v, want [bar]", h2.ContextAfter)
+		}
+	})
+
+	t.Run("a huge adjacent line is capped the same way an excerpt is", func(t *testing.T) {
+		huge := strings.Repeat("x", 200_000)
+		res := mustSearch(t, oneRoot(buildFS(map[string]string{
+			"f.txt": huge + "\nneedle line\n" + huge + "\n",
+		})), Options{Query: "needle", ContextLines: 1})
+		if len(res.Hits) != 1 {
+			t.Fatalf("want 1 hit, got %d", len(res.Hits))
+		}
+		h := res.Hits[0]
+		if len(h.ContextBefore) != 1 || len(h.ContextBefore[0]) > ExcerptCapBytes {
+			t.Fatalf("ContextBefore[0] length = %d, want <= ExcerptCapBytes (%d)", len(h.ContextBefore[0]), ExcerptCapBytes)
+		}
+		if len(h.ContextAfter) != 1 || len(h.ContextAfter[0]) > ExcerptCapBytes {
+			t.Fatalf("ContextAfter[0] length = %d, want <= ExcerptCapBytes (%d)", len(h.ContextAfter[0]), ExcerptCapBytes)
 		}
 	})
 

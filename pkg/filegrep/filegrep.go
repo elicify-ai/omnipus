@@ -283,6 +283,13 @@ func excerpt(line []byte, pos int) string {
 	return string(result)
 }
 
+// capContextLine bounds a ContextBefore/ContextAfter line to <=ExcerptCapBytes
+// the same UTF-8-safe way excerpt() bounds a match window (MV-6) — a context
+// line carries no match position of its own, so it is capped from its start.
+func capContextLine(line []byte) string {
+	return excerpt(line, 0)
+}
+
 // budgetError signals a request-level bound; carried through the walk.
 type budgetError struct{ reason TruncatedReason }
 
@@ -682,7 +689,7 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 	var (
 		fileBytes int64
 		lineNo    int
-		before    [][]byte // ring of up to contextN previous lines
+		before    []string // ring of up to contextN previous lines, each pre-capped
 		fileHits  []Hit
 		pending   []int // indices into fileHits awaiting up to contextN after-lines
 		perFile   int   // this file's own match count (MatchesPerFile cap)
@@ -706,9 +713,10 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 		if len(pending) == 0 {
 			return
 		}
+		capped := capContextLine(line)
 		keep := pending[:0]
 		for _, idx := range pending {
-			fileHits[idx].ContextAfter = append(fileHits[idx].ContextAfter, string(line))
+			fileHits[idx].ContextAfter = append(fileHits[idx].ContextAfter, capped)
 			if len(fileHits[idx].ContextAfter) < s.m.contextN {
 				keep = append(keep, idx)
 			}
@@ -756,9 +764,7 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 					Excerpt: excerpt(trimmed, pos),
 				}
 				if s.m.contextN > 0 {
-					for _, b := range before {
-						h.ContextBefore = append(h.ContextBefore, string(b))
-					}
+					h.ContextBefore = append(h.ContextBefore, before...)
 				}
 				fileHits = append(fileHits, h)
 				if s.m.contextN > 0 {
@@ -766,9 +772,7 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 				}
 			}
 			if s.m.contextN > 0 {
-				cp := make([]byte, len(trimmed))
-				copy(cp, trimmed)
-				before = append(before, cp)
+				before = append(before, capContextLine(trimmed))
 				if len(before) > s.m.contextN {
 					before = before[1:]
 				}
