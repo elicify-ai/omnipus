@@ -370,6 +370,80 @@ func TestVaultSearch_HonestyAndAttachments(t *testing.T) {
 	})
 }
 
+// buildVaultSearchVaultNoPropsSync is a real-UAT reproduction fixture:
+// content is indexed into the TEXT index (indexKnowledgeBase / SyncTracked)
+// exactly as buildVaultSearchVault's is, but — unlike that helper —
+// vaultprops.Sync is deliberately never called, so the properties index file
+// never comes into existence for this collection and openFindStore
+// (pkg/vaultprops/find_tool.go) legitimately returns nil, the same way it
+// does for any collection nobody has run check_integrity/mount-time indexing
+// against yet. That is the "ordinary, supported" state a real vault sits in
+// between mounting and its first properties sync — not a build-incapable
+// platform (records.PropertyIndexAvailable stays true here) — and it is
+// exactly the state the shipped binary was observed in during UAT: a PDF
+// attachment came back inside the Notes group while Attachments read empty.
+func buildVaultSearchVaultNoPropsSync(t *testing.T) (*restAPI, string, string) {
+	t.Helper()
+	if !records.PropertyIndexAvailable {
+		t.Skip("no properties index on this build; the propindex-less carve-out is " +
+			"covered separately by rest_knowledge_find_propindexless_test.go")
+	}
+
+	api, ws := buildLibraryTestAPI(t)
+	vault := filepath.Join(workDir(api, ws), "vault")
+	makeKnowledgeBase(t, vault, "Research vault")
+
+	// A note and an attachment sharing one matchable term, mirroring the UAT
+	// report byte for byte: "quarterly-review.md" / "assets/quarterly-
+	// contract.pdf", both findable on "quarterly". The PDF's extension alone
+	// is what classifies it as an attachment (pkg/knowledge/scan.go's
+	// ScanKindFor) — its bytes are never opened either way (FR-039a).
+	writeNote(t, vault, "quarterly-review.md",
+		"# Quarterly Review\n\nOur quarterly numbers were strong this cycle.\n")
+	writeNote(t, vault, "assets/quarterly-contract.pdf", "binary-ish bytes, never opened\n")
+
+	realVault, err := filepath.EvalSymlinks(vault)
+	require.NoError(t, err)
+	indexKnowledgeBase(t, api.homePath, realVault)
+	// No vaultprops.Sync call — see the doc comment above.
+
+	return api, ws, collectionIDOf(t, api, ws, "vault")
+}
+
+// TestVaultSearch_AttachmentNotMisreportedAsNoteBeforePropsSync is the direct
+// regression for the UAT finding: with the properties index not yet synced
+// (a propindex-CAPABLE build, not the MV-9 platform carve-out), a query
+// matching both a note and an attachment by name must put each in its OWN
+// group — never label the attachment a note, and never leave Attachments
+// empty for a hit the text index actually holds.
+func TestVaultSearch_AttachmentNotMisreportedAsNoteBeforePropsSync(t *testing.T) {
+	api, ws, colID := buildVaultSearchVaultNoPropsSync(t)
+
+	w := vaultFindPost(t, api, ws, map[string]any{"query": "quarterly", "collection_id": colID})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.VaultSearchResponse](t, w)
+
+	require.NotNil(t, resp.Attachments, "the handler always sends the attachments array")
+	assert.Len(t, *resp.Attachments, 1,
+		"the attachment must be findable by filename even before the properties index has ever synced")
+	if len(*resp.Attachments) == 1 {
+		hit := (*resp.Attachments)[0]
+		assert.Equal(t, "assets/quarterly-contract.pdf", hit.Path)
+		assert.Equal(t, "quarterly-contract.pdf", hit.Name)
+	}
+
+	assert.NotContains(t, noteHitPaths(resp), "assets/quarterly-contract.pdf",
+		"an attachment must never be reported as a note")
+	assert.Len(t, resp.Notes, 1, "the attachment must not also appear in the notes group")
+	if len(resp.Notes) > 0 {
+		assert.Equal(t, "quarterly-review.md", resp.Notes[0].Path)
+	}
+
+	assert.True(t, resp.Complete,
+		"a plain-word note+attachment query needs nothing from the (unsynced) properties index, "+
+			"so it must answer complete — got reason %v", resp.CompleteReason)
+}
+
 // TestVaultSearchNoteHit_ExcerptUnavailableOnUnreadableFile covers the other
 // half of "the snippet could not be produced" — the file itself cannot be
 // read — as a direct unit test of vaultSearchNoteHit, which is the one place

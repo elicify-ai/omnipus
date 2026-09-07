@@ -322,7 +322,16 @@ func (s *findTextSearcher) Search(_ context.Context, words string, limit int) ([
 	}
 	out := make([]knowledgefind.TextHit, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, knowledgefind.TextHit{Path: h.Path, SourceHash: h.SourceHash, Score: h.Score})
+		// h.Kind is pkg/knowledge's ScanKind ("note"/"attachment", scan.go) —
+		// the same two strings knowledgefind.KindNote/KindAttachment name, so
+		// this is a straight carry-through, not a re-derivation. Dropping it
+		// here (as this conversion used to) is what let an attachment come
+		// back indistinguishable from a note once TextHit reached find.go: a
+		// query for one kind had no way to filter the other kind's rows out
+		// of the SAME Search call.
+		out = append(out, knowledgefind.TextHit{
+			Path: h.Path, SourceHash: h.SourceHash, Score: h.Score, Kind: string(h.Kind),
+		})
 	}
 	return out, nil
 }

@@ -23,6 +23,19 @@ type TextHit struct {
 	// comparison is against THIS, not against a manifest entry.
 	SourceHash string
 	Score      float64
+	// Kind is the document's OWN indexed kind — KindNote or KindAttachment —
+	// as the text index recorded it (pkg/knowledge/index.go's indexNote /
+	// indexAttachment write it into the "kind" field of every segment they
+	// add). It is carried through unchanged from the underlying index, never
+	// re-derived here: this package has no filesystem access of its own to
+	// re-classify a path by extension, and doing so would let this layer
+	// silently disagree with what the index actually indexed.
+	//
+	// A TextSearcher that predates this field (a test double, typically)
+	// leaves it blank; textOnlyResponse treats a blank Kind as KindNote for
+	// backward compatibility, since every text-only caller before attachment
+	// support was note-only.
+	Kind string
 }
 
 // TextSearcher is the bleve half. It is an interface rather than a concrete
@@ -1058,22 +1071,45 @@ func (e *evaluation) recordProblems(ps []generated.RecordProblem) {
 //
 // It is deliberately a whitelist of "names nothing the properties index owns",
 // not a blacklist. Every argument below reaches a stored row: a typed filter, a
-// record type, kind=record's record_type column, kind=attachment's kind column,
-// a graph walk, a join, a grouping, a summary, a sort key and a rendered column
-// are all decoded from candidates this build has none of. Answering any of them
-// from a text ranking would be the silent broadening the platform gate exists
-// to refuse — so anything outside this shape still gets the refusal.
+// record type, kind=record's record_type column, a graph walk, a join, a
+// grouping, a summary, a sort key and a rendered column are all decoded from
+// CANDIDATES this build has none of when Store is nil — the properties store's
+// own `kind` column (propindex.KindNote/KindAttachment, propindex/rows.go)
+// included. Answering any of them from a text ranking would be the silent
+// broadening the platform gate exists to refuse — so anything outside this
+// shape still gets the refusal.
+//
+// kind=attachment is the one exception, and it is answerable WITHOUT that
+// candidate column: the text index tags every document it holds with its OWN
+// kind (pkg/knowledge/index.go's indexNote/indexAttachment write the "kind"
+// field directly), and an attachment is indexed by NAME ONLY — no body, no
+// properties (FR-039a) — so a plain-word match against it needs nothing the
+// properties store would otherwise supply. TextHit.Kind carries that
+// already-indexed fact through; textOnlyResponse is what filters on it, so a
+// kind=note query and a kind=attachment query each see only their own
+// documents from the SAME underlying Search call.
+//
+// The PropertyIndexAvailable guard here is not about what this query needs —
+// it needs nothing from the properties index either way — it exists only to
+// hold the platform posture steady on a build where that index cannot exist
+// at all (records_no_sqlite/mipsle/netbsd/freebsd-arm): MV-9's carve-out
+// (docs/internal/specs/unified-search-and-grep-spec.md) deliberately refuses
+// attachment search there by name, honestly, rather than answering it out of
+// the one index such a build does have, so SC-009's "propindex-less builds
+// show the honest carve-out instead" stays true regardless of this fix.
 func (q *query) textOnlyServable() bool {
-	return q.words != "" &&
-		q.kind == KindNote &&
-		q.filter == nil &&
-		q.recordType == "" &&
-		q.near == "" &&
-		len(q.join) == 0 &&
-		len(q.groupBy) == 0 &&
-		len(q.aggregates) == 0 &&
-		len(q.sort) == 0 &&
-		len(q.selectCols) == 0
+	if q.words == "" ||
+		q.filter != nil ||
+		q.recordType != "" ||
+		q.near != "" ||
+		len(q.join) != 0 ||
+		len(q.groupBy) != 0 ||
+		len(q.aggregates) != 0 ||
+		len(q.sort) != 0 ||
+		len(q.selectCols) != 0 {
+		return false
+	}
+	return q.kind == KindNote || (q.kind == KindAttachment && records.PropertyIndexAvailable)
 }
 
 // textOnlyResponse answers a words-only query out of the text index.
@@ -1088,9 +1124,28 @@ func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated b
 	// applied again here rather than trusted: TextSearcher.Search states that
 	// it answers "within the caller's already-resolved scope", and a prefix
 	// test costs nothing next to returning a path the agent may not see.
+	//
+	// KIND is filtered here too, not left to the caller: Search answers over
+	// the whole text index regardless of q.kind — it has no kind argument —
+	// so a query for one kind and a query for the other draw from the SAME
+	// hit list. Without this, a kind=note query returned every attachment
+	// that matched the words alongside the real notes (labelled as a note,
+	// since a row has no kind of its own to say otherwise), and a
+	// kind=attachment query saw its own hits stolen by the kind=note path
+	// while textOnlyServable refused to serve it at all. A blank h.Kind
+	// (a TextSearcher stub predating this field) is treated as KindNote —
+	// every text-only caller before attachment support was note-only, so
+	// that is the one backward-compatible reading.
 	scoped := make([]TextHit, 0, len(hits))
 	for _, h := range hits {
 		if d.PathPrefix != "" && !strings.HasPrefix(h.Path, d.PathPrefix) {
+			continue
+		}
+		hitKind := h.Kind
+		if hitKind == "" {
+			hitKind = KindNote
+		}
+		if hitKind != q.kind {
 			continue
 		}
 		scoped = append(scoped, h)
