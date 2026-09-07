@@ -874,78 +874,16 @@ var (
 	encoderLivenessStaleAfter    = 40 * time.Second
 )
 
-// encoderLivenessVideoStallTicks (fix-wave HIGH, reviewer 4 finding 1): the
-// ping-recency check alone can be defeated by a dead-capture encoder whose
-// ping BEACON is independent of its actual tabCapture/RTP pipeline
-// (encoder.js runs them as separate loops) — a wedged capture with a live
-// ping keeps this watchdog satisfied forever while a viewer sees a frozen
-// picture. This tracks Stats().VideoPackets across ticks instead: if a
-// viewer is attached (ViewerCount() > 0) but the packet count hasn't moved
-// for this many CONSECUTIVE ticks, treat it as stale exactly like a missed
-// ping beacon. Two (not one) tolerates the single-tick window right after a
-// viewer first attaches, before any packet has actually been forwarded yet —
-// even though the e2e evidence this fix is based on shows VP8 keeps emitting
-// packets on completely static content at ~30fps, so in practice one
-// no-progress tick already implies a dead capture; two ticks costs at most
-// one extra encoderLivenessCheckInterval of latency for the added safety
-// margin.
-//
-// Raised 2 -> 6 (2026-07-30 UAT). The premise quoted above — "VP8 keeps
-// emitting packets on completely static content at ~30fps" — is FALSE for
-// this capture path, and measured live traffic disproves it: on a static
-// Google page the ingest leg forwarded ~2 video packets/sec against ~50
-// audio packets/sec, i.e. exactly the 1 Hz blinking text cursor and nothing
-// else. tabCapture is REPAINT-driven, not clock-driven: a page with nothing
-// animating (no cursor, no video, no spinner) legitimately produces ZERO
-// frames, indefinitely, while the capture is perfectly healthy. At 2 ticks
-// this watchdog would call cs.Stop() on such a page after only 20s and kill
-// a working session — a false positive that reads to the user exactly like
-// the freeze we are fixing. 6 ticks (60s) keeps the wedged-capture-with-
-// live-ping detection this check exists for while making that false
-// positive far less likely. It does NOT eliminate it: a genuinely static
-// page still trips this at 60s. The durable fix is to distinguish "no
-// frames because nothing repainted" from "no frames because the pipeline is
-// wedged" (e.g. an encoder-side frame-production counter rather than an
-// RTP-egress counter), which is out of scope here and is why this remains a
-// tick-count tuning rather than a redesign.
+// encoderLivenessVideoStallTicks debounces positive capture-stage failure
+// evidence while relay packets remain unchanged. Silence by itself never
+// consumes this budget: a healthy static page may produce no video frames.
 const encoderLivenessVideoStallTicks = 6
 
-// watchEncoderLiveness runs for the lifetime of one CaptureSession (fix 3),
-// exiting as soon as cs.Done() closes (Stop(), from ANY cause) so at most
-// one watchdog goroutine is ever live per session. Started exactly once per
-// session by ensureCaptureSession's newFn — the same "exactly once per
-// session" discipline EnsureCaptureSession already guarantees for newFn
-// itself. Stops the session on either of two independent staleness signals:
-// no ping beacon within staleAfter (original fix 3), OR no video RTP
-// progress across encoderLivenessVideoStallTicks consecutive checks while a
-// viewer is attached (fix-wave HIGH addition, see that const's doc comment).
-//
-// checkInterval/staleAfter are passed in by the caller rather than read from
-// the encoderLivenessCheckInterval/encoderLivenessStaleAfter package vars
-// IN HERE, and this is load-bearing, not a style choice. An earlier version
-// of this function snapshotted those vars into locals once, at function
-// entry, reasoning that a single read (vs. re-reading every tick) was safe
-// once cs.Stop() started the goroutine's shutdown. That reasoning had a gap:
-// the snapshot read still happened on THIS goroutine, which the caller only
-// ever fire-and-forgets (`go h.watchEncoderLiveness(...)`) — nothing
-// guarantees this goroutine reaches its first statement before the SAME
-// test returns, let alone before a LATER test's setup overwrites the
-// package vars for its own shrunk-timing scenario. That is exactly what
-// happened under `go test -race`: a capture session started by one test
-// left its watchdog goroutine scheduled-but-not-yet-run, and a later test's
-// bare `encoderLivenessCheckInterval = 5*time.Millisecond` write raced this
-// goroutine's still-pending entry-snapshot read (WARNING: DATA RACE,
-// browser_webrtc.go:749/750 vs browser_webrtc_fixwave2_test.go:274/275,
-// TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPings).
-// Moving the read to the CALL SITE closes this for good: Go evaluates a `go`
-// statement's arguments on the CALLING goroutine, synchronously, before the
-// new goroutine is even spawned — so every caller below reads the package
-// vars (or, for the production call site, the vars stay hard-coded live
-// values with no test ever touching them concurrently) on a goroutine whose
-// ordering relative to the next test IS already established by the normal
-// sequential-test happens-before chain. This function itself never touches
-// the package vars at all, so no lifetime of the watchdog goroutine — however
-// long a slow CI runner leaves it scheduled — can race a later test again.
+// watchEncoderLiveness runs once per capture session until Stop closes Done.
+// A stale control heartbeat stops the session. Fresh stage-failure evidence
+// with no relay progress requests bounded recapture, preserving viewer peers.
+// Timing values are arguments so tests cannot race a goroutine reading mutable
+// package defaults after its launching test has already returned.
 func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agentID string, checkInterval, staleAfter time.Duration) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
@@ -954,6 +892,8 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 		lastVideoPackets int64
 		haveBaseline     bool
 		stallTicks       int
+		previousHealth   browser.CaptureHealthObservation
+		stageFailure     string
 	)
 
 	for {
@@ -962,11 +902,22 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 			return
 		case <-ticker.C:
 			stats := cs.Stats()
+			health := cs.CaptureHealth()
+			if health.ObservedAt != previousHealth.ObservedAt {
+				stageFailure = captureStageFailure(previousHealth, health, time.Now(), staleAfter)
+				previousHealth = health
+			}
+			if health.ObservedAt.IsZero() || time.Since(health.ObservedAt) > staleAfter {
+				stageFailure = ""
+			}
 			if cs.ViewerCount() > 0 {
-				if haveBaseline && stats.VideoPackets == lastVideoPackets {
+				if haveBaseline && stats.VideoPackets == lastVideoPackets && stageFailure != "" {
 					stallTicks++
 				} else {
 					stallTicks = 0
+					if haveBaseline && stats.VideoPackets > lastVideoPackets {
+						cs.RecordVideoProgress()
+					}
 				}
 				lastVideoPackets = stats.VideoPackets
 				haveBaseline = true
@@ -980,7 +931,8 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 			}
 			if stallTicks >= encoderLivenessVideoStallTicks {
 				slog.Warn(
-					"browser-webrtc: encoder liveness watchdog — video RTP has not advanced across consecutive checks with an attached viewer, stopping capture session",
+					"browser-webrtc: capture stage failed; requesting bounded recovery",
+					"stage", stageFailure,
 					"agent_id",
 					agentID,
 					"video_packets",
@@ -990,8 +942,8 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 					"check_interval",
 					checkInterval,
 				)
-				cs.Stop()
-				return
+				cs.ReportCaptureFailure()
+				stallTicks = 0
 			}
 
 			last := cs.LastPingAt()
@@ -1552,7 +1504,9 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 				continue
 			}
 			if ctrlFrame.Action == "ping" {
-				cs.RecordPing()
+				if !recordCaptureHealth(cs, epoch, ctrlFrame) {
+					continue
+				}
 				// Round-2 finding F7, gateway half. The encoder rides the
 				// liveness ping to report a quality-adaptation failure it
 				// cannot otherwise surface (a rejected setParameters dies in

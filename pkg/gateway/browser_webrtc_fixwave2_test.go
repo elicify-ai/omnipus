@@ -264,71 +264,8 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 // with a live ping beacon).
 // ---------------------------------------------------------------------------
 
-// TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPings
-// proves fix 4: the watchdog now also stops a session whose Stats().
-// VideoPackets never advances across consecutive ticks while a viewer is
-// attached — even when the ping beacon stays perfectly fresh throughout
-// (encoderLivenessStaleAfter is set to 24h so THAT signal alone could never
-// fire in this test window), reproducing the "dead-capture encoder with a
-// live ping beacon defeats the old watchdog" finding.
-func TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPings(t *testing.T) {
-	origInterval, origStale := encoderLivenessCheckInterval, encoderLivenessStaleAfter
-	encoderLivenessCheckInterval = 5 * time.Millisecond
-	encoderLivenessStaleAfter = 24 * time.Hour // isolates the RTP-progress signal
-	t.Cleanup(func() {
-		encoderLivenessCheckInterval = origInterval
-		encoderLivenessStaleAfter = origStale
-	})
-
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	relay := &fakeRelay{}
-	relay.setStats(webrtc.Stats{HasVideo: true, VideoPackets: 100}) // frozen for the whole test
-
-	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(
-		nil,
-		"watchdog-stall-agent",
-		relay,
-		fakeEncoderStarter(&calls, nil),
-		nil,
-	)
-	require.NoError(t, err)
-	_, err = cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
-	require.NoError(t, err)
-	cs.AddViewer("viewer-stall") // ViewerCount() > 0 is required to engage the stall check
-
-	var onStoppedCalls int32
-	cs.SetOnStopped(func() { atomic.AddInt32(&onStoppedCalls, 1) })
-
-	// Keep the ping beacon alive throughout, faster than the check interval
-	// — proves the stop is driven by the RTP-stall signal, not staleAfter.
-	pingStop := make(chan struct{})
-	t.Cleanup(func() { close(pingStop) })
-	go func() {
-		ticker := time.NewTicker(2 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-pingStop:
-				return
-			case <-ticker.C:
-				cs.RecordPing()
-			}
-		}
-	}()
-
-	go handler.watchEncoderLiveness(cs, "watchdog-stall-agent", encoderLivenessCheckInterval, encoderLivenessStaleAfter)
-
-	require.Eventually(
-		t,
-		func() bool { return atomic.LoadInt32(&onStoppedCalls) == 1 },
-		2*time.Second,
-		5*time.Millisecond,
-		"watchdog must stop a session whose VideoPackets never advances across consecutive ticks with an attached viewer, despite a fresh ping beacon",
-	)
-}
+// Silence-only failure detection is superseded by the FR-012 healthy-idle
+// and FR-013 failed-stage recovery tests in browser_capture_health_test.go.
 
 // TestWatchEncoderLiveness_DoesNotStop_WhenVideoPacketsAdvancing is the
 // negative control for fix 4: a relay whose VideoPackets keeps climbing must
