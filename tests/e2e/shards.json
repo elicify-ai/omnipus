@@ -52,6 +52,14 @@
       ]
     },
     {
+      "group": "llm-goal-work-first",
+      "key_slot": "a",
+      "port": 6072,
+      "specs": [
+        "tests/e2e/goal-work-first.spec.ts"
+      ]
+    },
+    {
       "group": "llm-conformance-chat",
       "key_slot": "a",
       "port": 6067,
