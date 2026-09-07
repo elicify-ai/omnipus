@@ -892,8 +892,7 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 		lastVideoPackets int64
 		haveBaseline     bool
 		stallTicks       int
-		previousHealth   browser.CaptureHealthObservation
-		stageFailure     string
+		healthTracker    captureHealthTracker
 	)
 
 	for {
@@ -903,12 +902,9 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 		case <-ticker.C:
 			stats := cs.Stats()
 			health := cs.CaptureHealth()
-			if health.ObservedAt != previousHealth.ObservedAt {
-				stageFailure = captureStageFailure(previousHealth, health, time.Now(), staleAfter)
-				previousHealth = health
-			}
-			if health.ObservedAt.IsZero() || time.Since(health.ObservedAt) > staleAfter {
-				stageFailure = ""
+			stageFailure := healthTracker.observe(health, time.Now(), staleAfter)
+			if haveBaseline && stats.VideoPackets > lastVideoPackets {
+				stageFailure = healthTracker.noteRelayProgress()
 			}
 			if cs.ViewerCount() > 0 {
 				if haveBaseline && stats.VideoPackets == lastVideoPackets && stageFailure != "" {

@@ -24,7 +24,7 @@ func TestCaptureHealthWireMappingRetainsZeroCountersAndRejectsOldBinding(t *test
 	require.True(t, recordCaptureHealth(cs, first, frame))
 	got := cs.CaptureHealth()
 	require.False(t, got.ObservedAt.IsZero())
-	require.Equal(t, browser.CaptureHealthObservation{Generation: 3, TrackState: "live", PeerState: "connected", HasSourceFrames: true, HasEncodedFrames: true, HasPacketsSent: true, SampleTimestampMS: 12, ObservedAt: got.ObservedAt}, got)
+	require.Equal(t, browser.CaptureHealthObservation{BindingEpoch: first, Generation: 3, TrackState: "live", PeerState: "connected", HasSourceFrames: true, HasEncodedFrames: true, HasPacketsSent: true, SampleTimestampMS: 12, ObservedAt: got.ObservedAt}, got)
 	bind()
 	ping := cs.LastPingAt()
 	require.False(t, recordCaptureHealth(cs, first, frame))
