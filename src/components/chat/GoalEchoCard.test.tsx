@@ -1,4 +1,6 @@
-// GoalEchoCard.test.tsx — ADR-053 FE-8 / US-3 / D11; criteria breakdown per
+// GoalEchoCard.test.tsx — ADR-081 D5/D9 (work-first goal flow, test 24):
+// the card is now a registered-record view rendered from the ACTIVE frame,
+// no buttons, no confirm/amend/cancel wiring. Criteria breakdown per
 // ADR-074 D5.2 / judgment-first FR-011 (US-6, test 19 component half).
 
 import { describe, it, expect, vi } from 'vitest'
@@ -18,7 +20,7 @@ function makeGoal(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFrame {
     latest_reason: '',
     active_loops: 0,
     cap: 16,
-    state: 'queued',
+    state: 'active',
     ...overrides,
   }
 }
@@ -43,7 +45,7 @@ describe('GoalEchoCard', () => {
     expect(screen.getByTestId('goal-echo-round')).toHaveTextContent('16 concurrent loops')
   })
 
-  // US-6 S1: pending goal with 2 prose + 1 marker check → 3 rows, text
+  // US-6 S1: an active goal with 2 prose + 1 marker check → 3 rows, text
   // first, verbatim command chip on the check row only. Rendered by the
   // SHARED CriteriaBreakdown (D5.4) — the chip format asserted here is the
   // shared formatVerifiesVia contract, identical on every surface. The
@@ -138,7 +140,10 @@ describe('GoalEchoCard', () => {
     expect(screen.getByTestId('goal-echo-condition')).toHaveTextContent('goal_marker_a1b2')
   })
 
-  it('renders no statement line when the frame carries no definition (legacy/ambiguous frames)', () => {
+  // ADR-081 round-2 B-3 / test 24: `definition` is legitimately ABSENT on a
+  // marker-path record (the existing Prompt/Intent fallback) — the card
+  // renders gracefully with no statement block, not a placeholder.
+  it('renders no statement line when the frame carries no definition (marker-path/legacy frames)', () => {
     render(<GoalEchoCard frame={makeGoal()} />)
     expect(screen.queryByTestId('goal-echo-statement')).not.toBeInTheDocument()
   })
@@ -171,8 +176,8 @@ describe('GoalEchoCard', () => {
   // ADR-080 D-DOD: a distinct "Definition of Done" accordion, separate from
   // the criteria's "Done when" section, collapsed by default with an
   // "N inferred — review" hint on the header itself so an inferred item is
-  // never hidden from the user's attention (even collapsed) — only expanding
-  // and reading it is required before confirming.
+  // never hidden from the reader's attention (even collapsed) — only
+  // expanding and reading it makes it visible.
   describe('Definition of Done (ADR-080 D-DOD)', () => {
     it('renders a distinct, collapsed-by-default DoD accordion, grouped separately from the criteria', () => {
       const frame = makeGoal({
@@ -245,56 +250,68 @@ describe('GoalEchoCard', () => {
     })
   })
 
-  // ADR-078 D1: the card now also offers click-to-confirm buttons. The prose
-  // hint stays as a secondary line below them (a channel user with no card
-  // can still confirm by typing).
-  it('shows the conversational confirmation prompt AND the Confirm/Cancel/Amend buttons in the queued state', () => {
-    render(<GoalEchoCard frame={makeGoal()} />)
-    expect(screen.getByText(/Reply to confirm/)).toBeInTheDocument()
-    expect(screen.getByTestId('goal-echo-actions')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /amend/i })).toBeInTheDocument()
-  })
-
-  // ADR-078 D1: Confirm sends the bare confirm token, Cancel sends
-  // `/goal clear`, Amend pre-fills the composer and sends nothing — each
-  // button fires exactly its own callback.
-  it('fires onConfirm/onCancel/onAmend on click, and only the clicked one', () => {
-    const onConfirm = vi.fn()
-    const onCancel = vi.fn()
-    const onAmend = vi.fn()
-    render(<GoalEchoCard frame={makeGoal()} onConfirm={onConfirm} onCancel={onCancel} onAmend={onAmend} />)
-
-    fireEvent.click(screen.getByTestId('goal-echo-confirm'))
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onCancel).not.toHaveBeenCalled()
-    expect(onAmend).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByTestId('goal-echo-cancel'))
-    expect(onCancel).toHaveBeenCalledTimes(1)
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onAmend).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByTestId('goal-echo-amend'))
-    expect(onAmend).toHaveBeenCalledTimes(1)
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onCancel).toHaveBeenCalledTimes(1)
-  })
-
-  // ADR-078 D1 / G-5 negative: the buttons render ONLY while the card is
-  // pending confirmation (`queued`) — a card left mounted for any other
-  // status (e.g. an active goal) shows no buttons.
-  it('does NOT render the action buttons when the frame is not in the queued state', () => {
-    render(<GoalEchoCard frame={makeGoal({ state: 'active' })} />)
-    expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
-    // Prose hint still shown regardless of state (existing behavior).
-    expect(screen.getByText(/Reply to confirm/)).toBeInTheDocument()
-  })
-
   it('shows singular "loop" when cap is 1', () => {
     render(<GoalEchoCard frame={makeGoal({ cap: 1 })} />)
     expect(screen.getByTestId('goal-echo-round')).toHaveTextContent('1 concurrent loop')
+  })
+
+  // ADR-081 D5/D9 (test 24): the confirm-gate button row is deleted in
+  // full — no Confirm/Amend/Cancel control exists anywhere on the card,
+  // for ANY state, including one that (pre-ADR-081) would have been
+  // pending confirmation.
+  describe('ADR-081 D5/D9 — no confirm/amend/cancel controls', () => {
+    it('renders no buttons at all on an active record with criteria and DoD', () => {
+      const frame = makeGoal({
+        criteria: [makeCriterion()],
+        dod: [
+          {
+            kind: 'prose',
+            judgment: 'boolean',
+            provenance: 'stated',
+            text: 'the setter explicitly asked for this',
+            author: { kind: 'agent', id: 'mia' },
+            status: 'pending',
+          },
+        ],
+      })
+      render(<GoalEchoCard frame={frame} />)
+      expect(screen.queryByRole('button', { name: /confirm/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /amend/i })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
+      // The accordion triggers ARE buttons — assert no OTHER buttons exist
+      // beyond the two accordion triggers.
+      const buttons = screen.getAllByRole('button')
+      for (const btn of buttons) {
+        expect(btn.dataset.testid).toMatch(/-trigger$/)
+      }
+    })
+
+    it('renders no buttons regardless of frame.state (no confirm-only gate survives)', () => {
+      for (const state of ['active', 'judging', 'done', 'failed', 'cleared'] as const) {
+        const { unmount } = render(<GoalEchoCard frame={makeGoal({ state })} />)
+        expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /confirm/i })).not.toBeInTheDocument()
+        unmount()
+      }
+    })
+
+    it('accepts no onConfirm/onCancel/onAmend props (component surface no longer has them)', () => {
+      // TypeScript itself enforces this at the call site (GoalEchoCardProps
+      // has no callback fields); this runtime assertion just confirms
+      // clicking anywhere on the card fires nothing chat-related — there is
+      // no click handler left to fire besides the accordion triggers.
+      const clickSpy = vi.fn()
+      render(
+        // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+        <div onClick={clickSpy}>
+          <GoalEchoCard frame={makeGoal({ criteria: [makeCriterion()] })} />
+        </div>,
+      )
+      fireEvent.click(screen.getByTestId('goal-echo-card'))
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+      // Nothing beyond bubbling occurred — no accidental confirm/cancel side
+      // effect wired to the card body itself.
+    })
   })
 })

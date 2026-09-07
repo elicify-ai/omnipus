@@ -11,11 +11,18 @@
 // falling back to '_default'). The latest goal-scoped JudgeVerdict (for the
 // expanded per-criterion view) is read from the global judgeActivity store.
 //
-// All 9 pill states render with distinct colour/icon grammar per the design:
-// queued (muted) / active (gold target) / waiting_on_user (amber) /
+// 8 of the 9 wire-enum pill states render with distinct colour/icon grammar
+// per the design: active (gold target) / waiting_on_user (amber) /
 // judge_unavailable (amber) / re-planning (amber) / judging (muted pulse) /
 // done (green) / failed (red) / cleared (muted — a deliberate user stop is
-// neither success nor failure, UAT S3 fix). The pill-state→render mapping
+// neither success nor failure, UAT S3 fix). The 9th, `queued`, is retired
+// (ADR-081 D5/D9): the backend never emits it anymore (the pending-confirm
+// state it represented is deleted in full), so it renders no pill at all —
+// see the defensive skip in `GoalPill` and the pre-filter in `GoalPillTray`
+// below. The wire-enum value itself survives untouched in the generated
+// type (Constraint #8; do not edit generated files), which is why
+// `describePillState` still narrows it out explicitly rather than the type
+// simply not existing. The pill-state→render mapping for the 8 live states
 // lives in `describePillState` below — an exhaustive switch with a `never`
 // default so a future 10th enum value fails typecheck.
 //
@@ -38,7 +45,7 @@
 // readers without stealing focus.
 
 import { useEffect, useRef, useState } from 'react'
-import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, Hourglass, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle } from '@phosphor-icons/react'
+import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
@@ -70,10 +77,8 @@ interface PillStateConfig {
   Icon: typeof Target
 }
 
-function describePillState(state: GoalStatusFrame['state']): PillStateConfig {
+function describePillState(state: Exclude<GoalStatusFrame['state'], 'queued'>): PillStateConfig {
   switch (state) {
-    case 'queued':
-      return { testId: 'goal-pill-queued', label: 'queued', accentClass: 'text-[var(--color-muted)]', Icon: Hourglass }
     case 'active':
       return { testId: 'goal-pill-active', label: 'active', accentClass: 'text-[var(--color-accent)]', Icon: Target }
     case 'waiting_on_user':
@@ -111,6 +116,15 @@ interface GoalPillProps {
 
 function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   const [expanded, setExpanded] = useState(false)
+
+  // ADR-081 D5/D9: `queued` is retired — the backend never emits it
+  // anymore. `GoalPillTray` already filters queued frames out before
+  // mapping to this component; this is a defensive second layer (never
+  // reached in practice) that also narrows `frame.state` for
+  // `describePillState`'s exhaustive switch below, which no longer has a
+  // `queued` case.
+  if (frame.state === 'queued') return null
+
   const config = describePillState(frame.state)
   const { Icon } = config
 
@@ -289,7 +303,10 @@ export function GoalPillTray() {
   const verdicts = useJudgeActivityStore((s) => s.verdicts)
   const visiblePills = useVisibleGoalPills(goalPills)
 
-  const entries = Object.entries(visiblePills)
+  // ADR-081 D5/D9: `queued` is retired and never emitted — filtered here
+  // (not just inside `GoalPill`) so a session holding only a stale/legacy
+  // queued pill renders NO tray at all, rather than an empty container.
+  const entries = Object.entries(visiblePills).filter(([, frame]) => frame.state !== 'queued')
   if (entries.length === 0) return null
 
   // Find the latest goal-scoped verdict for correlation in the expanded view.

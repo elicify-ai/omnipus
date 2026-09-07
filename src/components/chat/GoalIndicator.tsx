@@ -28,8 +28,17 @@
 // FE-1 pill redesign (bottom-right relocation, per-goal-id multi-pill,
 // click-to-expand criteria) — that remains a Phase-2 deliverable (see
 // GoalPillTray.tsx, which already implements it). This component renders
-// whenever a non-null `goalStatus` frame is present; the store clears the
-// bucket (session switch / reset) rather than any particular state literal.
+// whenever a non-null, non-`queued` `goalStatus` frame is present; the
+// store clears the bucket (session switch / reset) rather than any
+// particular state literal.
+//
+// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore
+// (the pending-confirm state it represented is deleted in full). The wire
+// enum value survives untouched in the generated type (Constraint #8; do
+// not edit generated files), so this component still narrows it out
+// explicitly (`nonQueuedGoal` below) rather than the type simply not
+// existing — a stale/legacy queued frame renders nothing here, same as a
+// null `goalStatus`.
 //
 // `aria-live="polite"` on the root announces state transitions to screen
 // readers without stealing focus.
@@ -71,18 +80,15 @@ interface StatusLineConfig {
   className: string
 }
 
-// Non-`active` states each render a single summary line (no condition/round
-// detail) — mirrors the prior paused/brake-fired convention. Exhaustive
-// switch with a `never` default so a future 9th enum value fails typecheck
-// here instead of silently rendering nothing.
-function describeNonActiveState(state: Exclude<GoalPillState, 'active'>): StatusLineConfig {
+// Non-`active`, non-`queued` states each render a single summary line (no
+// condition/round detail) — mirrors the prior paused/brake-fired
+// convention. `queued` is excluded from this type entirely (ADR-081 D5/D9
+// — retired, never emitted; the caller narrows it out via `nonQueuedGoal`
+// before this is ever called). Exhaustive switch with a `never` default so
+// a future 9th LIVE enum value fails typecheck here instead of silently
+// rendering nothing.
+function describeNonActiveState(state: Exclude<GoalPillState, 'active' | 'queued'>): StatusLineConfig {
   switch (state) {
-    case 'queued':
-      return {
-        testId: 'goal-indicator-queued',
-        text: 'queued — waiting for a free loop slot',
-        className: 'text-[var(--color-muted)]',
-      }
     case 'waiting_on_user':
       return {
         testId: 'goal-indicator-waiting',
@@ -142,9 +148,17 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
   // terminal frame either — `goalStatus` just holds whatever frame arrived
   // last, terminal or not, until a newer one replaces it (chat.ts's
   // `goalStatus` doc comment). So the actual rule is simpler than either
-  // claim: any non-null frame renders, `cleared` included, via its own
-  // dedicated branch below like every other non-active state.
-  const showGoal = !!goalStatus
+  // claim: any non-null, non-`queued` frame renders, `cleared` included,
+  // via its own dedicated branch below like every other non-active state.
+  //
+  // ADR-081 D5/D9: `queued` is excluded from `showGoal` up front (never
+  // emitted anymore), and every render branch below re-checks
+  // `goalStatus.state !== 'queued'` inline (property narrowing on repeated
+  // `goalStatus.state` access, the same pattern the pre-existing
+  // `!== 'active'` check already relied on) so `describeNonActiveState`
+  // never has to handle it. A stale/legacy queued frame renders nothing,
+  // same as a null `goalStatus`.
+  const showGoal = !!goalStatus && goalStatus.state !== 'queued'
   const showLoop = !!loopStatus
 
   if (!showGoal && !showLoop) return null
@@ -156,7 +170,7 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
       aria-live="polite"
       className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs"
     >
-      {showGoal && goalStatus && (
+      {showGoal && goalStatus && goalStatus.state !== 'queued' && (
         <div className="flex items-start gap-2">
           <Target size={13} weight="fill" className="mt-0.5 shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
           <div className="flex-1 min-w-0">

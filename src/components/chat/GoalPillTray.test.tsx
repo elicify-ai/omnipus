@@ -74,20 +74,21 @@ describe('GoalPillTray — per-goal-id pills', () => {
   })
 })
 
-describe('GoalPillTray — 9-state rendering', () => {
+describe('GoalPillTray — 8-state rendering (ADR-081 D5/D9: `queued` retired)', () => {
   beforeEach(() => {
     useChatStore.setState({ goalPills: {} })
     useJudgeActivityStore.getState().reset()
   })
 
-  // All 9 wire states (contracts/components/schemas/GoalStatusFrame.yaml),
-  // including `cleared` — the UAT S3 post-ADR-053 addition. Its row was
-  // missing here entirely (this table was still titled "8-state" and had
-  // only 8 rows), which is exactly how a mutation collapsing `cleared`'s
-  // rendering into `failed`'s survived 72/72 green: nothing asserted that
-  // `goal-pill-cleared` exists at all.
+  // 8 of the 9 wire states (contracts/components/schemas/GoalStatusFrame.yaml)
+  // render a dedicated pill, including `cleared` — the UAT S3 post-ADR-053
+  // addition. Its row was missing here entirely (this table was still
+  // titled "8-state" and had only 8 rows), which is exactly how a mutation
+  // collapsing `cleared`'s rendering into `failed`'s survived 72/72 green:
+  // nothing asserted that `goal-pill-cleared` exists at all. The 9th,
+  // `queued`, is retired (ADR-081 D5/D9) — see the dedicated describe block
+  // below for its now-renders-nothing coverage.
   const states: Array<[GoalStatusFrame['state'], string]> = [
-    ['queued', 'goal-pill-queued'],
     ['active', 'goal-pill-active'],
     ['waiting_on_user', 'goal-pill-waiting'],
     ['judge_unavailable', 'goal-pill-judge-unavailable'],
@@ -133,6 +134,39 @@ describe('GoalPillTray — 9-state rendering', () => {
     expect(clearedIconHtml).toBeTruthy()
     expect(failedIconHtml).toBeTruthy()
     expect(clearedIconHtml).not.toEqual(failedIconHtml)
+  })
+})
+
+// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore
+// (the pending-confirm state it represented is deleted in full). The
+// wire-enum value survives untouched in the generated type (Constraint #8),
+// so the tray still filters it out defensively rather than the type simply
+// not existing.
+describe('GoalPillTray — queued state (retired, ADR-081 D5/D9)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ goalPills: {} })
+    useJudgeActivityStore.getState().reset()
+  })
+
+  it('renders no tray at all when the only pill is queued', () => {
+    useChatStore.setState({ goalPills: { g1: makeGoal({ goal_id: 'g1', state: 'queued' }) } })
+    const { container } = render(<GoalPillTray />)
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByTestId('goal-pill-tray')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('goal-pill-queued')).not.toBeInTheDocument()
+  })
+
+  it('renders only the non-queued pill when a queued pill and a live pill coexist', () => {
+    useChatStore.setState({
+      goalPills: {
+        stale: makeGoal({ goal_id: 'stale', state: 'queued' }),
+        g1: makeGoal({ goal_id: 'g1', state: 'active' }),
+      },
+    })
+    render(<GoalPillTray />)
+    expect(screen.getAllByTestId('goal-pill-wrapper')).toHaveLength(1)
+    expect(screen.getByTestId('goal-pill-active')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-pill-queued')).not.toBeInTheDocument()
   })
 })
 

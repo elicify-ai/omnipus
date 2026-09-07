@@ -1,4 +1,5 @@
-// GoalIndicator.test.tsx — ADR-049 D6/US-12/FR-094/SD-C9.
+// GoalIndicator.test.tsx — ADR-049 D6/US-12/FR-094/SD-C9; ADR-081 D5/D9
+// (work-first goal flow) for the retired `queued` state.
 //
 // Pure presentational component, driven entirely by props (goalStatus/
 // loopStatus). Covers the ADR-053 9-value pill enum (queued/active/
@@ -11,7 +12,12 @@
 // `/goal clear` renders as a deliberate stop, not a failure (see the
 // `cleared` describe block below). "Renders nothing" is still covered by
 // `goalStatus === null` — `cleared` is a normal non-null frame like any
-// other terminal state.
+// other terminal state. `queued` (ADR-081 D5/D9) is now the ONE non-null
+// state that also renders nothing — it is retired and never emitted by the
+// backend anymore; the wire-enum value survives only in the generated type
+// (Constraint #8), so this component still defensively renders nothing for
+// it rather than the pre-ADR-081 "queued — waiting for a free loop slot"
+// summary line.
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -65,11 +71,22 @@ describe('GoalIndicator — active state', () => {
   })
 })
 
-describe('GoalIndicator — queued state', () => {
-  it('shows a queued summary line and does not show the round line', () => {
-    render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} />)
-    expect(screen.getByTestId('goal-indicator-queued')).toHaveTextContent('queued — waiting for a free loop slot')
+// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore.
+// Unlike every other non-null state, it renders NOTHING (same as a null
+// goalStatus), defensively, in case a stale/legacy frame ever carries it.
+describe('GoalIndicator — queued state (retired, ADR-081 D5/D9)', () => {
+  it('renders nothing for a queued frame — no summary line, no round line, no indicator container', () => {
+    const { container } = render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} />)
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByTestId('goal-indicator')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-queued')).not.toBeInTheDocument()
     expect(screen.queryByTestId('goal-indicator-round')).not.toBeInTheDocument()
+  })
+
+  it('still renders the loop status line alongside a queued (suppressed) goal frame', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} loopStatus={makeLoop()} />)
+    expect(screen.getByTestId('loop-status-line')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-queued')).not.toBeInTheDocument()
   })
 })
 
