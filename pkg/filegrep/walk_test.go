@@ -280,6 +280,28 @@ func TestFileGrep_ContextLines(t *testing.T) {
 		}
 	})
 
+	t.Run("adjacent matching line is not skipped as context_after", func(t *testing.T) {
+		res := mustSearch(t, oneRoot(buildFS(map[string]string{
+			"f.txt": "foo\nfoo\nbar\n",
+		})), Options{Query: "foo", ContextLines: 2})
+		if len(res.Hits) != 2 {
+			t.Fatalf("want 2 hits, got %d: %+v", len(res.Hits), res.Hits)
+		}
+		h1, h2 := res.Hits[0], res.Hits[1]
+		if h1.Line != 1 || h2.Line != 2 {
+			t.Fatalf("want hits on lines 1 and 2, got %d and %d", h1.Line, h2.Line)
+		}
+		if !equalStrings(h1.ContextAfter, []string{"foo", "bar"}) {
+			t.Fatalf("hit 1 (line 1) ContextAfter = %v, want [foo bar] (line 2's own content, then line 3)", h1.ContextAfter)
+		}
+		if !equalStrings(h2.ContextBefore, []string{"foo"}) {
+			t.Fatalf("hit 2 (line 2) ContextBefore = %v, want [foo] (line 1's content)", h2.ContextBefore)
+		}
+		if !equalStrings(h2.ContextAfter, []string{"bar"}) {
+			t.Fatalf("hit 2 (line 2) ContextAfter = %v, want [bar]", h2.ContextAfter)
+		}
+	})
+
 	t.Run("context_lines clamps to 0..5", func(t *testing.T) {
 		m, err := compile(Options{Query: "x", ContextLines: 99})
 		if err != nil {

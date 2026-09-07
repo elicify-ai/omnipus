@@ -697,7 +697,15 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 		return nil
 	}
 
+	// appendAfter records line as the next ContextAfter entry for every hit
+	// still awaiting one — including when line is itself a match, since a
+	// matching line is still a line "following" an earlier match in file
+	// order (MV-14/contract: context_after lists file-order lines, matching
+	// or not).
 	appendAfter := func(line []byte) {
+		if len(pending) == 0 {
+			return
+		}
 		keep := pending[:0]
 		for _, idx := range pending {
 			fileHits[idx].ContextAfter = append(fileHits[idx].ContextAfter, string(line))
@@ -730,6 +738,9 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 				s.countFileCapSkip()
 				return flush() // per-file remainder skip, counted — not a truncation
 			}
+			if s.m.contextN > 0 {
+				appendAfter(trimmed)
+			}
 			if pos, ok := s.m.lineMatch(trimmed); ok {
 				if perFile >= s.lim.MatchesPerFile {
 					s.countHitsCappedPerFile()
@@ -753,8 +764,6 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 				if s.m.contextN > 0 {
 					pending = append(pending, len(fileHits)-1)
 				}
-			} else if s.m.contextN > 0 {
-				appendAfter(trimmed)
 			}
 			if s.m.contextN > 0 {
 				cp := make([]byte, len(trimmed))
