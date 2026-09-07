@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -65,9 +66,10 @@ type Session struct {
 	// apiViewer builds the VIEWER leg only; s.api builds the loopback ingest
 	// leg. See NewSession for why they must not share a SettingEngine.
 	// Never nil after NewSession (it aliases s.api in the degraded paths).
-	apiViewer *webrtc.API
-	sink      InputSink
-	logfn     func(string, ...any)
+	apiViewer   *webrtc.API
+	contextSink ContextInputSink
+	sink        InputSink
+	logfn       func(string, ...any)
 
 	mu     sync.Mutex
 	closed bool
@@ -182,26 +184,16 @@ type Session struct {
 // data channel (nil until the viewer opens it, which happens asynchronously
 // after the answer is sent -- SendToViewer must tolerate that window).
 //
-// senders backs an explicit, code-owned termination path for this viewer's
-// per-connection goroutines -- see removeViewer's doc comment (viewer.go)
-// for the CI incident this closes: this package must not rely SOLELY on
-// Pion's own close cascade (PeerConnection.Close -> RTPTransceiver.Stop ->
-// RTPSender.Stop for drainViewerRTCP; separately PeerConnection.Close ->
-// SCTPTransport.Stop -> sctpAssociation.Abort -> per-stream read error ->
-// DataChannel.OnClose for runInputQueue) to unblock those goroutines'
-// blocking reads promptly -- that cascade is correct on a clean/fast
-// transport but is several hops deep through a third-party library and,
-// under real network conditions (packet loss, a degraded transport), was
-// observed to leave both goroutines blocked well past a 60s bound.
-// removeViewer/CloseViewer (via stopViewerConn) now call Stop() on senders
-// AND dc.Close() directly and synchronously, in addition to (not instead
-// of) the existing pc.Close() teardown -- dc.Close() (unlike relying on the
-// whole SCTP association's abort) tears down JUST this one data channel's
-// underlying stream directly, which is what runInputQueue's dc.OnClose
-// handler (inputdc.go, unchanged) is already waiting on to fire.
+// The persistent input context derives from the original attachment and is
+// canceled before this peer leaves the registry. Its queue wakes directly
+// on cancellation, without waiting for Pion's asynchronous close cascade.
+// Senders and the data channel also close explicitly to unblock transport
+// readers promptly; the caller still closes the whole PeerConnection.
 type viewerConn struct {
-	pc *webrtc.PeerConnection
-	dc *webrtc.DataChannel
+	inputCtx    context.Context
+	inputCancel context.CancelFunc
+	pc          *webrtc.PeerConnection
+	dc          *webrtc.DataChannel
 	// senders holds every RTPSender this viewer's PeerConnection negotiated
 	// (video, and audio if present) -- removeViewer/CloseViewer call
 	// Stop() on each directly so drainViewerRTCP's blocking sender.Read()
@@ -622,17 +614,20 @@ func (s *Session) Close() error {
 	s.audioForward.retire()
 	s.mu.Unlock()
 
+	s.viewersMu.Lock()
+	viewers := s.viewers
+	for _, vc := range viewers {
+		vc.cancelInput()
+	}
+	s.viewers = make(map[string]*viewerConn)
+	s.viewersMu.Unlock()
+
 	var errs []error
 	if ingest != nil {
 		if err := ingest.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close ingest: %w", err))
 		}
 	}
-
-	s.viewersMu.Lock()
-	viewers := s.viewers
-	s.viewers = make(map[string]*viewerConn)
-	s.viewersMu.Unlock()
 
 	// Fix-wave finding: this is the FOURTH viewer-teardown site in this
 	// package (removeViewer, CloseViewer, and HandleViewerOfferHandle's

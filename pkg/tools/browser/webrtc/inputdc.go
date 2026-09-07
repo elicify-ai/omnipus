@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -237,19 +238,18 @@ func (q *inputQueue) Len() int {
 	return len(q.items)
 }
 
-func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataChannel) {
+func (s *Session) wireInputDataChannel(parent context.Context, endSource context.CancelFunc, prefix, viewerID string, dc *webrtc.DataChannel) {
+	ctx, cancel := context.WithCancel(parent)
 	queue := newInputQueue()
-	var closeQueueOnce sync.Once
-	closeQueue := func() { closeQueueOnce.Do(queue.close) }
-
-	go s.runInputQueue(viewerID, queue)
+	go func() { defer cancel(); s.runInputQueueContext(ctx, viewerID, queue) }()
 
 	dc.OnOpen(func() {
 		s.logf("%s input data channel OPEN (label=%s)", prefix, dc.Label())
 	})
 	dc.OnClose(func() {
 		s.logf("%s input data channel closed", prefix)
-		closeQueue()
+		cancel()
+		endSource()
 	})
 	dc.OnError(func(err error) {
 		s.logf("%s input data channel error: %v", prefix, err)
@@ -259,7 +259,7 @@ func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataC
 			s.logf("%s WARNING: binary input frame received (want text), ignoring %d bytes", prefix, len(msg.Data))
 			return
 		}
-		if s.sink == nil {
+		if ctx.Err() != nil || (s.sink == nil && s.contextSink == nil) {
 			return
 		}
 		// Copy before handing off: Pion may reuse/release the underlying
@@ -313,28 +313,10 @@ func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw [
 	}
 }
 
-// runInputQueue is the SINGLE goroutine that drains one viewer's input queue
-// and invokes the Session's InputSink for each message IN ORDER, until the
-// queue is closed (dc.OnClose) — draining whatever remains queued first so a
-// viewer's last few events before disconnect are not discarded.
-//
-// It is the ONLY dequeuer. That is the whole point of the inputQueue type
-// (see its doc comment): the previous implementation used a Go channel that
-// this worker AND the producer's eviction path both received from, which
-// could reorder events.
+// runInputQueue preserves the legacy queue-drain contract for callers that
+// have no source context. Production data channels use runInputQueueContext.
 func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
-	for {
-		batch, ok := queue.popBatch()
-		if !ok {
-			return
-		}
-		if s.sink == nil {
-			continue
-		}
-		for _, raw := range coalesceInputBatch(batch) {
-			s.sink(viewerID, raw)
-		}
-	}
+	s.runInputQueueContext(context.Background(), viewerID, queue)
 }
 
 // coalesceInputBatch compacts one drained backlog before dispatch. Only
