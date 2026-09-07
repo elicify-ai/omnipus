@@ -212,6 +212,26 @@ func TranslateTools(tools []protocoltypes.ToolDefinition, enableWebSearch bool) 
 	return result
 }
 
+// ResolveToolChoiceUnion resolves options[protocoltypes.OptionKeyToolChoice]
+// (ADR-081 D3 [G-B1]) into the OpenAI Responses API's tool-choice union.
+// Shared by azure and codex_provider — both build a
+// responses.ResponseNewParams request and therefore share this exact union
+// shape.
+//
+// Always returns an explicit mode (never the omitted zero value): when no
+// ToolChoice was forced, that is ToolChoiceOptionsAuto, matching what azure
+// hardcoded unconditionally before this option existed — callers that never
+// touch tool_choice see byte-identical request bodies.
+func ResolveToolChoiceUnion(options map[string]any, providerName string) responses.ResponseNewParamsToolChoiceUnion {
+	mode := responses.ToolChoiceOptionsAuto
+	if tc, ok := protocoltypes.ResolveToolChoice(options, providerName); ok && tc.Mode == protocoltypes.ToolChoiceRequired {
+		mode = responses.ToolChoiceOptionsRequired
+	}
+	return responses.ResponseNewParamsToolChoiceUnion{
+		OfToolChoiceMode: openai.Opt(mode),
+	}
+}
+
 // ParseResponseBody parses an OpenAI Responses API JSON body into an LLMResponse.
 // Handles output item types: "message" (output_text + refusal), "function_call", and "reasoning".
 func ParseResponseBody(body io.Reader) (*protocoltypes.LLMResponse, error) {

@@ -352,6 +352,7 @@ func buildParams(
 
 	if len(tools) > 0 {
 		params.Tools = translateTools(tools)
+		applyToolChoice(&params, options)
 	}
 
 	// Extended Thinking / Adaptive Thinking
@@ -430,6 +431,30 @@ func levelToBudget(level string) int {
 		return 64000
 	default:
 		return 0
+	}
+}
+
+// applyToolChoice sets params.ToolChoice from the typed ToolChoice threaded
+// through options (ADR-081 D3 [G-B1]). Anthropic's wire format is
+// tool_choice: {"type":"auto"} / {"type":"any"} ("any" = required — the
+// SDK's ToolChoiceAnyParam; there is no "required" literal on this API).
+//
+// NEW code: this provider never set ToolChoice before. When ResolveToolChoice
+// returns ok=false (the common case — no forcing requested), ToolChoice is
+// left at its zero value, which `omitzero` drops from the request entirely;
+// the API defaults an omitted tool_choice to "auto" itself, so this is
+// behaviorally identical to the pre-ADR-081 state for every caller that
+// never sets the option.
+func applyToolChoice(params *anthropic.MessageNewParams, options map[string]any) {
+	tc, ok := protocoltypes.ResolveToolChoice(options, "anthropic")
+	if !ok {
+		return
+	}
+	switch tc.Mode {
+	case protocoltypes.ToolChoiceRequired:
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
+	case protocoltypes.ToolChoiceAuto:
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{}}
 	}
 }
 

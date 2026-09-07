@@ -125,6 +125,19 @@ func (p *CopilotCliProvider) Chat(
 		return nil, fmt.Errorf("%w: %s is not on this machine", ErrCopilotCLINotFound, p.command)
 	}
 
+	// ADR-081 D3 [G-B1]: tool-choice forcing is structurally inapplicable to
+	// this CLI-bridged provider — tools are flattened into the prompt text
+	// below (buildPrompt), there is no request-shape "tool_choice" field to
+	// set. The engine is expected to never force here (FR-009: forcing MUST
+	// NOT occur on a CLI-bridged provider); this is belt-and-suspenders — if
+	// it happens anyway, NO-OP rather than error, but WARN once so a future
+	// engine regression that DOES force here is visible instead of silently
+	// doing nothing.
+	if tc, ok := ResolveToolChoice(options, "copilot_cli"); ok && tc.Mode == ToolChoiceRequired {
+		slog.Warn("tool_choice=required requested but the Copilot CLI provider cannot force tool use (tools are flattened to prompt text); ignoring",
+			"provider", "github-copilot")
+	}
+
 	prompt := p.buildPrompt(messages, tools)
 
 	args := []string{
