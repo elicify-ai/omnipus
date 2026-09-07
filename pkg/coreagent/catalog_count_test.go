@@ -52,6 +52,43 @@ import (
 // "knowledge_" prefix — only the WIRE contract types (VaultFindRequest,
 // VaultFilterNode, …) carry "Vault". This file is corrected to match the
 // code that actually ships, not the earlier naming draft.
+//
+// THE FEAT→RELEASE MERGE (95 -> 101): the 95 above was feat/library-
+// improvements' OWN number, reached by that branch's linear history alone
+// (89-tool common ancestor with release/v0.1.1, +9 ADR-067 names, then
+// Stage 4's -9+6). It stopped being this catalog's number the moment this
+// file landed on integrate/library-improvements-v0.1.1 (commit
+// 1fea84ee0, "merge: vault + library improvements (B+C, ADR-069) onto
+// release/v0.1.1"), because release/v0.1.1 had ALSO moved, independently,
+// off that same 89-tool ancestor: its own commit history (through
+// fbcbc5edc) renamed/retired 5 of the ancestor's tools (hand_off, load_tool,
+// navigate, return_to_default, write_agent_metadata) and added 11 of its own
+// (AskUserQuestion, Skill, ToolSearch, switch_agent, list_mounts, and six
+// browser_* verbs) — net +6, landing release at 95 tools too, but a
+// DIFFERENT 95: zero knowledge_* names among them.
+//
+// The merge took release's 95 as the base (none of its renames/retirements
+// were reverted) and added feat's six ADR-068 D15.3 knowledge tools on top —
+// a clean, non-conflicting addition, since release never had any
+// knowledge_* name (old or new) to collide with. It did NOT pull in feat's
+// other five ancestor-era names (hand_off, load_tool, navigate,
+// return_to_default, write_agent_metadata): those are correctly retired on
+// the release side and their absence is not a merge regression. Net:
+// 95 (release/v0.1.1's own catalog, verified zero knowledge_* entries) + 6
+// (ADR-068 D15.3's knowledge_describe, knowledge_find, knowledge_read,
+// knowledge_edit, knowledge_restructure, knowledge_configure, verified as
+// the ENTIRE diff between the release parent and the merge result — no
+// other name was added or removed) = 101.
+//
+// Verified mechanically, not by inspection: `git merge-base` of the two
+// merge parents (fbcbc5edc on release/v0.1.1, 3f0c61404 on
+// feat/library-improvements) confirms the shared 89-tool/0-knowledge
+// ancestor; diffing allStaticToolNames at each of the three commits (base,
+// both parents, merge result) confirms release's independent 89->95
+// churn, feat's independent 89->95 churn (the Stage 4 arithmetic above),
+// and that the merge result's only delta from the release parent is
+// exactly the six ADR-068 D15.3 names, added, none removed. See
+// TestCatalog_MergeArithmetic below for the mechanical form of this.
 // ---------------------------------------------------------------------------
 
 // catalogSizeToday is the current size of the static builtin tool catalog.
@@ -66,7 +103,15 @@ import (
 //     catalog is already at the size where selection accuracy is the binding
 //     constraint, so a new entry needs a reason, not just a slot. Update this
 //     number in the same commit, and say in the message which tool and why.
-const catalogSizeToday = 95
+//
+// Bumped 95 -> 101 landing the feat/library-improvements -> release/v0.1.1
+// merge (commit 1fea84ee0): release/v0.1.1's own catalog stood at 95 tools
+// with zero knowledge_* entries; the merge added exactly the six ADR-068
+// D15.3 knowledge tools (knowledge_describe, knowledge_find, knowledge_read,
+// knowledge_edit, knowledge_restructure, knowledge_configure) from
+// feat/library-improvements, and nothing else — see the merge-arithmetic
+// paragraph above and TestCatalog_MergeArithmetic.
+const catalogSizeToday = 101
 
 // currentKnowledgeToolNames is the exact six ADR-068 D15.3 seeds — the
 // replacement for ADR-067's nine, superseded (Stage 4, Wave 2). Split by
@@ -177,13 +222,18 @@ func TestCatalog_RetiredKnowledgeToolsAreGone(t *testing.T) {
 }
 
 // TestCatalog_Stage4Arithmetic states the arithmetic Stage 4 was built to
-// satisfy, so the number this catalog holds today stays traceable to the
-// decision that set it rather than becoming a bare literal nobody can check.
+// satisfy on feat/library-improvements' OWN history — 98 - 9 + 6 = 95 — so
+// that history stays traceable to the decision that set it. This is no
+// longer catalogSizeToday's arithmetic (the feat -> release merge changed
+// what catalogSizeToday means; see TestCatalog_MergeArithmetic below), but
+// it remains a true, checkable fact about how feat/library-improvements
+// itself got to 95 knowledge-inclusive tools, independent of the merge.
 func TestCatalog_Stage4Arithmetic(t *testing.T) {
 	const (
-		preStage4Size         = 98
-		retiredCount          = 9
-		newKnowledgeToolCount = 6
+		preStage4Size          = 98
+		retiredCount           = 9
+		newKnowledgeToolCount  = 6
+		featBranchSizeAfterD15 = 95
 	)
 	if retiredCount != len(retiredKnowledgeToolNames) {
 		t.Fatalf("retiredCount const says %d but retiredKnowledgeToolNames holds %d names",
@@ -194,9 +244,36 @@ func TestCatalog_Stage4Arithmetic(t *testing.T) {
 			newKnowledgeToolCount, len(currentKnowledgeToolNames))
 	}
 	got := preStage4Size - retiredCount + newKnowledgeToolCount
+	if got != featBranchSizeAfterD15 {
+		t.Fatalf("ADR-068 D15.0's Stage 4 arithmetic on feat/library-improvements is "+
+			"%d - %d + %d = %d, but featBranchSizeAfterD15 says %d. One of the numbers "+
+			"in this file is wrong.",
+			preStage4Size, retiredCount, newKnowledgeToolCount, got, featBranchSizeAfterD15)
+	}
+}
+
+// TestCatalog_MergeArithmetic states the arithmetic that actually explains
+// catalogSizeToday post-merge: release/v0.1.1's own catalog (95 tools, zero
+// knowledge_* entries — an independent evolution off the same 89-tool
+// ancestor feat/library-improvements branched from, verified via
+// `git merge-base` of the two merge parents) plus the six ADR-068 D15.3
+// knowledge tools feat/library-improvements contributed, and nothing else.
+// Unlike TestCatalog_Stage4Arithmetic (a fact about one branch's own
+// history), this is the fact about what the merge actually did — see the
+// "THE FEAT→RELEASE MERGE" comment above.
+func TestCatalog_MergeArithmetic(t *testing.T) {
+	const (
+		releaseV011BaselineSize = 95
+		newKnowledgeToolCount   = 6
+	)
+	if newKnowledgeToolCount != len(currentKnowledgeToolNames) {
+		t.Fatalf("newKnowledgeToolCount const says %d but currentKnowledgeToolNames holds %d names",
+			newKnowledgeToolCount, len(currentKnowledgeToolNames))
+	}
+	got := releaseV011BaselineSize + newKnowledgeToolCount
 	if got != catalogSizeToday {
-		t.Fatalf("ADR-068 D15.0's arithmetic is %d - %d + %d = %d, but catalogSizeToday "+
+		t.Fatalf("the feat->release merge arithmetic is %d + %d = %d, but catalogSizeToday "+
 			"says %d. One of the numbers in this file is wrong.",
-			preStage4Size, retiredCount, newKnowledgeToolCount, got, catalogSizeToday)
+			releaseV011BaselineSize, newKnowledgeToolCount, got, catalogSizeToday)
 	}
 }
