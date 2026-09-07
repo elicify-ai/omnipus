@@ -85,8 +85,15 @@ function mountResponseWithDisclosure(
   }
 }
 
+// C2 collapsed the toolbar's standalone Add-mount button into the unified
+// "+" create menu (LibraryCreateMenu) — the dialog this opens, and every
+// disclosure assertion made against it, are unchanged; only the affordance
+// that starts it moved. Same open-by-pointerdown mechanism (Radix
+// DropdownMenu opens on pointerdown, not click) as LibraryExplorer.test.tsx's
+// own `openCreateMenuAndClick` helper.
 async function openAddMountDialogAndConfirm(hostPath: string) {
-  fireEvent.click(await screen.findByTestId('library-add-mount-button'))
+  fireEvent.pointerDown(await screen.findByTestId('library-create-menu-trigger'), { ctrlKey: false, button: 0 })
+  fireEvent.click(await screen.findByRole('menuitem', { name: /Add a folder from your Mac/ }))
   fireEvent.change(await screen.findByTestId('library-add-mount-path'), { target: { value: hostPath } })
   fireEvent.click(await screen.findByTestId('library-add-mount-confirm'))
 }
