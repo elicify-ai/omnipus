@@ -257,17 +257,15 @@ func excerpt(line []byte, pos int) string {
 			start = end - ExcerptCapBytes
 		}
 	}
-	for start > 0 && start < len(line) && !utf8.RuneStart(line[start]) {
-		start--
+	// Snapping INWARD (trimming a partial leading/trailing rune) rather than
+	// outward can only shrink [start, end), so the pre-snap size — already
+	// <=ExcerptCapBytes above — bounds the result unconditionally; no
+	// separate reclamp is needed.
+	for start < end && !utf8.RuneStart(line[start]) {
+		start++
 	}
-	for end < len(line) && !utf8.RuneStart(line[end]) {
-		end++
-	}
-	if end-start > ExcerptCapBytes+utf8.UTFMax {
-		end = start + ExcerptCapBytes
-		for end > start && end < len(line) && !utf8.RuneStart(line[end]) {
-			end--
-		}
+	for end > start && end < len(line) && !utf8.RuneStart(line[end]) {
+		end--
 	}
 	result := line[start:end]
 	if !utf8.Valid(result) {
@@ -283,6 +281,13 @@ func excerpt(line []byte, pos int) string {
 		return strings.ToValidUTF8(string(result), "")
 	}
 	return string(result)
+}
+
+// capContextLine bounds a ContextBefore/ContextAfter line to <=ExcerptCapBytes
+// the same UTF-8-safe way excerpt() bounds a match window (MV-6) — a context
+// line carries no match position of its own, so it is capped from its start.
+func capContextLine(line []byte) string {
+	return excerpt(line, 0)
 }
 
 // budgetError signals a request-level bound; carried through the walk.
@@ -349,14 +354,18 @@ func (s *state) chargeOutput(h Hit) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Both caps are checked against the hit being admitted NOW, before it is
+	// appended: truncation is what happened to a REJECTED hit, never a
+	// property of the last one that fit (a request with exactly Matches
+	// hits and nothing more is not truncated).
+	if len(s.res.Hits) >= s.lim.Matches {
+		return budgetError{ReasonMaxMatches}
+	}
 	if s.output+n > s.lim.OutputBytes {
 		return budgetError{ReasonMaxOutput}
 	}
 	s.output += n
 	s.res.Hits = append(s.res.Hits, h)
-	if len(s.res.Hits) >= s.lim.Matches {
-		return budgetError{ReasonMaxMatches}
-	}
 	return nil
 }
 
@@ -680,7 +689,7 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 	var (
 		fileBytes int64
 		lineNo    int
-		before    [][]byte // ring of up to contextN previous lines
+		before    []string // ring of up to contextN previous lines, each pre-capped
 		fileHits  []Hit
 		pending   []int // indices into fileHits awaiting up to contextN after-lines
 		perFile   int   // this file's own match count (MatchesPerFile cap)
@@ -695,10 +704,19 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 		return nil
 	}
 
+	// appendAfter records line as the next ContextAfter entry for every hit
+	// still awaiting one — including when line is itself a match, since a
+	// matching line is still a line "following" an earlier match in file
+	// order (MV-14/contract: context_after lists file-order lines, matching
+	// or not).
 	appendAfter := func(line []byte) {
+		if len(pending) == 0 {
+			return
+		}
+		capped := capContextLine(line)
 		keep := pending[:0]
 		for _, idx := range pending {
-			fileHits[idx].ContextAfter = append(fileHits[idx].ContextAfter, string(line))
+			fileHits[idx].ContextAfter = append(fileHits[idx].ContextAfter, capped)
 			if len(fileHits[idx].ContextAfter) < s.m.contextN {
 				keep = append(keep, idx)
 			}
@@ -728,6 +746,9 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 				s.countFileCapSkip()
 				return flush() // per-file remainder skip, counted — not a truncation
 			}
+			if s.m.contextN > 0 {
+				appendAfter(trimmed)
+			}
 			if pos, ok := s.m.lineMatch(trimmed); ok {
 				if perFile >= s.lim.MatchesPerFile {
 					s.countHitsCappedPerFile()
@@ -743,21 +764,15 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 					Excerpt: excerpt(trimmed, pos),
 				}
 				if s.m.contextN > 0 {
-					for _, b := range before {
-						h.ContextBefore = append(h.ContextBefore, string(b))
-					}
+					h.ContextBefore = append(h.ContextBefore, before...)
 				}
 				fileHits = append(fileHits, h)
 				if s.m.contextN > 0 {
 					pending = append(pending, len(fileHits)-1)
 				}
-			} else if s.m.contextN > 0 {
-				appendAfter(trimmed)
 			}
 			if s.m.contextN > 0 {
-				cp := make([]byte, len(trimmed))
-				copy(cp, trimmed)
-				before = append(before, cp)
+				before = append(before, capContextLine(trimmed))
 				if len(before) > s.m.contextN {
 					before = before[1:]
 				}
