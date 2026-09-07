@@ -469,55 +469,87 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 	return al.sessionWindowText(store, goalSessionID, budget, nil)
 }
 
-// buildGoalRubricNote returns the compile contract's rubric text alone: the
+// buildGoalRubricNote returns the compile contract's rubric text: the
 // clarity gate, the checklist-authoring guidance (judgment types, the
 // 4-layer DoD derivation ladder), and the seeded define-goal skill content
 // when present — WITHOUT ADR-079 D1's session-transcript window and WITHOUT
 // ADR-080 D-CONTEXT2's workspace/project instructions (ADR-081 D4, spec
-// FR-011). This is the SAME contract text the front-path compile call used
-// to assemble inline; it is now a single reusable builder so
-// buildGoalCompileMessages (below, D7's fallback-only compile) and loop.go's
-// D3/D4 turn-scoped rubric injection (the WORKING agent's own first-move
-// guidance) can never drift apart on what the quality bar says. The window
-// and workspace-instructions feeds are deliberately excluded: loop.go's
+// FR-011). This is a single reusable builder so buildGoalCompileMessages
+// (below, D7's fallback-only compile) and loop.go's D3/D4 turn-scoped
+// rubric injection (the WORKING agent's own first-move guidance) can never
+// drift apart on what the quality bar says. The window and
+// workspace-instructions feeds are deliberately excluded: loop.go's
 // injection call site already carries the session's own native message
 // history and already injects the turn's own workspace instructions
 // (injectWorkspaceInstructions) on every turn — re-including either here
 // would double-inject.
-func buildGoalRubricNote() string {
+//
+// forTool selects the delivery-mechanism framing that opens the note — the
+// two callers describe the SAME fields through two different surfaces, and
+// conflating them would leave a tool-calling turn holding an instruction to
+// emit raw JSON instead of calling a tool (D3 AMENDMENT, 2026-09-07: the
+// tool-calling path used to inherit the raw-JSON framing verbatim, since
+// provider tool-choice forcing carried the actual guarantee and the prompt
+// text's exact wording didn't matter as much; now that the immediate
+// post-turn correction is the enforcement point, the request itself must
+// say the right thing):
+//   - false — D7's compileGoalIntentLLM/goalCompileLLMCall, a raw no-tools
+//     LLM call with no set_goal/AskUserQuestion available at all. Keeps the
+//     original "respond with ONLY a JSON object" contract unchanged.
+//   - true — loop.go's D3/D4 turn-scoped injection, where set_goal and
+//     (webchat origin, budget permitting) AskUserQuestion are REAL callable
+//     tools. Opens with an explicit first-move instruction instead: call
+//     set_goal now, or ask once when genuinely unclear, then keep working in
+//     the same turn.
+//
+// The shared substance below (criterion/DoD authoring guidance, the skill
+// content) never differs — only how the model is told to deliver it.
+func buildGoalRubricNote(forTool bool) string {
 	var sys strings.Builder
+	if forTool {
+		sys.WriteString(
+			"Your FIRST action this turn must be a tool call, not prose. When you are confident, against " +
+				"the quality bar below, about the goal's restated statement, acceptance criteria, and " +
+				"Definition of Done, call set_goal now (mode: \"register\") with those fields, then continue " +
+				"straight into the work in this SAME turn — there is no confirmation step to wait for. When " +
+				"the goal is genuinely unclear, ask once instead: call AskUserQuestion where it is offered, " +
+				"or ask conversationally in your own reply where it is not, then call set_goal immediately " +
+				"once the answer arrives, before doing anything else.\n\n")
+	} else {
+		sys.WriteString(
+			"You compile a user's goal into a restated statement, judgment-typed acceptance criteria, and a\n" +
+				"Definition of Done (DoD) that a reviewer (the Judge) will later evaluate the work against.\n" +
+				"Respond with ONLY a JSON object, no prose around it, in exactly one of these two shapes:\n\n" +
+				"Clear:\n" +
+				"  {\"assessment\":{\"clarity\":\"clear\"},\n" +
+				"   \"definition\":\"<one clear sentence restating the goal>\",\n" +
+				"   \"criteria\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"}, ...],\n" +
+				"   \"dod\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"," +
+				"\"provenance\":\"stated\"|\"workspace\"|\"floor\"|\"inferred\"}, ...]}\n\n" +
+				"Ambiguous:\n" +
+				"  {\"assessment\":{\"clarity\":\"ambiguous\"},\n" +
+				"   \"clarifying_questions\":[\n" +
+				"     {\"header\":\"<short unique tab label>\",\"question\":\"<the question text>\",\n" +
+				"      \"options\":[{\"label\":\"...\",\"description\":\"...\"}, ... concrete answer options],\n" +
+				"      \"multi_select\":true|false (optional, default false),\n" +
+				"      \"recommended\":\"<one option's exact label, optional>\"},\n" +
+				"     ... up to 10 questions in one round\n" +
+				"   ]}\n\n" +
+				fmt.Sprintf(
+					"Every clarifying question needs a short unique header (max %d chars) and %d-%d concrete "+
+						"answer options — real, specific candidate answers, never filler — even when the true "+
+						"answer is open-ended: the user can always answer in free text instead, so the options are "+
+						"a helpful starting menu, not an exhaustive list. Never set a \"default_safe\" field on a "+
+						"clarifying question — these must always wait for the user's own answer.\n\n",
+					askuser.MaxHeaderChars, askuser.MinOptions, askuser.MaxOptions,
+				))
+	}
 	sys.WriteString(
-		"You compile a user's goal into a restated statement, judgment-typed acceptance criteria, and a\n" +
-			"Definition of Done (DoD) that a reviewer (the Judge) will later evaluate the work against.\n" +
-			"Respond with ONLY a JSON object, no prose around it, in exactly one of these two shapes:\n\n" +
-			"Clear:\n" +
-			"  {\"assessment\":{\"clarity\":\"clear\"},\n" +
-			"   \"definition\":\"<one clear sentence restating the goal>\",\n" +
-			"   \"criteria\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"}, ...],\n" +
-			"   \"dod\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"," +
-			"\"provenance\":\"stated\"|\"workspace\"|\"floor\"|\"inferred\"}, ...]}\n\n" +
-			"Ambiguous:\n" +
-			"  {\"assessment\":{\"clarity\":\"ambiguous\"},\n" +
-			"   \"clarifying_questions\":[\n" +
-			"     {\"header\":\"<short unique tab label>\",\"question\":\"<the question text>\",\n" +
-			"      \"options\":[{\"label\":\"...\",\"description\":\"...\"}, ... concrete answer options],\n" +
-			"      \"multi_select\":true|false (optional, default false),\n" +
-			"      \"recommended\":\"<one option's exact label, optional>\"},\n" +
-			"     ... up to 10 questions in one round\n" +
-			"   ]}\n\n" +
-			fmt.Sprintf(
-				"Every clarifying question needs a short unique header (max %d chars) and %d-%d concrete "+
-					"answer options — real, specific candidate answers, never filler — even when the true "+
-					"answer is open-ended: the user can always answer in free text instead, so the options are "+
-					"a helpful starting menu, not an exhaustive list. Never set a \"default_safe\" field on a "+
-					"clarifying question — these must always wait for the user's own answer.\n\n",
-				askuser.MaxHeaderChars, askuser.MinOptions, askuser.MaxOptions,
-			) +
-			"Choose \"clear\" ONLY when you are confident, against the quality bar below, that every " +
+		"Choose \"clear\" ONLY when you are confident, against the quality bar below, that every " +
 			"criterion is unambiguous and no reasonable reader would disagree about what \"done\" means. " +
 			"If scope, acceptance, or the user's meaning is genuinely ambiguous — including a goal that " +
-			"only makes sense against earlier conversation you were not given enough of — answer " +
-			"\"ambiguous\" and ask, instead of guessing.\n\n" +
+			"only makes sense against earlier conversation you were not given enough of — treat it as " +
+			"ambiguous and ask, instead of guessing.\n\n" +
 			"Definition: one clear sentence restating the goal, staying close to the setter's own words. " +
 			"Shape: \"Produce <outcome> for <who/what it serves>, so that <the one observable end-state> " +
 			"— <optional: by when / within a budget or attempt limit>.\" One primary outcome only (extra " +
@@ -569,13 +601,15 @@ const goalRubricChannelAddendum = "\n\nAskUserQuestion is unavailable on this ch
 // buildGoalRubricInjectionNote returns the ADR-081 D4 turn-scoped system
 // note loop.go injects on a goal turn: "" when holds is false (the D3 base
 // predicate — active goal AND an empty compiled record — does not hold this
-// request), buildGoalRubricNote() otherwise, with goalRubricChannelAddendum
-// appended when the turn did not originate on the web (isWebchat false).
+// request), buildGoalRubricNote(true) otherwise (the tool-calling framing —
+// this is always the WORKING agent's own turn, never the D7 raw-JSON
+// fallback compile), with goalRubricChannelAddendum appended when the turn
+// did not originate on the web (isWebchat false).
 func buildGoalRubricInjectionNote(holds, isWebchat bool) string {
 	if !holds {
 		return ""
 	}
-	note := buildGoalRubricNote()
+	note := buildGoalRubricNote(true)
 	if !isWebchat {
 		note += goalRubricChannelAddendum
 	}
@@ -611,7 +645,7 @@ func injectGoalRubricNote(msgs []providers.Message, note string) []providers.Mes
 // prompt shape.
 func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions string) []providers.Message {
 	var sys strings.Builder
-	sys.WriteString(buildGoalRubricNote())
+	sys.WriteString(buildGoalRubricNote(false))
 	if workspaceInstructions != "" {
 		// ADR-080 D-CONTEXT2: AUTHORITATIVE trusted context (the operator's own
 		// workspace/project instructions) — distinct from the UNTRUSTED session

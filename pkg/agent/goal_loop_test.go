@@ -14,6 +14,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -599,6 +600,166 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 	if after.GoalRoundsUsed != 1 {
 		t.Fatalf("rounds_used = %d, want 1 — the goal loop's own re-injected follow-up must still advance "+
 			"the round", after.GoalRoundsUsed)
+	}
+}
+
+// --- ADR-081 D3 AMENDMENT item 3: immediate post-turn correction --------
+//
+// checkGoalLoopAfterTurn's maybeNudgeUnregisteredGoal replaces provider
+// tool-choice forcing as the enforcement point: a completed goal turn that
+// left the compiled record empty gets nudged RIGHT THEN, not at the next
+// idle quiet window (contrast TestKeeper_NudgeLadderToFallback in
+// goal_keeper_repairs_test.go, which needs al.goalQuietWindowSettle to
+// advance the SAME GoalZeroOutputPushes counter via the idle path).
+
+// TestGoalLoop_PostTurnCorrection_NudgesImmediatelyWhenUnregistered proves
+// the core case: an ordinary turn (no GOAL_STATUS marker, no set_goal call)
+// on a recordless goal dispatches the D6c registration nudge synchronously,
+// within checkGoalLoopAfterTurn itself — never waiting for
+// goalQuietWindowSettle.
+func TestGoalLoop_PostTurnCorrection_NudgesImmediatelyWhenUnregistered(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	setActiveGoalRecordless(t, store, sid, "goal-nudge-1", "build a tetris game")
+
+	var mu sync.Mutex
+	var events []AsyncNotifyEvent
+	al.asyncNotifier.registerObserver(func(evt AsyncNotifyEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, evt)
+	})
+
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	// An ordinary turn that ends in plain text — no GOAL_STATUS marker, no
+	// set_goal call: the model skipped its first-move door entirely.
+	result := &turnResult{finalContent: "sure, let me think about this"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
+
+	after, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GoalZeroOutputPushes != 1 {
+		t.Fatalf("GoalZeroOutputPushes = %d, want 1 immediately after the turn — the correction must not "+
+			"wait for the idle quiet window", after.GoalZeroOutputPushes)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 dispatched nudge, got %d: %+v", len(events), events)
+	}
+	if !strings.Contains(events[0].Content, "Call set_goal now") {
+		t.Fatalf("nudge content = %q, want the D6c registration-nudge prompt", events[0].Content)
+	}
+	if events[0].SenderCanonicalID != goalLoopFollowUpSenderID {
+		t.Fatalf("nudge sender = %q, want %q — checkGoalLoopAfterTurn's own origin gate would otherwise drop it",
+			events[0].SenderCanonicalID, goalLoopFollowUpSenderID)
+	}
+}
+
+// TestGoalLoop_PostTurnCorrection_NoNudgeWhenRegistered proves the negative:
+// once the record is registered, an ordinary turn dispatches no nudge and
+// leaves GoalZeroOutputPushes untouched.
+func TestGoalLoop_PostTurnCorrection_NoNudgeWhenRegistered(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+
+	goalID := "goal-registered-1"
+	cond := "build a tetris game"
+	compiled := `{"intent":"x","prompt":"x","definition":"Build a tetris clone",` +
+		`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"the game renders"}]}`
+	if err := store.SetMeta(sid, session.MetaPatch{
+		GoalID: &goalID, GoalCondition: &cond, GoalCriteriaJSON: &compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var events []AsyncNotifyEvent
+	al.asyncNotifier.registerObserver(func(evt AsyncNotifyEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, evt)
+	})
+
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	result := &turnResult{finalContent: "working on it now"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
+
+	after, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GoalZeroOutputPushes != 0 {
+		t.Fatalf("GoalZeroOutputPushes = %d, want 0 — the record is registered, nothing to correct", after.GoalZeroOutputPushes)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 0 {
+		t.Fatalf("expected NO dispatched nudge once the record is registered, got %d: %+v", len(events), events)
+	}
+}
+
+// TestGoalLoop_PostTurnCorrection_ParkedCardSuppressesNudge proves D6a's
+// parked-card suppression also gates the IMMEDIATE correction, not just the
+// idle ladder: an already-pending AskUserQuestion card means the agent DID
+// take a first-move door and is waiting on the operator, not stalled — this
+// turn's OWN status is deliberately left non-Parked (the earlier, simpler
+// "this turn itself parked" gate at the top of checkGoalLoopAfterTurn is a
+// different code path; this test isolates maybeNudgeUnregisteredGoal's own
+// goalHasParkedCard check).
+func TestGoalLoop_PostTurnCorrection_ParkedCardSuppressesNudge(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	setActiveGoalRecordless(t, store, sid, "goal-parked-1", "build a tetris game")
+
+	al.SetAskUserRegistry(&fakeParkedCardRegistry{pending: map[string]bool{sid: true}})
+
+	var mu sync.Mutex
+	var events []AsyncNotifyEvent
+	al.asyncNotifier.registerObserver(func(evt AsyncNotifyEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, evt)
+	})
+
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	result := &turnResult{finalContent: "let me ask you something first"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
+
+	after, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GoalZeroOutputPushes != 0 {
+		t.Fatalf("GoalZeroOutputPushes = %d, want 0 — a parked card must suppress the immediate nudge", after.GoalZeroOutputPushes)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 0 {
+		t.Fatalf("expected NO dispatched nudge while a card is parked, got %d: %+v", len(events), events)
 	}
 }
 
