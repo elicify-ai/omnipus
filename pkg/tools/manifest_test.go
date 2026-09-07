@@ -890,6 +890,45 @@ func TestVisibility_KnowledgeToolsAreSearchOnly(t *testing.T) {
 	}
 }
 
+// TestVisibility_GrepIsSearchOnly pins the ADR-081 D11 tier ruling for the
+// new "grep" agent tool (unified-search-and-grep-spec.md MV-7): search-only
+// by default, like the knowledge family — ADR-071 §4.4's default applies
+// ("search-only by default... itself deliberate, not a silent fallthrough"),
+// never ManifestFull and never previewed.
+//
+// This is its OWN sibling test rather than an extension of
+// TestVisibility_KnowledgeToolsAreSearchOnly / knowledgeManifestToolNames:
+// grep is not part of ADR-068's vault-records family, and folding it into
+// that list would misrepresent the family it documents. "grep" is asserted
+// with no entry in fullManifestToolNames, infraManifestToolNames or
+// previewedLazyToolNames anywhere in this package — it reaches
+// ManifestLazy + ManifestSearchOnly purely by ABSENCE from those three maps
+// (ToolManifestTier's default branch), which is exactly why this pin exists:
+// nothing else in this package would fail if a future edit accidentally
+// added "grep" to one of them, so this test is the only thing that would
+// catch that regression.
+func TestVisibility_GrepIsSearchOnly(t *testing.T) {
+	const name = "grep"
+
+	previewed := make(map[string]bool)
+	for _, n := range PreviewedLazyToolNames() {
+		previewed[n] = true
+	}
+
+	if got := ToolManifestTier(name); got != ManifestLazy {
+		t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy", name, got)
+	}
+	if IsFullManifestTool(name) {
+		t.Errorf("IsFullManifestTool(%q) = true, want false — grep must never be Full-tier", name)
+	}
+	if got := ToolManifestVisibility(name); got != ManifestSearchOnly {
+		t.Errorf("ToolManifestVisibility(%q) = %v, want ManifestSearchOnly", name, got)
+	}
+	if previewed[name] {
+		t.Errorf("%q must not be in previewedLazyToolNames (grep stays fully search-only, ADR-081 D11)", name)
+	}
+}
+
 // TestVisibility_EveryCatalogNameHasRecordedLevel mirrors the existing
 // TestManifestNamesResolveInCatalog / TestCatalog_MatchesGlobalCeilingEntryForEntry
 // drift-test pattern: every name GeneralBuiltinMetadata() returns must resolve

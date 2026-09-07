@@ -1328,6 +1328,19 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		} {
 			out[name] = struct{}{}
 		}
+		// ADR-081 D11 (unified-search-and-grep-spec.md FR-008/FR-009) — the
+		// grep agent tool is unioned in explicitly here, for the same reason
+		// and under the same rule as the ADR-052 four and the ADR-068 six
+		// directly above: independent of its own implementation package
+		// landing, so the tool-policy coverage universe
+		// (config.ValidateToolPolicyCoverage / RepairIncompleteToolPolicyCoverage)
+		// recognizes it from the config-seeding side immediately. Mirrors
+		// pkg/coreagent/core.go's allStaticToolNames literal-for-literal
+		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// enforces the two stay in sync). Idempotent once the real tool
+		// implementation registers itself (same name, no duplicate entry in
+		// a set).
+		out["grep"] = struct{}{}
 		knownBuiltinToolNamesCache = out
 	})
 	return knownBuiltinToolNamesCache
