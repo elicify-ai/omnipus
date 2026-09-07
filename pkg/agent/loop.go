@@ -1908,6 +1908,15 @@ func registerSharedTools(
 			return al.getAskUserRegistry()
 		}))
 
+		// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004..FR-006):
+		// the validated write-path over this session's goal record.
+		// wireGoalToolsForAgent (goal_record_wiring.go) resolves the
+		// session-store-backed access/diff/feasibility seams LIVE per call —
+		// no external gateway wiring needed, unlike AskUserQuestion's
+		// registry, since goal state lives in the SAME session store this
+		// package already owns.
+		wireGoalToolsForAgent(al, agent)
+
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
 			return al.GetRegistry()
@@ -8408,6 +8417,238 @@ func isMessagingChannel(channel string) bool {
 	return false
 }
 
+// goalForcingWebChannel is the SPA session origin (ADR-081 D3 [G-B2]) —
+// mirrors pkg/tools' own unexported webChannelName const
+// (ask_user_question.go), which pkg/agent cannot reach without a
+// cross-package coupling for one literal. AskUserQuestion's own web-only
+// refusal (ToolChannel(ctx) != webChannelName) is the authority this
+// predicate must agree with, so both sides carry the identical value.
+const goalForcingWebChannel = "webchat"
+
+// goalTurnRecordState reads sessionID's current goal state via
+// ts.opts.TranscriptStore — the single read both evaluateGoalForcing
+// (iteration==1 only) and the mid-turn rubric-note budget estimate
+// (goalRubricNoteForBudget, every iteration) share, so the two can never
+// disagree about what "the record is still empty" means. holds is
+// ADR-081 D3's base predicate: an active goal (GoalCondition set) whose
+// compiled record is still empty (GoalCriteriaJSON unset) — the transient
+// window between instant activation (D1) and the working agent's own
+// set_goal authorship. meta is nil whenever holds is false.
+func goalTurnRecordState(ts *turnState) (holds bool, meta *session.UnifiedMeta) {
+	if ts == nil || ts.opts.TranscriptStore == nil || ts.opts.TranscriptSessionID == "" {
+		return false, nil
+	}
+	m, err := ts.opts.TranscriptStore.GetMeta(ts.opts.TranscriptSessionID)
+	if err != nil || m == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(m.GoalCondition) == "" || strings.TrimSpace(m.GoalCriteriaJSON) != "" {
+		return false, nil
+	}
+	return true, m
+}
+
+// isCLIBridgedProvider reports whether p is one of the CLI-subprocess-backed
+// providers (ADR-081 D3 [G-B1]: codex-cli / GitHub Copilot CLI) that
+// flatten tools into prompt text and have no request-shape tool-choice to
+// force (spec FR-009). Checked by concrete Go type — CreateProviderFromConfig
+// (pkg/providers/factory_provider.go) returns these types directly, with no
+// wrapping layer, whenever the catalog row's protocol is "cli".
+func isCLIBridgedProvider(p providers.LLMProvider) bool {
+	switch p.(type) {
+	case *providers.CodexCliProvider, *providers.CopilotCliProvider:
+		return true
+	default:
+		return false
+	}
+}
+
+// goalForcingNarrowTools returns the ADR-081 D3 Layer 1 narrowed tool pair:
+// set_goal (always, when present in policyFiltered) plus AskUserQuestion
+// when includeAsk is true and it too is present. Never any other tool —
+// C-3's "1 or 2 definitions, never any other tool".
+func goalForcingNarrowTools(policyFiltered []tools.Tool, includeAsk bool) []tools.Tool {
+	out := make([]tools.Tool, 0, 2)
+	for _, t := range policyFiltered {
+		switch t.Name() {
+		case tools.SetGoalToolName:
+			out = append(out, t)
+		case tools.AskUserQuestionToolName:
+			if includeAsk {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+// goalForcingDecision is ADR-081 D3/D4's per-request verdict, evaluated once
+// at the top of each LLM request inside runTurn's round loop (spec
+// FR-007/009/010/011, test 8) and consumed by that SAME iteration:
+// providerToolDefs assembly, the tool-choice option, the rubric-note
+// injection, and — after the tool-execution loop processes the model's
+// response — the FR-010 question-round budget bump when the ask door was
+// genuinely taken.
+type goalForcingDecision struct {
+	// layer1 is true when Layer 1 narrowed the tool surface to
+	// {set_goal[, AskUserQuestion]} and tool-choice is forced to required
+	// this request: the base predicate holds, the origin is webchat, the
+	// provider is not CLI-bridged, and set_goal itself is not policy-denied.
+	layer1 bool
+	// rubric is true whenever D3's base predicate holds at all (active goal
+	// AND an empty compiled record, this turn's first LLM request) —
+	// independent of channel/provider/policy. D4's rubric note injects
+	// under this alone; layer1 implies rubric, never the reverse.
+	rubric bool
+	// askOffered is true when this request's narrowed pair still includes
+	// AskUserQuestion (layer1 && the question budget is unspent && policy
+	// allows it) — read after the tool-execution loop to know the ask door
+	// was actually reachable this request.
+	askOffered bool
+	// isWebchat records ts.channel == goalForcingWebChannel once so the
+	// rubric-note builder and downstream logging need not re-derive it.
+	isWebchat bool
+	sessionID string
+	goalID    string
+	// questionRoundsUsed is the persisted budget counter AS READ this
+	// evaluation — bumpGoalQuestionRoundsUsed increments from this value,
+	// never a re-read, so a concurrent unrelated write between evaluation
+	// and the bump cannot silently double-count (the single-flight goal
+	// session assumption every other goal-state writer in this package
+	// already makes).
+	questionRoundsUsed int
+	// narrowed is the actual {set_goal[, AskUserQuestion]} slice offered
+	// this request when layer1 is true — nil otherwise. providerToolDefs is
+	// built directly from this slice (never re-derived), so what the model
+	// is offered and what askOffered/layer1 describe can never disagree.
+	narrowed []tools.Tool
+}
+
+// evaluateGoalForcing computes goalForcingDecision for the CURRENT LLM
+// request (ADR-081 D3, spec FR-007/009/010; C-3's negative rows, grill M1):
+// the predicate deliberately consults ONLY iteration and persisted session
+// state — never opts.UserInitiated or sender identity, since a card-resume
+// turn (human-answered or auto-submitted) and a keeper nudge turn are goal
+// turns exactly like a fresh activation turn.
+func (al *AgentLoop) evaluateGoalForcing(
+	ts *turnState, iteration int, activeProvider providers.LLMProvider, policyFiltered []tools.Tool,
+) goalForcingDecision {
+	var d goalForcingDecision
+	if iteration != 1 {
+		// D3 [G-M7]: evaluated on the turn's FIRST LLM request only — under
+		// forcing the pair's own two outcomes (register or park) never leave
+		// a second request with the predicate still true in the SAME turn;
+		// a non-forced goal turn that doesn't register on its first move is
+		// followed up by a fresh keeper nudge turn (D6c), not a later
+		// request in this one.
+		return d
+	}
+	holds, meta := goalTurnRecordState(ts)
+	if !holds {
+		return d
+	}
+	d.rubric = true
+	d.sessionID = ts.opts.TranscriptSessionID
+	d.goalID = meta.GoalID
+	d.questionRoundsUsed = meta.GoalQuestionRoundsUsed
+	d.isWebchat = ts.channel == goalForcingWebChannel
+
+	if !d.isWebchat {
+		// [G-B2]: AskUserQuestion is permanently web-only — on channel and
+		// keeper (Channel:"system") origins, Layers 2-3 (validation +
+		// keeper) carry the invariant; only the rubric note applies here.
+		logger.InfoCF("agent", "goal: forcing skipped — non-web origin",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "channel": ts.channel})
+		return d
+	}
+	if isCLIBridgedProvider(activeProvider) {
+		// FR-009: CLI-bridged providers flatten tools into the prompt text —
+		// there is no request-shape tool-choice to force (D3 [G-B1]).
+		logger.InfoCF("agent", "goal: forcing skipped — CLI-bridged provider",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID})
+		return d
+	}
+
+	setGoalAllowed, askAllowed := false, false
+	for _, t := range policyFiltered {
+		switch t.Name() {
+		case tools.SetGoalToolName:
+			setGoalAllowed = true
+		case tools.AskUserQuestionToolName:
+			askAllowed = true
+		}
+	}
+	if !setGoalAllowed {
+		// D3: "if set_goal itself is policy-denied, do NO forcing and log
+		// WARN" — checked specifically for set_goal, independent of whether
+		// AskUserQuestion alone would have made the intersection non-empty.
+		logger.WarnCF("agent", "goal: forcing skipped — set_goal is policy-denied for this agent",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "agent_id": ts.agent.ID})
+		return d
+	}
+
+	includeAsk := askAllowed && d.questionRoundsUsed < 1
+	d.narrowed = goalForcingNarrowTools(policyFiltered, includeAsk)
+	d.layer1 = true
+	// askOffered is recomputed from the ACTUAL narrowed slice rather than
+	// trusted from includeAsk alone, so it can never disagree with what
+	// providerToolDefs (built from this same slice) actually offers.
+	for _, t := range d.narrowed {
+		if t.Name() == tools.AskUserQuestionToolName {
+			d.askOffered = true
+		}
+	}
+
+	logger.InfoCF("agent", "goal: forced first-move door offered",
+		map[string]any{
+			"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
+			"ask_offered": d.askOffered, "channel": ts.channel,
+		})
+	return d
+}
+
+// bumpGoalQuestionRoundsUsed persists FR-010's spent question-round budget
+// (per GoalID — a restate never re-mints the GoalID, so it correctly
+// inherits an already-spent budget). Best-effort: a persistence failure is
+// WARN-logged, never turn-fatal — the card has already parked the turn by
+// the time this runs.
+func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
+	if d.sessionID == "" {
+		return
+	}
+	store := al.ResolveSessionStore(d.sessionID)
+	if store == nil {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget — session store unresolvable",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID})
+		return
+	}
+	newCount := d.questionRoundsUsed + 1
+	if err := store.SetMeta(d.sessionID, session.MetaPatch{GoalQuestionRoundsUsed: &newCount}); err != nil {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "error": err.Error()})
+		return
+	}
+	logger.InfoCF("agent", "goal: question door taken; budget spent",
+		map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "rounds_used": newCount})
+}
+
+// goalRubricNoteForBudget re-derives buildGoalRubricInjectionNote's input
+// from persisted session state (ADR-081 D4, midturn_budget.go's
+// ephemeralSystemNoteTokens) WITHOUT the iteration==1 gate
+// evaluateGoalForcing applies: mid-turn budget checks only ever run AFTER
+// this turn's own first request has already been assembled and sent, so by
+// the time this executes the predicate would already be false on any
+// request the injection itself actually fires for. Evaluating the base
+// predicate here regardless (rather than threading iteration through the
+// mid-turn call chain) is a deliberately conservative over-estimate on
+// iteration ≥ 2 — never an under-estimate — matching how every OTHER
+// ephemeral note in that enumeration is measured.
+func (al *AgentLoop) goalRubricNoteForBudget(ts *turnState) string {
+	holds, _ := goalTurnRecordState(ts)
+	isWebchat := ts != nil && ts.channel == goalForcingWebChannel
+	return buildGoalRubricInjectionNote(holds, isWebchat)
+}
+
 func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
 	// H1: guard against an already-canceled or timed-out context before doing any work.
 	if ctx.Err() != nil {
@@ -9202,6 +9443,14 @@ turnLoop:
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
 
+		// ADR-081 D3/D4 (spec FR-007/009/010/011): evaluated ONCE per request,
+		// right after the policy filter settles, so both the tool-surface
+		// narrowing below and the rubric-note injection further down (and the
+		// FR-010 question-budget bump after this iteration's tool-execution
+		// loop) read the exact same verdict. See evaluateGoalForcing's own doc
+		// comment for the full predicate.
+		goalForce := al.evaluateGoalForcing(ts, iteration, activeProvider, policyFilteredTools)
+
 		// FR-066: dedup invariant — tools[] must be name-unique after filter+assembly.
 		// If a duplicate is detected, emit HIGH audit and return an error turn result
 		// so the loop does not feed a malformed tool list to the LLM.
@@ -9245,9 +9494,17 @@ turnLoop:
 		}
 
 		var providerToolDefs []providers.ToolDefinition
-		if cfg.Tools.Manifest.Compressed {
+		switch {
+		case goalForce.layer1:
+			// ADR-081 D3 Layer 1 (spec test 8's compressed-mode-suspension
+			// row): "exactly the pair" is exact — bypass
+			// buildCompressedToolDefs/stripInfraToolDefs entirely for this one
+			// narrowed request, including the compressed-mode ToolSearch
+			// force-through those helpers would otherwise apply.
+			providerToolDefs = tools.ToolsToProviderDefs(goalForce.narrowed)
+		case cfg.Tools.Manifest.Compressed:
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
-		} else {
+		default:
 			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
 			// before surfacing defs to the model. ToolSearch resolves through the
 			// same global×agent merge as every other static builtin tool and is
@@ -9336,6 +9593,18 @@ turnLoop:
 			// ts.channel — deliberately NOT in the cached system prompt, since one
 			// agent serves multiple channels (see web_rendering_note.go).
 			callMessages = injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel))
+			// ADR-081 D4 (spec FR-011): the goal rubric + define-goal skill
+			// quality bar, injected exactly when the D3 base predicate holds
+			// (goalForce.rubric — active goal AND an empty compiled record,
+			// this turn's first LLM request) on EITHER origin — webchat gets
+			// it alongside Layer 1's forced two-tool choice below; a channel
+			// origin gets the SAME note (with its conversational-ask
+			// addendum) with no forcing at all (AskUserQuestion stays
+			// permanently web-only). buildGoalRubricInjectionNote returns ""
+			// when the predicate does not hold, making this call a no-op on
+			// every non-goal turn.
+			callMessages = injectGoalRubricNote(callMessages,
+				buildGoalRubricInjectionNote(goalForce.rubric, goalForce.isWebchat))
 			// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
 			// system message. Like the scratchpad, it is rebuilt every turn (never
 			// persisted) so it is never stale and not double-counted in the cached
@@ -9358,6 +9627,14 @@ turnLoop:
 		}
 		if useNativeSearch {
 			llmOpts["native_search"] = true
+		}
+		if goalForce.layer1 && !gracefulTerminal {
+			// ADR-081 D3 Layer 1 (spec C-3/FR-007): force the model to call
+			// one of the narrowed pair. gracefulTerminal already nils
+			// providerToolDefs above (spec test 34) — `required` with no
+			// tools offered is a provider 400, so the option is left unset
+			// on that branch rather than set-then-discarded.
+			llmOpts[providers.OptionKeyToolChoice] = providers.ToolChoice{Mode: providers.ToolChoiceRequired}
 		}
 		ts.agent.mu.RLock()
 		agentThinkingLevel := ts.agent.ThinkingLevel
@@ -11784,6 +12061,21 @@ turnLoop:
 			// FIRST (highest priority) because a park must win over an
 			// in-flight steering message or graceful interrupt too.
 			parked := toolResult.ParksTurn
+
+			// ADR-081 FR-010: the question door was genuinely taken on a
+			// forced goal turn — bump the persisted per-generation
+			// question-round budget. Scoped tightly: only THIS exact tool
+			// (never any other ParksTurn tool, e.g. a nested delegate's
+			// parked child), only when Layer 1 actually offered the ask
+			// door THIS request (goalForce.layer1 && goalForce.askOffered —
+			// a stray unforced AskUserQuestion call on some unrelated turn
+			// must never consume a goal's budget it has no relation to),
+			// and only on the genuine success path (parked==true — a
+			// refused/errored ask attempt asked nothing and must not spend
+			// the round, spec S-14/E6).
+			if parked && goalForce.layer1 && goalForce.askOffered && toolName == tools.AskUserQuestionToolName {
+				al.bumpGoalQuestionRoundsUsed(goalForce)
+			}
 
 			skipReason := ""
 			skipMessage := ""

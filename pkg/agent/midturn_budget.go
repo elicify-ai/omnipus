@@ -141,6 +141,15 @@ func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 	add(al.buildScratchpadNote(ts.agent.ID))
 	add(buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 	add(buildWebRenderingNote(ts.channel))
+	// ADR-081 D4 (spec FR-011): the goal rubric note. The ADR-078 D2
+	// buildGoalPendingNote entry that used to sit here is gone in full
+	// (pkg/agent/goal_pending_note.go, deleted — ADR-081 D9); this is its
+	// replacement in the SAME per-turn note enumeration. See
+	// goalRubricNoteForBudget's own doc comment for why this deliberately
+	// does not gate on "iteration==1 only" the way the real injection call
+	// site (runTurn) does — a conservative over-estimate on later
+	// iterations, never an under-estimate.
+	add(al.goalRubricNoteForBudget(ts))
 	return tokens
 }
 

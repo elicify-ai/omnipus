@@ -682,15 +682,6 @@ func diffGoalAmendment(current, proposed *CompiledGoal) *GoalAmendment {
 	return amd
 }
 
-// diffGoalAmendment is temporarily callerless in this wave: its last
-// production caller (proposeGoalAmendment) was deleted by ADR-081 D1/D9
-// (the pending-amendment-confirm ritual it served no longer exists). It is
-// NOT dead code — the ADR's survivor list keeps it explicitly: it is wired
-// into set_goal in wave 2 (ADR-081 D2 "mode: update"), which computes its
-// change summary via this exact differ. Guard kept only to document intent;
-// remove once wave 2 lands the real call site.
-var _ = diffGoalAmendment // wired into set_goal in wave 2 (ADR-081 D2)
-
 // diffCriteriaSet is the shared added/changed/dropped set-diff (by
 // normalized text + sameShape) that diffGoalAmendment runs once for
 // Criteria and once for DoD — a single implementation so the two ladders
