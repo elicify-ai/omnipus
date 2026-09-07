@@ -45,6 +45,23 @@ const askUserQuestionCard = (page: import('@playwright/test').Page) =>
  * (e.g. AskUserQuestionCard's own `data-testid="ask-user-cancel"` button),
  * so it is deliberately NOT included in this page-wide sweep.
  */
+/**
+ * Ends the current turn without racing a live model's wall-clock: click Stop
+ * if it is still showing, then wait for streaming to be over. Both halves are
+ * bounded and neither depends on how long the model would have taken — the
+ * flake this replaces (CI 34123445336) was a 120s wait for a real goal turn
+ * that legitimately does file writes and several tool calls.
+ */
+async function endTurnDeterministically(page: import('@playwright/test').Page) {
+  const stop = page.locator('[data-testid="stop-btn"]')
+  if (await stop.isVisible().catch(() => false)) {
+    await stop.click().catch(() => {
+      /* already settled between the check and the click — nothing to stop */
+    })
+  }
+  await expect(stop).toBeHidden({ timeout: 30_000 })
+}
+
 async function assertNoGoalConfirmRow(page: import('@playwright/test').Page) {
   await expect(page.getByRole('button', { name: /^Confirm$/i })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Amend$/i })).toHaveCount(0)
@@ -87,26 +104,23 @@ test(
     // including the start of streaming.
     await assertNoGoalConfirmRow(page)
 
-    // Wait for the turn to settle (streaming ends). A vague/ambiguous case
-    // could park on a question card instead of finishing outright — poll
-    // for either outcome rather than hard-requiring the stop button to
-    // disappear, since a parked turn also stops streaming.
-    await expect(stopButton(page)).toBeHidden({ timeout: 120_000 })
+    // FLAKE FIX (CI run 34123445336: failed twice on a 120s full-turn wait,
+    // passed on retry #2 — this repo fails flaky tests, correctly). Do NOT
+    // wait for the whole turn to settle: a live-model goal turn does real
+    // work (file writes, several tool calls) and its wall-clock is
+    // unbounded-in-practice, while NONE of this test's invariants need a
+    // finished turn. The forced first move (D3) is what this test proves,
+    // and it lands EARLY — the very first model request must call set_goal
+    // or AskUserQuestion — so wait for that door instead, then end the turn
+    // deterministically ourselves rather than racing the model to the exit.
+    const cardAppeared = await Promise.race([
+      goalEchoCard(page).waitFor({ state: 'visible', timeout: 90_000 }).then(() => true),
+      askUserQuestionCard(page).waitFor({ state: 'visible', timeout: 90_000 }).then(() => false),
+    ]).catch(() => false)
 
     // Whichever door the model took, the confirm-gate row still must never
     // have rendered.
     await assertNoGoalConfirmRow(page)
-
-    // Resilient, non-fatal wait: the record card is model-dependent (it only
-    // renders once/if the agent has registered via set_goal — the OTHER
-    // door, asking a clarifying question first, is legitimate and is NOT
-    // asserted against per the spec's holdout H-2). Give it a bounded
-    // window; if it never shows up, the ask-user-question door was taken
-    // instead, which is equally valid and asserted separately below.
-    const cardAppeared = await goalEchoCard(page)
-      .waitFor({ state: 'visible', timeout: 20_000 })
-      .then(() => true)
-      .catch(() => false)
 
     if (cardAppeared) {
       const card = goalEchoCard(page)
@@ -135,13 +149,22 @@ test(
       expect(asked || true).toBeTruthy() // door choice is model-dependent (holdout H-2) — not asserted either way
     }
 
+    // End the in-flight turn deterministically instead of waiting out a
+    // live model's real work (see the FLAKE FIX note above). Stop is
+    // idempotent-safe: if the turn already settled on its own, the button
+    // is simply gone.
+    await endTurnDeterministically(page)
+    await assertNoGoalConfirmRow(page)
+
     // A steering message must never trigger an approval prompt — ordinary
-    // chat is the entire steering mechanism (ADR-081 D5).
+    // chat is the entire steering mechanism (ADR-081 D5). Same discipline:
+    // assert streaming STARTED and no approval surfaced, then stop — never
+    // wait for the model to finish.
     await input.fill('also make the background dark')
     await input.press('Enter')
     await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
     await assertNoGoalConfirmRow(page)
-    await expect(stopButton(page)).toBeHidden({ timeout: 120_000 })
+    await endTurnDeterministically(page)
     await assertNoGoalConfirmRow(page)
   },
 )
