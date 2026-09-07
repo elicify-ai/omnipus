@@ -138,9 +138,18 @@ type Stats struct {
 	// kind, empty if none has arrived yet.
 	VideoCodec string
 	AudioCodec string
-	// VideoPackets/AudioPackets are cumulative RTP packets forwarded from
-	// ingest to the shared local track since the Session was created (counts
-	// survive ingest replacement; they do not reset).
+	// VideoPackets/AudioPackets count successful shared-track WriteRTP calls
+	// since Session creation. An aggregate failure may follow successful
+	// delivery to some viewers; zero bound viewers can also return success.
+	// These cumulative counters are not proof of receiver presentation.
 	VideoPackets int64
 	AudioPackets int64
+	// Received counters count parsed packets accepted from the current ingest
+	// owner before writing to viewers; failures count aggregate writer errors.
+	VideoReceivedPackets int64
+	AudioReceivedPackets int64
+	VideoForwardFailures int64
+	AudioForwardFailures int64
+	// IngestBindingToken belongs to the installed peer, not a pending offer.
+	IngestBindingToken uint64
 }

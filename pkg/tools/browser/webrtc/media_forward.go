@@ -18,6 +18,8 @@ type mediaForwarder struct {
 	feed               int64
 	seq                seqRewriter
 	lastSeq            atomic.Uint32
+	receivedPackets    atomic.Int64
+	forwardFailures    atomic.Int64
 	clockRate          uint32
 	haveTimestamp      bool
 	lastTimestamp      uint32
@@ -51,6 +53,8 @@ func (f *mediaForwarder) write(feed int64, pkt *rtp.Packet, now time.Time, write
 	if feed == 0 || f.feed != feed {
 		return false, nil
 	}
+	// Source progress is independent of an individual viewer's egress.
+	f.receivedPackets.Add(1)
 	if !f.offsetReady {
 		f.timestampOffset = 0
 		if f.haveTimestamp {
@@ -80,6 +84,9 @@ func (f *mediaForwarder) write(feed int64, pkt *rtp.Packet, now time.Time, write
 		f.haveTimestamp = true
 	}
 	err := write(pkt)
+	if err != nil {
+		f.forwardFailures.Add(1)
+	}
 	if err == nil {
 		if !f.haveForwarded {
 			// Retain the first mapped timestamp as a floor, even if an
