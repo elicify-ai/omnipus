@@ -119,15 +119,22 @@ type MetaPatch struct {
 	// (FR-110/FR-113). Pass an empty string to CLEAR it (paired with clearing
 	// GoalCondition on /goal clear, FR-114).
 	GoalCriteriaJSON *string
-	// GoalPendingJSON is the proposed CompiledGoal during a re-statement
-	// amendment (N-6/D11). Pass an empty string to CLEAR it (on confirm/clear).
-	GoalPendingJSON *string
 	// PendingAskJSON is the AskUserQuestion durable pending set (see
 	// SessionMeta.PendingAskJSON). Pass an empty string to CLEAR it.
 	PendingAskJSON *string
-	// GoalClarificationJSON is the ADR-074 D4a pending-clarification record
-	// (US-3 S7). Pass an empty string to CLEAR it (on answer/clear/restate).
-	GoalClarificationJSON *string
+	// GoalQuestionRoundsUsed is ADR-081 FR-010's persisted question-round
+	// budget counter (see SessionMeta.GoalQuestionRoundsUsed).
+	GoalQuestionRoundsUsed *int
+	// GoalZeroOutputPushes is ADR-081 FR-014b's persisted bounded-push streak
+	// (see SessionMeta.GoalZeroOutputPushes).
+	GoalZeroOutputPushes *int
+	// GoalRouteChannel/GoalRouteChatID/GoalRouteSessionKey/GoalRouteAgentID
+	// are ADR-081 FR-031's persisted goal routing (see the matching
+	// SessionMeta fields' doc comment).
+	GoalRouteChannel    *string
+	GoalRouteChatID     *string
+	GoalRouteSessionKey *string
+	GoalRouteAgentID    *string
 
 	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
 	// callers that want to CLEAR a loop must pass an empty-string LoopMode
@@ -897,16 +904,32 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		meta.GoalCriteriaJSON = *patch.GoalCriteriaJSON
 		goalTouched = true
 	}
-	if patch.GoalPendingJSON != nil {
-		meta.GoalPendingJSON = *patch.GoalPendingJSON
-		goalTouched = true
-	}
 	if patch.PendingAskJSON != nil {
 		meta.PendingAskJSON = *patch.PendingAskJSON
 		goalTouched = true
 	}
-	if patch.GoalClarificationJSON != nil {
-		meta.GoalClarificationJSON = *patch.GoalClarificationJSON
+	if patch.GoalQuestionRoundsUsed != nil {
+		meta.GoalQuestionRoundsUsed = *patch.GoalQuestionRoundsUsed
+		goalTouched = true
+	}
+	if patch.GoalZeroOutputPushes != nil {
+		meta.GoalZeroOutputPushes = *patch.GoalZeroOutputPushes
+		goalTouched = true
+	}
+	if patch.GoalRouteChannel != nil {
+		meta.GoalRouteChannel = *patch.GoalRouteChannel
+		goalTouched = true
+	}
+	if patch.GoalRouteChatID != nil {
+		meta.GoalRouteChatID = *patch.GoalRouteChatID
+		goalTouched = true
+	}
+	if patch.GoalRouteSessionKey != nil {
+		meta.GoalRouteSessionKey = *patch.GoalRouteSessionKey
+		goalTouched = true
+	}
+	if patch.GoalRouteAgentID != nil {
+		meta.GoalRouteAgentID = *patch.GoalRouteAgentID
 		goalTouched = true
 	}
 	if patch.LoopMode != nil {

@@ -58,13 +58,11 @@ func withShortGoalJudgeTimeout(t *testing.T, d time.Duration) {
 func setGoalRoundsArmed(t *testing.T, store *session.UnifiedStore, sid, condition string, roundsUsed int, lastActivity time.Time) {
 	t.Helper()
 	empty := ""
-	zero := ""
 	maxRounds := 5
 	past := lastActivity.UTC().Format(time.RFC3339)
 	if err := store.SetMeta(sid, session.MetaPatch{
 		GoalCondition:      &condition,
 		GoalCriteriaJSON:   &empty,
-		GoalPendingJSON:    &zero,
 		GoalRoundsUsed:     &roundsUsed,
 		GoalMaxRounds:      &maxRounds,
 		GoalLastActivityAt: &past,

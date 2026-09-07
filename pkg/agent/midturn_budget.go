@@ -107,21 +107,22 @@ func absoluteShareTokens(cs config.ContextSettings) int {
 
 // ephemeralSystemNoteTokens estimates the token cost of the ephemeral
 // system notes runTurn injects into callMessages before the request that is
-// ACTUALLY sent to the provider (C1): the scratchpad note, the ADR-078 D2
-// pending-goal note (buildGoalPendingNote — only while a fresh goal awaits
-// confirmation), the workspace instructions note (AGENT.md — up to 262,144
-// bytes, ~104,857 estimator tokens, with no budget-aware cap), and the
-// web-rendering note (loop.go's callMessages assembly — buildScratchpadNote
-// / injectGoalPendingNote / injectWorkspaceInstructions /
-// injectWebRenderingNote, all called on `repairedHistory`, never on the
-// `messages` slice either budget site measures). `messages` never carries
-// these notes — each injector returns a FRESH slice built strictly AFTER
-// both budget checks run — so requestTokens/sumRequestMessageTokens alone
-// under-measure the real request by however large AGENT.md is. A large
-// AGENT.md (up to the 256 KB cap) can by itself push the assembled request
-// tens of thousands of tokens past what either check saw, producing a
-// provider context_too_long on a window the engine believed it was
-// protecting — exactly the ADR's §1 incident class.
+// ACTUALLY sent to the provider (C1): the scratchpad note, the workspace
+// instructions note (AGENT.md — up to 262,144 bytes, ~104,857 estimator
+// tokens, with no budget-aware cap), and the web-rendering note (loop.go's
+// callMessages assembly — buildScratchpadNote / injectWorkspaceInstructions
+// / injectWebRenderingNote, all called on `repairedHistory`, never on the
+// `messages` slice either budget site measures). ADR-081 D9 retires the
+// ADR-078 D2 pending-goal note (buildGoalPendingNote/injectGoalPendingNote,
+// pkg/agent/goal_pending_note.go — deleted in full: instant activation
+// leaves no pending state for it to describe) — it is no longer part of this
+// estimate. `messages` never carries these notes — each injector returns a
+// FRESH slice built strictly AFTER both budget checks run — so
+// requestTokens/sumRequestMessageTokens alone under-measure the real request
+// by however large AGENT.md is. A large AGENT.md (up to the 256 KB cap) can
+// by itself push the assembled request tens of thousands of tokens past what
+// either check saw, producing a provider context_too_long on a window the
+// engine believed it was protecting — exactly the ADR's §1 incident class.
 //
 // The fourth ephemeral note — the compressed tool manifest — is charged
 // separately (manifestNoteTokens below, mid-turn only): the pre-turn site
@@ -138,7 +139,6 @@ func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 		}
 	}
 	add(al.buildScratchpadNote(ts.agent.ID))
-	add(buildGoalPendingNote(ts.opts.TranscriptStore, ts.opts.TranscriptSessionID))
 	add(buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 	add(buildWebRenderingNote(ts.channel))
 	return tokens
