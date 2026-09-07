@@ -73,6 +73,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -534,18 +535,22 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 	return al.sessionWindowText(store, goalSessionID, budget, nil)
 }
 
-// buildGoalCompileMessages assembles the compile call's fresh context: a
-// system message carrying the compile contract (+ the define-goal quality
-// bar when seeded, + ADR-080 D-CONTEXT2's AUTHORITATIVE workspace/project
-// instructions when resolvable), and one user message carrying ADR-079 D1's
-// UNTRUSTED session-transcript window (when non-empty) followed by the
-// intent's prose remainder (plus, on a resumed compile, the clarifying
-// question and the user's answer; plus, on a repair call, the feasibility-
-// gate rejection to repair around). sessionWindow and workspaceInstructions
-// are both "" on a byte-identical no-context call (no session / no
-// resolvable workspace) — every heading is conditionally emitted so a
-// missing feed never changes the prompt shape.
-func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions string) []providers.Message {
+// buildGoalRubricNote returns the compile contract's rubric text alone: the
+// clarity gate, the checklist-authoring guidance (judgment types, the
+// 4-layer DoD derivation ladder), and the seeded define-goal skill content
+// when present — WITHOUT ADR-079 D1's session-transcript window and WITHOUT
+// ADR-080 D-CONTEXT2's workspace/project instructions (ADR-081 D4, spec
+// FR-011). This is the SAME contract text the front-path compile call used
+// to assemble inline; it is now a single reusable builder so
+// buildGoalCompileMessages (below, D7's fallback-only compile) and loop.go's
+// D3/D4 turn-scoped rubric injection (the WORKING agent's own first-move
+// guidance) can never drift apart on what the quality bar says. The window
+// and workspace-instructions feeds are deliberately excluded: loop.go's
+// injection call site already carries the session's own native message
+// history and already injects the turn's own workspace instructions
+// (injectWorkspaceInstructions) on every turn — re-including either here
+// would double-inject.
+func buildGoalRubricNote() string {
 	var sys strings.Builder
 	sys.WriteString(
 		"You compile a user's goal into a restated statement, judgment-typed acceptance criteria, and a\n" +
@@ -614,6 +619,65 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 		sys.WriteString(bar)
 		sys.WriteString("\n")
 	}
+	return sys.String()
+}
+
+// goalRubricChannelAddendum extends buildGoalRubricNote's text on a
+// non-webchat origin (ADR-081 D3 [G-B2] / D4): AskUserQuestion is
+// permanently web-only (pkg/tools/ask_user_question.go), so a channel-origin
+// goal turn gets the SAME rubric plus this one line telling it to ask
+// conversationally instead of reaching for a card that would refuse.
+const goalRubricChannelAddendum = "\n\nAskUserQuestion is unavailable on this channel (it is permanently " +
+	"web-app only) — if you are not confident enough to register the record now, ask your clarifying " +
+	"question conversationally, in plain language, as your normal reply, and register the record once " +
+	"the operator answers.\n"
+
+// buildGoalRubricInjectionNote returns the ADR-081 D4 turn-scoped system
+// note loop.go injects on a goal turn: "" when holds is false (the D3 base
+// predicate — active goal AND an empty compiled record — does not hold this
+// request), buildGoalRubricNote() otherwise, with goalRubricChannelAddendum
+// appended when the turn did not originate on the web (isWebchat false).
+func buildGoalRubricInjectionNote(holds, isWebchat bool) string {
+	if !holds {
+		return ""
+	}
+	note := buildGoalRubricNote()
+	if !isWebchat {
+		note += goalRubricChannelAddendum
+	}
+	return note
+}
+
+// injectGoalRubricNote inserts note as a "system" role message at index 1 of
+// msgs — mirrors injectWebRenderingNote/injectWorkspaceInstructions exactly;
+// its position relative to the other ephemeral system notes is not
+// behaviorally significant. Returns msgs unchanged when note == "" or
+// len(msgs) == 0.
+func injectGoalRubricNote(msgs []providers.Message, note string) []providers.Message {
+	if note == "" || len(msgs) == 0 {
+		return msgs
+	}
+	out := make([]providers.Message, 0, len(msgs)+1)
+	out = append(out, msgs[0])
+	out = append(out, providers.Message{Role: "system", Content: note})
+	out = append(out, msgs[1:]...)
+	return out
+}
+
+// buildGoalCompileMessages assembles the compile call's fresh context: a
+// system message carrying the compile contract (buildGoalRubricNote) plus
+// ADR-080 D-CONTEXT2's AUTHORITATIVE workspace/project instructions when
+// resolvable, and one user message carrying ADR-079 D1's UNTRUSTED
+// session-transcript window (when non-empty) followed by the intent's prose
+// remainder (plus, on a resumed compile, the clarifying question and the
+// user's answer; plus, on a repair call, the feasibility-gate rejection to
+// repair around). sessionWindow and workspaceInstructions are both "" on a
+// byte-identical no-context call (no session / no resolvable workspace) —
+// every heading is conditionally emitted so a missing feed never changes the
+// prompt shape.
+func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions string) []providers.Message {
+	var sys strings.Builder
+	sys.WriteString(buildGoalRubricNote())
 	if workspaceInstructions != "" {
 		// ADR-080 D-CONTEXT2: AUTHORITATIVE trusted context (the operator's own
 		// workspace/project instructions) — distinct from the UNTRUSTED session
@@ -662,21 +726,41 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 	}
 }
 
-// goalCompileLLMCall runs one bounded compile call on the goal-bearing
-// agent's OWN provider/model (read together under the instance mutex so a
-// concurrent model switch is never observed torn — the ADR-032 model-quad
-// rule). Cost lands on the agent's own provider credentials; cancellation
-// follows the turn ctx.
-func goalCompileLLMCall(ctx context.Context, agentInst *AgentInstance, messages []providers.Message) (string, error) {
+// goalCompileLLMCall runs one bounded compile call (ADR-081 D7, spec
+// FR-018). After the front-path compile's deletion this function is
+// reachable ONLY from the D6c nudge-ladder engine fallback
+// (goal_loop.go, outside this file's scope) via compileGoalIntentLLM below,
+// so it resolves its provider/model from the JUDGE SYSTEM AGENT — the SAME
+// resolution runVerifierAdjudication uses (verifier_adjudication.go,
+// al.GetRegistry().GetAgent(string(coreagent.IDJudge))) — rather than the
+// goal-bearing (chat) agent it used to read Provider/Model from directly.
+// Judge-profile work (structured extraction, no creativity, bounded output)
+// belongs on a fast model; one knob (the Judge agent's own model setting)
+// now governs every remaining engine-invoked goal LLM call. agentInst still
+// identifies the calling (goal-bearing) agent for the nil-instance guard its
+// caller relies on (compileGoalIntentLLM's own EC-4 fallback branch) — it is
+// no longer the provider/model source. A nil/unresolvable Judge instance or
+// provider degrades to compileGoalIntentLLM's existing deterministic-parser
+// fallback (via this function's returned error) and logs a WARN naming the
+// degradation, never a silent fall-through.
+func (al *AgentLoop) goalCompileLLMCall(ctx context.Context, agentInst *AgentInstance, messages []providers.Message) (string, error) {
 	if agentInst == nil {
 		return "", errors.New("no agent instance for goal compile")
 	}
-	agentInst.mu.RLock()
-	provider := agentInst.Provider
-	model := agentInst.Model
-	agentInst.mu.RUnlock()
+	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
+	if !ok || judgeInst == nil {
+		logger.WarnCF("agent", "goal fallback compile degraded: judge agent has no provider",
+			map[string]any{"component": "goal", "reason": "judge_not_configured"})
+		return "", errors.New("judge system agent is not registered — goal fallback compile degraded")
+	}
+	judgeInst.mu.RLock()
+	provider := judgeInst.Provider
+	model := judgeInst.Model
+	judgeInst.mu.RUnlock()
 	if provider == nil {
-		return "", errors.New("goal-bearing agent has no provider")
+		logger.WarnCF("agent", "goal fallback compile degraded: judge agent has no provider",
+			map[string]any{"component": "goal", "reason": "judge_no_provider"})
+		return "", errors.New("judge system agent has no provider — goal fallback compile degraded")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, goalCompileCallTimeout)
 	defer cancel()
@@ -851,7 +935,7 @@ func (al *AgentLoop) compileGoalIntentLLM(
 	// One compile call, then (on a feasibility veto) exactly one repair call.
 	repairReason := ""
 	for call := 0; call < 2; call++ {
-		content, err := goalCompileLLMCall(ctx, agentInst,
+		content, err := al.goalCompileLLMCall(ctx, agentInst,
 			buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions))
 		if err != nil {
 			return fallback("compile call failed: " + err.Error())
