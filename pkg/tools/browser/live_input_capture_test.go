@@ -34,6 +34,7 @@ func TestLiveInputRequiresCurrentCommittedCapture(t *testing.T) {
 			lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
 			cs, _ := newRecoveryTestSession(t, &fakeRelay{})
 			lv.mgr.capture = cs
+			lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{{ctx: lv.tabCtx, targetID: "target-a"}}}
 			frame, err := cs.BeginFrameTransition("target-a", 800, 600, 1)
 			if err != nil {
 				t.Fatal(err)
@@ -79,6 +80,7 @@ func TestLiveInputCaptureClaimIsCheckedAfterQueueWait(t *testing.T) {
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls.Add(1); return nil })
 	cs, _ := newRecoveryTestSession(t, &fakeRelay{})
 	lv.mgr.capture = cs
+	lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{{ctx: lv.tabCtx, targetID: "target-a"}}}
 	frame, err := cs.BeginFrameTransition("target-a", 800, 600, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +124,7 @@ func TestLiveInputOwnedReleaseSurvivesCaptureTransition(t *testing.T) {
 	})
 	cs, _ := newRecoveryTestSession(t, &fakeRelay{})
 	lv.mgr.capture = cs
+	lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{{ctx: lv.tabCtx, targetID: "target-a"}}}
 	frame, err := cs.BeginFrameTransition("target-a", 800, 600, 1)
 	if err != nil {
 		t.Fatal(err)
