@@ -102,25 +102,21 @@ var (
 	)
 )
 
-// The two ADR-067 KnowledgeSearchResponse members, same pattern and same
-// reason: `hits` is an array of KnowledgeSearchHit, `incompleteness` is a
-// single KnowledgeSearchIncompleteness, and both arrive inlined because their
-// schemas declare `additionalProperties: false`.
+// knowledgeOutlineHeadingsInline — the ADR-067 KnowledgeOutline.headings
+// member arrives inlined because the schema declares `additionalProperties:
+// false`.
 //
-// Without these, a handler building a search response has to spell the whole
+// Without it, a handler building an outline response has to spell the whole
 // anonymous struct out at every construction site — which is a hand-written
 // copy of a contract type in everything but name, and would drift silently the
 // day a field is added to the schema.
-var (
-	knowledgeSearchHitsInline = regexp.MustCompile(
-		`(?s)(Hits)\s+\[\]struct\s*\{[^{}]*?json:"excerpt_unavailable,omitempty"[^{}]*?\}\s*(` + "`json:\"hits\"`" + `)`,
-	)
-	knowledgeSearchIncompletenessInline = regexp.MustCompile(
-		`(?s)(Incompleteness)\s+struct\s*\{[^{}]*?json:"total_known"[^{}]*?\}\s*(` + "`json:\"incompleteness\"`" + `)`,
-	)
-	knowledgeOutlineHeadingsInline = regexp.MustCompile(
-		`(?s)(Headings)\s+\[\]struct\s*\{[^{}]*?json:"slug"[^{}]*?\}\s*(` + "`json:\"headings\"`" + `)`,
-	)
+//
+// (The sibling KnowledgeSearchResponse.hits/incompleteness rules that used to
+// sit beside this one were removed with the schema itself — US-5/ADR-081
+// retired KnowledgeSearchRequest/Response/Hit/Incompleteness; there is
+// nothing left for them to rewrite.)
+var knowledgeOutlineHeadingsInline = regexp.MustCompile(
+	`(?s)(Headings)\s+\[\]struct\s*\{[^{}]*?json:"slug"[^{}]*?\}\s*(` + "`json:\"headings\"`" + `)`,
 )
 
 // memberConfigsHeartbeatInline matches the inline anonymous heartbeat struct
@@ -197,16 +193,6 @@ var rewriteRules = []rewriteRule{
 		name:    "knowledge_graph_skipped",
 		inline:  knowledgeGraphSkippedInline,
 		rewrite: "$1 []KnowledgeGraphSkip $2",
-	},
-	{
-		name:    "knowledge_search_hits",
-		inline:  knowledgeSearchHitsInline,
-		rewrite: "$1 []KnowledgeSearchHit $2",
-	},
-	{
-		name:    "knowledge_search_incompleteness",
-		inline:  knowledgeSearchIncompletenessInline,
-		rewrite: "$1 KnowledgeSearchIncompleteness $2",
 	},
 	{
 		name:    "knowledge_outline_headings",

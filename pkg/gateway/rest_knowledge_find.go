@@ -7,8 +7,10 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -84,13 +86,18 @@ func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// FR-037's principle: a limit above the cap is CLAMPED, never rejected.
-	limit := vaultSearchDefaultLimit
+	// FR-037's principle: a limit above the cap is CLAMPED, never rejected —
+	// and the clamp is DISCLOSED (MV-9's limit_clamped/limit_requested), never
+	// silent.
+	requestedLimit := vaultSearchDefaultLimit
 	if req.Limit != nil && *req.Limit > 0 {
-		limit = *req.Limit
+		requestedLimit = *req.Limit
 	}
+	limit := requestedLimit
+	limitClamped := false
 	if limit > vaultSearchMaxLimit {
 		limit = vaultSearchMaxLimit
+		limitClamped = true
 	}
 
 	// US-9/FR-053: an out-of-scope collection is an EMPTY, complete answer, and
@@ -115,26 +122,41 @@ func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	jsonOK(w, buildVaultSearchResult(r.Context(), env, col.Root, req.CollectionId, query, limit))
+	jsonOK(w, buildVaultSearchResult(r.Context(), env, col.Root, req.CollectionId, query, limit, requestedLimit, limitClamped))
 }
+
+// vaultSearchCompleteStatement is the render-ready sentence for a search that
+// covered the whole vault with nothing to disclose — the out-of-scope/empty
+// base case, and the fallback when nothing more specific applies. It is
+// deliberately the SAME sentence a genuinely empty, fully-indexed vault gets
+// (US-9/FR-053: an out-of-scope collection_id must stay indistinguishable
+// from an empty one, and that includes the prose, not only the hit arrays).
+const vaultSearchCompleteStatement = "Searched the whole of this knowledge base; its index was complete at query time."
 
 // emptyVaultSearchResponse is the empty-but-honest base every answer builds on:
 // every hit array is a real empty slice (never nil, which marshals to null),
 // and the verdict is complete — the empty set IS the whole of what this scope
-// can see.
+// can see. Attachments is sent as [] too (MV-9: the handler always sends it;
+// it is wire-optional only for additive-compat with older clients).
 func emptyVaultSearchResponse(collectionID string) gen.VaultSearchResponse {
+	statement := vaultSearchCompleteStatement
 	return gen.VaultSearchResponse{
 		CollectionId: collectionID,
 		Complete:     true,
 		Notes:        []gen.VaultSearchNoteHit{},
 		Records:      []gen.VaultSearchRecordHit{},
 		Views:        []gen.VaultSearchViewHit{},
+		Attachments:  &[]gen.VaultSearchAttachmentHit{},
+		Statement:    &statement,
 	}
 }
 
-// buildVaultSearchResult runs the three searches over one opened environment
-// and merges their completeness into one verdict.
-func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collectionRoot, collectionID, query string, limit int) gen.VaultSearchResponse {
+// buildVaultSearchResult runs the four searches (records, notes, views,
+// attachments) over one opened environment and merges their completeness into
+// one verdict, then attaches the MV-9 honesty fields: the notes
+// searched/total-known coverage pair, the notes-capped-at-limit flag, the
+// limit-clamp disclosure and the handler-authored statement.
+func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collectionRoot, collectionID, query string, limit, requestedLimit int, limitClamped bool) gen.VaultSearchResponse {
 	out := emptyVaultSearchResponse(collectionID)
 
 	// RECORDS FIRST — words scoped to each declared record type in turn, so the
@@ -170,6 +192,15 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 			}
 			out.Notes = append(out.Notes, vaultSearchNoteHit(collectionRoot, &noteResp.Rows[i], query))
 		}
+		// A present NextCursor is the engine's own "there is more beyond this
+		// page" signal (VaultFindResponse.next_cursor: absent means last page).
+		// This call always asks with offset 0 (RenderRows, no cursor), so its
+		// presence means the note group was cut at `limit` — the count is a
+		// lower bound, and the UI renders "N+" rather than an exact total.
+		if noteResp.NextCursor != nil {
+			capped := true
+			out.NotesCappedAtLimit = &capped
+		}
 	}
 	mergeVaultSearchCompleteness(&out, noteResp, noteReady)
 
@@ -177,7 +208,127 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 	// is answered whatever the text index's state.
 	out.Views = append(out.Views, vaultSearchViewHits(env, query, limit)...)
 
+	// ATTACHMENTS (ADR-081 CRIT-001 parity) — words over kind=attachment,
+	// matched by filename. This is the kind textOnlyServable never covers
+	// (find.go:1066-1077 gates it to kind=note only), so it always routes
+	// through the properties index: on a build without one (records_no_sqlite,
+	// mipsle, netbsd, freebsd/arm) the engine refuses by name rather than
+	// silently answering empty, and that refusal is surfaced here as
+	// complete:false with the engine's own reason — never a bare empty group
+	// (MV-9's platform carve-out).
+	attHits, attComplete, attReason := vaultSearchAttachments(ctx, env, query, limit)
+	out.Attachments = &attHits
+	if !attComplete {
+		out.Complete = false
+		if out.CompleteReason == nil && attReason != "" {
+			out.CompleteReason = &attReason
+		}
+	}
+
+	// HONESTY (MV-9): notes_searched / notes_total_known, sourced from the
+	// SAME text-index freshness surface complete_reason's own coverage
+	// warnings draw from (knowledgefind.TextFreshnessReporter.IndexFreshness,
+	// find.go:683-720/772-808) — never a number this handler invents. Both
+	// values arrive from ONE walk together, so they are set together; when the
+	// walk could not be trusted (ScannedFiles == 0, the same threshold the
+	// engine's own coverage checks use) the denominator is OMITTED rather than
+	// reported as zero.
+	if fr, ok := env.Deps.Text.(knowledgefind.TextFreshnessReporter); ok {
+		if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
+			searched := fresh.IndexedFiles
+			total := fresh.ScannedFiles
+			out.NotesSearched = &searched
+			out.NotesTotalKnown = &total
+		}
+	}
+
+	// LIMIT CLAMP DISCLOSURE (MV-9/FR-037): the handler clamps a request above
+	// knowledgefind.MaxLimit to that cap; the clamp is reported, never silent.
+	if limitClamped {
+		clamped := true
+		out.LimitClamped = &clamped
+		requested := requestedLimit
+		out.LimitRequested = &requested
+	}
+
+	statement := vaultSearchStatement(out)
+	out.Statement = &statement
+
 	return out
+}
+
+// vaultSearchAttachments runs the attachment-kind Find and builds the
+// Attachments group. It returns the hits, whether the search covered the
+// whole collection, and — when not — the engine's own reason.
+func vaultSearchAttachments(ctx context.Context, env vaultprops.FindEnv, query string, limit int) ([]gen.VaultSearchAttachmentHit, bool, string) {
+	out := []gen.VaultSearchAttachmentHit{}
+	resp, ready := runVaultSearchFind(ctx, env, query, "", gen.VaultFindRequestKindAttachment, limit)
+	if !ready {
+		return out, false, vaultSearchIncompleteReason(resp, ready)
+	}
+	for i := range resp.Rows {
+		out = append(out, vaultSearchAttachmentHit(&resp.Rows[i]))
+	}
+	if !resp.Complete {
+		return out, false, vaultSearchIncompleteReason(resp, ready)
+	}
+	return out, true, ""
+}
+
+// vaultSearchAttachmentHit builds one attachment hit. name is the basename of
+// the (forward-slash, collection-relative) path — what the query matched
+// against — computed rather than re-read, since attachment bytes are never
+// opened by this surface (pkg/knowledge/index.go::indexAttachment records
+// filename and path only).
+func vaultSearchAttachmentHit(row *gen.VaultFindRow) gen.VaultSearchAttachmentHit {
+	return gen.VaultSearchAttachmentHit{Path: row.Path, Name: path.Base(row.Path)}
+}
+
+// vaultSearchStatement composes the server-authored, render-ready coverage
+// sentence (MV-9's `statement`), mirroring the retired surface's
+// knowledgeStatement (rest_knowledge.go, deleted by US-5): a coverage clause
+// first, then any clamp disclosure appended.
+//
+// The coverage clause prefers the notes_searched/notes_total_known numbers
+// when known — "Searched X of Y notes known to the index." or, when the total
+// itself is not known, "Searched X notes so far." (never inventing a
+// denominator, FR-036) — and otherwise falls back to the merged
+// complete/complete_reason verdict.
+func vaultSearchStatement(out gen.VaultSearchResponse) string {
+	parts := make([]string, 0, 3)
+
+	switch {
+	case out.NotesSearched != nil && out.NotesTotalKnown != nil:
+		parts = append(parts, fmt.Sprintf("Searched %d of %d notes known to the index.",
+			*out.NotesSearched, *out.NotesTotalKnown))
+	case out.NotesSearched != nil:
+		parts = append(parts, fmt.Sprintf("Searched %d notes so far.", *out.NotesSearched))
+	case out.Complete:
+		parts = append(parts, vaultSearchCompleteStatement)
+	}
+
+	if !out.Complete {
+		if out.CompleteReason != nil && strings.TrimSpace(*out.CompleteReason) != "" {
+			parts = append(parts, strings.TrimSpace(*out.CompleteReason))
+		} else if len(parts) == 0 {
+			parts = append(parts, "This knowledge base's index is not fully ready, so these results may be incomplete.")
+		}
+	}
+
+	if out.LimitClamped != nil && *out.LimitClamped {
+		requested := 0
+		if out.LimitRequested != nil {
+			requested = *out.LimitRequested
+		}
+		parts = append(parts, fmt.Sprintf(
+			"The requested result count of %d was clamped to the maximum of %d.",
+			requested, vaultSearchMaxLimit))
+	}
+
+	if len(parts) == 0 {
+		parts = append(parts, vaultSearchCompleteStatement)
+	}
+	return strings.Join(parts, " ")
 }
 
 // runVaultSearchFind runs one Find and separates "the engine could not search
@@ -278,12 +429,19 @@ func mergeVaultSearchCompleteness(out *gen.VaultSearchResponse, resp gen.VaultFi
 
 // vaultSearchIncompleteReason names why a verdict is not complete, preferring
 // the engine's own sentence so the UI never has to invent one.
+//
+// Problems[0].Reason is checked BEFORE CompleteReason: finishVerdict
+// (pkg/records/knowledgefind/assemble.go) writes CompleteReason as a terse
+// summary — "N problem(s) reported" — while the actual, informative sentence
+// (the platform-naming refusal, or the "reflects N of M files" coverage
+// warning) lives in the problem itself. Preferring the summary over the
+// sentence it summarizes would surface the less useful of the two.
 func vaultSearchIncompleteReason(resp gen.VaultFindResponse, ready bool) string {
+	if len(resp.Problems) > 0 && strings.TrimSpace(resp.Problems[0].Reason) != "" {
+		return resp.Problems[0].Reason
+	}
 	if resp.CompleteReason != nil && strings.TrimSpace(*resp.CompleteReason) != "" {
 		return *resp.CompleteReason
-	}
-	if !ready && len(resp.Problems) > 0 && strings.TrimSpace(resp.Problems[0].Reason) != "" {
-		return resp.Problems[0].Reason
 	}
 	if !ready {
 		return "the vault index is not ready yet, so these results may be incomplete"
@@ -293,11 +451,20 @@ func vaultSearchIncompleteReason(resp gen.VaultFindResponse, ready bool) string 
 
 // vaultSearchNoteHit builds one note hit, attaching a re-read snippet when the
 // query can be located in the note as it is on disk now.
+//
+// When it cannot — the match moved, or the file could not be re-read —
+// ExcerptUnavailable is set true (MV-9's deliberate reduction of the retired
+// surface's 5-reason enum to one boolean, R2-MIN-010: the find path cannot
+// attribute the old re-read reasons, so it reports only that an excerpt could
+// not be produced). The hit still renders by title and path either way.
 func vaultSearchNoteHit(collectionRoot string, row *gen.VaultFindRow, query string) gen.VaultSearchNoteHit {
 	hit := gen.VaultSearchNoteHit{Path: row.Path, Title: row.Title}
 	if snip := vaultSearchSnippet(collectionRoot, row.Path, query); snip != "" {
 		hit.Snippet = &snip
+		return hit
 	}
+	unavailable := true
+	hit.ExcerptUnavailable = &unavailable
 	return hit
 }
 

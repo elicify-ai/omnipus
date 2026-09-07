@@ -222,38 +222,6 @@ type LibraryEntryMount = {
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
 };
-type KnowledgeSearchResponse = {
-  collection_id: string;
-  hits: Array<KnowledgeSearchHit>;
-  incompleteness: KnowledgeSearchIncompleteness;
-  limit_applied: number;
-  limit_clamped: boolean;
-  limit_requested?: number | undefined;
-};
-type KnowledgeSearchHit = {
-  path: string;
-  title: string;
-  score: number;
-  kind: "note" | "attachment";
-  excerpt?: string | undefined;
-  excerpt_unavailable?:
-    | (
-        | "file_unreadable"
-        | "file_missing"
-        | "match_moved"
-        | "budget_exhausted"
-        | "attachment_not_read"
-      )
-    | undefined;
-  byte_offset?: number | undefined;
-};
-type KnowledgeSearchIncompleteness = {
-  complete: boolean;
-  total_known: boolean;
-  statement: string;
-  indexed_files?: number | undefined;
-  total_files?: number | undefined;
-};
 type KnowledgeGraphResponse = {
   collection_id: string;
   kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
@@ -4389,47 +4357,6 @@ export const KnowledgeBaseInfo = z.object({
     })
     .optional(),
 });
-export const KnowledgeSearchRequest = z.object({
-  query: z.string().min(1).max(1024),
-  collection_id: z.string().min(1),
-  limit: z.number().int().gte(1).optional().default(20),
-  offset: z.number().int().gte(0).optional().default(0),
-  kinds: z.array(z.enum(["note", "attachment"])).optional(),
-});
-export const KnowledgeSearchHit: z.ZodType<KnowledgeSearchHit> = z.object({
-  path: z.string().min(1),
-  title: z.string(),
-  score: z.number(),
-  kind: z.enum(["note", "attachment"]),
-  excerpt: z.string().optional(),
-  excerpt_unavailable: z
-    .enum([
-      "file_unreadable",
-      "file_missing",
-      "match_moved",
-      "budget_exhausted",
-      "attachment_not_read",
-    ])
-    .optional(),
-  byte_offset: z.number().int().gte(0).optional(),
-});
-export const KnowledgeSearchIncompleteness: z.ZodType<KnowledgeSearchIncompleteness> =
-  z.object({
-    complete: z.boolean(),
-    total_known: z.boolean(),
-    statement: z.string().min(1),
-    indexed_files: z.number().int().gte(0).optional(),
-    total_files: z.number().int().gte(0).optional(),
-  });
-export const KnowledgeSearchResponse: z.ZodType<KnowledgeSearchResponse> =
-  z.object({
-    collection_id: z.string().min(1),
-    hits: z.array(KnowledgeSearchHit),
-    incompleteness: KnowledgeSearchIncompleteness,
-    limit_applied: z.number().int().gte(1),
-    limit_clamped: z.boolean(),
-    limit_requested: z.number().int().gte(1).optional(),
-  });
 export const FileSearchRequest = z.object({
   query: z.string().min(1).max(1024),
   path: z.string().optional(),
@@ -8220,63 +8147,6 @@ Frontmatter that is not valid YAML is reported through frontmatter_malformed; th
       {
         status: 404,
         description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/library/:workspace_id/knowledge/search",
-    alias: "searchKnowledgeBase",
-    description: `Returns ranked hits with path, title and a matched excerpt (FR-050), AND — in the same response — the incompleteness statement qualifying them (FR-035). A caller cannot obtain results without also obtaining the statement, which is the point: a partial answer that looks whole is worse than no answer.
-
-The excerpt is re-read from the file at query time and never stored in the index (FR-050a), so it always matches disk. When the re-read cannot be done — the file moved, became unreadable, or the latency budget ran out — the hit is still returned with path and title and a machine-readable excerpt_unavailable reason. Never a fabricated excerpt; never a silently dropped result.
-
-A limit above the server cap is clamped and the clamp is reported (FR-037). A collection outside the caller&#x27;s workspace scope returns an EMPTY result set rather than a permission error (FR-052, FR-053), so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a query plus its filters does not belong in a URL that lands in request logs.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: KnowledgeSearchRequest,
-      },
-      {
-        name: "workspace_id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: KnowledgeSearchResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 429,
-        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {
