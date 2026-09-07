@@ -77,6 +77,23 @@ package agent
 // because a nil Audit is a fail-closed refusal (knowledge/authoring_tools.go's
 // begin — the same preamble knowledge_edit.go/knowledge_restructure.go/
 // knowledge_configure.go share).
+//
+// # Manifest tier — unconditional registration does NOT mean unconditional
+// # per-turn cost
+//
+// "Registered for every agent" (above) is a POLICY statement (Constraint
+// #6): it says nothing about what ends up on the wire on a turn that never
+// touches these tools. That is governed separately, by ADR-071's manifest
+// tier (pkg/tools/manifest.go, ToolManifestTier/ToolManifestVisibility): none
+// of the six names is listed in fullManifestToolNames or
+// previewedLazyToolNames, so all six resolve to the deliberate default —
+// ManifestLazy + ManifestSearchOnly — meaning they cost ZERO tokens on any
+// turn until an agent calls ToolSearch for one by name or query (pinned by
+// pkg/tools/manifest_test.go's TestVisibility_KnowledgeToolsAreSearchOnly).
+// If a future change ever needs one of these six to be always-visible
+// (Full) or previewed (Tier 2), that is a deliberate manifest-tier decision
+// belonging in pkg/tools/manifest.go, updating that same pinning test — not
+// something to infer from this file's registration call.
 
 import (
 	"github.com/elicify-ai/omnipus/pkg/config"
