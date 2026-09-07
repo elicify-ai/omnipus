@@ -605,7 +605,13 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 	if kind == webrtc.RTPCodecTypeAudio {
 		forward = &s.audioForward
 	}
-	forward.begin(feedID, codec.ClockRate)
+	if kind == webrtc.RTPCodecTypeVideo {
+		forward.beginWithReceipt(feedID, codec.ClockRate, VideoReceipt{
+			BindingToken: s.ingestInstalledBindingToken, Generation: generation, TargetID: targetID,
+		})
+	} else {
+		forward.begin(feedID, codec.ClockRate)
+	}
 	var live func()
 	var boundary func(uint64, string, uint32)
 	switch kind {

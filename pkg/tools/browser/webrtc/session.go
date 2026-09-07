@@ -525,8 +525,16 @@ func (s *Session) Stats() Stats {
 	viewers := len(s.viewers)
 	s.viewersMu.Unlock()
 
+	var videoGeneration uint64
+	var videoTargetID string
+	if s.videoTrack != nil && s.videoFeedID != 0 {
+		videoGeneration, videoTargetID = s.videoGeneration, s.videoTargetID
+	}
 	return Stats{
-		Viewers: viewers,
+		VideoGeneration: videoGeneration,
+		VideoTargetID:   videoTargetID,
+		VideoReceipt:    s.videoForward.latestReceipt(),
+		Viewers:         viewers,
 		// Issue #674: liveness, not mere existence. The shared local tracks
 		// are never torn down (see videoFeedID's doc comment), so
 		// `videoTrack != nil` stays true forever after the first ingest — and

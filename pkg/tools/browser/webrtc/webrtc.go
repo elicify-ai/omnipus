@@ -122,17 +122,31 @@ type Config struct {
 // panicking.
 type InputSink func(viewerID string, raw []byte)
 
+// VideoReceipt identifies the source of the latest accepted video RTP packet.
+// Serial advances across feed replacement; zero means no packet was accepted.
+type VideoReceipt struct {
+	BindingToken uint64
+	Generation   uint64
+	TargetID     string
+	Serial       uint64
+}
+
 // Stats is a point-in-time snapshot of a Session's relay state, as returned
 // by Session.Stats() / stubbed by the lite build.
 type Stats struct {
 	// Viewers is the number of currently attached viewer PeerConnections.
 	Viewers int
-	// HasVideo/HasAudio report whether an ingest track of that kind has ever
-	// been attached (i.e. the shared local track exists, independent of
-	// whether the CURRENT ingest connection is still alive -- a track
-	// survives ingest replacement, see HandleIngestOffer).
+	// HasVideo/HasAudio report a currently live ingest feed of that kind.
+	// Shared local tracks survive replacement, but an unfed track is not live.
 	HasVideo bool
 	HasAudio bool
+	// VideoGeneration/VideoTargetID describe only the current live video feed.
+	// They are zero/empty while an installed peer has no video track yet.
+	VideoGeneration uint64
+	VideoTargetID   string
+	// VideoReceipt retains the latest actual packet's identity across feed
+	// changes until a new packet is accepted, independently of viewer writes.
+	VideoReceipt VideoReceipt
 	// VideoCodec/AudioCodec are the negotiated codec MIME types (e.g.
 	// "video/VP8", "audio/opus") of the most recent ingest track of that
 	// kind, empty if none has arrived yet.

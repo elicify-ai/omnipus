@@ -14,12 +14,17 @@ import (
 // source cannot write after its replacement or consume its sequence range.
 // Never acquire Session.mu while holding this lock.
 type mediaForwarder struct {
-	mu                 sync.Mutex
-	feed               int64
-	seq                seqRewriter
-	lastSeq            atomic.Uint32
-	receivedPackets    atomic.Int64
-	forwardFailures    atomic.Int64
+	mu              sync.Mutex
+	feed            int64
+	seq             seqRewriter
+	lastSeq         atomic.Uint32
+	receivedPackets atomic.Int64
+	forwardFailures atomic.Int64
+	// receiptIdentity belongs to feed and is protected by mu. receiptMu
+	// guards only the latest accepted-packet copy, never external writer IO.
+	receiptIdentity    VideoReceipt
+	receiptMu          sync.Mutex
+	receipt            VideoReceipt
 	clockRate          uint32
 	haveTimestamp      bool
 	lastTimestamp      uint32
@@ -32,9 +37,14 @@ type mediaForwarder struct {
 }
 
 func (f *mediaForwarder) begin(feed int64, clockRate uint32) {
+	f.beginWithReceipt(feed, clockRate, VideoReceipt{})
+}
+
+func (f *mediaForwarder) beginWithReceipt(feed int64, clockRate uint32, identity VideoReceipt) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.feed = feed
+	f.receiptIdentity = identity
 	f.clockRate = clockRate
 	f.seq = seqRewriter{lastOut: &f.lastSeq}
 	f.offsetReady = false
@@ -55,6 +65,15 @@ func (f *mediaForwarder) write(feed int64, pkt *rtp.Packet, now time.Time, write
 	}
 	// Source progress is independent of an individual viewer's egress.
 	f.receivedPackets.Add(1)
+	f.receiptMu.Lock()
+	// Exhaustion must not wrap and make an ancient serial appear fresh.
+	// Keep the last valid receipt rather than publish a reused serial.
+	if f.receipt.Serial != ^uint64(0) {
+		next := f.receiptIdentity
+		next.Serial = f.receipt.Serial + 1
+		f.receipt = next
+	}
+	f.receiptMu.Unlock()
 	if !f.offsetReady {
 		f.timestampOffset = 0
 		if f.haveTimestamp {
@@ -122,4 +141,11 @@ func (f *mediaForwarder) boundary(feed int64) (first uint32, latest uint32, ok b
 		return 0, 0, false
 	}
 	return f.boundaryTimestamp, f.forwardedTimestamp, true
+}
+
+// latestReceipt copies a complete identity without waiting for the packet writer.
+func (f *mediaForwarder) latestReceipt() VideoReceipt {
+	f.receiptMu.Lock()
+	defer f.receiptMu.Unlock()
+	return f.receipt
 }
