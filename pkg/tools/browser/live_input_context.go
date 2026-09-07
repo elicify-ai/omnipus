@@ -25,6 +25,7 @@ type liveInputState struct {
 	retired        map[context.Context]bool
 	abandoned      map[string]bool
 	cleaning       bool
+	sources        map[context.Context]bool
 }
 type liveInputRequest struct {
 	viewer string
@@ -35,6 +36,7 @@ type heldInputID struct {
 	target context.Context
 	viewer string
 	key    string
+	source context.Context
 }
 
 func (lv *LiveView) inputStateLocked() *liveInputState {
@@ -46,6 +48,7 @@ func (lv *LiveView) inputStateLocked() *liveInputState {
 			pendingRelease: make(map[heldInputID]bool),
 			retired:        make(map[context.Context]bool),
 			abandoned:      make(map[string]bool),
+			sources:        make(map[context.Context]bool),
 		}
 	}
 	return lv.inputState
@@ -74,6 +77,9 @@ func (r *LiveViewRegistry) InputContext(ctx context.Context, sessionID, viewerID
 }
 
 func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string, in LiveInput) error {
+	if inputSourceEnded(in.SourceContext) {
+		return realInputError("browser live: input source canceled: %w", in.SourceContext.Err())
+	}
 	if err := caller.Err(); err != nil {
 		return realInputError("browser live: input canceled: %w", err)
 	}
@@ -99,10 +105,21 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	}
 	ctx, cancel := context.WithTimeout(targetCtx, budget)
 	stop := context.AfterFunc(caller, cancel)
+	if in.SourceContext != nil {
+		stopSource := context.AfterFunc(in.SourceContext, cancel)
+		defer stopSource()
+	}
 	request := &liveInputRequest{viewer: viewerID, target: targetCtx, cancel: cancel}
 	state.requests[request] = struct{}{}
 	lv.mu.Unlock()
 	defer func() { stop(); cancel(); lv.mu.Lock(); delete(state.requests, request); lv.mu.Unlock() }()
+	if lv.mgr != nil {
+		release, err := lv.mgr.acquireLiveTabCommand(ctx, lv.sessionID)
+		if err != nil {
+			return realInputError("browser live: input canceled while waiting for tab operation: %w", err)
+		}
+		defer release()
+	}
 	if err := acquireInputGate(ctx, state.gate); err != nil {
 		return realInputError("browser live: input canceled while queued: %w", err)
 	}
@@ -113,18 +130,30 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	if err := ctx.Err(); err != nil {
 		return realInputError("browser live: input canceled: %w", err)
 	}
+	if inputSourceEnded(in.SourceContext) {
+		return realInputError("browser live: input source canceled: %w", in.SourceContext.Err())
+	}
 	if err := lv.flushPendingInput(ctx); err != nil {
 		return realInputError("browser live: held input cleanup failed: %w", err)
 	}
 	lv.mu.Lock()
-	retired := state.retired[targetCtx]
+	retired := state.retired[targetCtx] || lv.tabCtx != targetCtx
 	lv.mu.Unlock()
 	if retired {
 		return benignInputError("browser live: input target changed; retry on the current tab")
 	}
 	lv.mu.Lock()
-	_, tracked := state.held[heldInputID{targetCtx, viewerID, inputHoldKey(in)}]
+	_, tracked := state.held[heldInputID{target: targetCtx, viewer: viewerID, key: inputHoldKey(in), source: in.SourceContext}]
 	releasing := in.Kind == "key_up" || in.Kind == "mouse_up"
+	lv.mu.Unlock()
+	// Ordinary interaction must describe the committed picture. Navigation
+	// controls and an already-owned release do not depend on that picture.
+	if !(tracked && releasing) && !navigationInputKind(in.Kind) && lv.mgr != nil {
+		if cs := lv.mgr.CaptureSession(); cs != nil && !cs.AcceptsInputGeneration(in.CaptureID, in.CaptureGeneration) {
+			return benignInputError("browser live: displayed frame changed; wait for the current picture")
+		}
+	}
+	lv.mu.Lock()
 	allowed := tracked && releasing || lv.allowInputLocked(in.Kind)
 	lv.mu.Unlock()
 	if !allowed {
@@ -273,7 +302,7 @@ func (lv *LiveView) prepareHeldInput(target context.Context, viewer string, in L
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	state := lv.inputStateLocked()
-	id := heldInputID{target, viewer, inputHoldKey(in)}
+	id := heldInputID{target: target, viewer: viewer, key: inputHoldKey(in), source: in.SourceContext}
 	release := in.Kind == "key_up" || in.Kind == "mouse_up"
 	if release {
 		if _, owned := state.held[id]; !owned {
@@ -293,7 +322,7 @@ func (lv *LiveView) prepareHeldInput(target context.Context, viewer string, in L
 		if heldID.target != target {
 			continue
 		}
-		if release && heldID.key == id.key && heldID.viewer != viewer {
+		if release && heldID.key == id.key && heldID != id {
 			delete(state.held, id)
 			delete(state.pendingRelease, id)
 			return true, 0, 0, nil
@@ -317,11 +346,15 @@ func (lv *LiveView) recordHeldInput(target context.Context, viewer string, in Li
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	state := lv.inputStateLocked()
-	id := heldInputID{target, viewer, inputHoldKey(in)}
+	id := heldInputID{target: target, viewer: viewer, key: inputHoldKey(in), source: in.SourceContext}
 	switch in.Kind {
 	case "key_down", "mouse_down":
 		if id.key != "" {
-			state.held[id] = LiveInput{Kind: in.Kind, Key: in.Key, Code: in.Code, KeyCode: in.KeyCode, Button: in.Button, X: in.X, Y: in.Y, HasXY: in.HasXY}
+			state.held[id] = LiveInput{SourceContext: in.SourceContext, Kind: in.Kind, Key: in.Key, Code: in.Code, KeyCode: in.KeyCode, Button: in.Button, X: in.X, Y: in.Y, HasXY: in.HasXY}
+			if in.SourceContext != nil && !state.sources[in.SourceContext] {
+				state.sources[in.SourceContext] = true
+				context.AfterFunc(in.SourceContext, func() { lv.releaseInputSource(in.SourceContext) })
+			}
 		}
 	case "key_up", "mouse_up":
 		if confirmed {
@@ -436,7 +469,7 @@ func (lv *LiveView) flushPendingInput(ctx context.Context) error {
 		var held LiveInput
 		found := false
 		for candidate, value := range state.held {
-			if state.retired[candidate.target] || state.abandoned[candidate.viewer] || state.pendingRelease[candidate] {
+			if state.retired[candidate.target] || state.abandoned[candidate.viewer] || state.pendingRelease[candidate] || inputSourceEnded(candidate.source) {
 				id, held, found = candidate, value, true
 				break
 			}

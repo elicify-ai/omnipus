@@ -206,6 +206,9 @@ const (
 // mirrors the AsyncAPI BrowserInputFrame `kind` enum exactly: mouse_move,
 // mouse_down, mouse_up, wheel, key_down, key_up, text, navigate.
 type LiveInput struct {
+	// SourceContext is the original connection or input-channel lifetime.
+	// It is assigned by the gateway, never decoded from a client payload.
+	SourceContext context.Context
 	// CaptureID and CaptureGeneration are the viewer's claim about the
 	// displayed picture.
 	CaptureID         string

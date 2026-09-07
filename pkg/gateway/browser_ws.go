@@ -1529,6 +1529,7 @@ func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWS
 	}
 
 	in := browserInputFrameToLiveInput(frame)
+	in.SourceContext = attachment.ctx
 
 	if err := mgr.Live().InputContext(ctx, panelSessionID, viewerID, in); err != nil {
 		if commandWasSuperseded(ctx, attachment) {
