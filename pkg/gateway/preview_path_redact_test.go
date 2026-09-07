@@ -483,6 +483,7 @@ var expectedRedactionSites = []redactionRecordingSite{
 	{file: "rest_preview_audit.go", what: "emitPreviewAuditEntry: details[\"sanitized_path\"]"},
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
+	{file: "rest_signin_copilot.go", what: "handleCopilotSignInStatus: probe-refused 429 warning"},
 }
 
 // redactionImplFile is where redactRequestPath is DEFINED. Its own call
@@ -528,11 +529,14 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_six_sites", func(t *testing.T) {
-		// FR-003e counts six. If the product grows a seventh, this is the line
-		// that says so out loud rather than letting the number drift.
-		assert.Len(t, expectedRedactionSites, 6,
-			"FR-003e enumerates six request-path recording sites")
+	t.Run("inventory_is_seven_sites", func(t *testing.T) {
+		// FR-003e counted six; a seventh (rest_signin_copilot.go's probe-refused
+		// 429 warning) was added during the release/v0.1.1 merge. If the
+		// product grows an eighth, this is the line that says so out loud
+		// rather than letting the number drift.
+		assert.Len(t, expectedRedactionSites, 7,
+			"FR-003e-era inventory plus the rest_signin_copilot.go site enumerates seven "+
+				"request-path recording sites")
 	})
 }
 

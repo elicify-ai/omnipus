@@ -176,7 +176,7 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 		// trace it leaves — a refused call never reaches auditCopilotProbe,
 		// because nothing was probed and nothing was spent.
 		slog.Warn("api: copilot sign-in probe refused, another is already running",
-			"ip", a.clientIPWithLiveFallback(r), "path", r.URL.Path,
+			"ip", a.clientIPWithLiveFallback(r), "path", redactRequestPath(r.URL.Path),
 			"retry_after", copilotProbeRetryAfterSeconds)
 		w.Header().Set("Retry-After", strconv.Itoa(copilotProbeRetryAfterSeconds))
 		jsonErr(w, http.StatusTooManyRequests,
