@@ -28,6 +28,9 @@ func (cs *CaptureSession) BeginFrameTransition(targetID string, width, height in
 	}
 	before := cs.frames.snapshot().Generation
 	frame, err := cs.frames.begin(captureFrameGeometry{TargetID: targetID, Width: width, Height: height, Scale: scale})
+	if err == nil && frame.Generation != before {
+		cs.replaceFrameLifetimeLocked()
+	}
 	state := cs.frameStateLocked()
 	fn := cs.onFrameState
 	cs.mu.Unlock()

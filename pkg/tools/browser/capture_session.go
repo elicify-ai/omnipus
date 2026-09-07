@@ -361,6 +361,15 @@ type CaptureSession struct {
 	// callbacks. A counter rather than comparing the callback funcs
 	// themselves (func values are not comparable in Go beyond nil-checks).
 	ingestEpoch uint64
+	// Authenticated socket, pending offer, and frame lifetimes are independent
+	// of the media token installed in the relay. Guarded by mu.
+	ingestBindingToken  uint64
+	ingestBindingCtx    context.Context
+	ingestBindingCancel context.CancelFunc
+	ingestOfferID       uint64
+	ingestOfferCancel   context.CancelFunc
+	frameCtx            context.Context
+	frameCancel         context.CancelFunc
 	// viewers maps an attached viewerID to its MOST RECENT registration
 	// attempt's viewerRegistration (generation token + relay identity
 	// handle) -- see AddViewer, RemoveViewerIfCurrent, recordViewerRelayHandle
@@ -1043,6 +1052,7 @@ func (cs *CaptureSession) BindIngest(
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	previousClose = cs.ingestClose
+	cs.cancelIngestBindingLocked()
 	cs.ingestEpoch++
 	cs.ingestSend = send
 	cs.ingestClose = closeConn
@@ -1061,6 +1071,7 @@ func (cs *CaptureSession) UnbindIngest(epoch uint64) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if cs.ingestEpoch == epoch {
+		cs.cancelIngestBindingLocked()
 		cs.ingestSend = nil
 		cs.ingestClose = nil
 	}
@@ -1753,6 +1764,10 @@ func (cs *CaptureSession) Stop() {
 		return
 	}
 	cs.stopped = true
+	cs.cancelIngestBindingLocked()
+	if cs.frameCancel != nil {
+		cs.frameCancel()
+	}
 	close(cs.done)
 	if cs.stopTimer != nil {
 		cs.stopTimer.Stop()
