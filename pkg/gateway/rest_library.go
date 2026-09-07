@@ -77,8 +77,14 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(segs) != 2 {
-		http.NotFound(w, r)
-		return
+		// The ONE exception to the flat {workspace_id}/{sub} shape: files/search
+		// (rest_library_files_search.go) carries a literal two-segment sub-path.
+		// Every other route stays exactly two segments, so this is a narrow,
+		// exact-match carve-out rather than a general depth relaxation.
+		if len(segs) != 3 || segs[1] != "files" || segs[2] != "search" {
+			http.NotFound(w, r)
+			return
+		}
 	}
 
 	workspaceID, sub := segs[0], segs[1]
@@ -148,6 +154,19 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryInlineDisposition(w, r, workspaceID)
+	case "files":
+		// Only the exact files/search sub-path reaches here (guarded above);
+		// a bare /library/{workspace_id}/files (len(segs)==2) falls through to
+		// this same case with sub=="files" and is rejected below.
+		if len(segs) != 3 {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryFilesSearch(w, r, workspaceID)
 	default:
 		http.NotFound(w, r)
 	}
