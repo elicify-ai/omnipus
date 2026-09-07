@@ -1212,6 +1212,13 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
           if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
           return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
         })}
+        {/* In-flow mount (operator report, 2026-09-07 — see
+            GoalThreadTailCards.tsx's doc comment): rendered at the tail of
+            the SCROLLABLE transcript, not the fixed non-scrolling slot above
+            the composer, so a long criteria/DoD ladder scrolls with the
+            messages instead of overflowing a fixed-height area with its
+            buttons unreachable. */}
+        <GoalThreadTailCards />
       </div>
     </div>
   )
@@ -1411,6 +1418,14 @@ function VirtualizedMessageListInner({
             </ThreadPrimitive.Messages>
           </div>
         )}
+
+        {/* In-flow mount (operator report, 2026-09-07 — see
+            GoalThreadTailCards.tsx's doc comment): rendered at the tail of
+            the SCROLLABLE Viewport content, not the fixed non-scrolling slot
+            above the composer, so a long criteria/DoD ladder scrolls with
+            the messages instead of overflowing a fixed-height area with its
+            buttons unreachable. */}
+        <GoalThreadTailCards />
       </div>
     </ThreadPrimitive.Viewport>
   )
@@ -3005,6 +3020,11 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           {messages.length === 0 ? (
             <div className="flex-1 overflow-y-auto pt-4 pb-2">
               <WelcomeState hasAgent={!!activeAgentId} />
+              {/* In-flow mount (see GoalThreadTailCards.tsx's doc comment):
+                  a queued goal can compile before any message has landed
+                  (e.g. right after onboarding). Still scrollable here even
+                  though there's nothing else to scroll past yet. */}
+              <GoalThreadTailCards />
             </div>
           ) : (
             <VirtualizedMessageList messages={messages} liteMode={liteMode} />
@@ -3047,8 +3067,17 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           {/* Goal echo / amendment cards — ADR-053 FE-8: the compiled goal is
               echoed IN CHAT (no form/modal) when a pill is in `queued` state
               (newly compiled, awaiting the user's chat confirmation). Renders
-              nothing when no queued pills exist. */}
-          <GoalThreadTailCards />
+              nothing when no queued pills exist.
+              MOVED (operator report, 2026-09-07): this used to render here,
+              in this non-scrolling slot between the message list and the
+              composer — a long criteria/DoD ladder could overflow it with
+              the Confirm/Amend/Cancel buttons pushed off screen and
+              unreachable. It now renders INSIDE the scrollable message-list
+              container instead (see PlainMessageList / VirtualizedMessageListInner
+              below), so it scrolls with the transcript and the buttons are
+              always reachable. AskUserQuestionThreadTail stays here — its
+              tabbed one-question-at-a-time view is short and has no such
+              overflow risk. */}
 
           {/* AskUserQuestion card — askuserquestion-tool-spec v3 (ADR-074
               D4b): the flat, tabbed question zone (pending) or the collapsed

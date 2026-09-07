@@ -5,10 +5,13 @@
 // never renders the confirm card (R2-03's kept negative).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { GoalThreadTailCards } from './GoalThreadTailCards'
 import { useChatStore } from '@/store/chat'
-import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type {
+  GoalStatusFrame,
+  AskUserQuestionCard as AskUserCard,
+} from '@/lib/api/generated/asyncapi-types'
 
 // ADR-078 D1: Amend pre-fills the composer via AssistantUI's
 // `useComposerRuntime().setText(...)` — the same mechanism `useSlashMenu.ts`
@@ -34,10 +37,26 @@ function makeGoal(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFrame {
   }
 }
 
+function makeAsk(status: AskUserCard['status']): AskUserCard {
+  return {
+    card_id: 'ask_1',
+    session_id: 's1',
+    agent_id: 'mia',
+    status,
+    created_at: '2026-09-06T12:00:00Z',
+    questions: [{ header: 'Scope', question: 'What should the goal cover?', options: [] }],
+  }
+}
+
 describe('GoalThreadTailCards', () => {
   beforeEach(() => {
     mockSetText.mockClear()
-    useChatStore.setState({ goalPills: {}, sendMessage: vi.fn() })
+    useChatStore.setState({
+      goalPills: {},
+      sendMessage: vi.fn(),
+      pendingAsk: null,
+      isStreaming: false,
+    })
   })
 
   it('renders nothing with no pills', () => {
@@ -71,7 +90,10 @@ describe('GoalThreadTailCards', () => {
     })
     render(<GoalThreadTailCards />)
     expect(screen.getByTestId('goal-thread-tail-cards')).toBeInTheDocument()
-    // Criteria render through the shared CriteriaBreakdown (D5.4).
+    // Criteria render through the shared CriteriaBreakdown (D5.4), behind
+    // GoalEchoCard's collapsed-by-default accordion (redesign, operator
+    // report 2026-09-07) — expand it first.
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     expect(screen.getAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByText('verifies via:')).toBeInTheDocument()
     expect(screen.getByText('npm run build -> exit 0')).toBeInTheDocument()
@@ -140,5 +162,84 @@ describe('GoalThreadTailCards', () => {
     })
     const { container } = render(<GoalThreadTailCards />)
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+// "Compiling your goal…" (nice-to-have, operator report 2026-09-07): a
+// resumed goal-compile step after a clarify AskUserQuestion answer runs
+// silently — no streamed tokens, no isStreaming — until the queued
+// goal_status frame lands. Tracked locally off the pendingAsk pending ->
+// answered edge; see GoalThreadTailCards.tsx's doc comment for the full
+// rationale.
+describe('GoalThreadTailCards — "Compiling your goal…" indicator', () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      goalPills: {},
+      sendMessage: vi.fn(),
+      pendingAsk: null,
+      isStreaming: false,
+    })
+  })
+
+  it('stays absent while a question is merely pending (not yet answered)', () => {
+    useChatStore.setState({ pendingAsk: makeAsk('pending') })
+    render(<GoalThreadTailCards />)
+    expect(screen.queryByTestId('goal-compiling-indicator')).not.toBeInTheDocument()
+  })
+
+  it('arms on the pending -> answered edge, and hands off to the real card once a queued pill lands', () => {
+    useChatStore.setState({ pendingAsk: makeAsk('pending') })
+    const { rerender } = render(<GoalThreadTailCards />)
+    expect(screen.queryByTestId('goal-compiling-indicator')).not.toBeInTheDocument()
+
+    useChatStore.setState({ pendingAsk: makeAsk('answered') })
+    rerender(<GoalThreadTailCards />)
+    expect(screen.getByTestId('goal-compiling-indicator')).toHaveTextContent('Compiling your goal…')
+    expect(screen.queryByTestId('goal-echo-card')).not.toBeInTheDocument()
+
+    // The compiled goal lands — the real summary card takes over and the
+    // silent-wait indicator disappears.
+    useChatStore.setState({ goalPills: { _default: makeGoal() } })
+    rerender(<GoalThreadTailCards />)
+    expect(screen.queryByTestId('goal-compiling-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('goal-echo-card')).toBeInTheDocument()
+  })
+
+  it('does NOT arm on a pending -> cancelled edge (no compile follows a cancelled question)', () => {
+    useChatStore.setState({ pendingAsk: makeAsk('pending') })
+    const { rerender } = render(<GoalThreadTailCards />)
+    useChatStore.setState({ pendingAsk: makeAsk('cancelled') })
+    rerender(<GoalThreadTailCards />)
+    expect(screen.queryByTestId('goal-compiling-indicator')).not.toBeInTheDocument()
+  })
+
+  it('clears once an ordinary streamed reply begins, even with no queued goal', () => {
+    useChatStore.setState({ pendingAsk: makeAsk('pending') })
+    const { rerender } = render(<GoalThreadTailCards />)
+    useChatStore.setState({ pendingAsk: makeAsk('answered') })
+    rerender(<GoalThreadTailCards />)
+    expect(screen.getByTestId('goal-compiling-indicator')).toBeInTheDocument()
+
+    useChatStore.setState({ isStreaming: true })
+    rerender(<GoalThreadTailCards />)
+    expect(screen.queryByTestId('goal-compiling-indicator')).not.toBeInTheDocument()
+  })
+
+  it('gives up after a generous timeout if no goal ever compiles', () => {
+    vi.useFakeTimers()
+    try {
+      useChatStore.setState({ pendingAsk: makeAsk('pending') })
+      const { rerender } = render(<GoalThreadTailCards />)
+      useChatStore.setState({ pendingAsk: makeAsk('answered') })
+      rerender(<GoalThreadTailCards />)
+      expect(screen.getByTestId('goal-compiling-indicator')).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(90_000)
+      })
+      expect(screen.queryByTestId('goal-compiling-indicator')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

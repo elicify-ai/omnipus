@@ -46,8 +46,11 @@ describe('GoalEchoCard', () => {
   // US-6 S1: pending goal with 2 prose + 1 marker check → 3 rows, text
   // first, verbatim command chip on the check row only. Rendered by the
   // SHARED CriteriaBreakdown (D5.4) — the chip format asserted here is the
-  // shared formatVerifiesVia contract, identical on every surface.
-  it('itemizes the criteria breakdown plain-language-first with a verifies-via chip on technical rows', () => {
+  // shared formatVerifiesVia contract, identical on every surface. The
+  // criteria list lives behind a collapsed-by-default accordion (redesign,
+  // operator report 2026-09-07) — expand it via its trigger before asserting
+  // row content.
+  it('itemizes the criteria breakdown plain-language-first with a verifies-via chip on technical rows, once expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({ text: 'the release notes are written' }),
@@ -61,8 +64,16 @@ describe('GoalEchoCard', () => {
     })
     render(<GoalEchoCard frame={frame} />)
 
-    // The shared criteria list mounts inside the goal-echo criteria section.
+    // The accordion section mounts, collapsed, with a count in its header —
+    // no row content until expanded.
     expect(screen.getByTestId('goal-echo-criteria')).toBeInTheDocument()
+    expect(screen.getByTestId('goal-echo-criteria-trigger')).toHaveTextContent('Done when · 3 criteria')
+    expect(screen.getByTestId('goal-echo-criteria-trigger')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
+
+    expect(screen.getByTestId('goal-echo-criteria-trigger')).toHaveAttribute('aria-expanded', 'true')
     const rows = screen.getAllByRole('listitem')
     expect(rows).toHaveLength(3)
     expect(rows[0]).toHaveTextContent('the release notes are written')
@@ -75,7 +86,7 @@ describe('GoalEchoCard', () => {
     expect(screen.getByText('go test ./... -> exit 0')).toBeInTheDocument()
   })
 
-  it('renders a behavior payload as a verifies-via chip (tool + counts, shared format)', () => {
+  it('renders a behavior payload as a verifies-via chip (tool + counts, shared format), once expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({
@@ -86,12 +97,13 @@ describe('GoalEchoCard', () => {
       ],
     })
     render(<GoalEchoCard frame={frame} />)
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     expect(screen.getByText('verifies via:')).toBeInTheDocument()
     expect(screen.getByText('search_web x3+')).toBeInTheDocument()
   })
 
   // US-6 S4 (negative): `[kind]` classification tokens are not user-facing.
-  it('renders NO [kind] tokens anywhere on the card', () => {
+  it('renders NO [kind] tokens anywhere on the card, collapsed or expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion(),
@@ -103,6 +115,8 @@ describe('GoalEchoCard', () => {
       ],
     })
     const { container } = render(<GoalEchoCard frame={frame} />)
+    expect(container.textContent).not.toMatch(/\[(check|prose|behavior)\]/)
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     expect(container.textContent).not.toMatch(/\[(check|prose|behavior)\]/)
   })
 
@@ -129,8 +143,10 @@ describe('GoalEchoCard', () => {
     expect(screen.queryByTestId('goal-echo-statement')).not.toBeInTheDocument()
   })
 
-  // ADR-080 D-TYPES: every criterion row carries a small judgment badge.
-  it('renders a judgment badge (boolean/quantitative/artifact) on every criterion row', () => {
+  // ADR-080 D-TYPES: every criterion row carries a small judgment icon
+  // (redesign, operator report 2026-09-07 — an icon + accessible name/
+  // tooltip replaces the old uppercase text badge).
+  it('renders a judgment icon (not text) on every criterion row, once expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({ text: 'the release notes are written', judgment: 'boolean' }),
@@ -139,18 +155,26 @@ describe('GoalEchoCard', () => {
       ],
     })
     render(<GoalEchoCard frame={frame} />)
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     const badges = screen.getAllByTestId('criterion-judgment-badge')
     expect(badges).toHaveLength(3)
-    expect(badges[0]).toHaveTextContent('boolean')
-    expect(badges[1]).toHaveTextContent('quantitative')
-    expect(badges[2]).toHaveTextContent('artifact')
+    // No raw judgment word as VISIBLE text content — it's an icon now,
+    // legible only via its accessible name / tooltip.
+    expect(badges[0].textContent).toBe('')
+    expect(badges[1].textContent).toBe('')
+    expect(badges[2].textContent).toBe('')
+    expect(badges[0]).toHaveAttribute('aria-label', 'Pass/fail')
+    expect(badges[1]).toHaveAttribute('aria-label', 'Measured')
+    expect(badges[2]).toHaveAttribute('aria-label', 'Artifact')
   })
 
-  // ADR-080 D-DOD: a distinct "Definition of Done" block, separate from the
-  // criteria's "Done when" section, with inferred items flagged for
-  // approve/drop.
+  // ADR-080 D-DOD: a distinct "Definition of Done" accordion, separate from
+  // the criteria's "Done when" section, collapsed by default with an
+  // "N inferred — review" hint on the header itself so an inferred item is
+  // never hidden from the user's attention (even collapsed) — only expanding
+  // and reading it is required before confirming.
   describe('Definition of Done (ADR-080 D-DOD)', () => {
-    it('renders a distinct DoD block, grouped separately from the criteria', () => {
+    it('renders a distinct, collapsed-by-default DoD accordion, grouped separately from the criteria', () => {
       const frame = makeGoal({
         criteria: [makeCriterion({ text: 'the release notes are written' })],
         dod: [
@@ -167,11 +191,14 @@ describe('GoalEchoCard', () => {
       render(<GoalEchoCard frame={frame} />)
       expect(screen.getByTestId('goal-echo-criteria')).toBeInTheDocument()
       const dodBlock = screen.getByTestId('goal-echo-dod')
-      expect(dodBlock).toHaveTextContent('Definition of Done')
+      expect(dodBlock).toHaveTextContent('Definition of Done · 1 item')
+      expect(dodBlock).not.toHaveTextContent('no secrets or credentials appear in the output')
+
+      fireEvent.click(screen.getByTestId('goal-echo-dod-trigger'))
       expect(dodBlock).toHaveTextContent('no secrets or credentials appear in the output')
     })
 
-    it('flags a provenance:inferred DoD item as "inferred — confirm or drop"', () => {
+    it('flags a provenance:inferred DoD item on the COLLAPSED header, and again per-row once expanded', () => {
       const frame = makeGoal({
         dod: [
           {
@@ -185,10 +212,15 @@ describe('GoalEchoCard', () => {
         ],
       })
       render(<GoalEchoCard frame={frame} />)
+      // Visible while collapsed — never silently hidden.
+      expect(screen.getByTestId('goal-echo-dod-trigger')).toHaveTextContent('1 inferred — review')
+      expect(screen.queryByTestId('goal-echo-dod-content')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByTestId('goal-echo-dod-trigger'))
       expect(screen.getByTestId('goal-echo-dod')).toHaveTextContent('inferred — confirm or drop')
     })
 
-    it('does NOT flag a stated/workspace/floor DoD item as inferred', () => {
+    it('does NOT show an inferred hint when no DoD item is inferred', () => {
       const frame = makeGoal({
         dod: [
           {
@@ -202,10 +234,12 @@ describe('GoalEchoCard', () => {
         ],
       })
       render(<GoalEchoCard frame={frame} />)
+      expect(screen.getByTestId('goal-echo-dod-trigger')).not.toHaveTextContent('inferred')
+      fireEvent.click(screen.getByTestId('goal-echo-dod-trigger'))
       expect(screen.getByTestId('goal-echo-dod')).not.toHaveTextContent('inferred — confirm or drop')
     })
 
-    it('hides the DoD block entirely when the frame carries none', () => {
+    it('hides the DoD section entirely when the frame carries none', () => {
       render(<GoalEchoCard frame={makeGoal()} />)
       expect(screen.queryByTestId('goal-echo-dod')).not.toBeInTheDocument()
     })
