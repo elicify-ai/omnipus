@@ -5,6 +5,7 @@ import {
   Robot,
   PlugsConnected,
   PuzzlePiece,
+  Buildings,
   ChartBar,
   Gear,
   PushPin,
@@ -385,7 +386,7 @@ export function Sidebar() {
               + adds an editable row right in the list; Enter creates, Escape cancels. */}
           {creatingWorkspace && (
             <div className="flex items-center gap-2 px-4 py-1.5">
-              <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+              <Buildings size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
               <input tabIndex={0}
                 autoFocus
                 type="text"
@@ -513,10 +514,13 @@ export function Sidebar() {
                     aria-current={isActive ? 'page' : undefined}
                     className="flex items-center gap-2 flex-1 min-w-0 text-left"
                   >
-                    {/* One icon for every workspace (the Inbox Tray glyph); the
-                        ACTIVE workspace keeps its icon too — gold + text styling
-                        mark it, not a pulsing dot swap. */}
-                    <Tray
+                    {/* One icon for every workspace (icon-consistency pass,
+                        2026-09-07: Buildings, the same glyph every other
+                        surface — Library virtual root, workspace tab bar —
+                        now uses for "workspace"); the ACTIVE workspace keeps
+                        its icon too — gold + text styling mark it, not a
+                        pulsing dot swap. */}
+                    <Buildings
                       size={14}
                       weight={isActive ? 'fill' : 'regular'}
                       className={cn('flex-shrink-0', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')}
@@ -633,7 +637,7 @@ export function Sidebar() {
                 }}
                 className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
-                <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+                <Buildings size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
               </button>
             )

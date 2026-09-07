@@ -221,6 +221,42 @@ func TestLibraryEntries_HiddenFiltering(t *testing.T) {
 	require.Len(t, entries2, 2)
 }
 
+// TestLibraryEntries_ReportsIsKnowledgeBase reproduces the icon-consistency
+// defect: a knowledge base's vault-ness used to be knowable ONLY from a
+// react-query cache the SPA had to have already populated by opening
+// GET .../knowledge for that exact folder — a vault the operator had not yet
+// clicked into (or a fresh page load) rendered as an ordinary folder. The
+// listing itself must now STATE the fact, using the identical marker
+// detection GET .../knowledge answers per folder (makeKnowledgeBase writes
+// the same .omnipus-vault/ marker that endpoint's own tests use).
+func TestLibraryEntries_ReportsIsKnowledgeBase(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	work := workDir(api, id)
+	require.NoError(t, os.MkdirAll(work, 0o700))
+	makeKnowledgeBase(t, filepath.Join(work, "UAT Vault"), "UAT Vault")
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "Plain Folder"), 0o755))
+
+	w := libGet(t, api, "/api/v1/library/"+id+"/entries")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	entries := decodeEntries(t, w.Body.Bytes())
+	require.Len(t, entries, 2)
+
+	byName := make(map[string]gen.LibraryEntry, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+
+	vault, ok := byName["UAT Vault"]
+	require.True(t, ok)
+	require.NotNil(t, vault.IsKnowledgeBase, "a knowledge base directory must state is_knowledge_base on the wire")
+	assert.True(t, *vault.IsKnowledgeBase)
+
+	plain, ok := byName["Plain Folder"]
+	require.True(t, ok)
+	require.NotNil(t, plain.IsKnowledgeBase, "an ordinary folder is a real answer, not an omission")
+	assert.False(t, *plain.IsKnowledgeBase)
+}
+
 func TestLibraryEntries_UnknownWorkspace_404(t *testing.T) {
 	api, _ := buildLibraryTestAPI(t)
 	w := libGet(t, api, "/api/v1/library/ws-does-not-exist/entries")

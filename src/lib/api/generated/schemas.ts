@@ -212,6 +212,7 @@ type LibraryEntry = {
   modified_at: string;
   mime?: string | undefined;
   mount?: LibraryEntryMount | undefined;
+  is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
 };
 type LibraryEntryMount = {
@@ -4269,6 +4270,7 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   modified_at: z.string().datetime({ offset: true }),
   mime: z.string().optional(),
   mount: LibraryEntryMount.optional(),
+  is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
 });
 export const LibraryContentResponse = z.object({

@@ -1,106 +1,70 @@
-// Coverage for the Library's locked custom icon set (C3,
-// docs/internal/specs/library-b-c-design-2026-09-07.md §"Icon system —
-// LOCKED"). Renders each icon and asserts:
-//   - it draws exactly one <path> (the "single path per icon" knockout rule)
-//   - the knockout is carved via fillRule="evenodd", not a second
-//     fixed-colour shape (the whole point of the "reads on any surface" fix)
-//   - the outer container shape is the founder-locked base geometry for its
-//     kind (tile for Workspace, folder for Vault/Folder/Mount)
-//   - `size`/`className` are honoured, defaulting to 16px — the size the
-//     spec's own #1 rule says every icon is judged at first
+// Coverage for the Library's one surviving custom icon, MountFolderIcon
+// (icon-consistency, 2026-09-07). Every other container concept (Knowledge
+// Base, Workspace, Folder) is now a bare Phosphor component with no wrapper
+// — see LibraryEntryRow.tsx / LibraryExplorer.tsx. Renders the icon and
+// asserts:
+//   - it composes exactly the FolderSimple (regular) + ArrowUpRight (bold)
+//     path data copied from @phosphor-icons/react/dist/defs, not invented
+//     artwork
+//   - the badge is a decorative corner mark (aria-hidden), scaled/translated
+//     via <g transform>, not a second full-size shape
+//   - the accessible name lives on the outer <svg>, identifying the icon as
+//     a mounted folder regardless of the decorative badge
+//   - `size`/`className` are honoured, defaulting to 16px
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
-import { WorkspaceIcon, VaultIcon, FolderIcon, MountIcon } from './index'
+import { MountFolderIcon } from './index'
 
-const FOLDER_BASE = 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'
-const TILE_BASE = 'M7,3 H17 A4,4 0 0 1 21,7'
+const FOLDER_SIMPLE_REGULAR_D =
+  'M216,72H130.67L102.93,51.2a16.12,16.12,0,0,0-9.6-3.2H40A16,16,0,0,0,24,64V200a16,16,0,0,0,16,16H216.89A15.13,15.13,0,0,0,232,200.89V88A16,16,0,0,0,216,72Zm0,128H40V64H93.33L123.2,86.4A8,8,0,0,0,128,88h88Z'
+const ARROW_UP_RIGHT_BOLD_D =
+  'M204,64V168a12,12,0,0,1-24,0V93L72.49,200.49a12,12,0,0,1-17-17L163,76H88a12,12,0,0,1,0-24H192A12,12,0,0,1,204,64Z'
 
-describe('WorkspaceIcon', () => {
-  it('renders a rounded tile (not a folder) as its base shape', () => {
-    const { container } = render(<WorkspaceIcon />)
-    const path = container.querySelector('path')
-    expect(path).not.toBeNull()
-    expect(path?.getAttribute('d')).toContain(TILE_BASE)
-    expect(path?.getAttribute('d')).not.toContain(FOLDER_BASE)
+describe('MountFolderIcon', () => {
+  it('has an accessible name identifying it as a mounted folder', () => {
+    const { container } = render(<MountFolderIcon />)
+    const svg = container.querySelector('svg')
+    expect(svg?.getAttribute('role')).toBe('img')
+    expect(svg?.getAttribute('aria-label')).toBe('Mounted folder')
   })
 
-  it('carves its 2x2 knockout via fillRule=evenodd, filled with currentColor', () => {
-    const { container } = render(<WorkspaceIcon />)
-    const path = container.querySelector('path')
-    expect(path?.getAttribute('fill-rule')).toBe('evenodd')
-    expect(path?.getAttribute('fill')).toBe('currentColor')
-    // The outer tile plus four knockout squares, each a separate closed
-    // subpath ("M...Z") — 5 closes in total.
-    expect(path?.getAttribute('d')?.match(/Z/gi)?.length).toBe(5)
+  it('renders the FolderSimple base shape as a bare currentColor path (no card/backdrop)', () => {
+    const { container } = render(<MountFolderIcon />)
+    const paths = container.querySelectorAll('path')
+    expect(paths.length).toBe(2)
+    expect(paths[0].getAttribute('d')).toBe(FOLDER_SIMPLE_REGULAR_D)
+    expect(paths[0].getAttribute('fill')).toBe('currentColor')
   })
 
-  it('is exactly one <path> — the "single path per icon" knockout rule', () => {
-    const { container } = render(<WorkspaceIcon />)
-    expect(container.querySelectorAll('path').length).toBe(1)
+  it('renders the ArrowUpRight badge as a decorative, scaled-down corner mark', () => {
+    const { container } = render(<MountFolderIcon />)
+    const group = container.querySelector('g')
+    expect(group).not.toBeNull()
+    expect(group?.getAttribute('aria-hidden')).toBe('true')
+    // Scaled down (not a second full-size icon) and translated into a
+    // corner, not left at the origin.
+    expect(group?.getAttribute('transform')).toMatch(/scale\(0\.\d+\)/)
+    expect(group?.getAttribute('transform')).toMatch(/translate\(-?\d/)
+    const badgePath = group?.querySelector('path')
+    expect(badgePath?.getAttribute('d')).toBe(ARROW_UP_RIGHT_BOLD_D)
+    expect(badgePath?.getAttribute('fill')).toBe('currentColor')
+  })
+
+  it('shares Phosphor\'s own 256x256 viewBox grid, not a hand-picked canvas', () => {
+    const { container } = render(<MountFolderIcon />)
+    expect(container.querySelector('svg')?.getAttribute('viewBox')).toBe('0 0 256 256')
   })
 
   it('defaults to 16px and honours size/className', () => {
-    const { container: def } = render(<WorkspaceIcon />)
+    const { container: def } = render(<MountFolderIcon />)
     const defaultSvg = def.querySelector('svg')
     expect(defaultSvg?.getAttribute('width')).toBe('16')
     expect(defaultSvg?.getAttribute('height')).toBe('16')
 
-    const { container } = render(<WorkspaceIcon size={20} className="my-class" />)
+    const { container } = render(<MountFolderIcon size={20} className="my-class" />)
     const svg = container.querySelector('svg')
     expect(svg?.getAttribute('width')).toBe('20')
     expect(svg?.getAttribute('height')).toBe('20')
     expect(svg?.getAttribute('class')).toBe('my-class')
-  })
-})
-
-describe('VaultIcon', () => {
-  it('renders the folder base shape with a spark knockout, one path, evenodd', () => {
-    const { container } = render(<VaultIcon />)
-    const paths = container.querySelectorAll('path')
-    expect(paths.length).toBe(1)
-    const path = paths[0]
-    expect(path.getAttribute('d')).toContain(FOLDER_BASE)
-    expect(path.getAttribute('d')).toContain('M12 8.2')
-    expect(path.getAttribute('fill-rule')).toBe('evenodd')
-    expect(path.getAttribute('fill')).toBe('currentColor')
-  })
-})
-
-describe('FolderIcon', () => {
-  it('renders the folder base as an unfilled stroke outline (no knockout)', () => {
-    const { container } = render(<FolderIcon />)
-    const paths = container.querySelectorAll('path')
-    expect(paths.length).toBe(1)
-    const path = paths[0]
-    expect(path.getAttribute('d')).toBe(FOLDER_BASE)
-    expect(path.getAttribute('fill')).toBe('none')
-    expect(path.getAttribute('stroke')).toBe('currentColor')
-  })
-})
-
-describe('MountIcon', () => {
-  it('renders the folder base shape with an external-arrow knockout, one path, evenodd', () => {
-    const { container } = render(<MountIcon />)
-    const paths = container.querySelectorAll('path')
-    expect(paths.length).toBe(1)
-    const path = paths[0]
-    expect(path.getAttribute('d')).toContain(FOLDER_BASE)
-    expect(path.getAttribute('fill-rule')).toBe('evenodd')
-    expect(path.getAttribute('fill')).toBe('currentColor')
-    // The folder subpath (closed with lowercase "z") plus the arrow
-    // subpath (closed with uppercase "Z") — 2 closes in total.
-    expect(path.getAttribute('d')?.match(/Z/gi)?.length).toBe(2)
-  })
-})
-
-describe('all four icons', () => {
-  it.each([
-    ['WorkspaceIcon', WorkspaceIcon],
-    ['VaultIcon', VaultIcon],
-    ['FolderIcon', FolderIcon],
-    ['MountIcon', MountIcon],
-  ] as const)('%s shares the 24x24 viewBox grid', (_name, Icon) => {
-    const { container } = render(<Icon />)
-    expect(container.querySelector('svg')?.getAttribute('viewBox')).toBe('0 0 24 24')
   })
 })

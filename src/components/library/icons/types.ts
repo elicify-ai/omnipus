@@ -1,20 +1,17 @@
-// Shared prop contract for the Library's locked custom icon set (C3,
-// docs/internal/specs/library-b-c-design-2026-09-07.md §"Icon system —
-// LOCKED"). Four container kinds — Workspace, Vault, Folder, Mount — on
-// Phosphor's 24px grid, deliberately custom because Phosphor has no coherent
-// family for this hierarchy (native Phosphor stays everywhere else).
+// Shared prop contract for the Library's icon set (icon-consistency,
+// 2026-09-07): Knowledge Base / Workspace / Folder are plain Phosphor
+// components now (Books / Buildings / FolderSimple) with no wrapper of
+// their own. MountFolderIcon is the ONE deliberate exception — a mounted
+// folder needs a small composed corner badge Phosphor has no primitive for
+// — and this contract exists so that one exception still takes `size` +
+// `className` exactly like every Phosphor icon it sits next to.
 //
-// Every icon takes `size` + `className` only, exactly like the Phosphor
-// icons they sit next to in LibraryEntryRow/LibraryExplorer — no `color`
-// prop. Colour is deliberately left to the caller via `currentColor` (CSS
-// `color`, e.g. `style={{ color: 'var(--color-accent)' }}` or a Tailwind
-// `text-[var(--color-*)]` class), matching how every other icon in this
-// codebase is tinted. Baking the locked palette into the components would
-// make WorkspaceIcon/VaultIcon assume a background they don't control (a
-// selected row, a hover state, dark vs. the rare lighter surface).
+// No `color` prop: colour is deliberately left to the caller via
+// `currentColor` (CSS `color`, e.g. `style={{ color: 'var(--color-accent)' }}`
+// or a Tailwind `text-[var(--color-*)]` class), matching how every other
+// icon in this codebase is tinted.
 export interface LibraryIconProps {
-  /** Pixel size (both width and height). Default 16 — the size this whole
-   *  set is locked against (see the spec's "judge at 16px first" rule). */
+  /** Pixel size (both width and height). Default 16. */
   size?: number
   className?: string
 }

@@ -30,13 +30,13 @@ import {
   Books,
   Buildings,
   FolderPlus,
-  FolderSimpleDashed,
   Plus,
   SpinnerGap,
   UploadSimple,
 } from '@phosphor-icons/react'
 import { LibraryNewVaultDialog } from './LibraryNewVaultDialog'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
+import { MountFolderIcon } from './icons'
 import type { LibraryEntry } from '@/lib/api'
 
 export interface LibraryCreateMenuWorkspace {
@@ -134,7 +134,7 @@ export function LibraryCreateMenu({
                 data-testid="library-create-menu-add-mount"
                 className="flex items-center gap-2"
               >
-                <FolderSimpleDashed size={15} /> Add a folder from your Mac
+                <MountFolderIcon size={15} /> Add a folder from your Mac
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={onManageMounts}
@@ -142,7 +142,7 @@ export function LibraryCreateMenu({
                 data-testid="library-create-menu-manage-mounts"
                 className="flex items-center gap-2"
               >
-                <FolderSimpleDashed size={15} />
+                <MountFolderIcon size={15} />
                 {mountedCount === 0 ? 'Manage mounted folders' : `Manage ${mountedCount} mounted folders`}
               </DropdownMenuItem>
             </>
