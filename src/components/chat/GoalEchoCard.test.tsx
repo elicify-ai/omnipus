@@ -302,8 +302,14 @@ describe('GoalEchoCard', () => {
       // clicking anywhere on the card fires nothing chat-related — there is
       // no click handler left to fire besides the accordion triggers.
       const clickSpy = vi.fn()
+      // No `jsx-a11y` plugin is registered in this repo's eslint.config.mjs
+      // (baseline scope: @eslint/js + typescript-eslint only — see that
+      // file's header comment), so a `jsx-a11y/*` disable-directive here
+      // hard-errors ESLint's directive validation with "Definition for rule
+      // ... was not found" rather than suppressing anything real. A plain
+      // `onClick` on a test-only wrapper `<div>` isn't flagged by any rule
+      // this config actually enables.
       render(
-        // eslint-disable-next-line jsx-a11y/no-static-element-interactions
         <div onClick={clickSpy}>
           <GoalEchoCard frame={makeGoal({ criteria: [makeCriterion()] })} />
         </div>,

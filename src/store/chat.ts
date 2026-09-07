@@ -1598,6 +1598,51 @@ function evictGoalPillsOverCap(pills: Record<string, GoalStatusFrame>): Record<s
   return next
 }
 
+/**
+ * Field-preserving merge for `goalPills[pillKey]` — ADR-081 code-review
+ * round 1, Finding 1 (HIGH): the goal record card was only transiently
+ * visible. Root cause: the engine's ROUTINE `goal_status` emissions
+ * (end-of-turn pushes from the goal loop) carry NO `criteria`/`dod`/
+ * `definition` — only the `set_goal` post-write emission populates the
+ * record. Wholesale-replacing the stored pill on every frame (the previous
+ * behavior) meant the very next routine frame after registration clobbered
+ * the record-carrying pill, `GoalThreadTailCards`' `criteria.length>0`
+ * filter went false, and the card unmounted seconds after appearing — until
+ * the next `set_goal` write re-populated it.
+ *
+ * Rule (see the case 'goal_status' comment for why): a frame that DOES
+ * carry `criteria` always wins wholesale (it IS a fresh record — either the
+ * initial author or a `set_goal(mode: update)` steering revision). A
+ * terminal/cleared frame (`done`/`failed`/`cleared`) also always wins
+ * wholesale — record display ends with the goal regardless of what was
+ * stored, and GoalThreadTailCards never renders a terminal pill's record
+ * anyway. Otherwise (incoming carries no criteria AND is non-terminal —
+ * i.e. a routine `active`/`judging`/`waiting_on_user`/... progress push)
+ * carry the stored `criteria`/`dod`/`definition` forward while taking every
+ * other field (state/round/reason/accounting) from the incoming frame — the
+ * incoming frame is still the source of truth for everything EXCEPT the
+ * record fields it didn't populate.
+ */
+function mergeGoalPillFrame(
+  stored: GoalStatusFrame | undefined,
+  incoming: GoalStatusFrame,
+): GoalStatusFrame {
+  const incomingHasCriteria = (incoming.criteria?.length ?? 0) > 0
+  if (incomingHasCriteria || GOAL_TERMINAL_STATES.has(incoming.state)) {
+    return incoming
+  }
+  const storedHasCriteria = (stored?.criteria?.length ?? 0) > 0
+  if (!stored || !storedHasCriteria) {
+    return incoming
+  }
+  return {
+    ...incoming,
+    criteria: stored.criteria,
+    dod: stored.dod,
+    definition: stored.definition,
+  }
+}
+
 export const useChatStore = create<ChatStore>((set, get) => {
   // ── Internal helpers that mutate a named session bucket ─────────────────────
   // These read/write sessionsById[sid] and then re-sync foreground fields.
@@ -5302,11 +5347,23 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // arriving for this session still evicts any lingering '_default'
           // pill defensively — harmless once no frame is ever emitted with an
           // empty goal_id, cheap insurance against any stale/legacy one.
+          //
+          // ADR-081 code-review round 1, Finding 1 (HIGH): the pill for
+          // `pillKey` is no longer stored verbatim — it goes through
+          // `mergeGoalPillFrame` so a routine, criteria-less progress frame
+          // cannot clobber a record a prior `set_goal` write already
+          // authored. `goalStatus` (the legacy single latest-frame selector,
+          // feeding only `GoalIndicator`, which never reads criteria) stays
+          // store-verbatim — this fix is scoped to `goalPills` only, the
+          // field the record card actually reads. See `mergeGoalPillFrame`'s
+          // doc comment for the merge rule.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
           const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
           withBucket(targetSid, (b) => {
-            const merged = { ...(b.goalPills ?? {}), [pillKey]: goalFrame }
+            const storedPill = b.goalPills?.[pillKey]
+            const mergedPill = mergeGoalPillFrame(storedPill, goalFrame)
+            const merged = { ...(b.goalPills ?? {}), [pillKey]: mergedPill }
             if (pillKey !== '_default') {
               delete merged['_default']
             }
