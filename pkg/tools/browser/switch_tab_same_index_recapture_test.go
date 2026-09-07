@@ -90,7 +90,7 @@ func attachTestCaptureSession(t *testing.T, m *BrowserManager) (*CaptureSession,
 // LiveViewRegistry.handleTabsChanged -> LiveView.onTabsChanged path, which is
 // what fires the recapture on the NORMAL (model moved) switch. It reproduces
 // onTabsChanged's activeTabChanged rule faithfully — resolve the active tab
-// via mgr.Session, compare against the last one seen, and only then recapture,
+// via a read-only snapshot, compare against the last one seen, and only then recapture,
 // with the first call establishing the baseline rather than counting as a
 // change.
 //
@@ -101,7 +101,7 @@ func attachTestCaptureSession(t *testing.T, m *BrowserManager) (*CaptureSession,
 func installFakeLiveRecaptureBridge(m *BrowserManager, cs *CaptureSession) {
 	tracker := &activeCtxTracker{}
 	m.SetTabsChangedFunc(func(sessionID string, _ []Tab, _ int) {
-		newCtx, err := m.Session(sessionID)
+		newCtx, _, err := m.activeTargetSnapshot(sessionID)
 		if err != nil {
 			return
 		}

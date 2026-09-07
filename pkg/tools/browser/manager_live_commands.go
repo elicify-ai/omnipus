@@ -13,7 +13,7 @@ type liveTabCommandGate struct {
 	users int
 }
 
-// acquireLiveTabCommand serializes an attached tab set's UI operations, including
+// acquireLiveTabCommand serializes a tab set's target operations, including
 // their callbacks. It is separate from the live input gate: callbacks can acquire
 // that gate to publish a new target. Never wait while holding BrowserManager.mu.
 func (m *BrowserManager) acquireLiveTabCommand(ctx context.Context, sessionID string) (func(), error) {

@@ -1640,10 +1640,9 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 		s(tabs, activeIdx)
 	}
 
-	// Session() always resolves the ACTIVE tab's context (ADR-041 D1) — reuse
-	// it here instead of threading a raw ctx through the tabs-changed
-	// callback, so Tab (the public snapshot type) can stay metadata-only.
-	newCtx, err := lv.mgr.Session(lv.sessionID)
+	// The notifying operation already owns target admission. A callback must
+	// only read the active target, never re-enter admission or recreate Chrome.
+	newCtx, _, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
 	if err != nil {
 		// Nothing to rebind to — e.g. the browsing context is mid-recreation
 		// after a crash. watchForUnexpectedDeath already handles notifying

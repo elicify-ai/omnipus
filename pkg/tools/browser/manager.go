@@ -415,8 +415,10 @@ type BrowserManager struct {
 	cfg  BrowserConfig
 	ssrf *security.SSRFChecker // never nil — enforced by NewBrowserManager
 	mu   sync.Mutex
-	// tabCommands serializes contextual UI tab operations; guarded by mu.
+	// tabCommands serializes target operations and their observers; guarded by mu.
 	tabCommands map[string]*liveTabCommandGate
+	// At most one metadata publication waits for each exact session entry.
+	pendingTabNotifications map[string]*sessionEntry
 	// allocCtx is the chromedp context ensureStarted's tab-creating callers
 	// (bootstrapBrowserCtx etc.) build off. In coordinator (shared-Chrome)
 	// mode this is the coordinator's rootCtx itself (CRIT-001: chromedp CHILD
@@ -1590,6 +1592,12 @@ func probeChromiumBinaryWithTimeout(
 // concurrent caller waits and then observes the now-populated
 // m.sessions[sessionID] instead of creating a second one.
 func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer release()
+
 	// Cancels collected under m.mu and run after it is dropped (see the
 	// crash-recovery branch below). Declared out here so the retry loop reuses
 	// one slice rather than allocating per iteration.
@@ -2278,6 +2286,12 @@ func (m *BrowserManager) ListTabs(sessionID string) (tabs []Tab, activeIdx int, 
 // (live-measured 2026-08-03; the three-way desync where the tab strip said one
 // tab, the URL bar said another, and the pixels showed a third).
 func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return Tab{}, admissionErr
+	}
+	defer release()
+
 	m.mu.Lock()
 	se, err := m.lookupTabLocked(sessionID, index)
 	if err != nil {
@@ -2522,6 +2536,12 @@ func (m *BrowserManager) runTabFocusCDP(tabCtx context.Context, actions ...chrom
 // doc comment), which DOES talk to CDP and therefore runs with no
 // BrowserManager lock held, mirroring Session()'s discipline.
 func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, activeIdx int, err error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return nil, 0, admissionErr
+	}
+	defer release()
+
 	m.mu.Lock()
 	se, lerr := m.lookupTabLocked(sessionID, index)
 	if lerr != nil {
@@ -2614,6 +2634,12 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 // it active, subject to the FR-060 memory gate (ADR-041 D3). Creates the browsing context
 // if it doesn't exist yet, mirroring Session()'s lazy-creation semantics.
 func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return Tab{}, admissionErr
+	}
+	defer release()
+
 	m.mu.Lock()
 	if err := m.ensureStarted(); err != nil {
 		m.mu.Unlock()
@@ -2883,6 +2909,20 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	browserCtx := se.browserCtx
 	m.mu.Unlock()
 
+	// Register the shared adoption outcome before waiting for target admission,
+	// so concurrent callers still observe this attempt's result.
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		m.mu.Lock()
+		delete(m.pendingAdopt, targetID)
+		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
+		entry.err = admissionErr
+		close(entry.done)
+		m.mu.Unlock()
+		return entry.result, admissionErr
+	}
+	defer release()
+
 	newTab, err := m.createTab(browserCtx, targetID)
 
 	m.mu.Lock()
@@ -3144,29 +3184,9 @@ type ReconcileOutcome struct {
 // (see ReconcileOutcome's doc comment) — a click that spawns two new targets
 // where one adopts and the other is stranded reports BOTH.
 func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, error) {
-	m.mu.Lock()
-	se, ok := m.sessions[sessionID]
-	if !ok || len(se.tabs) == 0 {
-		m.mu.Unlock()
-		return ReconcileOutcome{}, nil
-	}
-	execCtx := se.active().ctx
-	tracked := make(map[target.ID]struct{}, len(se.tabs))
-	for _, t := range se.tabs {
-		tracked[t.targetID] = struct{}{}
-	}
-	listTargets := m.listTargets
-	m.mu.Unlock()
-
-	if listTargets == nil {
-		listTargets = chromedp.Targets
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(execCtx, reconcileTargetListTimeout)
-	infos, lerr := listTargets(timeoutCtx)
-	cancel()
-	if lerr != nil {
-		return ReconcileOutcome{}, fmt.Errorf("browser: failed to list targets for reconcile: %w", lerr)
+	infos, tracked, err := m.reconcileTargetSnapshot(sessionID)
+	if err != nil {
+		return ReconcileOutcome{}, err
 	}
 
 	var out ReconcileOutcome
@@ -3277,10 +3297,8 @@ func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
 				m.mu.Unlock()
 				return
 			}
-			tabs := snapshotTabsLocked(se)
-			activeIdx := se.activeIdx
+			m.queueTabNotificationLocked(sessionID, se)
 			m.mu.Unlock()
-			go m.notifyTabsChanged(sessionID, tabs, activeIdx) // ADR-041 fix F5 — see doc comment above
 			return
 		}
 	}
