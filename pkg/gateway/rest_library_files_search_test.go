@@ -277,3 +277,41 @@ func TestLibraryFilesSearch_MountScope(t *testing.T) {
 	require.Len(t, resp.Hits, 1)
 	assert.Equal(t, "mymount/shared-a.txt", resp.Hits[0].Path)
 }
+
+// TestLibraryFilesSearch_SemaphoreIsSharedWithTheAgentTool — MV-11's actual
+// guarantee, which no other test states: the REST surface and the agent grep
+// tool draw from ONE 2-slot counter, not one each.
+//
+// This test exists because the defect it catches shipped in the parallel
+// build and survived a green suite. The gateway owned a private 2-slot
+// channel while pkg/tools/grep.go acquired pkg/filegrep's — two independent
+// caps of 2, so four walks could run at once and the "cap" bounded nothing.
+// TestLibraryFilesSearch_ConcurrencyCapAndCancel could not see it: it fills
+// the slots through AcquireFilegrepWalkSlot, the same door the handler uses,
+// so it stays green whichever counter that door happens to open.
+//
+// The discriminating move is to fill both slots through the TOOL's door —
+// filegrep.TryAcquire, exactly what GrepTool.Execute calls — and then assert
+// the REST surface is refused. Under one shared counter that is a 429; under
+// two separate counters the handler finds its own slots free and answers 200.
+func TestLibraryFilesSearch_SemaphoreIsSharedWithTheAgentTool(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+	// Both acquisitions go through pkg/filegrep directly — the agent tool's
+	// path, never the gateway's wrapper.
+	require.True(t, filegrep.TryAcquire(context.Background()),
+		"tool-side slot 1 must be available on a quiet process")
+	require.True(t, filegrep.TryAcquire(context.Background()),
+		"tool-side slot 2 must be available on a quiet process")
+	defer filegrep.Release()
+	defer filegrep.Release()
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"anything"}`)
+	assert.Equalf(t, http.StatusTooManyRequests, w.Code,
+		"two agent-tool walks already hold both shared slots, so the human file "+
+			"search must be refused with 429 — a 200 here means the REST surface counts "+
+			"against its OWN private semaphore and MV-11's cross-surface cap is not real. "+
+			"body=%s", w.Body.String())
+	assert.Equal(t, "1", w.Header().Get("Retry-After"))
+}
