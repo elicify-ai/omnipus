@@ -40,7 +40,8 @@
         "tests/e2e/media.spec.ts",
         "tests/e2e/open-in-chat.spec.ts",
         "tests/e2e/settings.spec.ts",
-        "tests/e2e/memory-remember-recall.spec.ts"
+        "tests/e2e/memory-remember-recall.spec.ts",
+        "tests/e2e/agent-grep.spec.ts"
       ]
     },
     {
