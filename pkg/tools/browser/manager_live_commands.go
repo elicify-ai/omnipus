@@ -9,8 +9,9 @@ import (
 const liveTabCommandTimeout = 5 * time.Second
 
 type liveTabCommandGate struct {
-	gate  chan struct{}
-	users int
+	gate    chan struct{}
+	users   int
+	retired bool // guarded by BrowserManager.mu; rejected users drain normally.
 }
 
 // acquireLiveTabCommand serializes a tab set's target operations, including
@@ -45,6 +46,14 @@ func (m *BrowserManager) acquireLiveTabCommand(ctx context.Context, sessionID st
 			<-gate.gate
 			drop()
 			return nil, err
+		}
+		m.mu.Lock()
+		retired := gate.retired
+		m.mu.Unlock()
+		if retired {
+			<-gate.gate
+			drop()
+			return nil, errBrowserSessionChanged
 		}
 		return func() { <-gate.gate; drop() }, nil
 	case <-ctx.Done():
