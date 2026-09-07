@@ -268,3 +268,51 @@ func TestGrepCarveOutFastPathPremise(t *testing.T) {
 		}
 	}
 }
+
+// TestGrepTool_DottedHomeIsNotProtectedByHiddenPruning covers the DEFAULT
+// installation shape — $OMNIPUS_HOME at ~/.omnipus, a dot-directory — with a
+// mount on the directory above it (mounting $HOME is warn-and-allow, and a
+// plausible thing for an operator to do).
+//
+// The engine's hidden-entry pruning makes an unscoped search skip .omnipus,
+// but that is not protection: it prunes hidden ENTRIES it encounters during a
+// walk, and a `path` naming the dot-directory makes it the walk ROOT instead,
+// whose own (entirely non-hidden) entries are then enumerated normally. The
+// carve-out is what has to hold here, and hidden-file handling in the engine
+// must be free to change without reopening this.
+func TestGrepTool_DottedHomeIsNotProtectedByHiddenPruning(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, ".omnipus")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("seed home: %v", err)
+	}
+	t.Setenv(config.EnvHome, home)
+
+	const wsID, agentID = "ws-dotted", "agent-dotted"
+	work := seedGrepWorkspace(t, home, wsID, agentID)
+	mustWriteFile(t, filepath.Join(home, "credentials.json"), "{\"api_key\":\"sk-DOTTED-CREDENTIAL\"}\n")
+	mustWriteFile(t, filepath.Join(home, "cli.token"), "sk-DOTTED-CLITOKEN\n")
+	if _, _, err := workspace.CreateMount(home, wsID, "host", parent); err != nil {
+		t.Fatalf("create mount on $OMNIPUS_HOME's parent: %v", err)
+	}
+
+	tool := NewGrepTool(work, true)
+	ctx := WithTurnWorkspaceDir(WithAgentID(context.Background(), agentID), work)
+
+	for _, scope := range []string{"", "host", "host/.omnipus"} {
+		args := map[string]any{"pattern": "sk-DOTTED-"}
+		if scope != "" {
+			args["path"] = scope
+		}
+		res := tool.Execute(ctx, args)
+		if res.IsError {
+			t.Logf("path=%q refused with an error (acceptable): %s", scope, res.ForLLM)
+			continue
+		}
+		for _, leak := range []string{"sk-DOTTED-CREDENTIAL", "sk-DOTTED-CLITOKEN"} {
+			if strings.Contains(res.ForLLM, leak+"\"") || strings.Contains(res.ForLLM, leak+"\n") {
+				t.Errorf("path=%q disclosed %q from the default dot-directory home:\n%s", scope, leak, res.ForLLM)
+			}
+		}
+	}
+}
