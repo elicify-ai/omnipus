@@ -103,9 +103,9 @@ func (o *orderLog) snapshot() []string {
 func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 	tabA, cancelA := context.WithCancel(context.Background())
 	t.Cleanup(cancelA)
-	tabB, cancelB := context.WithCancel(context.Background())
+	tabB, cancelB := context.WithCancel(context.WithValue(context.Background(), viewportTargetTestKey{}, "B"))
 	t.Cleanup(cancelB)
-	tabC, cancelC := context.WithCancel(context.Background())
+	tabC, cancelC := context.WithCancel(context.WithValue(context.Background(), viewportTargetTestKey{}, "C"))
 	t.Cleanup(cancelC)
 
 	entry := &tabEntry{ctx: tabB, cancel: cancelB}
@@ -146,12 +146,12 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 			mu.Lock()
 			resized = append(resized, ctx)
 			mu.Unlock()
-			if ctx == tabB {
+			if ctx.Value(viewportTargetTestKey{}) == "B" {
 				sawBOnce.Do(func() { close(sawB) })
 				<-holdB // hold B's re-apply open so C's change lands mid-flight
 			}
 		case layoutMetricsAction:
-			if ctx == tabC {
+			if ctx.Value(viewportTargetTestKey{}) == "C" {
 				*a.w, *a.h = 640, 480 // C's real geometry
 			} else {
 				*a.w, *a.h = 800, 600 // B's — must never end up cached while C is active
@@ -179,7 +179,7 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range resized {
-			if c == tabC {
+			if c.Value(viewportTargetTestKey{}) == "C" {
 				return true
 			}
 		}

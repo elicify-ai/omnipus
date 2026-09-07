@@ -261,7 +261,7 @@ func TestViewportBasis_TabBacksTheCapture_RefreshesTheStaleCache(t *testing.T) {
 func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 	tabOld, cancelOld := context.WithCancel(context.Background())
 	t.Cleanup(cancelOld)
-	tabNew, cancelNew := context.WithCancel(context.Background())
+	tabNew, cancelNew := context.WithCancel(context.WithValue(context.Background(), viewportTargetTestKey{}, "new"))
 	t.Cleanup(cancelNew)
 
 	mgr := &BrowserManager{
@@ -335,7 +335,7 @@ func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 	require.Equal(t, 686, got.bounds[0].height)
 	require.Positive(t, got.scales,
 		"the sharpness override is per tab, so it must be re-applied too or the new tab renders at 1x")
-	require.Same(t, tabNew, got.ctxs[0],
+	require.Equal(t, "new", got.ctxs[0].Value(viewportTargetTestKey{}),
 		"the resize must target the tab the user switched TO, not the one they left")
 }
 
