@@ -33,14 +33,33 @@
 //   - A hit is ONE matching line (first match position); a name match is one
 //     hit with KindName (MV-14).
 //
-// # Performance
+// # Performance (FR-022)
 //
-// This file is the CORRECT REFERENCE implementation: a serial walk with the
-// full behavioral contract, written so all six implementation tracks can build
-// and test against a working engine from day one. The best-in-class levers
-// (FR-022: parallel scanning, sensitive-literal bytes.Index fast path with an
-// alloc gate, required-literal prefilter, folded insensitive scan) are layered
-// on behind THIS SAME API by the engine track; behavior must not change.
+// This is the BEST-IN-CLASS engine layered behind the reference API's exact
+// contract (see filegrep_test.go for the equivalence tests pinning it):
+//
+//   - Sensitive-literal fast path: bytes.Index only, the regex engine is
+//     structurally unreachable (matcher.lineMatch's plain-literal branch),
+//     zero allocations (matcher.go).
+//   - Insensitive literals: an ASCII-case-folded scanner (indexFoldASCII,
+//     zero allocation) for ASCII patterns; regex ("(?i)") fallback only when
+//     the pattern contains a non-ASCII byte (matcher.go).
+//   - Required-literal prefilter: a literal proven mandatory by the parsed
+//     regex AST (prefilter.go) is bytes.Contains-checked before a line ever
+//     reaches RE2.
+//   - Parallel scanning: the directory walk stays single-goroutine and fully
+//     deterministic (name matching, gitignore/hidden/glob filtering, and
+//     every structural bound — max files, max depth — are unchanged from the
+//     reference), and feeds a bounded worker pool that scans file CONTENT
+//     concurrently. Every hit is collected under one mutex and the final
+//     Result.Hits is sorted path-lexicographic-then-line before return (spec
+//     A3), so the result set is deterministic regardless of scheduling.
+//     Budget counters (BytesScanned, output bytes, match counts) are
+//     mutex-protected so they are exact — never torn — under concurrency;
+//     which exact hit trips a global budget can vary run-to-run when several
+//     files are being scanned at once (an inherent, documented property of
+//     concurrent budget enforcement), but every stat and every reason
+//     reported is truthful.
 package filegrep
 
 import (
@@ -51,15 +70,14 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/grafana/regexp"
-	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 // CaseMode selects how letter case is treated for BOTH name and content
@@ -215,91 +233,6 @@ var alwaysPruned = map[string]struct{}{
 	".git": {}, ".library": {}, ".omnipus-vault": {},
 }
 
-// matcher is the compiled query: exactly one of lit / re is active.
-type matcher struct {
-	lit      string // literal to find (already case-normalized when folding)
-	fold     bool   // true => case-insensitive literal (compare folded)
-	re       *regexp.Regexp
-	contextN int
-}
-
-func (o Options) effectiveCase() CaseMode {
-	switch o.Case {
-	case CaseSensitive, CaseInsensitive:
-		return o.Case
-	default: // smart: any uppercase letter => sensitive (MV-13)
-		for _, r := range o.Query {
-			if unicode.IsUpper(r) {
-				return CaseSensitive
-			}
-		}
-		return CaseInsensitive
-	}
-}
-
-func compile(o Options) (*matcher, error) {
-	m := &matcher{contextN: o.ContextLines}
-	if m.contextN < 0 {
-		m.contextN = 0
-	}
-	if m.contextN > 5 {
-		m.contextN = 5
-	}
-	cs := o.effectiveCase()
-	if o.Regex {
-		pat := o.Query
-		if cs == CaseInsensitive {
-			pat = "(?i)" + pat
-		}
-		re, err := regexp.Compile(pat)
-		if err != nil {
-			return nil, err
-		}
-		m.re = re
-		return m, nil
-	}
-	m.lit = o.Query
-	m.fold = cs == CaseInsensitive
-	return m, nil
-}
-
-// lineMatch reports whether line matches, and the byte offset of the first
-// match (for excerpt centering). Reference implementation: the optimized
-// engine keeps these semantics exactly (folded compare == strings.ToLower
-// equality semantics for the reference; ASCII-fold fast path may replace it
-// as long as results are identical — test-pinned by the equivalence tests).
-func (m *matcher) lineMatch(line []byte) (int, bool) {
-	if m.re != nil {
-		loc := m.re.FindIndex(line)
-		if loc == nil {
-			return 0, false
-		}
-		return loc[0], true
-	}
-	if m.fold {
-		// Correctness-first reference: Unicode-aware fold via lowering both.
-		// (The optimized path substitutes an ASCII-folded scanner with regex
-		// fallback for non-ASCII patterns — MV-13 — behavior-identical.)
-		l := bytes.ToLower(line)
-		q := strings.ToLower(m.lit)
-		i := bytes.Index(l, []byte(q))
-		if i < 0 {
-			return 0, false
-		}
-		return i, true
-	}
-	i := bytes.Index(line, []byte(m.lit))
-	if i < 0 {
-		return 0, false
-	}
-	return i, true
-}
-
-func (m *matcher) nameMatch(name string) bool {
-	_, ok := m.lineMatch([]byte(name))
-	return ok
-}
-
 // excerpt cuts a <=ExcerptCapBytes window around pos, snapping to rune
 // boundaries so the result is always valid UTF-8 (MV-6).
 func excerpt(line []byte, pos int) string {
@@ -336,25 +269,76 @@ func excerpt(line []byte, pos int) string {
 			end--
 		}
 	}
-	return string(line[start:end])
+	result := line[start:end]
+	if !utf8.Valid(result) {
+		// Landing both edges on a lead byte (utf8.RuneStart) guarantees the
+		// window doesn't SPLIT a rune, but not that every byte inside it
+		// forms a COMPLETE valid sequence — content that isn't valid UTF-8
+		// to begin with (non-UTF-8 text that has no NUL byte in its first
+		// 8 KiB, so it passes the binary sniff) can still produce an
+		// invalid window. MV-6 requires excerpts to be valid UTF-8
+		// unconditionally, so drop whatever invalid bytes remain rather
+		// than ever return one that isn't (dropping only shrinks the
+		// result, so it never grows past the cap either).
+		return strings.ToValidUTF8(string(result), "")
+	}
+	return string(result)
 }
 
-// errBudget signals a request-level bound; carried through the walk.
-type errBudget struct{ reason TruncatedReason }
+// budgetError signals a request-level bound; carried through the walk.
+type budgetError struct{ reason TruncatedReason }
 
-func (e errBudget) Error() string { return "filegrep: budget " + string(e.reason) }
+func (e budgetError) Error() string { return "filegrep: budget " + string(e.reason) }
 
-// state is one search's mutable accounting.
+// errStopped is an internal sentinel: it means "some other goroutine already
+// recorded the real stop reason" (see walkAbort). It never reaches a caller
+// of Search — walkRoot always substitutes the real reason before returning.
+var errStopped = errors.New("filegrep: walk stopped")
+
+// walkAbort is the first-error-wins handoff between the (single-goroutine)
+// walker and the content-scan worker pool: whichever goroutine discovers a
+// budget breach first records it and cancels the shared scan context so
+// every other goroutine stops promptly.
+type walkAbort struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (a *walkAbort) report(err error, cancel context.CancelFunc) {
+	a.mu.Lock()
+	if a.err == nil {
+		a.err = err
+	}
+	a.mu.Unlock()
+	cancel()
+}
+
+func (a *walkAbort) get() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.err
+}
+
+// state is one search's mutable accounting. Fields touched only by the
+// single walker goroutine (FilesVisited, FilesPrunedIgnored, and the
+// directory-walk control flow) need no synchronization; fields reachable
+// from the content-scan worker pool (res.Hits, output, and the Stats fields
+// scanFile updates) are guarded by mu so concurrent scanning never tears an
+// update.
 type state struct {
 	m       *matcher
 	opts    Options
 	lim     Limits
 	res     *Result
+	mu      sync.Mutex
 	output  int // accumulated output bytes (MV-3a engine budget)
 	include []string
 	exclude []string
 }
 
+// chargeOutput enforces the accumulated output-byte budget and the total
+// match cap (MV-3/MV-3a). Safe for concurrent callers (the walker for name
+// hits, worker-pool goroutines for content hits).
 func (s *state) chargeOutput(h Hit) error {
 	n := len(h.Path) + len(h.Excerpt)
 	for _, c := range h.ContextBefore {
@@ -363,15 +347,64 @@ func (s *state) chargeOutput(h Hit) error {
 	for _, c := range h.ContextAfter {
 		n += len(c)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.output+n > s.lim.OutputBytes {
-		return errBudget{ReasonMaxOutput}
+		return budgetError{ReasonMaxOutput}
 	}
 	s.output += n
 	s.res.Hits = append(s.res.Hits, h)
 	if len(s.res.Hits) >= s.lim.Matches {
-		return errBudget{ReasonMaxMatches}
+		return budgetError{ReasonMaxMatches}
 	}
 	return nil
+}
+
+// addBytesScanned adds n to Stats.BytesScanned under the shared lock and
+// reports whether the running total is now over the byte budget.
+func (s *state) addBytesScanned(n int64) (over bool) {
+	s.mu.Lock()
+	s.res.Stats.BytesScanned += n
+	over = s.res.Stats.BytesScanned > s.lim.Bytes
+	s.mu.Unlock()
+	return over
+}
+
+func (s *state) countSkippedProblem() {
+	s.mu.Lock()
+	s.res.Stats.FilesSkippedProblems++
+	s.mu.Unlock()
+}
+
+func (s *state) countFileCapSkip() {
+	s.mu.Lock()
+	s.res.Stats.FilesSkippedFileCap++
+	s.mu.Unlock()
+}
+
+func (s *state) countHitsCappedPerFile() {
+	s.mu.Lock()
+	s.res.Stats.HitsCappedPerFile++
+	s.mu.Unlock()
+}
+
+// checkStop reports whether the walk should stop now. ctx is the original
+// request context (its own deadline is the only source of a genuine
+// "deadline" reason); scanCtx additionally trips when a worker in the
+// content-scan pool has already recorded a different budget breach — in
+// that case checkStop returns errStopped so the caller defers to
+// walkAbort.get() for the real reason, rather than misreporting it as a
+// deadline.
+func (s *state) checkStop(ctx, scanCtx context.Context) error {
+	select {
+	case <-scanCtx.Done():
+		if ctx.Err() != nil {
+			return budgetError{ReasonDeadline}
+		}
+		return errStopped
+	default:
+		return nil
+	}
 }
 
 func (s *state) globAllowed(rel string) bool {
@@ -391,56 +424,18 @@ func (s *state) globAllowed(rel string) bool {
 	return false
 }
 
-// ignoreStack layers nested .gitignore/.ignore matchers (FR-007): a path is
-// pruned when the DEEPEST matching pattern says ignore, honoring negations,
-// exactly gitignore's precedence (delegated to the library per O1/MIN-004).
-type ignoreLayer struct {
-	base string // dir the ignore file lives in, "" for root
-	gi   *gitignore.GitIgnore
-}
-
-func loadIgnoreLayer(fsys fs.FS, dir string) []ignoreLayer {
-	var out []ignoreLayer
-	for _, name := range []string{".gitignore", ".ignore"} {
-		p := name
-		if dir != "" {
-			p = dir + "/" + name
-		}
-		data, err := fs.ReadFile(fsys, p)
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(string(data), "\n")
-		gi := gitignore.CompileIgnoreLines(lines...)
-		out = append(out, ignoreLayer{base: dir, gi: gi})
+// workerCount bounds the content-scan pool size: enough to overlap I/O and
+// RE2 work across files, never so many that a small search pays needless
+// goroutine/scheduling overhead.
+func workerCount() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		n = 1
 	}
-	return out
-}
-
-func ignoredBy(layers []ignoreLayer, rel string, isDir bool) bool {
-	// Later (deeper) layers win; go-gitignore handles negation within a file.
-	verdict := false
-	decided := false
-	for _, l := range layers {
-		sub := rel
-		if l.base != "" {
-			if !strings.HasPrefix(rel, l.base+"/") {
-				continue
-			}
-			sub = strings.TrimPrefix(rel, l.base+"/")
-		}
-		probe := sub
-		if isDir {
-			probe = sub + "/"
-		}
-		if l.gi.MatchesPath(probe) {
-			verdict, decided = true, true
-		} else if decided && l.gi.MatchesPath("!"+probe) {
-			// negation is handled inside MatchesPath; nothing extra here.
-			_ = probe
-		}
+	if n > 8 {
+		n = 8
 	}
-	return verdict
+	return n
 }
 
 // Search runs one bounded search over the given roots, in order. It never
@@ -462,19 +457,46 @@ func Search(ctx context.Context, roots []Root, opts Options) (Result, error) {
 
 	for _, root := range roots {
 		if err := s.walkRoot(ctx, root); err != nil {
-			var b errBudget
+			var b budgetError
 			if errors.As(err, &b) {
 				res.Truncated = true
 				res.TruncatedReason = b.reason
+				sortHits(res.Hits)
 				return res, nil
 			}
 			// Root itself failed mid-walk (FR-021): visible, never quiet.
 			res.Truncated = true
 			res.TruncatedReason = ReasonRootLost
+			sortHits(res.Hits)
 			return res, nil
 		}
 	}
+	sortHits(res.Hits)
 	return res, nil
+}
+
+// sortHits enforces the deterministic result-set ordering the parallel
+// scanner needs (spec A3: files kind => path-lexicographic, then line —
+// name hits carry Line 0 so they naturally sort before any content hit on
+// the same path). The serial reference produced this order for free by
+// walking directories alphabetically and scanning one file at a time; the
+// parallel engine restores it explicitly since worker completion order is
+// not otherwise deterministic.
+func sortHits(hits []Hit) {
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].Path != hits[j].Path {
+			return hits[i].Path < hits[j].Path
+		}
+		return hits[i].Line < hits[j].Line
+	})
+}
+
+// scanJob is one file handed from the (serial) walker to the content-scan
+// worker pool.
+type scanJob struct {
+	root     Root
+	rel      string
+	reported string
 }
 
 func (s *state) walkRoot(ctx context.Context, root Root) error {
@@ -482,94 +504,150 @@ func (s *state) walkRoot(ctx context.Context, root Root) error {
 	if _, err := fs.Stat(root.FS, "."); err != nil {
 		return err
 	}
-	perFileHits := map[string]int{}
-	var layers []ignoreLayer
-	layers = append(layers, loadIgnoreLayer(root.FS, "")...)
 
-	var walk func(dir string, depth int, layers []ignoreLayer) error
-	walk = func(dir string, depth int, layers []ignoreLayer) error {
-		select {
-		case <-ctx.Done():
-			return errBudget{ReasonDeadline}
-		default:
-		}
-		if depth > s.lim.Depth {
-			return errBudget{ReasonMaxDepth}
-		}
-		entries, err := fs.ReadDir(root.FS, pathOrDot(dir))
-		if err != nil {
-			if dir == "" {
-				return err // root lost
+	scanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan scanJob)
+	abort := &walkAbort{}
+	var wg sync.WaitGroup
+	n := workerCount()
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := s.scanFile(ctx, scanCtx, job); err != nil {
+					abort.report(err, cancel)
+				}
 			}
-			s.res.Stats.FilesSkippedProblems++
-			return nil
+		}()
+	}
+
+	layers := loadIgnoreLayer(root.FS, "")
+	walkErr := s.walkDir(ctx, scanCtx, root, "", 1, layers, jobs)
+	walkerFoundGenuineStop := walkErr != nil && !errors.Is(walkErr, errStopped)
+
+	// The walker finishing its traversal is the NORMAL, successful case —
+	// every eligible file has been handed to a worker, and those workers
+	// must be allowed to keep scanning their already-dispatched job to its
+	// own natural completion (EOF, its own budget check, …). Only cancel
+	// scanCtx here when the walker itself found a genuine stop reason
+	// (a budget breach or root loss); a worker that independently finds one
+	// already calls cancel itself via abort.report. Cancelling unconditionally
+	// the moment the walk finishes would spuriously cut off in-flight scans
+	// that hadn't done anything wrong yet.
+	if walkerFoundGenuineStop {
+		cancel()
+	}
+	close(jobs)
+	wg.Wait()
+
+	if walkerFoundGenuineStop {
+		return walkErr
+	}
+	if workerErr := abort.get(); workerErr != nil {
+		return workerErr
+	}
+	return nil
+}
+
+// walkDir is the single-goroutine directory walker: it enumerates entries in
+// the same alphabetical, depth-first order as the reference, applies every
+// structural rule (always-pruned, hidden, gitignore, glob, FilesVisited /
+// MaxFiles / MaxDepth), performs NAME matching inline, and hands each
+// eligible regular file to the content-scan worker pool via jobs.
+func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, depth int, layers []ignoreLayer, jobs chan<- scanJob) error {
+	if err := s.checkStop(ctx, scanCtx); err != nil {
+		return err
+	}
+	if depth > s.lim.Depth {
+		return budgetError{ReasonMaxDepth}
+	}
+	entries, err := fs.ReadDir(root.FS, pathOrDot(dir))
+	if err != nil {
+		if dir == "" {
+			return err // the walk root's own listing is gone: root_lost
 		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-		for _, e := range entries {
-			select {
-			case <-ctx.Done():
-				return errBudget{ReasonDeadline}
-			default:
-			}
-			name := e.Name()
-			rel := name
-			if dir != "" {
-				rel = dir + "/" + name
-			}
-			if e.IsDir() {
-				if _, bad := alwaysPruned[name]; bad {
-					s.res.Stats.FilesPrunedIgnored++
-					continue
-				}
-				if !s.opts.IncludeHidden && strings.HasPrefix(name, ".") {
-					continue
-				}
-				if ignoredBy(layers, rel, true) {
-					s.res.Stats.FilesPrunedIgnored++
-					continue
-				}
-				sub := append(layers, loadIgnoreLayer(root.FS, rel)...)
-				if err := walk(rel, depth+1, sub); err != nil {
-					return err
-				}
+		// FR-021: distinguish an isolated per-directory hiccup from the
+		// whole mount having died mid-walk. If the ROOT itself no longer
+		// opens either, promote to root_lost instead of silently piling up
+		// per-item skips while the mount is actually gone; if the root is
+		// still healthy, this is exactly the reference's isolated skip.
+		if _, rootErr := fs.Stat(root.FS, "."); rootErr != nil {
+			return rootErr
+		}
+		s.countSkippedProblem()
+		return nil
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	for _, e := range entries {
+		if err := s.checkStop(ctx, scanCtx); err != nil {
+			return err
+		}
+		name := e.Name()
+		rel := name
+		if dir != "" {
+			rel = dir + "/" + name
+		}
+		if e.IsDir() {
+			if _, bad := alwaysPruned[name]; bad {
+				s.res.Stats.FilesPrunedIgnored++
 				continue
 			}
 			if !s.opts.IncludeHidden && strings.HasPrefix(name, ".") {
 				continue
 			}
-			if ignoredBy(layers, rel, false) {
+			if ignoredBy(layers, rel, true) {
 				s.res.Stats.FilesPrunedIgnored++
 				continue
 			}
-			reported := rel
-			if root.Name != "" {
-				reported = root.Name + "/" + rel
+			sub := append(layers, loadIgnoreLayer(root.FS, rel)...)
+			if err := s.walkDir(ctx, scanCtx, root, rel, depth+1, sub, jobs); err != nil {
+				return err
 			}
-			if !s.globAllowed(reported) {
-				continue
-			}
-			s.res.Stats.FilesVisited++
-			if s.res.Stats.FilesVisited > s.lim.Files {
-				return errBudget{ReasonMaxFiles}
-			}
-			// NAME match (one hit, KindName — MV-14).
-			if s.m.nameMatch(name) {
-				if err := s.chargeOutput(Hit{Path: reported, Kind: KindName}); err != nil {
-					return err
-				}
-			}
-			// CONTENT scan (regular files only; symlinks are entries the
-			// confined FS refuses to traverse — their name may match above).
-			if !e.Type().IsRegular() {
-				continue
-			}
-			if err := s.scanFile(ctx, root, rel, reported, perFileHits); err != nil {
+			continue
+		}
+		if !s.opts.IncludeHidden && strings.HasPrefix(name, ".") {
+			continue
+		}
+		if ignoredBy(layers, rel, false) {
+			s.res.Stats.FilesPrunedIgnored++
+			continue
+		}
+		reported := rel
+		if root.Name != "" {
+			reported = root.Name + "/" + rel
+		}
+		if !s.globAllowed(reported) {
+			continue
+		}
+		s.res.Stats.FilesVisited++
+		if s.res.Stats.FilesVisited > s.lim.Files {
+			return budgetError{ReasonMaxFiles}
+		}
+		// NAME match (one hit, KindName — MV-14).
+		if s.m.nameMatch(name) {
+			if err := s.chargeOutput(Hit{Path: reported, Kind: KindName}); err != nil {
 				return err
 			}
 		}
-		return nil
+		// CONTENT scan (regular files only; symlinks are entries the
+		// confined FS refuses to traverse — their name may match above).
+		if !e.Type().IsRegular() {
+			continue
+		}
+		job := scanJob{root: root, rel: rel, reported: reported}
+		select {
+		case jobs <- job:
+		case <-scanCtx.Done():
+			if ctx.Err() != nil {
+				return budgetError{ReasonDeadline}
+			}
+			return errStopped
+		}
 	}
-	return walk("", 1, layers)
+	return nil
 }
 
 func pathOrDot(p string) string {
@@ -579,10 +657,16 @@ func pathOrDot(p string) string {
 	return path.Clean(p)
 }
 
-func (s *state) scanFile(ctx context.Context, root Root, rel, reported string, perFileHits map[string]int) error {
-	f, err := root.FS.Open(rel)
+// scanFile scans one file's content on behalf of the worker pool. It
+// buffers this file's own hits locally (fileHits) — including resolving
+// ContextBefore/ContextAfter, which never cross a file boundary — and only
+// hands them to the shared Result via chargeOutput once they're final,
+// keeping every cross-goroutine interaction through the single mutex-guarded
+// path.
+func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
+	f, err := job.root.FS.Open(job.rel)
 	if err != nil {
-		s.res.Stats.FilesSkippedProblems++
+		s.countSkippedProblem()
 		return nil
 	}
 	defer f.Close()
@@ -597,51 +681,63 @@ func (s *state) scanFile(ctx context.Context, root Root, rel, reported string, p
 		fileBytes int64
 		lineNo    int
 		before    [][]byte // ring of up to contextN previous lines
-		pending   []*Hit   // hits awaiting up to contextN after-lines
+		fileHits  []Hit
+		pending   []int // indices into fileHits awaiting up to contextN after-lines
+		perFile   int   // this file's own match count (MatchesPerFile cap)
 	)
+
+	flush := func() error {
+		for _, h := range fileHits {
+			if err := s.chargeOutput(h); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	appendAfter := func(line []byte) {
-		for _, h := range pending {
-			if len(h.ContextAfter) < s.m.contextN {
-				h.ContextAfter = append(h.ContextAfter, string(line))
+		keep := pending[:0]
+		for _, idx := range pending {
+			fileHits[idx].ContextAfter = append(fileHits[idx].ContextAfter, string(line))
+			if len(fileHits[idx].ContextAfter) < s.m.contextN {
+				keep = append(keep, idx)
 			}
 		}
-		filtered := pending[:0]
-		for _, h := range pending {
-			if len(h.ContextAfter) < s.m.contextN {
-				filtered = append(filtered, h)
-			}
-		}
-		pending = filtered
+		pending = keep
 	}
 
 	for {
-		select {
-		case <-ctx.Done():
-			return errBudget{ReasonDeadline}
-		default:
+		if err := s.checkStop(ctx, scanCtx); err != nil {
+			if ferr := flush(); ferr != nil {
+				return ferr
+			}
+			return err
 		}
-		line, err := br.ReadBytes('\n')
+		line, rerr := br.ReadBytes('\n')
 		if len(line) > 0 {
 			trimmed := bytes.TrimRight(line, "\r\n")
 			lineNo++
 			fileBytes += int64(len(line))
-			s.res.Stats.BytesScanned += int64(len(line))
-			if s.res.Stats.BytesScanned > s.lim.Bytes {
-				return errBudget{ReasonMaxBytes}
+			if s.addBytesScanned(int64(len(line))) {
+				if ferr := flush(); ferr != nil {
+					return ferr
+				}
+				return budgetError{ReasonMaxBytes}
 			}
 			if fileBytes > PerFileContentCap {
-				s.res.Stats.FilesSkippedFileCap++
-				return nil // per-file remainder skip, counted — not a truncation
+				s.countFileCapSkip()
+				return flush() // per-file remainder skip, counted — not a truncation
 			}
 			if pos, ok := s.m.lineMatch(trimmed); ok {
-				if perFileHits[rel] >= s.lim.MatchesPerFile {
-					s.res.Stats.HitsCappedPerFile++
-					// keep scanning for byte accounting? No: capped file is done.
-					return nil
+				if perFile >= s.lim.MatchesPerFile {
+					s.countHitsCappedPerFile()
+					// keep scanning for byte accounting? No: capped file is
+					// done, matching the reference's per-file cap behavior.
+					return flush()
 				}
-				perFileHits[rel]++
+				perFile++
 				h := Hit{
-					Path:    reported,
+					Path:    job.reported,
 					Kind:    KindContent,
 					Line:    lineNo,
 					Excerpt: excerpt(trimmed, pos),
@@ -651,11 +747,9 @@ func (s *state) scanFile(ctx context.Context, root Root, rel, reported string, p
 						h.ContextBefore = append(h.ContextBefore, string(b))
 					}
 				}
-				if err := s.chargeOutput(h); err != nil {
-					return err
-				}
+				fileHits = append(fileHits, h)
 				if s.m.contextN > 0 {
-					pending = append(pending, &s.res.Hits[len(s.res.Hits)-1])
+					pending = append(pending, len(fileHits)-1)
 				}
 			} else if s.m.contextN > 0 {
 				appendAfter(trimmed)
@@ -669,12 +763,12 @@ func (s *state) scanFile(ctx context.Context, root Root, rel, reported string, p
 				}
 			}
 		}
-		if err != nil {
-			if err == io.EOF {
-				return nil
+		if rerr != nil {
+			if rerr == io.EOF {
+				return flush()
 			}
-			s.res.Stats.FilesSkippedProblems++
-			return nil
+			s.countSkippedProblem()
+			return flush()
 		}
 	}
 }
