@@ -5,6 +5,7 @@ import "time"
 // CaptureHealthObservation is an internal snapshot of independently measured
 // capture stages. Counter presence is explicit: zero is a valid measurement.
 type CaptureHealthObservation struct { // not-wire-format: gateway maps the generated contract into this snapshot.
+	BindingEpoch      uint64 // Assigned by the server; never trusted from an encoder payload.
 	Generation        int64
 	TrackState        string
 	TrackMuted        bool
