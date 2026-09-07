@@ -103,6 +103,14 @@ func (p *CopilotCliProvider) GetDefaultModel() string {
 	return CopilotDefaultModel
 }
 
+// SupportsToolChoiceForcing implements ToolChoiceForcingCapable: false —
+// tools are flattened into the prompt text (buildPrompt below), so there is
+// no request-shape tool_choice field to force (ADR-081 D3 [G-B1], spec
+// FR-009). Review-round-1 finding #12: this interface is the engine's
+// primary check (pkg/agent/loop.go's isCLIBridgedProvider); the per-request
+// no-op+WARN in Chat, below, remains the last line of defense.
+func (p *CopilotCliProvider) SupportsToolChoiceForcing() bool { return false }
+
 // CopilotCLIAvailable reports whether the given command (empty means the
 // default `copilot`) resolves to an executable on this machine.
 func CopilotCLIAvailable(command string) bool {

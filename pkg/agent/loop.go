@@ -8464,10 +8464,22 @@ func goalTurnRecordState(ts *turnState) (holds bool, meta *session.UnifiedMeta) 
 // isCLIBridgedProvider reports whether p is one of the CLI-subprocess-backed
 // providers (ADR-081 D3 [G-B1]: codex-cli / GitHub Copilot CLI) that
 // flatten tools into prompt text and have no request-shape tool-choice to
-// force (spec FR-009). Checked by concrete Go type — CreateProviderFromConfig
-// (pkg/providers/factory_provider.go) returns these types directly, with no
-// wrapping layer, whenever the catalog row's protocol is "cli".
+// force (spec FR-009).
+//
+// review-round-1 finding #12: the PRIMARY check is now the
+// providers.ToolChoiceForcingCapable interface — a provider self-declares
+// via SupportsToolChoiceForcing() rather than being matched by a hardcoded
+// concrete-type switch, which misses provider-pool fallback candidates
+// (a *providers.LLMProvider wrapper/adapter around one of the CLI types)
+// and any future CLI-bridged wrapper the switch was never updated for. Only
+// when p does NOT implement the interface at all does the concrete-type
+// switch run, as a fallback for the two known types — kept rather than
+// deleted so a provider that somehow reaches here without implementing the
+// interface (a bug, not the expected path) still gets the right answer.
 func isCLIBridgedProvider(p providers.LLMProvider) bool {
+	if tc, ok := p.(providers.ToolChoiceForcingCapable); ok {
+		return !tc.SupportsToolChoiceForcing()
+	}
 	switch p.(type) {
 	case *providers.CodexCliProvider, *providers.CopilotCliProvider:
 		return true
@@ -9633,15 +9645,28 @@ turnLoop:
 			ts.markGracefulTerminalUsed()
 		}
 
+		// ADR-081 D3 Layer 1 forcing is active for THIS request exactly when
+		// goalForce.layer1 holds and gracefulTerminal hasn't nilled the tool
+		// surface — the same predicate the tool_choice branch below tests.
+		// review-round-1 finding #6: native_search was being set independently
+		// of this, which silently adds a THIRD callable "tool" (the
+		// provider's own built-in search) that satisfies tool_choice=required
+		// without the model ever touching set_goal/AskUserQuestion — the
+		// narrowed pair Layer 1 promises is "exactly two", not "two plus
+		// whatever native capability happens to be on". Suppress native
+		// search for this one request when forcing is active; the client-side
+		// search_web tool is not offered here either (it's excluded from
+		// goalForce.narrowed, same as every other non-goal tool).
+		forcingActive := goalForce.layer1 && !gracefulTerminal
 		llmOpts := map[string]any{
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
 		}
-		if useNativeSearch {
+		if useNativeSearch && !forcingActive {
 			llmOpts["native_search"] = true
 		}
-		if goalForce.layer1 && !gracefulTerminal {
+		if forcingActive {
 			// ADR-081 D3 Layer 1 (spec C-3/FR-007): force the model to call
 			// one of the narrowed pair. gracefulTerminal already nils
 			// providerToolDefs above (spec test 34) — `required` with no

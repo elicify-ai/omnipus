@@ -123,11 +123,31 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		// mints one (this keeps the FR-010 question budget and the FR-014b
 		// push counter attached to the SAME goal generation).
 		if goalIntentNeedsLLMCompile(args) {
-			// Prose restate: rewrite the turn's working prompt exactly like a
-			// fresh activation does — the working agent updates the record
-			// itself via set_goal(mode: update) once it runs (wave 2). No LLM
-			// call here, no pending state.
-			opts.UserMessage = args
+			// review-round-1 finding #9: patch the durable GoalCondition to
+			// the new intent BEFORE rewriting the turn prompt — mirrors
+			// applyGoalMarkerRestate's own GoalCondition patch exactly (same
+			// GoalID, no confirm ritual, just steering). Without this, the
+			// keeper's own prompts (goalNudgePrompt/goalContinuePushPrompt),
+			// `/goal status`, and the D7 fallback compile all read
+			// meta.GoalCondition as this goal's intent — every one of them
+			// would keep citing the SUPERSEDED pre-restate intent forever,
+			// even though the CURRENT turn (opts.UserMessage, below) sees
+			// the new one.
+			newCondition := strings.TrimSpace(args)
+			nowStr := time.Now().UTC().Format(time.RFC3339)
+			if err := store.SetMeta(sessionID, session.MetaPatch{
+				GoalCondition:      &newCondition,
+				GoalLastActivityAt: &nowStr,
+			}); err != nil {
+				logger.WarnCF("agent", "goal: could not persist prose-restated condition",
+					map[string]any{"session_id": sessionID, "error": err.Error()})
+				return true, true, "Could not update the goal (internal error persisting session state)."
+			}
+			// Rewrite the turn's working prompt exactly like a fresh
+			// activation does — the working agent updates the record itself
+			// via set_goal(mode: update) once it runs (wave 2). No LLM call
+			// here, no pending state.
+			opts.UserMessage = newCondition
 			return true, false, ""
 		}
 		// Marker-only restate: deterministic, zero LLM calls, the feasibility
@@ -222,24 +242,42 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		GoalLatestReason:   &emptyReason,
 		GoalStartedAt:      &nowStr,
 		GoalLastActivityAt: &nowStr,
+		// review-round-1 finding #5: a fresh goal generation gets fresh
+		// budgets — both counters are per-GoalID (FR-010's question-round
+		// door, FR-014b's bounded-push streak) per daypartition.go's own
+		// field contract, but nothing zeroed them here, so a NEW goal on
+		// this session silently inherited whatever the PREVIOUS generation
+		// had spent (e.g. an exhausted question-round door stays exhausted
+		// forever, even for goals that never asked a single question).
+		GoalQuestionRoundsUsed: &zero,
+		GoalZeroOutputPushes:   &zero,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: failed to persist goal set",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 		return true, true, "Could not start the goal loop (internal error persisting session state)."
 	}
 
-	// The goal_status frame carries the compiled criteria as the echo (the SPA
-	// renders the active goal + its ladder). This is the FR-113 "echoed in chat".
-	al.emitGoalStatusFrame(sessionID, goalID, condition, 0, maxRounds, "", goalPillActive)
-
-	// ADR-053 Phase-2 §1: capture the chat routing so a later idle-settlement
-	// unmet verdict can re-inject a steering turn via the async-notifier (the
-	// idle path has no turnResult to attach a followUp to).
+	// ADR-053 Phase-2 §1: capture the chat routing BEFORE the write-side
+	// effect below — afterGoalRecordWrite's FR-020 channel echo reads the
+	// RECORDED route (goalTriggers().routeFor), so it must already be set
+	// for a channel-origin marker goal to get its echo on this very write
+	// (also lets a later idle-settlement unmet verdict re-inject a steering
+	// turn via the async-notifier — the idle path has no turnResult to
+	// attach a followUp to).
 	routeAgentID := ""
 	if agentInst != nil {
 		routeAgentID = agentInst.ID
 	}
 	al.recordGoalRouting(sessionID, opts.Channel, opts.ChatID, opts.SessionKey, routeAgentID)
+
+	// review-round-1 finding #8: route the marker-path activation frame
+	// through the SAME post-write path set_goal uses (afterGoalRecordWrite)
+	// instead of the bare emitGoalStatusFrame — the marker compile already
+	// produced a full criteria/dod ladder (unlike the D1 instant-activation
+	// path's legitimately-empty transient record), so the frame should
+	// carry it (FR-113/FR-019), and a channel-routed marker goal gets its
+	// FR-020 echo exactly like a set_goal-authored one.
+	al.afterGoalRecordWrite(sessionID, criteriaJSON, "")
 
 	opts.UserMessage = condition
 	return true, false, ""
@@ -290,6 +328,12 @@ func (al *AgentLoop) activateInstantGoal(
 		GoalLatestReason:   &emptyReason,
 		GoalStartedAt:      &nowStr,
 		GoalLastActivityAt: &nowStr,
+		// review-round-1 finding #5: fresh generation = fresh budgets — see
+		// the marker-only fresh-activation branch above for the full
+		// rationale (same leak, same fix, applied to the instant-activation
+		// path too).
+		GoalQuestionRoundsUsed: &zero,
+		GoalZeroOutputPushes:   &zero,
 	}); err != nil {
 		return fmt.Errorf("goal: instant activation SetMeta: %w", err)
 	}
@@ -331,7 +375,16 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 		return "Could not update the goal (internal error persisting session state)."
 	}
-	al.emitGoalStatusFrame(sessionID, meta.GoalID, condition, meta.GoalRoundsUsed, meta.GoalMaxRounds, "", goalPillActive)
+	// review-round-1 finding #8: route the marker-path restate frame through
+	// the SAME post-write path set_goal(mode:update) uses (afterGoalRecordWrite)
+	// instead of the bare emitGoalStatusFrame — the restated record carries a
+	// full criteria/dod ladder just like set_goal's own update, so the frame
+	// should carry it too, and a channel-routed marker goal gets its FR-020
+	// echo on a restate exactly like it does on a fresh marker activation.
+	// meta.GoalCriteriaJSON here is the PRIOR record (this function's meta
+	// param was read before the SetMeta write above) — same diff-summary
+	// shape set_goal's own update path logs.
+	al.afterGoalRecordWrite(sessionID, criteriaJSON, goalRecordDiffAdapter(meta.GoalCriteriaJSON, criteriaJSON))
 	return fmt.Sprintf("Goal updated: %s\nAcceptance criteria: %d.", condition, len(compiled.Criteria))
 }
 
@@ -461,6 +514,16 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 		GoalLatestReason:   &empty,
 		GoalStartedAt:      &empty,
 		GoalLastActivityAt: &empty,
+		// review-round-1 finding #5: clearing a goal must also clear its
+		// budgets — otherwise goal B (the NEXT `/goal <intent>` on this
+		// session) inherits whatever goal A had already spent of the
+		// question-round door / zero-output push streak, even though B's
+		// activation paths (above) now zero these too. Belt-and-suspenders:
+		// this covers the window between a clear and the next activation,
+		// and any future clear call site that forgets the activation-side
+		// reset.
+		GoalQuestionRoundsUsed: &zero,
+		GoalZeroOutputPushes:   &zero,
 	})
 	if serr != nil {
 		// SetMeta failed — the on-disk goal fields are still set. Do NOT

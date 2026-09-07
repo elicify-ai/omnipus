@@ -360,6 +360,14 @@ func (p *forcedDoorCaptureProvider) Chat(
 
 func (p *forcedDoorCaptureProvider) GetDefaultModel() string { return "forced-door-capture-mock" }
 
+// SupportsNativeSearch implements the same unexported-interface probe
+// pkg/agent/loop.go's useNativeSearch check uses (interface{
+// SupportsNativeSearch() bool }). Unconditionally true — it only takes
+// effect when a test ALSO sets cfg.Tools.Web.PreferNative, which no
+// existing caller of this provider does, so this is inert for every
+// pre-existing test and opt-in for review-round-1 finding #6's own test.
+func (p *forcedDoorCaptureProvider) SupportsNativeSearch() bool { return true }
+
 func (p *forcedDoorCaptureProvider) requestAt(n int) (capturedRequest, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -470,6 +478,83 @@ func TestGoalTurn_EndToEnd_ForcedDoorAndRestoration(t *testing.T) {
 	}
 	if _, present := second.options[providers.OptionKeyToolChoice]; present {
 		t.Fatal("request 2 must NOT carry a tool-choice option — forcing applies to the first request only")
+	}
+}
+
+// TestGoalTurn_ForcedRequest_SuppressesNativeSearch is review-round-1
+// finding #6: llmOpts["native_search"] used to be set independently of
+// Layer-1 forcing, silently adding a THIRD callable "tool" (the provider's
+// own built-in search capability) that satisfies tool_choice=required
+// without the model ever touching set_goal or AskUserQuestion — defeating
+// the "exactly two" narrowed pair Layer 1 promises (D3 [G-m11]). The FORCED
+// first request must never carry native_search, even when the provider
+// supports it and cfg.Tools.Web.PreferNative is on; the SECOND request
+// (forcing lifted, full surface restored) is free to carry it again.
+func TestGoalTurn_ForcedRequest_SuppressesNativeSearch(t *testing.T) {
+	provider := &forcedDoorCaptureProvider{
+		firstCallToolCalls: []providers.ToolCall{{
+			ID: "call_1", Type: "function", Name: tools.SetGoalToolName,
+			Function: &providers.FunctionCall{
+				Name: tools.SetGoalToolName,
+				Arguments: `{"definition":"Build a tetris clone","criteria":[` +
+					`{"text":"the game renders and accepts input","judgment":"boolean"}],` +
+					`"assessment":{"clarity":"clear"}}`,
+			},
+		}},
+		finalMsg: "working on it now",
+	}
+	al, _ := newGoalLoopTestLoop(t, provider, func(cfg *config.Config) {
+		cfg.Tools.Web.PreferNative = true
+	})
+	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
+	if !ok {
+		t.Fatal("native-agent not registered")
+	}
+	agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{
+			tools.SetGoalToolName:         config.ToolPolicyAllow,
+			tools.AskUserQuestionToolName: config.ToolPolicyAllow,
+			"search_web":                  config.ToolPolicyAllow,
+		},
+	})
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	setActiveGoalRecordless(t, store, sid, "goal-native-search-1", "build me a tetris game")
+
+	opts := processOptions{
+		SessionKey: "goal-native-search-session", Channel: "webchat", ChatID: "c1",
+		UserMessage:     "build me a tetris game",
+		TranscriptStore: store, TranscriptSessionID: sid,
+		DefaultResponse: "done", UserInitiated: true,
+	}
+	ts := newTurnState(agentInst, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
+
+	if _, err := al.runTurn(context.Background(), ts); err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+
+	first, ok := provider.requestAt(0)
+	if !ok {
+		t.Fatal("provider was never called")
+	}
+	tc, ok := first.options[providers.OptionKeyToolChoice].(providers.ToolChoice)
+	if !ok || tc.Mode != providers.ToolChoiceRequired {
+		t.Fatalf("request 1 must carry tool_choice=required (forcing must genuinely be active for this assertion to mean anything), got %#v",
+			first.options[providers.OptionKeyToolChoice])
+	}
+	if _, present := first.options["native_search"]; present {
+		t.Fatal("request 1 (forced) must NOT carry native_search — it would add a third callable " +
+			"tool that satisfies tool_choice=required without going through set_goal/AskUserQuestion")
+	}
+
+	second, ok := provider.requestAt(1)
+	if !ok {
+		t.Fatal("expected a second LLM request (the record now exists — the predicate is false)")
+	}
+	if _, present := second.options[providers.OptionKeyToolChoice]; present {
+		t.Fatal("request 2 must NOT carry a tool-choice option — forcing applies to the first request only")
+	}
+	if _, present := second.options["native_search"]; !present {
+		t.Fatal("request 2 (forcing lifted) must carry native_search again — the suppression is scoped to the forced request only")
 	}
 }
 

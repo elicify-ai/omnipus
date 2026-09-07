@@ -281,16 +281,16 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 		collector, cleanup := newEventCollector(t, al)
 		defer cleanup()
 
-		if err := reg.Submit(cardID, sid, "", []askuser.SubmittedAnswer{
+		if submitErr := reg.Submit(cardID, sid, "", []askuser.SubmittedAnswer{
 			{Header: "Scope", Selected: []string{"Single"}},
-		}); err != nil {
-			t.Fatalf("Submit: %v", err)
+		}); submitErr != nil {
+			t.Fatalf("Submit: %v", submitErr)
 		}
 		if got := dispatcher.callCount(); got != 1 {
 			t.Fatalf("DispatchResume calls = %d, want exactly 1", got)
 		}
-		if err := dispatcher.errResult(); err != nil {
-			t.Fatalf("the resume turn itself failed: %v", err)
+		if resumeErr := dispatcher.errResult(); resumeErr != nil {
+			t.Fatalf("the resume turn itself failed: %v", resumeErr)
 		}
 
 		second, ok := provider.callAt(1)
@@ -398,8 +398,8 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 		if got := dispatcher.callCount(); got != 1 {
 			t.Fatalf("DispatchResume calls = %d, want exactly 1 (the server auto-submit)", got)
 		}
-		if err := dispatcher.errResult(); err != nil {
-			t.Fatalf("the auto-submit resume turn itself failed: %v", err)
+		if resumeErr := dispatcher.errResult(); resumeErr != nil {
+			t.Fatalf("the auto-submit resume turn itself failed: %v", resumeErr)
 		}
 
 		afterMeta, err := store.GetMeta(sid)
@@ -493,10 +493,10 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 		// card; this directly manipulates state to isolate that ONE call
 		// site — new-goal activation — from the other).
 		empty := ""
-		if err := store.SetMeta(sid, session.MetaPatch{
+		if setMetaErr := store.SetMeta(sid, session.MetaPatch{
 			GoalID: &empty, GoalCondition: &empty, GoalCriteriaJSON: &empty,
-		}); err != nil {
-			t.Fatal(err)
+		}); setMetaErr != nil {
+			t.Fatal(setMetaErr)
 		}
 		if _, ok := reg.PendingForSession(sid); !ok {
 			t.Fatal("sanity: the stale card must still be genuinely pending before supersession")
@@ -514,10 +514,10 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 		if _, ok := reg.PendingForSession(sid); ok {
 			t.Fatal("the stale card must be gone once the new goal activates")
 		}
-		if err := reg.Submit(staleCardID, sid, "", []askuser.SubmittedAnswer{
+		if submitErr := reg.Submit(staleCardID, sid, "", []askuser.SubmittedAnswer{
 			{Header: "Scope", Selected: []string{"Single"}},
-		}); !errors.Is(err, askuser.ErrNoPending) {
-			t.Fatalf("a late Submit on the cancelled stale card must return ErrNoPending, got %v", err)
+		}); !errors.Is(submitErr, askuser.ErrNoPending) {
+			t.Fatalf("a late Submit on the cancelled stale card must return ErrNoPending, got %v", submitErr)
 		}
 
 		newMeta, err := store.GetMeta(sid)
@@ -745,18 +745,39 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		t.Fatalf("the continuation push must be stamped with the goal-loop sender, got %q", steerMsg.Sender.CanonicalID)
 	}
 
-	if _, err := al.processSystemMessage(context.Background(), steerMsg); err != nil {
-		t.Fatalf("processSystemMessage (continuation push): %v", err)
+	if _, processErr := al.processSystemMessage(context.Background(), steerMsg); processErr != nil {
+		t.Fatalf("processSystemMessage (continuation push): %v", processErr)
 	}
 	if al.goalIsIdleSettling(sid) {
 		t.Fatal("the continuation push must be ACCEPTED — activity must bump and idleSettling must clear (the un-wedge, D6b)")
 	}
 
 	// --- A SECOND idle cycle must be able to fire (C-7). ---
+	//
+	// review-round-1 finding #4(a): the continuation-push turn processed
+	// above ran the scripted provider's plain TEXT response ("Continuing to
+	// work on the unmet items.") — no tool calls, so no adjudicable output
+	// (session.EntryTypeToolCall entry) landed between cycle 1's and cycle
+	// 2's watermarks. The zero-output triple therefore correctly reads
+	// "still zero output" (a bare acknowledgment is not real work), and
+	// cycle 2 dispatches its OWN bounded continue-push rather than a second
+	// Judge call — this is the CORRECT behavior, not a wedge: the un-wedge
+	// invariant itself was already proven above (idleSettling cleared after
+	// the steer turn was accepted). This assertion proves the SECOND cycle
+	// genuinely fires (the push counter advances) rather than silently doing
+	// nothing.
 	rewindGoalLastActivity(t, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // cycle 2
-	if got := cp.callCount(); got != 2 {
-		t.Fatalf("cycle 2: Judge calls = %d, want 2 (a second full idle cycle must complete — no wedge)", got)
+	if got := cp.callCount(); got != 1 {
+		t.Fatalf("cycle 2: Judge calls = %d, want 1 (unchanged — a bare-text continuation reply is not adjudicable output)", got)
+	}
+	afterCycle2, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCycle2.GoalZeroOutputPushes != 1 {
+		t.Fatalf("cycle 2: GoalZeroOutputPushes = %d, want 1 (a second full idle cycle must complete — no wedge)",
+			afterCycle2.GoalZeroOutputPushes)
 	}
 }
 

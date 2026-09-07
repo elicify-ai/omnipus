@@ -28,6 +28,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -205,10 +206,12 @@ func (t *SetGoalTool) Parameters() map[string]any {
 			"mode": map[string]any{
 				"type": "string",
 				"enum": []string{string(setGoalModeRegister), string(setGoalModeUpdate)},
-				"description": "register (default): first authoring of this goal's record — fails if " +
-					"there is nothing to update yet, use register instead. update: steering — " +
-					"re-validate and REPLACE the record; a change summary is returned in the result. " +
-					"update fails if no record has been registered yet.",
+				"description": "register (default): your first authoring of this goal's record — " +
+					"the normal choice on a freshly activated goal, or right after the operator answers " +
+					"your clarifying questions. update: steering an ALREADY-registered record — " +
+					"re-validates and REPLACES it, and a change summary (what was added/changed/dropped) " +
+					"is returned in the result. update fails if no record has been registered yet — " +
+					"call register first.",
 			},
 			"definition": map[string]any{
 				"type": "string",
@@ -321,38 +324,94 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("set_goal rejected: definition is required — one clear sentence restating the goal")
 	}
 
+	// Parse whatever record already existed BEFORE building the new one —
+	// mode:update's merge logic below (review-round-1 finding #7) needs it
+	// for both the criteria/dod Kind carry-over and the omitted-dod
+	// carry-forward. Also still used, as before, to carry Intent/Prompt
+	// through unchanged (this tool only ever sets Definition/Criteria/DoD).
+	var oldRec setGoalRecord
+	if strings.TrimSpace(currentRecordJSON) != "" {
+		if uErr := json.Unmarshal([]byte(currentRecordJSON), &oldRec); uErr != nil {
+			slog.Warn("set_goal: current record JSON failed to parse; proceeding without its prior-record carry-over",
+				"component", "goal", "session_id", sessionID, "error", uErr)
+			oldRec = setGoalRecord{}
+		}
+	}
+
 	rawCriteria, _ := args["criteria"].([]any)
 	criteria, cErr := parseSetGoalCriteria(rawCriteria, authorID)
 	if cErr != nil {
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr))
+	}
+	if mode == setGoalModeUpdate {
+		// finding #7(a): a criterion whose normalized text matches one in the
+		// PRIOR record keeps that prior criterion's Kind and any
+		// check/behavior payload — this tool's schema only ever authors
+		// KindProse, so without this merge, an agent simply re-submitting a
+		// marker-authored machine-verifiable criterion by text (as part of an
+		// otherwise-unrelated steering update) would silently downgrade it.
+		for i := range criteria {
+			criteria[i] = mergeCriterionKindFromOld(criteria[i], oldRec.Criteria)
+		}
 	}
 	normCriteria, nErr := task.NormalizeCriteria(criteria)
 	if nErr != nil {
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", nErr))
 	}
 
-	rawDoD, _ := args["dod"].([]any)
+	// finding #7(b): distinguish an OMITTED/null `dod` arg from an
+	// explicitly EMPTY one ([]) — args["dod"] absent or JSON null means the
+	// caller never touched dod at all; args["dod"]:[] means the caller is
+	// deliberately clearing it. Only the second case (or register mode,
+	// where there is no prior record to carry forward) means "apply the
+	// floor here".
+	rawDoDVal, dodKeyPresent := args["dod"]
+	dodTouched := dodKeyPresent && rawDoDVal != nil
+	var rawDoD []any
+	if dodTouched {
+		rawDoD, _ = rawDoDVal.([]any)
+	}
 	dod, dErr := parseSetGoalDoD(rawDoD, authorID)
 	if dErr != nil {
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", dErr))
 	}
+
 	var normDoD []task.AcceptanceCriterion
-	if len(dod) == 0 {
-		// ADR-081 D2 — the DoD floor: a validated dod set that comes back
-		// empty is backfilled with the same built-in floor
-		// pkg/agent.newFloorDoD guarantees (ADR-080 D-DOD layer 3). Already
-		// normalized (fixed sentinel IDs, valid shape) — no NormalizeCriteria
-		// pass needed.
-		normDoD = setGoalFloorDoD()
-	} else {
+	switch {
+	case len(dod) > 0:
+		if mode == setGoalModeUpdate {
+			// Same Kind/check/behavior carry-over as criteria, above.
+			for i := range dod {
+				dod[i] = mergeCriterionKindFromOld(dod[i], oldRec.DoD)
+			}
+		}
 		normDoD, nErr = task.NormalizeCriteria(dod)
 		if nErr != nil {
 			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", nErr))
 		}
+	case mode == setGoalModeUpdate && !dodTouched:
+		// finding #7(b): an omitted dod on update means "leave my existing
+		// DoD alone" — NOT "replace it with the generic floor". Already
+		// normalized/validated from when it was originally written; no
+		// NormalizeCriteria pass needed. Only when the carried-forward
+		// result is ITSELF empty (a pre-ADR-080 legacy record with no DoD
+		// field at all) does the floor backfill apply — the same
+		// "result empty → floor" rule mode:register always followed.
+		normDoD = oldRec.DoD
+		if len(normDoD) == 0 {
+			normDoD = setGoalFloorDoD()
+		}
+	default:
+		// register mode with no dod, OR update mode with an EXPLICIT empty
+		// dod ([]) — the caller is deliberately (re)applying the floor.
+		// ADR-081 D2 — the DoD floor: pkg/agent.newFloorDoD's built-in floor
+		// (ADR-080 D-DOD layer 3). Already normalized (fixed sentinel IDs,
+		// valid shape) — no NormalizeCriteria pass needed.
+		normDoD = setGoalFloorDoD()
 	}
 
 	assessment, aErr := parseSetGoalAssessment(args)
-	if aErr != nil {
+	if aErr != nil && !errors.Is(aErr, errAssessmentNotProvided) {
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", aErr))
 	}
 
@@ -365,17 +424,6 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	// Carry Intent/Prompt through from whatever record already existed (see
-	// setGoalRecord's doc comment) — this tool only ever sets
-	// Definition/Criteria/DoD.
-	var oldRec setGoalRecord
-	if strings.TrimSpace(currentRecordJSON) != "" {
-		if uErr := json.Unmarshal([]byte(currentRecordJSON), &oldRec); uErr != nil {
-			slog.Warn("set_goal: current record JSON failed to parse; proceeding without its intent/prompt carry-over",
-				"component", "goal", "session_id", sessionID, "error", uErr)
-			oldRec = setGoalRecord{}
-		}
-	}
 	newRec := setGoalRecord{
 		Intent:     oldRec.Intent,
 		Prompt:     oldRec.Prompt,
@@ -445,6 +493,46 @@ func parseSetGoalMode(args map[string]any) (setGoalMode, error) {
 	default:
 		return "", fmt.Errorf("mode %q is not \"register\" or \"update\"", raw)
 	}
+}
+
+// mergeCriterionKindFromOld is review-round-1 finding #7(a)'s fix: this
+// tool's own Parameters() schema only ever authors KindProse — criteria
+// items offer only text+judgment, dod items only text+judgment+provenance,
+// with no check/behavior input shape at all. On mode:update, hardcoding
+// KindProse on every submitted item (parseSetGoalCriteria/parseSetGoalDoD,
+// both above) would silently DOWNGRADE a marker-authored machine-verifiable
+// item (Kind check or behavior, carrying a Check or Behavior payload) the
+// instant the agent merely re-submits it by text as part of an otherwise-
+// unrelated steering update — losing its verifiability with no error, no
+// warning, and nothing in the diff summary to flag it.
+//
+// When newCrit's normalized text matches an item in oldPool, the OLD Kind
+// and Check/Behavior payload are carried onto the new item; every other
+// field (Judgment, Text, Author, Provenance, Status) stays exactly what the
+// caller submitted — task.NormalizeCriteria still validates the merged
+// result afterward, so a caller-submitted Judgment genuinely incompatible
+// with the carried-over Kind (e.g. "quantitative" for a check item, which
+// is always boolean) is still rejected as a validation error, not silently
+// coerced.
+//
+// Matching is TEXT-only, never ID: this tool's schema has no id input field
+// for criteria or dod items (see Parameters()), so the caller never has an
+// old ID to submit in the first place — there is nothing to match on but
+// the restated text.
+func mergeCriterionKindFromOld(newCrit task.AcceptanceCriterion, oldPool []task.AcceptanceCriterion) task.AcceptanceCriterion {
+	normNew := strings.ToLower(strings.TrimSpace(newCrit.Text))
+	for _, old := range oldPool {
+		if strings.ToLower(strings.TrimSpace(old.Text)) != normNew {
+			continue
+		}
+		if old.Kind == task.KindCheck || old.Kind == task.KindBehavior {
+			newCrit.Kind = old.Kind
+			newCrit.Check = old.Check
+			newCrit.Behavior = old.Behavior
+		}
+		break
+	}
+	return newCrit
 }
 
 // parseSetGoalCriteria decodes and shape-checks the `criteria` arg. Judgment
@@ -537,13 +625,22 @@ func requireExplicitJudgment(m map[string]any, field string) (task.JudgmentKind,
 	return judgment, nil
 }
 
+// errAssessmentNotProvided is parseSetGoalAssessment's sentinel for "the
+// caller simply did not supply an assessment argument" (lint: nilnil —
+// distinguishes an intentionally-absent OPTIONAL arg from a genuine parse
+// failure, instead of overloading a bare (nil, nil) return that a `nilnil`
+// linter — rightly — cannot tell apart from "forgot to handle an error
+// case"). Every caller of parseSetGoalAssessment must treat this sentinel as
+// non-fatal (errors.Is check), exactly as the old nil-error case was.
+var errAssessmentNotProvided = errors.New("set_goal: no assessment argument provided")
+
 // parseSetGoalAssessment decodes and validates the optional `assessment`
 // arg. Never persisted (see setGoalAssessment's doc) — this is its only
 // consumer besides Execute's own result-payload/log emission.
 func parseSetGoalAssessment(args map[string]any) (*setGoalAssessment, error) {
 	raw, present := args["assessment"]
 	if !present || raw == nil {
-		return nil, nil
+		return nil, errAssessmentNotProvided
 	}
 	m, ok := raw.(map[string]any)
 	if !ok {

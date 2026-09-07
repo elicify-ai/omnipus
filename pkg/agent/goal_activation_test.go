@@ -242,13 +242,17 @@ func TestGoalActivation_MarkerPathPinned(t *testing.T) {
 }
 
 // TestGoalRestate_ActiveGoal proves US-5 (test 6): a prose restate on an
-// active goal rewrites the working prompt without touching the persisted
-// record or minting a new GoalID; a marker-only restate updates the record
-// deterministically (zero LLM calls); and the feasibility veto still
-// applies on a vetoed marker restate (fail-closed — the record is
-// untouched).
+// active goal rewrites the working prompt AND patches the durable
+// GoalCondition to the new intent (review-round-1 finding #9 — keeper
+// prompts, `/goal status`, and the D7 fallback compile all cite
+// GoalCondition, so leaving it stale would have them cite the SUPERSEDED
+// pre-restate intent forever) without touching the compiled
+// GoalCriteriaJSON record or minting a new GoalID; a marker-only restate
+// updates the record deterministically (zero LLM calls); and the
+// feasibility veto still applies on a vetoed marker restate (fail-closed —
+// the record is untouched).
 func TestGoalRestate_ActiveGoal(t *testing.T) {
-	t.Run("prose_restate_rewrites_prompt_leaves_record_untouched", func(t *testing.T) {
+	t.Run("prose_restate_rewrites_prompt_and_condition_leaves_compiled_record_untouched", func(t *testing.T) {
 		provider := &noCallProvider{t: t}
 		al, _ := newGoalLoopTestLoop(t, provider, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
@@ -282,9 +286,13 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		if after.GoalID != before.GoalID {
 			t.Fatalf("prose restate must not mint a new GoalID, got %q want %q", after.GoalID, before.GoalID)
 		}
-		if after.GoalCondition != before.GoalCondition {
-			t.Fatalf("prose restate must not touch the persisted record (the agent updates it via set_goal), got %q want %q",
-				after.GoalCondition, before.GoalCondition)
+		if after.GoalCondition != "actually make it multiplayer" {
+			t.Fatalf("finding #9: prose restate must patch the durable GoalCondition to the new intent, "+
+				"got %q want %q", after.GoalCondition, "actually make it multiplayer")
+		}
+		if after.GoalCriteriaJSON != before.GoalCriteriaJSON {
+			t.Fatalf("prose restate must not touch the COMPILED record (the agent updates it via set_goal), got %q want %q",
+				after.GoalCriteriaJSON, before.GoalCriteriaJSON)
 		}
 		if provider.calls != 0 {
 			t.Fatalf("prose restate must make ZERO LLM calls, got %d", provider.calls)

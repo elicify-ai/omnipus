@@ -102,6 +102,28 @@ type NativeSearchCapable interface {
 	SupportsNativeSearch() bool
 }
 
+// ToolChoiceForcingCapable is an optional interface for providers that
+// support REQUEST-SHAPE tool_choice forcing (ADR-081 D3 Layer 1: narrowing
+// to an exact tool pair with tool_choice=required). Review-round-1 finding
+// #12: the agent loop's isCLIBridgedProvider used to check a hardcoded
+// concrete-type switch (*CodexCliProvider, *CopilotCliProvider), which
+// misses provider-pool fallback candidates and any future CLI-bridged
+// wrapper — this interface lets a provider self-declare instead. A provider
+// that does NOT implement this interface is treated as forcing-capable by
+// default (SupportsToolChoiceForcing's absence, not its value, is the
+// "capable" signal — mirrors ThinkingCapable/NativeSearchCapable's own
+// opt-in shape); only a provider that explicitly implements it and returns
+// false is treated as unable to force. CodexCliProvider and
+// CopilotCliProvider both implement this returning false (they flatten
+// tools into prompt text — no request-shape tool_choice field exists to
+// set, spec FR-009). Their own per-request no-op+WARN when a caller sets
+// tool_choice=required anyway (ResolveToolChoice + slog.Warn in both
+// providers' Chat) remains the last line of defense for a provider-pool
+// fallback that reaches one of them despite the engine's own check here.
+type ToolChoiceForcingCapable interface {
+	SupportsToolChoiceForcing() bool
+}
+
 // FailoverReason classifies why an LLM request failed for fallback decisions.
 type FailoverReason string
 
