@@ -259,12 +259,15 @@ var inlineServingByteWriters = map[string]bool{
 //	                                           first, for the same reason, and
 //	                                           needs ServeContent's Range support
 //	                                           so bundle audio and video can seek.
-//	embed.go:newSPAHandler                     the EMBEDDED SPA's own asset tree.
+//	embed.go:newSPAHandlerFor                  the EMBEDDED SPA's own asset tree.
 //	                                           Not Library-resolved bytes, not
 //	                                           operator- or agent-authored, and
-//	                                           not covered by §10.4.
+//	                                           not covered by §10.4. (The byte
+//	                                           writer lives in newSPAHandlerFor,
+//	                                           the fs.FS-parameterised body that
+//	                                           newSPAHandler now delegates to.)
 var expectedInlineServingByteWriterSites = []string{
-	"embed.go:newSPAHandler",
+	"embed.go:newSPAHandlerFor",
 	"inline_serving.go:serveLibraryContent",
 	"rest_library_preview.go:handleServeLibraryPreview",
 }
