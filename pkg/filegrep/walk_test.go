@@ -5,6 +5,7 @@
 package filegrep
 
 import (
+	"io/fs"
 	"testing"
 )
 
@@ -67,6 +68,30 @@ func TestFileGrep_GitignoreSemantics(t *testing.T) {
 		}
 		if !got["keep.log"] {
 			t.Fatal("keep.log should be un-ignored by the negation")
+		}
+	})
+
+	t.Run("a deeper gitignore's negation un-ignores what a shallower one ignored (F5)", func(t *testing.T) {
+		// The root .gitignore ignores every *.log; src/.gitignore then
+		// un-ignores src/keep.log specifically. Real git semantics: the
+		// deepest matching pattern wins, so src/keep.log must surface while
+		// src/other.log stays pruned.
+		files := map[string]string{
+			".gitignore":     "*.log\n",
+			"src/.gitignore": "!keep.log\n",
+			"src/keep.log":   "needle",
+			"src/other.log":  "needle",
+		}
+		res := mustSearch(t, oneRoot(buildFS(files)), Options{Query: "needle"})
+		got := map[string]bool{}
+		for _, h := range res.Hits {
+			got[h.Path] = true
+		}
+		if !got["src/keep.log"] {
+			t.Fatal("src/keep.log should be un-ignored by the deeper .gitignore's negation")
+		}
+		if got["src/other.log"] {
+			t.Fatal("src/other.log should still be pruned by the root .gitignore")
 		}
 	})
 
@@ -150,6 +175,52 @@ func TestFileGrep_HiddenAndAlwaysPruned(t *testing.T) {
 			t.Fatal("hidden dotfile should be included when IncludeHidden is true")
 		}
 	})
+}
+
+// TestFileGrep_HiddenPruneAccounting pins F6: a dot-prefixed file or
+// directory skipped because IncludeHidden is false is still a PRUNE, and
+// must be counted in Stats.FilesPrunedIgnored exactly like the
+// always-pruned and gitignore branches immediately around it — the engine's
+// contract is that every skip is observable, never silent.
+func TestFileGrep_HiddenPruneAccounting(t *testing.T) {
+	files := map[string]string{
+		".hidden-file.txt":  "needle",
+		".hidden-dir/x.txt": "needle",
+		"visible.txt":       "needle",
+	}
+	res := mustSearch(t, oneRoot(buildFS(files)), Options{Query: "needle"})
+	if len(res.Hits) != 1 || res.Hits[0].Path != "visible.txt" {
+		t.Fatalf("want only visible.txt found, got %+v", res.Hits)
+	}
+	if res.Stats.FilesPrunedIgnored < 2 {
+		t.Fatalf("want both the hidden file and the hidden directory counted in FilesPrunedIgnored, got %d", res.Stats.FilesPrunedIgnored)
+	}
+}
+
+// TestFileGrep_DirectoryNameHit pins F7: a directory whose OWN name matches
+// the query must itself produce a KindName hit — not just files, matching
+// the FileSearchHit contract ("matched by its name/path") and the SPA's
+// plain-folder placeholder ("Search files and folders").
+func TestFileGrep_DirectoryNameHit(t *testing.T) {
+	files := map[string]string{
+		"01-Areas/Finance/report.md": "irrelevant content",
+	}
+	res := mustSearch(t, oneRoot(buildFS(files)), Options{Query: "Finance"})
+	var dirHit *Hit
+	for i, h := range res.Hits {
+		if h.Path == "01-Areas/Finance" {
+			dirHit = &res.Hits[i]
+		}
+	}
+	if dirHit == nil {
+		t.Fatalf("want a hit for the 01-Areas/Finance directory itself, got %+v", res.Hits)
+	}
+	if dirHit.Kind != KindName {
+		t.Fatalf("want KindName for a directory hit, got %v", dirHit.Kind)
+	}
+	if dirHit.Line != 0 {
+		t.Fatalf("want Line 0 for a directory name hit, got %d", dirHit.Line)
+	}
 }
 
 // TestFileGrep_GlobIncludeExclude pins US-3: doublestar ** glob filtering.
@@ -294,6 +365,76 @@ func TestFileGrep_ContextLines(t *testing.T) {
 		}
 		if m2.contextN != 0 {
 			t.Fatalf("want contextN clamped to 0, got %d", m2.contextN)
+		}
+	})
+}
+
+// TestFileGrep_ScopedSearchHonorsAncestorIgnore pins F8: both real callers
+// (pkg/tools/grep.go's `path`, pkg/gateway/rest_library_files_search.go's
+// scoped rel) narrow Root.FS to a subdirectory via os.Root.OpenRoot/fs.Sub
+// BEFORE handing it to filegrep — so an ancestor .gitignore/.ignore layer
+// above that subdirectory is invisible to loadIgnoreLayer(root.FS, "").
+// Root.ScopePrefix + Root.AncestorIgnore (populated via LoadAncestorIgnore,
+// called by the caller against the UNNARROWED fs.FS) is how a caller
+// preserves that layer through the narrowing.
+func TestFileGrep_ScopedSearchHonorsAncestorIgnore(t *testing.T) {
+	files := map[string]string{
+		".gitignore":        "build/\n",
+		"src/build/out.txt": "needle",
+		"src/main.txt":      "needle",
+	}
+	trueRoot := buildFS(files)
+
+	t.Run("unscoped search prunes build/ via the root .gitignore", func(t *testing.T) {
+		res := mustSearch(t, oneRoot(trueRoot), Options{Query: "needle"})
+		got := map[string]bool{}
+		for _, h := range res.Hits {
+			got[h.Path] = true
+		}
+		if got["src/build/out.txt"] {
+			t.Fatal("src/build/out.txt should be pruned by the root .gitignore")
+		}
+		if !got["src/main.txt"] {
+			t.Fatal("src/main.txt should be found")
+		}
+	})
+
+	t.Run("scoping to src without ancestor context loses the root .gitignore", func(t *testing.T) {
+		sub, err := fs.Sub(trueRoot, "src")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := mustSearch(t, oneRoot(sub), Options{Query: "needle"})
+		got := map[string]bool{}
+		for _, h := range res.Hits {
+			got[h.Path] = true
+		}
+		if !got["build/out.txt"] {
+			t.Fatal("test setup: this sub-test documents the F8 discrepancy — build/out.txt " +
+				"is expected to leak through when the caller narrows Root.FS without supplying " +
+				"ancestor ignore context; if this now fails, the discrepancy may already be fixed " +
+				"some other way and this test needs re-checking")
+		}
+	})
+
+	t.Run("scoping to src WITH ancestor context still prunes build/", func(t *testing.T) {
+		sub, err := fs.Sub(trueRoot, "src")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ancestor := LoadAncestorIgnore(trueRoot, "src")
+		root := Root{Name: "src", FS: sub, ScopePrefix: "src", AncestorIgnore: ancestor}
+		res := mustSearch(t, []Root{root}, Options{Query: "needle"})
+		got := map[string]bool{}
+		for _, h := range res.Hits {
+			got[h.Path] = true
+		}
+		if got["src/build/out.txt"] {
+			t.Fatal("src/build/out.txt should still be pruned by the ancestor .gitignore once " +
+				"the caller supplies ScopePrefix/AncestorIgnore")
+		}
+		if !got["src/main.txt"] {
+			t.Fatalf("src/main.txt should still be found, got %+v", res.Hits)
 		}
 	})
 }
