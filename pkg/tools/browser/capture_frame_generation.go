@@ -51,7 +51,7 @@ func (f *captureFrameTracker) begin(geometry captureFrameGeometry) (captureFrame
 func (f *captureFrameTracker) commit(generation uint64, targetID string, timestamp uint32) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if generation == 0 || generation != f.current.Generation || targetID != f.current.Geometry.TargetID {
+	if generation == 0 || generation != f.current.Generation || targetID != f.current.Geometry.TargetID || f.current.Geometry.Width == 0 {
 		return false
 	}
 	if f.current.Ready && int32(timestamp-f.current.Timestamp) < 0 {

@@ -87,7 +87,7 @@ func TestCaptureFrameGenerationRejectsInvalidGeometry(t *testing.T) {
 
 func TestCaptureFrameGenerationBoundaryDoesNotMoveBackward(t *testing.T) {
 	var frames captureFrameTracker
-	if _, err := frames.begin(captureFrameGeometry{TargetID: "page-a", Scale: 1}); err != nil {
+	if _, err := frames.begin(captureFrameGeometry{TargetID: "page-a", Width: 800, Height: 600, Scale: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if !frames.commit(1, "page-a", 0xfffffff0) || !frames.commit(1, "page-a", 20) {
