@@ -73,6 +73,14 @@ type Session struct {
 
 	mu     sync.Mutex
 	closed bool
+	// Binding admission and peer installation share mu. A binding token is
+	// independent of the server display generation and socket epoch.
+	ingestBindingToken          uint64
+	ingestBindingCtx            context.Context
+	ingestBindingCancel         context.CancelFunc
+	ingestOfferID               uint64
+	ingestOfferCancel           context.CancelFunc
+	ingestInstalledBindingToken uint64
 	// onIngestLost is invoked (in its own goroutine, no lock held) when the
 	// installed ingest connection dies — see the OnConnectionStateChange
 	// handler in ingest.go. The owner uses it to ask the encoder for a fresh
@@ -612,7 +620,15 @@ func (s *Session) Close() error {
 	s.audioFeedID = 0
 	s.videoForward.retire()
 	s.audioForward.retire()
+	bindingCancel, offerCancel := s.ingestBindingCancel, s.ingestOfferCancel
+	s.ingestBindingCancel, s.ingestOfferCancel = nil, nil
 	s.mu.Unlock()
+	if offerCancel != nil {
+		offerCancel()
+	}
+	if bindingCancel != nil {
+		bindingCancel()
+	}
 
 	s.viewersMu.Lock()
 	viewers := s.viewers

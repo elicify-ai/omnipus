@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -76,10 +77,10 @@ var audioGraceTimeout = 2 * time.Second
 // relay.go, which allocated a fresh local track on every attach and would
 // have orphaned existing viewers on reconnect.
 func (s *Session) HandleIngestOffer(sdpOffer string) (string, error) {
-	return s.handleIngestOffer(sdpOffer, 0, "")
+	return s.handleIngestOffer(sdpOffer, 0, "", nil)
 }
 
-func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string) (answer string, err error) {
+func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (answer string, err error) {
 	if sdpOffer == "" {
 		return "", fmt.Errorf("webrtc: ingest offer: empty SDP")
 	}
@@ -88,11 +89,19 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 	prefix := fmt.Sprintf("[ingest-%d]", id)
 	s.logf("%s offer received (%d bytes SDP)", prefix, len(sdpOffer))
 
+	ctx := context.Background()
+	if admission != nil {
+		ctx = admission.ctx
+	}
 	s.mu.Lock()
 	closed := s.closed
+	admissionErr := s.ingestAdmissionErrorLocked(admission)
 	s.mu.Unlock()
 	if closed {
 		return "", fmt.Errorf("webrtc: session closed")
+	}
+	if admissionErr != nil {
+		return "", admissionErr
 	}
 
 	// ice-diag: full candidate/timing/selected-pair instrumentation, on the
@@ -156,8 +165,17 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 	installed := false
 	defer func() {
 		if !installed {
-			if cerr := pc.Close(); cerr != nil {
-				s.logf("%s closing failed new ingest connection: %v", prefix, cerr)
+			closeCandidate := func() {
+				if cerr := pc.Close(); cerr != nil {
+					s.logf("%s closing failed new ingest connection: %v", prefix, cerr)
+				}
+			}
+			// Cancellation returns promptly even if old candidate resources
+			// take time to close. This exact candidate was never installed.
+			if admission != nil && ctx.Err() != nil {
+				go closeCandidate()
+			} else {
+				closeCandidate()
 			}
 		}
 	}()
@@ -197,20 +215,22 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 		}()
 	})
 
-	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
-	if err = pc.SetRemoteDescription(offer); err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: set remote description: %w", prefix, err)
-	}
-
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
-
-	var ans webrtc.SessionDescription
-	ans, err = pc.CreateAnswer(nil)
-	if err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: create answer: %w", prefix, err)
+	if admission == nil {
+		err = prepareIngestAnswer(pc, sdpOffer, prefix)
+	} else {
+		// Pion initializes its ICE agent synchronously during SDP preparation.
+		// A blocked network lookup must not hold the authenticated request open.
+		prepared := make(chan error, 1)
+		go func() { prepared <- prepareIngestAnswer(pc, sdpOffer, prefix) }()
+		select {
+		case err = <-prepared:
+		case <-ctx.Done():
+			return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, context.Cause(ctx))
+		}
 	}
-	if err = pc.SetLocalDescription(ans); err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: set local description: %w", prefix, err)
+	if err != nil {
+		return "", err
 	}
 
 	// gatherStart is deliberately taken AFTER SetLocalDescription (which is
@@ -222,6 +242,8 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 	// separate, because it reported only which of the two branches was taken.
 	gatherStart := time.Now()
 	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, context.Cause(ctx))
 	case <-gatherComplete:
 		s.logf("%s server gathering complete in %dms, sending answer", prefix, time.Since(gatherStart).Milliseconds())
 	case <-time.After(gatherTimeout):
@@ -243,8 +265,16 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 		s.mu.Unlock()
 		return "", fmt.Errorf("webrtc: session closed")
 	}
+	if admissionErr := s.ingestAdmissionErrorLocked(admission); admissionErr != nil {
+		s.mu.Unlock()
+		return "", admissionErr
+	}
 	old := s.ingestPC
 	s.ingestPC = pc
+	s.ingestInstalledBindingToken = 0
+	if admission != nil {
+		s.ingestInstalledBindingToken = admission.bindingToken
+	}
 	s.videoFeedID = 0
 	s.audioFeedID = 0
 	s.videoForward.retire()
@@ -267,13 +297,10 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 
 // HandleIngestOfferForGeneration binds an ingest to the server's display lineage.
 func (s *Session) HandleIngestOfferForGeneration(sdp string, generation uint64, targetID string) (string, error) {
-	if generation == 0 || generation > 9007199254740991 {
-		return "", fmt.Errorf("webrtc: capture generation must be a positive safe integer")
+	if err := validateCaptureIdentity(generation, targetID); err != nil {
+		return "", err
 	}
-	if len(targetID) == 0 || len(targetID) > 128 {
-		return "", fmt.Errorf("webrtc: capture target must contain 1 to 128 bytes")
-	}
-	return s.handleIngestOffer(sdp, generation, targetID)
+	return s.handleIngestOffer(sdp, generation, targetID, nil)
 }
 
 // ingestDisconnectGracePeriod bounds how long the INSTALLED ingest connection
