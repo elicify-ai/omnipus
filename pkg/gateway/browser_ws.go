@@ -61,7 +61,14 @@ type browserWSConn struct { // not-wire-format: internal connection bookkeeping,
 }
 
 func (c *browserWSConn) close() {
-	c.closeOnce.Do(func() { close(c.doneCh) })
+	c.closeOnce.Do(func() {
+		close(c.doneCh)
+		// Unblock ReadMessage so detach/held-input cleanup never depends on the
+		// peer acknowledging a close frame or waiting for the read deadline.
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
+	})
 }
 
 // sendCritical enqueues a must-not-drop frame (browser_status, browser_tabs,
@@ -134,7 +141,9 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// are established and torn down separately on the same connection, and
 	// handleViewport legitimately needs both — folding them into one lock
 	// would mean holding the WebRTC lock across a CDP-bound resize.
-	attachMu sync.Mutex
+	attachMu         sync.Mutex
+	attachmentCtx    context.Context
+	attachmentCancel context.CancelFunc
 	// attachEpoch is the attach-path twin of webrtcEpoch below, and works
 	// identically: bumped synchronously on readLoop's goroutine the instant
 	// a browser_attach frame is dispatched (beginAttach, called from
@@ -289,6 +298,7 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 func (s *browserConnState) beginAttach() uint64 {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
+	s.cancelAttachmentLocked()
 	s.attachEpoch++
 	return s.attachEpoch
 }
@@ -302,6 +312,7 @@ func (s *browserConnState) beginAttach() uint64 {
 // cover the case where nothing is committed YET.
 func (s *browserConnState) invalidateAttach() {
 	s.attachMu.Lock()
+	s.cancelAttachmentLocked()
 	s.attachEpoch++
 	s.attachMu.Unlock()
 }
@@ -326,6 +337,11 @@ func (s *browserConnState) bindAttachment(
 	if s.attachEpoch != epoch {
 		return false
 	}
+	if s.attachmentCancel != nil {
+		s.attachmentCancel()
+	}
+	s.attachmentCtx, s.attachmentCancel = context.WithCancel(context.Background())
+
 	s.mgr = mgr
 	s.sessionID = sessionID
 	s.panelSessionID = panelSessionID
@@ -382,6 +398,7 @@ func resolvePanelTabSet(
 func (s *browserConnState) clearAttachment() (mgr *browser.BrowserManager, sessionID, panelSessionID string) {
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
+	s.cancelAttachmentLocked()
 	mgr, sessionID, panelSessionID = s.mgr, s.sessionID, s.panelSessionID
 	s.mgr = nil
 	s.sessionID = ""
@@ -1505,12 +1522,18 @@ func (h *BrowserWSHandler) handleAttach(
 // the exact same blocked URL) would leave the user looking at no error at
 // all after their retry was refused again.
 func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+	attachment := state.commandAttachment()
+	h.handleInputContext(attachment.ctx, wc, state, attachment, viewerID, data)
+}
+
+func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte) {
 	runBrowserConnWorkHook(workKindInput)
-	// Read the attachment ONCE, under attachMu, and use that snapshot for the
-	// whole handler: browser_attach now commits from the worker goroutine, so
-	// re-reading state.mgr/state.sessionID field-by-field could observe an
-	// attach landing mid-handler and mix a nil manager with a live session id.
-	mgr, sessionID, panelSessionID := state.attachment()
+	// Use the identity captured when this command was admitted. A replacement
+	// attachment cancels this lifetime before any new identity is published.
+	if ctx.Err() != nil || attachment.ctx.Err() != nil {
+		return
+	}
+	mgr, sessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
 	if mgr == nil || sessionID == "" {
 		return
 	}
@@ -1521,7 +1544,10 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 
 	in := browserInputFrameToLiveInput(frame)
 
-	if err := mgr.Live().Input(panelSessionID, viewerID, in); err != nil {
+	if err := mgr.Live().InputContext(ctx, panelSessionID, viewerID, in); err != nil {
+		if commandWasSuperseded(ctx, attachment) {
+			return
+		}
 		if browser.IsBenignLiveInputError(err) {
 			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", sessionID)
 			// The not-controller repair that lived here is gone: input is
@@ -1544,13 +1570,8 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 		// even though their submission was refused again. Navigate errors
 		// therefore always emit; every other kind keeps the content-aware
 		// cooldown.
-		throttled := !inputKindIsDiscrete(frame.Kind) &&
-			message == state.lastInputErrorMessage &&
-			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
-		if !throttled {
-			state.lastInputErrorSentAt = now
-			state.lastInputErrorMessage = message
-			wc.sendCriticalGen(sessionErrorStatus(sessionID, message),
+		if state.shouldSendInputFailure(attachment, frame.Kind, message, now) {
+			wc.sendCriticalGen(operationErrorStatus(sessionID, message),
 				dropContext(sessionID, viewerID, "input-error"))
 		}
 	}
@@ -1618,6 +1639,13 @@ func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.Liv
 	if frame.CaptureHeight != nil {
 		in.CaptureHeight = *frame.CaptureHeight
 	}
+	if frame.CaptureId != nil {
+		in.CaptureID = *frame.CaptureId
+	}
+	if frame.CaptureGeneration != nil && *frame.CaptureGeneration > 0 {
+		in.CaptureGeneration = uint64(*frame.CaptureGeneration)
+	}
+
 	return in
 }
 
@@ -1648,6 +1676,11 @@ func (h *BrowserWSHandler) handleControl(
 	data []byte,
 	cfg *config.Config,
 ) {
+	attachment := state.commandAttachment()
+	h.handleControlContext(attachment.ctx, wc, state, attachment, viewerID, userID, data, cfg)
+}
+
+func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID, userID string, data []byte, cfg *config.Config) {
 	// One snapshot under attachMu for the whole handler — see handleInput.
 	//
 	// chatSessionID is echoed on outgoing frames / audit entries; every call
@@ -1655,15 +1688,18 @@ func (h *BrowserWSHandler) handleControl(
 	// resolved at attach (issue #671) — see handleAttach's doc comment. The
 	// control lock therefore runs on the SAME owner the panel is showing and
 	// the agent's tools consult, never split across two tab sets.
-	mgr, chatSessionID, panelSessionID := state.attachment()
+	if ctx.Err() != nil || attachment.ctx.Err() != nil {
+		return
+	}
+	mgr, chatSessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
 	if mgr == nil || chatSessionID == "" {
-		wc.sendCriticalGen(errorStatus("browser_control: attach before requesting control"),
+		wc.sendCriticalGen(operationErrorStatus("", "browser_control: attach before requesting control"),
 			dropContext("", viewerID, "control-not-attached"))
 		return
 	}
 	var frame generated.BrowserControlFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_control: invalid frame"),
+		wc.sendCriticalGen(operationErrorStatus("", "browser_control: invalid frame"),
 			dropContext(chatSessionID, viewerID, "control-invalid"))
 		return
 	}
@@ -1672,13 +1708,17 @@ func (h *BrowserWSHandler) handleControl(
 	case "take":
 		if !cfg.Tools.Browser.TakeControlEnabled {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "take_control_disabled")
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "take-control is disabled by the operator"),
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "take-control is disabled by the operator"),
 				dropContext(chatSessionID, viewerID, "control-take-disabled"))
 			return
 		}
-		if !mgr.Live().TakeControl(panelSessionID, viewerID) {
+		granted := false
+		if !state.withCommandAttachment(ctx, attachment, func() { granted = mgr.Live().TakeControl(panelSessionID, viewerID) }) {
+			return
+		}
+		if !granted {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"),
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "another viewer already controls this browser"),
 				dropContext(chatSessionID, viewerID, "control-take-denied"))
 			return
 		}
@@ -1691,7 +1731,9 @@ func (h *BrowserWSHandler) handleControl(
 			Controller: &controller,
 		}, dropContext(chatSessionID, viewerID, "control-take-ok"))
 	case "release":
-		mgr.Live().ReleaseControl(panelSessionID, viewerID)
+		if !state.withCommandAttachment(ctx, attachment, func() { mgr.Live().ReleaseControl(panelSessionID, viewerID) }) {
+			return
+		}
 		h.auditRelease(userID, chatSessionID, viewerID)
 		wc.sendCriticalGen(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
@@ -1699,7 +1741,7 @@ func (h *BrowserWSHandler) handleControl(
 			SessionId: &chatSessionID,
 		}, dropContext(chatSessionID, viewerID, "control-release-ok"))
 	default:
-		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
+		wc.sendCriticalGen(operationErrorStatus("", fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
 			dropContext(chatSessionID, viewerID, "control-unknown-action"))
 	}
 }
@@ -1731,17 +1773,25 @@ func (h *BrowserWSHandler) handleControl(
 // tabs.go) are UNAFFECTED — they call BrowserManager.SwitchTab/CloseTab/
 // OpenTab directly, never through this WS handler.
 func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+	attachment := state.commandAttachment()
+	h.handleTabActionContext(attachment.ctx, wc, state, attachment, viewerID, data)
+}
+
+func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte) {
 	runBrowserConnWorkHook(workKindTabAction)
 	// One snapshot under attachMu for the whole handler — see handleInput.
-	mgr, chatSessionID, panelSessionID := state.attachment()
+	if ctx.Err() != nil || attachment.ctx.Err() != nil {
+		return
+	}
+	mgr, chatSessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
 	if mgr == nil || chatSessionID == "" {
-		wc.sendCriticalGen(errorStatus("browser_tab_action: attach before managing tabs"),
+		wc.sendCriticalGen(operationErrorStatus("", "browser_tab_action: attach before managing tabs"),
 			dropContext("", viewerID, "tab-action-not-attached"))
 		return
 	}
 	var frame generated.BrowserTabActionFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_tab_action: invalid frame"),
+		wc.sendCriticalGen(operationErrorStatus("", "browser_tab_action: invalid frame"),
 			dropContext(chatSessionID, viewerID, "tab-action-invalid"))
 		return
 	}
@@ -1753,7 +1803,7 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 
 	if controller := mgr.Live().Controller(panelSessionID); controller != "" && controller != viewerID {
 		wc.sendCriticalGen(
-			sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
+			operationErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
 			dropContext(chatSessionID, viewerID, "tab-action-not-controller"),
 		)
 		return
@@ -1762,31 +1812,40 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	switch frame.Action {
 	case "switch":
 		if frame.Index == nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "browser_tab_action: index is required for switch"),
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "browser_tab_action: index is required for switch"),
 				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"))
 			return
 		}
-		if _, err := mgr.SwitchTab(panelSessionID, *frame.Index); err != nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+		if _, err := mgr.SwitchTabContext(ctx, panelSessionID, *frame.Index); err != nil {
+			if commandWasSuperseded(ctx, attachment) {
+				return
+			}
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
 		}
 	case "close":
 		if frame.Index == nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "browser_tab_action: index is required for close"),
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "browser_tab_action: index is required for close"),
 				dropContext(chatSessionID, viewerID, "tab-close-missing-index"))
 			return
 		}
-		if _, _, err := mgr.CloseTab(panelSessionID, *frame.Index); err != nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+		if _, _, err := mgr.CloseTabContext(ctx, panelSessionID, *frame.Index); err != nil {
+			if commandWasSuperseded(ctx, attachment) {
+				return
+			}
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-close-failed"))
 		}
 	case "open":
-		if _, err := mgr.OpenTab(panelSessionID); err != nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+		if _, err := mgr.OpenTabContext(ctx, panelSessionID); err != nil {
+			if commandWasSuperseded(ctx, attachment) {
+				return
+			}
+			wc.sendCriticalGen(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-open-failed"))
 		}
 	default:
-		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
+		wc.sendCriticalGen(operationErrorStatus("", fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
 			dropContext(chatSessionID, viewerID, "tab-action-unknown"))
 	}
 }

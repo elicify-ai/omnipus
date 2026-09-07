@@ -415,6 +415,8 @@ type BrowserManager struct {
 	cfg  BrowserConfig
 	ssrf *security.SSRFChecker // never nil — enforced by NewBrowserManager
 	mu   sync.Mutex
+	// tabCommands serializes contextual UI tab operations; guarded by mu.
+	tabCommands map[string]*liveTabCommandGate
 	// allocCtx is the chromedp context ensureStarted's tab-creating callers
 	// (bootstrapBrowserCtx etc.) build off. In coordinator (shared-Chrome)
 	// mode this is the coordinator's rootCtx itself (CRIT-001: chromedp CHILD

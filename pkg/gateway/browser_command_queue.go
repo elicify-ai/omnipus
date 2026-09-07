@@ -101,13 +101,11 @@ func (q *browserCommandQueue) discard() {
 }
 
 func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte, typ string, cfg *config.Config) {
-	state.attachMu.Lock()
-	epoch := state.attachEpoch
-	state.attachMu.Unlock()
+	attachment := state.commandAttachment()
 	var in generated.BrowserInputFrame
 	if typ == string(generated.WsFrameTypeBrowserInput) {
 		if err := json.Unmarshal(data, &in); err != nil {
-			wc.sendCriticalGen(errorStatus("invalid browser input"), dropContext("", viewerID, "input-invalid"))
+			wc.sendCriticalGen(operationErrorStatus(attachment.sessionID, "invalid browser input"), dropContext("", viewerID, "input-invalid"))
 			return
 		}
 	}
@@ -115,23 +113,22 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 		move:       in.Kind == "mouse_move",
 		navigation: in.Kind == "navigate" || in.Kind == "navigate_back" || in.Kind == "reload",
 		run: func(ctx context.Context) {
-			state.attachMu.Lock()
-			current := state.attachEpoch == epoch
-			state.attachMu.Unlock()
-			if !current {
+			if attachment.ctx.Err() != nil {
 				return
 			}
+			commandCtx, cancel := attachment.bindContext(ctx)
+			defer cancel()
 			if ctx.Err() != nil {
 				failBrowserInput(wc, state, viewerID, "Browser input expired; reconnect and retry.")
 				return
 			}
 			switch typ {
 			case string(generated.WsFrameTypeBrowserInput):
-				h.handleInput(wc, state, viewerID, data)
+				h.handleInputContext(commandCtx, wc, state, attachment, viewerID, data)
 			case string(generated.WsFrameTypeBrowserControl):
-				h.handleControl(wc, state, viewerID, userID, data, cfg)
+				h.handleControlContext(commandCtx, wc, state, attachment, viewerID, userID, data, cfg)
 			case string(generated.WsFrameTypeBrowserTabAction):
-				h.handleTabAction(wc, state, viewerID, data)
+				h.handleTabActionContext(commandCtx, wc, state, attachment, viewerID, data)
 			}
 		},
 	}
