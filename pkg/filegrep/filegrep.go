@@ -183,6 +183,18 @@ func (l Limits) Normalize() Limits {
 type Root struct {
 	Name string
 	FS   fs.FS
+	// ScopePrefix and AncestorIgnore let a caller that narrowed FS to a
+	// subdirectory of a larger tree (os.Root.OpenRoot, fs.Sub) preserve the
+	// .gitignore/.ignore layers that live ABOVE the narrowed root (F8):
+	// this package never reads outside the fs.FS it's handed, so those
+	// ancestor layers are otherwise invisible to it. ScopePrefix is FS's
+	// own path relative to the true, unscoped root ("src" after
+	// fs.Sub(wfs, "src")); AncestorIgnore is that root's ignore file
+	// content for every directory strictly above ScopePrefix, built by
+	// LoadAncestorIgnore against the UNNARROWED fs.FS before narrowing.
+	// Both zero-valued (the default) means FS already IS the true root.
+	ScopePrefix    string
+	AncestorIgnore []AncestorIgnoreLayer
 }
 
 // Options is one search request.
@@ -533,8 +545,14 @@ func (s *state) walkRoot(ctx context.Context, root Root) error {
 		}()
 	}
 
+	var ancestorLayers []ignoreLayer
+	for _, a := range root.AncestorIgnore {
+		ancestorLayers = append(ancestorLayers, newIgnoreLayer(a.Dir, a.Lines))
+	}
+	ancestor := ancestorContext{prefix: root.ScopePrefix, layers: ancestorLayers}
+
 	layers := loadIgnoreLayer(root.FS, "")
-	walkErr := s.walkDir(ctx, scanCtx, root, "", 1, layers, jobs)
+	walkErr := s.walkDir(ctx, scanCtx, root, "", 1, layers, ancestor, jobs)
 	walkerFoundGenuineStop := walkErr != nil && !errors.Is(walkErr, errStopped)
 
 	// The walker finishing its traversal is the NORMAL, successful case —
@@ -561,12 +579,35 @@ func (s *state) walkRoot(ctx context.Context, root Root) error {
 	return nil
 }
 
+// ancestorContext is the F8 caller-supplied ignore layers from strictly
+// above a scoped Root.FS — constant for the whole walk of one root, so it's
+// computed once in walkRoot and threaded unchanged through every recursive
+// walkDir call rather than recompiled per directory.
+type ancestorContext struct {
+	prefix string // Root.ScopePrefix; "" when Root.FS is already the true root
+	layers []ignoreLayer
+}
+
+// seed resolves the ancestor layers' own verdict for rel (a path relative
+// to the scoped Root.FS), to be used as ignoredByFrom's starting point
+// before the walk root's own layers get their turn — see ignoredByFrom.
+func (a ancestorContext) seed(rel string, isDir bool) bool {
+	if len(a.layers) == 0 {
+		return false
+	}
+	trueRel := rel
+	if a.prefix != "" {
+		trueRel = a.prefix + "/" + rel
+	}
+	return ignoredByFrom(false, a.layers, trueRel, isDir)
+}
+
 // walkDir is the single-goroutine directory walker: it enumerates entries in
 // the same alphabetical, depth-first order as the reference, applies every
 // structural rule (always-pruned, hidden, gitignore, glob, FilesVisited /
 // MaxFiles / MaxDepth), performs NAME matching inline, and hands each
 // eligible regular file to the content-scan worker pool via jobs.
-func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, depth int, layers []ignoreLayer, jobs chan<- scanJob) error {
+func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, depth int, layers []ignoreLayer, ancestor ancestorContext, jobs chan<- scanJob) error {
 	if err := s.checkStop(ctx, scanCtx); err != nil {
 		return err
 	}
@@ -605,22 +646,37 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 				continue
 			}
 			if !s.opts.IncludeHidden && strings.HasPrefix(name, ".") {
-				continue
-			}
-			if ignoredBy(layers, rel, true) {
 				s.res.Stats.FilesPrunedIgnored++
 				continue
 			}
+			if ignoredByFrom(ancestor.seed(rel, true), layers, rel, true) {
+				s.res.Stats.FilesPrunedIgnored++
+				continue
+			}
+			// NAME match on the directory itself (one hit, KindName — F7).
+			// globAllowed doesn't apply here: include/exclude globs govern
+			// which FILES are reportable, not directory pruning or
+			// directory name hits.
+			if s.m.nameMatch(name) {
+				reported := rel
+				if root.Name != "" {
+					reported = root.Name + "/" + rel
+				}
+				if err := s.chargeOutput(Hit{Path: reported, Kind: KindName}); err != nil {
+					return err
+				}
+			}
 			sub := append(layers, loadIgnoreLayer(root.FS, rel)...)
-			if err := s.walkDir(ctx, scanCtx, root, rel, depth+1, sub, jobs); err != nil {
+			if err := s.walkDir(ctx, scanCtx, root, rel, depth+1, sub, ancestor, jobs); err != nil {
 				return err
 			}
 			continue
 		}
 		if !s.opts.IncludeHidden && strings.HasPrefix(name, ".") {
+			s.res.Stats.FilesPrunedIgnored++
 			continue
 		}
-		if ignoredBy(layers, rel, false) {
+		if ignoredByFrom(ancestor.seed(rel, false), layers, rel, false) {
 			s.res.Stats.FilesPrunedIgnored++
 			continue
 		}
