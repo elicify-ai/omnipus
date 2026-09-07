@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -136,20 +137,17 @@ func emptyVaultSearchResponse(collectionID string) gen.VaultSearchResponse {
 func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collectionRoot, collectionID, query string, limit int) gen.VaultSearchResponse {
 	out := emptyVaultSearchResponse(collectionID)
 
-	// NOTES — words over kind=note.
-	noteResp, noteReady := runVaultSearchFind(ctx, env, query, "", gen.VaultFindRequestKindNote, limit)
-	if noteReady {
-		for i := range noteResp.Rows {
-			out.Notes = append(out.Notes, vaultSearchNoteHit(collectionRoot, &noteResp.Rows[i], query))
-		}
-	}
-	mergeVaultSearchCompleteness(&out, noteResp, noteReady)
-
-	// RECORDS — words scoped to each declared record type in turn, so the
+	// RECORDS FIRST — words scoped to each declared record type in turn, so the
 	// engine renders that type's declared properties as cells. A typeless
 	// kind=record query cannot: with no type it does not know which schema's
 	// columns to render, so it returns rows with EMPTY cells — and cells (the
 	// typed property values that matched) are the whole point of a record hit.
+	//
+	// kind=record is a STRICT SUBSET of kind=note (a record note is a note that
+	// declares a record type), so a record note also matches the note query. The
+	// record hit is the more specific, more useful one, so it OWNS the file: its
+	// paths are collected here and excluded from NOTES below, so the same file is
+	// never shown — or counted — in both groups.
 	recHits, recComplete, recReason := vaultSearchRecords(ctx, env, query, limit)
 	out.Records = append(out.Records, recHits...)
 	if !recComplete {
@@ -158,6 +156,22 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 			out.CompleteReason = &recReason
 		}
 	}
+	recordPaths := make(map[string]bool, len(recHits))
+	for i := range recHits {
+		recordPaths[recHits[i].Path] = true
+	}
+
+	// NOTES — words over kind=note, minus any path already returned as a record.
+	noteResp, noteReady := runVaultSearchFind(ctx, env, query, "", gen.VaultFindRequestKindNote, limit)
+	if noteReady {
+		for i := range noteResp.Rows {
+			if recordPaths[noteResp.Rows[i].Path] {
+				continue
+			}
+			out.Notes = append(out.Notes, vaultSearchNoteHit(collectionRoot, &noteResp.Rows[i], query))
+		}
+	}
+	mergeVaultSearchCompleteness(&out, noteResp, noteReady)
 
 	// VIEWS — name/label match over the loaded view set. No index needed, so it
 	// is answered whatever the text index's state.
@@ -361,17 +375,21 @@ func vaultSearchSnippet(collectionRoot, relPath, query string) string {
 		return ""
 	}
 	lowerBody := strings.ToLower(body)
-	pos := -1
+	lowerPos := -1
 	for _, term := range vaultSearchQueryTerms(query) {
 		if i := strings.Index(lowerBody, term); i >= 0 {
-			pos = i
+			lowerPos = i
 			break
 		}
 	}
-	if pos < 0 {
+	if lowerPos < 0 {
 		return ""
 	}
-	return vaultSearchWindow(body, pos)
+	// strings.ToLower can change byte length (e.g. U+0130 → "i̇"), so a byte
+	// offset into lowerBody is NOT a valid offset into body. Map it back to the
+	// original bytes; otherwise the window is misaligned and, when folding
+	// expands text before the match, pos can exceed len(body) and panic.
+	return vaultSearchWindow(body, vaultSearchOrigOffset(body, lowerPos))
 }
 
 // vaultSearchReadNoteHead reads up to the scan cap of the note, refusing any
@@ -403,10 +421,13 @@ func vaultSearchReadNoteHead(collectionRoot, relPath string) (string, bool) {
 }
 
 // vaultSearchQueryTerms lowercases and splits the query into terms, longest
-// first, so the most specific term anchors the snippet.
+// first, so the most specific term anchors the snippet. Terms are delimited by
+// any character that is not a letter, digit, '_' or '-' — using the full Unicode
+// letter/digit classes, so a CJK, Cyrillic or accented query still yields terms
+// (an ASCII-only class silently dropped them, leaving those hits snippet-less).
 func vaultSearchQueryTerms(query string) []string {
 	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
-		return !(r == '_' || r == '-' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+		return !(r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r))
 	})
 	seen := map[string]bool{}
 	var out []string
@@ -419,6 +440,26 @@ func vaultSearchQueryTerms(query string) []string {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
 	return out
+}
+
+// vaultSearchOrigOffset maps a byte offset in strings.ToLower(body) back to the
+// corresponding byte offset in body. Case-folding is rune→runes and can change
+// byte length, so the two strings do not share offsets; this walks body once,
+// accumulating each rune's folded length until it reaches lowerPos. The result
+// is always a valid index into body (≤ len(body)), so the caller's window can
+// never slice out of range.
+func vaultSearchOrigOffset(body string, lowerPos int) int {
+	if lowerPos <= 0 {
+		return 0
+	}
+	lo := 0
+	for i, r := range body {
+		if lo >= lowerPos {
+			return i
+		}
+		lo += len(strings.ToLower(string(r)))
+	}
+	return len(body)
 }
 
 // vaultSearchWindow cuts a whitespace-collapsed window of context around pos,

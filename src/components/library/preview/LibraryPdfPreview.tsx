@@ -420,6 +420,28 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
         // types it as `Worker`.
         const pdfWorker = pdfjs.PDFWorker.create({ name: 'omnipus-library-pdf', port })
 
+        // A missing worker file (or the SPA fallback serving index.html with a
+        // 200) makes `new Worker` succeed synchronously but fail asynchronously
+        // with an `error` event; the worker then never replies and
+        // `task.promise` hangs on "Opening…" forever. Race the load against that
+        // error so the catch below surfaces a visible error instead — the exact
+        // silent-degrade this component's header says it prevents (FR-018b).
+        const workerFailed = new Promise<never>((_, reject) => {
+          port.addEventListener(
+            'error',
+            (ev: ErrorEvent) => {
+              reject(
+                new Error(
+                  `The PDF parsing worker at ${ASSET_BASE}pdf.worker.min.mjs failed to load, ` +
+                    `so this PDF was not opened. It may be missing or served as an HTML fallback.` +
+                    (ev.message ? ` Cause: ${ev.message}` : ''),
+                ),
+              )
+            },
+            { once: true },
+          )
+        })
+
         const task = pdfjs.getDocument({
           data,
           worker: pdfWorker,
@@ -435,7 +457,7 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
           iccUrl: `${ASSET_BASE}iccs/`,
         })
         loadingTask = task
-        doc = await task.promise
+        doc = await Promise.race([task.promise, workerFailed])
         if (cancelled) return
         docRef.current = doc
         pdfjsRef.current = pdfjs
@@ -591,8 +613,16 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
     if (mode !== 'edit') {
       for (const div of annotationLayerDivsRef.current.values()) div.remove()
       annotationLayerDivsRef.current.clear()
+      // Placed-signature previews are UNSAVED edits with a live remove button;
+      // they must not float over — or be mutable in — the read-only View render.
+      // Hide (not remove) so switching back to Edit restores them without
+      // needing the original strokes, which are not retained in state.
+      for (const el of signaturePreviewElsRef.current.values()) el.style.display = 'none'
       return
     }
+
+    // Re-entering edit: any previews hidden on the last View toggle come back.
+    for (const el of signaturePreviewElsRef.current.values()) el.style.display = ''
 
     let cancelled = false
     void (async () => {

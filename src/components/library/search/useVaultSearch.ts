@@ -132,6 +132,9 @@ export interface UseVaultSearchResult {
   error: Error | null
   response: VaultSearchResponse | undefined
   counts: VaultSearchCounts
+  /** The effective per-kind result cap. A kind whose array length equals this
+   *  may have more matches than were returned, so the caller renders "N+". */
+  limit: number
 }
 
 export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchResult {
@@ -225,5 +228,9 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
     error: active ? ((result.error as Error | null) ?? null) : null,
     response,
     counts,
+    // The effective per-kind cap. The server truncates each kind to this, so a
+    // kind whose array length equals it may have more matches than shown — the
+    // bar renders "N+" rather than a flat count that silently plateaus.
+    limit,
   }
 }

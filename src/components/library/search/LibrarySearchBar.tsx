@@ -100,13 +100,14 @@ export interface LibrarySearchBarProps {
   className?: string
 }
 
-function countBadge(n: number) {
+function countBadge(n: number, more = false) {
   return (
     <Badge
       variant="secondary"
       className="ml-1.5 px-1.5 py-0 text-[10px] leading-4"
     >
       {n}
+      {more ? '+' : ''}
     </Badge>
   )
 }
@@ -224,6 +225,7 @@ export function LibrarySearchBar({
     error,
     response,
     counts,
+    limit: effectiveLimit,
   } = useVaultSearch({
     workspaceId,
     folderPath,
@@ -241,6 +243,21 @@ export function LibrarySearchBar({
   }, [isActive])
 
   const disabled = workspaceId === null || isResolvingCollection || collectionId === undefined
+
+  // A kind whose returned array fills the per-kind cap may have more matches
+  // than shown; the badge renders "N+" so a plateaued count is never read as a
+  // true total. "all" overflows if any single kind did.
+  const kindAtLimit = (kind: VaultSearchKind): boolean => {
+    if (!response) return false
+    if (kind === 'all') {
+      return (
+        response.notes.length >= effectiveLimit ||
+        response.records.length >= effectiveLimit ||
+        response.views.length >= effectiveLimit
+      )
+    }
+    return response[kind].length >= effectiveLimit
+  }
   const placeholder =
     workspaceId === null
       ? 'Search notes, records, views'
@@ -302,9 +319,9 @@ export function LibrarySearchBar({
         )}
       </div>
 
-      {!isActive && children}
+      {(!isActive || disabled) && children}
 
-      {isActive && (
+      {isActive && !disabled && (
         <div data-testid="library-search-active" className="flex flex-col gap-2">
           {error && (
             <LibraryErrorBanner message={error.message || 'Search failed.'} testId="library-search-error" />
@@ -316,7 +333,7 @@ export function LibrarySearchBar({
                 {FILTER_TABS.map((tab) => (
                   <TabsTrigger key={tab.value} value={tab.value} data-testid={`library-search-filter-${tab.value}`}>
                     {tab.label}
-                    {countBadge(counts[tab.value])}
+                    {countBadge(counts[tab.value], kindAtLimit(tab.value))}
                   </TabsTrigger>
                 ))}
               </TabsList>
