@@ -173,7 +173,7 @@ func (cs *CaptureSession) onIngestLost() {
 // event rather than a copied watchdog observation.
 func (cs *CaptureSession) reportIngestLoss(sample *CaptureHealthObservation) bool {
 	cs.mu.Lock()
-	if cs.stopped || sample != nil && (sample.BindingEpoch == 0 || sample.BindingEpoch != cs.ingestEpoch || cs.ingestSend == nil || *sample != cs.captureHealth) {
+	if cs.stopped || sample != nil && (sample.BindingEpoch == 0 || sample.BindingEpoch != cs.ingestEpoch || cs.ingestSend == nil || (cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() != nil) || *sample != cs.captureHealth) {
 		cs.mu.Unlock()
 		return false
 	}

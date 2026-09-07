@@ -30,6 +30,43 @@ Integration branch: `browser-improvements`. Base: `fbcbc5edc9845f1fbecb01b423f15
 - [ ] Avoid redundant stale tab-API polling when verified current-generation geometry is available; measure recapture against the two-second target.
 - [ ] Integrate all lanes and resolve cross-component failures.
 
+## Current integration checkpoint
+
+The unchecked wave-level items above remain open until their complete production
+behavior is verified. The following integrated work narrows those gaps:
+
+- Capture startup measures the selected target and its actual geometry before
+  injection (`563022dfe`). Focused cancellation, target-retirement, mutation, and
+  race checks passed; cold shared-process registration remains a separate limit.
+- Authenticated ingest offers retain socket, frame, and offer ownership through
+  negotiation (`d6556cfb2`). Seven deliberate faults were caught and restored
+  adapter tests passed. The gateway reader integration is committed as
+  `a55f42757`: heartbeats and disconnects remain responsive during negotiation,
+  offers have a bounded queue and receipt-based deadline, and answers preserve
+  exact identity. Eight gateway mutations were caught; restored focused tests
+  passed. Capture-only runtime and reader race verification remain pending.
+- Input requires the committed capture to match the receiving target ID and
+  exact target context (`625146088`), in addition to source lifetime and frame
+  generation checks (`4fbc98bf2`). Four wrong-target deliveries were reproduced;
+  three mutations and restored focused race tests passed. Nil-capture admission
+  and cross-panel capture allocation are still open.
+- Session removal retires pending target operations and prevents delayed
+  completion from reviving or replacing the wrong session (`bc1e33752`). Nine
+  behavioral failures, four caught mutations, and restored focused race/shuffle
+  verification are recorded. Viewport admission is the next startup-worker lane.
+- The complete relay race suite passed 159 tests/subtests with zero skips and
+  zero race warnings (`62ab23e6d`, evidence). This covers connection lifetimes,
+  offer admission, separate ingress/write-failure statistics, and bounded input
+  overflow cleanup together. It does not establish viewer presentation, audible
+  synchronization, remote performance, or exact-branch UI acceptance.
+
+Current parallel ownership: startup worker handles viewport admission; media
+worker handles context-aware capture constructors and viewer-offer adapters;
+UI worker handles authenticated gateway ingest and its capture fixture. Root
+handles health/binding integration, capture transitions, and final assembly.
+Go test batches remain serial to respect the machine's resource constraints;
+source work proceeds in the isolated worktrees.
+
 ## Release evidence (all pending)
 
 - [ ] Independent intensive `/review` of complete release-base diff; seven review lenses, every finding resolved and rechecked.

@@ -25,7 +25,7 @@ type CaptureHealthObservation struct { // not-wire-format: gateway maps the gene
 func (cs *CaptureSession) RecordIngestHeartbeat(epoch uint64, sample *CaptureHealthObservation) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	if cs.stopped || epoch == 0 || epoch != cs.ingestEpoch || cs.ingestSend == nil {
+	if cs.stopped || epoch == 0 || epoch != cs.ingestEpoch || cs.ingestSend == nil || (cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() != nil) {
 		return false
 	}
 	now := time.Now()
