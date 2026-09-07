@@ -179,7 +179,7 @@ type e2eFakeEncoder struct {
 }
 
 // startE2EFakeEncoder dials ingestWSURL, performs
-// hello → offer → answer exactly as encoder.js does, and returns a ready
+// hello → confirmed capture command → qualified offer → answer, and returns a ready
 // e2eFakeEncoder with its PeerConnection's remote description already set.
 // Call ONLY from a non-test goroutine (see file doc comment) — every failure
 // is a returned error, never a t.Fatal/require call.
@@ -217,6 +217,22 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 		return nil, fmt.Errorf("write hello: %w", writeErr)
 	}
 
+	conn.SetReadDeadline(time.Now().Add(e2eWait))
+	_, commandData, readErr := conn.ReadMessage()
+	if readErr != nil {
+		return nil, fmt.Errorf("read initial capture command: %w", readErr)
+	}
+	var command generated.BrowserCaptureControlFrame
+	if err := json.Unmarshal(commandData, &command); err != nil {
+		return nil, fmt.Errorf("unmarshal initial capture command: %w", err)
+	}
+	if command.Type != string(generated.WsFrameTypeBrowserCaptureControl) || command.Action != "recapture" ||
+		command.CaptureGeneration == nil || *command.CaptureGeneration <= 0 || *command.CaptureGeneration > 9007199254740991 ||
+		command.TargetId == nil || *command.TargetId == "" || command.ExpectedWidth == nil || *command.ExpectedWidth <= 0 ||
+		command.ExpectedHeight == nil || *command.ExpectedHeight <= 0 || command.CaptureScale == nil || *command.CaptureScale <= 0 {
+		return nil, fmt.Errorf("initial capture command lacks confirmed identity or geometry: %+v", command)
+	}
+
 	pc, pcErr := pion.NewPeerConnection(pion.Configuration{})
 	if pcErr != nil {
 		return nil, fmt.Errorf("new peer connection: %w", pcErr)
@@ -252,9 +268,13 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 		return nil, fmt.Errorf("encoder-side offer: %w", offerErr)
 	}
 
+	offerID := 1
 	offerFrame := generated.BrowserCaptureOfferFrame{
-		Type: string(generated.WsFrameTypeBrowserCaptureOffer),
-		Sdp:  offerSDP,
+		Type:              string(generated.WsFrameTypeBrowserCaptureOffer),
+		Sdp:               offerSDP,
+		CaptureGeneration: command.CaptureGeneration,
+		TargetId:          command.TargetId,
+		OfferId:           &offerID,
 	}
 	offerData, jsonErr := json.Marshal(offerFrame)
 	if jsonErr != nil {
@@ -275,6 +295,12 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 	}
 	if answerFrame.Type != string(generated.WsFrameTypeBrowserCaptureAnswer) || answerFrame.Sdp == "" {
 		return nil, fmt.Errorf("unexpected capture-ingest reply: %+v", answerFrame)
+	}
+
+	if answerFrame.CaptureGeneration == nil || *answerFrame.CaptureGeneration != *command.CaptureGeneration ||
+		answerFrame.TargetId == nil || *answerFrame.TargetId != *command.TargetId ||
+		answerFrame.OfferId == nil || *answerFrame.OfferId != offerID {
+		return nil, fmt.Errorf("capture answer does not match the offered identity: %+v", answerFrame)
 	}
 
 	if setErr := pc.SetRemoteDescription(
@@ -519,6 +545,8 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	relay := webrtc.NewSession(webrtc.Config{StunServer: ""}, sink, e2eSafeLogf(t.Name()))
 
 	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeStarter, e2eSafeLogf(t.Name()))
+	require.NoError(t, err)
+	_, err = cs.BeginFrameTransition("e2e-target", 800, 600, 1)
 	require.NoError(t, err)
 	t.Cleanup(cs.Stop) // idempotent safety net; the test also calls Stop explicitly below
 

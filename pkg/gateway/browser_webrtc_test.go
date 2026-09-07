@@ -810,55 +810,16 @@ func TestCaptureIngestWSHandler_ValidateInbound_RejectsSchemaInvalidHello(t *tes
 }
 
 func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) {
-	_, al := newBrowserWSTestHandler(t, nil)
-	reg := newCaptureRegistry()
-	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, "agent-a", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
-	require.NoError(t, err)
-	reg.set("agent-a", cs)
-
-	handler := newCaptureIngestWSHandler(al, reg)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	wsURL := "ws" + srv.URL[len("http"):] + "/api/v1/browser/capture-ingest"
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-
-	hello := generated.BrowserCaptureHelloFrame{
-		Type:       string(generated.WsFrameTypeBrowserCaptureHello),
-		Token:      cs.TokenHex(),
-		ExtVersion: "1.0.0",
-	}
-	data, err := json.Marshal(hello)
-	require.NoError(t, err)
-
-	conn1, resp1, err := dialer.Dial(wsURL, nil)
-	require.NoError(t, err)
-	if resp1 != nil {
-		resp1.Body.Close()
-	}
-	t.Cleanup(func() { _ = conn1.Close() })
-	require.NoError(t, conn1.WriteMessage(websocket.TextMessage, data))
-
-	// Give the server a moment to bind conn1 as the current ingest connection.
-	time.Sleep(100 * time.Millisecond)
-
-	conn2, resp2, err := dialer.Dial(wsURL, nil)
-	require.NoError(t, err)
-	if resp2 != nil {
-		resp2.Body.Close()
-	}
-	t.Cleanup(func() { _ = conn2.Close() })
-	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, data))
-
-	// conn1 must be closed by the server once conn2's hello supersedes it.
-	conn1.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	_, _, readErr := conn1.ReadMessage()
-	require.Error(
-		t,
-		readErr,
-		"the OLD ingest connection must be closed once a second hello with the same token arrives",
-	)
+	cs, _, url := ingestWireFixture(t)
+	conn1 := ingestWireConnect(t, cs, url)
+	require.Equal(t, "recapture", ingestWireRead(t, conn1, "browser_capture_control")["action"])
+	conn2 := ingestWireConnect(t, cs, url)
+	require.Equal(t, "recapture", ingestWireRead(t, conn2, "browser_capture_control")["action"])
+	require.NoError(t, conn1.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err := conn1.ReadMessage()
+	require.Error(t, err, "the old socket must close after the replacement authenticates")
+	ingestWireSendOffer(t, conn2, 1, 1, "page-a")
+	require.Equal(t, "qualified-answer", ingestWireRead(t, conn2, "browser_capture_answer")["sdp"])
 }
 
 // ── ADR-048 condition-2 fence (re-scoped 2026-07-18) ─────────────────────────
