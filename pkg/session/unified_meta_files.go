@@ -85,9 +85,17 @@ type u5StatsFile struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// u5GoalFile is goal.json's on-disk shape: the 9 Goal* fields, verbatim
+// u5GoalFile is goal.json's on-disk shape: the Goal* fields, verbatim
 // tags. Carries no UpdatedAt of its own (only stats.json does, FR-053) — a
 // goal round does not bump the session's composed recency (BDD-59).
+// ADR-081 D9/Migration (greenfield, no back-compat): GoalPendingJSON and
+// GoalClarificationJSON — the confirm-gate's pending-draft/clarification-
+// record fields — are REMOVED. A stale value under their old JSON keys
+// ("goal_pending"/"goal_clarification") in an on-disk goal.json is simply
+// ignored by json.Unmarshal (unknown fields are dropped) and disappears on
+// the next write — no shim, no legacy parse path. GoalQuestionRoundsUsed,
+// GoalZeroOutputPushes, and the persisted GoalRoute* group are ADDED
+// (FR-010/FR-014b/FR-031).
 type u5GoalFile struct {
 	GoalID             string `json:"goal_id,omitempty"`
 	GoalCondition      string `json:"goal_condition,omitempty"`
@@ -97,13 +105,19 @@ type u5GoalFile struct {
 	GoalStartedAt      string `json:"goal_started_at,omitempty"`
 	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
 	GoalCriteriaJSON   string `json:"goal_criteria,omitempty"`
-	GoalPendingJSON    string `json:"goal_pending,omitempty"`
 	// PendingAskJSON (AskUserQuestion durable pending set) rides in the goal
 	// group: pending interaction state, no recency bump (see SessionMeta).
+	// Untouched by ADR-081 D9 — it belongs to the tool, not the deleted
+	// confirm-gate coupling.
 	PendingAskJSON string `json:"pending_ask,omitempty"`
-	// GoalClarificationJSON is ADR-074 D4a's pending-clarification record
-	// (US-3 S7) — a 10th Goal* field added alongside the original 9.
-	GoalClarificationJSON string `json:"goal_clarification,omitempty"`
+	// GoalQuestionRoundsUsed/GoalZeroOutputPushes/GoalRoute* — see
+	// SessionMeta's matching fields (daypartition.go) for the full contract.
+	GoalQuestionRoundsUsed int    `json:"goal_question_rounds_used,omitempty"`
+	GoalZeroOutputPushes   int    `json:"goal_zero_output_pushes,omitempty"`
+	GoalRouteChannel       string `json:"goal_route_channel,omitempty"`
+	GoalRouteChatID        string `json:"goal_route_chat_id,omitempty"`
+	GoalRouteSessionKey    string `json:"goal_route_session_key,omitempty"`
+	GoalRouteAgentID       string `json:"goal_route_agent_id,omitempty"`
 }
 
 // u5LoopFile is loop.json's on-disk shape: the 9 Loop* fields, verbatim
@@ -155,18 +169,21 @@ func u5StatsFromMeta(meta *UnifiedMeta) u5StatsFile {
 
 func u5GoalFromMeta(meta *UnifiedMeta) u5GoalFile {
 	return u5GoalFile{
-		GoalID:             meta.GoalID,
-		GoalCondition:      meta.GoalCondition,
-		GoalRoundsUsed:     meta.GoalRoundsUsed,
-		GoalMaxRounds:      meta.GoalMaxRounds,
-		GoalLatestReason:   meta.GoalLatestReason,
-		GoalStartedAt:      meta.GoalStartedAt,
-		GoalLastActivityAt: meta.GoalLastActivityAt,
-		GoalCriteriaJSON:   meta.GoalCriteriaJSON,
-		GoalPendingJSON:    meta.GoalPendingJSON,
-		PendingAskJSON:     meta.PendingAskJSON,
-
-		GoalClarificationJSON: meta.GoalClarificationJSON,
+		GoalID:                 meta.GoalID,
+		GoalCondition:          meta.GoalCondition,
+		GoalRoundsUsed:         meta.GoalRoundsUsed,
+		GoalMaxRounds:          meta.GoalMaxRounds,
+		GoalLatestReason:       meta.GoalLatestReason,
+		GoalStartedAt:          meta.GoalStartedAt,
+		GoalLastActivityAt:     meta.GoalLastActivityAt,
+		GoalCriteriaJSON:       meta.GoalCriteriaJSON,
+		PendingAskJSON:         meta.PendingAskJSON,
+		GoalQuestionRoundsUsed: meta.GoalQuestionRoundsUsed,
+		GoalZeroOutputPushes:   meta.GoalZeroOutputPushes,
+		GoalRouteChannel:       meta.GoalRouteChannel,
+		GoalRouteChatID:        meta.GoalRouteChatID,
+		GoalRouteSessionKey:    meta.GoalRouteSessionKey,
+		GoalRouteAgentID:       meta.GoalRouteAgentID,
 	}
 }
 
@@ -200,47 +217,51 @@ func u5LaterOf(a, b time.Time) time.Time {
 func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, goal u5GoalFile, loop u5LoopFile) *UnifiedMeta {
 	return &UnifiedMeta{
 		SessionMeta: SessionMeta{
-			ID:                    identity.ID,
-			AgentID:               identity.AgentID,
-			Title:                 identity.Title,
-			Status:                identity.Status,
-			CreatedAt:             identity.CreatedAt,
-			UpdatedAt:             u5LaterOf(identity.UpdatedAt, stats.UpdatedAt),
-			Model:                 identity.Model,
-			Provider:              identity.Provider,
-			Stats:                 stats.SessionStats,
-			WorkspaceID:           identity.WorkspaceID,
-			TaskID:                identity.TaskID,
-			Channel:               identity.Channel,
-			InstanceID:            identity.InstanceID,
-			PeerID:                identity.PeerID,
-			Partitions:            identity.Partitions,
-			LastCompactionSummary: identity.LastCompactionSummary,
-			Owner:                 identity.Owner,
-			AgentIDs:              identity.AgentIDs,
-			ActiveAgentID:         identity.ActiveAgentID,
-			CompactionSummaries:   identity.CompactionSummaries,
-			ParentSessionID:       identity.ParentSessionID,
-			GoalID:                goal.GoalID,
-			GoalCondition:         goal.GoalCondition,
-			GoalRoundsUsed:        goal.GoalRoundsUsed,
-			GoalMaxRounds:         goal.GoalMaxRounds,
-			GoalLatestReason:      goal.GoalLatestReason,
-			GoalStartedAt:         goal.GoalStartedAt,
-			GoalLastActivityAt:    goal.GoalLastActivityAt,
-			GoalCriteriaJSON:      goal.GoalCriteriaJSON,
-			GoalPendingJSON:       goal.GoalPendingJSON,
-			PendingAskJSON:        goal.PendingAskJSON,
-			GoalClarificationJSON: goal.GoalClarificationJSON,
-			LoopMode:              loop.LoopMode,
-			LoopPrompt:            loop.LoopPrompt,
-			LoopRunCount:          loop.LoopRunCount,
-			LoopMaxRuns:           loop.LoopMaxRuns,
-			LoopIntervalMS:        loop.LoopIntervalMS,
-			LoopNextDelayMS:       loop.LoopNextDelayMS,
-			LoopJobID:             loop.LoopJobID,
-			LoopStartedAt:         loop.LoopStartedAt,
-			LoopLastActivityAt:    loop.LoopLastActivityAt,
+			ID:                     identity.ID,
+			AgentID:                identity.AgentID,
+			Title:                  identity.Title,
+			Status:                 identity.Status,
+			CreatedAt:              identity.CreatedAt,
+			UpdatedAt:              u5LaterOf(identity.UpdatedAt, stats.UpdatedAt),
+			Model:                  identity.Model,
+			Provider:               identity.Provider,
+			Stats:                  stats.SessionStats,
+			WorkspaceID:            identity.WorkspaceID,
+			TaskID:                 identity.TaskID,
+			Channel:                identity.Channel,
+			InstanceID:             identity.InstanceID,
+			PeerID:                 identity.PeerID,
+			Partitions:             identity.Partitions,
+			LastCompactionSummary:  identity.LastCompactionSummary,
+			Owner:                  identity.Owner,
+			AgentIDs:               identity.AgentIDs,
+			ActiveAgentID:          identity.ActiveAgentID,
+			CompactionSummaries:    identity.CompactionSummaries,
+			ParentSessionID:        identity.ParentSessionID,
+			GoalID:                 goal.GoalID,
+			GoalCondition:          goal.GoalCondition,
+			GoalRoundsUsed:         goal.GoalRoundsUsed,
+			GoalMaxRounds:          goal.GoalMaxRounds,
+			GoalLatestReason:       goal.GoalLatestReason,
+			GoalStartedAt:          goal.GoalStartedAt,
+			GoalLastActivityAt:     goal.GoalLastActivityAt,
+			GoalCriteriaJSON:       goal.GoalCriteriaJSON,
+			PendingAskJSON:         goal.PendingAskJSON,
+			GoalQuestionRoundsUsed: goal.GoalQuestionRoundsUsed,
+			GoalZeroOutputPushes:   goal.GoalZeroOutputPushes,
+			GoalRouteChannel:       goal.GoalRouteChannel,
+			GoalRouteChatID:        goal.GoalRouteChatID,
+			GoalRouteSessionKey:    goal.GoalRouteSessionKey,
+			GoalRouteAgentID:       goal.GoalRouteAgentID,
+			LoopMode:               loop.LoopMode,
+			LoopPrompt:             loop.LoopPrompt,
+			LoopRunCount:           loop.LoopRunCount,
+			LoopMaxRuns:            loop.LoopMaxRuns,
+			LoopIntervalMS:         loop.LoopIntervalMS,
+			LoopNextDelayMS:        loop.LoopNextDelayMS,
+			LoopJobID:              loop.LoopJobID,
+			LoopStartedAt:          loop.LoopStartedAt,
+			LoopLastActivityAt:     loop.LoopLastActivityAt,
 		},
 		Type: identity.Type,
 	}
@@ -445,9 +466,13 @@ func (us *UnifiedStore) u5WriteGoalLocked(sessionID string, meta *UnifiedMeta) e
 		cached.GoalStartedAt = meta.GoalStartedAt
 		cached.GoalLastActivityAt = meta.GoalLastActivityAt
 		cached.GoalCriteriaJSON = meta.GoalCriteriaJSON
-		cached.GoalPendingJSON = meta.GoalPendingJSON
 		cached.PendingAskJSON = meta.PendingAskJSON
-		cached.GoalClarificationJSON = meta.GoalClarificationJSON
+		cached.GoalQuestionRoundsUsed = meta.GoalQuestionRoundsUsed
+		cached.GoalZeroOutputPushes = meta.GoalZeroOutputPushes
+		cached.GoalRouteChannel = meta.GoalRouteChannel
+		cached.GoalRouteChatID = meta.GoalRouteChatID
+		cached.GoalRouteSessionKey = meta.GoalRouteSessionKey
+		cached.GoalRouteAgentID = meta.GoalRouteAgentID
 	} else {
 		us.metaCache[sessionID] = meta.Clone()
 	}

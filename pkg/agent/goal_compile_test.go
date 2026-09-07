@@ -38,7 +38,7 @@ func (f fakeFeasibilityContext) BashReachable() bool { return f.bashReachable }
 
 // --- FR-110/FR-113: compile intent → criteria + echo-confirm + amendment -----
 
-func TestGoalCompile_EchoConfirm_Amendment(t *testing.T) {
+func TestGoalCompile_Echo_Amendment(t *testing.T) {
 	fc := fakeFeasibilityContext{bashReachable: true}
 
 	// Each marker kind compiles to the right criterion kind.
@@ -83,14 +83,6 @@ func TestGoalCompile_EchoConfirm_Amendment(t *testing.T) {
 		t.Errorf("echo must include the behavior tool, got: %s", echo)
 	}
 
-	// Confirm detection (FR-113/D11): a chat reply confirms.
-	if !IsGoalConfirm("confirm") || !IsGoalConfirm("  YES  ") {
-		t.Error("IsGoalConfirm must accept confirm/yes")
-	}
-	if IsGoalConfirm("some other text") {
-		t.Error("IsGoalConfirm must reject non-confirm text")
-	}
-
 	// Amendment diff (N-6): re-statement is added/changed/dropped, never silent.
 	// Build current + proposed with MATCHING texts so a shape-only change is
 	// detected as "changed" (not add+drop). The behavior criterion's min_count
@@ -123,13 +115,14 @@ func TestGoalCompile_EchoConfirm_Amendment(t *testing.T) {
 
 func intp(v int) *int { return &v }
 
-// TestGoalCompile_AmendmentEcho_ShowsDoDDelta is code-review fix-wave finding
-// #4: an amendment diff (diffGoalAmendment/formatAmendmentEcho) must show DoD
-// deltas alongside Criteria deltas — a `/goal <new intent>` over an active
-// goal recompiles a new DoD (unioned into the judged set on confirm via
-// compiledGoalCriteriaFor) but the old amendment echo showed only Criteria
-// deltas, silently changing what gets judged without telling the user.
-func TestGoalCompile_AmendmentEcho_ShowsDoDDelta(t *testing.T) {
+// TestGoalCompile_AmendmentDiff_ShowsDoDDelta is code-review fix-wave finding
+// #4, re-scoped by ADR-081 D9 (formatAmendmentEcho is retired — set_goal's
+// mode:update tool result renders the diff in wave 2; this test now covers
+// diffGoalAmendment's own DoD-delta computation directly): an amendment diff
+// must show DoD deltas alongside Criteria deltas — a re-statement over an
+// active goal recompiles a new DoD (unioned into the judged set via
+// compiledGoalCriteriaFor) and the diff must not silently drop that.
+func TestGoalCompile_AmendmentDiff_ShowsDoDDelta(t *testing.T) {
 	au := task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "tester"}
 	sysAuthor := task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorID}
 
@@ -171,25 +164,11 @@ func TestGoalCompile_AmendmentEcho_ShowsDoDDelta(t *testing.T) {
 	if !amd.HasChanges() {
 		t.Fatal("HasChanges must be true when only DoD differs")
 	}
-
-	echo := formatAmendmentEcho(amd)
-	if !strings.Contains(echo, "Definition of Done changes") {
-		t.Fatalf("amendment echo must render a DoD delta block, got:\n%s", echo)
-	}
-	if !strings.Contains(echo, "input is validated before use") {
-		t.Fatalf("amendment echo must list the added DoD item, got:\n%s", echo)
-	}
-	if !strings.Contains(echo, "(inferred — confirm or drop)") {
-		t.Fatalf("amendment echo must flag the inferred DoD item, got:\n%s", echo)
-	}
-	if !strings.Contains(echo, "no secrets leak") {
-		t.Fatalf("amendment echo must list the changed DoD item, got:\n%s", echo)
-	}
 }
 
-// TestGoalCompile_AmendmentEcho_DoDOnlyUnchanged_NoDeltaBlock is the negative
-// control: identical DoD on both sides renders no DoD delta block at all.
-func TestGoalCompile_AmendmentEcho_DoDOnlyUnchanged_NoDeltaBlock(t *testing.T) {
+// TestGoalCompile_AmendmentDiff_DoDOnlyUnchanged_NoDelta is the negative
+// control: identical DoD on both sides produces no DoD delta at all.
+func TestGoalCompile_AmendmentDiff_DoDOnlyUnchanged_NoDelta(t *testing.T) {
 	dod := []task.AcceptanceCriterion{
 		{ID: "d1", Kind: task.KindProse, Text: "no secrets leak", Judgment: task.JudgmentBoolean,
 			Provenance: task.ProvenanceFloor, Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorID}},
@@ -202,10 +181,6 @@ func TestGoalCompile_AmendmentEcho_DoDOnlyUnchanged_NoDeltaBlock(t *testing.T) {
 	if len(amd.DoDAdded) != 0 || len(amd.DoDChanged) != 0 || len(amd.DoDDropped) != 0 {
 		t.Fatalf("identical DoD must produce no DoD delta, got added=%+v changed=%+v dropped=%+v",
 			amd.DoDAdded, amd.DoDChanged, amd.DoDDropped)
-	}
-	echo := formatAmendmentEcho(amd)
-	if strings.Contains(echo, "Definition of Done changes") {
-		t.Fatalf("no DoD delta block expected when DoD is unchanged, got:\n%s", echo)
 	}
 }
 
@@ -353,7 +328,12 @@ func TestCriterionUnjudgeable_OwnerRemediation(t *testing.T) {
 
 // --- FR-114/N-12: /goal clear cancels in-flight compilation -----------------
 
-func TestGoalClear_CancelsInflightCompilation(t *testing.T) {
+// TestGoalClear_AfterRestate_ClearsEverything replaces the ADR-074-era
+// TestGoalClear_CancelsInflightCompilation (ADR-081 D9: there is no more
+// pending-amendment state for /goal clear to cancel — a restate applies
+// immediately): activate a goal, restate it (marker-only, applies in place),
+// then verify /goal clear empties all goal state.
+func TestGoalClear_AfterRestate_ClearsEverything(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -362,19 +342,20 @@ func TestGoalClear_CancelsInflightCompilation(t *testing.T) {
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
 	}
 
-	// Start an active goal (set + ADR-074 D4a confirm), then begin a
-	// re-statement amendment (pending).
+	// Instant activation (ADR-081 D1) — active immediately, no confirm step.
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal the feature lands correctly", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
+
+	// A marker-only restate on the active goal applies immediately (US-5 S19).
 	al.applyGoalCommandPrompt(context.Background(),
-		bus.InboundMessage{Content: "/goal the feature lands correctly and tests pass", UserInitiated: true}, agentInst, &opts)
+		bus.InboundMessage{Content: "/goal [tests pass]", UserInitiated: true}, agentInst, &opts)
 	mid, _ := store.GetMeta(sid)
-	if mid.GoalPendingJSON == "" {
-		t.Fatal("precondition: a pending amendment must exist after re-state")
+	if mid.GoalCondition == "" {
+		t.Fatal("precondition: goal must still be active after restate")
 	}
 
-	// /goal clear cancels BOTH the active goal AND the in-flight compilation.
+	// /goal clear empties the (now-restated) goal state.
 	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal clear", UserInitiated: true}, agentInst, &opts)
 	if !matched || !handled {
@@ -384,9 +365,9 @@ func TestGoalClear_CancelsInflightCompilation(t *testing.T) {
 		t.Fatalf("/goal clear reply should say cleared, got: %s", reply)
 	}
 	after, _ := store.GetMeta(sid)
-	if after.GoalCondition != "" || after.GoalCriteriaJSON != "" || after.GoalPendingJSON != "" {
-		t.Errorf("after clear, all goal state must be empty: condition=%q criteria=%q pending=%q",
-			after.GoalCondition, after.GoalCriteriaJSON, after.GoalPendingJSON)
+	if after.GoalCondition != "" || after.GoalCriteriaJSON != "" {
+		t.Errorf("after clear, all goal state must be empty: condition=%q criteria=%q",
+			after.GoalCondition, after.GoalCriteriaJSON)
 	}
 }
 

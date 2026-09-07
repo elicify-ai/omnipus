@@ -58,26 +58,20 @@ func newGoalTestSession(t *testing.T, al *AgentLoop, agentID string) (*session.U
 	return store, meta.ID
 }
 
-// activatePendingGoal drives the ADR-074 D4a confirm step: a prose `/goal
-// <intent>` now parks as a PENDING goal (US-3 S1) rather than activating
-// immediately, so tests that need an ACTIVE goal replay `/goal confirm` after
-// the set. Asserts the confirm actually activated (matched=true,
-// handled=false — the confirm turn continues into round 1) and that the goal
-// condition is now live.
-func activatePendingGoal(t *testing.T, al *AgentLoop, agentInst *AgentInstance, opts *processOptions) {
+// activatePendingGoal is a compatibility name (ADR-081 D1: instant
+// activation — there is no more pending/confirm step) kept so the ~33
+// call sites across the goal test suite that call it right after an
+// activating `/goal <intent>` do not all need individual edits. It is now a
+// pure assertion: the goal must ALREADY be active, because the preceding
+// `/goal <intent>` call activated it in the SAME turn.
+func activatePendingGoal(t *testing.T, _ *AgentLoop, _ *AgentInstance, opts *processOptions) {
 	t.Helper()
-	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
-		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, opts)
-	if !matched || handled {
-		t.Fatalf("activatePendingGoal: matched=%v handled=%v reply=%q, want matched=true handled=false "+
-			"(fresh-pending confirm rewrites the turn into round 1)", matched, handled, reply)
-	}
 	meta, err := opts.TranscriptStore.GetMeta(opts.TranscriptSessionID)
 	if err != nil {
 		t.Fatalf("activatePendingGoal: GetMeta: %v", err)
 	}
 	if meta.GoalCondition == "" {
-		t.Fatal("activatePendingGoal: goal must be ACTIVE after confirm")
+		t.Fatal("activatePendingGoal: goal must already be ACTIVE (ADR-081 D1 instant activation)")
 	}
 }
 
@@ -99,10 +93,12 @@ func unmetJudgeProvider(reason string) *fakeJudgeProvider {
 
 // --- /goal: set / status / clear ----------------------------------------
 
-// TestGoalCommand_SetRewritesUserMessage — updated for ADR-074 D4a (US-3 S1):
-// a PROSE `/goal <intent>` no longer activates in the set turn. It parks as a
-// PENDING goal (echo + confirm), and it is the CONFIRM turn that rewrites
-// opts.UserMessage and continues into round 1.
+// TestGoalCommand_SetRewritesUserMessage — rewritten for ADR-081 D1: a PROSE
+// `/goal <intent>` activates INSTANTLY in the same turn (matched=true,
+// handled=false), rewriting opts.UserMessage to the raw intent — no compile
+// call, no pending echo, no confirm step. GoalCriteriaJSON starts EMPTY
+// (the working agent authors the record itself via set_goal, a later wave) —
+// that is the legal transient state, not a bug.
 func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
@@ -117,34 +113,14 @@ func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true},
 		agentInst, &opts,
 	)
-	if !matched || !handled {
-		t.Fatalf("matched=%v handled=%v, want matched=true handled=true (prose set answers with the pending echo)", matched, handled)
-	}
-	if reply == "" {
-		t.Fatal("prose set must reply with the itemized pending echo")
-	}
-	mid, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mid.GoalCondition != "" {
-		t.Fatalf("prose set must NOT activate before confirm, got condition %q", mid.GoalCondition)
-	}
-	if mid.GoalPendingJSON == "" {
-		t.Fatal("prose set must park a pending compiled goal (GoalPendingJSON)")
-	}
-
-	// The confirm turn activates and rewrites the user message into round 1.
-	matched, handled, _ = al.applyGoalCommandPrompt(
-		context.Background(),
-		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true},
-		agentInst, &opts,
-	)
 	if !matched || handled {
-		t.Fatalf("confirm: matched=%v handled=%v, want matched=true handled=false (turn continues to LLM)", matched, handled)
+		t.Fatalf("matched=%v handled=%v, want matched=true handled=false (instant activation continues to the LLM)", matched, handled)
+	}
+	if reply != "" {
+		t.Fatalf("instant activation must not answer synchronously, got reply %q", reply)
 	}
 	if opts.UserMessage != "make the tests pass" {
-		t.Fatalf("opts.UserMessage = %q, want the condition text", opts.UserMessage)
+		t.Fatalf("opts.UserMessage = %q, want the raw intent", opts.UserMessage)
 	}
 	after, err := store.GetMeta(sid)
 	if err != nil {
@@ -153,8 +129,20 @@ func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 	if after.GoalCondition != "make the tests pass" || after.GoalRoundsUsed != 0 || after.GoalMaxRounds != config.DefaultGoalMaxRounds {
 		t.Fatalf("unexpected goal state: %+v", after)
 	}
+	if after.GoalID == "" {
+		t.Fatal("instant activation must mint a GoalID")
+	}
+	if after.GoalCriteriaJSON != "" {
+		t.Fatalf("GoalCriteriaJSON must start EMPTY on instant activation, got %q", after.GoalCriteriaJSON)
+	}
 }
 
+// TestGoalCommand_ReplaceOnSet — rewritten for ADR-081 D1/D5/FR-001: a
+// `/goal <new intent>` on an ALREADY-ACTIVE goal is STEERING, not a pending
+// amendment. A PROSE restate rewrites the turn's working prompt (same
+// mechanism as activation) and does NOT touch the persisted record — the
+// working agent updates it via set_goal in a later wave — and critically
+// does NOT mint a new GoalID (FR-001).
 func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
@@ -167,46 +155,38 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition A", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
+	before, _ := store.GetMeta(sid)
+	firstID := before.GoalID
 	oneRound := 1
 	if err := store.SetMeta(sid, session.MetaPatch{GoalRoundsUsed: &oneRound}); err != nil {
 		t.Fatal(err)
 	}
 
-	// ADR-053 Phase-2 (N-6/D11): a `/goal <new intent>` while a goal is ALREADY
-	// active is diffed as an amendment and confirmed — never silently recompiled.
-	// So /goal condition B produces an amendment echo (handled=true) and leaves
-	// the active goal A untouched, with a pending amendment stored.
+	// A prose restate rewrites the working prompt and continues the turn —
+	// no confirm ritual, no amendment echo.
 	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition B", UserInitiated: true}, agentInst, &opts)
-	if !matched || !handled {
-		t.Fatalf("re-state: matched=%v handled=%v, want matched=true handled=true (amendment echo)", matched, handled)
+	if !matched || handled {
+		t.Fatalf("restate: matched=%v handled=%v, want matched=true handled=false (continues to the LLM)", matched, handled)
 	}
-	if !strings.Contains(reply, "amendment") {
-		t.Fatalf("re-state reply = %q, want an amendment echo", reply)
+	if reply != "" {
+		t.Fatalf("restate must not answer synchronously, got reply %q", reply)
 	}
-	afterAmend, _ := store.GetMeta(sid)
-	if afterAmend.GoalCondition != "condition A" {
-		t.Fatalf("condition after re-state = %q, want condition A still active (no silent recompile, N-6)", afterAmend.GoalCondition)
+	if opts.UserMessage != "condition B" {
+		t.Fatalf("opts.UserMessage = %q, want the restated intent", opts.UserMessage)
 	}
-	if afterAmend.GoalPendingJSON == "" {
-		t.Fatal("GoalPendingJSON must hold the proposed amendment until confirm (N-6)")
-	}
-
-	// /goal confirm applies the amendment: condition B, rounds reset (new generation).
-	al.applyGoalCommandPrompt(context.Background(),
-		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, &opts)
 	after, err := store.GetMeta(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.GoalCondition != "condition B" {
-		t.Fatalf("condition = %q, want condition B after confirm (FR-113/N-6)", after.GoalCondition)
+	if after.GoalCondition != "condition A" {
+		t.Fatalf("condition after restate = %q, want condition A untouched (the agent updates it via set_goal)", after.GoalCondition)
 	}
-	if after.GoalRoundsUsed != 0 {
-		t.Fatalf("rounds_used = %d, want reset to 0 on amend (new generation)", after.GoalRoundsUsed)
+	if after.GoalID != firstID {
+		t.Fatalf("restate must NOT mint a new GoalID (FR-001), got %q want %q", after.GoalID, firstID)
 	}
-	if after.GoalPendingJSON != "" {
-		t.Fatal("GoalPendingJSON must clear on confirm")
+	if after.GoalRoundsUsed != 1 {
+		t.Fatalf("restate must not reset rounds (no new generation), got %d", after.GoalRoundsUsed)
 	}
 }
 
@@ -248,12 +228,11 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 	for _, verb := range []string{"clear", "stop", "cancel"} {
 		al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
-		// First iteration: the status section's goal is still ACTIVE, so the
-		// restate parked as an amendment (confirm answers synchronously);
-		// later iterations: a fresh pending goal (confirm continues into
-		// round 1). Either way the confirm leaves an ACTIVE goal to clear.
-		al.applyGoalCommandPrompt(context.Background(),
-			bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, &opts)
+		// ADR-081 D1: instant activation — no confirm step. First iteration:
+		// the status section's goal is still ACTIVE, so this is a prose
+		// restate that leaves the already-active goal in place; later
+		// iterations: a goalless fresh activation. Either way the goal is
+		// ACTIVE immediately after the single call above.
 		if mid, merr := store.GetMeta(sid); merr != nil || mid.GoalCondition == "" {
 			t.Fatalf("%s: setup — goal must be active before the clear (err=%v)", verb, merr)
 		}
@@ -1203,16 +1182,20 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	}
 	firstID := meta1.GoalID
 
-	al.applyGoalCommandPrompt(context.Background(),
+	// ADR-081 D1/FR-001: a prose restate on the active goal rewrites the
+	// working prompt and continues the turn — no confirm ritual, and
+	// critically it must NOT mint a new GoalID.
+	matched, handled, _ := al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition A amended", UserInitiated: true}, agentInst, &opts)
-	al.applyGoalCommandPrompt(context.Background(),
-		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, &opts)
+	if !matched || handled {
+		t.Fatalf("restate: matched=%v handled=%v, want matched=true handled=false", matched, handled)
+	}
 	metaAmended, err := store.GetMeta(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if metaAmended.GoalID != firstID {
-		t.Fatalf("amendment must keep the same goal-id, got %q want %q", metaAmended.GoalID, firstID)
+		t.Fatalf("restate must keep the same goal-id, got %q want %q", metaAmended.GoalID, firstID)
 	}
 
 	// An ordinary (non-claim) worker turn re-emits the SAME goal-id.
@@ -1249,7 +1232,10 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	cleanup()
 
 	// Every emitted frame for goal #1's lifecycle carries firstID; goal #2's
-	// own frame carries its own, different id. None is ever empty.
+	// own frame carries its own, different id. None is ever empty — ADR-081
+	// D1 mints the GoalID up front on instant activation, so (unlike the
+	// retired ADR-074 D4a pending/queued state) there is no window where a
+	// frame legitimately carries an empty goal-id.
 	payloads := goalStatusPayloadsFor(c, sid)
 	sawFirstID, sawSecondID := false, false
 	for _, p := range payloads {
@@ -1259,13 +1245,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 		case meta2.GoalID:
 			sawSecondID = true
 		case "":
-			// ADR-074 D4a: a PENDING (queued) frame legitimately carries no
-			// goal-id — the generation is minted at confirm, never earlier
-			// (newGoalID's own contract). Any OTHER state with an empty id is
-			// still the UAT S3 bug.
-			if p.State != goalPillQueued {
-				t.Fatalf("emitted GoalStatusFrame with an empty goal_id: %+v", p)
-			}
+			t.Fatalf("emitted GoalStatusFrame with an empty goal_id: %+v", p)
 		default:
 			t.Fatalf("emitted GoalStatusFrame with an unexpected goal_id %q: %+v", p.GoalID, p)
 		}

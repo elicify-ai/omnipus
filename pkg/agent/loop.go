@@ -7778,18 +7778,12 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
-	// ADR-074 D4a reply routing (judgment-first spec US-3 S9): when this
-	// session carries a pending goal state (compiled-awaiting-confirmation or
-	// awaiting a clarification answer), a BARE chat message may be the confirm
-	// token or the clarification answer. The hook answers synchronously
-	// (handled=true), rewrites the turn into round 1 on a fresh-goal confirm
-	// (handled=false + opts.UserMessage), or passes an ordinary message
-	// through untouched — a routine chat message never silently mutates goal
-	// state.
-	if goalHandled, goalReply := al.applyGoalPendingReply(ctx, msg, agent, &opts); goalHandled {
-		return goalReply, agent, nil
-	}
-
+	// ADR-081 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
+	// (applyGoalPendingReply) is retired — goals activate instantly now, so
+	// there is no more pending/clarification state for a bare chat message to
+	// resolve against (FR-022: bare "confirm" is ordinary chat, no
+	// interception exists). Nothing stands between handleCommand above and
+	// runAgentLoop below anymore.
 	resp, err := al.runAgentLoop(ctx, agent, opts)
 	return resp, agent, err
 }
@@ -9317,32 +9311,25 @@ turnLoop:
 				injected = append(injected, callMessages[1:]...)
 				callMessages = injected
 			}
-			// Inject the ADR-078 D2 pending-goal note as an ephemeral system
-			// message: while a goal is compiled and awaiting the user's
-			// confirmation (fresh pending only — see buildGoalPendingNote's
-			// gating), the model must not proceed context-blind about it. Like
-			// the scratchpad note above, this is rebuilt every turn from session
-			// meta and never persisted to history.
-			callMessages = injectGoalPendingNote(callMessages, buildGoalPendingNote(ts.opts.TranscriptStore, ts.opts.TranscriptSessionID))
 			// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
 			// system message immediately after the system prompt. Empty/absent
 			// instructions are a no-op — zero behavioral change.
 			//
-			// Ordering note (finding 10c, context-audit 2026-08, extended by
-			// ADR-078 D2's goal-pending note — this comment previously claimed
-			// "workspace instructions land at [2]", which stopped being true once
-			// the web-rendering note was added between this call and
-			// injectManifestNote below): all of these injectors
-			// (injectGoalPendingNote above, this one, injectWebRenderingNote,
+			// Ordering note (finding 10c, context-audit 2026-08 — ADR-081 D9
+			// retires the ADR-078 D2 goal-pending note that used to sit between
+			// this call and injectManifestNote below; buildGoalPendingNote/
+			// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
+			// in full — instant activation leaves no pending state for a note to
+			// describe): the remaining injectors (this one, injectWebRenderingNote,
 			// injectManifestNote) insert at index 1 of the message array, so call
 			// order alone determines final position — the LAST call ends up
 			// CLOSEST to the system message. With every note present this turn,
 			// final order is: [0] system prompt · [1] manifest note · [2]
-			// web-rendering note · [3] workspace instructions · [4] goal-pending
-			// note (spliced above, before this call) · [5] scratchpad (spliced
-			// above, before that) · [6+] history. See injectWorkspaceInstructions'
-			// own doc comment (workspace_instructions.go) for the authoritative,
-			// single-sourced version of this contract.
+			// web-rendering note · [3] workspace instructions · [4] scratchpad
+			// (spliced above, before this call) · [5+] history. See
+			// injectWorkspaceInstructions' own doc comment
+			// (workspace_instructions.go) for the authoritative, single-sourced
+			// version of this contract.
 			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 			// Web-only: encourage Mermaid diagrams when the turn comes from the web
 			// chat (the sole surface that renders them). Per-turn + surface-gated on

@@ -176,15 +176,6 @@ type SessionMeta struct {
 	// Immutable once the user confirms the echo (D9); a re-statement AMENDS by
 	// minting a fresh JSON via a diffed, confirmed amendment (N-6).
 	GoalCriteriaJSON string `json:"goal_criteria,omitempty"`
-	// GoalPendingJSON holds a PROPOSED-but-unconfirmed CompiledGoal JSON during
-	// a re-statement amendment flow (N-6/D11: a `/goal <new intent>` issued while
-	// a goal is ALREADY active is diffed as an amendment and confirmed via
-	// `/goal confirm`, never silently recompiled). While pending, the ACTIVE
-	// goal's Condition + GoalCriteriaJSON are untouched; on confirm the pending
-	// goal mints a new generation (GoalCondition + GoalCriteriaJSON take the
-	// proposed values, GoalPendingJSON clears). Ephemeral-ish: cleared on
-	// /goal clear and on a fresh `/goal <intent>` that supersedes it.
-	GoalPendingJSON string `json:"goal_pending,omitempty"`
 	// PendingAskJSON is the AskUserQuestion tool's durable pending question
 	// set (askuserquestion-tool-spec.md §0.4, M-R2-1): a JSON-encoded
 	// askuser.PendingSet, written by pkg/askuser's Registry when a question
@@ -194,21 +185,42 @@ type SessionMeta struct {
 	// default-safe timers (US-6 S1). Empty means no set was ever asked on
 	// this session; a terminal-status record (status answered/cancelled)
 	// means "not pending" — the collapsed card record renders from it on
-	// history reload. Persisted in the goal.json field group alongside
-	// GoalPendingJSON (its closest sibling: session-scoped pending
-	// interaction state that must not bump the session's composed recency).
+	// history reload. Persisted in the goal.json field group (session-scoped
+	// pending interaction state that must not bump the session's composed
+	// recency) — untouched by ADR-081 D9, which belongs to the tool, not the
+	// deleted confirm-gate coupling.
 	PendingAskJSON string `json:"pending_ask,omitempty"`
 
-	// GoalClarificationJSON holds the ADR-074 D4a pending-clarification record
-	// (judgment-first spec US-3 S7): when the prose `/goal` LLM compile returns
-	// a clarifying question instead of criteria, the original intent + the
-	// question persist here (JSON, pkg/agent's goalClarificationRecord shape)
-	// until the user's next ordinary chat message answers it (feeding ONE
-	// resumed compile), or `/goal clear`/a fresh `/goal <intent>` discards it.
-	// Mutually exclusive with GoalPendingJSON in practice (a question round has
-	// produced no pending criteria yet). Covered by the same idle-expiry sweep
-	// as active goals (US-3 S10).
-	GoalClarificationJSON string `json:"goal_clarification,omitempty"`
+	// GoalQuestionRoundsUsed is ADR-081 FR-010's question-round budget: 1 per
+	// goal GENERATION (per GoalID) — a prose restate keeps the GoalID and
+	// therefore inherits a spent budget (only a fresh activation on a
+	// goalless session mints a new GoalID and resets this to 0). Wired by
+	// wave 2's forced two-door mechanism (D3); this field is added here only
+	// so the greenfield meta round-trips it.
+	GoalQuestionRoundsUsed int `json:"goal_question_rounds_used,omitempty"`
+	// GoalZeroOutputPushes is ADR-081 FR-014b's persisted bounded-push streak:
+	// how many consecutive idle cycles the keeper has pushed a RECORDED goal
+	// with zero adjudicable output, capped at 2 before normal (fail-closed
+	// permitted) adjudication resumes. Persisted (not in-memory) so a
+	// gateway restart between pushes cannot silently re-open the unbounded
+	// loop. Reset to 0 on a triple-false idle or a successful set_goal write
+	// (wave 2 wiring; this field is added here only so the greenfield meta
+	// round-trips it).
+	GoalZeroOutputPushes int `json:"goal_zero_output_pushes,omitempty"`
+	// GoalRouteChannel/GoalRouteChatID/GoalRouteSessionKey/GoalRouteAgentID
+	// are ADR-081 FR-031's persisted goal routing: the chat coordinates
+	// (channel/chat-id/session-key/agent) a later idle-settlement push or a
+	// channel record echo needs to re-inject a turn — today this lives ONLY
+	// in an in-memory map (recordGoalRouting/goal_triggers.go), which a
+	// gateway restart silently empties, disabling BOTH the keeper push and
+	// the channel echo for a long-running channel goal. Persisting it here
+	// lets the reader (goalTriggers().routeFor, wave 2) fall back to the
+	// on-disk value when the in-memory map is empty. All four are omitempty
+	// and unwired by this wave — wave 2 wires the writer/reader.
+	GoalRouteChannel    string `json:"goal_route_channel,omitempty"`
+	GoalRouteChatID     string `json:"goal_route_chat_id,omitempty"`
+	GoalRouteSessionKey string `json:"goal_route_session_key,omitempty"`
+	GoalRouteAgentID    string `json:"goal_route_agent_id,omitempty"`
 
 	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
 	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
