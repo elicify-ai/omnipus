@@ -555,7 +555,7 @@ _e2e_run_shard() {
   "providers": [
     {
       "model_name": "openrouter-glm",
-      "model": "openrouter/z-ai/glm-5.2",
+      "model": "openrouter/z-ai/glm-5.3-flash",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
@@ -590,7 +590,7 @@ EOF
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
   jq -n --arg key "$key" \
-    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.3-flash"},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }
