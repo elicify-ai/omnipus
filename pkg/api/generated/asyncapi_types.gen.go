@@ -104,9 +104,15 @@ type BrowserAttachFrame struct {
 
 // BrowserCaptureAnswerFrame — Server (gateway) → client (capture extension). Pion SDP answer to a browser_capture_offer, completing the ingest leg's non-trickle offer/answer exchange. Once applied, the encoder page's tabCapture MediaStream (video, plus audio when the tab produces sound) flows into the gateway's shared TrackLocalStaticRTP tracks for relay to viewers. See ADR-047 D1/D2.
 type BrowserCaptureAnswerFrame struct {
+	// Immutable accepted capture generation from the corresponding offer.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Encoder negotiation attempt identity on this ingest connection. The answer echoes this value; stale answers must never configure a newer peer even when the capture generation and target are unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP answer (application/sdp body) from the gateway's Pion ingest PeerConnection, ICE-gathering-complete (non-trickle).
-	Sdp  string `json:"sdp"`
-	Type string `json:"type"`
+	Sdp string `json:"sdp"`
+	// Verified CDP page target from the corresponding offer.
+	TargetId *string `json:"target_id,omitempty"`
+	Type     string  `json:"type"`
 }
 
 // BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound; triggered by the same live.go onTabsChanged/rebindWatch tab-follow logic that also drives the live-view session/control-lock bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
@@ -153,6 +159,8 @@ type BrowserCaptureHelloFrame struct {
 type BrowserCaptureOfferFrame struct {
 	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
 	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Encoder negotiation attempt identity on this ingest connection. The answer echoes this value; stale answers must never configure a newer peer even when the capture generation and target are unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP offer (application/sdp body) from the encoder page's ingest PeerConnection, ICE-gathering-complete (non-trickle).
 	Sdp string `json:"sdp"`
 	// CDP page target identity for this capture generation. The encoder must verify its selected Chrome tab maps to this identity before offering.

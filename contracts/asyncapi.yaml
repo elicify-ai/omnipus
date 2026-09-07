@@ -4410,6 +4410,14 @@ components:
           description: >-
             CDP page target identity for this capture generation. The encoder must
             verify its selected Chrome tab maps to this identity before offering.
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Encoder negotiation attempt identity on this ingest connection. The
+            answer echoes this value; stale answers must never configure a newer
+            peer even when the capture generation and target are unchanged.
 
     BrowserCaptureAnswerFrame:
       title: BrowserCaptureAnswerFrame
@@ -4434,6 +4442,25 @@ components:
           maxLength: 131072
           description: Complete SDP answer (application/sdp body) from the gateway's Pion ingest PeerConnection, ICE-gathering-complete
             (non-trickle).
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Encoder negotiation attempt identity on this ingest connection. The
+            answer echoes this value; stale answers must never configure a newer
+            peer even when the capture generation and target are unchanged.
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: Immutable accepted capture generation from the corresponding offer.
+        target_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Verified CDP page target from the corresponding offer.
+
     BrowserCaptureControlFrame:
       title: BrowserCaptureControlFrame
       description: 'Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension)

@@ -11438,6 +11438,7 @@ export const BrowserCaptureOfferFrame = z
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     target_id: z.string().min(1).max(128).optional(),
+    offer_id: z.number().int().min(1).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -11445,6 +11446,9 @@ export const BrowserCaptureAnswerFrame = z
   .object({
     type: z.literal("browser_capture_answer"),
     sdp: z.string().min(1).max(131072),
+    offer_id: z.number().int().min(1).max(9007199254740991).optional(),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    target_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 

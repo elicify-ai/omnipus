@@ -683,11 +683,15 @@ export interface BrowserCaptureOfferFrame {
   sdp: string;
   capture_generation?: number;
   target_id?: string;
+  offer_id?: number;
 }
 
 export interface BrowserCaptureAnswerFrame {
   type: "browser_capture_answer";
   sdp: string;
+  offer_id?: number;
+  capture_generation?: number;
+  target_id?: string;
 }
 
 export interface BrowserCaptureControlFrame {
