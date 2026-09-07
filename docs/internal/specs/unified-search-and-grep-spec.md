@@ -590,10 +590,15 @@ order, OBS-003); e2e shard checker green at 66/66.
 - **FR-008** A `grep` tool MUST expose the engine (pattern, regex flag, case mode,
   scope, globs, context lines, caps) returning structured matches under policy and
   audit.
-- **FR-009** Policy roster (founder): ceiling `allow`; explicit `allow` for EVERY
-  agent tier — Jim/Mia/Ava/Ray, the Worker, specialists
-  (Planner/Explorer/Researcher), system agents; the drift backfill writes `allow`
-  for grep on pre-existing agents. No posture is left to silent inheritance.
+- **FR-009** Policy roster (founder, final 2026-09-07): ceiling `allow`; explicit
+  `allow` for EVERY seeded tier — Jim/Mia/Ava/Ray, the Worker, specialists
+  (Planner/Explorer/Researcher), system agents incl. PlanSupervisor (tension
+  documented in-code; founder: "it does not hurt"); the drift backfill writes
+  `allow` for grep on pre-existing agents. **BRAND-NEW operator-created agents
+  must NOT receive any hardcoded grep deny — the GLOBAL ceiling is the default
+  (ADR-077's own doctrine, founder-reaffirmed: "the global policy sets the
+  default, not any hardcoded default"), so a new agent inherits allow from the
+  ceiling (either no per-agent entry, or an explicit allow — never deny).**
 - **FR-010** VaultSearch additions are contract-first and additive (MV-9).
 - **FR-011** The retired endpoint's full inventory (route, handler, wire types,
   inboundschemas via regen, client fn, client test file, `searchFn` prop) MUST be
