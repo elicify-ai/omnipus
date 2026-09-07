@@ -54,10 +54,14 @@ const browserWSMaxMessageBytes = 64 * 1024
 // carries far less than chat's wsConn (no replay divert, no session
 // tracking) — this socket does exactly one thing: relay one live browser.
 type browserWSConn struct { // not-wire-format: internal connection bookkeeping, never marshaled.
-	conn      *websocket.Conn
-	sendCh    chan []byte
-	doneCh    chan struct{}
-	closeOnce sync.Once
+	conn         *websocket.Conn
+	sendCh       chan []byte
+	doneCh       chan struct{}
+	closeOnce    sync.Once
+	latestMu     sync.Mutex
+	latestWakeCh chan struct{}
+	latestSlots  [browserLatestKindCount]browserLatestFrame
+	latestNext   int
 }
 
 func (c *browserWSConn) close() {
@@ -71,11 +75,9 @@ func (c *browserWSConn) close() {
 	})
 }
 
-// sendCritical enqueues a must-not-drop frame (browser_status, browser_tabs,
-// browser_webrtc_*, error) — every frame this socket carries is a state
-// transition the SPA needs to see (ADR-061: there is no separate high-volume
-// lossy stream on this connection any more). Blocks briefly rather than
-// silently dropping; gives up after 2s so a wedged connection can't hang the caller.
+// sendCritical enqueues discrete transitions such as control, signalling and
+// operation errors. Replaceable tab/video snapshots use sendLatestGen instead.
+// It waits at most two seconds so a wedged connection cannot hang its caller.
 // dropCtx is a short, caller-supplied identifier (see dropContext) logged
 // ONLY if the frame is actually dropped (B6, 7-reviewer finding): before
 // this the drop-warning below carried nothing identifying, making a dropped
@@ -999,57 +1001,41 @@ func writeCloseAuthFailed(conn *websocket.Conn) {
 // connection. gorilla/websocket requires all writes to happen from the same
 // goroutine. A nil message on sendCh is the sentinel for a ping frame.
 func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
-	// defer close (2026-07-31, found by the sibling instance's reviewers and
-	// verified here): every exit path below is a bare `return`. Without this,
-	// a write failure left the connection WRITE-dead but READ-alive — doneCh
-	// was never closed, so sendCritical kept selecting on a channel
-	// nobody would ever close, and readLoop kept refreshing its deadline from
-	// whatever the client was still sending. The socket was then only reaped
-	// by the CLIENT's own missed-ping self-heal ~60s later. close() is
-	// sync.Once-guarded, so this is safe alongside every other caller.
+	// Every terminal write error also closes the reader and triggers detach.
 	defer wc.close()
-
+	wake := wc.latestWake()
 	for {
+		var msg []byte
 		select {
-		case msg, ok := <-wc.sendCh:
+		case payload, ok := <-wc.sendCh:
 			if !ok {
 				return
 			}
-			// SetWriteDeadline before EVERY write, ping included (2026-07-31).
-			// This socket had none at all, while the chat socket
-			// (websocket.go's writePump, wsWriteWait) has had them for some
-			// time — the same invariant, applied to only one of the two.
-			//
-			// Without a deadline, WriteMessage blocks INDEFINITELY once the
-			// client's TCP receive window fills, wedging this single writer
-			// goroutine for good: no further frames, and — worse — no further
-			// keepalive pings. The peer then hits its own read timeout and
-			// tears the connection down, which is what surfaces as the
-			// abnormal `close 1006` the operator has been seeing (33 of them
-			// in one session's log). At the time this fix landed, this socket
-			// was the one carrying the high-volume JPEG screencast stream
-			// (since removed, ADR-061), so it was by far the most likely of
-			// the two to fill a window in the first place.
-			//
-			// With the deadline, a stalled write fails fast and this pump
-			// exits cleanly, letting the normal reconnect path run instead of
-			// leaving a half-dead connection nobody times out for 60s.
-			if err := wc.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
-				slog.Debug("browser-ws: SetWriteDeadline failed", "error", err)
-				return
-			}
-			if msg == nil {
-				if err := wc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					slog.Debug("browser-ws: ping write error", "error", err)
-					return
-				}
+			msg = payload
+		case <-wake:
+			var ok bool
+			msg, ok = wc.takeLatest()
+			if !ok {
 				continue
 			}
-			if err := wc.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				slog.Debug("browser-ws: write error", "error", err)
+		case <-wc.doneCh:
+			return
+		}
+		// One writer owns every transport write, including keepalive pings. Neither
+		// the attachment mutex nor the latest-state mutex is held across I/O.
+		if err := wc.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+			slog.Debug("browser-ws: SetWriteDeadline failed", "error", err)
+			return
+		}
+		if msg == nil {
+			if err := wc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				slog.Debug("browser-ws: ping write error", "error", err)
 				return
 			}
-		case <-wc.doneCh:
+			continue
+		}
+		if err := wc.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			slog.Debug("browser-ws: write error", "error", err)
 			return
 		}
 	}
