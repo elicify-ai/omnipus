@@ -53,3 +53,21 @@ func TryAcquire(ctx context.Context) bool {
 func Release() {
 	<-walkSlots
 }
+
+// TryAcquireNow is the non-blocking variant: it takes a free slot if one is
+// available right now and never waits. It exists because a zero-wait caller
+// cannot be built from TryAcquire alone — a select racing an
+// already-expired context against a free slot is nondeterministic, so
+// "refuse unless instantly free" needs its own entry point. The REST
+// handler's acquisition wrapper (pkg/gateway's AcquireFilegrepWalkSlot)
+// layers its instant-try-then-brief-wait policy on this plus TryAcquire.
+// Same contract as TryAcquire: a true return holds a slot the caller MUST
+// Release exactly once.
+func TryAcquireNow() bool {
+	select {
+	case walkSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}

@@ -46,11 +46,12 @@ type centralBuiltinCounts struct {
 	general   int
 	browser   int
 	knowledge int
+	grep      int
 }
 
 // total is every builtin admitted across all families.
 func (c centralBuiltinCounts) total() int {
-	return c.system + c.general + c.browser + c.knowledge
+	return c.system + c.general + c.browser + c.knowledge + c.grep
 }
 
 // buildCentralBuiltinRegistry assembles the full builtin metadata catalog.
@@ -80,6 +81,7 @@ func buildCentralBuiltinRegistry(sysDeps *systools.Deps) (*tools.BuiltinRegistry
 	register("general", tools.GeneralBuiltinMetadata(), &counts.general)
 	register("browser", browser.BrowserBuiltinMetadata(), &counts.browser)
 	register("knowledge", knowledgeBuiltinMetadata(), &counts.knowledge)
+	register("grep", grepBuiltinMetadata(), &counts.grep)
 
 	return reg, counts
 }

@@ -33,7 +33,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchKnowledgeBaseInfo: vi.fn(),
     fetchKnowledgeOutline: vi.fn(),
     fetchKnowledgeGraph: vi.fn(),
-    searchKnowledge: vi.fn(),
     // unified-search-and-grep-spec.md US-1/US-2: LibrarySearchBar (mounted by
     // LibraryExplorer for every workspace folder, not only KnowledgePanel's
     // vault-only surface any more) reaches these two directly. Same reasoning
@@ -60,7 +59,6 @@ import {
   fetchKnowledgeGraph,
   searchVault,
   searchFiles,
-  searchKnowledge,
   ApiError,
 } from '@/lib/api'
 
@@ -75,7 +73,6 @@ const mockedMkdir = vi.mocked(mkdirLibraryEntry)
 const mockedKnowledgeInfo = vi.mocked(fetchKnowledgeBaseInfo)
 const mockedKnowledgeOutline = vi.mocked(fetchKnowledgeOutline)
 const mockedKnowledgeGraph = vi.mocked(fetchKnowledgeGraph)
-const mockedKnowledgeSearch = vi.mocked(searchKnowledge)
 const mockedSearchVault = vi.mocked(searchVault)
 const mockedSearchFiles = vi.mocked(searchFiles)
 
@@ -160,13 +157,6 @@ beforeEach(() => {
     edges: [],
     skipped: [],
     truncated: false,
-  })
-  mockedKnowledgeSearch.mockResolvedValue({
-    collection_id: 'kb_1',
-    hits: [],
-    incompleteness: { complete: true, total_known: true, statement: 'Searched the whole collection.' },
-    limit_applied: 20,
-    limit_clamped: false,
   })
   // Defaults for LibrarySearchBar's two search clients (unified-search-and-
   // grep-spec.md US-1/US-2) — empty-but-complete, matching the same "the
