@@ -872,10 +872,13 @@ export function LibraryExplorer({
       )}
 
       {/* ── Knowledge base (ADR-067 US-4) ────────────────────────────────────
-          The one place a person reaches the knowledge-base surface: it sits
-          above the listing of the folder it is describing, so "is this a
-          collection, and is its index current?" is answered where the folder
-          is, rather than on a screen of its own (no new top-level screen).
+          The first-run/indexing-status surface: it sits above the listing of
+          the folder it is describing, so "is this a collection, and is its
+          index current?" is answered where the folder is, rather than on a
+          screen of its own (no new top-level screen). Search itself lives in
+          LibrarySearchBar below, not here (unified-search-and-grep-spec.md
+          US-5 — a vault folder used to carry two search boxes; MV-10 keeps
+          it to exactly one).
 
           Mounted only when a workspace is open — the virtual root lists
           workspaces, not files, so there is no folder to ask about. The panel
@@ -889,14 +892,7 @@ export function LibraryExplorer({
           poll — the frame is the contract's answer to progress (FR-080). */}
       {workspaceId !== null && (
         <div className="shrink-0 p-2 pb-0">
-          <KnowledgePanel
-            workspaceId={workspaceId}
-            path={browsedDir}
-            onOpenNote={(workspacePath) => {
-              if (!confirmDiscardLibraryEdits()) return
-              goTo(workspaceId, workspacePath)
-            }}
-          />
+          <KnowledgePanel workspaceId={workspaceId} path={browsedDir} />
         </div>
       )}
 

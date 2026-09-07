@@ -44,14 +44,18 @@ export type VaultSearchResponse = components['schemas']['VaultSearchResponse']
 export type VaultSearchNoteHit = components['schemas']['VaultSearchNoteHit']
 export type VaultSearchRecordHit = components['schemas']['VaultSearchRecordHit']
 export type VaultSearchViewHit = components['schemas']['VaultSearchViewHit']
+export type VaultSearchAttachmentHit = components['schemas']['VaultSearchAttachmentHit']
 export type KnowledgeBaseInfo = components['schemas']['KnowledgeBaseInfo']
 
 /** Debounce before a keystroke becomes a request — same figure as
  *  useKnowledgeSearch's, for the same reason (a typed word is one request). */
 export const VAULT_SEARCH_DEBOUNCE_MS = 250
 
-/** The segmented filter's four positions (library-b-c-design-2026-09-07 §C1). */
-export type VaultSearchKind = 'all' | 'notes' | 'records' | 'views'
+/** The segmented filter's five positions (library-b-c-design-2026-09-07 §C1;
+ *  `attachments` added by unified-search-and-grep-spec.md US-1/MV-9 — the
+ *  ported attachment-filename search the retired KnowledgeSearch box also
+ *  covered). */
+export type VaultSearchKind = 'all' | 'notes' | 'records' | 'views' | 'attachments'
 
 /** The seam the component and its tests inject. Production default below. */
 export type VaultSearchFn = (
@@ -84,10 +88,76 @@ export interface VaultSearchCounts {
   notes: number
   records: number
   views: number
+  attachments: number
 }
 
 function emptyCounts(): VaultSearchCounts {
-  return { all: 0, notes: 0, records: 0, views: 0 }
+  return { all: 0, notes: 0, records: 0, views: 0, attachments: 0 }
+}
+
+// ── Honesty port (unified-search-and-grep-spec.md US-1/MV-9/FR-036/FR-037) ──
+//
+// These mirror useKnowledgeSearch.ts's classifyHonesty/clampOf exactly in
+// spirit — the retired KnowledgeSearch box's honesty guarantees must survive
+// onto this bar unweakened — but the WIRE SHAPE they read is simpler:
+// VaultSearchResponse states its coverage directly (`notes_searched` /
+// `notes_total_known`) rather than through a nested incompleteness object
+// with a separate boolean flag, and it carries no `limit_applied` echo (see
+// vaultClampOf below).
+
+/**
+ * The coverage state of one search answer, for NOTES specifically — the only
+ * kind the contract states a searched/total count for.
+ *
+ *  - `undefined` — either the answer is complete (nothing partial to
+ *    disclose) or the server sent no coverage numbers at all.
+ *  - `'ratio'`   — a partial answer WITH a usable denominator
+ *    (`notes_total_known` is a number): "X of Y notes searched" may be shown.
+ *  - `'so-far'`  — a partial answer with a count but NO denominator: a bare
+ *    count, "so far" — never an invented total (FR-036).
+ */
+export type VaultSearchCoverage = 'ratio' | 'so-far' | undefined
+
+export function classifyVaultCoverage(res: VaultSearchResponse): VaultSearchCoverage {
+  if (res.complete) return undefined
+  if (typeof res.notes_searched !== 'number') return undefined
+  return typeof res.notes_total_known === 'number' ? 'ratio' : 'so-far'
+}
+
+export interface VaultSearchClamp {
+  /** The number the caller asked for, when the server echoed it. Absent when
+   *  the server reported the clamp without echoing the refused number — the
+   *  clamp is still stated, just without that figure (mirrors
+   *  useKnowledgeSearch.ts's KnowledgeSearchClamp). */
+  requested?: number
+}
+
+/**
+ * vaultClampOf returns the clamp to report, or null when nothing was
+ * clamped (FR-037: a clamp is disclosed, never silently applied).
+ *
+ * UNLIKE the retired KnowledgeSearchResponse, VaultSearchResponse carries no
+ * `limit_applied` echo — there is no server-stated "here is the cap you got
+ * instead" number to show alongside `limit_requested`. Inventing one (e.g.
+ * from the client's own default) would be exactly the fabricated-certainty
+ * failure this whole feature refuses elsewhere, so the clamp is reported
+ * without a specific applied figure.
+ */
+export function vaultClampOf(res: VaultSearchResponse): VaultSearchClamp | null {
+  if (!res.limit_clamped) return null
+  return res.limit_requested === undefined ? {} : { requested: res.limit_requested }
+}
+
+/**
+ * isNotesCappedAtLimit — whether the NOTES list may have been cut short by
+ * the per-kind cap. Prefers the server's own `notes_capped_at_limit` when the
+ * response states it (server truth); falls back to the same length-vs-limit
+ * heuristic the bar already uses for records/views/attachments, which have no
+ * analogous server-stated flag.
+ */
+export function isNotesCappedAtLimit(res: VaultSearchResponse, limit: number): boolean {
+  if (res.notes_capped_at_limit !== undefined) return res.notes_capped_at_limit
+  return res.notes.length > 0 && res.notes.length >= limit
 }
 
 export interface UseVaultSearchOptions {
@@ -135,6 +205,15 @@ export interface UseVaultSearchResult {
   /** The effective per-kind result cap. A kind whose array length equals this
    *  may have more matches than were returned, so the caller renders "N+". */
   limit: number
+  /** The notes coverage state (US-1 AS-2/AS-3, FR-036) — undefined when the
+   *  answer is complete or the server sent no coverage numbers. */
+  coverage: VaultSearchCoverage
+  /** The clamp to disclose (FR-037), or null when nothing was clamped. */
+  clamp: VaultSearchClamp | null
+  /** Whether the notes list may have been cut short by the per-kind cap —
+   *  server truth (`notes_capped_at_limit`) when stated, else the same
+   *  length-vs-limit heuristic the bar uses for the other kinds. */
+  notesCappedAtLimit: boolean
 }
 
 export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchResult {
@@ -205,11 +284,17 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
 
   const counts = useMemo<VaultSearchCounts>(() => {
     if (!response) return emptyCounts()
+    // attachments is optional on the wire (absent ⇒ treated as [], MV-9's
+    // platform carve-out) — a build without the properties index sends no
+    // group at all rather than a bare empty one, and this is where "absent"
+    // and "empty" collapse into the same displayed count.
+    const attachments = response.attachments?.length ?? 0
     return {
       notes: response.notes.length,
       records: response.records.length,
       views: response.views.length,
-      all: response.notes.length + response.records.length + response.views.length,
+      attachments,
+      all: response.notes.length + response.records.length + response.views.length + attachments,
     }
   }, [response])
 
@@ -232,5 +317,8 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
     // kind whose array length equals it may have more matches than shown — the
     // bar renders "N+" rather than a flat count that silently plateaus.
     limit,
+    coverage: response ? classifyVaultCoverage(response) : undefined,
+    clamp: response ? vaultClampOf(response) : null,
+    notesCappedAtLimit: response ? isNotesCappedAtLimit(response, limit) : false,
   }
 }

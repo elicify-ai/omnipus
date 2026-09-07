@@ -1,7 +1,7 @@
 // KnowledgePanel — the knowledge-base surface for whichever folder the Library
 // is showing (ADR-067 US-4, US-6, E-1, E-9).
 //
-// WHAT THIS OWNS. Two things, and deliberately not more:
+// WHAT THIS OWNS. One thing, and deliberately not more:
 //
 //   1. THE ANSWER ABOUT THIS FOLDER. It asks the contract endpoint
 //      GET /library/{workspace_id}/knowledge?path=… whether this folder is a
@@ -9,14 +9,20 @@
 //      over the WebSocket, and resolves the two into ONE state a reader can
 //      act on — see resolveKnowledgeFirstRunState below, which is a pure
 //      function precisely so its ordering rules can be tested without a DOM.
-//   2. COMPOSITION. When (and only when) the folder really is a knowledge
-//      base, it renders KnowledgeSearch (a collection-level surface, which is
-//      what this panel is scoped to) plus any `children` the caller adds. It
-//      duplicates none of that component's behaviour — the incompleteness and
-//      clamping statements on a search RESPONSE belong to KnowledgeSearch and
-//      useKnowledgeSearch, and are not restated here. The note-level surfaces
-//      — outline, backlinks, reader — are deliberately NOT here: they belong
-//      to whichever pane has a note open, not to a folder.
+//
+// SEARCH IS NO LONGER THIS PANEL'S. Until unified-search-and-grep-spec.md
+// US-5, this panel also mounted KnowledgeSearch beneath its first-run state —
+// which meant a vault folder carried TWO search inputs on screen at once
+// (this one, and LibrarySearchBar's, mounted by LibraryExplorer just below
+// it). That was the shipped duplication US-1/US-5 exist to fix (MV-10:
+// exactly one search input per Library view). LibrarySearchBar now owns ALL
+// vault search — grouped results, the segmented filter, and every honesty
+// signal the retired KnowledgeSearch box had (ported, not dropped; see
+// useVaultSearch.ts and its test suite). This panel renders only the
+// first-run/indexing answer plus whatever `children` the caller composes
+// beneath it — the note-level surfaces (outline, backlinks, reader) are
+// deliberately NOT here either: they belong to whichever pane has a note
+// open, not to a folder.
 //
 // WHY PROGRESS ARRIVES AS A PROP AND NOT A FETCH. KnowledgeBaseInfo carries no
 // index counts, on purpose: the contract states that a REST field for progress
@@ -53,9 +59,7 @@ import { fetchKnowledgeBaseInfo } from '@/lib/api'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { cn } from '@/lib/utils'
 
-import { collectionPathToWorkspacePath } from './KnowledgeBacklinks'
 import { KnowledgeEmptyState, type KnowledgeFirstRunState } from './KnowledgeEmptyState'
-import { KnowledgeSearch } from './KnowledgeSearch'
 
 /** Last path segment of a workspace-relative folder path; '' for the root. */
 function folderNameOf(rootPath: string): string {
@@ -188,15 +192,6 @@ export interface KnowledgePanelProps { // not-wire-format: SPA-only component pr
   /** Create the first note in an empty collection. Same rule. */
   onCreateNote?: () => void
   /**
-   * Open a note the reader picked out of search results. Receives a
-   * WORKSPACE-relative path — search hits are collection-relative, and the
-   * translation happens here so callers deal in one kind of path only (the
-   * kind the Library address takes, FR-012).
-   */
-  onOpenNote?: (workspacePath: string) => void
-  /** Test seam for the search request; production uses the module default. */
-  searchFn?: React.ComponentProps<typeof KnowledgeSearch>['searchFn']
-  /**
    * Extra knowledge-base surface composed by the caller, rendered beneath the
    * search box. Rendered only when the folder really is a knowledge base and
    * detection succeeded, so those features stay off everywhere else
@@ -214,8 +209,6 @@ export function KnowledgePanel({
   progress,
   onCreateCollection,
   onCreateNote,
-  onOpenNote,
-  searchFn,
   children,
   loadInfo = fetchKnowledgeBaseInfo,
   className,
@@ -330,16 +323,6 @@ export function KnowledgePanel({
       />
       {surfaceEnabled && (
         <div data-testid="knowledge-panel-surface" className="flex flex-col gap-2">
-          <KnowledgeSearch
-            workspaceId={info.workspace_id}
-            collectionId={info.collection_id}
-            searchFn={searchFn}
-            onOpenNote={
-              onOpenNote
-                ? (hitPath) => onOpenNote(collectionPathToWorkspacePath(info.root_path, hitPath))
-                : undefined
-            }
-          />
           {children}
         </div>
       )}

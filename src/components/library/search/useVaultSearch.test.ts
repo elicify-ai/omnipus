@@ -18,6 +18,9 @@ import {
 import {
   useVaultSearch,
   VAULT_SEARCH_DEBOUNCE_MS,
+  classifyVaultCoverage,
+  vaultClampOf,
+  isNotesCappedAtLimit,
   type VaultSearchResponse,
   type KnowledgeBaseInfo,
 } from './useVaultSearch'
@@ -221,7 +224,7 @@ describe('useVaultSearch — counts', () => {
     )
 
     await waitFor(() => expect(result.current.counts.all).toBe(4))
-    expect(result.current.counts).toEqual({ all: 4, notes: 2, records: 1, views: 1 })
+    expect(result.current.counts).toEqual({ all: 4, notes: 2, records: 1, views: 1, attachments: 0 })
   })
 
   it('is all-zero before any response has arrived', () => {
@@ -230,7 +233,131 @@ describe('useVaultSearch — counts', () => {
       () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: '', loadCollectionInfo }),
       { wrapper: wrapper() },
     )
-    expect(result.current.counts).toEqual({ all: 0, notes: 0, records: 0, views: 0 })
+    expect(result.current.counts).toEqual({ all: 0, notes: 0, records: 0, views: 0, attachments: 0 })
     expect(result.current.isActive).toBe(false)
+  })
+
+  it('counts attachments and folds them into "all" (US-1/MV-9 — ported attachment search)', async () => {
+    const loadCollectionInfo = vi.fn().mockResolvedValue(vaultInfo())
+    const searchFn = vi.fn().mockResolvedValue(
+      response({
+        notes: [{ path: 'a.md', title: 'A' }],
+        attachments: [{ path: 'img/diagram.png', name: 'diagram.png' }],
+      }),
+    )
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: 'diagram', loadCollectionInfo, searchFn }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(result.current.counts.attachments).toBe(1))
+    expect(result.current.counts).toEqual({ all: 2, notes: 1, records: 0, views: 0, attachments: 1 })
+  })
+
+  it('treats an absent attachments group as [] (MV-9 platform carve-out)', async () => {
+    // A propindex-less build sends no `attachments` key at all rather than an
+    // empty array — this must never surface as a count of undefined/NaN.
+    const loadCollectionInfo = vi.fn().mockResolvedValue(vaultInfo())
+    const searchFn = vi.fn().mockResolvedValue(response({ notes: [{ path: 'a.md', title: 'A' }] }))
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: 'a', loadCollectionInfo, searchFn }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(result.current.counts.notes).toBe(1))
+    expect(result.current.counts.attachments).toBe(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Honesty port (unified-search-and-grep-spec.md US-1, MV-9, FR-036, FR-037) —
+// every signal the retired KnowledgeSearch box carried, ported onto
+// VaultSearchResponse's simpler wire shape. Expected values are derived from
+// the CONTRACT and the spec's acceptance scenarios, not from the functions.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('classifyVaultCoverage — US-1 AS-2/AS-3, FR-036', () => {
+  it('is undefined once the answer is complete — nothing partial to disclose', () => {
+    expect(classifyVaultCoverage(response({ complete: true, notes_searched: 4120 }))).toBeUndefined()
+  })
+
+  it('is undefined when the server sent no coverage numbers at all', () => {
+    expect(classifyVaultCoverage(response({ complete: false }))).toBeUndefined()
+  })
+
+  it('is "ratio" when a partial answer states BOTH a searched count and a known total', () => {
+    expect(
+      classifyVaultCoverage(response({ complete: false, notes_searched: 4120, notes_total_known: 12880 })),
+    ).toBe('ratio')
+  })
+
+  it('is "so-far" when a partial answer has a count but no total — never an invented denominator', () => {
+    expect(classifyVaultCoverage(response({ complete: false, notes_searched: 4120 }))).toBe('so-far')
+  })
+})
+
+describe('vaultClampOf — US-8-style clamp disclosure, FR-037', () => {
+  it('returns null when nothing was clamped', () => {
+    expect(vaultClampOf(response({ limit_clamped: false }))).toBeNull()
+  })
+
+  it('reports the clamp with the refused number, when the server echoed it', () => {
+    expect(vaultClampOf(response({ limit_clamped: true, limit_requested: 400 }))).toEqual({ requested: 400 })
+  })
+
+  it('still reports the clamp when the server omitted the requested number', () => {
+    expect(vaultClampOf(response({ limit_clamped: true }))).toEqual({})
+  })
+})
+
+describe('isNotesCappedAtLimit — server truth over the length heuristic', () => {
+  it('prefers the server-stated notes_capped_at_limit when present', () => {
+    // The array is short, but the server says it was capped — trust it.
+    expect(
+      isNotesCappedAtLimit(response({ notes: [{ path: 'a.md', title: 'A' }], notes_capped_at_limit: true }), 20),
+    ).toBe(true)
+  })
+
+  it('falls back to length-vs-limit when the server states nothing', () => {
+    const notes = Array.from({ length: 20 }, (_, i) => ({ path: `n${i}.md`, title: `N${i}` }))
+    expect(isNotesCappedAtLimit(response({ notes }), 20)).toBe(true)
+  })
+
+  it('is false for a short, unstated list', () => {
+    expect(isNotesCappedAtLimit(response({ notes: [{ path: 'a.md', title: 'A' }] }), 20)).toBe(false)
+  })
+})
+
+describe('useVaultSearch — coverage/clamp/notesCappedAtLimit surfaced on the hook result', () => {
+  it('surfaces the classified coverage and clamp alongside the response', async () => {
+    const loadCollectionInfo = vi.fn().mockResolvedValue(vaultInfo())
+    const searchFn = vi.fn().mockResolvedValue(
+      response({
+        complete: false,
+        notes: [{ path: 'a.md', title: 'A' }],
+        notes_searched: 4120,
+        notes_total_known: 12880,
+        limit_clamped: true,
+        limit_requested: 400,
+        notes_capped_at_limit: true,
+      }),
+    )
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: 'x', loadCollectionInfo, searchFn }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(result.current.response).toBeDefined())
+    expect(result.current.coverage).toBe('ratio')
+    expect(result.current.clamp).toEqual({ requested: 400 })
+    expect(result.current.notesCappedAtLimit).toBe(true)
+  })
+
+  it('is undefined/null/false before any response has arrived', () => {
+    const loadCollectionInfo = vi.fn().mockResolvedValue(vaultInfo())
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: '', loadCollectionInfo }),
+      { wrapper: wrapper() },
+    )
+    expect(result.current.coverage).toBeUndefined()
+    expect(result.current.clamp).toBeNull()
+    expect(result.current.notesCappedAtLimit).toBe(false)
   })
 })

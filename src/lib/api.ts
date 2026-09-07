@@ -207,6 +207,10 @@ import {
   VaultSearchRequest as VaultSearchRequestSchema,
   VaultSearchResponse as VaultSearchResponseSchema,
   CreateVaultRequest as CreateVaultRequestSchema,
+  // unified-search-and-grep-spec.md workstream B — index-free file search
+  // over a plain folder/mount's confined Library root (contract-first #8):
+  FileSearchRequest as FileSearchRequestSchema,
+  FileSearchResponse as FileSearchResponseSchema,
   LibraryBinaryContentRequest as LibraryBinaryContentRequestSchema,
   KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
   // view-kinds-design-2026-09-03 §7 — the evaluated saved-view result the
@@ -518,6 +522,9 @@ import type {
   CreateVaultRequest,
   LibraryBinaryContentRequest,
   KnowledgeGraphResponse,
+  // unified-search-and-grep-spec.md workstream B (contract-first #8):
+  FileSearchRequest,
+  FileSearchResponse,
   // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
   ViewResult,
   KnowledgeBaseViews,
@@ -4786,6 +4793,41 @@ export async function searchVault(
       ...(signal ? { signal } : {}),
     },
     VaultSearchResponseSchema as ZodType<VaultSearchResponse>,
+  )
+}
+
+/**
+ * Index-free file search over a plain folder/mount's confined Library root
+ * (unified-search-and-grep-spec.md workstream B/C,
+ * POST .../library/{workspace_id}/files/search). Names/paths always match;
+ * text-file content matches under the engine's byte/match/depth/deadline
+ * bounds. The human bar always sends `regex:false` (a literal, smart-case
+ * query) — `regex:true` is the tool/API opt-in this client fn also carries so
+ * callers who need it aren't blocked.
+ *
+ * HONESTY: any bound that stops the walk is reported via `truncated` +
+ * `truncated_reason`; clamped limits are echoed in `limits_applied`; a lost
+ * walk/mount root is `truncated_reason: "root_lost"`, never a silent empty
+ * result (MV-3/MV-9 siblings for this endpoint).
+ *
+ * `signal` cancels the in-flight request AND the server-side walk (the
+ * gateway holds a 2-slot walk semaphore shared with the agent `grep` tool —
+ * MV-11) — callers hold at most one in-flight search and abort the previous
+ * one on a new keystroke or navigation.
+ */
+export async function searchFiles(
+  workspaceId: string,
+  body: FileSearchRequest,
+  signal?: AbortSignal,
+): Promise<FileSearchResponse> {
+  return request<FileSearchResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/files/search`,
+    {
+      method: 'POST',
+      body: JSON.stringify(FileSearchRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    },
+    FileSearchResponseSchema as ZodType<FileSearchResponse>,
   )
 }
 
