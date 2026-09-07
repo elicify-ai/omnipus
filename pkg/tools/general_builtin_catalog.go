@@ -143,6 +143,16 @@ func GeneralBuiltinMetadata() []Tool {
 	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
 	out = append(out, NewAskUserQuestionTool(nil))
 
+	// --- set_goal (CategoryTasks) — ADR-081 D2 (work-first-goal-flow-spec
+	// FR-004/FR-005/FR-006): the validated write-path over the goal record
+	// (definition/criteria/DoD), replacing the old two-compile-call gate as
+	// the working agent's own first move on a freshly activated goal.
+	// Metadata-only instance (nil access fn; never Execute()d here) so the
+	// central registry and the Constraint #6 tool-policy-coverage universe
+	// (buildKnownBuiltinToolNames) see it, mirroring AskUserQuestion's own
+	// registration exactly.
+	out = append(out, NewSetGoalTool(nil))
+
 	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))
 	out = append(out, NewTaskCreateTool(nil))

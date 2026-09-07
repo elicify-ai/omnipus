@@ -383,6 +383,17 @@ var allStaticToolNames = []string{
 	// their denyAllThenOverride stamps (they can never be session owners; an
 	// advertised always-erroring tool violates their minimal seeds).
 	"AskUserQuestion",
+	// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004): the validated
+	// write-path over the goal record (definition/criteria/DoD), seeded
+	// ALLOW for every human-facing agent alongside AskUserQuestion — it can
+	// only ever touch the CALLING session's own record, and refuses on a
+	// delegated sub-turn or a goalless session via its own scope
+	// preconditions, not via policy. Judge and PlanSupervisor resolve
+	// explicit DENY via their denyAllThenOverride stamps (they never run
+	// /goal sessions); Worker resolves explicit DENY via tightenGlobalCeiling
+	// (same "ceiling is allow, so absence GRANTS" trap plan_correct/
+	// stop_plan/inspect_session already document).
+	"set_goal",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
@@ -723,6 +734,17 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// applies, so it is named too rather than left to inference.
 			"stop_plan":    deny,
 			"plan_correct": deny,
+			// set_goal (ADR-081 D2) is an EXPLICIT "deny" here for exactly
+			// the inspect_session/stop_plan/plan_correct reason directly
+			// above: its global ceiling is "allow" (pkg/config/defaults.go),
+			// so leaving it ABSENT from this sparse map would silently GRANT
+			// it to the Worker. A generic delegated worker session should
+			// never author its own goal record — the tool's own scope
+			// preconditions already refuse it at delegation depth > 0, but
+			// "unusable grant" is not a posture this codebase ships
+			// (Constraint #6), so it is named too rather than left to
+			// inference.
+			"set_goal": deny,
 			// --- ADR-056 roster visibility ---
 			// Same "ceiling is allow, so absence GRANTS" trap once more, and
 			// here the grant would not merely be unusable: the Worker id is
@@ -749,6 +771,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// message_parent(question:true); the seed keeps the tool usable
 			// whenever one of them runs as a session owner.
 			"AskUserQuestion": allow,
+			// set_goal (ADR-081 D2): same reasoning as AskUserQuestion
+			// immediately above — its own scope precondition refuses a
+			// DELEGATED run (ToolDelegationDepth > 0), so the seed only ever
+			// matters when one of these agents runs as a session owner.
+			"set_goal": allow,
 			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
 			// "ask" (never absent, never deny) for the three plan-execution
 			// tools — an operator-approval prompt gates any attempted use.
@@ -938,6 +965,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
+			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// own session's goal record — seeded alongside AskUserQuestion.
+			"set_goal": allow,
 			// Agent lifecycle — her core job. Delete is consent-gated (ask).
 			"create_agent": allow,
 			"update_agent": allow,
@@ -1004,6 +1034,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
+			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// own session's goal record — seeded alongside AskUserQuestion.
+			"set_goal": allow,
 			// Converse / route.
 			"send_message": allow,
 			"switch_agent": allow,
@@ -1067,6 +1100,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
+			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// own session's goal record — seeded alongside AskUserQuestion.
+			"set_goal": allow,
 			// Web research.
 			"search_web": allow,
 			"fetch_url":  allow,
@@ -1177,6 +1213,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
+			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// own session's goal record — seeded alongside AskUserQuestion.
+			"set_goal": allow,
 			// File operations — read, write, and navigate the workspace.
 			"read_file":      allow,
 			"write_file":     allow,
@@ -2535,6 +2574,10 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// carries it — every human-facing agent may ask the user
 				// structured clarification questions; never `ask`-gate asking.
 				"AskUserQuestion": allow,
+				// set_goal (ADR-081 D2): customs' default allowlist carries
+				// it too — every human-facing agent may author its own
+				// session's goal record, seeded alongside AskUserQuestion.
+				"set_goal": allow,
 				// Conservative initial allow-list: read-only filesystem +
 				// persistent memory. Everything else — bash included — stays
 				// denied until the operator opts in.

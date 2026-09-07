@@ -274,7 +274,20 @@ func DefaultConfig() *Config {
 				// ask-gate). Per-agent seeds decide who holds it: every
 				// human-facing agent allow; Judge/PlanSupervisor explicit deny
 				// via their denyAllThenOverride stamps.
-				"AskUserQuestion":     "allow",
+				"AskUserQuestion": "allow",
+				// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004): the
+				// validated write-path over the goal record. Ceiling "allow"
+				// for the same reason AskUserQuestion's is — writing your own
+				// session's goal record is the safety-increasing direction
+				// (it can only ever register/replace THIS session's own
+				// record, gated shut for a delegated sub-turn or a goalless
+				// session by the tool's own scope preconditions, never by
+				// policy) — and per-agent seeds decide who holds it: every
+				// human-facing agent allow (mirroring AskUserQuestion's own
+				// seed), Judge/PlanSupervisor explicit deny via their
+				// denyAllThenOverride stamps, Worker explicit deny via
+				// tightenGlobalCeiling (see pkg/coreagent/core.go).
+				"set_goal":            "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",
 				"update_task":         "allow",
