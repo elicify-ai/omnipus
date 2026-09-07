@@ -69,7 +69,10 @@ package coreagent
 //     a name its enumeration never covered takes "deny": the same
 //     deny-by-default baseline NewCustomAgentToolsCfg writes for every tool an
 //     operator has not opted into, and the fail-closed direction the whole
-//     subsystem is built in.
+//     subsystem is built in. ONE RECORDED EXCEPTION: "grep" (ADR-081 D11,
+//     FR-009 / spec MV-8 — founder ruling) backfills to "allow" even in this
+//     branch, not the generic deny — see the "grep" assignment inside
+//     backfillToolPolicyCatalogDrift below for the full rationale.
 //
 // # What it deliberately does NOT do
 //
@@ -80,6 +83,13 @@ package coreagent
 // "deny" for each name it wants below that ceiling. Backfilling every absent
 // catalog name for the Worker would silently retire that design, so the seed
 // branch iterates the SEED's keys, not the catalog's.
+//
+// EXCEPTION: "grep" (ADR-081 D11, FR-009 — founder ruling) is the one name
+// the Worker's seed spells out at "allow" even though that is IDENTICAL to
+// the global ceiling, not a tightening below it — see coreAgentSeed's
+// IDWorker branch for the full rationale. Because it is a seed key like any
+// other, it needs no special case here: this file still just iterates the
+// seed's keys and copies whatever value each one states.
 //
 // It also leaves an operator-created agent with no policy map at all (nil or
 // empty Tools) alone. A non-empty map is evidence of an enumeration — every
@@ -147,6 +157,29 @@ func backfillToolPolicyCatalogDrift(cfg *config.Config) []toolPolicyBackfill {
 			for _, name := range allStaticToolNames {
 				want[name] = config.ToolPolicyDeny
 			}
+			// RECORDED EXCEPTION (ADR-081 D11, FR-009 / spec MV-8 — founder
+			// ruling): "grep" is the one tool this generic deny-by-default
+			// baseline does NOT apply to. Every other unnamed tool takes the
+			// fail-closed deny an operator has not opted into. grep is
+			// different by explicit spec direction: MV-8 states the drift
+			// backfill writes "allow" (the ceiling posture) for grep on
+			// PRE-EXISTING agents, without carving out operator-created ones
+			// — a read-only tool confined to the calling agent's own
+			// workspace root and mounts (FR-020) that the founder ruling
+			// judged safe enough to backfill unprompted even here.
+			//
+			// This is deliberately narrower than "grep is always allow for a
+			// custom agent": it is an UPGRADE/backfill-path exception only.
+			// A BRAND-NEW custom agent created after this change still gets
+			// grep "deny" from NewCustomAgentToolsCfg's own conservative,
+			// operator-opts-in baseline — creating a new agent is a
+			// deliberate, human-reviewed event with its own tool picker, a
+			// different risk profile from an agent silently re-seeded on an
+			// upgrade it took no part in. Widening NewCustomAgentToolsCfg's
+			// own default was out of scope for this change; if that is
+			// wanted too, it is a separate, deliberate edit to that
+			// function, not an implication of this backfill exception.
+			want["grep"] = config.ToolPolicyAllow
 		}
 
 		if agentCfg.Tools == nil {

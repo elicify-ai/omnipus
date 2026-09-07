@@ -284,12 +284,17 @@ func TestSeed_JudgeSkillAllowlistUnchanged(t *testing.T) {
 // --- FR-008: the exact one-tool grant, as a complement ---------------------
 
 // TestPlanSupervisorSeed_ExactlyPlanCorrect verifies FR-008 over the SEED
-// literal: plan_correct allow, ToolSearch allow and Skill allow (the two
+// literal: plan_correct allow, ToolSearch allow, Skill allow (the two
 // structural floors every agent gets — CLAUDE.md constraint 6 / ADR-072 D1 —
-// applying even to the most locked-down agent in the system), and every
-// other name in the static catalog deny. Stated as a COMPLEMENT rather than
-// a list, so a tool added to the catalog later can never silently land in
-// PlanSupervisor's allow set.
+// applying even to the most locked-down agent in the system) and, as of
+// ADR-081 D11, grep allow (FR-009's founder ruling — "explicit allow for
+// EVERY agent tier ... system agents", the deliberate FOURTH grant this
+// test's own comment used to say would require amending it on purpose; see
+// coreAgentSeed's IDPlanSupervisor case for the full rationale, including
+// why this does not reopen the read_file/list_directory withholding just
+// below). Every other name in the static catalog stays deny. Stated as a
+// COMPLEMENT rather than a list, so a tool added to the catalog later can
+// never silently land in PlanSupervisor's allow set.
 func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -301,7 +306,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	require.Len(t, pol, len(catalog),
 		"policy must enumerate the whole static catalog, one literal entry each (Constraint #6)")
 
-	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true}
+	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true}
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "policy must enumerate tool %q (no default fallback)", name)
@@ -310,9 +315,9 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 			continue
 		}
 		assert.Equalf(t, config.ToolPolicyDeny, p,
-			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch "+
-				"and Skill structural floors; if you are widening it further, amend this test "+
-				"deliberately (the complement failing IS the guard working)", name)
+			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch, "+
+				"Skill and (ADR-081 D11) grep grants; if you are widening it further, amend this "+
+				"test deliberately (the complement failing IS the guard working)", name)
 	}
 
 	// Named call-outs for the withheld grants the spec argues about at length,
@@ -350,14 +355,17 @@ func TestPlanSupervisorResolved_ExactlyPlanCorrect(t *testing.T) {
 	assert.Equal(t, "allow", resolveFor(t, cfg, id, "Skill", nil),
 		"(PlanSupervisor, Skill) must RESOLVE allow — the ADR-072 D1 structural floor every "+
 			"agent gets applies even to the most locked-down agent in the system")
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "grep", nil),
+		"(PlanSupervisor, grep) must RESOLVE allow — ADR-081 D11's founder ruling (FR-009) "+
+			"grants grep to every agent tier including the most locked-down system agent")
 
 	for _, name := range coreagent.AllStaticToolNames() {
-		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" {
+		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" {
 			continue
 		}
 		assert.Equalf(t, "deny", resolveFor(t, cfg, id, name, nil),
 			"(PlanSupervisor, %s) must resolve deny — its grant is exactly plan_correct plus "+
-				"the ToolSearch and Skill structural floors", name)
+				"the ToolSearch/Skill structural floors and (ADR-081 D11) grep", name)
 	}
 }
 

@@ -111,7 +111,15 @@ import (
 // knowledge_edit, knowledge_restructure, knowledge_configure) from
 // feat/library-improvements, and nothing else — see the merge-arithmetic
 // paragraph above and TestCatalog_MergeArithmetic.
-const catalogSizeToday = 101
+//
+// Bumped 101 -> 102 adding "grep" (ADR-081 D11,
+// unified-search-and-grep-spec.md FR-008/FR-009): the file-search/content-grep
+// agent tool, registered in the catalog ahead of its own implementation
+// package landing (same rule as the ADR-052/ADR-055/ADR-068 additions this
+// file already documents). This is a POST-MERGE addition, independent of the
+// feat->release merge arithmetic TestCatalog_MergeArithmetic states — see
+// that test's postMergeAdditions term for how the two numbers now reconcile.
+const catalogSizeToday = 102
 
 // currentKnowledgeToolNames is the exact six ADR-068 D15.3 seeds — the
 // replacement for ADR-067's nine, superseded (Stage 4, Wave 2). Split by
@@ -253,27 +261,35 @@ func TestCatalog_Stage4Arithmetic(t *testing.T) {
 }
 
 // TestCatalog_MergeArithmetic states the arithmetic that actually explains
-// catalogSizeToday post-merge: release/v0.1.1's own catalog (95 tools, zero
+// catalogSizeToday: release/v0.1.1's own catalog (95 tools, zero
 // knowledge_* entries — an independent evolution off the same 89-tool
 // ancestor feat/library-improvements branched from, verified via
 // `git merge-base` of the two merge parents) plus the six ADR-068 D15.3
-// knowledge tools feat/library-improvements contributed, and nothing else.
-// Unlike TestCatalog_Stage4Arithmetic (a fact about one branch's own
-// history), this is the fact about what the merge actually did — see the
-// "THE FEAT→RELEASE MERGE" comment above.
+// knowledge tools feat/library-improvements contributed at the merge, plus
+// postMergeAdditions — every static builtin tool name added to the catalog
+// AFTER that merge landed, independent of the merge's own arithmetic. Unlike
+// TestCatalog_Stage4Arithmetic (a fact about one branch's own history), the
+// first two terms here are the fact about what the merge actually did — see
+// the "THE FEAT→RELEASE MERGE" comment above; postMergeAdditions is simply
+// the running tally of everything since.
 func TestCatalog_MergeArithmetic(t *testing.T) {
 	const (
 		releaseV011BaselineSize = 95
 		newKnowledgeToolCount   = 6
+		// postMergeAdditions: one so far — "grep" (ADR-081 D11, FR-009),
+		// added to allStaticToolNames ahead of its own implementation
+		// package landing. Bump this alongside catalogSizeToday, in the
+		// same commit, whenever a tool is added post-merge.
+		postMergeAdditions = 1
 	)
 	if newKnowledgeToolCount != len(currentKnowledgeToolNames) {
 		t.Fatalf("newKnowledgeToolCount const says %d but currentKnowledgeToolNames holds %d names",
 			newKnowledgeToolCount, len(currentKnowledgeToolNames))
 	}
-	got := releaseV011BaselineSize + newKnowledgeToolCount
+	got := releaseV011BaselineSize + newKnowledgeToolCount + postMergeAdditions
 	if got != catalogSizeToday {
-		t.Fatalf("the feat->release merge arithmetic is %d + %d = %d, but catalogSizeToday "+
-			"says %d. One of the numbers in this file is wrong.",
-			releaseV011BaselineSize, newKnowledgeToolCount, got, catalogSizeToday)
+		t.Fatalf("the merge arithmetic plus post-merge additions is %d + %d + %d = %d, but "+
+			"catalogSizeToday says %d. One of the numbers in this file is wrong.",
+			releaseV011BaselineSize, newKnowledgeToolCount, postMergeAdditions, got, catalogSizeToday)
 	}
 }

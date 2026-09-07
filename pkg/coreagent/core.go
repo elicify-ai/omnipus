@@ -345,6 +345,19 @@ func GetPrompt(id string) string {
 //     ScopeGeneral tool in pkg/tools, not a separate tier); it is called out
 //     here only because its seeded posture is a rule of its own — see
 //     coreAgentSeed's ROSTER VISIBILITY rule.
+//   - 1 ADR-081 (D11, unified-search-and-grep-spec.md FR-008/FR-009) tool —
+//     grep, the recursive file-name/content search agent tool. Registered
+//     here ahead of / independent of its own implementation package landing,
+//     under exactly the same rule and for the same two reasons as the
+//     ADR-052 four and the ADR-068 six above (validateOverrideKeys panics on
+//     an override key absent from this literal; the tool-policy-coverage
+//     universe derives its gap list from this same set, via
+//     pkg/gateway/gateway.go's buildKnownBuiltinToolNames). FR-009's founder
+//     ruling: global ceiling "allow", EXPLICIT "allow" seeded for every
+//     agent tier — Jim/Mia/Ava/Ray, the Worker, the specialist tier, and
+//     every system agent — a read-only tool confined to the calling agent's
+//     own workspace root and mounts (FR-020), with no posture left to
+//     silent inheritance anywhere in the roster.
 //
 // Do NOT treat the per-category counts above as the authority for the total:
 // they are prose and go stale (they twice did). The mechanical assertion
@@ -528,6 +541,23 @@ var allStaticToolNames = []string{
 	"knowledge_edit",
 	"knowledge_restructure",
 	"knowledge_configure",
+
+	// ADR-081 D11 (unified-search-and-grep-spec.md FR-008/FR-009) — the
+	// file-search/grep agent tool. Listed here ahead of / independent of its
+	// own implementation package landing, under exactly the same rule as the
+	// ADR-052 four and the ADR-068 six above: validateOverrideKeys PANICS on
+	// a seed override naming a tool absent from this literal, and the
+	// tool-policy-coverage universe (config.ValidateToolPolicyCoverage /
+	// RepairIncompleteToolPolicyCoverage, via pkg/gateway's
+	// buildKnownBuiltinToolNames, which mirrors this literal) derives its
+	// gap list from this same set — a name missing here is invisible to
+	// both, not merely uncovered (FR-071's failure mode). FR-009's founder
+	// ruling: ceiling "allow", EXPLICIT "allow" seeded for every agent
+	// tier (Jim/Mia/Ava/Ray, the Worker, the specialist tier, every system
+	// agent) — a read-only tool confined to the calling agent's own
+	// workspace root and mounts only (FR-020), with no posture left to
+	// silent inheritance anywhere in the roster.
+	"grep",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -747,6 +777,20 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// editing this map: a tool that should sit BELOW the ceiling must be
 		// written out here explicitly, on the upgrade path exactly as on the
 		// fresh-install path.
+		//
+		// EXCEPTION (ADR-081 D11, FR-009 — founder ruling): "grep" is the
+		// first entry this map carries that is NOT a below-ceiling
+		// tightening — its value ("allow") is IDENTICAL to the global
+		// ceiling, so by every rule stated above it could simply be left
+		// absent and inherit. It is written out anyway, deliberately
+		// breaking the "every entry here tightens below the ceiling"
+		// pattern: the grep founder ruling
+		// (unified-search-and-grep-spec.md MV-8) requires an EXPLICIT
+		// "allow" for every agent tier with no posture left to silent
+		// inheritance — including the Worker, whose otherwise-sparse map
+		// would normally leave a ceiling-matching "allow" implicit. See the
+		// matching note on tool_policy_catalog_drift.go's "What it
+		// deliberately does NOT do" section.
 		return tightenGlobalCeiling(map[string]config.ToolPolicy{
 			// --- Channels ---
 			"enable_channel":    deny,
@@ -856,6 +900,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"knowledge_edit":        deny,
 			"knowledge_restructure": deny,
 			"knowledge_configure":   deny,
+			// --- ADR-081 D11 (FR-009, founder ruling) ---
+			// grep: EXPLICIT allow — the one entry in this map that MATCHES
+			// the ceiling rather than tightening below it. See the EXCEPTION
+			// note on this map's intro comment above: the founder ruling for
+			// grep leaves no agent's posture, including the Worker's, to
+			// silent ceiling inheritance.
+			"grep": allow,
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -883,6 +934,19 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
 			// same literal value. See coreAgentSeed's doc comment.
 			"stop_plan": ask,
+			// ADR-081 D11 (FR-009, founder ruling): grep is allowed for the
+			// WHOLE specialist tier — Planner, Explorer and Researcher alike
+			// — unlike knowledge_describe/knowledge_find/knowledge_read
+			// above, which are denied for this tier specifically because the
+			// Worker/specialist ids are shared across every concurrent
+			// delegated run of that role. grep carries no such identity
+			// ambiguity: it is scoped per-call to the CALLING agent's own
+			// workspace root and mounts (FR-020), so a grant to "the
+			// Planner" never crosses into a sibling delegated session's
+			// files the way a knowledge-base grant would. The founder ruling
+			// grants it unprompted to every agent tier with no posture left
+			// to silent inheritance.
+			"grep": allow,
 		}
 		switch id {
 		case IDPlanner:
@@ -1153,6 +1217,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"knowledge_edit":        ask,
 			"knowledge_restructure": ask,
 			"knowledge_configure":   ask,
+			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+			// for every agent tier, including Ava — unlike the knowledge
+			// writes just above, it mutates nothing (a read-only recursive
+			// name/content search confined to her own workspace root and
+			// mounts, FR-020), so none of the cascade/control-plane
+			// reasoning that keeps those three at "ask" applies here.
+			"grep": allow,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -1244,6 +1315,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"knowledge_edit":        ask,
 			"knowledge_restructure": ask,
 			"knowledge_configure":   ask,
+			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+			// for every agent tier, including Mia — unlike the knowledge
+			// writes just above, it mutates nothing (a read-only recursive
+			// name/content search confined to her own workspace root and
+			// mounts, FR-020), so the "she asks before writing there"
+			// reasoning above does not apply to a tool that never writes.
+			"grep": allow,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -1378,6 +1456,14 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"knowledge_edit":        ask,
 			"knowledge_restructure": ask,
 			"knowledge_configure":   ask,
+			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+			// for every agent tier, including Ray — and squarely his job: a
+			// read-only recursive name/content search over local sources,
+			// confined to his own workspace root and mounts (FR-020), is the
+			// research surface this agent already holds (read_file,
+			// list_directory, search_web, fetch_url above), not a write that
+			// would warrant the "ask" his knowledge writes carry.
+			"grep": allow,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -1572,6 +1658,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"knowledge_edit":        allow,
 			"knowledge_restructure": allow,
 			"knowledge_configure":   allow,
+			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+			// for every agent tier, Jim included — consistent with his
+			// existing unprompted bash and knowledge-write grants above: a
+			// read-only recursive search confined to his own workspace root
+			// and mounts (FR-020) is a strictly narrower capability than
+			// what he can already do unaudited through bash.
+			"grep": allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
@@ -1619,21 +1712,29 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Skill tool to load ANY skill's content at all — the "# Skills"
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
+			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+			// for every agent tier, including the Judge. Unlike inspect_session
+			// (structurally scoped to the verifier role) this is not a new
+			// capability class for the Judge — it already holds read_file and
+			// list_directory above, and grep is the same read-only,
+			// own-workspace-confined surface (FR-020), just recursive.
+			"grep": allow,
 		})
 	case IDPlanSupervisor:
-		// ADR-055 / plan-supervisor-spec FR-008. PlanSupervisor's grant is
-		// EXACTLY THREE tools: plan_correct (its role-specific grant),
-		// ToolSearch (the structural floor every agent gets — see the
-		// "Structural floor" comment on the ToolSearch entry below) and
-		// Skill (ADR-072 D1's equivalent structural floor for skill content —
-		// without it PlanSupervisor could never load the "plan" skill
-		// systemAgentSkills grants it, since nothing force-loads a skill's
-		// body any more). Naming plan_correct here is not belt-and-braces: denyAllThenOverride
-		// stamps an explicit deny for every catalog name first, and a
-		// per-agent deny BEATS the global "allow" ceiling under
-		// strictest-wins — so an unnamed tool ships denied to PlanSupervisor
-		// itself and the correction loop would be dead on arrival on every
-		// fresh install.
+		// ADR-055 / plan-supervisor-spec FR-008. PlanSupervisor's grant was
+		// EXACTLY THREE tools until ADR-081 D11 added a FOURTH (see the
+		// dedicated paragraph at the end of this comment); it is now
+		// plan_correct (its role-specific grant), ToolSearch (the structural
+		// floor every agent gets — see the "Structural floor" comment on the
+		// ToolSearch entry below), Skill (ADR-072 D1's equivalent structural
+		// floor for skill content — without it PlanSupervisor could never
+		// load the "plan" skill systemAgentSkills grants it, since nothing
+		// force-loads a skill's body any more) and grep. Naming plan_correct
+		// here is not belt-and-braces: denyAllThenOverride stamps an
+		// explicit deny for every catalog name first, and a per-agent deny
+		// BEATS the global "allow" ceiling under strictest-wins — so an
+		// unnamed tool ships denied to PlanSupervisor itself and the
+		// correction loop would be dead on arrival on every fresh install.
 		//
 		// Everything else is deliberately withheld, and each omission is a
 		// decision rather than an oversight:
@@ -1653,6 +1754,21 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     Workspace, add it to the re-enforced field set, and assert the
 		//     effective reach (a denied read outside the workspace) — not
 		//     merely the policy string.
+		//
+		//     READ THIS BEFORE ASSUMING grep BELOW CONTRADICTS THIS BULLET:
+		//     it does carry the SAME unspecified-reach exposure this bullet
+		//     argues against for read_file/list_directory — grep is also a
+		//     filesystem read, confined to the same unreinforced Workspace
+		//     field (FR-020). It is granted anyway, ONLY because ADR-081's
+		//     founder ruling (unified-search-and-grep-spec.md MV-8/FR-009)
+		//     is explicit and unqualified: "explicit allow for EVERY agent
+		//     tier ... system agents", with grep specifically singled out as
+		//     the founder-ruled exception (R2-MAJ-002) — not a
+		//     re-evaluation of the read_file/list_directory reasoning above,
+		//     which stands unchanged for those two names. If PlanSupervisor's
+		//     Workspace is ever stated and re-enforced (closing the gap this
+		//     bullet describes), that fix tightens grep's real reach here
+		//     too, same as it would read_file's.
 		//   - No inspect_session, even though the Judge holds it: it is
 		//     structurally inert here. The real control on that tool is the
 		//     engine-set, fail-closed verifier-session scope lock
@@ -1679,16 +1795,21 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     opposite of "one correction per wake".
 		//
 		// TestPlanSupervisorSeed_ExactlyPlanCorrect asserts this as a
-		// COMPLEMENT (allow for plan_correct, ToolSearch AND Skill, deny for
-		// every other name in allStaticToolNames) rather than as a list, so a
-		// tool added to the catalog later can never silently land in
-		// PlanSupervisor's allow set. ToolSearch and Skill are the two
-		// deliberate, uniform exceptions to "exactly one role-specific tool":
-		// every agent needs them to reach ANY tiered (lazy/search-only) tool
-		// or ANY skill's content at all — structural floors, not role-specific
-		// grants, and they apply even to the most locked-down agent in the
-		// system. A future change that genuinely wants a FOURTH grant must
-		// amend that test deliberately — the complement failing is the guard
+		// COMPLEMENT (allow for plan_correct, ToolSearch, Skill AND grep,
+		// deny for every other name in allStaticToolNames) rather than as a
+		// list, so a tool added to the catalog later can never silently land
+		// in PlanSupervisor's allow set. ToolSearch and Skill are structural
+		// floors — every agent needs them to reach ANY tiered (lazy/
+		// search-only) tool or ANY skill's content at all, and they apply
+		// even to the most locked-down agent in the system. grep is
+		// DIFFERENT in kind from those two floors and from plan_correct: it
+		// is the one deliberate FOURTH, role-UNRELATED grant this comment's
+		// own prior revision said would need the test amended on purpose
+		// (see the ADR-081 paragraph above) — not a structural floor, not
+		// PlanSupervisor's role-specific verb, but a founder-ruled universal
+		// exception landing on the most locked-down agent in the system
+		// same as everywhere else. A future FIFTH grant must still amend
+		// that test deliberately — the complement failing is the guard
 		// working.
 		return denyAllThenOverride(map[string]config.ToolPolicy{
 			"plan_correct": allow,
@@ -1698,6 +1819,12 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Skill tool to load ANY skill's content at all — the "# Skills"
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
+			// ADR-081 D11 (FR-009, founder ruling) — see the dedicated
+			// paragraph above this map: the one deliberate FOURTH grant,
+			// unrelated to PlanSupervisor's role, required by the grep
+			// founder ruling's explicit, unqualified "every agent tier ...
+			// system agents" roster.
+			"grep": allow,
 		})
 	default:
 		return denyAllThenOverride(nil)

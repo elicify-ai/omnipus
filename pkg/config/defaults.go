@@ -629,6 +629,23 @@ func DefaultConfig() *Config {
 				"knowledge_edit":        "allow",
 				"knowledge_restructure": "allow",
 				"knowledge_configure":   "allow",
+
+				// --- grep (ADR-081 D11, FR-009 — founder ruling) ---
+				// Ceiling "allow": grep is a read-only, no-write, recursive
+				// file-name/content search confined to the CALLING agent's
+				// own workspace root and mounts only (FR-020) — never a
+				// cross-workspace scope, never a mutation. The founder
+				// ruling (unified-search-and-grep-spec.md MV-8) requires an
+				// EXPLICIT "allow" for every seeded agent tier
+				// (pkg/coreagent/core.go: Jim/Mia/Ava/Ray, the Worker, the
+				// specialist tier, every system agent), so unlike most
+				// entries in this map the ceiling is not a real gate for
+				// anyone in the shipped roster — it exists so a name absent
+				// from a future custom agent's own map still resolves
+				// "allow" rather than falling through to a silent runtime
+				// default (Constraint #6), exactly like every other ceiling
+				// entry here.
+				"grep": "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds
