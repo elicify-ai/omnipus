@@ -222,6 +222,693 @@ type LibraryEntryMount = {
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
 };
+type KnowledgeSearchResponse = {
+  collection_id: string;
+  hits: Array<KnowledgeSearchHit>;
+  incompleteness: KnowledgeSearchIncompleteness;
+  limit_applied: number;
+  limit_clamped: boolean;
+  limit_requested?: number | undefined;
+};
+type KnowledgeSearchHit = {
+  path: string;
+  title: string;
+  score: number;
+  kind: "note" | "attachment";
+  excerpt?: string | undefined;
+  excerpt_unavailable?:
+    | (
+        | "file_unreadable"
+        | "file_missing"
+        | "match_moved"
+        | "budget_exhausted"
+        | "attachment_not_read"
+      )
+    | undefined;
+  byte_offset?: number | undefined;
+};
+type KnowledgeSearchIncompleteness = {
+  complete: boolean;
+  total_known: boolean;
+  statement: string;
+  indexed_files?: number | undefined;
+  total_files?: number | undefined;
+};
+type KnowledgeGraphResponse = {
+  collection_id: string;
+  kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
+  source_path?: string | undefined;
+  nodes: Array<KnowledgeGraphNode>;
+  edges: Array<KnowledgeGraphEdge>;
+  skipped: Array<KnowledgeGraphSkip>;
+  truncated: boolean;
+  hop_limit_applied?: number | undefined;
+  node_limit_applied?: number | undefined;
+};
+type KnowledgeGraphNode = {
+  path: string;
+  title?: string | undefined;
+  exists: boolean;
+};
+type KnowledgeGraphEdge = {
+  from_path: string;
+  to_path: string;
+  link_text?: string | undefined;
+  alias?: string | undefined;
+  heading?: string | undefined;
+  resolution:
+    | "exact_path"
+    | "unique_basename"
+    | "shortest_path"
+    | "lexicographic"
+    | "unresolved";
+  ambiguous: boolean;
+  candidates?: Array<string> | undefined;
+  embed?: boolean | undefined;
+};
+type KnowledgeGraphSkip = {
+  path: string;
+  reason:
+    | "symlink"
+    | "outside_root"
+    | "unreadable"
+    | "not_addressable"
+    | "node_limit"
+    | "hop_limit";
+  detail?: string | undefined;
+};
+type KnowledgeBaseViews = {
+  base_path: string;
+  is_knowledge_base: boolean;
+  collection_id?: string | undefined;
+  collection_root?: string | undefined;
+  source?: string | undefined;
+  views: Array<KnowledgeBaseView>;
+  unloadable_count: number;
+};
+type KnowledgeBaseView = {
+  name: string;
+  label: string;
+  kind?: string | undefined;
+  unservable?: boolean | undefined;
+  unservable_reason?: string | undefined;
+};
+type KnowledgeOutline = {
+  path: string;
+  is_knowledge_base: boolean;
+  collection_id?: string | undefined;
+  headings: Array<KnowledgeOutlineHeading>;
+  frontmatter_malformed?: boolean | undefined;
+};
+type KnowledgeOutlineHeading = {
+  level: number;
+  text: string;
+  slug: string;
+  line?: number | undefined;
+  byte_offset?: number | undefined;
+};
+type RecordSchema = {
+  types: Array<RecordType>;
+  problems: Array<RecordProblem>;
+};
+type RecordType = {
+  schema_version: number;
+  type: string;
+  label?: string | undefined;
+  identity_prefix?: string | undefined;
+  properties: Array<PropertyDef>;
+  source_path?: string | undefined;
+};
+type PropertyDef = {
+  name: string;
+  type:
+    | "text"
+    | "enum"
+    | "relation"
+    | "date"
+    | "integer"
+    | "decimal"
+    | "person"
+    | "checkbox";
+  many: boolean;
+  required: boolean;
+  label?: string | undefined;
+  values?: Array<EnumValueDef> | undefined;
+  to?: string | undefined;
+  inverse?: string | undefined;
+  unit?: string | undefined;
+  unit_property?: string | undefined;
+  formula?: string | undefined;
+};
+type EnumValueDef = {
+  value: string;
+  label?: string | undefined;
+  position: number;
+  group?: ("open" | "done" | "cancelled") | undefined;
+};
+type RecordProblem = {
+  code:
+    | "missing_schema_version"
+    | "duplicate_type_declaration"
+    | "unknown_property"
+    | "unknown_enum_value"
+    | "missing_required"
+    | "arity_violation"
+    | "enum_violation"
+    | "type_mismatch"
+    | "dangling_relation"
+    | "relation_type_mismatch"
+    | "cardinality_violation"
+    | "duplicate_id"
+    | "integer_not_whole"
+    | "integer_out_of_range"
+    | "candidate_cap_exceeded"
+    | "hop_limit_exceeded"
+    | "hop_traversal_bound_exceeded"
+    | "page_size_clamped"
+    | "scope_truncated"
+    | "text_search_truncated"
+    | "aggregate_refused"
+    | "index_unavailable"
+    | "evaluation_bound_exceeded"
+    | "unsupported_operator"
+    | "unsupported_parameter"
+    | "empty_like_pattern"
+    | "empty_in_list"
+    | "literal_type_mismatch"
+    | "ordering_on_many_property"
+    | "comparison_undefined"
+    | "date_format_ambiguous"
+    | "decimal_scale_exceeded"
+    | "stale_record"
+    | "orphan_row"
+    | "stale_cursor"
+    | "unknown_view"
+    | "unknown_record_type"
+    | "view_part_ineligible";
+  reason: string;
+  records: Array<string>;
+  property?: string | undefined;
+  expected?: string | undefined;
+  fix?: string | undefined;
+  permitted?: Array<string> | undefined;
+  paths?: Array<string> | undefined;
+};
+type VaultRecord = {
+  id: string;
+  type: string;
+  path: string;
+  title?: string | undefined;
+  version_token?: string | undefined;
+  properties: Array<RecordPropertyValue>;
+};
+type RecordPropertyValue = {
+  property: string;
+  type?:
+    | ("text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person")
+    | undefined;
+  values: Array<RecordValue>;
+};
+type RecordValue = {
+  type:
+    | "text"
+    | "enum"
+    | "relation"
+    | "date"
+    | "integer"
+    | "decimal"
+    | "person"
+    | "checkbox";
+  text?: string | undefined;
+  enum?: string | undefined;
+  relation?: RecordRef | undefined;
+  date?: string | undefined;
+  integer?: string | undefined;
+  decimal?: string | undefined;
+  person?: RecordRef | undefined;
+  checkbox?: boolean | undefined;
+};
+type RecordRef = {
+  link: string;
+  resolved: boolean;
+  id?: string | undefined;
+  type?: string | undefined;
+  title?: string | undefined;
+};
+type RecordQueryRequest = {
+  type: string;
+  filters?: Array<RecordFilter> | undefined;
+  group_by?: Array<string> | undefined;
+  sort?: Array<RecordSort> | undefined;
+  aggregates?: Array<RecordAggregate> | undefined;
+  select?: Array<string> | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  hops?: number | undefined;
+};
+type RecordFilter = {
+  property: string;
+  op: "eq" | "lt" | "lte" | "gt" | "gte" | "contains" | "is_absent";
+  values?: Array<RecordValue> | undefined;
+  negate?: boolean | undefined;
+  include_absent?: boolean | undefined;
+  via?: Array<string> | undefined;
+};
+type RecordSort = {
+  property: string;
+  direction: "asc" | "desc";
+};
+type RecordAggregate = {
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
+  property?: string | undefined;
+};
+type RecordQueryResponse = {
+  records: Array<VaultRecord>;
+  complete: boolean;
+  problems: Array<RecordProblem>;
+  refused: boolean;
+  groups?: Array<RecordGroup> | undefined;
+  aggregates?: Array<RecordAggregateResult> | undefined;
+  limit_applied: number;
+  limit_clamped: boolean;
+  limit_requested?: number | undefined;
+  total_matched?: number | undefined;
+  next_cursor?: string | undefined;
+};
+type RecordGroup = {
+  keys: Array<RecordGroupKey>;
+  count: number;
+  record_ids: Array<string>;
+  aggregates?: Array<RecordAggregateResult> | undefined;
+};
+type RecordGroupKey = {
+  property: string;
+  absent: boolean;
+  value?: RecordValue | undefined;
+  label?: string | undefined;
+};
+type RecordAggregateResult = {
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
+  property?: string | undefined;
+  refused: boolean;
+  count?: number | undefined;
+  value?: RecordValue | undefined;
+  excluded_records?: number | undefined;
+};
+type RecordWriteRequest = {
+  type: string;
+  id?: string | undefined;
+  path?: string | undefined;
+  version_token?: string | undefined;
+  properties: Array<RecordPropertyValue>;
+};
+type ViewPart = {
+  part:
+    | "table"
+    | "list"
+    | "tiles"
+    | "columns"
+    | "calendar"
+    | "figures"
+    | "chart"
+    | "crosstab";
+  number?: string | undefined;
+  unit?: string | undefined;
+  date?: string | undefined;
+  image?: string | undefined;
+  choice?: string | undefined;
+  aggregate?: ViewPartAggregate | undefined;
+  grouping?: Array<ViewGroupBy> | undefined;
+  subtotals?: {} | undefined;
+  properties?: Array<string> | undefined;
+};
+type ViewPartAggregate = "sum" | "avg" | "min" | "max" | "count";
+type ViewGroupBy = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
+type ViewResult = {
+  view: string;
+  label: string;
+  kind?: string | undefined;
+  type?: string | undefined;
+  refusal?: ViewResultRefusal | undefined;
+  parts: Array<ViewResultPart>;
+  rows: Array<VaultFindRow>;
+  rows_truncated?: boolean | undefined;
+  complete: boolean;
+  complete_reason?: string | undefined;
+  aggregates?: Array<VaultFindTotal> | undefined;
+  problems: Array<RecordProblem>;
+};
+type ViewResultRefusal = {
+  code: string;
+  reason: string;
+  remedy: string;
+};
+type ViewResultPart = {
+  part:
+    | "table"
+    | "list"
+    | "tiles"
+    | "columns"
+    | "calendar"
+    | "figures"
+    | "chart"
+    | "crosstab";
+  source: ViewPart;
+  columns?: Array<string> | undefined;
+  groups?: Array<ViewResultGroup> | undefined;
+  totals?: Array<ViewUnitTotal> | undefined;
+  excluded_count?: number | undefined;
+  excluded_reason?: string | undefined;
+  unit_property?: string | undefined;
+  excluded_paths?: Array<string> | undefined;
+  series?: Array<ViewResultSeries> | undefined;
+  crosstab?: ViewResultCrosstab | undefined;
+};
+type ViewResultGroup = {
+  key: string;
+  absent?: boolean | undefined;
+  count: number;
+  paths: Array<string>;
+  subtotals: Array<ViewUnitTotal>;
+  excluded_count?: number | undefined;
+  excluded_reason?: string | undefined;
+  excluded_paths?: Array<string> | undefined;
+  paths_omitted?: number | undefined;
+};
+type ViewUnitTotal = {
+  property: string;
+  op: ViewPartAggregate;
+  unit?: string | undefined;
+  unit_property?: string | undefined;
+  value: string;
+  count: number;
+};
+type ViewResultSeries = {
+  unit?: string | undefined;
+  points: Array<ViewResultPoint>;
+};
+type ViewResultPoint = {
+  key: string;
+  value: string;
+  count: number;
+};
+type ViewResultCrosstab = {
+  row_property: string;
+  column_property: string;
+  row_keys: Array<string>;
+  column_keys: Array<string>;
+  cells: Array<ViewResultCrosstabCell>;
+  excluded_count?: number | undefined;
+  excluded_reason?: string | undefined;
+  excluded_paths?: Array<string> | undefined;
+};
+type ViewResultCrosstabCell = {
+  row: string;
+  column: string;
+  unit?: string | undefined;
+  value: string;
+  count: number;
+};
+type VaultFindRow = {
+  id?: string | undefined;
+  path: string;
+  title: string;
+  line?: number | undefined;
+  status?: ("open" | "done") | undefined;
+  text?: string | undefined;
+  cells: Array<VaultFindCell>;
+  joins: Array<VaultFindJoin>;
+  stale?: boolean | undefined;
+};
+type VaultFindCell = {
+  property: string;
+  value: string;
+};
+type VaultFindJoin = {
+  relation: string;
+  target: string;
+  cells: Array<VaultFindCell>;
+};
+type VaultFindTotal = {
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
+  label: string;
+  value: string;
+  scope: string;
+  unit?: string | undefined;
+  unit_property?: string | undefined;
+  refused?: boolean | undefined;
+};
+type ViewDef = {
+  name: string;
+  type?: string | undefined;
+  label?: string | undefined;
+  filter?: VaultFilterNode | undefined;
+  grouping?: Array<ViewGroupBy> | undefined;
+  sort?: Array<RecordSort> | undefined;
+  properties?: Array<string> | undefined;
+  property_config?: {} | undefined;
+  layout?:
+    | ("table" | "cards" | "board" | "calendar" | "gallery" | "map")
+    | undefined;
+  kind?:
+    | (
+        | "table"
+        | "list"
+        | "tiles"
+        | "board"
+        | "calendar"
+        | "summary"
+        | "trend"
+        | "breakdown"
+      )
+    | undefined;
+  parts?: Array<ViewPart> | undefined;
+  formulas?: {} | undefined;
+  aggregates?: Array<RecordAggregate> | undefined;
+  limit?: number | undefined;
+  disabled?: boolean | undefined;
+  source?: string | undefined;
+  untranslated?: Array<string> | undefined;
+};
+type ViewPropertyConfig = Partial<{
+  display_name: string;
+}>;
+type VaultFindRequest = Partial<{
+  words: string;
+  type: string;
+  kind: "note" | "record" | "task" | "attachment";
+  filter: VaultFilterNode;
+  view: string;
+  near: string;
+  hops: number;
+  join: Array<string>;
+  group_by: Array<VaultFindGroupBy>;
+  sort: Array<VaultFindSort>;
+  select: Array<string>;
+  aggregate: Array<VaultFindAggregate>;
+  explain: boolean;
+  limit: number;
+  cursor: string;
+  detail: "minimal" | "standard";
+}>;
+type VaultFindGroupBy = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
+type VaultFindSort = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
+type VaultFindAggregate = {
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
+  property?: string | undefined;
+};
+type VaultFilterNode = Partial<{
+  all: Array<VaultFilterNode>;
+  any: Array<VaultFilterNode>;
+  not: VaultFilterNode;
+  property: string;
+  op:
+    | "="
+    | "<>"
+    | "<"
+    | "<="
+    | ">"
+    | ">="
+    | "LIKE"
+    | "IN"
+    | "IS NULL"
+    | "IS NOT NULL";
+  value: string;
+  values: Array<string>;
+}>;
+type VaultFindResponse = {
+  complete: boolean;
+  complete_reason?: string | undefined;
+  refused: boolean;
+  counts: VaultFindCounts;
+  query_echo: string;
+  index?: VaultIndexState | undefined;
+  rows: Array<VaultFindRow>;
+  elided?: number | undefined;
+  elided_summary?: string | undefined;
+  groups?: Array<VaultFindGroup> | undefined;
+  totals: Array<VaultFindTotal>;
+  problems: Array<RecordProblem>;
+  next: Array<VaultFindAction>;
+  nearest_terms?: Array<VaultTermCount> | undefined;
+  plan?: Array<VaultFindPlanStep> | undefined;
+  next_cursor?: string | undefined;
+  limit_applied?: number | undefined;
+  limit_clamped?: boolean | undefined;
+  limit_requested?: number | undefined;
+};
+type VaultFindCounts = {
+  selected: number;
+  evaluated: number;
+  shown: number;
+};
+type VaultIndexState = {
+  returned: number;
+  agreeing: number;
+  epoch?: number | undefined;
+};
+type VaultFindGroup = {
+  property: string;
+  key: string;
+  absent?: boolean | undefined;
+  count: number;
+  paths: Array<string>;
+  subgroups?: Array<VaultFindSubgroup> | undefined;
+};
+type VaultFindSubgroup = {
+  property: string;
+  key: string;
+  absent?: boolean | undefined;
+  count: number;
+  paths: Array<string>;
+};
+type VaultFindAction = {
+  label: string;
+  call: string;
+};
+type VaultTermCount = {
+  term: string;
+  documents: number;
+};
+type VaultFindPlanStep = {
+  stage:
+    | "scope"
+    | "narrow"
+    | "retrieve"
+    | "compare"
+    | "join"
+    | "group"
+    | "sort"
+    | "aggregate"
+    | "render";
+  property?: string | undefined;
+  source?:
+    | ("properties_index" | "text_index" | "go_comparator" | "schema" | "none")
+    | undefined;
+  detail: string;
+};
+type VaultSearchResponse = {
+  collection_id: string;
+  complete: boolean;
+  complete_reason?: string | undefined;
+  notes: Array<VaultSearchNoteHit>;
+  records: Array<VaultSearchRecordHit>;
+  views: Array<VaultSearchViewHit>;
+};
+type VaultSearchNoteHit = {
+  path: string;
+  title: string;
+  snippet?: string | undefined;
+};
+type VaultSearchRecordHit = {
+  path: string;
+  title: string;
+  id?: string | undefined;
+  record_type?: string | undefined;
+  cells: Array<VaultFindCell>;
+};
+type VaultSearchViewHit = {
+  view: string;
+  label: string;
+  kind?: string | undefined;
+  type?: string | undefined;
+};
+type ValidationReport = {
+  complete: boolean;
+  problems: Array<RecordProblem>;
+  records_checked: number;
+  types_checked: number;
+  types?: Array<string> | undefined;
+};
 type Agent = {
   id: string;
   name: string;
@@ -1044,7 +1731,7 @@ type NotificationList = {
 };
 type Notification = {
   id: string;
-  type: "schedule_failed";
+  type: "schedule_failed" | "knowledge_drift";
   title: string;
   body?: string | undefined;
   severity: "info" | "warning" | "error";
@@ -3449,7 +4136,7 @@ export const ScheduleRunResult = z.object({
 });
 export const Notification: z.ZodType<Notification> = z.object({
   id: z.string(),
-  type: z.literal("schedule_failed"),
+  type: z.enum(["schedule_failed", "knowledge_drift"]),
   title: z.string().min(1),
   body: z.string().optional(),
   severity: z.enum(["info", "warning", "error"]),
@@ -3576,6 +4263,10 @@ export const LibraryContentRequest = z.object({
   path: z.string().min(1),
   content: z.string().max(10485760),
 });
+export const LibraryBinaryContentRequest = z.object({
+  path: z.string().min(1),
+  content_base64: z.string().min(1),
+});
 export const uploadLibraryFiles_Body = z
   .object({ files: z.array(z.instanceof(File)) })
   .partial()
@@ -3584,9 +4275,429 @@ export const LibraryUploadResponse: z.ZodType<LibraryUploadResponse> = z.object(
   { entries: z.array(LibraryEntry) }
 );
 export const LibraryMkdirRequest = z.object({ path: z.string().min(1) });
+export const CreateVaultRequest = z.object({
+  name: z.string().min(1),
+  parent_rel_path: z.string().optional(),
+});
 export const LibraryRenameRequest = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
+});
+export const LibraryPreviewTokenRequest = z.object({
+  workspace_id: z.string().min(1),
+  path: z.string().min(1),
+  scope: z.enum(["file", "bundle"]),
+  entry_path: z.string().optional(),
+});
+export const LibraryPreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  url: z.string().min(1),
+  expires_at: z.string().datetime({ offset: true }),
+  expires_in_seconds: z.number().int().gte(1),
+  scope: z.enum(["file", "bundle"]),
+  scope_root: z.string().min(1),
+  workspace_id: z.string().min(1).optional(),
+});
+export const LibraryInlineDisposition = z.object({
+  path: z.string().min(1),
+  extension: z.string(),
+  disposition: z.enum(["inline", "attachment"]),
+  content_type: z.string().min(1),
+  renderer: z.enum([
+    "html",
+    "pdf",
+    "audio",
+    "video",
+    "image",
+    "markdown",
+    "text",
+    "code",
+    "none",
+  ]),
+  requires_sandbox: z.boolean(),
+  reason: z.string().optional(),
+});
+export const KnowledgeBaseInfo = z.object({
+  workspace_id: z.string().min(1),
+  root_path: z.string().min(1),
+  is_knowledge_base: z.boolean(),
+  marker: z.enum(["omnipus_vault", "obsidian", "none"]),
+  collection_id: z.string().min(1).optional(),
+  display_name: z.string().optional(),
+  template_path: z.string().optional(),
+  detection_error: z
+    .object({
+      code: z.enum([
+        "marker_unreadable",
+        "root_unreadable",
+        "root_missing",
+        "not_a_directory",
+      ]),
+      message: z.string().min(1),
+    })
+    .optional(),
+});
+export const KnowledgeSearchRequest = z.object({
+  query: z.string().min(1).max(1024),
+  collection_id: z.string().min(1),
+  limit: z.number().int().gte(1).optional().default(20),
+  offset: z.number().int().gte(0).optional().default(0),
+  kinds: z.array(z.enum(["note", "attachment"])).optional(),
+});
+export const KnowledgeSearchHit: z.ZodType<KnowledgeSearchHit> = z.object({
+  path: z.string().min(1),
+  title: z.string(),
+  score: z.number(),
+  kind: z.enum(["note", "attachment"]),
+  excerpt: z.string().optional(),
+  excerpt_unavailable: z
+    .enum([
+      "file_unreadable",
+      "file_missing",
+      "match_moved",
+      "budget_exhausted",
+      "attachment_not_read",
+    ])
+    .optional(),
+  byte_offset: z.number().int().gte(0).optional(),
+});
+export const KnowledgeSearchIncompleteness: z.ZodType<KnowledgeSearchIncompleteness> =
+  z.object({
+    complete: z.boolean(),
+    total_known: z.boolean(),
+    statement: z.string().min(1),
+    indexed_files: z.number().int().gte(0).optional(),
+    total_files: z.number().int().gte(0).optional(),
+  });
+export const KnowledgeSearchResponse: z.ZodType<KnowledgeSearchResponse> =
+  z.object({
+    collection_id: z.string().min(1),
+    hits: z.array(KnowledgeSearchHit),
+    incompleteness: KnowledgeSearchIncompleteness,
+    limit_applied: z.number().int().gte(1),
+    limit_clamped: z.boolean(),
+    limit_requested: z.number().int().gte(1).optional(),
+  });
+export const VaultSearchRequest = z.object({
+  query: z.string().min(1).max(1024),
+  collection_id: z.string().min(1),
+  limit: z.number().int().gte(1).optional().default(20),
+});
+export const VaultSearchNoteHit: z.ZodType<VaultSearchNoteHit> = z.object({
+  path: z.string().min(1),
+  title: z.string(),
+  snippet: z.string().optional(),
+});
+export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
+  property: z.string().min(1),
+  value: z.string(),
+});
+export const VaultSearchRecordHit: z.ZodType<VaultSearchRecordHit> = z.object({
+  path: z.string().min(1),
+  title: z.string(),
+  id: z.string().optional(),
+  record_type: z.string().optional(),
+  cells: z.array(VaultFindCell),
+});
+export const VaultSearchViewHit: z.ZodType<VaultSearchViewHit> = z.object({
+  view: z.string().min(1),
+  label: z.string(),
+  kind: z.string().optional(),
+  type: z.string().optional(),
+});
+export const VaultSearchResponse: z.ZodType<VaultSearchResponse> = z.object({
+  collection_id: z.string().min(1),
+  complete: z.boolean(),
+  complete_reason: z.string().optional(),
+  notes: z.array(VaultSearchNoteHit),
+  records: z.array(VaultSearchRecordHit),
+  views: z.array(VaultSearchViewHit),
+});
+export const KnowledgeGraphNode: z.ZodType<KnowledgeGraphNode> = z.object({
+  path: z.string().min(1),
+  title: z.string().optional(),
+  exists: z.boolean(),
+});
+export const KnowledgeGraphEdge: z.ZodType<KnowledgeGraphEdge> = z.object({
+  from_path: z.string().min(1),
+  to_path: z.string().min(1),
+  link_text: z.string().optional(),
+  alias: z.string().optional(),
+  heading: z.string().optional(),
+  resolution: z.enum([
+    "exact_path",
+    "unique_basename",
+    "shortest_path",
+    "lexicographic",
+    "unresolved",
+  ]),
+  ambiguous: z.boolean(),
+  candidates: z.array(z.string()).optional(),
+  embed: z.boolean().optional(),
+});
+export const KnowledgeGraphSkip: z.ZodType<KnowledgeGraphSkip> = z.object({
+  path: z.string().min(1),
+  reason: z.enum([
+    "symlink",
+    "outside_root",
+    "unreadable",
+    "not_addressable",
+    "node_limit",
+    "hop_limit",
+  ]),
+  detail: z.string().optional(),
+});
+export const KnowledgeGraphResponse: z.ZodType<KnowledgeGraphResponse> =
+  z.object({
+    collection_id: z.string().min(1),
+    kind: z.enum([
+      "links",
+      "backlinks",
+      "unresolved",
+      "orphans",
+      "neighbourhood",
+    ]),
+    source_path: z.string().optional(),
+    nodes: z.array(KnowledgeGraphNode),
+    edges: z.array(KnowledgeGraphEdge),
+    skipped: z.array(KnowledgeGraphSkip),
+    truncated: z.boolean(),
+    hop_limit_applied: z.number().int().gte(1).optional(),
+    node_limit_applied: z.number().int().gte(1).optional(),
+  });
+export const KnowledgeOutlineHeading: z.ZodType<KnowledgeOutlineHeading> =
+  z.object({
+    level: z.number().int().gte(1).lte(6),
+    text: z.string(),
+    slug: z.string().min(1),
+    line: z.number().int().gte(1).optional(),
+    byte_offset: z.number().int().gte(0).optional(),
+  });
+export const KnowledgeOutline: z.ZodType<KnowledgeOutline> = z.object({
+  path: z.string().min(1),
+  is_knowledge_base: z.boolean(),
+  collection_id: z.string().min(1).optional(),
+  headings: z.array(KnowledgeOutlineHeading),
+  frontmatter_malformed: z.boolean().optional(),
+});
+export const KnowledgeBaseView: z.ZodType<KnowledgeBaseView> = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.string().optional(),
+  unservable: z.boolean().optional(),
+  unservable_reason: z.string().min(1).optional(),
+});
+export const KnowledgeBaseViews: z.ZodType<KnowledgeBaseViews> = z.object({
+  base_path: z.string().min(1),
+  is_knowledge_base: z.boolean(),
+  collection_id: z.string().min(1).optional(),
+  collection_root: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+  views: z.array(KnowledgeBaseView),
+  unloadable_count: z.number().int().gte(0),
+});
+export const ViewResultRefusal: z.ZodType<ViewResultRefusal> = z.object({
+  code: z.string().min(1),
+  reason: z.string().min(1),
+  remedy: z.string(),
+});
+export const ViewPartAggregate = z.enum(["sum", "avg", "min", "max", "count"]);
+export const ViewGroupBy: z.ZodType<ViewGroupBy> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
+});
+export const ViewPart: z.ZodType<ViewPart> = z.object({
+  part: z.enum([
+    "table",
+    "list",
+    "tiles",
+    "columns",
+    "calendar",
+    "figures",
+    "chart",
+    "crosstab",
+  ]),
+  number: z.string().min(1).optional(),
+  unit: z.string().min(1).optional(),
+  date: z.string().min(1).optional(),
+  image: z.string().min(1).optional(),
+  choice: z.string().min(1).optional(),
+  aggregate: ViewPartAggregate.optional(),
+  grouping: z.array(ViewGroupBy).max(2).optional(),
+  subtotals: z.record(ViewPartAggregate).optional(),
+  properties: z.array(z.string().min(1)).optional(),
+});
+export const ViewUnitTotal: z.ZodType<ViewUnitTotal> = z.object({
+  property: z.string().min(1),
+  op: ViewPartAggregate,
+  unit: z.string().optional(),
+  unit_property: z.string().optional(),
+  value: z.string(),
+  count: z.number().int(),
+});
+export const ViewResultGroup: z.ZodType<ViewResultGroup> = z.object({
+  key: z.string(),
+  absent: z.boolean().optional(),
+  count: z.number().int(),
+  paths: z.array(z.string()),
+  subtotals: z.array(ViewUnitTotal),
+  excluded_count: z.number().int().optional(),
+  excluded_reason: z.string().optional(),
+  excluded_paths: z.array(z.string().min(1)).optional(),
+  paths_omitted: z.number().int().gte(1).optional(),
+});
+export const ViewResultPoint: z.ZodType<ViewResultPoint> = z.object({
+  key: z.string(),
+  value: z.string(),
+  count: z.number().int(),
+});
+export const ViewResultSeries: z.ZodType<ViewResultSeries> = z.object({
+  unit: z.string().optional(),
+  points: z.array(ViewResultPoint),
+});
+export const ViewResultCrosstabCell: z.ZodType<ViewResultCrosstabCell> =
+  z.object({
+    row: z.string(),
+    column: z.string(),
+    unit: z.string().optional(),
+    value: z.string(),
+    count: z.number().int(),
+  });
+export const ViewResultCrosstab: z.ZodType<ViewResultCrosstab> = z.object({
+  row_property: z.string().min(1),
+  column_property: z.string().min(1),
+  row_keys: z.array(z.string()),
+  column_keys: z.array(z.string()),
+  cells: z.array(ViewResultCrosstabCell),
+  excluded_count: z.number().int().optional(),
+  excluded_reason: z.string().optional(),
+  excluded_paths: z.array(z.string().min(1)).optional(),
+});
+export const ViewResultPart: z.ZodType<ViewResultPart> = z.object({
+  part: z.enum([
+    "table",
+    "list",
+    "tiles",
+    "columns",
+    "calendar",
+    "figures",
+    "chart",
+    "crosstab",
+  ]),
+  source: ViewPart,
+  columns: z.array(z.string()).optional(),
+  groups: z.array(ViewResultGroup).optional(),
+  totals: z.array(ViewUnitTotal).optional(),
+  excluded_count: z.number().int().optional(),
+  excluded_reason: z.string().optional(),
+  unit_property: z.string().optional(),
+  excluded_paths: z.array(z.string().min(1)).optional(),
+  series: z.array(ViewResultSeries).optional(),
+  crosstab: ViewResultCrosstab.optional(),
+});
+export const VaultFindJoin: z.ZodType<VaultFindJoin> = z.object({
+  relation: z.string().min(1),
+  target: z.string().min(1),
+  cells: z.array(VaultFindCell),
+});
+export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
+  id: z.string().min(1).optional(),
+  path: z.string().min(1),
+  title: z.string(),
+  line: z.number().int().gte(1).optional(),
+  status: z.enum(["open", "done"]).optional(),
+  text: z.string().optional(),
+  cells: z.array(VaultFindCell),
+  joins: z.array(VaultFindJoin),
+  stale: z.boolean().optional(),
+});
+export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
+  label: z.string().min(1),
+  value: z.string(),
+  scope: z.string().min(1),
+  unit: z.string().optional(),
+  unit_property: z.string().optional(),
+  refused: z.boolean().optional(),
+});
+export const RecordProblem: z.ZodType<RecordProblem> = z.object({
+  code: z.enum([
+    "missing_schema_version",
+    "duplicate_type_declaration",
+    "unknown_property",
+    "unknown_enum_value",
+    "missing_required",
+    "arity_violation",
+    "enum_violation",
+    "type_mismatch",
+    "dangling_relation",
+    "relation_type_mismatch",
+    "cardinality_violation",
+    "duplicate_id",
+    "integer_not_whole",
+    "integer_out_of_range",
+    "candidate_cap_exceeded",
+    "hop_limit_exceeded",
+    "hop_traversal_bound_exceeded",
+    "page_size_clamped",
+    "scope_truncated",
+    "text_search_truncated",
+    "aggregate_refused",
+    "index_unavailable",
+    "evaluation_bound_exceeded",
+    "unsupported_operator",
+    "unsupported_parameter",
+    "empty_like_pattern",
+    "empty_in_list",
+    "literal_type_mismatch",
+    "ordering_on_many_property",
+    "comparison_undefined",
+    "date_format_ambiguous",
+    "decimal_scale_exceeded",
+    "stale_record",
+    "orphan_row",
+    "stale_cursor",
+    "unknown_view",
+    "unknown_record_type",
+    "view_part_ineligible",
+  ]),
+  reason: z.string().min(1),
+  records: z.array(z.string().min(1)),
+  property: z.string().min(1).optional(),
+  expected: z.string().optional(),
+  fix: z.string().optional(),
+  permitted: z.array(z.string()).optional(),
+  paths: z.array(z.string().min(1)).optional(),
+});
+export const ViewResult: z.ZodType<ViewResult> = z.object({
+  view: z.string().min(1),
+  label: z.string(),
+  kind: z.string().optional(),
+  type: z.string().optional(),
+  refusal: ViewResultRefusal.optional(),
+  parts: z.array(ViewResultPart),
+  rows: z.array(VaultFindRow),
+  rows_truncated: z.boolean().optional(),
+  complete: z.boolean(),
+  complete_reason: z.string().optional(),
+  aggregates: z.array(VaultFindTotal).optional(),
+  problems: z.array(RecordProblem),
 });
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
@@ -3800,6 +4911,406 @@ export const CliValidateResponse = z.object({
 });
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
+export const KnowledgeConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("knowledge_version_conflict"),
+  path: z.string().min(1),
+  expected_version: z.string().optional(),
+  actual_version: z.string().optional(),
+});
+export const KnowledgeMountConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("knowledge_mount_conflict"),
+  existing_root_path: z.string().min(1),
+  requested_root_path: z.string().min(1),
+  existing_collection_id: z.string().optional(),
+});
+export const EnumValueDef: z.ZodType<EnumValueDef> = z.object({
+  value: z.string().min(1),
+  label: z.string().optional(),
+  position: z.number().int().gte(0),
+  group: z.enum(["open", "done", "cancelled"]).optional(),
+});
+export const PropertyDef: z.ZodType<PropertyDef> = z.object({
+  name: z.string().min(1),
+  type: z.enum([
+    "text",
+    "enum",
+    "relation",
+    "date",
+    "integer",
+    "decimal",
+    "person",
+    "checkbox",
+  ]),
+  many: z.boolean(),
+  required: z.boolean(),
+  label: z.string().optional(),
+  values: z.array(EnumValueDef).optional(),
+  to: z.string().min(1).optional(),
+  inverse: z.string().min(1).optional(),
+  unit: z.string().optional(),
+  unit_property: z.string().min(1).optional(),
+  formula: z.string().min(1).optional(),
+});
+export const RecordType: z.ZodType<RecordType> = z.object({
+  schema_version: z.number().int().gte(1),
+  type: z.string().min(1),
+  label: z.string().optional(),
+  identity_prefix: z.string().min(1).optional(),
+  properties: z.array(PropertyDef),
+  source_path: z.string().optional(),
+});
+export const RecordSchema: z.ZodType<RecordSchema> = z.object({
+  types: z.array(RecordType),
+  problems: z.array(RecordProblem),
+});
+export const RecordRef: z.ZodType<RecordRef> = z.object({
+  link: z.string().min(1),
+  resolved: z.boolean(),
+  id: z.string().min(1).optional(),
+  type: z.string().min(1).optional(),
+  title: z.string().optional(),
+});
+export const RecordValue: z.ZodType<RecordValue> = z.object({
+  type: z.enum([
+    "text",
+    "enum",
+    "relation",
+    "date",
+    "integer",
+    "decimal",
+    "person",
+    "checkbox",
+  ]),
+  text: z.string().optional(),
+  enum: z.string().min(1).optional(),
+  relation: RecordRef.optional(),
+  date: z.string().min(8).max(40).optional(),
+  integer: z
+    .string()
+    .min(1)
+    .max(20)
+    .regex(/^-?(0|[1-9][0-9]*)$/)
+    .optional(),
+  decimal: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]{1,100})?$/)
+    .optional(),
+  person: RecordRef.optional(),
+  checkbox: z.boolean().optional(),
+});
+export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
+  property: z.string().min(1),
+  type: z
+    .enum(["text", "enum", "relation", "date", "integer", "decimal", "person"])
+    .optional(),
+  values: z.array(RecordValue),
+});
+export const VaultRecord: z.ZodType<VaultRecord> = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+  path: z.string().min(1),
+  title: z.string().optional(),
+  version_token: z.string().min(1).optional(),
+  properties: z.array(RecordPropertyValue),
+});
+export const RecordFilter: z.ZodType<RecordFilter> = z.object({
+  property: z.string().min(1),
+  op: z.enum(["eq", "lt", "lte", "gt", "gte", "contains", "is_absent"]),
+  values: z.array(RecordValue).optional(),
+  negate: z.boolean().optional(),
+  include_absent: z.boolean().optional(),
+  via: z.array(z.string().min(1)).max(2).optional(),
+});
+export const RecordSort: z.ZodType<RecordSort> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]),
+});
+export const RecordAggregate: z.ZodType<RecordAggregate> = z.object({
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
+  property: z.string().min(1).optional(),
+});
+export const RecordQueryRequest: z.ZodType<RecordQueryRequest> = z.object({
+  type: z.string().min(1),
+  filters: z.array(RecordFilter).optional(),
+  group_by: z.array(z.string().min(1)).max(2).optional(),
+  sort: z.array(RecordSort).optional(),
+  aggregates: z.array(RecordAggregate).optional(),
+  select: z.array(z.string().min(1)).optional(),
+  limit: z.number().int().gte(1).optional().default(50),
+  cursor: z.string().min(1).optional(),
+  hops: z.number().int().gte(0).optional().default(0),
+});
+export const RecordGroupKey: z.ZodType<RecordGroupKey> = z.object({
+  property: z.string().min(1),
+  absent: z.boolean(),
+  value: RecordValue.optional(),
+  label: z.string().optional(),
+});
+export const RecordAggregateResult: z.ZodType<RecordAggregateResult> = z.object(
+  {
+    op: z.enum([
+      "count",
+      "sum",
+      "min",
+      "max",
+      "avg",
+      "median",
+      "stddev",
+      "range",
+      "earliest",
+      "latest",
+      "checked",
+      "unchecked",
+      "empty",
+      "filled",
+      "unique",
+    ]),
+    property: z.string().min(1).optional(),
+    refused: z.boolean(),
+    count: z.number().int().gte(0).optional(),
+    value: RecordValue.optional(),
+    excluded_records: z.number().int().gte(0).optional(),
+  }
+);
+export const RecordGroup: z.ZodType<RecordGroup> = z.object({
+  keys: z.array(RecordGroupKey).min(1).max(2),
+  count: z.number().int().gte(0),
+  record_ids: z.array(z.string().min(1)),
+  aggregates: z.array(RecordAggregateResult).optional(),
+});
+export const RecordQueryResponse: z.ZodType<RecordQueryResponse> = z.object({
+  records: z.array(VaultRecord),
+  complete: z.boolean(),
+  problems: z.array(RecordProblem),
+  refused: z.boolean(),
+  groups: z.array(RecordGroup).optional(),
+  aggregates: z.array(RecordAggregateResult).optional(),
+  limit_applied: z.number().int().gte(1),
+  limit_clamped: z.boolean(),
+  limit_requested: z.number().int().gte(1).optional(),
+  total_matched: z.number().int().gte(0).optional(),
+  next_cursor: z.string().min(1).optional(),
+});
+export const RecordWriteRequest: z.ZodType<RecordWriteRequest> = z.object({
+  type: z.string().min(1),
+  id: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  version_token: z.string().min(1).optional(),
+  properties: z.array(RecordPropertyValue).min(1),
+});
+export const RelationWriteRequest = z.object({
+  id: z.string().min(1),
+  version_token: z.string().min(1),
+  property: z.string().min(1),
+  op: z.enum(["add", "remove", "replace"]),
+  targets: z.array(z.string().min(1)),
+});
+export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
+  .object({ display_name: z.string().min(1) })
+  .partial();
+export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
+  z
+    .object({
+      all: z.array(VaultFilterNode).min(1),
+      any: z.array(VaultFilterNode).min(1),
+      not: VaultFilterNode,
+      property: z.string().min(1),
+      op: z.enum([
+        "=",
+        "<>",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "LIKE",
+        "IN",
+        "IS NULL",
+        "IS NOT NULL",
+      ]),
+      value: z.string(),
+      values: z.array(z.string()).min(1),
+    })
+    .partial()
+);
+export const ViewDef: z.ZodType<ViewDef> = z.object({
+  name: z.string().min(1),
+  type: z.string().min(1).optional(),
+  label: z.string().optional(),
+  filter: VaultFilterNode.optional(),
+  grouping: z.array(ViewGroupBy).max(2).optional(),
+  sort: z.array(RecordSort).optional(),
+  properties: z.array(z.string().min(1)).optional(),
+  property_config: z.record(ViewPropertyConfig).optional(),
+  layout: z
+    .enum(["table", "cards", "board", "calendar", "gallery", "map"])
+    .optional(),
+  kind: z
+    .enum([
+      "table",
+      "list",
+      "tiles",
+      "board",
+      "calendar",
+      "summary",
+      "trend",
+      "breakdown",
+    ])
+    .optional(),
+  parts: z.array(ViewPart).optional(),
+  formulas: z.record(z.string().min(1)).optional(),
+  aggregates: z.array(RecordAggregate).optional(),
+  limit: z.number().int().gte(1).optional(),
+  disabled: z.boolean().optional(),
+  source: z.string().optional(),
+  untranslated: z.array(z.string().min(1)).optional(),
+});
+export const VaultFindGroupBy: z.ZodType<VaultFindGroupBy> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
+});
+export const VaultFindSort: z.ZodType<VaultFindSort> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
+});
+export const VaultFindAggregate: z.ZodType<VaultFindAggregate> = z.object({
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
+  property: z.string().min(1).optional(),
+});
+export const VaultFindRequest: z.ZodType<VaultFindRequest> = z
+  .object({
+    words: z.string().min(1),
+    type: z.string().min(1),
+    kind: z.enum(["note", "record", "task", "attachment"]),
+    filter: VaultFilterNode,
+    view: z.string().min(1),
+    near: z.string().min(1),
+    hops: z.number().int().gte(1).lte(2),
+    join: z.array(z.string().min(1)),
+    group_by: z.array(VaultFindGroupBy).max(2),
+    sort: z.array(VaultFindSort),
+    select: z.array(z.string().min(1)),
+    aggregate: z.array(VaultFindAggregate),
+    explain: z.boolean(),
+    limit: z.number().int().gte(1),
+    cursor: z.string().min(1),
+    detail: z.enum(["minimal", "standard"]),
+  })
+  .partial();
+export const VaultFindCounts: z.ZodType<VaultFindCounts> = z.object({
+  selected: z.number().int().gte(0),
+  evaluated: z.number().int().gte(0),
+  shown: z.number().int().gte(0),
+});
+export const VaultIndexState: z.ZodType<VaultIndexState> = z.object({
+  returned: z.number().int().gte(0),
+  agreeing: z.number().int().gte(0),
+  epoch: z.number().int().gte(0).optional(),
+});
+export const VaultFindSubgroup: z.ZodType<VaultFindSubgroup> = z.object({
+  property: z.string().min(1),
+  key: z.string(),
+  absent: z.boolean().optional(),
+  count: z.number().int().gte(0),
+  paths: z.array(z.string().min(1)),
+});
+export const VaultFindGroup: z.ZodType<VaultFindGroup> = z.object({
+  property: z.string().min(1),
+  key: z.string(),
+  absent: z.boolean().optional(),
+  count: z.number().int().gte(0),
+  paths: z.array(z.string().min(1)),
+  subgroups: z.array(VaultFindSubgroup).optional(),
+});
+export const VaultFindAction: z.ZodType<VaultFindAction> = z.object({
+  label: z.string().min(1),
+  call: z.string().min(1),
+});
+export const VaultTermCount: z.ZodType<VaultTermCount> = z.object({
+  term: z.string().min(1),
+  documents: z.number().int().gte(1),
+});
+export const VaultFindPlanStep: z.ZodType<VaultFindPlanStep> = z.object({
+  stage: z.enum([
+    "scope",
+    "narrow",
+    "retrieve",
+    "compare",
+    "join",
+    "group",
+    "sort",
+    "aggregate",
+    "render",
+  ]),
+  property: z.string().min(1).optional(),
+  source: z
+    .enum(["properties_index", "text_index", "go_comparator", "schema", "none"])
+    .optional(),
+  detail: z.string().min(1),
+});
+export const VaultFindResponse: z.ZodType<VaultFindResponse> = z.object({
+  complete: z.boolean(),
+  complete_reason: z.string().optional(),
+  refused: z.boolean(),
+  counts: VaultFindCounts,
+  query_echo: z.string(),
+  index: VaultIndexState.optional(),
+  rows: z.array(VaultFindRow),
+  elided: z.number().int().gte(1).optional(),
+  elided_summary: z.string().optional(),
+  groups: z.array(VaultFindGroup).optional(),
+  totals: z.array(VaultFindTotal),
+  problems: z.array(RecordProblem),
+  next: z.array(VaultFindAction),
+  nearest_terms: z.array(VaultTermCount).optional(),
+  plan: z.array(VaultFindPlanStep).optional(),
+  next_cursor: z.string().min(1).optional(),
+  limit_applied: z.number().int().gte(1).optional(),
+  limit_clamped: z.boolean().optional(),
+  limit_requested: z.number().int().gte(1).optional(),
+});
+export const ValidationReport: z.ZodType<ValidationReport> = z.object({
+  complete: z.boolean(),
+  problems: z.array(RecordProblem),
+  records_checked: z.number().int().gte(0),
+  types_checked: z.number().int().gte(0),
+  types: z.array(z.string().min(1)).optional(),
+});
 export const AgentSession = z
   .object({
     id: z.string(),
@@ -5990,6 +7501,54 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "put",
+    path: "/library/:workspace_id/content-binary",
+    alias: "putLibraryContentBinary",
+    description: `Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest&#x27;s description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryBinaryContentRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/library/:workspace_id/download",
     alias: "downloadLibraryFile",
@@ -6129,6 +7688,471 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/inline-disposition",
+    alias: "getLibraryInlineDisposition",
+    description: `Returns the server&#x27;s own answer for one file: allow-listed for inline display or not, the extension-derived Content-Type it will be served with, which SPA renderer should draw it, and whether drawing it makes the browser execute it (ADR-067 D15).
+
+Exists so the SPA never re-derives any of that from the filename. The allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b); a second copy in TypeScript would be a second answer, and the two would disagree the first time an extension was added to one of them.
+
+Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryInlineDisposition,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge",
+    alias: "getKnowledgeBaseInfo",
+    description: `Marker-based detection (ADR-067 FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. File CONTENT is never read to decide this.
+
+Returns 200 with is_knowledge_base&#x3D;false for an ordinary folder — that is an answer, not an error. A marker that exists but cannot be read is reported through detection_error rather than silently downgrading the folder to ordinary (E-9).
+
+Carries no index counts. Index progress is a streaming state pushed over the WebSocket as knowledge_index_progress (FR-080); polling this endpoint for it is the mistake that contract is written to prevent.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeBaseInfo,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/base-views",
+    alias: "getKnowledgeBaseViews",
+    description: `Lists the saved views whose &#x60;source&#x60; names the given &#x60;.base&#x60; file, with the slug each one is actually addressed by, its display label, its kind, and whether it can be served at all — plus the enclosing collection, so a caller can evaluate any of them without a second lookup.
+
+THE SLUG IS THE SERVER&#x27;S TO GIVE. Import is one-shot (FR-102) and the importer&#x27;s SlugRegistry appends a collision counter that nothing outside it can reconstruct, so a client that re-derived slugs by parsing the &#x60;.base&#x60; file mapped two colliding view names onto one slug and rendered the first view&#x27;s rows under the second view&#x27;s name. Every &#x60;name&#x60; here is read from the saved view file itself and must be passed VERBATIM to GET .../knowledge/view.
+
+A &#x60;.base&#x60; outside any knowledge base answers 200 with is_knowledge_base&#x3D;false and no views: nothing imported it, so it has no views to run, which is a stated answer rather than an error. View files that name this base but failed to load are counted in unloadable_count rather than silently reducing the list.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeBaseViews,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/find",
+    alias: "findVault",
+    description: `The human-facing counterpart to the agent&#x27;s knowledge_find tool (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text (with a snippet), records matched by their typed property values, and saved views matched by name or label.
+
+It runs over the SAME engine the agent uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine&#x27;s prefix-matching, coverage and freshness behaviour — there is no second search engine.
+
+Honest states: an empty result is EMPTY, not an error. When the index is not ready (never built, or still catching up with disk), the response is complete&#x3D;false with a complete_reason carrying the freshness signal, so the UI can say &quot;still indexing&quot; rather than &quot;no results&quot;. A collection outside the caller&#x27;s workspace scope returns the same empty-but-complete shape rather than a permission error, so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a free-text query does not belong in a URL that lands in request logs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: VaultSearchRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: VaultSearchResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/graph",
+    alias: "getKnowledgeGraph",
+    description: `One operation serves all five graph queries (FR-051) because they differ only in which subgraph is selected, not in what a link is.
+
+Link resolution follows a fixed ladder — exact path, unique basename, shortest path, lexicographic (FR-040) — and an ambiguous basename is resolved by that rule AND reported as ambiguous (FR-041): resolving it is not a licence to stay quiet about it. A link with no match, or one whose target lies outside the collection root, is reported unresolved and the target is not read (FR-042, FR-043). Symbolic links are skipped and reported rather than followed (FR-044), which is also how a symlink loop terminates.
+
+Every query is bounded by hop count and node count (FR-054) and reports its own truncation, so a small graph is never mistaken for a clipped one.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "collection_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "kind",
+        type: "Query",
+        schema: z.enum([
+          "links",
+          "backlinks",
+          "unresolved",
+          "orphans",
+          "neighbourhood",
+        ]),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "hops",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+    ],
+    response: KnowledgeGraphResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/outline",
+    alias: "getKnowledgeOutline",
+    description: `Returns the heading outline that drives the reading rail, for ANY markdown file — whether or not it belongs to a knowledge base (FR-062). An outline is parsed from the one file in hand and needs no index, which is exactly why search and backlinks stay knowledge-base-only: those do need one. The is_knowledge_base field tells the client which other rail panels it may offer.
+
+Headings come back as a FLAT list in document order with nesting carried by level, not as a tree — a document that skips from H1 to H3 has one honest representation that way, where a tree would force the server to invent an intermediate heading the author never wrote.
+
+Frontmatter that is not valid YAML is reported through frontmatter_malformed; the file is still outlined and still indexed for body text (E-17).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeOutline,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/search",
+    alias: "searchKnowledgeBase",
+    description: `Returns ranked hits with path, title and a matched excerpt (FR-050), AND — in the same response — the incompleteness statement qualifying them (FR-035). A caller cannot obtain results without also obtaining the statement, which is the point: a partial answer that looks whole is worse than no answer.
+
+The excerpt is re-read from the file at query time and never stored in the index (FR-050a), so it always matches disk. When the re-read cannot be done — the file moved, became unreadable, or the latency budget ran out — the hit is still returned with path and title and a machine-readable excerpt_unavailable reason. Never a fabricated excerpt; never a silently dropped result.
+
+A limit above the server cap is clamped and the clamp is reported (FR-037). A collection outside the caller&#x27;s workspace scope returns an EMPTY result set rather than a permission error (FR-052, FR-053), so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a query plus its filters does not belong in a URL that lands in request logs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: KnowledgeSearchRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeSearchResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/view",
+    alias: "getKnowledgeViewResult",
+    description: `Resolves a saved view by name within one in-scope knowledge base, evaluates its filter/grouping/aggregation through the SAME engine knowledge_find uses (there is exactly one query engine), and returns the view&#x27;s resolved part stack with every aggregate precomputed server-side (view-kinds-design-2026-09-03 §7) — per-group subtotals and totals ONCE PER UNIT VALUE, never across units (G2), with rows whose unit is missing shown, excluded from every total and counted (G3). A legacy view with no &#x60;parts&#x60; serves as its single layout-derived part.
+
+A view that cannot be answered — unknown, stored disabled (FR-105), refused at load, a layout with no drawable part, or an engine refusal — returns 200 with &#x60;refusal&#x60; set and empty parts/rows, so the client can show WHY. A collection_id outside this workspace&#x27;s scope answers exactly like an unknown view (FR-052/FR-053): the error channel must not confirm what exists elsewhere.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "collection_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "view",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: ViewResult,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {
@@ -6299,6 +8323,59 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/library/:workspace_id/vaults",
+    alias: "createVault",
+    description: `Creates a folder at parent_rel_path/name (or the work-tree root when parent_rel_path is omitted) and initialises it as an Omnipus knowledge base: the .omnipus-vault/ marker (FR-022/FR-023) plus empty records/ and views/ control-plane directories, so knowledge_configure can write record types and saved views into it immediately. Rejects (409) if an entry already exists at the resulting path — this endpoint never adopts or converts an existing folder. Returns 403 if the resulting path resolves outside the workspace&#x27;s work tree; 404 if parent_rel_path does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: CreateVaultRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/library/copy",
     alias: "copyLibraryEntry",
     description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
@@ -6384,6 +8461,62 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/preview-token",
+    alias: "mintLibraryPreviewToken",
+    description: `Mints the path-bearing credential a SANDBOXED preview needs (ADR-067 FR-003a, FR-003f). A document served under the isolation policy has an opaque origin, so it can send neither the SameSite&#x3D;Strict session cookie nor an Authorization header on its own &lt;link&gt;, &lt;script&gt;, font or media requests — without this token an HTML bundle simply cannot load its own subresources.
+
+Minting is authenticated and never widens access: the caller must already be able to read the path, and the grant covers one workspace and one path only — a single file, or one bundle root and its descendants (FR-003b). The token lives 15 minutes and is also invalidated by logout, mount revoke, and deletion or move of the named path (FR-003d).
+
+Re-minting returns a NEW token and invalidates the previous one (FR-003m). There is no renewal endpoint.
+
+Both this endpoint and the /library-preview/&lt;token&gt;/&lt;path&gt; serving prefix are rate-limited, and a session may hold at most 8 live tokens; a 9th mint request is refused with 429 (FR-003k).
+
+The serving prefix itself is deliberately NOT in this document: it is a bare, token-authenticated path on the main listener (ADR-044 shape) that returns file bytes or an HTML error page, carries no JSON contract, and answers GET and HEAD only — every other method is 405 with Allow: GET, HEAD (FR-003j).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryPreviewTokenRequest,
+      },
+    ],
+    response: LibraryPreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {
@@ -11262,7 +13395,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.literal("schedule_failed"),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),
@@ -11570,6 +13703,21 @@ export const JudgeVerdictFrame = z
   })
   .strict();
 
+export const KnowledgeIndexProgressFrame = z
+  .object({
+    type: z.literal("knowledge_index_progress"),
+    collection_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+    phase: z.enum(["enumerating", "indexing", "idle", "failed"]),
+    indexed_files: z.number().int().min(0),
+    total_known: z.boolean(),
+    total_files: z.number().int().min(0).optional(),
+    skipped_files: z.number().int().min(0).optional(),
+    error: z.string().optional(),
+    updated_at: z.string().optional(),
+  })
+  .strict();
+
 export const ErrorPayload = z
   .object({
     llm_error: LLMError,
@@ -11643,6 +13791,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  KnowledgeIndexProgressFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

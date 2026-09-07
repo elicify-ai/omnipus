@@ -1,0 +1,29 @@
+title: KnowledgeGraphNode
+description: >
+  One note or attachment appearing in a KnowledgeGraphResponse. A node may
+  describe a target that does not exist on disk — that is how an unresolved
+  wikilink is represented (FR-042).
+type: object
+additionalProperties: false
+required:
+  - path
+  - exists
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Collection-relative path, forward-slash separated. For a node that does
+      not exist, this is the link text as written, normalised — it is NOT a
+      path the caller may read.
+    example: "architecture/sandboxing.md"
+  title:
+    type: string
+    description: Display title. Absent for a node that does not exist.
+    example: "Sandboxing"
+  exists:
+    type: boolean
+    description: >
+      False for the target of an unresolved link. The client MUST mark such a
+      node visibly and MUST NOT navigate on click (FR-065).
+    example: true

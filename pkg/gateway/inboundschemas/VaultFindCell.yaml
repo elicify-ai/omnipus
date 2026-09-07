@@ -1,0 +1,28 @@
+title: VaultFindCell
+description: >
+  One rendered column of one row (spec 4.2). The value is TEXT, exactly as it
+  will be shown, and never a JSON number — a decimal that round-tripped through
+  a binary float would render digits the note does not contain, and the whole
+  type system exists to stop that.
+
+  A `decimal` renders at its property's DECLARED scale where the schema declares
+  one, and otherwise at the value's own scale as written in the note. Thousands
+  separators are a choice of the compact-text projection and are never part of a
+  stored or compared value.
+type: object
+additionalProperties: false
+required:
+  - property
+  - value
+properties:
+  property:
+    type: string
+    minLength: 1
+    example: "status"
+  value:
+    type: string
+    description: >
+      The rendered value. An EMPTY STRING is a legitimate rendering — of an
+      empty string property, or of a property the record leaves absent — so a
+      renderer must not treat empty as "omit this cell".
+    example: "open"

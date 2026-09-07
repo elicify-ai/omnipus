@@ -1,0 +1,37 @@
+title: LibraryBinaryContentRequest
+description: >
+  Request body for PUT /api/v1/library/{workspace_id}/content-binary. Writes
+  BINARY content to a file at the given workspace-relative path, creating the
+  file if it does not already exist and overwriting any existing content
+  entirely. The sibling of LibraryContentRequest/PUT .../content, which is
+  UTF-8 text only — a filled PDF or other binary attachment written through
+  that route would corrupt, because its content field is a `string` decoded
+  as UTF-8 text before being written as `[]byte(req.Content)`. This route
+  instead carries the raw bytes as standard base64, so any byte sequence
+  survives the JSON transport unmodified. The path's parent directory must
+  already exist within the workspace's work tree.
+type: object
+additionalProperties: false
+required:
+  - path
+  - content_base64
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path of the file to write, forward-slash
+      separated. Never absolute and never containing a ".." segment
+      (library-spec.md Constraints). Same validation as
+      LibraryContentRequest.path.
+    example: "uploads/report.pdf"
+  content_base64:
+    type: string
+    minLength: 1
+    description: >
+      Full replacement content for the file, as standard (RFC 4648 §4)
+      base64 of the raw bytes — no URL-safe alphabet, no line wrapping.
+      The DECODED byte length is capped at 26214400 bytes (25 MB); a
+      base64 string decoding to more than that is rejected with 400
+      before any bytes are written.
+    example: "JVBERi0xLjQKJcOkw7zDtsO..."

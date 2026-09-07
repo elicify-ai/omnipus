@@ -1,0 +1,63 @@
+title: KnowledgeConflictError
+description: >
+  Typed 409 body for a refused knowledge-base write (ADR-067 D18 / D14).
+  Returned when the version token a write carried does not match the file on
+  disk (FR-106) — the file changed underneath the caller and applying the
+  write would silently lose whatever changed.
+
+  The refusal NAMES THE PATH, because "conflict" without a path is not
+  actionable in a collection of thousands of notes.
+
+  THE VERSION TOKEN, defined here because this is the type that carries it:
+  an opaque string the server computes over the file's CONTENT — not its
+  modification time, which is not sufficient on its own to detect an
+  external change (FR-107). Every read that a write may follow returns the
+  current token, every write MUST send back the token it read, and the
+  server compares them. Callers MUST treat the token as opaque: never parse
+  it, never compare it for ordering, never construct one. The encoding is
+  the server's to change without a contract change, and a client that has
+  not decoded it cannot be broken by that.
+
+  Shares the "error" and "code" fields of the standard ErrorResponse
+  envelope so a generic error handler still works on it unchanged; the extra
+  fields are what a conflict-aware handler uses.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+  - path
+properties:
+  error:
+    type: string
+    minLength: 1
+    description: Human-readable message, safe to display.
+    example: "architecture/sandboxing.md changed on disk since you opened it"
+  code:
+    type: string
+    enum:
+      - knowledge_version_conflict
+    description: >
+      Machine-readable discriminator. A single value, so a client can branch
+      on it without string matching on the message.
+    example: "knowledge_version_conflict"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Collection-relative path of the file that was NOT written.
+    example: "architecture/sandboxing.md"
+  expected_version:
+    type: string
+    description: >
+      The opaque version token the caller sent — what it believed the file
+      was. Absent when the caller sent none, which is itself a refusal
+      (FR-106 requires a token on every write).
+    example: "v1:9f2a7c40"
+  actual_version:
+    type: string
+    description: >
+      The opaque version token of the file as it now stands. A caller that
+      re-reads, merges and retries sends this one back. Absent when the file
+      has been deleted since.
+    example: "v1:1b8e330d"

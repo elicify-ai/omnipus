@@ -2761,6 +2761,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/content-binary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Write a file's BINARY content from the Library editor
+         * @description Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest's description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB. Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist.
+         */
+        put: operations["putLibraryContentBinary"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/upload": {
         parameters: {
             query?: never;
@@ -2801,6 +2821,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/vaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a new knowledge base ("vault") in a workspace's work tree
+         * @description Creates a folder at parent_rel_path/name (or the work-tree root when parent_rel_path is omitted) and initialises it as an Omnipus knowledge base: the .omnipus-vault/ marker (FR-022/FR-023) plus empty records/ and views/ control-plane directories, so knowledge_configure can write record types and saved views into it immediately. Rejects (409) if an entry already exists at the resulting path — this endpoint never adopts or converts an existing folder. Returns 403 if the resulting path resolves outside the workspace's work tree; 404 if parent_rel_path does not exist.
+         */
+        post: operations["createVault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/rename": {
         parameters: {
             query?: never;
@@ -2833,6 +2873,224 @@ export interface paths {
          * @description Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
          */
         get: operations["downloadLibraryFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a short-lived preview token for a Library file or bundle
+         * @description Mints the path-bearing credential a SANDBOXED preview needs (ADR-067 FR-003a, FR-003f). A document served under the isolation policy has an opaque origin, so it can send neither the SameSite=Strict session cookie nor an Authorization header on its own <link>, <script>, font or media requests — without this token an HTML bundle simply cannot load its own subresources.
+         *
+         *     Minting is authenticated and never widens access: the caller must already be able to read the path, and the grant covers one workspace and one path only — a single file, or one bundle root and its descendants (FR-003b). The token lives 15 minutes and is also invalidated by logout, mount revoke, and deletion or move of the named path (FR-003d).
+         *
+         *     Re-minting returns a NEW token and invalidates the previous one (FR-003m). There is no renewal endpoint.
+         *
+         *     Both this endpoint and the /library-preview/<token>/<path> serving prefix are rate-limited, and a session may hold at most 8 live tokens; a 9th mint request is refused with 429 (FR-003k).
+         *
+         *     The serving prefix itself is deliberately NOT in this document: it is a bare, token-authenticated path on the main listener (ADR-044 shape) that returns file bytes or an HTML error page, carries no JSON contract, and answers GET and HEAD only — every other method is 405 with Allow: GET, HEAD (FR-003j).
+         */
+        post: operations["mintLibraryPreviewToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/inline-disposition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ask whether a Library file may be previewed inline, and as what
+         * @description Returns the server's own answer for one file: allow-listed for inline display or not, the extension-derived Content-Type it will be served with, which SPA renderer should draw it, and whether drawing it makes the browser execute it (ADR-067 D15).
+         *
+         *     Exists so the SPA never re-derives any of that from the filename. The allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b); a second copy in TypeScript would be a second answer, and the two would disagree the first time an extension was added to one of them.
+         *
+         *     Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
+         */
+        get: operations["getLibraryInlineDisposition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Detect whether a folder is a knowledge base, and describe it
+         * @description Marker-based detection (ADR-067 FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. File CONTENT is never read to decide this.
+         *
+         *     Returns 200 with is_knowledge_base=false for an ordinary folder — that is an answer, not an error. A marker that exists but cannot be read is reported through detection_error rather than silently downgrading the folder to ordinary (E-9).
+         *
+         *     Carries no index counts. Index progress is a streaming state pushed over the WebSocket as knowledge_index_progress (FR-080); polling this endpoint for it is the mistake that contract is written to prevent.
+         */
+        get: operations["getKnowledgeBaseInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Relevance search over one knowledge base
+         * @description Returns ranked hits with path, title and a matched excerpt (FR-050), AND — in the same response — the incompleteness statement qualifying them (FR-035). A caller cannot obtain results without also obtaining the statement, which is the point: a partial answer that looks whole is worse than no answer.
+         *
+         *     The excerpt is re-read from the file at query time and never stored in the index (FR-050a), so it always matches disk. When the re-read cannot be done — the file moved, became unreadable, or the latency budget ran out — the hit is still returned with path and title and a machine-readable excerpt_unavailable reason. Never a fabricated excerpt; never a silently dropped result.
+         *
+         *     A limit above the server cap is clamped and the clamp is reported (FR-037). A collection outside the caller's workspace scope returns an EMPTY result set rather than a permission error (FR-052, FR-053), so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a query plus its filters does not belong in a URL that lands in request logs.
+         */
+        post: operations["searchKnowledgeBase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/find": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Human vault search — notes, records and views in one query
+         * @description The human-facing counterpart to the agent's knowledge_find tool (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text (with a snippet), records matched by their typed property values, and saved views matched by name or label.
+         *
+         *     It runs over the SAME engine the agent uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour — there is no second search engine.
+         *
+         *     Honest states: an empty result is EMPTY, not an error. When the index is not ready (never built, or still catching up with disk), the response is complete=false with a complete_reason carrying the freshness signal, so the UI can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns the same empty-but-complete shape rather than a permission error, so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a free-text query does not belong in a URL that lands in request logs.
+         */
+        post: operations["findVault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Links, backlinks, unresolved links, orphans or a neighbourhood
+         * @description One operation serves all five graph queries (FR-051) because they differ only in which subgraph is selected, not in what a link is.
+         *
+         *     Link resolution follows a fixed ladder — exact path, unique basename, shortest path, lexicographic (FR-040) — and an ambiguous basename is resolved by that rule AND reported as ambiguous (FR-041): resolving it is not a licence to stay quiet about it. A link with no match, or one whose target lies outside the collection root, is reported unresolved and the target is not read (FR-042, FR-043). Symbolic links are skipped and reported rather than followed (FR-044), which is also how a symlink loop terminates.
+         *
+         *     Every query is bounded by hop count and node count (FR-054) and reports its own truncation, so a small graph is never mistaken for a clipped one.
+         */
+        get: operations["getKnowledgeGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/outline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Heading outline for a markdown file
+         * @description Returns the heading outline that drives the reading rail, for ANY markdown file — whether or not it belongs to a knowledge base (FR-062). An outline is parsed from the one file in hand and needs no index, which is exactly why search and backlinks stay knowledge-base-only: those do need one. The is_knowledge_base field tells the client which other rail panels it may offer.
+         *
+         *     Headings come back as a FLAT list in document order with nesting carried by level, not as a tree — a document that skips from H1 to H3 has one honest representation that way, where a tree would force the server to invent an intermediate heading the author never wrote.
+         *
+         *     Frontmatter that is not valid YAML is reported through frontmatter_malformed; the file is still outlined and still indexed for body text (E-17).
+         */
+        get: operations["getKnowledgeOutline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/base-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved views imported from one .base file
+         * @description Lists the saved views whose `source` names the given `.base` file, with the slug each one is actually addressed by, its display label, its kind, and whether it can be served at all — plus the enclosing collection, so a caller can evaluate any of them without a second lookup.
+         *
+         *     THE SLUG IS THE SERVER'S TO GIVE. Import is one-shot (FR-102) and the importer's SlugRegistry appends a collision counter that nothing outside it can reconstruct, so a client that re-derived slugs by parsing the `.base` file mapped two colliding view names onto one slug and rendered the first view's rows under the second view's name. Every `name` here is read from the saved view file itself and must be passed VERBATIM to GET .../knowledge/view.
+         *
+         *     A `.base` outside any knowledge base answers 200 with is_knowledge_base=false and no views: nothing imported it, so it has no views to run, which is a stated answer rather than an error. View files that name this base but failed to load are counted in unloadable_count rather than silently reducing the list.
+         */
+        get: operations["getKnowledgeBaseViews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Evaluate a saved view and return everything needed to draw it
+         * @description Resolves a saved view by name within one in-scope knowledge base, evaluates its filter/grouping/aggregation through the SAME engine knowledge_find uses (there is exactly one query engine), and returns the view's resolved part stack with every aggregate precomputed server-side (view-kinds-design-2026-09-03 §7) — per-group subtotals and totals ONCE PER UNIT VALUE, never across units (G2), with rows whose unit is missing shown, excluded from every total and counted (G3). A legacy view with no `parts` serves as its single layout-derived part.
+         *
+         *     A view that cannot be answered — unknown, stored disabled (FR-105), refused at load, a layout with no drawable part, or an engine refusal — returns 200 with `refusal` set and empty parts/rows, so the client can show WHY. A collection_id outside this workspace's scope answers exactly like an unknown view (FR-052/FR-053): the error channel must not confirm what exists elsewhere.
+         */
+        get: operations["getKnowledgeViewResult"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4129,6 +4387,38 @@ export interface components {
             content: string;
         };
         /**
+         * LibraryBinaryContentRequest
+         * @description Request body for PUT /api/v1/library/{workspace_id}/content-binary. Writes BINARY content to a file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. The sibling of LibraryContentRequest/PUT .../content, which is UTF-8 text only — a filled PDF or other binary attachment written through that route would corrupt, because its content field is a `string` decoded as UTF-8 text before being written as `[]byte(req.Content)`. This route instead carries the raw bytes as standard base64, so any byte sequence survives the JSON transport unmodified. The path's parent directory must already exist within the workspace's work tree.
+         */
+        LibraryBinaryContentRequest: {
+            /**
+             * @description Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Same validation as LibraryContentRequest.path.
+             * @example uploads/report.pdf
+             */
+            path: string;
+            /**
+             * @description Full replacement content for the file, as standard (RFC 4648 §4) base64 of the raw bytes — no URL-safe alphabet, no line wrapping. The DECODED byte length is capped at 26214400 bytes (25 MB); a base64 string decoding to more than that is rejected with 400 before any bytes are written.
+             * @example JVBERi0xLjQKJcOkw7zDtsO...
+             */
+            content_base64: string;
+        };
+        /**
+         * CreateVaultRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
+         */
+        CreateVaultRequest: {
+            /**
+             * @description The new vault folder's name — a single path segment, never containing "/" or "\" and never "." or "..". Also becomes the vault's marker display_name. Rejected (400) if it fails either check, or the workspace's own portable-name rules; rejected (409) if an entry already exists at the resulting path.
+             * @example Research
+             */
+            name: string;
+            /**
+             * @description Workspace-relative folder the vault is created inside, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Omit or pass "" to create the vault at the workspace's work-tree root.
+             * @example projects/2026
+             */
+            parent_rel_path?: string;
+        };
+        /**
          * LibraryRenameRequest
          * @description Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
          */
@@ -4189,6 +4479,2797 @@ export interface components {
              * @example projects/2026/reports
              */
             path: string;
+        };
+        /**
+         * LibraryInlineDisposition
+         * @description Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
+         *     Answers one question before the SPA commits to a renderer: may these bytes be shown inline, as what type, and does showing them require the sandboxed token path? The SPA MUST NOT re-derive any of this from the file extension — the allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b), and a second copy in TypeScript is a second answer waiting to disagree.
+         *     This describes the file, not a grant. Fetching the bytes inline still requires a preview token (LibraryPreviewTokenRequest).
+         */
+        LibraryInlineDisposition: {
+            /**
+             * @description Workspace-relative path this answer describes.
+             * @example reports/q3/index.html
+             */
+            path: string;
+            /**
+             * @description Lower-cased filename extension including the leading dot, or empty for a file with none.
+             * @example .html
+             */
+            extension: string;
+            /**
+             * @description "inline" when the extension is on the allow-list; "attachment" for everything else, which is the default and includes .pdf (FR-008). A .pdf is an attachment deliberately: PDF.js fetches its bytes from the AUTHENTICATED Library endpoint, so a PDF never becomes a browser document at all.
+             * @example inline
+             * @enum {string}
+             */
+            disposition: "inline" | "attachment";
+            /**
+             * @description The Content-Type the server will send, derived from the EXTENSION and never from sniffing the content (FR-015). Compiled into the binary, so the same build answers identically on every machine (FR-015b). "application/octet-stream" for an extension not in the table.
+             * @example text/html
+             */
+            content_type: string;
+            /**
+             * @description Which SPA surface should draw this file. "html" is the only value that makes the bytes a browser document; every other value names a component Omnipus draws itself, which is why only "html" is sandboxed (FR-014, FR-017). "none" means offer a download card.
+             * @example html
+             * @enum {string}
+             */
+            renderer: "html" | "pdf" | "audio" | "video" | "image" | "markdown" | "text" | "code" | "none";
+            /**
+             * @description True when displaying this file makes the browser execute it, so it MUST be loaded through the preview-token path inside a sandboxed iframe. True for renderer "html" — including .svg, which is scriptable when opened as a document. False for everything Omnipus renders itself.
+             * @example true
+             */
+            requires_sandbox: boolean;
+            /**
+             * @description Why disposition is "attachment", when it is. Present only then, so the SPA can say something better than a blank download card.
+             * @example extension not on the inline allow-list
+             */
+            reason?: string;
+        };
+        /**
+         * LibraryPreviewTokenRequest
+         * @description Request body for POST /api/v1/library/preview-token (FR-003f). Mints a short-lived, path-bearing credential that lets a SANDBOXED document — which has an opaque origin and can therefore send neither the SameSite=Strict session cookie nor an Authorization header — load itself and its relative subresources (FR-003a, FR-003).
+         *     Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller must already be able to read the path, and the token is scoped to one workspace and one path. There is no whole-workspace scope, by design.
+         *     No workspace_id in the route: this is a mint operation over the Library as a whole, matching the existing /library/move and /library/copy shape, and the workspace it applies to is part of the request rather than the path.
+         */
+        LibraryPreviewTokenRequest: {
+            /**
+             * @description Workspace whose work tree contains path.
+             * @example ws_7f3a
+             */
+            workspace_id: string;
+            /**
+             * @description Workspace-relative path, forward-slash separated. For scope "file", the file itself. For scope "bundle", the DIRECTORY that is the bundle root. Never absolute and never containing a ".." segment; resolution is confined to the workspace work tree at the syscall boundary, not merely by string cleaning (FR-003i).
+             * @example reports/q3
+             */
+            path: string;
+            /**
+             * @description "file" grants exactly one file. "bundle" grants one directory and its descendants, which is what an HTML page with its own stylesheets, scripts, fonts and media needs. Nothing wider exists (FR-003b).
+             * @example bundle
+             * @enum {string}
+             */
+            scope: "file" | "bundle";
+            /**
+             * @description For scope "bundle", the bundle-root-relative document to open first, used to build the returned url. Defaults to "index.html". Ignored for scope "file".
+             * @example index.html
+             */
+            entry_path?: string;
+        };
+        /**
+         * LibraryPreviewTokenResponse
+         * @description Response for POST /api/v1/library/preview-token (FR-003f). The minted credential, where to point an iframe at it, and when it dies.
+         *     Lifetime is 15 minutes (FR-003d) — long enough to load and read a bundle, short enough that a token found later in a log is already dead. Expiry alone is not revocation: a token is ALSO invalidated when the minting session logs out, when the workspace mount is revoked, and when the named path is deleted or moved. The store is in memory, so a gateway restart invalidates every live preview.
+         *     RE-MINTING RETURNS A NEW VALUE AND INVALIDATES THE PREVIOUS ONE (FR-003m). Do not copy the same-token-for-the-same-directory behaviour of the agent web_serve path: re-registering there returns the SAME string, so the credential survives as long as the tab is open — exactly the property a 15-minute lifetime exists to prevent.
+         *     There is no renewal endpoint and no silent timer-driven reload. The SPA uses expires_at to show a visible expiry notice in Omnipus chrome OUTSIDE the frame, with an explicit Reload, because the frame is cross-origin and opaque: the embedder cannot detect that its request failed, and onload fires for an error page exactly as it does for content.
+         */
+        LibraryPreviewTokenResponse: {
+            /**
+             * @description The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (FR-003h). Minting FAILS CLOSED if the entropy source errors: no token, no fallback, no shortened value. This string is the entire security of an unauthenticated bearer path, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (FR-003e).
+             * @example kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t
+             */
+            token: string;
+            /**
+             * @description Gateway-relative URL to put in the iframe's src. Serves GET and HEAD only; every other method is 405 (FR-003j). Use it as <iframe src="…"> and never as srcdoc — srcdoc resolves relative URLs against the EMBEDDER, so no bundle subresource would load, and it has no response to carry the isolation policy.
+             * @example /library-preview/kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t/index.html
+             */
+            url: string;
+            /**
+             * Format: date-time
+             * @description Absolute RFC3339 UTC instant at which the token stops working. Drives the visible expiry notice (FR-003m).
+             * @example 2026-08-22T14:45:00Z
+             */
+            expires_at: string;
+            /**
+             * @description Seconds from the moment this response was produced until expires_at — 900 for the 15-minute lifetime. Present alongside the absolute instant because a client whose clock is wrong would compute a wrong countdown from expires_at alone, and a preview that claims to have expired while it still works is as confusing as the reverse.
+             * @example 900
+             */
+            expires_in_seconds: number;
+            /**
+             * @description The granted scope, echoed from the request.
+             * @example bundle
+             * @enum {string}
+             */
+            scope: "file" | "bundle";
+            /**
+             * @description Workspace-relative path this token is confined to — the file itself for scope "file", the bundle root for scope "bundle". Every request on the token path resolves inside THIS root, not merely inside the workspace (FR-003i).
+             * @example reports/q3
+             */
+            scope_root: string;
+            /**
+             * @description Workspace the token is scoped to, echoed from the request.
+             * @example ws_7f3a
+             */
+            workspace_id?: string;
+        };
+        /**
+         * KnowledgeBaseInfo
+         * @description Identity and detection result for one knowledge base (ADR-067 D18). Returned by GET /api/v1/library/{workspace_id}/knowledge?path=... for any folder in the workspace work tree.
+         *     Detection is marker-based and never reads file CONTENT (FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. Omnipus writes only its own marker and never creates .obsidian/ (FR-022, FR-023).
+         *     Deliberately carries NO index counts or percentages. Index progress is a streaming state delivered over the WebSocket as KnowledgeIndexProgressFrame (FR-080); a caller that wants to know how far indexing has got subscribes, it does not poll this endpoint.
+         */
+        KnowledgeBaseInfo: {
+            /**
+             * @description Workspace whose work tree contains this folder.
+             * @example ws_7f3a
+             */
+            workspace_id: string;
+            /**
+             * @description Workspace-relative path of the collection root, forward-slash separated. Never absolute, never containing a ".." segment. Knowledge bases live inside the workspace tree, never at an arbitrary host path (FR-025).
+             * @example notes/vault
+             */
+            root_path: string;
+            /**
+             * @description True when a marker directory was found at root_path. False means an ordinary folder — NOT "we could not tell"; an unreadable marker is reported through detection_error instead of being silently downgraded (E-9).
+             * @example true
+             */
+            is_knowledge_base: boolean;
+            /**
+             * @description Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
+             * @example omnipus_vault
+             * @enum {string}
+             */
+            marker: "omnipus_vault" | "obsidian" | "none";
+            /**
+             * @description Stable opaque identifier for this collection, derived from the root's RESOLVED REAL PATH (FR-031). Two mounts of the same folder — into one workspace or several — share a collection_id and therefore one index; the index is reference-counted across those mounts. Absent when is_knowledge_base is false. Callers MUST treat this as opaque and MUST NOT parse a filesystem path out of it.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id?: string;
+            /**
+             * @description Human-readable collection name recorded in the marker (FR-024). Absent when the marker records none; the SPA then falls back to the root folder's own name.
+             * @example Research vault
+             */
+            display_name?: string;
+            /**
+             * @description Collection-relative path of the folder holding note templates, as recorded in the marker (FR-024). Reachable without enabling hidden files (FR-101). Absent when the collection defines no templates.
+             * @example templates
+             */
+            template_path?: string;
+            /** @description Present when detection could not complete — a marker exists but could not be read, or the root itself could not be stat-ed. Detection then fails LOUDLY: is_knowledge_base carries the last known answer and the caller MUST surface this rather than treating the folder as ordinary (E-9). */
+            detection_error?: {
+                /**
+                 * @description Machine-readable reason detection could not complete.
+                 * @example marker_unreadable
+                 * @enum {string}
+                 */
+                code: "marker_unreadable" | "root_unreadable" | "root_missing" | "not_a_directory";
+                /**
+                 * @description Human-readable explanation naming the path involved.
+                 * @example cannot read notes/vault/.omnipus-vault: permission denied
+                 */
+                message: string;
+            };
+        };
+        /**
+         * KnowledgeSearchRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Relevance search over one knowledge base's index.
+         *     Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace (FR-052), and a collection outside that scope yields an EMPTY result set rather than a permission error (FR-053) — so a caller can never use the error channel to probe for collections it may not see.
+         */
+        KnowledgeSearchRequest: {
+            /**
+             * @description Free-text relevance query.
+             * @example landlock seccomp fallback
+             */
+            query: string;
+            /**
+             * @description The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections (FR-026).
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description Maximum hits to return. A value above the server cap is CLAMPED, not rejected, and the clamp is reported on the response (limit_clamped / limit_applied, FR-037).
+             * @default 20
+             * @example 20
+             */
+            limit: number;
+            /**
+             * @description Number of hits to skip, for paging through a large result set.
+             * @default 0
+             * @example 0
+             */
+            offset: number;
+            /**
+             * @description Restrict hits to these entry kinds. Omitted means both. Attachments are indexed by FILENAME AND PATH ONLY — their contents are never opened (FR-039a) — so an attachment hit never carries a body excerpt.
+             * @example [
+             *       "note"
+             *     ]
+             */
+            kinds?: ("note" | "attachment")[];
+        };
+        /**
+         * KnowledgeSearchResponse
+         * @description Response for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Hits plus the incompleteness statement, in the SAME response (FR-035) — a caller cannot obtain results without also obtaining the statement qualifying them.
+         *     A collection outside the caller's workspace scope yields hits: [] with incompleteness.complete = true, not an error (FR-053).
+         */
+        KnowledgeSearchResponse: {
+            /**
+             * @description The collection these hits came from, echoed from the request.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /** @description Matched entries, best-scored first. Always present — an empty array, never null — so a client may map over it without a nil check. */
+            hits: components["schemas"]["KnowledgeSearchHit"][];
+            incompleteness: components["schemas"]["KnowledgeSearchIncompleteness"];
+            /**
+             * @description The result cap actually used for this query.
+             * @example 20
+             */
+            limit_applied: number;
+            /**
+             * @description True when the requested limit exceeded the server cap and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-037).
+             * @example false
+             */
+            limit_clamped: boolean;
+            /**
+             * @description The limit the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
+             * @example 5000
+             */
+            limit_requested?: number;
+        };
+        /**
+         * KnowledgeSearchHit
+         * @description One relevance hit from a knowledge-base search (FR-050). Carries path, title and a matched excerpt.
+         *     A note larger than the segment size is indexed as several consecutive index documents (FR-034a) — no note is ever refused, skipped or truncated. Hits from several segments of one note COLLAPSE INTO ONE hit here, scored by its best segment, so a caller never has to de-duplicate by path.
+         */
+        KnowledgeSearchHit: {
+            /**
+             * @description Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
+             * @example Sandboxing
+             */
+            title: string;
+            /**
+             * Format: double
+             * @description Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
+             * @example 7.42
+             */
+            score: number;
+            /**
+             * @description Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
+             * @example note
+             * @enum {string}
+             */
+            kind: "note" | "attachment";
+            /**
+             * @description Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
+             * @example …Landlock is per-thread and inherited, so the gateway and its children…
+             */
+            excerpt?: string;
+            /**
+             * @description Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+             *     "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
+             * @example budget_exhausted
+             * @enum {string}
+             */
+            excerpt_unavailable?: "file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted" | "attachment_not_read";
+            /**
+             * Format: int64
+             * @description ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
+             * @example 20481
+             */
+            byte_offset?: number;
+        };
+        /**
+         * KnowledgeSearchIncompleteness
+         * @description The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
+         *     Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
+         */
+        KnowledgeSearchIncompleteness: {
+            /**
+             * @description True when the index covered the whole collection at query time, so these results are the whole answer.
+             * @example false
+             */
+            complete: boolean;
+            /**
+             * @description False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
+             * @example true
+             */
+            total_known: boolean;
+            /**
+             * @description Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
+             * @example Searched 4,120 of 12,880 notes — indexing is still running.
+             */
+            statement: string;
+            /**
+             * Format: int64
+             * @description Files indexed and therefore searchable at query time.
+             * @example 4120
+             */
+            indexed_files?: number;
+            /**
+             * Format: int64
+             * @description Total files in the collection. Present only when total_known is true.
+             * @example 12880
+             */
+            total_files?: number;
+        };
+        /**
+         * KnowledgeGraphResponse
+         * @description Response for GET /api/v1/library/{workspace_id}/knowledge/graph (ADR-067 D18). One shape serves all five graph queries (FR-051) — links, backlinks, unresolved, orphans and neighbourhood — because they differ only in which subgraph is selected, not in what a link is.
+         *     Every query is bounded (FR-054) and reports its own truncation, so a caller can always tell a small graph from a clipped one.
+         */
+        KnowledgeGraphResponse: {
+            /**
+             * @description The collection queried.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
+             * @example backlinks
+             * @enum {string}
+             */
+            kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
+            /**
+             * @description The note the query was about. Required in practice for links, backlinks and neighbourhood; absent for unresolved and orphans, which are collection-wide.
+             * @example architecture/sandboxing.md
+             */
+            source_path?: string;
+            /** @description Every node referenced by this graph, including non-existent link targets (exists=false). Always an array, never null. */
+            nodes: components["schemas"]["KnowledgeGraphNode"][];
+            /** @description Every edge in this graph. Empty for "orphans". Always an array, never null. */
+            edges: components["schemas"]["KnowledgeGraphEdge"][];
+            /** @description Paths the walk did not follow, with reasons. Always an array, never null — an empty array is a positive statement that nothing was skipped. */
+            skipped: components["schemas"]["KnowledgeGraphSkip"][];
+            /**
+             * @description True when a bound stopped the walk before it was exhausted, so this graph is a clipped view. The bounds that applied are in hop_limit_applied and node_limit_applied.
+             * @example false
+             */
+            truncated: boolean;
+            /**
+             * @description Maximum hops walked from source_path (FR-054). Present for "neighbourhood".
+             * @example 2
+             */
+            hop_limit_applied?: number;
+            /**
+             * @description Maximum nodes this response may contain (FR-054).
+             * @example 200
+             */
+            node_limit_applied?: number;
+        };
+        /**
+         * KnowledgeGraphNode
+         * @description One note or attachment appearing in a KnowledgeGraphResponse. A node may describe a target that does not exist on disk — that is how an unresolved wikilink is represented (FR-042).
+         */
+        KnowledgeGraphNode: {
+            /**
+             * @description Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description Display title. Absent for a node that does not exist.
+             * @example Sandboxing
+             */
+            title?: string;
+            /**
+             * @description False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
+             * @example true
+             */
+            exists: boolean;
+        };
+        /**
+         * KnowledgeGraphEdge
+         * @description One directed link between two nodes, plus how it was resolved. Resolution order is fixed (FR-040): exact path, then unique basename, then shortest path, then lexicographic order. An ambiguous basename still RESOLVES by that rule and is ALSO reported as ambiguous (FR-041) — resolving it is not a licence to stay quiet about it.
+         */
+        KnowledgeGraphEdge: {
+            /**
+             * @description Collection-relative path of the note containing the link.
+             * @example index.md
+             */
+            from_path: string;
+            /**
+             * @description Collection-relative path of the resolved target, or the normalised link text when resolution is "unresolved".
+             * @example architecture/sandboxing.md
+             */
+            to_path: string;
+            /**
+             * @description The link target exactly as written in the source note.
+             * @example sandboxing
+             */
+            link_text?: string;
+            /**
+             * @description Display alias, for an aliased wikilink such as [[note|alias]].
+             * @example how sandboxing works
+             */
+            alias?: string;
+            /**
+             * @description Heading fragment, for a heading link such as [[note#Section]].
+             * @example Section
+             */
+            heading?: string;
+            /**
+             * @description Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+             * @example unique_basename
+             * @enum {string}
+             */
+            resolution: "exact_path" | "unique_basename" | "shortest_path" | "lexicographic" | "unresolved";
+            /**
+             * @description True when more than one file matched and the tie-break decided it. The alternatives are listed in candidates.
+             * @example false
+             */
+            ambiguous: boolean;
+            /**
+             * @description Every path that matched, in tie-break order, when ambiguous is true. Present only then.
+             * @example [
+             *       "notes/setup.md",
+             *       "archive/setup.md"
+             *     ]
+             */
+            candidates?: string[];
+            /**
+             * @description True when the link is a transclusion (![[note]]) rather than a plain link.
+             * @example false
+             */
+            embed?: boolean;
+        };
+        /**
+         * KnowledgeGraphSkip
+         * @description One path the walk deliberately did not follow, and why. Reported rather than omitted: a file the system cannot address must be visible to the caller, never silently absent (FR-112).
+         */
+        KnowledgeGraphSkip: {
+            /**
+             * @description Collection-relative path that was skipped.
+             * @example notes/link-to-home
+             */
+            path: string;
+            /**
+             * @description "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+             * @example symlink
+             * @enum {string}
+             */
+            reason: "symlink" | "outside_root" | "unreadable" | "not_addressable" | "node_limit" | "hop_limit";
+            /**
+             * @description Human-readable explanation, safe to display.
+             * @example symbolic link to /home/dan/other-vault — not followed
+             */
+            detail?: string;
+        };
+        /**
+         * KnowledgeBaseViews
+         * @description The saved views that belong to one `.base` file, plus everything needed to evaluate them — the answer to "open this base as its views" (view-kinds-design-2026-09-03 §7).
+         *     WHY THIS ENDPOINT EXISTS. Nothing listed which saved views came from which source file, so the SPA read the `.base` file itself and re-derived each view's slug by mirroring the importer's slugger. Two things that cost: the importer's collision COUNTER cannot be mirrored (two view names that kebab alike collapsed onto one slug, and the second tab rendered the first view's rows), and a hand-rolled YAML walk mistook a nested `name:` key for the view's own name (a valid view then answered `unknown_view`). Both are re-derivations of a fact the server already holds: every imported view file records the `source` it came from, its own `name`, and its `label`. This endpoint reports them, and the client re-derives nothing.
+         *     MATCHING IS ON `source`, NOT ON THE FILENAME. A view's `source` is the vault-relative path of the `.base` it was imported from, written by the importer; the slug's spelling is a convenience, not an index.
+         */
+        KnowledgeBaseViews: {
+            /**
+             * @description The workspace-relative path that was asked about, echoed back, so a cached answer can never be shown against the wrong file.
+             * @example notes/vault/CRM/Invoices.base
+             */
+            base_path: string;
+            /**
+             * @description Whether the file sits inside a knowledge base at all. False means its views have nowhere to run — nothing imported them, and there is no collection to evaluate them against — and `views` is then empty. This is a stated answer, not an error: an ordinary `.base` file sitting outside a vault is an ordinary file.
+             * @example true
+             */
+            is_knowledge_base: boolean;
+            /**
+             * @description The enclosing collection, to be passed as `collection_id` when evaluating one of these views. Absent exactly when `is_knowledge_base` is false. Opaque — never parse a path out of it.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id?: string;
+            /**
+             * @description Workspace-relative path of that collection's root, forward-slash separated, matching KnowledgeBaseInfo.root_path. The SPA joins it with a vault-relative attachment path to build a download URL. Absent exactly when `is_knowledge_base` is false.
+             * @example notes/vault
+             */
+            collection_root?: string;
+            /**
+             * @description The vault-relative path the views were matched on — the value an imported view carries in its own `source` field. Present exactly when `is_knowledge_base` is true. Reported so a base with zero views can be diagnosed without guessing what was looked for.
+             * @example CRM/Invoices.base
+             */
+            source?: string;
+            /** @description The views imported from this base, in the collection's own load order (filename order, so it is stable across runs). Always present — an empty array is the honest answer for a `.base` nothing imported, and the caller must render it as such rather than as a blank. */
+            views: components["schemas"]["KnowledgeBaseView"][];
+            /**
+             * @description How many view files name this base as their `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the schema no longer declares. They cannot appear in `views` because they have no usable name to address, so they are counted here instead, and the caller says "N views could not be loaded" rather than quietly showing fewer tabs than the base has views.
+             *
+             *     A file so broken that its own `source` key is unreadable cannot be attributed to any base and is counted against none.
+             * @example 1
+             */
+            unloadable_count: number;
+        };
+        /**
+         * KnowledgeBaseView
+         * @description One saved view that was imported from a given `.base` file, as the server knows it (view-kinds-design-2026-09-03 §7).
+         *     THE SERVER'S SLUG IS THE ONLY ADDRESS. Import is one-shot (FR-102): a `.base` file's views were translated into `<vault>/.omnipus-vault/views/<slug>.yaml` and the source file is never read again on the query path. The importer's own SlugRegistry (pkg/vaultimport/util.go) derives that slug — kebab(base stem) + "--" + kebab(view name), plus a numeric suffix when two view names kebab to the same string — and the suffix is a COUNTER over everything already handed out, which nothing outside the importer can reconstruct. A client that re-derived the slug by parsing the `.base` file therefore mapped two colliding view names onto ONE slug: the second tab silently rendered the first view's rows under the second view's name. `name` here is read from the saved view file itself, so there is nothing left to re-derive.
+         */
+        KnowledgeBaseView: {
+            /**
+             * @description The saved view's own name — the authoritative slug, to be passed VERBATIM as the `view` query parameter of GET /library/{workspace_id}/knowledge/view. Never reconstructed by a client.
+             * @example invoices--outstanding
+             */
+            name: string;
+            /**
+             * @description What to show a reader: the view's declared `label` when it has one, otherwise its `name`. Resolved server-side (records.SavedView's DisplayLabel) so no two consumers can invent different fallbacks.
+             * @example Outstanding
+             */
+            label: string;
+            /**
+             * @description The view kind that authored this view (design §2.3), when the file declares one. Provenance — nothing renders from it.
+             * @example summary
+             */
+            kind?: string;
+            /**
+             * @description True when the view loaded but CANNOT be served — it is stored `disabled` (FR-105), or its filter cannot be carried into the query grammar. Absent or false means it can be evaluated normally.
+             *
+             *     Reported rather than hidden: a view the vault declares and this surface silently omits is indistinguishable from a view that was never imported, and the operator's fix differs completely between the two.
+             * @example true
+             */
+            unservable?: boolean;
+            /**
+             * @description Why it cannot be served, in the operator's own vocabulary, together with the remedy — records.ViewServeRefusal's Reason and Remedy. Present exactly when `unservable` is true.
+             * @example the view is stored disabled because an expression in its filter could not be translated — write the filter directly to run it
+             */
+            unservable_reason?: string;
+        };
+        /**
+         * KnowledgeOutline
+         * @description Response for GET /api/v1/library/{workspace_id}/knowledge/outline (ADR-067 D18). The heading tree for the reading rail.
+         *     Available for ANY markdown file, whether or not it belongs to a knowledge base (FR-062): an outline is parsed from the one file in hand and needs no index. Search and backlinks stay knowledge-base-only precisely because they do need one — is_knowledge_base tells the client which of the rail's panels it may offer.
+         */
+        KnowledgeOutline: {
+            /**
+             * @description Workspace-relative path of the file this outline describes.
+             * @example notes/vault/architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description True when this file sits inside a detected knowledge base, so the client may additionally offer search and backlinks. False means the outline is all that is available for this file — not an error.
+             * @example true
+             */
+            is_knowledge_base: boolean;
+            /**
+             * @description The collection containing this file. Present only when is_knowledge_base is true.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id?: string;
+            /** @description Headings in document order. Always an array, never null; empty for a file with no headings. */
+            headings: components["schemas"]["KnowledgeOutlineHeading"][];
+            /**
+             * @description True when the file opens with a frontmatter block that is not valid YAML. The file is still outlined and still indexed for body text; the malformed frontmatter is reported rather than silently dropped (E-17).
+             * @example false
+             */
+            frontmatter_malformed?: boolean;
+        };
+        /**
+         * KnowledgeOutlineHeading
+         * @description One heading in a markdown file's outline. The outline is a FLAT list ordered as the headings appear in the document, with nesting carried by level — not a recursive tree. A flat list has one representation for any document, including one that skips from H1 to H3, where a tree would force the server to invent an intermediate node the author never wrote.
+         */
+        KnowledgeOutlineHeading: {
+            /**
+             * @description Heading level, 1 for "#" through 6 for "######".
+             * @example 2
+             */
+            level: number;
+            /**
+             * @description Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
+             * @example Sandboxing
+             */
+            text: string;
+            /**
+             * @description URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
+             * @example sandboxing
+             */
+            slug: string;
+            /**
+             * @description 1-based line number of the heading in the source file.
+             * @example 42
+             */
+            line?: number;
+            /**
+             * Format: int64
+             * @description Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
+             * @example 1180
+             */
+            byte_offset?: number;
+        };
+        /**
+         * KnowledgeConflictError
+         * @description Typed 409 body for a refused knowledge-base write (ADR-067 D18 / D14). Returned when the version token a write carried does not match the file on disk (FR-106) — the file changed underneath the caller and applying the write would silently lose whatever changed.
+         *     The refusal NAMES THE PATH, because "conflict" without a path is not actionable in a collection of thousands of notes.
+         *     THE VERSION TOKEN, defined here because this is the type that carries it: an opaque string the server computes over the file's CONTENT — not its modification time, which is not sufficient on its own to detect an external change (FR-107). Every read that a write may follow returns the current token, every write MUST send back the token it read, and the server compares them. Callers MUST treat the token as opaque: never parse it, never compare it for ordering, never construct one. The encoding is the server's to change without a contract change, and a client that has not decoded it cannot be broken by that.
+         *     Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses.
+         */
+        KnowledgeConflictError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example architecture/sandboxing.md changed on disk since you opened it
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+             * @example knowledge_version_conflict
+             * @enum {string}
+             */
+            code: "knowledge_version_conflict";
+            /**
+             * @description Collection-relative path of the file that was NOT written.
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description The opaque version token the caller sent — what it believed the file was. Absent when the caller sent none, which is itself a refusal (FR-106 requires a token on every write).
+             * @example v1:9f2a7c40
+             */
+            expected_version?: string;
+            /**
+             * @description The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+             * @example v1:1b8e330d
+             */
+            actual_version?: string;
+        };
+        /**
+         * KnowledgeMountConflictError
+         * @description Typed 409 body for a refused knowledge-base mount. A knowledge base is exactly ONE mounted folder (FR-026): a second root is refused, and the error NAMES BOTH so the operator can see which existing collection is in the way rather than guessing.
+         *     Beyond ADR-067 D18's seven-type table, added because FR-026 requires a "typed error naming both" and that is by definition a cross-boundary type. Without it here, the first implementer hand-writes the struct and trips the Hard Constraint #8 lint gate.
+         */
+        KnowledgeMountConflictError: {
+            /**
+             * @description Human-readable message naming both roots.
+             * @example workspace already has a knowledge base at notes/vault; cannot also mount research/second-vault
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator.
+             * @example knowledge_mount_conflict
+             * @enum {string}
+             */
+            code: "knowledge_mount_conflict";
+            /**
+             * @description Workspace-relative root of the collection already mounted.
+             * @example notes/vault
+             */
+            existing_root_path: string;
+            /**
+             * @description Workspace-relative root the caller asked to mount.
+             * @example research/second-vault
+             */
+            requested_root_path: string;
+            /**
+             * @description collection_id of the already-mounted collection, when known.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            existing_collection_id?: string;
+        };
+        /**
+         * RecordSchema
+         * @description Every record type visible to the caller (ADR-068 D2, D15, record_schema).
+         *     ADR-068 D0: this list is whatever the operator's vault declares. Omnipus ships NO record types of its own — not one, and not as an overridable default — so an empty `types` array on a vault that has declared nothing is the correct and expected answer, not a broken installation.
+         *     `problems` is REQUIRED here, not optional, for the same reason it is on a query response: a schema listing that quietly omits a type it could not load — an unversioned file (FR-002), a type declared twice in two files (FR-003) — tells the caller the type does not exist, which is a different and wrong answer. Both paths of a duplicate declaration are named in the problem (FR-003).
+         *     The listing is scoped to the calling agent's workspace (FR-060). A schema in a vault mounted only into another workspace is simply not in this list, and that is indistinguishable from it not existing (FR-062).
+         *     Note for the agent-facing tool: record_schema returns a COMPACT TEXTUAL schema to the model, not this object serialised as JSON — Notion measured a ~91% context-token reduction making that change. This type is the structured form for the gateway/SPA boundary.
+         */
+        RecordSchema: {
+            /** @description The declared record types, ordered by type name. Always present — an empty array, never null. */
+            types: components["schemas"]["RecordType"][];
+            /** @description REQUIRED. Schema files that could not be loaded, and why. Always present — an EMPTY ARRAY when every schema loaded cleanly, never null. */
+            problems: components["schemas"]["RecordProblem"][];
+        };
+        /**
+         * RecordType
+         * @description One record type as declared by the vault in `<vault>/.omnipus-vault/records/<type>.yaml` (ADR-068 D2).
+         *     ADR-068 D0 is binding here: Omnipus ships the MECHANISM and the vault ships the CONVENTION. There are NO built-in record types — no company, contact, deal or interaction, not even as an overridable default — because a shipped default becomes the de-facto standard and quietly gives the product opinions about the operator's business that it has no basis for. Every RecordType on this wire was read from a file in the operator's own vault.
+         *     `schema_version` is mandatory from the first release (FR-002): a schema file without it is rejected and NO records of that type are validated against it. Obsidian's `.base` format broke in five consecutive releases across eight weeks, two of them unannounced; machine-generated schemas make an unversioned format worse, not better.
+         */
+        RecordType: {
+            /**
+             * @description Declared schema version. Mandatory (FR-002) — a schema file lacking it is rejected outright rather than loaded with an assumed version.
+             * @example 1
+             */
+            schema_version: number;
+            /**
+             * @description The record type name, matching the `type` key in a record's frontmatter (D1). A note whose type matches no schema is an ordinary note and NOT an error (FR-005).
+             * @example company
+             */
+            type: string;
+            /**
+             * @description Human-readable label for display. Absent means render `type`.
+             * @example Company
+             */
+            label?: string;
+            /**
+             * @description Prefix for minted record identifiers (D7) — a prefix of "CO" yields "CO-0142". Identity is a stable ID, not the filename, so a rename can neither break a relation nor fork a group.
+             * @example CO
+             */
+            identity_prefix?: string;
+            /** @description The declared properties, in declaration order. Always present — an empty array, never null. */
+            properties: components["schemas"]["PropertyDef"][];
+            /**
+             * @description Vault-relative path of the schema file that declared this type. Carried so a duplicate declaration can name BOTH paths (FR-003) instead of reporting an unlocatable conflict.
+             * @example .omnipus-vault/records/company.yaml
+             */
+            source_path?: string;
+        };
+        /**
+         * PropertyDef
+         * @description One declared property of a record type (ADR-068 D2, D3). EIGHT property types exist and no more: text, enum, relation, date, integer, decimal, person, checkbox.
+         *     The count was seven through Draft 9. `checkbox` joined in spec Draft 11 (FR-004c, ADR-068 D24.5) and this line is the record of when it changed — a rewrite of this sentence back to "seven" re-creates the staleness UAT case C-8 was written to catch. Before that, in ADR-068 revision 7, the membership changed while the count did not: `money` was deleted and `number` was split into `integer` and `decimal`.
+         *     ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and `required` carry no default and are never inferred, because the single most-reported failure in the research corpus is a scalar property silently becoming a list the moment a second value is added — after which every query written against it returns nothing, with no error (D3.1). A property whose arity is merely "absent" reproduces exactly that ambiguity on the wire.
+         *     Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
+         *     ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
+         */
+        PropertyDef: {
+            /**
+             * @description The frontmatter key, exactly as the operator declared it. Never renamed and never prefixed by us — only fields Omnipus itself maintains carry the `omni_` prefix (D8), so removing Omnipus leaves a working note.
+             * @example status
+             */
+            name: string;
+            /**
+             * @description "text" — prose, never validated. On the CURRENT query grammar (ruling R-B, the ten SQL operators of VaultFilterNode) a text property answers `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the only wildcards and they must be spelled. Full-text relevance retrieval is ADR-067's search surface, not this one.
+             *
+             *     *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is RecordQueryRequest's own filter shape. The flat view format that also used it is deleted; a saved view and a knowledge_find request both speak the ten SQL operators above and nothing else.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
+             * @example enum
+             * @enum {string}
+             */
+            type: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person" | "checkbox";
+            /**
+             * @description Declared ARITY (D3.1). True means a list, false means a scalar. Writing a list to a scalar property is rejected with the expected shape named (FR-006), rather than silently widening the property.
+             * @example false
+             */
+            many: boolean;
+            /**
+             * @description True when a record of this type MUST carry the property. A record missing a required property is named by validation with the property and the reason (RecordProblem.code = missing_required).
+             * @example true
+             */
+            required: boolean;
+            /**
+             * @description Human-readable label for display. Absent means render `name`.
+             * @example Status
+             */
+            label?: string;
+            /**
+             * @description The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back.
+             *
+             *     Sorting and the `min`/`max` aggregates are LEXICAL OVER THE CASE-FOLDED VALUE (ruling R-5/R-E, FR-010): there is no declared-position ordinal, and `Won`, `won` and `WON` sort together exactly as they group together. A domain order is expressed by PREFIXING the values (`1-lead`, `2-qualified`) — visible in the operator's own file, doing exactly what it appears to do.
+             */
+            values?: components["schemas"]["EnumValueDef"][];
+            /**
+             * @description Target record type name. Present only when type is "relation" or "person". A relation pointing at a note that exists but is not of this type is a validation finding, not a silent accept (FR-034).
+             * @example company
+             */
+            to?: string;
+            /**
+             * @description Name of the DERIVED reverse direction (D5). The inverse is computed from the index and is NEVER stored in any file (FR-032) — the hand-maintained reverse list is the field that drifts the first time anyone forgets.
+             * @example deals
+             */
+            inverse?: string;
+            /**
+             * @description Unit of measure for an "integer" or "decimal" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
+             *
+             *     IT IS THE FIXED UNIT, THE SAME ON EVERY RECORD. A number whose unit VARIES per record — an amount that is SGD on one invoice and EUR on the next — declares `unit_property` instead, naming the sibling property that carries it.
+             * @example minutes
+             */
+            unit?: string;
+            /**
+             * @description Name of a SIBLING property on this same record type that carries this number's unit PER RECORD (view-kinds-design-2026-09-03 §5). Optional, and valid only on "integer" and "decimal".
+             *
+             *     WHY IT IS DECLARED AND NEVER INFERRED. Pairing a number with any nearby enum works perfectly on invoices and is wrong the first time a record holds two amounts — a `total` in the record's currency beside a `tax_rate` that is a percentage. Where a number and a unit-like enum coexist UNDECLARED, knowledge_describe may MENTION the candidate pairing; nothing acts on it.
+             *
+             *     WHAT IT BUYS. The pair renders as ONE value ("12,480.00 SGD") and the unit property loses its own row. More importantly it makes the totalling rule enforceable: a number with a unit totals ONCE PER UNIT VALUE and NEVER across units (design §3 G2), and a row whose unit is missing is shown, EXCLUDED from every total, and counted separately (G3). Without the declaration there is nothing to enforce that against, and summing across currencies produces a wrong number that looks right — the one failure mode in this area that reports nothing at all.
+             *
+             *     VALIDATED AT LOAD, PER FILE, AND REFUSED BY NAME. The named property must EXIST on this record type, must be a DIFFERENT property (a number cannot be its own unit), and must be an "enum" or a "text" — a unit is a label, and a date or a second number is not one. A violation rejects this schema file naming the property and the reason; every other record type in the vault goes on loading.
+             * @example currency
+             */
+            unit_property?: string;
+            /**
+             * @description DECLARED HERE, THIS KEY IS REFUSED, AND THE SCHEMA FILE IS REJECTED NAMING IT. It stays DEFINED in this contract so the refusal has something to be about: an author who writes `formula:` on a schema property gets one message at load, at authoring time, telling them where a formula actually goes. A key silently ignored is how a promise becomes a blank column.
+             *
+             *     WHY. Nothing evaluates it. A query reaches a formula only as `formula.<name>` (FR-140), and that name is served by a saved VIEW's `formulas:` map (ADR-068 D24.3, FR-140/FR-141). A schema property is read from the note's own frontmatter, where a computed value never appears — so a type-level formula would render BLANK on every row while the answer still reported itself COMPLETE. Measured, on a `plant` type declaring `double_height: height_cm * 2` over a note holding `height_cm: 12.5`: the column came back empty and the result said "COMPLETE: yes — 1 of 1 shown". A blank that claims completeness is indistinguishable from a note with no value, so the operator concludes their DATA is wrong rather than that the feature was never wired.
+             *
+             *     REFUSED RATHER THAN WIRED, deliberately. The surface is specified nowhere: wiring it needs an ADR amendment saying where a type-level formula is addressed, whether a view formula of the same name shadows it, and what an unqualified `select` renders for it. Refusing is the reading that leaves the specification and the behaviour agreeing.
+             *
+             *     REFUSED AT LOAD, PER FILE. Only the schema file declaring it is rejected; every other record type in the vault goes on loading and answering. The query path deliberately does NOT raise this — a schema that loaded clean used to kill its whole record type on a query that had nothing to do with formulas.
+             *
+             *     THE REMEDY, which the refusal states: delete `formula:` from this property and declare the same expression in a saved view's `formulas:` map, where a query reaches it as `formula.` + this property's name — or, if the value belongs on the note itself, drop `formula:` and keep this as an ordinary stored property that notes write.
+             * @example amount * quantity
+             */
+            formula?: string;
+        };
+        /**
+         * EnumValueDef
+         * @description One value of a closed, ORDERED enum (ADR-068 D4). Order is data, carried in `position`, so nobody has to encode it into the spelling — the "1-Pending / 7-DoNotContact" prefix hack in real vaults exists only because the tool sorted lexically and offered no other way to state sequence.
+         *     Sorting an enum property sorts by `position`, never lexically (FR-010). A value outside the declared set is REJECTED with the permitted values named (FR-011); it is never silently auto-created as a second de-facto value.
+         */
+        EnumValueDef: {
+            /**
+             * @description The token as written in the record's frontmatter.
+             * @example prospect
+             */
+            value: string;
+            /**
+             * @description Human-readable label for display. Absent means render `value`.
+             * @example Prospect
+             */
+            label?: string;
+            /**
+             * @description Zero-based declared position. Sort order for this property (FR-010).
+             * @example 0
+             */
+            position: number;
+            /**
+             * @description Optional lifecycle grouping (D4) so "is this finished?" is answerable across record types whose vocabularies differ. Omitted means ungrouped.
+             * @example open
+             * @enum {string}
+             */
+            group?: "open" | "done" | "cancelled";
+        };
+        /**
+         * VaultRecord
+         * @description One record: an ordinary Markdown note in the operator's own vault that declares a record type in its frontmatter (ADR-068 D1). There is no separate database — a record IS the note, and a note whose type matches no schema is simply an ordinary note, not an error (FR-005).
+         *     Derived values — counts, sums, last-interaction dates, relation inverses — are NEVER present as stored properties here (D9, FR-046). They are computed at query time, because an agent reading frontmatter cannot tell a stale derived value from a fact, and every hand-maintained derived field found in the research is wrong in somebody's vault right now.
+         *     NAMED VaultRecord, NOT Record. A component named "Record" generates a TypeScript `export type Record = ...` that shadows the built-in Record<K, V> utility type throughout the generated module, and tsc then fails with "Type 'Record' is not generic" on every unrelated use of it in the same file. That is a property of the generator's output, so no hand-edit could survive a regeneration.
+         */
+        VaultRecord: {
+            /**
+             * @description The stable record identifier, minted on creation and immutable (D7, FR-036) — identity is an ID, not the filename, so a rename cannot break a relation. Unique within its type; a duplicate is a hard validation error naming both paths (FR-039).
+             * @example CO-0142
+             */
+            id: string;
+            /**
+             * @description The declared record type this record belongs to.
+             * @example company
+             */
+            type: string;
+            /**
+             * @description Vault-relative path of the note. Always within the calling agent's workspace scope — a record in a vault mounted only into another workspace is not visible at all, and that case is indistinguishable from an empty vault (FR-060, FR-062).
+             * @example CRM/Companies/Acme Ltd.md
+             */
+            path: string;
+            /**
+             * @description Display title, for rendering without opening the file.
+             * @example Acme Ltd
+             */
+            title?: string;
+            /**
+             * @description ADR-067 D14's opaque content-hash version token for this note. Present on reads, and required back on a write; a stale token is REFUSED and the refusal is audited (FR-043). Opaque — never parsed, compared only for equality.
+             * @example sha256:3d1c9a7e5b2f4806
+             */
+            version_token?: string;
+            /** @description The record's declared properties and their values, in the schema's declaration order. Always present — an empty array, never null. A property whose values array is empty is ABSENT (D3.2). */
+            properties: components["schemas"]["RecordPropertyValue"][];
+        };
+        /**
+         * RecordPropertyValue
+         * @description One property of one record, with all of its values (ADR-068 D3).
+         *     `values` is ALWAYS an array, whatever the declared arity, and arity is enforced against the schema rather than guessed from the wire shape: a scalar property carrying two values is rejected with the expected shape named (FR-006), and it is never silently widened into a list. The single most-reported failure in the research corpus is precisely that silent widening, after which every query written against the property returns nothing with no error.
+         *     AN EMPTY `values` ARRAY MEANS ABSENT (D3.2, FR-007), and absent is a state distinct from every value. On a write, an empty array clears the property.
+         *     Used in both directions. On a READ the server also populates `type`. On a WRITE (RecordWriteRequest) `type` may be omitted — the schema is the authority — and relation and person properties are NOT writable here: they are modified through RelationWriteRequest's explicit add / remove / replace verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+         */
+        RecordPropertyValue: {
+            /**
+             * @description The declared property name. Validated against the record type's schema BEFORE evaluation or write; an unknown name is rejected with the valid names listed (FR-023, FR-024).
+             * @example arr
+             */
+            property: string;
+            /**
+             * @description The declared property type, echoed by the server on reads. Optional on a write request, where the schema is the authority.
+             * @example decimal
+             * @enum {string}
+             */
+            type?: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person";
+            /** @description The values held. Always present — an empty array, never null. Empty means the property is ABSENT on this record (D3.2), which a filter can test for explicitly and which a negative filter includes by default (FR-008). */
+            values: components["schemas"]["RecordValue"][];
+        };
+        /**
+         * RecordValue
+         * @description ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+         *     THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
+         *     NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+         *     ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+         */
+        RecordValue: {
+            /**
+             * @description Which of the eight property types governs this value, and therefore which field below is populated.
+             * @example decimal
+             * @enum {string}
+             */
+            type: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person" | "checkbox";
+            /**
+             * @description Populated when type is "text". Prose; never compared for equality (D3).
+             * @example Introduced by a mutual contact at a conference.
+             */
+            text?: string;
+            /**
+             * @description Populated when type is "enum". The declared token, which MUST appear in the property's declared value set; anything else is rejected with the permitted values named (FR-011).
+             * @example active
+             */
+            enum?: string;
+            relation?: components["schemas"]["RecordRef"];
+            /**
+             * @description Populated when type is "date". Either a calendar day as YYYY-MM-DD or an instant as RFC 3339. Comparable in both forms — the failure this closes is a date stored as free text, which sorts and filters as nothing.
+             * @example 2026-08-25
+             */
+            date?: string;
+            /**
+             * @description Populated when type is "integer". A signed 64-bit whole number, carried as a decimal STRING: a JSON number becomes a binary float in both generated languages, and a float64 cannot represent 2^53+1 — precisely the large-identifier case this type exists to keep exact (FR-013). A value outside int64 is REFUSED, never saturated and never widened. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+             * @example 60
+             */
+            integer?: string;
+            /**
+             * @description Populated when type is "decimal". An exact, arbitrary-precision number carried as a decimal STRING, for the same reason as `integer`: a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. At most 100 decimal places (FR-013) — deliberately generous; a value past the bound is refused naming it, never rounded, because rounding to satisfy a bound is a silent change to a number.
+             *     THE 100-PLACE BOUND IS IN THE PATTERN, not only in `maxLength`, so the wire refuses exactly what the parser refuses. A `maxLength` alone cannot express it — the integer part has no fixed width, so any single length cap either admits a 110-place value with a short integer part or rejects a 2-place value with a long one. A boundary that accepts what the engine rejects is a value a caller can PUT and never read back. `maxLength` admits a 100-place value with a sign, a leading digit and the point. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+             * @example 349.98
+             */
+            decimal?: string;
+            person?: components["schemas"]["RecordRef"];
+            /**
+             * @description Populated when type is "checkbox" (FR-004c, ADR-068 D24.5). A real JSON boolean, and that is deliberate rather than inconsistent with `integer` and `decimal` above: those are strings because a JSON number becomes a binary float and loses exactness, and a boolean has no such hazard — `true` round-trips as `true` in both generated languages.
+             *     ABSENT IS THE THIRD STATE and it is NOT `false`. A property with no value carries no RecordValue at all (D3.2, FR-007), so a `checkbox: false` on the wire means the note WROTE `false`, never that it said nothing. "Days I did not meditate" is the days with no value; "days I recorded not meditating" is this field set to false. They are different questions and this schema keeps them different.
+             * @example true
+             */
+            checkbox?: boolean;
+        };
+        /**
+         * RecordRef
+         * @description A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+         *     What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+         *     This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+         */
+        RecordRef: {
+            /**
+             * @description The wikilink target text as stored in the file, without the surrounding brackets. This is the durable, human-editable form.
+             * @example Acme Ltd
+             */
+            link: string;
+            /**
+             * @description True when the link resolved to exactly one record of the declared target type. False for a dangling, ambiguous or wrong-type target — in which case the query still returns the reference and the response carries a matching RecordProblem (FR-033, FR-034).
+             * @example true
+             */
+            resolved: boolean;
+            /**
+             * @description The target's stable record identifier (D7). Present only when resolved is true.
+             * @example CO-0142
+             */
+            id?: string;
+            /**
+             * @description The target's record type. Present only when resolved is true. A target that resolves to a record of the WRONG type is reported as relation_type_mismatch, not silently accepted (FR-034).
+             * @example company
+             */
+            type?: string;
+            /**
+             * @description Display title of the target, for rendering without a second fetch.
+             * @example Acme Ltd
+             */
+            title?: string;
+        };
+        /**
+         * RecordQueryRequest
+         * @description A structured record query (ADR-068 D13, D15.1b; FR-022 to FR-029).
+         *     Structured, never a text query language (FR-022): every property name, enum value and relation target is checked against the schema BEFORE anything is evaluated (FR-023), and a query naming something the schema does not declare is REJECTED with the valid names listed rather than returning zero records (FR-024). A mistyped property that returns an empty result is indistinguishable from a correct query over an empty vault, and the accepted community workaround for that today is "keep testing until something is returned".
+         *     Scope is not negotiable by the caller. Every record tool resolves through the calling agent's workspace (FR-060); records in a vault mounted only into another workspace are invisible, and that case is indistinguishable from an empty vault (FR-062). Scope is resolved BEFORE a rejection is built, so the valid-names list in an error can never reveal schemas outside that scope (FR-024).
+         *     Bounds are stated and every breach is REPORTED, never silently applied — see RecordQueryResponse.
+         */
+        RecordQueryRequest: {
+            /**
+             * @description The record type to query. Exactly one; a query does not span record types, it follows relations between them via RecordFilter.via.
+             * @example deal
+             */
+            type: string;
+            /** @description Filter clauses, combined with AND. Omitted or empty matches every record of the type within scope. */
+            filters?: components["schemas"]["RecordFilter"][];
+            /**
+             * @description Properties to group by, outermost first. Two levels are supported (FR-027); grouping by a relation is supported (FR-029); a record with several values appears in every group it belongs to (FR-028).
+             * @example [
+             *       "company",
+             *       "status"
+             *     ]
+             */
+            group_by?: string[];
+            /** @description Sort keys, applied in order. Enums sort by declared position (FR-010). */
+            sort?: components["schemas"]["RecordSort"][];
+            /** @description Aggregates to compute over the matched set, and per group when group_by is present. None are returned over a refused candidate set (FR-066). */
+            aggregates?: components["schemas"]["RecordAggregate"][];
+            /**
+             * @description Properties to return on each record. Omitted returns every declared property. Narrowing this changes what is RETURNED, never what is matched.
+             * @example [
+             *       "name",
+             *       "status",
+             *       "arr"
+             *     ]
+             */
+            select?: string[];
+            /**
+             * @description Records per page. Default 50. A value above the server cap of 200 is CLAMPED, not rejected, and the clamp is REPORTED on the response (limit_clamped / limit_applied, FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
+             * @default 50
+             * @example 50
+             */
+            limit: number;
+            /**
+             * @description Opaque pagination cursor from a previous response's next_cursor. A cursor that cannot be honoured is an ERROR, never a silent restart from the beginning (D15.1b) — a silent restart returns page one while the caller believes it is reading page four.
+             * @example eyJvIjoxMDB9
+             */
+            cursor?: string;
+            /**
+             * @description Maximum relation hops this query may follow. At most 2; a query requesting more is REFUSED with the reason (FR-065) rather than rejected by the schema, so the caller is told the bound and not merely that its body was invalid.
+             * @default 0
+             * @example 1
+             */
+            hops: number;
+        };
+        /**
+         * RecordQueryResponse
+         * @description The answer to a record query — records AND the account of everything the query could not include, in the SAME response (ADR-068 D13, FR-025).
+         *     THERE IS NO CALL SHAPE THAT RETURNS RECORDS ALONE. `complete` and `problems` are REQUIRED fields, not optional ones, and that is the load-bearing decision of this whole contract. If either were optional, a client could receive a total without the caveats attached to it, a server could omit them under load and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention rather than a structure, and conventions are exactly what fails silently. Required here means: a caller physically cannot hold these records without also holding the verdict on them.
+         *     Every bound in D15.1b sets complete: false with the reason and the remedy — a clamped page, a refused candidate set, a hop limit, a truncated scope, an index that cannot answer. So a caller that ignores `problems` entirely still cannot mistake a bounded answer for a whole one, because the boolean it did read already said so.
+         *     A refusal arrives HERE, not as an HTTP error: refused: true with records empty and a narrowing instruction in problems (FR-064, FR-066). No partial answer and no partial total is ever returned in that case.
+         *     An out-of-scope query is not an error either — it returns records: [] with complete: true, indistinguishable from an empty vault (FR-061, FR-062), so the error channel cannot be used to probe for records the caller may not see.
+         */
+        RecordQueryResponse: {
+            /** @description The matched records, in the requested sort order. Always present — an empty array, never null — so a client may map over it without a nil check. Each record appears ONCE even when grouping placed it in several groups; the groups reference it by id. */
+            records: components["schemas"]["VaultRecord"][];
+            /**
+             * @description REQUIRED. True only when the query covered everything it was asked to cover: no record excluded for a type violation, no clamp, no refusal, no truncated scope, no unavailable index. False whenever ANY of those applies, with the reason and the remedy in `problems`.
+             *     Never optional. The completeness verdict travelling separately from the records — or not travelling at all — is the failure mode this response type was designed to make impossible.
+             * @example false
+             */
+            complete: boolean;
+            /**
+             * @description REQUIRED. Everything the query could not include, and why. Always present — an EMPTY ARRAY when there is nothing to report, never null and never absent, so "no problems" is stated rather than inferred from a missing field.
+             *     A record excluded from an aggregate is named here with the reason (FR-026). So is a clamp, a refusal, a hop limit and a truncated scope.
+             */
+            problems: components["schemas"]["RecordProblem"][];
+            /**
+             * @description REQUIRED. True when the query was refused outright and NO answer was computed — the candidate set exceeded the 10,000-record materialisation bound (FR-064), or more than two relation hops were requested (FR-065). Records is then empty, no aggregate is returned (FR-066), and `problems` carries the narrowing instruction naming the filter that would help.
+             *     Distinct from complete: false, which also covers a partial answer that WAS computed. A caller must be able to tell "here is some of it" from "here is none of it, narrow and re-ask" without parsing prose.
+             * @example false
+             */
+            refused: boolean;
+            /** @description Grouped results, present only when the request carried group_by. The records themselves stay in `records`; groups reference them by id. */
+            groups?: components["schemas"]["RecordGroup"][];
+            /** @description Aggregate results over the whole matched set, in the order requested. A refused aggregate is present and marked refused — never omitted (FR-014, FR-066). */
+            aggregates?: components["schemas"]["RecordAggregateResult"][];
+            /**
+             * @description The page size actually used for this query.
+             * @example 50
+             */
+            limit_applied: number;
+            /**
+             * @description True when the requested page size exceeded the server cap of 200 and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-063) — silent truncation is the incumbent behaviour this ADR cites as motivating evidence, and shipping our own would be indefensible.
+             * @example false
+             */
+            limit_clamped: boolean;
+            /**
+             * @description The page size the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
+             * @example 5000
+             */
+            limit_requested?: number;
+            /**
+             * Format: int64
+             * @description Records matching the filters across all pages, when it is known exactly. ABSENT rather than estimated when it is not — an invented denominator is the confidently-wrong answer this response type exists to prevent.
+             * @example 63
+             */
+            total_matched?: number;
+            /**
+             * @description Opaque cursor for the next page. Absent means this was the last page. Cursor-based, so a page boundary cannot silently repeat or skip records when the corpus changes between calls.
+             * @example eyJvIjoxMDB9
+             */
+            next_cursor?: string;
+        };
+        /**
+         * RecordFilter
+         * @description One structured filter clause (ADR-068 D13, FR-022). The query surface takes a STRUCTURED filter object and deliberately accepts no text query language: a query language would have to be parsed, and a parse failure that degrades to "returns nothing" is the silent-empty-result failure this ADR exists to end.
+         *     Every property name and enum value here is validated against the schema BEFORE evaluation (FR-023). A clause naming something the schema does not declare REJECTS the query with the valid names listed — it MUST NOT return zero records (FR-024), because a typo and a genuinely empty result look identical and the caller cannot tell which it got.
+         *     A "text" property supports exactly two operators: `contains` — case-sensitive substring matching (§8 R-10) — and `is_absent`. Equality and ordering are NOT defined for text, because text is prose, never validated and never compared for equality (D3); `eq`/`lt`/`lte`/`gt`/`gte` on a text property are REFUSED with the reason named, not answered. Relevance search over prose is ADR-067's surface, not this one.
+         *     Corrected 2026-08-25: this paragraph previously read "supports only is_absent / is_present". `is_present` is in neither this schema's `op` enum nor the engine's operator set, and `contains` — which the engine DOES define for text (compare_oracle.go's operatorDefinedForType[text][contains] is true, with cell-by-cell truth-table coverage) — was missing. "Is it present?" is spelled {op: is_absent, negate: true}.
+         */
+        RecordFilter: {
+            /**
+             * @description The declared property to filter on, in the record type reached after following `via`. Property types are scoped to their record type (D3.3), so this name is resolved against that type's schema and no other.
+             * @example status
+             */
+            property: string;
+            /**
+             * @description The comparison to apply. This set is exactly the operators the engine implements and the §8 truth table covers — no more and no fewer.
+             *
+             *     `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
+             *
+             *     Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0 compare equal (§8 R-1). On an enum it is LEXICAL over the folded value (R-5): there is no declared-position ordinal, and a domain order is expressed by prefixing the values. `is_absent` tests the third state (D3.2) explicitly.
+             * @example eq
+             * @enum {string}
+             */
+            op: "eq" | "lt" | "lte" | "gt" | "gte" | "contains" | "is_absent";
+            /** @description Operand values. Empty or omitted for is_absent; exactly one for every other operator. The engine takes a single lexical literal — the same text a frontmatter file would hold — so it is parsed by the same code path as a record's own value (§8 R-12). */
+            values?: components["schemas"]["RecordValue"][];
+            /**
+             * @description Invert this clause. `status != done` is {op: eq, values: ["done"], negate: true}, and "is it present?" is {op: is_absent, negate: true}.
+             *
+             *     Negation is a FLAG rather than a family of `not_` operators (no `neq`, no `not_in`) so that there is exactly one place negation is applied and exactly one place FR-008's absence rule can be forgotten — which mirrors the engine, where `records.Filter.Negate` is a single bool consulted at one point in `Filter.MatchWith`.
+             *
+             *     Two consequences the caller must be able to predict:
+             *
+             *     (a) FR-008 — a negated clause INCLUDES records where the property is absent, because "days I did not meditate" must contain the days with no value at all, which are precisely the days being asked about. Override with `include_absent: false`.
+             *
+             *     (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
+             *
+             *     Omitted is identical to false: an unset flag can never turn a clause into its opposite. Stated in prose rather than as a JSON Schema `default:` deliberately — openapi-typescript promotes a defaulted property to REQUIRED, which would have made `negate` mandatory in TypeScript while oapi-codegen still emitted an optional `*bool`, so the two generated languages would disagree about the same field.
+             * @example true
+             */
+            negate?: boolean;
+            /**
+             * @description Whether records where the property is ABSENT still satisfy this clause. MEANINGFUL ONLY WHEN `negate` IS TRUE.
+             *
+             *     On a NEGATED clause (FR-008): absent records are INCLUDED by default, because "days I did not meditate" must contain the days carrying no value at all — precisely the days being asked about. Send `include_absent: false` to opt out. That opt-out is the wire spelling of the engine's `records.Filter.ExcludeAbsent`, which holds `!include_absent`; this schema therefore carries no separate `exclude_absent` field, because a second field meaning the same thing is how a contract starts contradicting itself.
+             *
+             *     On a NON-NEGATED clause: absent records NEVER satisfy the clause, and this field is IGNORED — no value of it can admit them. §8 R-2 makes a comparison with an absent operand false for every operator except `is_absent`, and `records.Filter.MatchWith` returns that verdict unchanged when the clause is not negated: `ExcludeAbsent` is read only inside its `f.Negate` branch, and no field on `records.Filter` admits an absent record to a POSITIVE clause.
+             *
+             *     That is OUT OF SCOPE, not an unbuilt feature — nothing is owed here and no engine change is pending. FR-008 mandates inclusion for NEGATIVE filters only, and "status is done, or has no status at all" is a UNION of two clauses rather than one clause with a knob: ask it as {op: eq, values: ["done"]} together with {op: is_absent}.
+             *
+             *     `op: is_absent` is exempt at either polarity: it TESTS absence, so absence is its subject rather than a case to re-admit.
+             *
+             *     Carries no JSON Schema `default:`, for the reason spelled out on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would split the two generated languages on one field. Omitted means "the default for this clause", which is the FR-008 inclusion above.
+             *
+             *     Corrected 2026-08-26: this description previously claimed "a non-negated clause excludes them unless this is explicitly true" — i.e. that `include_absent: true` admits absent records to a POSITIVE clause. No code performs that and none is planned. A handler written to the old wording would have had to drop the flag silently or grow a SECOND engine field, which is the very duplication the paragraph above refuses.
+             * @example false
+             */
+            include_absent?: boolean;
+            /**
+             * @description Relation properties to follow before applying this clause, in order — the two-hop question of ADR-068 section 1.2 expressed as data. At most two hops (FR-065); a third is REFUSED rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly. Omitted or empty means the clause applies to the queried type itself.
+             * @example [
+             *       "company"
+             *     ]
+             */
+            via?: string[];
+        };
+        /**
+         * RecordSort
+         * @description One sort key (ADR-068 D4, FR-010, §8 R-5).
+         *     SORTING IS LEXICAL, and the SORT KEY IS THE FOLDED VALUE. An enum is no exception — there is no declared-position ordinal, and an author who wants a domain order writes it into the values: "1-lead", "2-qualified". The prefix sits in the operator's own file and does exactly what it looks like it does.
+         *     Two clauses of R-5 a caller can rely on. The key is the FOLDED form, not the raw bytes, so "Won", "won" and "WON" — one value under case-insensitive matching — sort to one place instead of three while grouping collapses them into one group. TIES on the folded key break on RAW BYTE ORDER, so the order is TOTAL and byte-identical across runs and rebuilds. What renders is always the file's own spelling, never the sort key.
+         */
+        RecordSort: {
+            /**
+             * @description The declared property to sort by, validated against the schema first (FR-023).
+             * @example status
+             */
+            property: string;
+            /**
+             * @description Ascending or descending, along the lexical order described above.
+             * @example asc
+             * @enum {string}
+             */
+            direction: "asc" | "desc";
+        };
+        /**
+         * RecordAggregate
+         * @description One summary to compute over the matched records (ADR-068 D9, D13, D24.4; spec FR-150 to FR-155).
+         *     ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian Bases calls these "summaries" and carries them under a `summaries` key. There is NO `summaries` key here and there never will be: parity is CAPABILITY, not key names, so the nine functions Bases had and we did not simply became new ops of this existing surface. The importer TRANSLATES Obsidian's top-level `summaries` block and its per-view summary map into entries of this shape.
+         *     THE "THERE IS DELIBERATELY NO AVG" PARAGRAPH THAT STOOD HERE IS SUPERSEDED (FR-152), and the way it is superseded matters more than the fact. It refused `avg` as "a number whose precision nobody declared" — a correct objection, answered rather than argued with. Average, Median (at an even count) and Stddev are computed EXACTLY, in rationals, and RENDERED at a DECLARED scale: the property's declared scale + 2, round-half-even. The response labels such a value as ROUNDED, so no caller mistakes a rendered figure for an exact one, and FR-013's no-binary-float rule is untouched — nothing here ever enters a float64.
+         *     TWO COMPUTATIONAL CLASSES, AND ONLY ONE OF THEM BUFFERS (FR-151). Thirteen of the fifteen stream through an O(1) accumulator — including `stddev`, which streams exactly via count, sum and sum-of-squares in rational arithmetic and rounds only at the final square root. `median` and `unique` are the two population-class ops: they buffer ONE COLUMN of the summarised property's values (never rows), and they are bounded by their own named refusal, B3 — a population-class op ABORTS MID-SCAN above 100,000 buffered values or 8 MB of buffered bytes, whichever comes first, reporting the count reached and the remedy (narrow the filter, or summarise a scalar property).
+         *     NO SUMMARY IS EVER COMPUTED OVER A TRUNCATED SET (FR-154, FR-066). A bound that refuses returns NO summary at all; it is never partial. A median quietly taken over whatever fit is the precise failure this whole surface exists to remove, and Median is the first op for which that shortcut is tempting.
+         *     A SUMMARY THE PROPERTY'S TYPE DOES NOT DEFINE IS REFUSED BY NAME (FR-155) — `stddev` over text, `checked` over a date — listing the summaries the type does define. FR-024's posture, applied to summaries: never a zero, never a blank cell.
+         */
+        RecordAggregate: {
+            /**
+             * @description The reduction. Fifteen, and the list is closed (FR-150).
+             *
+             *     NEEDS NO PROPERTY: "count" — number of matched records; the only op valid with `property` omitted.
+             *
+             *     NUMBER DOMAIN (integer and decimal are ONE comparison domain, R-1): "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "avg" — exact mean, rendered at the declared scale and labelled rounded (FR-152). "median" — the middle value; at an even count the exact mean of the two middle values, same rendering rule. "stddev" — POPULATION standard deviation, and the response label SAYS population (FR-153). Obsidian's documentation does not state which theirs is, so ours declares its own definition rather than guessing at a match, and the importer records the divergence risk by name rather than in silence.
+             *
+             *     NUMBER OR DATE DOMAIN: "min" / "max" — the extreme value; for an enum that is the LEXICAL extreme over the folded value (R-5), not a declared position. "range" — max minus min, defined in the number domain AND the date domain; a date range renders as a DURATION, not as a date.
+             *
+             *     DATE DOMAIN: "earliest" / "latest" — the date domain's extremes. They are spelled separately from min/max because a reader scanning a view should not have to know that a date sorts.
+             *
+             *     CHECKBOX DOMAIN (PropertyDef type `checkbox`, FR-004c): "checked" / "unchecked" — how many records hold `true` and how many hold `false`. Absent is the third state and is counted by NEITHER; "checked + unchecked" is not the record count and must not be read as one.
+             *
+             *     ANY TYPE: "empty" / "filled" — how many records are ABSENT and how many PRESENT on the property. Defined for every type, which is what makes them the honest answer to "how much of this column is actually filled in". "unique" — the number of DISTINCT values, compared under the same folding the comparator uses everywhere else (R-5/R-D), so `Won` and `won` are one value here exactly as they are one group in a grouping.
+             * @example sum
+             * @enum {string}
+             */
+            op: "count" | "sum" | "min" | "max" | "avg" | "median" | "stddev" | "range" | "earliest" | "latest" | "checked" | "unchecked" | "empty" | "filled" | "unique";
+            /**
+             * @description The property to summarise. Required for every op except "count", which counts records rather than values and forbids it. Validated against the schema before evaluation (FR-023); a name the schema does not declare REJECTS the query with the declared names listed (FR-024), never returning a zero that reads like a real total.
+             *
+             *     The reserved namespaces are valid here: `file.*` (FR-130) and `formula.*` (FR-140s) are summarised exactly like a declared property.
+             * @example arr
+             */
+            property?: string;
+        };
+        /**
+         * RecordAggregateResult
+         * @description The outcome of one requested aggregate — WHICH MAY BE A REFUSAL, stated as such (ADR-068 D13, FR-014, FR-066).
+         *     A refusal is a first-class result here, not an error and not a missing entry. The alternative — omitting the aggregate, or returning a number computed over whatever happened to parse — is exactly the confidently-wrong total this ADR exists to prevent. Every record excluded from an aggregate is additionally named in the response's `problems` with the reason (FR-026).
+         */
+        RecordAggregateResult: {
+            /**
+             * @description The summary requested, echoed back. This list MUST stay identical to RecordAggregate's (FR-150's fifteen). A response op the request grammar can express but this echo cannot is not a cosmetic gap: the SPA edge validates every incoming payload against the generated Zod schema and DROPS what does not validate, so a `median` computed correctly by the engine would vanish between the wire and the screen with no error anywhere.
+             * @example sum
+             * @enum {string}
+             */
+            op: "count" | "sum" | "min" | "max" | "avg" | "median" | "stddev" | "range" | "earliest" | "latest" | "checked" | "unchecked" | "empty" | "filled" | "unique";
+            /**
+             * @description The property aggregated. Absent for count.
+             * @example arr
+             */
+            property?: string;
+            /**
+             * @description True when NO figure is returned. Set for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly — an exactness this contract can promise because every numeric value on the wire is a decimal string, never a binary float. When true, `value` and `count` are absent and the reason is in the response's `problems`.
+             * @example false
+             */
+            refused: boolean;
+            /**
+             * Format: int64
+             * @description The count, when op is "count" and refused is false. Also the number of records that CONTRIBUTED to a sum, min or max, so a caller can see how many were excluded without subtracting.
+             * @example 63
+             */
+            count?: number;
+            value?: components["schemas"]["RecordValue"];
+            /**
+             * Format: int64
+             * @description How many matched records were excluded from this aggregate because their value could not be read as the declared type. Every one of them is named in the response's `problems` (FR-026) — this field is the headline, not a substitute for the list.
+             * @example 22
+             */
+            excluded_records?: number;
+        };
+        /**
+         * RecordGroup
+         * @description One group of matched records (ADR-068 D10, FR-027 to FR-029).
+         *     Two levels of grouping are supported, and the second level is carried as a SECOND ENTRY IN `keys` rather than as a nested group, so the structure is flat, non-recursive and cannot express a third level by accident. A published CRM design specified "group by company, then jurisdiction" and shipped with one level, the second being inexpressible; two levels is the requirement, and exactly two is what this type can hold.
+         *     A record with several values in the grouping property APPEARS IN EVERY GROUP IT BELONGS TO (FR-028). This is a deliberate departure from Obsidian, whose single combined group ("Finance Business" for a record tagged Finance and Business) is confirmed intentional by its authors and is useless for the categorisation case it appears in. The consequence is that the group counts can sum to MORE than the number of matched records; that is correct, not a double count.
+         *     Grouping by a RELATION is supported (FR-029). Notion's own answer to this is "Not currently", which is why their first-party guidance flattens relations into selects; we do not inherit the constraint that caused it.
+         */
+        RecordGroup: {
+            /** @description This group's key, one entry per grouping level, outermost first. Two entries means a second-level group (FR-027). */
+            keys: components["schemas"]["RecordGroupKey"][];
+            /**
+             * Format: int64
+             * @description Records in this group. May sum across groups to more than the total matched, when a multi-value property placed a record in several groups (FR-028).
+             * @example 12
+             */
+            count: number;
+            /**
+             * @description Identifiers of the records in this group, in the response's sort order. Always present — an empty array, never null. Ids rather than whole records, so a record appearing in several groups is carried once in `records` and referenced from each.
+             * @example [
+             *       "CO-0142",
+             *       "CO-0198"
+             *     ]
+             */
+            record_ids: string[];
+            /** @description Per-group aggregate results, in the order requested. A refusal inside one group is stated on THAT group, so one group whose values could not be totalled cannot silently void the totals of the others. */
+            aggregates?: components["schemas"]["RecordAggregateResult"][];
+        };
+        /**
+         * RecordGroupKey
+         * @description One level of a group's key (ADR-068 D10).
+         *     ABSENT IS ITS OWN GROUP. `absent: true` with no `value` is the group of records that hold no value for the grouping property (D3.2) — it is not merged into an empty-string group and it is not dropped. Grouping that silently discards the records with nothing in the column loses exactly the rows a triage view is looking for.
+         */
+        RecordGroupKey: {
+            /**
+             * @description The property this level grouped by.
+             * @example status
+             */
+            property: string;
+            /**
+             * @description True when this group holds the records for which the property is absent. When true, `value` is omitted.
+             * @example false
+             */
+            absent: boolean;
+            value?: components["schemas"]["RecordValue"];
+            /**
+             * @description Display label for the group heading. For an enum this is the declared label, and groups are ordered by declared position, not by spelling (FR-010).
+             * @example Active
+             */
+            label?: string;
+        };
+        /**
+         * RecordProblem
+         * @description One thing a record operation could not do, named rather than dropped (ADR-068 D13). This is the type the whole ADR exists to serve: the failure mode being corrected is SILENCE — a query that quietly omits the records it could not understand and returns a confident total over what is left.
+         *     A problem names the records affected, the reason, and where possible the expected shape and the remedy. The community's accepted debugging advice for the incumbent tools today is "keep testing until something is returned"; that is what a system with no error channel forces on people.
+         *     A RecordProblem is NOT an HTTP error. Bounded, refused and partially evaluated answers all arrive as a normal response carrying `complete: false` and one or more of these (D15.1b).
+         */
+        RecordProblem: {
+            /**
+             * @description Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "hop_traversal_bound_exceeded" — building the relation graph `near`/`hops` walks (undirected, every resolved edge in workspace scope, because a path between two record types crosses the query's own `type`/`kind` narrowing by definition) visited more than 50,000 relation-edge rows before the scan that assembles it finished. A DIFFERENT cause from "evaluation_bound_exceeded" and "candidate_cap_exceeded", which both count RECORDS; this counts EDGES, and the store exposes no pre-scan count over them (ruling R-A keeps every aggregate off the SQL path), so it is a streaming abort in FR-064's B2 pattern that borrows FR-065a's B1-sized ceiling of 50,000 — "the same ceiling ... so there is one number to reason about". No partial neighbourhood is ever returned; the remedy narrows `near` or drops a hop level, never "add a filter", which does not shrink the graph scan at all (FR-076). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "text_search_truncated" — code review A, F6. `words` is answered by the text index FIRST and intersected with the typed filter SECOND (the typed half cannot run until it knows which paths the text half kept), so the text index is asked for more candidates than the page size — a fanout — to leave room for the typed filter to narrow afterward. When the corpus holds more matching documents than the fanout, the text half is cut off before the typed filter ever sees the rest, and a record that would have matched everything, ranked outside the fanout, is silently absent — indistinguishable from "nothing in the vault matches". Reported, with Complete: false, whenever the fanout was exhausted; the zero-hit path (NearestTerms, "did you mean") is refused to a truncated query for the same reason — it would suggest vocabulary as though the search had actually seen the whole corpus. The remedy is real: a typed `filter` (unlike `words`) is evaluated by the properties index over the FULL narrowed candidate population (bounded by candidate_cap_exceeded / evaluation_bound_exceeded, not by this fanout), so replacing or narrowing `words` with an equivalent typed condition on a declared property is not answered by this same bound. "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a). "evaluation_bound_exceeded" — FR-064's B1. The narrowed CANDIDATE population exceeded 50,000 before anything was retrieved. It is a DIFFERENT cause from "candidate_cap_exceeded", which is B2 and counts SURVIVORS during evaluation, and the two must stay distinct because they name different remedies: B1 is reduced by narrowing the scope or the kind, and NOT by adding a filter, which does not change the number that fired. B1's count is exact and is quoted; B2's is not, because the count aborts at the cap and never reaches a true total — quoting one would state a number nobody computed. "unsupported_operator" — a SQL construct the filter does not implement (JOIN, BETWEEN, COALESCE, CASE, a subquery, a function call). REFUSED naming the ten supported operators and the parameter that does the job instead (FR-022c) — never parsed, never silently dropped. "unsupported_parameter" — an argument name the request does not declare, refused with the accepted names listed rather than ignored (FR-022c). "empty_like_pattern" — a LIKE pattern of '' or '%', which matches every record; refused naming IS NOT NULL as the operator that means it (FR-022a). "empty_in_list" — IN was given an empty list, which can match nothing (FR-022d). "literal_type_mismatch" — a literal that cannot be read in the property's declared type (FR-022e). Never coerced. "ordering_on_many_property" — an ordering comparison against a list- valued property, which section 8 R-13 leaves undefined; refused naming =, IN and LIKE as the operators that are defined there. "comparison_undefined" — the comparison oracle could not decide this pair: a non-conforming value (R-4), an unresolved relation (R-8), or an operator no rule defines for the declared type. The record is EXCLUDED and NAMED, and it is not re-admitted by negation — counting a corrupt value as "not done" by double negation would be a silent wrong answer. "date_format_ambiguous" — a date whose format cannot be read without guessing, or whose month or day is not zero-padded (FR-021d). It is never guessed. "decimal_scale_exceeded" — more decimal places than a decimal property carries. The value is NOT rounded to fit (FR-013). "stale_record" — this row's source_hash and the text index's disagree, or one side holds none (FR-020c). Reported as a DISAGREEMENT, never as "the properties index is stale": the comparison establishes that the two differ, not which is behind. "orphan_row" — the properties index holds a row for a path where no indexed note exists (D16.5). "stale_cursor" — the cursor was issued against a different index epoch. An ERROR, never a silent restart from page one. "unknown_view" — a saved view name the vault does not define, refused with the views in scope listed. "unknown_record_type" — a record type the schema set does not declare, refused with the declared types listed (FR-024). "view_part_ineligible" — a saved view declares a part whose BINDINGS do not satisfy what that part requires: a `figures` or `chart` part with no number, a `chart` whose `date` names something the record type does not declare as a date, a `tiles` part bound to a property that is not image-capable, a `columns` part bound to something that is not a small enum. The part draws NOTHING, and this is the renderer saying so (view-kinds-design-2026-09-03 D6). The composer (op=create_view) refuses to write such a part; this code exists because a parts-bearing file can reach the renderer by other routes — a hand-edited file, an import, or a binary written before D6 closed op=write_view — and a part that computes nothing because its bindings are absent must never be served as an empty but clean rendering.
+             * @example type_mismatch
+             * @enum {string}
+             */
+            code: "missing_schema_version" | "duplicate_type_declaration" | "unknown_property" | "unknown_enum_value" | "missing_required" | "arity_violation" | "enum_violation" | "type_mismatch" | "dangling_relation" | "relation_type_mismatch" | "cardinality_violation" | "duplicate_id" | "integer_not_whole" | "integer_out_of_range" | "candidate_cap_exceeded" | "hop_limit_exceeded" | "hop_traversal_bound_exceeded" | "page_size_clamped" | "scope_truncated" | "text_search_truncated" | "aggregate_refused" | "index_unavailable" | "evaluation_bound_exceeded" | "unsupported_operator" | "unsupported_parameter" | "empty_like_pattern" | "empty_in_list" | "literal_type_mismatch" | "ordering_on_many_property" | "comparison_undefined" | "date_format_ambiguous" | "decimal_scale_exceeded" | "stale_record" | "orphan_row" | "stale_cursor" | "unknown_view" | "unknown_record_type" | "view_part_ineligible";
+            /**
+             * @description Human-readable statement of what went wrong, ready to render. Never empty — a problem with no reason is indistinguishable from silence, which is the failure this type exists to end.
+             * @example company is text, not a relation — cannot be resolved
+             */
+            reason: string;
+            /**
+             * @description Record identifiers this problem applies to. Always present — an empty array, never null — so a caller may render it without a nil check. Empty when the problem is a property of the QUERY rather than of particular records (a clamp, a refusal, a truncated scope).
+             * @example [
+             *       "CO-0052"
+             *     ]
+             */
+            records: string[];
+            /**
+             * @description The property at fault, when the problem is attributable to one.
+             * @example company
+             */
+            property?: string;
+            /**
+             * @description The shape that WAS expected, stated plainly. A rejection that does not say what correct looks like leaves the caller guessing (FR-042).
+             * @example expected a link to a company record
+             */
+            expected?: string;
+            /**
+             * @description The remedy. For a refusal this is the narrowing instruction naming the filter that would help (FR-064) — a bound is never reported without one.
+             * @example add a status filter, or narrow the date range
+             */
+            fix?: string;
+            /**
+             * @description The permitted values or valid names, listed so the caller can correct itself. Populated for unknown_property, unknown_enum_value and enum_violation (FR-011, FR-024). Scope is resolved BEFORE this list is built, so it can never reveal schemas outside the caller's workspace (FR-024, FR-062).
+             * @example [
+             *       "prospect",
+             *       "active",
+             *       "dormant",
+             *       "churned"
+             *     ]
+             */
+            permitted?: string[];
+            /**
+             * @description Vault-relative paths implicated. Carries BOTH paths for a duplicate type declaration (FR-003) or a duplicate identifier (FR-039), where naming only one leaves the conflict unfixable.
+             * @example [
+             *       ".omnipus-vault/records/company.yaml",
+             *       ".omnipus-vault/records/companies.yaml"
+             *     ]
+             */
+            paths?: string[];
+        };
+        /**
+         * RecordWriteRequest
+         * @description A typed, validated write to one record (ADR-068 D14, FR-040 to FR-044).
+         *     A write is a SPLICE, never a re-serialisation. Comments, key order, blank lines and quoting style survive, and the file is byte-identical outside the patched span (FR-041). This is not a nicety: the vault is simultaneously a human's working notes, and a writer that re-serialises YAML degrades it a little on every touch until the operator stops trusting the agent.
+         *     A write that violates the schema is REJECTED with the expected shape named, and the file is left unmodified (FR-042). Nothing is half-written.
+         *     RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified through RelationWriteRequest's three explicit verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+         *     Derived values are never written into frontmatter (D9, FR-046) — a request naming a derived property is rejected, not honoured.
+         */
+        RecordWriteRequest: {
+            /**
+             * @description The record type being written. Always required, on create and update alike.
+             * @example company
+             */
+            type: string;
+            /**
+             * @description The record to update. ABSENT MEANS CREATE, in which case `path` is required and the identifier is minted by the server (FR-036) — never supplied by the caller, so two concurrent creators cannot choose the same id. When present, `version_token` is required too.
+             * @example CO-0142
+             */
+            id?: string;
+            /**
+             * @description Vault-relative path of the note. Required on create; ignored on update, where the id already locates the record and a rename is a separate operation.
+             * @example CRM/Companies/Acme Ltd.md
+             */
+            path?: string;
+            /**
+             * @description ADR-067 D14's opaque content-hash token, as returned on the record that is being updated. REQUIRED whenever `id` is present: a stale token means the file changed since it was read, and the write is REFUSED and the refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody saw. Omitted only on create, where there is no prior version.
+             * @example sha256:3d1c9a7e5b2f4806
+             */
+            version_token?: string;
+            /** @description The properties to write, and only those — every other byte of the file is untouched. An entry whose `values` array is empty CLEARS that property (D3.2). A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042). */
+            properties: components["schemas"]["RecordPropertyValue"][];
+        };
+        /**
+         * RelationWriteRequest
+         * @description A change to one relation property, through THREE DISTINCT VERBS (ADR-068 D15, FR-045).
+         *     `replace` must be named explicitly, and that is the entire point of this type existing separately from RecordWriteRequest. The incumbent offers only replace, so the ordinary read-then-write pattern — read the list, append, write it back — deletes every relation added by anyone else in between and returns success. Making add and remove first-class means the common case never has to send the whole list, and making replace a named verb means clearing a list is something a caller did on purpose.
+         *     A relation is stored ONCE, on one side, as a quoted wikilink (D5.1). The inverse is derived from the index and is never written to any file (FR-032); writing the reverse direction is not something this request can do, and not something anyone needs to remember to do.
+         */
+        RelationWriteRequest: {
+            /**
+             * @description The record whose relation property is being changed.
+             * @example DE-0007
+             */
+            id: string;
+            /**
+             * @description ADR-067 D14's opaque content-hash token for that record. A stale token is REFUSED and the refusal AUDITED (FR-043, FR-044).
+             * @example sha256:3d1c9a7e5b2f4806
+             */
+            version_token: string;
+            /**
+             * @description The relation or person property to change. Must be declared as type "relation" or "person" in the record type's schema; anything else is rejected with the expected shape named. Declared cardinality is enforced (FR-035) — adding a second target to a scalar relation is refused.
+             * @example company
+             */
+            property: string;
+            /**
+             * @description "add" — add the targets, leaving existing ones in place. Adding a target already present is a no-op, not a duplicate. "remove" — remove the targets, leaving the rest in place. Removing a target that is not present is a no-op, not an error. "replace" — the existing targets are DISCARDED and replaced by `targets`. An empty `targets` clears the property. Named explicitly so that destroying a list is never the accidental outcome of a read-modify- write (FR-045).
+             * @example add
+             * @enum {string}
+             */
+            op: "add" | "remove" | "replace";
+            /**
+             * @description The relation targets, each a wikilink target text or a record identifier. Always present — an empty array, never null; empty is valid ONLY with op "replace", where it clears the property, and is rejected for add and remove, which would otherwise be silent no-ops that look like successful writes.
+             *     A target that does not exist, or that exists but is not of the declared target type, is REPORTED (FR-033, FR-034) — never silently stored as a link that will render as a distinct group of one.
+             * @example [
+             *       "Acme Ltd"
+             *     ]
+             */
+            targets: string[];
+        };
+        /**
+         * ViewGroupBy
+         * @description One grouping key of a saved view (ADR-068 D24.1, spec FR-018b).
+         *     IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. The retired flat view format grouped by a bare list of property names with no direction field at all, so every `groupBy` direction in an imported Obsidian base was UNREPRESENTABLE ON THE WIRE — not merely untranslated. The founder's own vault carried 24 of them and every one was flattened to the default order in silence, which is the shape of failure this whole surface is written against: a view that imports without an error and then sorts its groups the wrong way, with nothing anywhere to say so.
+         */
+        ViewGroupBy: {
+            /**
+             * @description The property to group on. Grouping by a relation is supported (FR-029), and a record holding several values appears in EVERY group it belongs to (FR-028) rather than being assigned to one arbitrarily. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+             * @example owner
+             */
+            property: string;
+            /**
+             * @description Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+             *
+             *     Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+             *
+             *     Group order is LEXICAL over the case-folded key (ruling R-5/R-E) — an enum has no declared-position ordinal, and a domain order is expressed by prefixing the values (`1-lead`, `2-qualified`).
+             * @example desc
+             * @enum {string}
+             */
+            direction?: "asc" | "desc";
+        };
+        /**
+         * ViewPropertyConfig
+         * @description Per-property presentation for one column of a saved view (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base, which is display configuration rather than a projection list).
+         *     PURE PRESENTATION. THE ENGINE NEVER READS THIS. Obsidian's own rule is kept verbatim and it is the rule that matters: a display name is NEVER usable in a filter, a sort, a grouping or a formula. Those positions name the PROPERTY, always — so renaming a column in the UI can never quietly change which records a view returns.
+         */
+        ViewPropertyConfig: {
+            /**
+             * @description Column heading to render instead of the property name. Absent means render the property name itself.
+             * @example Annual value
+             */
+            display_name?: string;
+        };
+        /**
+         * ViewPart
+         * @description One drawn element of a saved view's part stack (view-kinds-design-2026-09-03 §2.2, §4).
+         *     A view used to be ONE flat layout, and nothing composed. A financial report is a figures row plus a grouped table with subtotals plus an aging cross-table; a performance report is figures plus a chart plus a worst-offenders table. Neither fits "one layout", so all 69 views in the founder's imported vault were flat tables that totalled nothing.
+         *     PARTS ARE NOT AN AUTHORING SURFACE. The agent picks one of the eight named view KINDS (ViewDef.kind); the composer emits the part stack that kind stands for, and the renderer walks it. Free part composition was considered and deliberately left out (design §2.3): it is untestable, and the raw `write_view` path already covers the tail.
+         *     THE BINDING FIELDS ARE OPTIONAL HERE AND REQUIRED BY THE PART. This schema cannot say "a chart needs a date AND a number" without a per-part oneOf that oapi-codegen would inline as eight anonymous structs. The requirement table lives in the composer's gate G1, which refuses by NAME — "board needs an enum with at most 8 values; `status` has 26" — and that refusal is the surface an agent actually reads. What this schema does enforce is that a binding, when present, is a real non-empty property name: the loader refuses a blank one rather than rendering a part bound to nothing.
+         */
+        ViewPart: {
+            /**
+             * @description Which element this draws. Eight, and the list is closed.
+             *
+             *     "table" — rows by columns. "list" — a name and one detail per row. "tiles" — a grid keyed on an image property. "columns" — status columns, i.e. a board, keyed on an enum property. "calendar" — a month grid keyed on a date property. "figures" — a headline row of numbers. "chart" — a line or bar over time, needing a date and a number. "crosstab" — rows by columns with aggregated cells, needing two group properties and a number.
+             *
+             *     A value outside this set is a LOAD REJECTION, not a part that renders as a table. That is the same rule `layout` already carries and for the same measured reason: an unrecognised layout that fell back to a table scored CLEAN under the parity criterion while silently losing what the view actually asked for.
+             * @example figures
+             * @enum {string}
+             */
+            part: "table" | "list" | "tiles" | "columns" | "calendar" | "figures" | "chart" | "crosstab";
+            /**
+             * @description The number property this part totals or plots. Required in practice by `figures`, `chart` and `crosstab`; meaningless on the others.
+             *
+             *     If the property declares a companion unit (PropertyDef.unit_property), every total this part draws is computed ONCE PER UNIT VALUE and never across units (design §3 G2).
+             * @example amount
+             */
+            number?: string;
+            /**
+             * @description The companion unit property of `number`, named explicitly so the part records which pairing it was composed against.
+             *
+             *     IT IS NEVER INFERRED. Pairing any number with any nearby enum works on invoices and is wrong the first time a record holds two amounts, which is why the pairing is declared on the record type (PropertyDef.unit_property) and merely restated here. A `unit` naming a property that is not the declared companion of `number` is the composer's to refuse.
+             * @example currency
+             */
+            unit?: string;
+            /**
+             * @description The date property this part lays out or plots against. Used by `calendar` and `chart`.
+             * @example due_date
+             */
+            date?: string;
+            /**
+             * @description The file/image property `tiles` draws its grid from.
+             * @example cover
+             */
+            image?: string;
+            /**
+             * @description The enum property `columns` draws its board columns from. The composer's gate G1 additionally requires it to hold at most 8 values — a board with 26 columns is not a board.
+             * @example status
+             */
+            choice?: string;
+            /** @description The reduction `figures` and `crosstab` apply to `number`. Omitted means the part draws no aggregate of its own. */
+            aggregate?: components["schemas"]["ViewPartAggregate"];
+            /**
+             * @description Grouping keys for this part, outermost first, each carrying its own direction — the SAME shape as ViewDef.grouping, deliberately, so a part's grouping and a view's grouping can never mean two different things.
+             *
+             *     Omitted means this part declares NO grouping of its own, and the view's own `grouping` is what stands. The loader never copies one into the other: a part is returned exactly as its file wrote it, so a reader can always tell a part that asked for something from a part that inherited it.
+             */
+            grouping?: components["schemas"]["ViewGroupBy"][];
+            /**
+             * @description Per-group subtotal row, keyed by PROPERTY name, valued by the reduction to apply to it (design §4's `subtotals: {amount: sum}`).
+             *
+             *     PER GROUP AND PER UNIT. A subtotal over a number carrying a companion unit is drawn once per unit value under G2, with the rows whose unit is missing shown, excluded and counted separately under G3 — never one combined figure, because a combined figure across currencies is a wrong number that looks right.
+             * @example {
+             *       "amount": "sum"
+             *     }
+             */
+            subtotals?: {
+                [key: string]: components["schemas"]["ViewPartAggregate"];
+            };
+            /**
+             * @description Columns for the table-ish parts (`table`, `list`, `crosstab`), in this order. Omitted means this part names no columns of its own, and the view's own `properties` is what stands — which in turn, omitted, shows every declared property.
+             *
+             *     Narrowing this changes what is RENDERED, never what is matched — the same rule ViewDef.properties carries, restated because a part-level column list is exactly where somebody would expect a filter to hide.
+             * @example [
+             *       "file.name",
+             *       "client",
+             *       "due_date",
+             *       "amount"
+             *     ]
+             */
+            properties?: string[];
+        };
+        /**
+         * ViewPartAggregate
+         * @description The reduction one part of a view applies to a number (view-kinds-design-2026-09-03 §4). FIVE, and the list is closed.
+         *     IT IS DELIBERATELY NARROWER THAN RecordAggregate's FIFTEEN. RecordAggregate is the query surface's full vocabulary, including the two population-class ops that buffer a column (`median`, `unique`) and the domain-specific ones (`earliest`, `checked`, `stddev`). A view PART's figure row and per-group subtotal row are drawn for a reader, per unit value, on every render — so the set here is the one every number answers and nothing here can abort mid-scan. A view that genuinely needs a median asks for it through `aggregates`, which is RecordAggregate's own field and is unchanged.
+         *     THE UNIT RULE IS NOT OPTIONAL AND IS NOT EXPRESSIBLE HERE. A number carrying a companion unit property (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units (design §3 G2), and a row whose unit is missing is shown, excluded from every total, and counted separately (G3). Those are composer and renderer rules; this enum only names which reduction is asked for.
+         * @example sum
+         * @enum {string}
+         */
+        ViewPartAggregate: "sum" | "avg" | "min" | "max" | "count";
+        /**
+         * ViewResult
+         * @description The evaluated answer of one saved view — everything the SPA needs to draw it (view-kinds-design-2026-09-03 §7). The server evaluates the view's filter, grouping and aggregation through the SAME engine knowledge_find uses (there is exactly one query engine) and precomputes every aggregate under the gate rules, so the SPA only draws:
+         *     G2 — a number with a companion unit totals once per unit value, never across units. Every total anywhere in this object is a LIST of per-unit entries (ViewUnitTotal); no field can hold a combined figure.
+         *     G3 — a row whose unit is missing or unconfirmed is in `rows` (shown), excluded from every total, and counted in the owning part's excluded_count.
+         *     A view that cannot be answered arrives as a 200 with `refusal` set and empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own "NOT SERVABLE" line would state it — never as a transport error and never as a silent empty table.
+         */
+        ViewResult: {
+            /**
+             * @description The view's name, exactly as addressed.
+             * @example unpaid--by-client
+             */
+            view: string;
+            /**
+             * @description The display label — the view's own `label` when declared, else the name, resolved server-side so no two renderers invent different fallbacks.
+             * @example Unpaid, by client
+             */
+            label: string;
+            /**
+             * @description The view kind that authored this view (ViewDef.kind), echoed verbatim when declared. Provenance — the renderer walks `parts`, never this.
+             * @example summary
+             */
+            kind?: string;
+            /**
+             * @description The record type the view queries. Absent for an untyped view.
+             * @example invoice
+             */
+            type?: string;
+            /** @description Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false. */
+            refusal?: components["schemas"]["ViewResultRefusal"];
+            /** @description The resolved part stack in render order — the view's own `parts`, or the single part a legacy `layout`-only view maps to (a no-parts view still serves as one table part). Always present — an empty array, never null; empty exactly when `refusal` is set. */
+            parts: components["schemas"]["ViewResultPart"][];
+            /** @description Every evaluated row, in the view's own order, shared by all parts — one view answers one question about one row set (ViewDef.parts: `filter` is shared and never per-part). Groups and crosstabs reference these by path. Always present — an empty array, never null. */
+            rows: components["schemas"]["VaultFindRow"][];
+            /** @description True when the row set exceeded the server's render bound and `rows` holds only the first page of it. Totals and subtotals are then NOT computed (`complete` is false and complete_reason says why) — a total over a truncated set would be a wrong number that looks right, which is the one output this surface exists to make impossible. */
+            rows_truncated?: boolean;
+            /** @description True only when the evaluation covered everything the view asked to cover — the same verdict, with the same workspace-scope exception, as VaultFindResponse.complete, from which it is carried. */
+            complete: boolean;
+            /** @description Why the verdict is what it is. Empty when `complete` is true. */
+            complete_reason?: string;
+            /**
+             * @description The view's own `aggregates:` results — the LEGACY, pre-part-stack summary key, which 69 saved views still use — carried through from the engine with the scope clause it computed them with (FR-125).
+             *
+             *     They are SEPARATE from a part's `totals`, and the shapes differ because the guarantees differ. A part total is a ViewUnitTotal: reduced once per unit value, never across units (G2), because this endpoint does that reduction itself. These come from the engine's `aggregate`, which is unit-blind — so an entry over a number with a DECLARED companion unit is NOT surfaced here at all; it is refused, and the refusal is in `problems`. Only summaries that cannot cross a unit (count, empty, filled, unique) and numbers no record type pairs with a unit appear.
+             *
+             *     Absent when the view declares no `aggregates`.
+             */
+            aggregates?: components["schemas"]["VaultFindTotal"][];
+            /** @description Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null. */
+            problems: components["schemas"]["RecordProblem"][];
+        };
+        /**
+         * ViewResultPart
+         * @description One rendered element of a view result's part stack (view-kinds-design-2026-09-03 §7): the resolved part definition plus whatever the server precomputed for it, so the SPA only draws.
+         *     WHICH DATA FIELDS ARE SET DEPENDS ON THE PART. `table`/`list`/`tiles`/ `columns`/`calendar` draw from the result's shared `rows` (plus `groups` when the part or the view groups); `figures` carries `totals`; `chart` carries `series`; `crosstab` carries `crosstab`. A per-part oneOf was considered and rejected for the reason ViewPart.yaml gives — oapi-codegen inlines it as eight anonymous structs — so absence of a data field means "this part draws nothing of that kind", never "the server forgot".
+         */
+        ViewResultPart: {
+            /**
+             * @description Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
+             * @example figures
+             * @enum {string}
+             */
+            part: "table" | "list" | "tiles" | "columns" | "calendar" | "figures" | "chart" | "crosstab";
+            /** @description The RESOLVED part this element was drawn from — the entry of the view's own `parts` stack, or the single part EffectiveParts synthesises from a legacy `layout`-only view. Echoed so a reader can always tell what was asked for, including the bindings (number/unit/date/choice/image) the precomputed data was computed against. */
+            source: components["schemas"]["ViewPart"];
+            /** @description Resolved column property names for the table-ish parts, in render order: the part's own `properties`, else the view's, else the record type's declaration order. Absent on parts that draw no columns. */
+            columns?: string[];
+            /** @description Grouped rows with per-group, per-unit subtotals, present when this part groups (its own `grouping`, else the view's). Group order is the grouping's own order. Rows are referenced by path into the result's shared `rows`. */
+            groups?: components["schemas"]["ViewResultGroup"][];
+            /** @description Whole-result totals for this part, one entry per (property, op, unit value) — the figures row, or a grouped table's footer. NEVER a combined figure across units (G2): the list shape is the enforcement, and the footer line explaining why is the renderer's to draw from it. */
+            totals?: components["schemas"]["ViewUnitTotal"][];
+            /**
+             * @description Rows excluded from every total of this part because their unit value is missing or unconfirmed (G3). The rows themselves are still in `rows` — shown, excluded, counted. Absent when the part's numbers declare no companion unit, or when the part computes no totals.
+             * @example 2
+             */
+            excluded_count?: number;
+            /**
+             * @description Why those rows were excluded, ready to render as the G3 footer line. Present exactly when excluded_count is present and greater than zero.
+             * @example 2 rows have no confirmed currency value and are excluded from every total
+             */
+            excluded_reason?: string;
+            /**
+             * @description The companion unit property this part's `number` binding RESOLVED to, from the record type's own declaration (design section 5). Absent when the number declares no companion unit, or when the part totals nothing.
+             *
+             *     THE SCHEMA IS THE AUTHORITY AND THIS IS ITS ANSWER. A part's own `unit:` key records what the composer stamped when the view was written; it is provenance, and a record type edited afterwards can leave it stale. The server resolves the unit from the schema, refuses the total outright when the two disagree (naming both sides), and states the resolved answer here — so no consumer ever re-derives a unit from `source.unit` and no two consumers can derive different ones.
+             * @example currency
+             */
+            unit_property?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
+            /** @description Chart parts only: the precomputed series, one per unit value (G2), points aggregated per date bucket server-side. */
+            series?: components["schemas"]["ViewResultSeries"][];
+            /** @description Crosstab parts only: the precomputed grid. */
+            crosstab?: components["schemas"]["ViewResultCrosstab"];
+        };
+        /**
+         * ViewResultGroup
+         * @description One group of a grouped view part (view-kinds-design-2026-09-03 §4, §7).
+         *     Groups REFERENCE rows by path rather than repeating them — the same shape VaultFindGroup takes, and for the same reason: a record holding several values of the grouped property appears in every group it belongs to (FR-028), and repeating it would render it three times.
+         *     The per-group subtotal row is PER UNIT under G2: `subtotals` is a list of ViewUnitTotal, one entry per (property, op, unit value), never one combined figure. Rows whose unit is missing or unconfirmed are counted in this group's own `excluded_count` (G3) — shown in the group, excluded from every subtotal.
+         */
+        ViewResultGroup: {
+            /**
+             * @description The group's value, rendered. An EMPTY key is the ABSENT group — read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+             * @example Acme Pte Ltd
+             */
+            key: string;
+            /** @description True when this group holds the records where the grouped property is ABSENT, which `key` alone cannot express. */
+            absent?: boolean;
+            /**
+             * @description Evaluated rows in this group.
+             * @example 4
+             */
+            count: number;
+            /** @description The member rows, by path into the result's own `rows` list. Always present — an empty array, never null. */
+            paths: string[];
+            /** @description Per-group totals, one entry per (property, op, unit value) under G2. Always present — an empty array, never null, so "this part declares no subtotals" is stated rather than inferred. */
+            subtotals: components["schemas"]["ViewUnitTotal"][];
+            /**
+             * @description Rows in this group excluded from every subtotal because their unit value is missing or unconfirmed (G3). Absent when the subtotalled numbers declare no companion unit, or when nothing was excluded.
+             * @example 1
+             */
+            excluded_count?: number;
+            /**
+             * @description Why those rows were excluded, ready to render. Present exactly when excluded_count is present and greater than zero.
+             * @example 1 row has no confirmed currency value and is excluded from every subtotal
+             */
+            excluded_reason?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
+            /**
+             * @description How many of this group's members are NOT named in `paths` because the answer does not carry them. Absent when every member is named.
+             *
+             *     `paths` references rows in the result's own `rows` list, and `rows` is capped. A group's `count` is its size over the FULL evaluated set, so once the cap binds, count and len(paths) legitimately differ — and the difference has to be STATED. Copying every member path instead would make the payload grow with the corpus rather than with the cap (a 100k record match produced ~100k path strings per grouped part), and naming rows the answer does not carry would leave the references dangling.
+             * @example 8
+             */
+            paths_omitted?: number;
+        };
+        /**
+         * ViewUnitTotal
+         * @description One computed reduction over one number property, FOR ONE UNIT VALUE (view-kinds-design-2026-09-03 §3 G2).
+         *     A number carrying a companion unit (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units, so a view result carries a LIST of these — one entry per distinct unit value — and no field anywhere in the result can hold a combined figure. That is the load-bearing decision of this type: a sum across currencies is a wrong number that looks right, and the shape makes it inexpressible rather than merely discouraged.
+         *     A number with NO companion unit produces exactly one entry with `unit` absent. The two cases are distinguished by the FIELD'S PRESENCE, never by a sentinel value, because an empty string is a legitimate enum value (R-3).
+         */
+        ViewUnitTotal: {
+            /**
+             * @description The number property this total reduces.
+             * @example amount
+             */
+            property: string;
+            /** @description The reduction applied. */
+            op: components["schemas"]["ViewPartAggregate"];
+            /**
+             * @description The unit value this total covers (e.g. "SGD"). ABSENT when the number declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped.
+             * @example SGD
+             */
+            unit?: string;
+            /**
+             * @description The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+             *
+             *     It travels WITH the unit value rather than beside it, one level up, because a unit and the property it was read from are one fact: a renderer that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with, and the schema it would need in order to stop guessing is not something the SPA has.
+             * @example currency
+             */
+            unit_property?: string;
+            /**
+             * @description The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
+             * @example 12480.00
+             */
+            value: string;
+            /**
+             * @description How many values were included in this total. Rows excluded under G3 (missing/unconfirmed unit) are NOT in this count — they are in the enclosing scope's excluded_count.
+             * @example 7
+             */
+            count: number;
+        };
+        /**
+         * ViewResultSeries
+         * @description One line of a chart part (view-kinds-design-2026-09-03 §7). A chart over a number with a companion unit draws ONE SERIES PER UNIT VALUE (G2) — the series are never merged into one line, because a line that sums euros and hours is a wrong picture that looks right. A number with no companion unit produces exactly one series with `unit` absent.
+         */
+        ViewResultSeries: {
+            /**
+             * @description The unit value this series covers. Absent when the plotted number declares no companion unit property.
+             * @example SGD
+             */
+            unit?: string;
+            /** @description The aggregated points in date order. Always present — an empty array, never null. */
+            points: components["schemas"]["ViewResultPoint"][];
+        };
+        /**
+         * ViewResultPoint
+         * @description One aggregated point of a chart series (view-kinds-design-2026-09-03 §2.2, §7). The server aggregates; the SPA only draws — a chart part's data arrives as points, never as raw rows the client would have to reduce itself, because a client-side reduction is a second implementation of G2 waiting to disagree with the first.
+         */
+        ViewResultPoint: {
+            /**
+             * @description The date bucket, rendered exactly as the date property renders (ISO 8601), so lexical order is chronological order.
+             * @example 2026-05-01
+             */
+            key: string;
+            /**
+             * @description The aggregated value at this point, as exact text (never a JSON number).
+             * @example 3200.00
+             */
+            value: string;
+            /**
+             * @description How many values were aggregated into this point.
+             * @example 3
+             */
+            count: number;
+        };
+        /**
+         * ViewResultCrosstab
+         * @description The precomputed grid of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7): two group properties and a number, reduced server-side into cells so the SPA only draws. Key order in `row_keys`/`column_keys` is the grid's render order (lexical over the case-folded key, ruling R-5/R-E — the same order grouping itself uses).
+         */
+        ViewResultCrosstab: {
+            /**
+             * @description The property the grid's rows group by (the part's outer grouping key).
+             * @example client
+             */
+            row_property: string;
+            /**
+             * @description The property the grid's columns group by (the part's inner grouping key).
+             * @example status
+             */
+            column_property: string;
+            /** @description Every row key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null. */
+            row_keys: string[];
+            /** @description Every column key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null. */
+            column_keys: string[];
+            /** @description The aggregated cells. SPARSE — a (row, column) position with no values simply has no cell, and the SPA renders it empty rather than as a zero nobody computed. Always present — an empty array, never null. */
+            cells: components["schemas"]["ViewResultCrosstabCell"][];
+            /** @description Rows excluded from every cell because their unit value is missing or unconfirmed (G3). Absent when the aggregated number declares no companion unit, or when nothing was excluded. */
+            excluded_count?: number;
+            /** @description Why those rows were excluded, ready to render. */
+            excluded_reason?: string;
+            /**
+             * @description The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+             *
+             *     The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+             */
+            excluded_paths?: string[];
+        };
+        /**
+         * ViewResultCrosstabCell
+         * @description One aggregated cell of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7). Cells are precomputed server-side; the SPA lays them out on the row/column grid and draws. A cell over a number with a companion unit exists ONCE PER UNIT VALUE (G2) — two currencies at the same grid position are two cells, never one combined figure.
+         */
+        ViewResultCrosstabCell: {
+            /**
+             * @description The row group's rendered key. An empty string is the ABSENT group, exactly as in ViewResultGroup.key.
+             * @example Acme Pte Ltd
+             */
+            row: string;
+            /**
+             * @description The column group's rendered key. An empty string is the ABSENT group.
+             * @example overdue
+             */
+            column: string;
+            /**
+             * @description The unit value this cell covers. Absent when the aggregated number declares no companion unit property.
+             * @example SGD
+             */
+            unit?: string;
+            /**
+             * @description The aggregated value, as exact text (never a JSON number).
+             * @example 820.00
+             */
+            value: string;
+            /**
+             * @description How many values were aggregated into this cell.
+             * @example 2
+             */
+            count: number;
+        };
+        /**
+         * ViewResultRefusal
+         * @description WHY a saved view cannot be answered (view-kinds-design-2026-09-03 §7, FR-018b's "the reason is NAMED"). It is the wire form of the same refusal the backend already states in prose — records.ViewServeRefusal, the shape knowledge_describe's "NOT SERVABLE by knowledge_find" line reads — so the SPA can show the operator WHY a view cannot answer instead of a blank panel.
+         *     A refusal is a 200 with this object set and no data, never a transport error: the view is real, the request was well-formed, and the reason is the answer.
+         */
+        ViewResultRefusal: {
+            /**
+             * @description Machine-readable refusal code. NOT a closed enum, deliberately: the codes are owned by the backend's own refusal vocabularies and new ones must be able to arrive without a contract change silently dropping them at the SPA's validation edge. Current emitters: "unknown_view" (no view of that name is addressable here — which is also what an out-of-scope collection answers, indistinguishably, per FR-053), "view_disabled" (records.ServeRefusalDisabled: stored but never applied, FR-105), "no_drawable_parts" (a layout with no part equivalent, e.g. `map`, and no explicit parts), every records.ViewRejectionCode (a view file that exists but was refused at load, e.g. "view_unknown_property"), and every RecordProblem.code a refused evaluation names (e.g. "index_unavailable").
+             * @example view_disabled
+             */
+            code: string;
+            /** @description What cannot be done, in the operator's own vocabulary. */
+            reason: string;
+            /** @description What to do about it. May be empty when the underlying refusal named none, but the field is always present so a renderer never invents one. */
+            remedy: string;
+        };
+        /**
+         * ViewDef
+         * @description A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
+         *     A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
+         *     THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER. A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL operators — the same grammar knowledge_find evaluates, so a view's filter needs no translation to be served — `grouping` keys that each carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and `property_config`.
+         *     THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored `filters` (a flat AND-list in a separate seven-operator vocabulary) and `group_by` (a bare name list with no direction). It was carried alongside this one only so files written under it stayed readable. Nothing was ever written under it outside this project's own tooling and no such file exists on disk, so it is deleted rather than versioned around: two formats in one schema is a permanent tax on every reader, and the second one had no remaining constituency.
+         *     The rule that partition existed to protect still holds, and it is the one rule this surface will not break: A VIEW IS NEVER BROADENED ON THE OPERATOR'S BEHALF (FR-105). The retired vocabulary's `contains` meant whole-element membership, and rewriting it as `LIKE '%…%'` would have turned that into substring matching — `labels contains "in"` newly matching `indoor`, `printing` and `min`. That translation was specified in spec Draft 10 and withdrawn in Draft 11 as review finding F5, and it is still prohibited: knowledge_configure refuses any rewrite that changes the row set. What is gone is the OLD FORMAT, not the prohibition.
+         *     `untranslated` and `disabled` exist for the one-shot .base importer (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot translate is preserved VERBATIM in `untranslated` and reported, never approximated and never silently dropped — an approximation that looks like a translation is worse than an honest gap, because nobody reviews a filter that appears to have imported cleanly. Import is one-shot: `.base` files are never read on the query path (FR-102).
+         */
+        ViewDef: {
+            /**
+             * @description View identifier, unique within the vault.
+             * @example open-by-owner
+             */
+            name: string;
+            /**
+             * @description The record type this view queries.
+             *
+             *     OPTIONAL (FR-018b). An UNTYPED view queries every note in scope — which is what four of the founder's eighteen bases do, scoping purely by folder and spanning record types. In an untyped view a property resolves BY NAME over the rows the index holds for every note (FR-021e): a note that CARRIES the key holds its value, parsed in the domain the name resolves to; a value that does not parse there is NON-CONFORMING and reported; and ONLY a note not carrying the key at all is ABSENT. A note whose file says `status: open` must never answer TRUE to `status IS NULL`. Two in-scope types declaring one name with DIFFERENT types REFUSE the query naming both declarations — loud, never a silent domain split. A name no in-scope type declares resolves in the TEXT domain over the raw values.
+             *
+             *     A declared type holding ZERO records is a VALID, EMPTY view (FR-018d) carrying the ordinary completeness verdict — "0 records, complete" — which is distinguishable from the silent empty this design exists to prevent. Six of the founder's eighteen bases reference types provisioned ahead of their data. A type NO schema declares is still rejected: that is drift, not provisioning.
+             *
+             *     A `type:` that is PRESENT but blank is REFUSED. An empty string is not "untyped" — it is a typo for a type name, and treating it as a deliberate absence would turn a misspelling into a vault-wide query. Omit the key entirely to mean untyped.
+             * @example deal
+             */
+            type?: string;
+            /**
+             * @description Human-readable title. Absent means render `name`.
+             * @example Open deals by owner
+             */
+            label?: string;
+            /**
+             * @description The view's filter, as ONE VaultFilterNode tree — the same `all`/`any`/`not` combinators and ten SQL operators knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
+             *
+             *     ONE FILTER GRAMMAR, ONE SPELLING OF IT. The product used to speak two filter languages and the bridge between them refused two of the older one's leaves outright. Obsidian's `and`/`or`/`not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as an escaped `LIKE '%…%'`; its relation traversal is the request's own join shape rather than a per-leaf hop.
+             *
+             *     FR-023c's bound applies to a view's tree identically to a request's: at most 64 leaves and depth 8, refused above either naming which.
+             */
+            filter?: components["schemas"]["VaultFilterNode"];
+            /**
+             * @description Grouping keys, outermost first, each carrying its own direction (FR-018b). Two levels (FR-027); grouping by a relation is supported (FR-029) and a record holding several values appears in every group it belongs to (FR-028).
+             *
+             *     THE DIRECTION IS PART OF THE KEY, not an afterthought: a bare name list is why every `groupBy` direction in an imported base was unrepresentable rather than merely untranslated.
+             */
+            grouping?: components["schemas"]["ViewGroupBy"][];
+            /** @description Sort keys, applied in order. */
+            sort?: components["schemas"]["RecordSort"][];
+            /**
+             * @description Properties to display, in this order. Omitted shows every declared property. Narrowing this changes what is RENDERED, never what is matched.
+             * @example [
+             *       "name",
+             *       "status",
+             *       "value"
+             *     ]
+             */
+            properties?: string[];
+            /**
+             * @description Per-property presentation, keyed by PROPERTY name (FR-018b) — Obsidian's top-level `properties` block, which is display configuration rather than a projection list.
+             *
+             *     PURE PRESENTATION; THE ENGINE NEVER READS IT. Obsidian's own rule is kept verbatim: a display name is never usable in a filter, a sort, a grouping or a formula, so renaming a column can never quietly change which records a view returns.
+             */
+            property_config?: {
+                [key: string]: components["schemas"]["ViewPropertyConfig"];
+            };
+            /**
+             * @description Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
+             *
+             *     ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
+             *
+             *     This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
+             * @example cards
+             * @enum {string}
+             */
+            layout?: "table" | "cards" | "board" | "calendar" | "gallery" | "map";
+            /**
+             * @description WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
+             *
+             *     IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+             *
+             *     The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
+             *
+             *     A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
+             * @example summary
+             * @enum {string}
+             */
+            kind?: "table" | "list" | "tiles" | "board" | "calendar" | "summary" | "trend" | "breakdown";
+            /**
+             * @description THE ORDERED STACK THE RENDERER WALKS (view-kinds-design-2026-09-03 §4). Optional.
+             *
+             *     ABSENT MEANS THE VIEW IS READ EXACTLY AS IT WAS BEFORE THIS FIELD EXISTED: one part, derived from `layout` plus the view's own grouping and properties. All 69 views in the founder's imported vault load unchanged, and no file has to be migrated for the renderer to keep working. The loader exposes one accessor for both shapes, so no consumer downstream has to know which of the two it is looking at — a consumer that branched on `parts == nil` is a consumer that would eventually branch differently from the next one.
+             *
+             *     `filter` is SHARED BY EVERY PART and is never per-part. One view answers one question about one row set; a part that could narrow the rows under it would make the figures row and the table beneath it disagree about what they are counting, with nothing on screen to say so.
+             */
+            parts?: components["schemas"]["ViewPart"][];
+            /**
+             * @description Computed properties, keyed by name, each value the expression's SOURCE TEXT (FR-141) — human-diffable and directly comparable against the Obsidian original it was translated from. A formula is referenced from any property position as `formula.<name>`.
+             *
+             *     THE PARSER LIVES IN THE WRITE PATH AND ONLY THERE (FR-140). knowledge_configure and the importer parse an expression when it is written and REFUSE one that does not parse, naming the position and the reason; it is never stored. The view loader re-validates on load, so a hand-edited file is re-checked. knowledge_find accepts NO text expression anywhere — a query reaches a formula only as a reference to something already validated — which is what keeps both halves of ADR-068 O-3 true on the query path: no text language, no parser, and therefore no parse failure that could degrade into an empty result.
+             *
+             *     Bounded, and refused above each bound naming which (FR-146): one formula at most 64 nodes and depth 8; a view at most 16 formulas; a view's formulas at most 256 nodes in total. A reference CYCLE (`a: formula.b + 1`, `b: formula.a + 1`) parses clean and would recurse forever, so the reference graph is validated at write AND at load and a cycle is REFUSED naming its path (FR-148).
+             * @example {
+             *       "days_to_expiry": "(expires - today()).days"
+             *     }
+             */
+            formulas?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Summaries to compute for this view, and per group when grouped.
+             *
+             *     ONE NAME, FIFTEEN FUNCTIONS (founder ruling, FR-150). Obsidian's top-level `summaries` key and its per-view summary map TRANSLATE at import into entries of this list. There is deliberately NO `summaries` key on a view: parity is capability, not key names, and a second spelling for one concept is how two surfaces start disagreeing about which is authoritative.
+             */
+            aggregates?: components["schemas"]["RecordAggregate"][];
+            /**
+             * @description Page size for this view. Clamped at the server cap of 200, with the clamp reported on the response (FR-063).
+             * @example 50
+             */
+            limit?: number;
+            /**
+             * @description The view is stored but MUST NOT be applied; applying it is REFUSED naming the expression in `untranslated` that disabled it (FR-105).
+             *
+             *     THIS IS THE BROADENING PROHIBITION MADE STRUCTURAL, and it is the one import rule that admits no exception: an imported view must never return MORE rows than its original while looking correct. An untranslatable expression in any ROW-SET-AFFECTING position — a filter, anywhere in its tree — disables the view rather than importing it with the clause quietly dropped. The standing example: a base filtering `type == "decision"` AND NOT `inFolder("99-Temp")` AND NOT `inFolder("00-Inbox")`. Drop the two folder clauses and the view still runs, still looks right, and now silently includes every scratch note in the vault.
+             *
+             *     An untranslatable expression in an ANNOTATION position — display config, a summary, an unrenderable `layout` — cannot change which rows appear, so the view imports ENABLED with the loss declared in `untranslated` (FR-106).
+             *
+             *     Omitted is identical to false. Carries no JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: a `default:` makes openapi-typescript promote the field to REQUIRED while oapi-codegen still emits an optional pointer, and the two generated languages then disagree about one field.
+             * @example true
+             */
+            disabled?: boolean;
+            /**
+             * @description Vault-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible; the source is never re-read afterwards (FR-102).
+             * @example CRM/Deals.base
+             */
+            source?: string;
+            /**
+             * @description Expressions from the imported source that could NOT be translated, preserved verbatim (FR-101). Present only on an imported view, and non-empty only when something was genuinely left behind. Never an approximation of the original.
+             *
+             *     UNDER PARITY, EVERY RESIDUAL ENTRY HERE IS A DEFECT TO FILE, NOT AN ACCEPTED LOSS, and the import report must say so in those words (FR-107). The neutral "reported and moved on" posture survives only for genuinely UNDOCUMENTED upstream behaviour, which the report labels as such — the standing example being that Obsidian's documentation never says whether its standard deviation is population or sample, so ours declares its own definition (FR-153) and records the divergence risk by name.
+             * @example [
+             *       "status != \"done\" && (due < now() || priority > 3)"
+             *     ]
+             */
+            untranslated?: string[];
+        };
+        /**
+         * VaultFindRequest
+         * @description A call to `knowledge_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2). It absorbs `record_query`, `record_explain`, `knowledge_search`, `knowledge_tasks` and link-neighbourhood traversal. There is no second retrieval tool, and there is no call shape that returns rows without the verdict on them.
+         *     HOSTED INLINE rather than in its own file because it references the recursive VaultFilterNode by internal `#/components/schemas/` reference — see that schema's note for why a cross-file reference cannot be used there.
+         *     A parameter name this schema does not declare is REFUSED listing the accepted names (FR-022c), never ignored. Silently dropping an argument is how a caller comes to believe a constraint was applied that never was.
+         *     Scope is not negotiable by the caller. Every vault tool resolves through the CALLING AGENT'S workspace (FR-060); notes in a vault mounted only into another workspace are invisible, and that case is deliberately indistinguishable from an empty vault (FR-062) so the error channel cannot be used to probe for what the caller may not see. Scope is resolved BEFORE any refusal is built, so the valid-names list in an error can never disclose a schema outside it.
+         */
+        VaultFindRequest: {
+            /**
+             * @description Free text, ranked (FR-112). Composes with every other parameter: the answer is the INTERSECTION, never a union. When `words` finds nothing the response reports the vocabulary the index actually holds and STOPS there — it does not broaden the query on the caller's behalf (FR-114), because a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
+             * @example pricing
+             */
+            words?: string;
+            /**
+             * @description The record type to search. Unknown → refusal listing the declared types (FR-024), never an empty result.
+             * @example deal
+             */
+            type?: string;
+            /**
+             * @description What sort of row to return. Omitted means `note`.
+             *
+             *     `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+             * @example task
+             * @enum {string}
+             */
+            kind?: "note" | "record" | "task" | "attachment";
+            /** @description A structured filter tree. Applied AFTER `view` when both are given, so a saved view is refined rather than replaced. */
+            filter?: components["schemas"]["VaultFilterNode"];
+            /**
+             * @description A saved view, applied first. Unknown name → refusal listing the saved views in scope.
+             * @example open-pipeline
+             */
+            view?: string;
+            /**
+             * @description A note path or wikilink. Restricts the answer to notes within `hops` link steps of it. It COMPOSES with `words` and `filter` — that composition is the capability worth having, and no system this design surveyed can express it: each has text search OR graph traversal, none composes them.
+             * @example Companies/Acme Ltd.md
+             */
+            near?: string;
+            /**
+             * @description Link steps from `near`. Meaningful only with `near`; omitted means 1. A third hop is REFUSED naming the limit and the remedy (FR-065) rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly.
+             * @example 2
+             */
+            hops?: number;
+            /**
+             * @description Relation properties whose columns to BORROW onto each row (FR-124). A borrowed value renders visibly as borrowed and is never merged into the row's own columns: it is not a property of this record and must never read as one.
+             * @example [
+             *       "company"
+             *     ]
+             */
+            join?: string[];
+            /**
+             * @description Group the answer, outermost first. Two levels (FR-027); grouping by a relation is supported (FR-029); a record holding several values appears in every group it belongs to (FR-028).
+             *
+             *     EACH KEY CARRIES ITS OWN DIRECTION, and that is not decoration. This was a bare list of names, so a saved view whose `grouping` recorded `direction: desc` — written to its file faithfully, and read back faithfully — had nowhere to land in a request, and serving it was REFUSED (records.ServeRefusalGroupDirection) rather than answered with the groups quietly reordered ascending. The refusal was the right call; the absent field was the defect.
+             *
+             *     Omitted direction means `asc`. `desc` is the exact reverse of `asc` over the values, and the ABSENT group sorts last in BOTH directions — see VaultFindGroupBy for what "the values" means per declared type, which is the comparator's answer (R-1) and not a rule invented for grouping.
+             * @example [
+             *       {
+             *         "property": "company"
+             *       },
+             *       {
+             *         "property": "status",
+             *         "direction": "desc"
+             *       }
+             *     ]
+             */
+            group_by?: components["schemas"]["VaultFindGroupBy"][];
+            /**
+             * @description Sort keys in order. Omitted sorts by relevance.
+             *
+             *     An enum sorts LEXICALLY over its case-folded form, so `Won`, `won` and `WON` sort together exactly as they group together (ruling R-E, R-5c); ties on the folded key break on raw bytes so the order is deterministic. There is no declared-position ordinal — a domain order is expressed by prefixing the declared values (`1-lead`, `2-qualified`), which is visible in the operator's own file and does exactly what it appears to do.
+             *
+             *     The sort is computed in Go by the comparator, never by an emitted `ORDER BY` (ruling R-A).
+             */
+            sort?: components["schemas"]["VaultFindSort"][];
+            /**
+             * @description Which properties to render as columns. Omitted uses the schema's own declaration order, so a report reads the way the operator wrote it. Narrowing this changes what is RENDERED, never what is matched.
+             * @example [
+             *       "status",
+             *       "arr"
+             *     ]
+             */
+            select?: string[];
+            /** @description Totals to compute. Each states its own scope in the rendered response; a total that does not say what it covers is a bare number (FR-125). Every total is computed over the FULL EVALUATED SET, never over the rendered page (FR-125a). No total is returned over a refused candidate set. */
+            aggregate?: components["schemas"]["VaultFindAggregate"][];
+            /**
+             * @description Report the plan and EVALUATE NOTHING (FR-073). Omitted means false.
+             *
+             *     An `explain` response names every property the query touches and the index each would be answered from, performs ZERO candidate retrievals, and carries no `index_epoch` — a plan is not a result, so it should not observe an epoch at all. Two `explain` calls over an unchanged schema are byte-identical, including across a corpus mutation, which is what makes the assertion capable of failing against an implementation that quietly evaluates.
+             * @example true
+             */
+            explain?: boolean;
+            /**
+             * @description Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
+             * @example 50
+             */
+            limit?: number;
+            /**
+             * @description Opaque pagination cursor from a previous response. A cursor that cannot be honoured is an ERROR naming the epoch it was issued against (FR-020c), never a silent restart — a silent restart returns page one while the caller believes it is reading page four.
+             * @example c2FnZTI
+             */
+            cursor?: string;
+            /**
+             * @description Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
+             * @example minimal
+             * @enum {string}
+             */
+            detail?: "minimal" | "standard";
+        };
+        /**
+         * VaultFilterNode
+         * @description One node of a `knowledge_find` filter tree (ADR-068 D15.3, spec FR-022, ruling R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf carrying `property`, `op` and `value`. Exactly one form per node; a node that sets both a combinator and a leaf field is REFUSED, never silently resolved to one of them.
+         *     HOSTED INLINE HERE, NOT IN ITS OWN FILE, and the reason is mechanical: this schema is RECURSIVE — `all`, `any` and `not` take VaultFilterNode children — and oapi-codegen v2.7.0 INLINES a cross-file $ref at its use site, so a cross-file SELF-reference expands until the generator dies with a stack overflow. An internal `#/components/schemas/` reference resolves to the named type instead. This is the same exception, for the same reason, that ADR-034 records for the discriminated unions.
+         *     THE OPERATORS ARE SQL'S, AND THAT IS THE WHOLE POINT (ruling R-B, revision 5). They replaced seven we invented — `eq`, `lt`, `lte`, `gt`, `gte`, `contains`, `is_absent` — and the argument is retrieval accuracy rather than style: our vocabulary has appeared in a model's training data zero times and SQL's an enormous number of times, so a model reaching for `LIKE` is recalling where a model reaching for `contains` was guessing.
+         *     BOTH HALVES OF ADR-068 O-3 STILL HOLD, AMENDED NOT OVERTURNED. This is a STRUCTURED OBJECT and there is NO PARSER. Nothing recognises SQL text. A model fluent in SQL that puts `JOIN`, `BETWEEN`, `COALESCE`, a `CASE` or a subquery in the operator position is REFUSED BY NAME, listing the ten supported operators and naming the parameter that does the job instead (FR-022c) — never parsed, never silently dropped, and never answered with an empty result set.
+         *     AND NOTHING HERE IS EVALUATED BY SQLITE (ruling R-A). The properties index narrows candidates on record type, note kind and path prefix; every comparison in this tree is then decided in Go by the tested comparator. Three of spec section 8's rules cannot hold otherwise: SQL's `NOT` is three-valued so every absent row falls out of a negation, SQLite's `LIKE` and `COLLATE NOCASE` fold two of the fourteen case pairs the spec requires and none of the twelve non-ASCII ones, and comparison affinity makes `3 = '3'` answer differently depending on which side is a column.
+         */
+        VaultFilterNode: {
+            /** @description Every child must hold. Conjunction. */
+            all?: components["schemas"]["VaultFilterNode"][];
+            /** @description At least one child must hold. Disjunction. */
+            any?: components["schemas"]["VaultFilterNode"][];
+            /**
+             * @description The child must NOT hold. This is the TREE negation, and it is not a synonym for the `<>` leaf — the distinction is ruled explicitly in spec section 8 R-2 and it decides what happens to records that never said.
+             *
+             *     `{not: {p, "=", v}}` INCLUDES records where `p` is absent (FR-008): "days I did not meditate" must contain the days carrying no value at all, precisely the days being asked about. `{p, "<>", v}` EXCLUDES them, because in SQL `x <> 'v'` over a NULL `x` drops the row, and adopting SQL's names without SQL's semantics is exactly what ruling R-B forbids.
+             *
+             *     A comparison that could not be MADE is not re-admitted by negation either. A non-conforming value (R-4), an unresolved relation (R-8) or an operator no rule defines for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated node as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer, which is the failure this whole surface exists to remove.
+             */
+            not?: components["schemas"]["VaultFilterNode"];
+            /**
+             * @description LEAF FORM. The declared property to compare, resolved against the queried record type's schema and no other (property types are scoped to their record type, D3.3). A name the schema does not declare REJECTS the query with the declared names listed (FR-024) — it MUST NOT return zero records, because a typo and a genuinely empty result look identical to the caller and the typo is far more common.
+             * @example status
+             */
+            property?: string;
+            /**
+             * @description LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly what the engine implements and the section 8 truth table covers — no more and no fewer.
+             *
+             *     `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and element-wise on a `many` property (R-9). The four ordering operators are UNDEFINED against a `many` property and are refused naming the remedy rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its `values` list must be non-empty. `IS NULL` is the one operator an absent operand does not make false, and `IS NOT NULL` is its complement — an empty string, an empty list and a zero are all VALUES, not absence (R-3).
+             * @example =
+             * @enum {string}
+             */
+            op?: "=" | "<>" | "<" | "<=" | ">" | ">=" | "LIKE" | "IN" | "IS NULL" | "IS NOT NULL";
+            /**
+             * @description LEAF FORM, every operator except `IN`, `IS NULL` and `IS NOT NULL`. The operand in LEXICAL form — the same text a frontmatter file would hold — so it is read by exactly the same parser as a record's own value (R-12: the rules apply identically whether a value came from a query literal or from a note).
+             *
+             *     It is a string on the wire for that reason, and the reason is not convenience. A JSON number would arrive already parsed by a JSON decoder into a binary float, at which point a decimal property's exactness is gone before the engine ever sees it. A literal that cannot be read in the property's declared type is REFUSED naming both (FR-022e), never coerced.
+             * @example open
+             */
+            value?: string;
+            /**
+             * @description LEAF FORM, `IN` only. The candidate set, in the same lexical form as `value`. It MUST be non-empty: an empty `IN` list can match nothing, so honouring one would return zero records for a query the caller believes selects something — the silent empty result this surface exists to prevent, arriving through a different door. It is REFUSED instead (FR-022d). A single-element list means `=`.
+             * @example [
+             *       "open",
+             *       "won"
+             *     ]
+             */
+            values?: string[];
+        };
+        /**
+         * VaultFindResponse
+         * @description The answer to `knowledge_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).
+         *     THERE IS NO CALL SHAPE THAT RETURNS ROWS ALONE. `complete`, `counts`, `problems`, `rows`, `totals` and `next` are REQUIRED, and that is the load-bearing decision of this contract. If any were optional a caller could hold a total without the caveats attached to it, a producer could omit them and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention, and conventions are exactly what fail silently.
+         *     THE RENDERING IS PART OF THE CONTRACT, not a presentation detail. This object is projected to COMPACT TEXT for the model, never to JSON: measurement puts the reduction from a JSON schema object to compact text at roughly 91% of the context tokens, and moving results from inline text to a file collapsed agent accuracy from 93.1% to 55.2% — as large a swing as changing the retriever. The projection is fixed:
+         *
+         *       1. COMPLETENESS FIRST, in the header. The verdict precedes the evidence so
+         *          that no conclusion forms before the caveat arrives. A reader must never
+         *          have to reach the bottom of a table to learn the answer was partial.
+         *       2. The query ECHOED AS EXECUTED, so a clamp or a default is visible without
+         *          a second call.
+         *       3. Rows. Borrowed values marked visibly as borrowed, never merged in.
+         *       4. Totals, each stating its scope in the same sentence as its number.
+         *       5. Problems — one record, one reason, one FIX, inline. "value is '50k'
+         *          where a number is required" and not "3 records excluded".
+         *       6. NEXT: addressable calls. In an agentic loop every response is the prompt
+         *          for the next call.
+         *
+         *     A REFUSAL ARRIVES HERE, not as a transport error, and never as an empty success: `refused: true` with no rows and the remedy in `problems`. An out-of-scope query is not an error either — it returns no rows with `complete: true`, deliberately indistinguishable from an empty vault.
+         */
+        VaultFindResponse: {
+            /**
+             * @description REQUIRED. True only when the query covered everything it was asked to cover: nothing excluded for a type violation, no clamp, no refusal, no stale row, no truncated scope, no unavailable index.
+             *
+             *     A response whose `complete` is false and whose `problems` is EMPTY is a defect: either the reason is named or the verdict is wrong.
+             *
+             *     THE ONE STATED EXCEPTION IS WORKSPACE SCOPE. A caller can receive `complete: true` over zero rows while records exist in a vault mounted only into another workspace. That is deliberate and required, and it means the verdict is honest about everything EXCEPT scope. It is written down here rather than left to be discovered, because an unstated exception to a headline guarantee is how a guarantee stops being believed.
+             * @example false
+             */
+            complete: boolean;
+            /**
+             * @description Why the verdict is what it is, ready to render on the header line immediately after it. Empty when `complete` is true.
+             * @example 3 of 17 selected records could not be evaluated
+             */
+            complete_reason?: string;
+            /**
+             * @description REQUIRED. True when the query was refused outright and NO answer was computed — a bound exceeded, a third hop, an unsupported operator, a capability this build does not have. Rows are then empty, no total is returned, and `problems` carries the remedy.
+             *
+             *     Distinct from `complete: false`, which also covers a partial answer that WAS computed. A caller must be able to tell "here is some of it" from "here is none of it, narrow and re-ask" without parsing prose.
+             * @example false
+             */
+            refused: boolean;
+            /** @description REQUIRED. The numbers behind the verdict. */
+            counts: components["schemas"]["VaultFindCounts"];
+            /**
+             * @description REQUIRED. The query AS EXECUTED, including defaults filled in and clamps applied — so a caller sees what actually ran rather than what it sent. Empty only when there was nothing to echo, which no real call produces.
+             * @example type=deal words="pricing" filter=(status = 'open' AND arr >= 50000) limit=50
+             */
+            query_echo: string;
+            /** @description Per-record freshness across the two indexes. ABSENT on an `explain` response, which evaluates nothing and therefore observes no epoch. */
+            index?: components["schemas"]["VaultIndexState"];
+            /** @description REQUIRED. The matched rows in the requested order. Always present — an empty array, never null. */
+            rows: components["schemas"]["VaultFindRow"][];
+            /**
+             * @description Rows that were evaluated and are being reported as existing, but which the byte budget could not render. Absent when nothing was elided. It is stated rather than dropped so the row count on screen never reads as the size of the answer.
+             * @example 5
+             */
+            elided?: number;
+            /**
+             * @description A one-line trace of the elided rows — enough for a reader to see the shape of what was cut without paging. Empty when nothing was elided.
+             * @example 57,000.00 · 56,000.00 · 55,000.00
+             */
+            elided_summary?: string;
+            /** @description Grouped results, present only when the request carried `group_by`. Rows stay in `rows`; groups reference them by path. */
+            groups?: components["schemas"]["VaultFindGroup"][];
+            /** @description REQUIRED. Computed totals, each carrying the scope it covers. Always present — an empty array, never null, so "no totals were asked for" is stated rather than inferred from a missing field. */
+            totals: components["schemas"]["VaultFindTotal"][];
+            /**
+             * @description REQUIRED. Everything the query could not include, and why. Always present — an EMPTY array, never null and never absent, so "no problems" is stated rather than inferred.
+             *
+             *     Each entry names the records affected, the reason, and the FIX. A problem list that says only what went wrong fails the requirement: an exclusion is reported with its remedy in the same line, because the reader's next action is the point of telling them at all.
+             */
+            problems: components["schemas"]["RecordProblem"][];
+            /** @description REQUIRED. Addressable follow-up calls. Always present — an empty array, never null. A response that ends without one forces the model to invent arguments, and an invented property name is the failure the schema check exists to prevent. */
+            next: components["schemas"]["VaultFindAction"][];
+            /** @description On a zero-hit word search, the vocabulary the index actually holds. Reported INSTEAD of broadening the query, never as well as. */
+            nearest_terms?: components["schemas"]["VaultTermCount"][];
+            /** @description Present only on an `explain` response, and then INSTEAD of any evaluation — zero candidate retrievals occur. */
+            plan?: components["schemas"]["VaultFindPlanStep"][];
+            /**
+             * @description Opaque cursor for the next page. Absent means this was the last page.
+             * @example c2FnZTI
+             */
+            next_cursor?: string;
+            /**
+             * @description The page size actually used.
+             * @example 50
+             */
+            limit_applied?: number;
+            /**
+             * @description True when the requested page size exceeded the cap of 200 and was reduced. The clamp is REPORTED, never silent — silent truncation is the incumbent behaviour this design cites as motivating evidence, and shipping our own would be indefensible.
+             * @example false
+             */
+            limit_clamped?: boolean;
+            /**
+             * @description What the caller asked for. Present only when `limit_clamped` is true, so the caller can see exactly what was refused.
+             * @example 5000
+             */
+            limit_requested?: number;
+        };
+        /**
+         * VaultFindSort
+         * @description One sort key (spec 4.1.2, ruling R-E). Computed in Go by the comparator, never by an emitted `ORDER BY` — SQLite's collations fold two of the fourteen case pairs the spec requires and none of the twelve non-ASCII ones, so a sort delegated to the store would order differently from the equality that grouped the same values.
+         */
+        VaultFindSort: {
+            /**
+             * @description The declared property to sort on. Unknown → refusal listing the declared names (FR-024).
+             * @example arr
+             */
+            property: string;
+            /**
+             * @description Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
+             * @example desc
+             * @enum {string}
+             */
+            direction?: "asc" | "desc";
+        };
+        /**
+         * VaultFindGroupBy
+         * @description One grouping key of a knowledge_find request (spec FR-027, FR-018b).
+         *     IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. `group_by` used to be a bare list of property names. A saved view's own `grouping` keys have carried a direction since ADR-068 D24.1, so a view that recorded `DESC` was written to disk faithfully and then REFUSED at serve time (records.ServeRefusalGroupDirection) — the request had nowhere to ask for what the view had recorded. Refusing was right; the missing field was the defect. This is that field.
+         *     Shaped exactly like `sort` (VaultFindSort) — same name kept, same optional `direction`, same "omitted means asc" — because a request that expressed one ordering as objects and the other as bare strings taught every caller two grammars for one idea.
+         */
+        VaultFindGroupBy: {
+            /**
+             * @description The property to group on. Grouping by a relation is supported (FR-029), and a record holding several values appears in EVERY group it belongs to (FR-028) rather than being assigned to one arbitrarily. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+             * @example status
+             */
+            property: string;
+            /**
+             * @description Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+             *
+             *     Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+             *
+             *     `desc` IS THE EXACT REVERSE OF `asc` OVER THE VALUES, and what "the values" means is the comparator's own answer (ruling R-1's comparison domains), never a per-position rule invented for grouping:
+             *
+             *     * `enum` and `text` order LEXICALLY over the case-folded value — `Won`,
+             *       `won` and `WON` order as one, exactly as they GROUP as one (R-5c). An
+             *       enum has NO declared-position ordinal: `desc` on a `status` declared
+             *       `[lead, qualified, won]` returns `won, qualified, lead` because `w` >
+             *       `q` > `l`, and would return them in a different order the moment a
+             *       value were renamed. A domain order is expressed by prefixing the
+             *       declared values (`1-lead`, `2-qualified`), which is visible in the
+             *       operator's own file and does what it appears to do.
+             *     * `integer`, `decimal`, `date` and `datetime` order NATURALLY —
+             *       numerically and chronologically. `desc` over a backlink count returns
+             *       12 before 9; it does not return "9" before "12" because `9` > `1` as
+             *       text.
+             *     * every other declared type (`relation`, `person`, `checkbox`) orders
+             *       lexically over the rendered group label, which is what the group is
+             *       identified BY.
+             *
+             *
+             *     THE ABSENT GROUP SORTS LAST IN BOTH DIRECTIONS. This is a decision, not the comparator's leftover: a record with no value has not got a small value, and it has not got a large one either — absence is outside the order rather than at one end of it. Reversing it into first place on `desc` would put "nobody recorded this" exactly where a reader looking for the biggest group is looking. It is the same rule row sorting already applies (assemble.go's compareByProperty), stated once and applied to both.
+             * @example desc
+             * @enum {string}
+             */
+            direction?: "asc" | "desc";
+        };
+        /**
+         * VaultFindAggregate
+         * @description One total to compute over the matched set (spec FR-123, FR-125, FR-125a, and FR-150 to FR-155 for the fifteen ops).
+         *     ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian's "summaries" are these ops; there is no separate `summaries` key on this surface or on a view. The op set here is byte-identical in spelling to RecordAggregate's, deliberately — pkg/records/view_find_bridge.go maps a saved view's summaries onto this request by copying the op string, and two spellings for one function is how that mapping starts lying.
+         *     Precision is DECLARED, not avoided (FR-152): `avg`, `median` and `stddev` are computed exactly in rationals and rendered at the property's declared scale + 2, round-half-even, with the response labelling the value ROUNDED. `stddev` is POPULATION standard deviation and the label says so (FR-153).
+         *     `median` and `unique` are the two population-class ops (FR-151): they buffer ONE COLUMN of values, never rows, and abort mid-scan at B3's bound — 100,000 buffered values or 8 MB, whichever first — naming the count reached and the remedy. No total is ever computed over a truncated set (FR-154); a refused bound returns no total at all, never a partial one.
+         */
+        VaultFindAggregate: {
+            /**
+             * @description The reduction; fifteen, and the list is closed (FR-150). `count` needs no property and counts evaluated rows; every other op requires one.
+             *
+             *     Number domain (`integer` and `decimal` are ONE comparison domain, R-1): `sum`, `avg`, `median`, `stddev`, `min`, `max`, `range`. Date domain: `earliest`, `latest`, `min`, `max`, and `range`, which renders as a DURATION. Checkbox domain (FR-004c): `checked`, `unchecked` — absent is counted by neither, so their sum is not the row count. Any type: `empty`, `filled`, `unique`; `unique` counts DISTINCT values under the comparator's own case folding (R-5/R-D), so `Won` and `won` are one.
+             *
+             *     An op the property's declared type does not define is REFUSED naming the ops that type does define (FR-155) — never answered with a zero.
+             * @example sum
+             * @enum {string}
+             */
+            op: "count" | "sum" | "min" | "max" | "avg" | "median" | "stddev" | "range" | "earliest" | "latest" | "checked" | "unchecked" | "empty" | "filled" | "unique";
+            /**
+             * @description The property to reduce. Required for every op except `count`, which counts rows rather than values and forbids it. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+             * @example arr
+             */
+            property?: string;
+        };
+        /**
+         * VaultFindRow
+         * @description One row of a `knowledge_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
+         *     A row is ONE REAL THING AT A PATH — a note, or a checkbox line within one. The checkbox case is a deliberate, narrow amendment rather than a silent absorption: `kind: task` returns many rows per file, so a task row carries `line` and `status` and renders with its line number, and a reader is therefore never able to mistake it for the note that contains it.
+         */
+        VaultFindRow: {
+            /**
+             * @description The record identifier, byte-exact and NEVER case-folded: `CO-0142` and `co-0142` are two distinct records (R-8). Absent on an ordinary note, which is the majority of every real vault and not an error (FR-005) — such a row is addressed by `path`.
+             * @example DEAL-0117
+             */
+            id?: string;
+            /**
+             * @description The vault-relative path. Always present, because it is what the caller passes to `knowledge_read` next, and a row a caller cannot address is a row that ends the loop.
+             * @example Deals/DEAL-0117.md
+             */
+            path: string;
+            /**
+             * @description The note's display title.
+             * @example Acme renewal FY27
+             */
+            title: string;
+            /**
+             * @description TASK ROWS ONLY. The 1-based line of the checkbox, counted from the first byte of the file including any frontmatter block, because that is the line the operator's editor shows.
+             * @example 42
+             */
+            line?: number;
+            /**
+             * @description TASK ROWS ONLY. The checkbox state.
+             * @example open
+             * @enum {string}
+             */
+            status?: "open" | "done";
+            /**
+             * @description TASK ROWS ONLY. The checkbox text, trimmed.
+             * @example chase the renewal quote
+             */
+            text?: string;
+            /** @description The row's OWN columns, in `select` order or the schema's declaration order. Always present — an empty array, never null. */
+            cells: components["schemas"]["VaultFindCell"][];
+            /** @description Values borrowed through a relation, rendered visibly as borrowed and never merged into `cells`. Always present — an empty array, never null. */
+            joins: components["schemas"]["VaultFindJoin"][];
+            /**
+             * @description True when this row's `source_hash` does not agree with the text index's, or when either side holds no hash at all. Omitted means the two indexes agree.
+             *
+             *     The reason a stale row is RETURNED and FLAGGED rather than dropped is that dropping it would make the answer quietly smaller with nothing saying so. A flagged row moves the response's completeness verdict to `no` and appears in `problems` by name.
+             * @example true
+             */
+            stale?: boolean;
+        };
+        /**
+         * VaultFindCell
+         * @description One rendered column of one row (spec 4.2). The value is TEXT, exactly as it will be shown, and never a JSON number — a decimal that round-tripped through a binary float would render digits the note does not contain, and the whole type system exists to stop that.
+         *     A `decimal` renders at its property's DECLARED scale where the schema declares one, and otherwise at the value's own scale as written in the note. Thousands separators are a choice of the compact-text projection and are never part of a stored or compared value.
+         */
+        VaultFindCell: {
+            /** @example status */
+            property: string;
+            /**
+             * @description The rendered value. An EMPTY STRING is a legitimate rendering — of an empty string property, or of a property the record leaves absent — so a renderer must not treat empty as "omit this cell".
+             * @example open
+             */
+            value: string;
+        };
+        /**
+         * VaultFindJoin
+         * @description Columns BORROWED onto a row through a relation (spec FR-124).
+         *     It is a separate structure rather than extra cells on the row because the rendering rule is a correctness rule, not a layout preference: a borrowed value MUST render visibly as borrowed — `company [[Acme Ltd]]: status active` — and must never be merged into the row's own columns. It is not a property of this record, and a reader who takes it for one has been told something false about the record in front of them.
+         */
+        VaultFindJoin: {
+            /**
+             * @description The relation property the values were borrowed through.
+             * @example company
+             */
+            relation: string;
+            /**
+             * @description The related note, as written — the wikilink the row points at.
+             * @example [[Acme Ltd]]
+             */
+            target: string;
+            /** @description The borrowed columns. Always present — an empty array, never null — so a relation that resolved to a note carrying none of the requested properties still renders as a resolved relation rather than vanishing. */
+            cells: components["schemas"]["VaultFindCell"][];
+        };
+        /**
+         * VaultFindGroup
+         * @description One group of a grouped answer (spec FR-027, FR-028, FR-029).
+         *     A record holding SEVERAL values of the grouped property appears in EVERY group it belongs to (FR-028), so the group counts legitimately sum to more than the row count. That is why each group states its own count rather than leaving a reader to add them up: the sum of the parts is not the size of the whole, and a rendering that implied otherwise would be arithmetically wrong.
+         */
+        VaultFindGroup: {
+            /**
+             * @description The property this level groups by.
+             * @example status
+             */
+            property: string;
+            /**
+             * @description The group's value, rendered. An EMPTY key is the ABSENT group — the records that carry no value for this property at all. It is a real group and it is labelled as absence rather than dropped: the records nobody recorded a value for are frequently the ones being asked about.
+             * @example open
+             */
+            key: string;
+            /**
+             * @description True when this group holds the records where the property is ABSENT, which `key` alone cannot express — an empty string is itself a value (R-3) and must not collide with absence.
+             * @example false
+             */
+            absent?: boolean;
+            /**
+             * @description Evaluated records in this group.
+             * @example 12
+             */
+            count: number;
+            /** @description The member rows, by path. Always present — an empty array, never null. Groups reference rows rather than repeating them, so a record that landed in three groups is still rendered once. */
+            paths: string[];
+            /**
+             * @description The second grouping level, when `group_by` named two.
+             *
+             *     It refs a DISTINCT, childless type rather than this one. That is deliberate and it is not a codegen workaround: two levels is the stated limit (FR-027), and a self-referential schema would advertise unbounded nesting — a depth the engine refuses and no caller can reach. A contract should not describe a shape the system will not produce.
+             */
+            subgroups?: components["schemas"]["VaultFindSubgroup"][];
+        };
+        /**
+         * VaultFindSubgroup
+         * @description The INNER level of a two-level grouping (spec FR-027).
+         *     It carries no children of its own, which is how the two-level limit is expressed in the contract rather than only in the engine. A record holding several values of the grouped property appears in every subgroup it belongs to (FR-028), so subgroup counts can sum to more than the parent's count — which is why each states its own.
+         */
+        VaultFindSubgroup: {
+            /**
+             * @description The property this level groups by.
+             * @example status
+             */
+            property: string;
+            /**
+             * @description The group's value, rendered. An empty key is the ABSENT group; read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+             * @example open
+             */
+            key: string;
+            /**
+             * @description True when this group holds the records where the property is absent.
+             * @example false
+             */
+            absent?: boolean;
+            /**
+             * @description Evaluated records in this subgroup.
+             * @example 4
+             */
+            count: number;
+            /** @description The member rows, by path. Always present — an empty array, never null. */
+            paths: string[];
+        };
+        /**
+         * VaultFindTotal
+         * @description One computed total, WITH THE SCOPE IT COVERS (spec FR-125, FR-125a).
+         *     `scope` is not decoration and it is not optional. A total that does not say what it covers is a bare number, and a bare number over a partially-evaluated set is the confidently-wrong answer this whole surface exists to remove. The scope clause is rendered in the SAME SENTENCE as the value, so a reader cannot acquire the number without the qualification.
+         *     The value is computed over the FULL EVALUATED SET, never over the rendered page. Those two counts genuinely differ whenever the byte budget elides rows, and a design where they cannot differ is a design whose test for this cannot fail.
+         *     ONE TOTAL PER UNIT VALUE (view-kinds-design-2026-09-03 §3 G2, D7). A number property the record type pairs with a companion unit (PropertyDef.unit_property) is reduced ONCE PER DISTINCT UNIT VALUE and NEVER across units, so ONE requested aggregate yields N of these — one per unit, each carrying its own `unit`, its own count and its own scope clause. No field anywhere can hold a combined figure: 100.50 SGD + 200.00 EUR is a number in no currency, stated with the same confidence as a correct one.
+         *     A number with NO companion unit still yields exactly ONE entry with `unit` absent, unchanged in shape and value from before D7. The two cases are told apart by the FIELD'S PRESENCE, never by a sentinel — an empty string is a legitimate unit value.
+         */
+        VaultFindTotal: {
+            /**
+             * @description The reduction this total came from, echoed back. Identical to VaultFindAggregate's list (FR-150's fifteen) and required to stay so: the SPA validates responses against the generated Zod schema and drops what fails, so an op the request can ask for but the response cannot name is a correct answer that disappears silently on its way to a reader.
+             * @example sum
+             * @enum {string}
+             */
+            op: "count" | "sum" | "min" | "max" | "avg" | "median" | "stddev" | "range" | "earliest" | "latest" | "checked" | "unchecked" | "empty" | "filled" | "unique";
+            /**
+             * @description The total as named in the request, e.g. `sum(arr)`.
+             * @example sum(arr)
+             */
+            label: string;
+            /**
+             * @description The exact result as text. Never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed. EMPTY when `refused` is true — a refused total carries no value, rather than a zero a reader would take for an answer.
+             * @example 1,051,000.00
+             */
+            value: string;
+            /**
+             * @description What the number covers, ready to render immediately after it.
+             * @example over 14 of 14 evaluated rows (12 shown)
+             */
+            scope: string;
+            /**
+             * @description The unit value this total covers (e.g. "SGD"). ABSENT when the reduced property declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped, which is exactly when several of these share one `label`.
+             *
+             *     The same field, with the same meaning, as ViewUnitTotal.unit: one rule (G2), one vocabulary, whichever surface answers.
+             * @example SGD
+             */
+            unit?: string;
+            /**
+             * @description The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+             *
+             *     It travels WITH the unit value because the two are one fact: a reader that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with.
+             * @example currency
+             */
+            unit_property?: string;
+            /**
+             * @description True when no total could be returned — over a refused candidate set, or over a property whose values could not all be read. A refused total is PRESENT and marked, never omitted: an absent total reads as "there was nothing to add up".
+             * @example false
+             */
+            refused?: boolean;
+        };
+        /**
+         * VaultFindAction
+         * @description One addressable next call (spec FR-126).
+         *     In an agentic loop every response is the prompt for the next call, so a response that ends without one forces the model to invent arguments — and an invented property name is the failure the whole schema check exists to prevent. Each action is a CALL the caller can issue verbatim, not a description of one.
+         */
+        VaultFindAction: {
+            /**
+             * @description What this call is for, in one word where possible — `page`, `narrow`, `widen`, `fix`, `retry`.
+             * @example narrow
+             */
+            label: string;
+            /**
+             * @description The call, ready to issue.
+             * @example knowledge_find type=deal filter=(status = 'open' AND arr >= 100000)
+             */
+            call: string;
+        };
+        /**
+         * VaultFindCounts
+         * @description The four numbers a completeness verdict is built from (spec FR-121, FR-125a).
+         *     They are separate fields because they are separate facts and they routinely disagree. A design in which they cannot disagree is a design whose test for FR-125a cannot fail — which is precisely the defect an earlier revision of the worked example shipped, stating "14 evaluated" in its header and "over 12 of 12 rows" in its total, the same number twice.
+         *     selected >= evaluated >= shown, always. `selected - evaluated` is the count of records that were narrowed to but could not be read, and every one of them is named in `problems`.
+         */
+        VaultFindCounts: {
+            /**
+             * @description Records the narrowing predicates selected — the candidate population, before any comparison was made.
+             * @example 17
+             */
+            selected: number;
+            /**
+             * @description Records the comparator could actually read and decide on. Every total is computed over THIS set.
+             * @example 14
+             */
+            evaluated: number;
+            /**
+             * @description Rows the byte budget allowed into this response. Never larger than `evaluated`, and smaller whenever the budget bit.
+             * @example 12
+             */
+            shown: number;
+        };
+        /**
+         * VaultFindPlanStep
+         * @description One line of an `explain` plan (spec FR-073, AC-F3).
+         *     The plan names EVERY property the query touches and the index each will be answered from. That specificity is the point: a criterion that only asked for "a plan" passed for a constant-returning stub, so the plan must be derived from the actual request and schema, and it must be BYTE-IDENTICAL across a corpus mutation chosen to change it if evaluation were happening.
+         */
+        VaultFindPlanStep: {
+            /**
+             * @description Which phase of the pipeline this step describes.
+             * @example compare
+             * @enum {string}
+             */
+            stage: "scope" | "narrow" | "retrieve" | "compare" | "join" | "group" | "sort" | "aggregate" | "render";
+            /**
+             * @description The property this step touches, when it touches one.
+             * @example arr
+             */
+            property?: string;
+            /**
+             * @description Where the step is answered from. `properties_index` NARROWS — record type, note kind, path prefix, nothing else. `go_comparator` DECIDES every comparison. A plan that shows a comparison sourced from `properties_index` is reporting a ruling violation.
+             * @example go_comparator
+             * @enum {string}
+             */
+            source?: "properties_index" | "text_index" | "go_comparator" | "schema" | "none";
+            /**
+             * @description What the step does, in one clause.
+             * @example arr >= 50000 evaluated in Go over the decimal column
+             */
+            detail: string;
+        };
+        /**
+         * VaultIndexState
+         * @description What the two indexes say about the rows THIS response returned (spec FR-020c, FR-020c1, ADR-068 D16.5).
+         *     Freshness is PER RETURNED RECORD, not per index. Each row's `source_hash` from the properties index is compared against the bleve document's stored `source_hash`; a row that fails moves to `problems` and the completeness verdict becomes `no`.
+         *     The reason a disagreement is reported as "the two indexes disagree" and never as "the properties index is stale" is that the comparison establishes DISAGREEMENT, not which side is behind. Claiming the second is a precision the mechanism does not have.
+         *     An EMPTY hash on either side is UNKNOWN freshness, which is flagged — never assumed fresh. That case is real rather than theoretical: an attachment is deliberately indexed with no hash, because its bytes must not be opened.
+         *     The count covers WHAT THE QUERY RETURNED, NOT WHAT IT DID NOT (FR-020c1). This is one of exactly two stated exceptions to the headline guarantee that a response names everything it excluded; the other is workspace scope.
+         */
+        VaultIndexState: {
+            /**
+             * @description Rows in this response whose freshness was checked.
+             * @example 12
+             */
+            returned: number;
+            /**
+             * @description Of those, how many had matching hashes on both sides. Equal to `returned` in the healthy case; anything less means named rows are in `problems`.
+             * @example 12
+             */
+            agreeing: number;
+            /**
+             * Format: int64
+             * @description The properties index's generation counter, which a cursor is issued against. ABSENT on an `explain` response: explain evaluates nothing, so it observes no epoch, and two explain calls over an unchanged schema are byte-identical.
+             * @example 8814
+             */
+            epoch?: number;
+        };
+        /**
+         * VaultTermCount
+         * @description One term the text index actually holds, with its document frequency (spec FR-114, FR-115).
+         *     It is what a zero-hit answer reports INSTEAD of broadening the query. The system states the vocabulary it has and stops: a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
+         */
+        VaultTermCount: {
+            /** @example prospect */
+            term: string;
+            /**
+             * @description How many indexed notes contain it.
+             * @example 412
+             */
+            documents: number;
+        };
+        /**
+         * VaultSearchRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/knowledge/find — the HUMAN vault search (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text, records matched by their typed property values, and saved views matched by name or label.
+         *     It runs over the SAME engine the agent's knowledge_find tool uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour rather than standing up a second search path.
+         *     Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace, and a collection outside that scope yields an EMPTY result set rather than a permission error — so a caller can never use the error channel to probe for collections it may not see.
+         */
+        VaultSearchRequest: {
+            /**
+             * @description Free-text query, matched against note bodies, record properties and view names.
+             * @example landlock seccomp fallback
+             */
+            query: string;
+            /**
+             * @description The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description Maximum hits to return PER KIND (notes, records and views are counted separately). A value above the server cap is CLAMPED, not rejected.
+             * @default 20
+             * @example 20
+             */
+            limit: number;
+        };
+        /**
+         * VaultSearchResponse
+         * @description The human vault search result (library-b-c-design-2026-09-07 §C1): three grouped hit lists for one query, plus an honest completeness verdict.
+         *     An empty result is EMPTY, not an error — every hit array is always present and may be empty. When the index is not ready (never built, or still catching up with the files on disk), `complete` is false and `complete_reason` carries the engine's freshness signal, so the caller can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns this same empty-but-complete shape.
+         */
+        VaultSearchResponse: {
+            /**
+             * @description The collection this result covers, echoed from the request.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description True only when the search covered the whole vault: the index was built, current, and no kind's result was clamped or refused. False whenever the index is not ready — see complete_reason.
+             * @example true
+             */
+            complete: boolean;
+            /**
+             * @description Why the verdict is false, ready to render (e.g. "the text index has never finished indexing this vault — it currently reflects 3 of 68 files…"). Absent when complete is true.
+             * @example the text index has never finished indexing this vault
+             */
+            complete_reason?: string;
+            /** @description Notes matched by body text. Always present — an empty array, never null. */
+            notes: components["schemas"]["VaultSearchNoteHit"][];
+            /** @description Records matched by their typed property values. Always present — an empty array, never null. */
+            records: components["schemas"]["VaultSearchRecordHit"][];
+            /** @description Saved views whose name or label matched. Always present — an empty array, never null. */
+            views: components["schemas"]["VaultSearchViewHit"][];
+        };
+        /**
+         * VaultSearchNoteHit
+         * @description One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine (hits arrive in that engine's relevance order); the snippet is a render-time excerpt of the note as it is on disk.
+         */
+        VaultSearchNoteHit: {
+            /**
+             * @description Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty.
+             * @example Sandboxing
+             */
+            title: string;
+            /**
+             * @description A short excerpt of the note body around the first matched term, read from the file at query time. ABSENT when no term could be located in the current file (the match may have moved, or the file could not be read) — the hit is still returned with path and title rather than fabricating an excerpt or dropping the result.
+             * @example …Landlock is per-thread and inherited, so the gateway and its children…
+             */
+            snippet?: string;
+        };
+        /**
+         * VaultSearchRecordHit
+         * @description One record matched by the query (library-b-c-design-2026-09-07 §C1). A record is a note that declares a record type; its typed property values are carried as cells so the caller can see WHICH values matched without a second read.
+         */
+        VaultSearchRecordHit: {
+            /**
+             * @description Collection-relative path of the matched record note.
+             * @example crm/acme.md
+             */
+            path: string;
+            /**
+             * @description The record note's display title.
+             * @example Acme Corp
+             */
+            title: string;
+            /**
+             * @description The record identifier, byte-exact and never case-folded. Absent on a record note that declares no id.
+             * @example CO-0142
+             */
+            id?: string;
+            /**
+             * @description The declared record type, when the row resolved one.
+             * @example company
+             */
+            record_type?: string;
+            /** @description The record's rendered typed property values, in the engine's column order. Always present — an empty array, never null. */
+            cells: components["schemas"]["VaultFindCell"][];
+        };
+        /**
+         * VaultSearchViewHit
+         * @description One saved view (or imported base view) whose name or label matched the query (library-b-c-design-2026-09-07 §C1). Opening it evaluates the view — the same result the GET .../knowledge/view endpoint returns.
+         */
+        VaultSearchViewHit: {
+            /**
+             * @description The view's identifier, passed VERBATIM to GET .../knowledge/view.
+             * @example open-deals
+             */
+            view: string;
+            /**
+             * @description The view's display label — its declared label, falling back to its name.
+             * @example Open deals
+             */
+            label: string;
+            /**
+             * @description The view's declared kind, when it has one (table, board, gallery, …).
+             * @example table
+             */
+            kind?: string;
+            /**
+             * @description The record type the view is scoped to, when it declares one.
+             * @example deal
+             */
+            type?: string;
+        };
+        /**
+         * ValidationReport
+         * @description The result of running the schema across records (ADR-068 D15, record_validate).
+         *     Its purpose is to turn "the view looks wrong" into a clearable worklist: every failure named per record, with the reason and the expected shape.
+         *     `complete` and `problems` are REQUIRED for the same structural reason they are on RecordQueryResponse: a validation run that could not cover everything it was asked to cover, and does not say so, is worse than no validation at all — it certifies a corpus nobody checked. An empty `problems` array with `complete: true` is the only combination that means "this corpus is clean".
+         */
+        ValidationReport: {
+            /**
+             * @description REQUIRED. True only when every record of every requested type within scope was checked. False when scope resolution was itself incomplete (FR-062a), when a bound stopped the run, or when a schema could not be loaded — with the reason in `problems`.
+             * @example false
+             */
+            complete: boolean;
+            /** @description REQUIRED. Every finding, named per record with the reason and, where applicable, the expected shape. Always present — an EMPTY ARRAY when the corpus is clean, never null and never absent. */
+            problems: components["schemas"]["RecordProblem"][];
+            /**
+             * Format: int64
+             * @description How many records were actually examined. Stated so a clean report over zero records cannot be mistaken for a clean report over the corpus.
+             * @example 63
+             */
+            records_checked: number;
+            /**
+             * Format: int64
+             * @description How many record types were examined.
+             * @example 4
+             */
+            types_checked: number;
+            /**
+             * @description The record types examined, by name. Present so the caller can see what the run covered without inferring it from the findings.
+             * @example [
+             *       "company",
+             *       "deal"
+             *     ]
+             */
+            types?: string[];
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
@@ -9358,15 +12439,17 @@ export interface components {
         };
         /**
          * Notification
-         * @description A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
          */
         Notification: {
             id: string;
             /**
              * @description The event class. Extensible; consumers must tolerate unknown values.
+             *
+             *     "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
              * @enum {string}
              */
-            type: "schedule_failed";
+            type: "schedule_failed" | "knowledge_drift";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;
@@ -17838,6 +20921,38 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    putLibraryContentBinary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryBinaryContentRequest"];
+            };
+        };
+        responses: {
+            /** @description The written file's updated entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     uploadLibraryFiles: {
         parameters: {
             query?: {
@@ -17921,6 +21036,39 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    createVault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateVaultRequest"];
+            };
+        };
+        responses: {
+            /** @description The vault's directory entry. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     renameLibraryEntry: {
         parameters: {
             query?: never;
@@ -17985,6 +21133,333 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    mintLibraryPreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryPreviewTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token minted. The caller should put url into an iframe src and drive its expiry notice from expires_at. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryPreviewTokenResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getLibraryInlineDisposition: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the file to classify.
+                 * @example reports/q3/index.html
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How this file may be displayed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryInlineDisposition"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeBaseInfo: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the folder to test. Use "" or "." for the work-tree root.
+                 * @example notes/vault
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detection result for this folder. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseInfo"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    searchKnowledgeBase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Hits and the incompleteness statement qualifying them. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeSearchResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    findVault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VaultSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description The three grouped hit lists and the completeness verdict. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultSearchResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeGraph: {
+        parameters: {
+            query: {
+                /**
+                 * @description The KnowledgeBaseInfo.collection_id to query.
+                 * @example kb_3d1c9a7e5b2f4806
+                 */
+                collection_id: string;
+                /**
+                 * @description Which graph query to run.
+                 * @example backlinks
+                 */
+                kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
+                /**
+                 * @description Collection-relative path of the note the query is about. Required for links, backlinks and neighbourhood; ignored for unresolved and orphans, which are collection-wide.
+                 * @example architecture/sandboxing.md
+                 */
+                path?: string;
+                /**
+                 * @description Maximum hops for a neighbourhood query. Clamped to the server bound; the value actually used is echoed as hop_limit_applied.
+                 * @example 2
+                 */
+                hops?: number;
+                /**
+                 * @description Maximum nodes in the response. Clamped to the server bound; the value actually used is echoed as node_limit_applied.
+                 * @example 200
+                 */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The selected subgraph, with whatever the walk skipped. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeGraphResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeOutline: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the markdown file.
+                 * @example notes/vault/architecture/sandboxing.md
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's headings in document order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeOutline"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeBaseViews: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the .base file.
+                 * @example notes/vault/CRM/Invoices.base
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The views imported from that base file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseViews"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeViewResult: {
+        parameters: {
+            query: {
+                /**
+                 * @description The KnowledgeBaseInfo.collection_id holding the view.
+                 * @example kb_3d1c9a7e5b2f4806
+                 */
+                collection_id: string;
+                /**
+                 * @description The saved view's name, exactly as declared.
+                 * @example unpaid--by-client
+                 */
+                view: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The evaluated view, or the named reason it cannot answer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewResult"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -18564,10 +22039,86 @@ export type LibraryEntry = components["schemas"]["LibraryEntry"];
 export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
+export type LibraryBinaryContentRequest = components["schemas"]["LibraryBinaryContentRequest"];
+export type CreateVaultRequest = components["schemas"]["CreateVaultRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
 export type LibraryTransferRequest = components["schemas"]["LibraryTransferRequest"];
 export type LibraryMkdirRequest = components["schemas"]["LibraryMkdirRequest"];
+export type LibraryInlineDisposition = components["schemas"]["LibraryInlineDisposition"];
+export type LibraryPreviewTokenRequest = components["schemas"]["LibraryPreviewTokenRequest"];
+export type LibraryPreviewTokenResponse = components["schemas"]["LibraryPreviewTokenResponse"];
+export type KnowledgeBaseInfo = components["schemas"]["KnowledgeBaseInfo"];
+export type KnowledgeSearchRequest = components["schemas"]["KnowledgeSearchRequest"];
+export type KnowledgeSearchResponse = components["schemas"]["KnowledgeSearchResponse"];
+export type KnowledgeSearchHit = components["schemas"]["KnowledgeSearchHit"];
+export type KnowledgeSearchIncompleteness = components["schemas"]["KnowledgeSearchIncompleteness"];
+export type KnowledgeGraphResponse = components["schemas"]["KnowledgeGraphResponse"];
+export type KnowledgeGraphNode = components["schemas"]["KnowledgeGraphNode"];
+export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdge"];
+export type KnowledgeGraphSkip = components["schemas"]["KnowledgeGraphSkip"];
+export type KnowledgeBaseViews = components["schemas"]["KnowledgeBaseViews"];
+export type KnowledgeBaseView = components["schemas"]["KnowledgeBaseView"];
+export type KnowledgeOutline = components["schemas"]["KnowledgeOutline"];
+export type KnowledgeOutlineHeading = components["schemas"]["KnowledgeOutlineHeading"];
+export type KnowledgeConflictError = components["schemas"]["KnowledgeConflictError"];
+export type KnowledgeMountConflictError = components["schemas"]["KnowledgeMountConflictError"];
+export type RecordSchema = components["schemas"]["RecordSchema"];
+export type RecordType = components["schemas"]["RecordType"];
+export type PropertyDef = components["schemas"]["PropertyDef"];
+export type EnumValueDef = components["schemas"]["EnumValueDef"];
+export type VaultRecord = components["schemas"]["VaultRecord"];
+export type RecordPropertyValue = components["schemas"]["RecordPropertyValue"];
+export type RecordValue = components["schemas"]["RecordValue"];
+export type RecordRef = components["schemas"]["RecordRef"];
+export type RecordQueryRequest = components["schemas"]["RecordQueryRequest"];
+export type RecordQueryResponse = components["schemas"]["RecordQueryResponse"];
+export type RecordFilter = components["schemas"]["RecordFilter"];
+export type RecordSort = components["schemas"]["RecordSort"];
+export type RecordAggregate = components["schemas"]["RecordAggregate"];
+export type RecordAggregateResult = components["schemas"]["RecordAggregateResult"];
+export type RecordGroup = components["schemas"]["RecordGroup"];
+export type RecordGroupKey = components["schemas"]["RecordGroupKey"];
+export type RecordProblem = components["schemas"]["RecordProblem"];
+export type RecordWriteRequest = components["schemas"]["RecordWriteRequest"];
+export type RelationWriteRequest = components["schemas"]["RelationWriteRequest"];
+export type ViewGroupBy = components["schemas"]["ViewGroupBy"];
+export type ViewPropertyConfig = components["schemas"]["ViewPropertyConfig"];
+export type ViewPart = components["schemas"]["ViewPart"];
+export type ViewPartAggregate = components["schemas"]["ViewPartAggregate"];
+export type ViewResult = components["schemas"]["ViewResult"];
+export type ViewResultPart = components["schemas"]["ViewResultPart"];
+export type ViewResultGroup = components["schemas"]["ViewResultGroup"];
+export type ViewUnitTotal = components["schemas"]["ViewUnitTotal"];
+export type ViewResultSeries = components["schemas"]["ViewResultSeries"];
+export type ViewResultPoint = components["schemas"]["ViewResultPoint"];
+export type ViewResultCrosstab = components["schemas"]["ViewResultCrosstab"];
+export type ViewResultCrosstabCell = components["schemas"]["ViewResultCrosstabCell"];
+export type ViewResultRefusal = components["schemas"]["ViewResultRefusal"];
+export type ViewDef = components["schemas"]["ViewDef"];
+export type VaultFindRequest = components["schemas"]["VaultFindRequest"];
+export type VaultFilterNode = components["schemas"]["VaultFilterNode"];
+export type VaultFindResponse = components["schemas"]["VaultFindResponse"];
+export type VaultFindSort = components["schemas"]["VaultFindSort"];
+export type VaultFindGroupBy = components["schemas"]["VaultFindGroupBy"];
+export type VaultFindAggregate = components["schemas"]["VaultFindAggregate"];
+export type VaultFindRow = components["schemas"]["VaultFindRow"];
+export type VaultFindCell = components["schemas"]["VaultFindCell"];
+export type VaultFindJoin = components["schemas"]["VaultFindJoin"];
+export type VaultFindGroup = components["schemas"]["VaultFindGroup"];
+export type VaultFindSubgroup = components["schemas"]["VaultFindSubgroup"];
+export type VaultFindTotal = components["schemas"]["VaultFindTotal"];
+export type VaultFindAction = components["schemas"]["VaultFindAction"];
+export type VaultFindCounts = components["schemas"]["VaultFindCounts"];
+export type VaultFindPlanStep = components["schemas"]["VaultFindPlanStep"];
+export type VaultIndexState = components["schemas"]["VaultIndexState"];
+export type VaultTermCount = components["schemas"]["VaultTermCount"];
+export type VaultSearchRequest = components["schemas"]["VaultSearchRequest"];
+export type VaultSearchResponse = components["schemas"]["VaultSearchResponse"];
+export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];
+export type VaultSearchRecordHit = components["schemas"]["VaultSearchRecordHit"];
+export type VaultSearchViewHit = components["schemas"]["VaultSearchViewHit"];
+export type ValidationReport = components["schemas"]["ValidationReport"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];

@@ -1,0 +1,19 @@
+filters:
+  and:
+    - type == "task"
+formulas:
+  days_until_due: if(due, (date(due) - today()).days, "")
+properties:
+  formula.days_until_due:
+    displayName: Days Until Due
+views:
+  - type: table
+    name: Due Within Seven Days
+    filters:
+      and:
+        - formula.days_until_due >= 0
+        - formula.days_until_due <= 7
+    order:
+      - file.name
+      - due
+      - formula.days_until_due

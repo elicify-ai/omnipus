@@ -1,0 +1,79 @@
+title: RelationWriteRequest
+description: >
+  A change to one relation property, through THREE DISTINCT VERBS (ADR-068
+  D15, FR-045).
+
+  `replace` must be named explicitly, and that is the entire point of this
+  type existing separately from RecordWriteRequest. The incumbent offers only
+  replace, so the ordinary read-then-write pattern — read the list, append,
+  write it back — deletes every relation added by anyone else in between and
+  returns success. Making add and remove first-class means the common case
+  never has to send the whole list, and making replace a named verb means
+  clearing a list is something a caller did on purpose.
+
+  A relation is stored ONCE, on one side, as a quoted wikilink (D5.1). The
+  inverse is derived from the index and is never written to any file (FR-032);
+  writing the reverse direction is not something this request can do, and not
+  something anyone needs to remember to do.
+type: object
+additionalProperties: false
+required:
+  - id
+  - version_token
+  - property
+  - op
+  - targets
+properties:
+  id:
+    type: string
+    minLength: 1
+    description: The record whose relation property is being changed.
+    example: "DE-0007"
+  version_token:
+    type: string
+    minLength: 1
+    description: >
+      ADR-067 D14's opaque content-hash token for that record. A stale token is
+      REFUSED and the refusal AUDITED (FR-043, FR-044).
+    example: "sha256:3d1c9a7e5b2f4806"
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The relation or person property to change. Must be declared as type
+      "relation" or "person" in the record type's schema; anything else is
+      rejected with the expected shape named. Declared cardinality is enforced
+      (FR-035) — adding a second target to a scalar relation is refused.
+    example: "company"
+  op:
+    type: string
+    enum:
+      - add
+      - remove
+      - replace
+    description: >
+      "add" — add the targets, leaving existing ones in place. Adding a target
+      already present is a no-op, not a duplicate.
+      "remove" — remove the targets, leaving the rest in place. Removing a
+      target that is not present is a no-op, not an error.
+      "replace" — the existing targets are DISCARDED and replaced by
+      `targets`. An empty `targets` clears the property. Named explicitly so
+      that destroying a list is never the accidental outcome of a read-modify-
+      write (FR-045).
+    example: "add"
+  targets:
+    type: array
+    description: >
+      The relation targets, each a wikilink target text or a record
+      identifier. Always present — an empty array, never null; empty is valid
+      ONLY with op "replace", where it clears the property, and is rejected
+      for add and remove, which would otherwise be silent no-ops that look
+      like successful writes.
+
+      A target that does not exist, or that exists but is not of the declared
+      target type, is REPORTED (FR-033, FR-034) — never silently stored as a
+      link that will render as a distinct group of one.
+    items:
+      type: string
+      minLength: 1
+    example: ["Acme Ltd"]

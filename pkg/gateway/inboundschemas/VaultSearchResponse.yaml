@@ -1,0 +1,57 @@
+title: VaultSearchResponse
+description: >
+  The human vault search result (library-b-c-design-2026-09-07 §C1): three
+  grouped hit lists for one query, plus an honest completeness verdict.
+
+  An empty result is EMPTY, not an error — every hit array is always present and
+  may be empty. When the index is not ready (never built, or still catching up
+  with the files on disk), `complete` is false and `complete_reason` carries the
+  engine's freshness signal, so the caller can say "still indexing" rather than
+  "no results". A collection outside the caller's workspace scope returns this
+  same empty-but-complete shape.
+type: object
+additionalProperties: false
+required:
+  - collection_id
+  - complete
+  - notes
+  - records
+  - views
+properties:
+  collection_id:
+    type: string
+    minLength: 1
+    description: The collection this result covers, echoed from the request.
+    example: "kb_3d1c9a7e5b2f4806"
+  complete:
+    type: boolean
+    description: >
+      True only when the search covered the whole vault: the index was built,
+      current, and no kind's result was clamped or refused. False whenever the
+      index is not ready — see complete_reason.
+    example: true
+  complete_reason:
+    type: string
+    description: >
+      Why the verdict is false, ready to render (e.g. "the text index has never
+      finished indexing this vault — it currently reflects 3 of 68 files…").
+      Absent when complete is true.
+    example: "the text index has never finished indexing this vault"
+  notes:
+    type: array
+    description: Notes matched by body text. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultSearchNoteHit.yaml"
+      x-go-type: VaultSearchNoteHit
+  records:
+    type: array
+    description: Records matched by their typed property values. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultSearchRecordHit.yaml"
+      x-go-type: VaultSearchRecordHit
+  views:
+    type: array
+    description: Saved views whose name or label matched. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultSearchViewHit.yaml"
+      x-go-type: VaultSearchViewHit

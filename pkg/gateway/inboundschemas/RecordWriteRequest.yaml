@@ -1,0 +1,70 @@
+title: RecordWriteRequest
+description: >
+  A typed, validated write to one record (ADR-068 D14, FR-040 to FR-044).
+
+  A write is a SPLICE, never a re-serialisation. Comments, key order, blank
+  lines and quoting style survive, and the file is byte-identical outside the
+  patched span (FR-041). This is not a nicety: the vault is simultaneously a
+  human's working notes, and a writer that re-serialises YAML degrades it a
+  little on every touch until the operator stops trusting the agent.
+
+  A write that violates the schema is REJECTED with the expected shape named,
+  and the file is left unmodified (FR-042). Nothing is half-written.
+
+  RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified
+  through RelationWriteRequest's three explicit verbs (FR-045), because a
+  read-then-write round trip that silently replaces a relation list is how the
+  incumbent deletes relations and returns success.
+
+  Derived values are never written into frontmatter (D9, FR-046) — a request
+  naming a derived property is rejected, not honoured.
+type: object
+additionalProperties: false
+required:
+  - type
+  - properties
+properties:
+  type:
+    type: string
+    minLength: 1
+    description: The record type being written. Always required, on create and update alike.
+    example: "company"
+  id:
+    type: string
+    minLength: 1
+    description: >
+      The record to update. ABSENT MEANS CREATE, in which case `path` is
+      required and the identifier is minted by the server (FR-036) — never
+      supplied by the caller, so two concurrent creators cannot choose the
+      same id. When present, `version_token` is required too.
+    example: "CO-0142"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Vault-relative path of the note. Required on create; ignored on update,
+      where the id already locates the record and a rename is a separate
+      operation.
+    example: "CRM/Companies/Acme Ltd.md"
+  version_token:
+    type: string
+    minLength: 1
+    description: >
+      ADR-067 D14's opaque content-hash token, as returned on the record that
+      is being updated. REQUIRED whenever `id` is present: a stale token means
+      the file changed since it was read, and the write is REFUSED and the
+      refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody
+      saw. Omitted only on create, where there is no prior version.
+    example: "sha256:3d1c9a7e5b2f4806"
+  properties:
+    type: array
+    minItems: 1
+    description: >
+      The properties to write, and only those — every other byte of the file
+      is untouched. An entry whose `values` array is empty CLEARS that
+      property (D3.2). A write of a list into a scalar property, or of a value
+      outside a closed enum, is rejected with the expected shape named
+      (FR-006, FR-011, FR-042).
+    items:
+      $ref: "./RecordPropertyValue.yaml"
+      x-go-type: RecordPropertyValue

@@ -57,6 +57,17 @@ tags:
     would otherwise also match it.
 - name: Preview
   description: Agent-generated preview content served on the main gateway listener at /preview/ (token-authenticated, ADR-044)
+- name: Knowledge
+  description: >
+    Knowledge-base read surface over a mounted collection inside a workspace
+    work tree (ADR-067) — marker-based detection, relevance search, the link
+    graph, and per-file heading outlines. Retrieval is scoped to knowledge
+    bases mounted into the calling agent's workspace; a collection outside
+    that scope returns an empty result set rather than a permission error, so
+    the error channel cannot be used to probe for collections the caller may
+    not see. Index PROGRESS is deliberately absent from this REST surface: it
+    is a streaming state carried by the knowledge_index_progress WebSocket
+    frame in contracts/asyncapi.yaml, not something a client polls for.
 - name: Agents
   description: Agent management endpoints
 - name: Settings
@@ -265,6 +276,10 @@ components:
       $ref: ./components/schemas/LibraryContentResponse.yaml
     LibraryContentRequest:
       $ref: ./components/schemas/LibraryContentRequest.yaml
+    LibraryBinaryContentRequest:
+      $ref: ./components/schemas/LibraryBinaryContentRequest.yaml
+    CreateVaultRequest:
+      $ref: ./components/schemas/CreateVaultRequest.yaml
     LibraryRenameRequest:
       $ref: ./components/schemas/LibraryRenameRequest.yaml
     LibraryUploadResponse:
@@ -273,6 +288,955 @@ components:
       $ref: ./components/schemas/LibraryTransferRequest.yaml
     LibraryMkdirRequest:
       $ref: ./components/schemas/LibraryMkdirRequest.yaml
+    LibraryInlineDisposition:
+      $ref: ./components/schemas/LibraryInlineDisposition.yaml
+    LibraryPreviewTokenRequest:
+      $ref: ./components/schemas/LibraryPreviewTokenRequest.yaml
+    LibraryPreviewTokenResponse:
+      $ref: ./components/schemas/LibraryPreviewTokenResponse.yaml
+    KnowledgeBaseInfo:
+      $ref: ./components/schemas/KnowledgeBaseInfo.yaml
+    KnowledgeSearchRequest:
+      $ref: ./components/schemas/KnowledgeSearchRequest.yaml
+    KnowledgeSearchResponse:
+      $ref: ./components/schemas/KnowledgeSearchResponse.yaml
+    KnowledgeSearchHit:
+      $ref: ./components/schemas/KnowledgeSearchHit.yaml
+    KnowledgeSearchIncompleteness:
+      $ref: ./components/schemas/KnowledgeSearchIncompleteness.yaml
+    KnowledgeGraphResponse:
+      $ref: ./components/schemas/KnowledgeGraphResponse.yaml
+    KnowledgeGraphNode:
+      $ref: ./components/schemas/KnowledgeGraphNode.yaml
+    KnowledgeGraphEdge:
+      $ref: ./components/schemas/KnowledgeGraphEdge.yaml
+    KnowledgeGraphSkip:
+      $ref: ./components/schemas/KnowledgeGraphSkip.yaml
+    KnowledgeBaseViews:
+      $ref: ./components/schemas/KnowledgeBaseViews.yaml
+    KnowledgeBaseView:
+      $ref: ./components/schemas/KnowledgeBaseView.yaml
+    KnowledgeOutline:
+      $ref: ./components/schemas/KnowledgeOutline.yaml
+    KnowledgeOutlineHeading:
+      $ref: ./components/schemas/KnowledgeOutlineHeading.yaml
+    KnowledgeConflictError:
+      $ref: ./components/schemas/KnowledgeConflictError.yaml
+    KnowledgeMountConflictError:
+      $ref: ./components/schemas/KnowledgeMountConflictError.yaml
+    # ── Vault records (ADR-068) ───────────────────────────────────────────
+    # Contract-first per Hard Constraint #8 and ADR-068 D19: these types are
+    # defined here BEFORE any Go or TS code exists (FR-090). No REST path
+    # references them yet — the first consumers are the nine record_* agent
+    # tools; the human surface arrives in ADR-068 D20's W5. skip-prune keeps
+    # them generated regardless, which is the point: the generated types are
+    # the only legal cross-boundary types when that code is written.
+    #
+    # ADR-068 D0 is binding on every schema below: the product ships the
+    # MECHANISM, the vault ships the CONVENTION. There is NO built-in record
+    # type here — no company, contact, deal or interaction, not even as an
+    # overridable default. Names in the examples are illustrative only.
+    #
+    # Every cross-file $ref in these schemas carries an `x-go-type` sibling.
+    # That is not decoration. oapi-codegen v2.7.0 INLINES a cross-file $ref as
+    # an anonymous struct at the use site, so without it RecordQueryResponse
+    # would carry `Problems []struct{...}` rather than `[]RecordProblem` — a
+    # JSON-shape-coincident copy that no handler can name and that silently
+    # stops matching the schema the day a field is added. The repo's other
+    # answer to this is the regex rewriter in scripts/gen-go-fixup.go, per
+    # type; x-go-type is the same fix declared in the contract instead, and it
+    # already has precedent here (CliValidateRequest.cli). The TypeScript and
+    # Zod generators ignore x-* extensions, so both halves stay in step.
+    RecordSchema:
+      $ref: ./components/schemas/RecordSchema.yaml
+    RecordType:
+      $ref: ./components/schemas/RecordType.yaml
+    PropertyDef:
+      $ref: ./components/schemas/PropertyDef.yaml
+    EnumValueDef:
+      $ref: ./components/schemas/EnumValueDef.yaml
+    # Named VaultRecord, not Record: a component called "Record" generates a
+    # TypeScript `export type Record = ...` that SHADOWS the built-in
+    # Record<K, V> utility type across the whole generated module, and tsc
+    # then fails with "Type 'Record' is not generic" on every unrelated use
+    # of it in the same file. Discovered by regenerating; the collision is in
+    # generated code, so no hand-edit could survive it.
+    VaultRecord:
+      $ref: ./components/schemas/VaultRecord.yaml
+    RecordPropertyValue:
+      $ref: ./components/schemas/RecordPropertyValue.yaml
+    RecordValue:
+      $ref: ./components/schemas/RecordValue.yaml
+    RecordRef:
+      $ref: ./components/schemas/RecordRef.yaml
+    RecordQueryRequest:
+      $ref: ./components/schemas/RecordQueryRequest.yaml
+    RecordQueryResponse:
+      $ref: ./components/schemas/RecordQueryResponse.yaml
+    RecordFilter:
+      $ref: ./components/schemas/RecordFilter.yaml
+    RecordSort:
+      $ref: ./components/schemas/RecordSort.yaml
+    RecordAggregate:
+      $ref: ./components/schemas/RecordAggregate.yaml
+    RecordAggregateResult:
+      $ref: ./components/schemas/RecordAggregateResult.yaml
+    RecordGroup:
+      $ref: ./components/schemas/RecordGroup.yaml
+    RecordGroupKey:
+      $ref: ./components/schemas/RecordGroupKey.yaml
+    RecordProblem:
+      $ref: ./components/schemas/RecordProblem.yaml
+    RecordWriteRequest:
+      $ref: ./components/schemas/RecordWriteRequest.yaml
+    RelationWriteRequest:
+      $ref: ./components/schemas/RelationWriteRequest.yaml
+    ViewGroupBy:
+      $ref: ./components/schemas/ViewGroupBy.yaml
+    ViewPropertyConfig:
+      $ref: ./components/schemas/ViewPropertyConfig.yaml
+    ViewPart:
+      $ref: ./components/schemas/ViewPart.yaml
+    ViewPartAggregate:
+      $ref: ./components/schemas/ViewPartAggregate.yaml
+    # ── View results (view-kinds-design-2026-09-03 §7) — what the SPA fetches
+    # to DRAW a saved view: resolved parts, grouped rows with per-group
+    # per-unit subtotals (G2), the G3 excluded counter, and precomputed
+    # figures/chart/crosstab data. A view that cannot answer arrives with a
+    # `refusal` naming why, matching the backend's own serve-refusal shape.
+    ViewResult:
+      $ref: ./components/schemas/ViewResult.yaml
+    ViewResultPart:
+      $ref: ./components/schemas/ViewResultPart.yaml
+    ViewResultGroup:
+      $ref: ./components/schemas/ViewResultGroup.yaml
+    ViewUnitTotal:
+      $ref: ./components/schemas/ViewUnitTotal.yaml
+    ViewResultSeries:
+      $ref: ./components/schemas/ViewResultSeries.yaml
+    ViewResultPoint:
+      $ref: ./components/schemas/ViewResultPoint.yaml
+    ViewResultCrosstab:
+      $ref: ./components/schemas/ViewResultCrosstab.yaml
+    ViewResultCrosstabCell:
+      $ref: ./components/schemas/ViewResultCrosstabCell.yaml
+    ViewResultRefusal:
+      $ref: ./components/schemas/ViewResultRefusal.yaml
+    # ── ViewDef — ADR-068 D10 and D24.1, spec FR-018b/FR-018d, FR-105, FR-109 ───
+    # HOSTED INLINE, NOT IN ITS OWN FILE, for the same mechanical reason
+    # VaultFindRequest is (see its note below): a view's
+    # `filter` IS the recursive VaultFilterNode, and oapi-codegen v2.7.0
+    # INLINES a cross-file $ref at its use site — so a cross-file reference to
+    # a recursive schema expands until the generator dies with a stack
+    # overflow. An internal '#/components/schemas/' reference resolves to the
+    # named type instead, and only a schema living HERE can write one. This is
+    # the ADR-034 exception, applied for the third time and for the same cause.
+    # ViewDef.yaml was deleted in the same commit; there is no second copy.
+    ViewDef:
+      title: ViewDef
+      description: >
+        A saved query, stored as data (ADR-068 D10). A view names filters,
+        grouping, sort and the properties to show; it lives in
+        `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one
+        and a human can diff it.
+
+        A view naming a property or enum value that does not exist is REJECTED
+        at write time (D15), not stored and discovered broken later.
+
+        THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER.
+        A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL
+        operators — the same grammar knowledge_find evaluates, so a view's
+        filter needs no translation to be served — `grouping` keys that each
+        carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and
+        `property_config`.
+
+        THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored
+        `filters` (a flat AND-list in a separate seven-operator vocabulary)
+        and `group_by` (a bare name list with no direction). It was carried
+        alongside this one only so files written under it stayed readable.
+        Nothing was ever written under it outside this project's own tooling
+        and no such file exists on disk, so it is deleted rather than
+        versioned around: two formats in one schema is a permanent tax on
+        every reader, and the second one had no remaining constituency.
+
+        The rule that partition existed to protect still holds, and it is the
+        one rule this surface will not break: A VIEW IS NEVER BROADENED ON THE
+        OPERATOR'S BEHALF (FR-105). The retired vocabulary's `contains` meant
+        whole-element membership, and rewriting it as `LIKE '%…%'` would have
+        turned that into substring matching — `labels contains "in"` newly
+        matching `indoor`, `printing` and `min`. That translation was
+        specified in spec Draft 10 and withdrawn in Draft 11 as review finding
+        F5, and it is still prohibited: knowledge_configure refuses any
+        rewrite that changes the row set. What is gone is the OLD FORMAT, not
+        the prohibition.
+
+        `untranslated` and `disabled` exist for the one-shot .base importer
+        (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot
+        translate is preserved VERBATIM in `untranslated` and reported, never
+        approximated and never silently dropped — an approximation that looks
+        like a translation is worse than an honest gap, because nobody reviews
+        a filter that appears to have imported cleanly. Import is one-shot:
+        `.base` files are never read on the query path (FR-102).
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: View identifier, unique within the vault.
+          example: "open-by-owner"
+        type:
+          type: string
+          minLength: 1
+          description: >
+            The record type this view queries.
+
+
+            OPTIONAL (FR-018b). An UNTYPED view queries every
+            note in scope — which is what four of the founder's eighteen bases
+            do, scoping purely by folder and spanning record types. In an
+            untyped view a property resolves BY NAME over the rows the index
+            holds for every note (FR-021e): a note that CARRIES the key holds
+            its value, parsed in the domain the name resolves to; a value that
+            does not parse there is NON-CONFORMING and reported; and ONLY a
+            note not carrying the key at all is ABSENT. A note whose file says
+            `status: open` must never answer TRUE to `status IS NULL`. Two
+            in-scope types declaring one name with DIFFERENT types REFUSE the
+            query naming both declarations — loud, never a silent domain
+            split. A name no in-scope type declares resolves in the TEXT
+            domain over the raw values.
+
+
+            A declared type holding ZERO records is a VALID, EMPTY view
+            (FR-018d) carrying the ordinary completeness verdict — "0 records,
+            complete" — which is distinguishable from the silent empty this
+            design exists to prevent. Six of the founder's eighteen bases
+            reference types provisioned ahead of their data. A type NO schema
+            declares is still rejected: that is drift, not provisioning.
+
+
+            A `type:` that is PRESENT but blank is REFUSED. An empty string is
+            not "untyped" — it is a typo for a type name, and treating it as a
+            deliberate absence would turn a misspelling into a vault-wide
+            query. Omit the key entirely to mean untyped.
+          example: "deal"
+        label:
+          type: string
+          description: Human-readable title. Absent means render `name`.
+          example: "Open deals by owner"
+        filter:
+          description: >
+            The view's filter, as ONE VaultFilterNode tree — the same
+            `all`/`any`/`not` combinators and ten SQL operators
+            knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
+
+
+            ONE FILTER GRAMMAR, ONE SPELLING OF IT. The product used to speak
+            two filter languages and the bridge between them refused two of
+            the older one's leaves outright. Obsidian's `and`/`or`/`not` map
+            1:1 onto `all`/`any`/`not`; its `contains` translates as an
+            escaped `LIKE '%…%'`; its relation traversal is the request's own
+            join shape rather than a per-leaf hop.
+
+
+            FR-023c's bound applies to a view's tree identically to a
+            request's: at most 64 leaves and depth 8, refused above either
+            naming which.
+          allOf:
+            - $ref: "#/components/schemas/VaultFilterNode"
+        grouping:
+          type: array
+          maxItems: 2
+          description: >
+            Grouping keys, outermost first, each carrying its own direction
+            (FR-018b). Two levels (FR-027); grouping by a relation is
+            supported (FR-029) and a record holding several values appears in
+            every group it belongs to (FR-028).
+
+
+            THE DIRECTION IS PART OF THE KEY, not an afterthought: a bare name
+            list is why every `groupBy` direction in an imported base was
+            unrepresentable rather than merely untranslated.
+          items:
+            $ref: "./components/schemas/ViewGroupBy.yaml"
+            x-go-type: ViewGroupBy
+        sort:
+          type: array
+          description: Sort keys, applied in order.
+          items:
+            $ref: "./components/schemas/RecordSort.yaml"
+            x-go-type: RecordSort
+        properties:
+          type: array
+          description: >
+            Properties to display, in this order. Omitted shows every declared
+            property. Narrowing this changes what is RENDERED, never what is
+            matched.
+          items:
+            type: string
+            minLength: 1
+          example: ["name", "status", "value"]
+        property_config:
+          type: object
+          description: >
+            Per-property presentation, keyed by PROPERTY name
+            (FR-018b) — Obsidian's top-level `properties` block, which is
+            display configuration rather than a projection list.
+
+
+            PURE PRESENTATION; THE ENGINE NEVER READS IT. Obsidian's own rule
+            is kept verbatim: a display name is never usable in a filter, a
+            sort, a grouping or a formula, so renaming a column can never
+            quietly change which records a view returns.
+          additionalProperties:
+            $ref: "./components/schemas/ViewPropertyConfig.yaml"
+            x-go-type: ViewPropertyConfig
+        layout:
+          type: string
+          enum:
+            - table
+            - cards
+            - board
+            - calendar
+            - gallery
+            - map
+          x-enum-varnames:
+            - ViewDefLayoutTable
+            - ViewDefLayoutCards
+            - ViewDefLayoutBoard
+            - ViewDefLayoutCalendar
+            - ViewDefLayoutGallery
+            - ViewDefLayoutMap
+          description: >
+            Which rendering this view asks for (FR-109). THE
+            ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
+
+
+            ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`,
+            `gallery` and `map` are declared here precisely BECAUSE they are
+            not rendered: the importer must be able to record what an Obsidian
+            view actually asked for, so a layout this product cannot draw
+            imports with the loss NAMED as an annotation loss (FR-106) instead
+            of arriving as a table that nobody knows was ever anything else.
+
+
+            This field exists because of a measured failure, not a hypothesis.
+            An Obsidian CARDS view imported as a table, recorded no loss at
+            all, and scored CLEAN under the parity exit criterion — a green
+            number over an undetected loss, which is the exact failure this
+            whole surface is written against. An unrenderable layout is a
+            visible gap; a silently flattened one is a wrong answer.
+          example: "cards"
+        kind:
+          type: string
+          enum:
+            - table
+            - list
+            - tiles
+            - board
+            - calendar
+            - summary
+            - trend
+            - breakdown
+          x-enum-varnames:
+            - ViewDefKindTable
+            - ViewDefKindList
+            - ViewDefKindTiles
+            - ViewDefKindBoard
+            - ViewDefKindCalendar
+            - ViewDefKindSummary
+            - ViewDefKindTrend
+            - ViewDefKindBreakdown
+          description: >
+            WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW
+            (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on
+            every view written before the kinds existed.
+
+
+            IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The
+            renderer walks `parts` and only `parts`; nothing switches on this
+            field at render time. It records what the agent asked for, so a
+            later "make that summary group by month instead" can be answered by
+            re-composing the same kind rather than by reverse-engineering a
+            part stack.
+
+
+            The eight and what each stacks: `table` → table. `list` → list.
+            `tiles` → tiles (needs an image property). `board` → columns (needs
+            an enum property with at most 8 values). `calendar` → calendar
+            (needs a date property). `summary` → figures then a grouped table
+            with subtotals (needs a number). `trend` → figures then chart then
+            table (needs a date and a number). `breakdown` → figures then
+            crosstab (needs two groupable properties and a number).
+
+
+            A kind is OFFERED only when the collection holds what it requires,
+            and a refusal names the missing property (design §3 G1). That gate
+            lives in the composer, which is the only thing that writes this
+            field on the normal path.
+          example: "summary"
+        parts:
+          type: array
+          description: >
+            THE ORDERED STACK THE RENDERER WALKS
+            (view-kinds-design-2026-09-03 §4). Optional.
+
+
+            ABSENT MEANS THE VIEW IS READ EXACTLY AS IT WAS BEFORE THIS FIELD
+            EXISTED: one part, derived from `layout` plus the view's own
+            grouping and properties. All 69 views in the founder's imported
+            vault load unchanged, and no file has to be migrated for the
+            renderer to keep working. The loader exposes one accessor for both
+            shapes, so no consumer downstream has to know which of the two it
+            is looking at — a consumer that branched on `parts == nil` is a
+            consumer that would eventually branch differently from the next
+            one.
+
+
+            `filter` is SHARED BY EVERY PART and is never per-part. One view
+            answers one question about one row set; a part that could narrow
+            the rows under it would make the figures row and the table beneath
+            it disagree about what they are counting, with nothing on screen to
+            say so.
+          items:
+            $ref: "./components/schemas/ViewPart.yaml"
+            x-go-type: ViewPart
+        formulas:
+          type: object
+          description: >
+            Computed properties, keyed by name, each value the
+            expression's SOURCE TEXT (FR-141) — human-diffable and directly
+            comparable against the Obsidian original it was translated from.
+            A formula is referenced from any property position as
+            `formula.<name>`.
+
+
+            THE PARSER LIVES IN THE WRITE PATH AND ONLY THERE (FR-140).
+            knowledge_configure and the importer parse an expression when it is
+            written and REFUSE one that does not parse, naming the position and
+            the reason; it is never stored. The view loader re-validates on
+            load, so a hand-edited file is re-checked. knowledge_find accepts
+            NO text expression anywhere — a query reaches a formula only as a
+            reference to something already validated — which is what keeps
+            both halves of ADR-068 O-3 true on the query path: no text
+            language, no parser, and therefore no parse failure that could
+            degrade into an empty result.
+
+
+            Bounded, and refused above each bound naming which (FR-146): one
+            formula at most 64 nodes and depth 8; a view at most 16 formulas;
+            a view's formulas at most 256 nodes in total. A reference CYCLE
+            (`a: formula.b + 1`, `b: formula.a + 1`) parses clean and would
+            recurse forever, so the reference graph is validated at write AND
+            at load and a cycle is REFUSED naming its path (FR-148).
+          additionalProperties:
+            type: string
+            minLength: 1
+          example:
+            days_to_expiry: "(expires - today()).days"
+        aggregates:
+          type: array
+          description: >
+            Summaries to compute for this view, and per group when grouped.
+
+
+            ONE NAME, FIFTEEN FUNCTIONS (founder ruling, FR-150). Obsidian's
+            top-level `summaries` key and its per-view summary map TRANSLATE
+            at import into entries of this list. There is deliberately NO
+            `summaries` key on a view: parity is capability, not key names,
+            and a second spelling for one concept is how two surfaces start
+            disagreeing about which is authoritative.
+          items:
+            $ref: "./components/schemas/RecordAggregate.yaml"
+            x-go-type: RecordAggregate
+        limit:
+          type: integer
+          minimum: 1
+          description: >
+            Page size for this view. Clamped at the server cap of 200, with the
+            clamp reported on the response (FR-063).
+          example: 50
+        disabled:
+          type: boolean
+          description: >
+            The view is stored but MUST NOT be applied; applying it is REFUSED
+            naming the expression in `untranslated` that disabled it (FR-105).
+
+
+            THIS IS THE BROADENING PROHIBITION MADE STRUCTURAL, and it is the
+            one import rule that admits no exception: an imported view must
+            never return MORE rows than its original while looking correct. An
+            untranslatable expression in any ROW-SET-AFFECTING position — a
+            filter, anywhere in its tree — disables the view rather than
+            importing it with the clause quietly dropped. The standing
+            example: a base filtering `type == "decision"` AND NOT
+            `inFolder("99-Temp")` AND NOT `inFolder("00-Inbox")`. Drop the two
+            folder clauses and the view still runs, still looks right, and now
+            silently includes every scratch note in the vault.
+
+
+            An untranslatable expression in an ANNOTATION position — display
+            config, a summary, an unrenderable `layout` — cannot change which
+            rows appear, so the view imports ENABLED with the loss declared in
+            `untranslated` (FR-106).
+
+
+            Omitted is identical to false. Carries no JSON Schema `default:`
+            for the reason RecordFilter.yaml gives on `negate`: a `default:`
+            makes openapi-typescript promote the field to REQUIRED while
+            oapi-codegen still emits an optional pointer, and the two generated
+            languages then disagree about one field.
+          example: true
+        source:
+          type: string
+          description: >
+            Vault-relative path of the file this view was IMPORTED from, when
+            it was imported rather than authored. Recorded so the provenance of
+            a partially translated view is visible; the source is never re-read
+            afterwards (FR-102).
+          example: "CRM/Deals.base"
+        untranslated:
+          type: array
+          description: >
+            Expressions from the imported source that could NOT be translated,
+            preserved verbatim (FR-101). Present only on an imported view, and
+            non-empty only when something was genuinely left behind. Never an
+            approximation of the original.
+
+
+            UNDER PARITY, EVERY RESIDUAL ENTRY HERE IS A DEFECT TO FILE, NOT AN
+            ACCEPTED LOSS, and the import report must say so in those words
+            (FR-107). The neutral "reported and moved on" posture survives only
+            for genuinely UNDOCUMENTED upstream behaviour, which the report
+            labels as such — the standing example being that Obsidian's
+            documentation never says whether its standard deviation is
+            population or sample, so ours declares its own definition (FR-153)
+            and records the divergence risk by name.
+          items:
+            type: string
+            minLength: 1
+          example: ['status != "done" && (due < now() || priority > 3)']
+    # ── knowledge_find — ADR-068 D15.3, spec 4.1.2 and 4.2 ──────────────────────
+    # The ONE retrieval path. These types supersede the RecordQuery* family
+    # above for the agent-facing surface: that family predates ruling R-B (the
+    # SQL operator vocabulary) and ruling R-E (lexical enum order), and spec
+    # section 10a marks it for deletion once its last consumer is gone. It is
+    # left generated here rather than deleted in the same change, because
+    # deleting a contract and writing its replacement in one commit leaves no
+    # revision in which either can be reviewed against the other.
+    #
+    # TWO OF THESE ARE HOSTED INLINE, and it is the ADR-034 exception rather
+    # than a lapse. VaultFilterNode is RECURSIVE, and oapi-codegen v2.7.0
+    # inlines a cross-file $ref at its use site — so a cross-file SELF-ref
+    # expands until the generator dies with a stack overflow (measured: it does,
+    # every time). An internal '#/components/schemas/...' ref resolves to the
+    # named type instead, so VaultFilterNode and the request that references it
+    # live here. Everything non-recursive stays one-file-per-schema as usual.
+    #
+    # VaultFindGroup deliberately does NOT recurse: its second level is the
+    # distinct, childless VaultFindSubgroup. Two levels is the stated limit
+    # (FR-027), and a self-referential schema would advertise a nesting depth
+    # the engine refuses.
+    VaultFindRequest:
+      title: VaultFindRequest
+      description: >
+        A call to `knowledge_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2).
+        It absorbs `record_query`, `record_explain`, `knowledge_search`,
+        `knowledge_tasks` and link-neighbourhood traversal. There is no second
+        retrieval tool, and there is no call shape that returns rows without the
+        verdict on them.
+
+        HOSTED INLINE rather than in its own file because it references the recursive
+        VaultFilterNode by internal `#/components/schemas/` reference — see that
+        schema's note for why a cross-file reference cannot be used there.
+
+        A parameter name this schema does not declare is REFUSED listing the accepted
+        names (FR-022c), never ignored. Silently dropping an argument is how a caller
+        comes to believe a constraint was applied that never was.
+
+        Scope is not negotiable by the caller. Every vault tool resolves through the
+        CALLING AGENT'S workspace (FR-060); notes in a vault mounted only into another
+        workspace are invisible, and that case is deliberately indistinguishable from
+        an empty vault (FR-062) so the error channel cannot be used to probe for what
+        the caller may not see. Scope is resolved BEFORE any refusal is built, so the
+        valid-names list in an error can never disclose a schema outside it.
+      type: object
+      additionalProperties: false
+      properties:
+        words:
+          type: string
+          minLength: 1
+          description: >
+            Free text, ranked (FR-112). Composes with every other parameter: the
+            answer is the INTERSECTION, never a union. When `words` finds nothing the
+            response reports the vocabulary the index actually holds and STOPS there
+            — it does not broaden the query on the caller's behalf (FR-114), because
+            a user who searched for one thing and silently received results for a
+            broader thing has been given a wrong answer with no error channel.
+          example: "pricing"
+        type:
+          type: string
+          minLength: 1
+          description: >
+            The record type to search. Unknown → refusal listing the declared types
+            (FR-024), never an empty result.
+          example: "deal"
+        kind:
+          type: string
+          enum: [note, record, task, attachment]
+          description: >
+            What sort of row to return. Omitted means `note`.
+
+
+            `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX
+            LINES, not notes: each row carries `path`, `line`, `status` and `text`,
+            and renders with its line number so a reader can never mistake it for the
+            note that contains it (FR-076a). This narrowly amends the rule that a row
+            is one note: a row is one real THING AT A PATH — a note, or a checkbox
+            line within one. The whole-collection regex walk that `knowledge_tasks`
+            performed does not survive; checkboxes are indexed, so the ordinary
+            bounds apply and the old 5,000-file read cap is gone.
+          example: "task"
+        filter:
+          description: >
+            A structured filter tree. Applied AFTER `view` when both are given, so a
+            saved view is refined rather than replaced.
+          allOf:
+            - $ref: '#/components/schemas/VaultFilterNode'
+        view:
+          type: string
+          minLength: 1
+          description: >
+            A saved view, applied first. Unknown name → refusal listing the saved
+            views in scope.
+          example: "open-pipeline"
+        near:
+          type: string
+          minLength: 1
+          description: >
+            A note path or wikilink. Restricts the answer to notes within `hops` link
+            steps of it. It COMPOSES with `words` and `filter` — that composition is
+            the capability worth having, and no system this design surveyed can
+            express it: each has text search OR graph traversal, none composes them.
+          example: "Companies/Acme Ltd.md"
+        hops:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: >
+            Link steps from `near`. Meaningful only with `near`; omitted means 1. A
+            third hop is REFUSED naming the limit and the remedy (FR-065) rather than
+            walked implicitly, because a deeper traversal is a follow-up query the
+            caller should make knowingly.
+          example: 2
+        join:
+          type: array
+          description: >
+            Relation properties whose columns to BORROW onto each row (FR-124). A
+            borrowed value renders visibly as borrowed and is never merged into the
+            row's own columns: it is not a property of this record and must never
+            read as one.
+          items:
+            type: string
+            minLength: 1
+          example: ["company"]
+        group_by:
+          type: array
+          maxItems: 2
+          description: >
+            Group the answer, outermost first. Two levels (FR-027); grouping by a
+            relation is supported (FR-029); a record holding several values appears
+            in every group it belongs to (FR-028).
+
+
+            EACH KEY CARRIES ITS OWN DIRECTION, and that is not decoration. This
+            was a bare list of names, so a saved view whose `grouping` recorded
+            `direction: desc` — written to its file faithfully, and read back
+            faithfully — had nowhere to land in a request, and serving it was
+            REFUSED (records.ServeRefusalGroupDirection) rather than answered
+            with the groups quietly reordered ascending. The refusal was the
+            right call; the absent field was the defect.
+
+
+            Omitted direction means `asc`. `desc` is the exact reverse of `asc`
+            over the values, and the ABSENT group sorts last in BOTH directions
+            — see VaultFindGroupBy for what "the values" means per declared
+            type, which is the comparator's answer (R-1) and not a rule
+            invented for grouping.
+          items:
+            $ref: "./components/schemas/VaultFindGroupBy.yaml"
+            x-go-type: VaultFindGroupBy
+          example: [{ "property": "company" }, { "property": "status", "direction": "desc" }]
+        sort:
+          type: array
+          description: >
+            Sort keys in order. Omitted sorts by relevance.
+
+
+            An enum sorts LEXICALLY over its case-folded form, so `Won`, `won` and
+            `WON` sort together exactly as they group together (ruling R-E, R-5c);
+            ties on the folded key break on raw bytes so the order is deterministic.
+            There is no declared-position ordinal — a domain order is expressed by
+            prefixing the declared values (`1-lead`, `2-qualified`), which is visible
+            in the operator's own file and does exactly what it appears to do.
+
+
+            The sort is computed in Go by the comparator, never by an emitted
+            `ORDER BY` (ruling R-A).
+          items:
+            $ref: "./components/schemas/VaultFindSort.yaml"
+            x-go-type: VaultFindSort
+        select:
+          type: array
+          description: >
+            Which properties to render as columns. Omitted uses the schema's own
+            declaration order, so a report reads the way the operator wrote it.
+            Narrowing this changes what is RENDERED, never what is matched.
+          items:
+            type: string
+            minLength: 1
+          example: ["status", "arr"]
+        aggregate:
+          type: array
+          description: >
+            Totals to compute. Each states its own scope in the rendered response; a
+            total that does not say what it covers is a bare number (FR-125). Every
+            total is computed over the FULL EVALUATED SET, never over the rendered
+            page (FR-125a). No total is returned over a refused candidate set.
+          items:
+            $ref: "./components/schemas/VaultFindAggregate.yaml"
+            x-go-type: VaultFindAggregate
+        explain:
+          type: boolean
+          description: >
+            Report the plan and EVALUATE NOTHING (FR-073). Omitted means false.
+
+
+            An `explain` response names every property the query touches and the
+            index each would be answered from, performs ZERO candidate retrievals,
+            and carries no `index_epoch` — a plan is not a result, so it should not
+            observe an epoch at all. Two `explain` calls over an unchanged schema are
+            byte-identical, including across a corpus mutation, which is what makes
+            the assertion capable of failing against an implementation that quietly
+            evaluates.
+          example: true
+        limit:
+          type: integer
+          minimum: 1
+          description: >
+            Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED
+            and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so
+            an over-large request comes back with a stated clamp rather than a bare
+            schema error that says nothing about what was applied.
+          example: 50
+        cursor:
+          type: string
+          minLength: 1
+          description: >
+            Opaque pagination cursor from a previous response. A cursor that cannot
+            be honoured is an ERROR naming the epoch it was issued against
+            (FR-020c), never a silent restart — a silent restart returns page one
+            while the caller believes it is reading page four.
+          example: "c2FnZTI"
+        detail:
+          type: string
+          enum: [minimal, standard]
+          description: >
+            Rendering density. Omitted means `standard`. `minimal` drops columns and
+            borrowed values to roughly 80 bytes per hit; the completeness header and
+            the problem COUNT always survive the trim, because the caveat is the one
+            thing a shorter answer must not lose.
+          example: "minimal"
+    VaultFilterNode:
+      title: VaultFilterNode
+      description: >
+        One node of a `knowledge_find` filter tree (ADR-068 D15.3, spec FR-022, ruling
+        R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf
+        carrying `property`, `op` and `value`. Exactly one form per node; a node that
+        sets both a combinator and a leaf field is REFUSED, never silently resolved to
+        one of them.
+
+        HOSTED INLINE HERE, NOT IN ITS OWN FILE, and the reason is mechanical: this
+        schema is RECURSIVE — `all`, `any` and `not` take VaultFilterNode children —
+        and oapi-codegen v2.7.0 INLINES a cross-file $ref at its use site, so a
+        cross-file SELF-reference expands until the generator dies with a stack
+        overflow. An internal `#/components/schemas/` reference resolves to the named
+        type instead. This is the same exception, for the same reason, that ADR-034
+        records for the discriminated unions.
+
+        THE OPERATORS ARE SQL'S, AND THAT IS THE WHOLE POINT (ruling R-B, revision 5).
+        They replaced seven we invented — `eq`, `lt`, `lte`, `gt`, `gte`, `contains`,
+        `is_absent` — and the argument is retrieval accuracy rather than style: our
+        vocabulary has appeared in a model's training data zero times and SQL's an
+        enormous number of times, so a model reaching for `LIKE` is recalling where a
+        model reaching for `contains` was guessing.
+
+        BOTH HALVES OF ADR-068 O-3 STILL HOLD, AMENDED NOT OVERTURNED. This is a
+        STRUCTURED OBJECT and there is NO PARSER. Nothing recognises SQL text. A model
+        fluent in SQL that puts `JOIN`, `BETWEEN`, `COALESCE`, a `CASE` or a subquery
+        in the operator position is REFUSED BY NAME, listing the ten supported
+        operators and naming the parameter that does the job instead (FR-022c) — never
+        parsed, never silently dropped, and never answered with an empty result set.
+
+        AND NOTHING HERE IS EVALUATED BY SQLITE (ruling R-A). The properties index
+        narrows candidates on record type, note kind and path prefix; every comparison
+        in this tree is then decided in Go by the tested comparator. Three of spec
+        section 8's rules cannot hold otherwise: SQL's `NOT` is three-valued so every
+        absent row falls out of a negation, SQLite's `LIKE` and `COLLATE NOCASE` fold
+        two of the fourteen case pairs the spec requires and none of the twelve
+        non-ASCII ones, and comparison affinity makes `3 = '3'` answer differently
+        depending on which side is a column.
+      type: object
+      additionalProperties: false
+      properties:
+        all:
+          type: array
+          minItems: 1
+          description: Every child must hold. Conjunction.
+          items:
+            $ref: '#/components/schemas/VaultFilterNode'
+        any:
+          type: array
+          minItems: 1
+          description: At least one child must hold. Disjunction.
+          items:
+            $ref: '#/components/schemas/VaultFilterNode'
+        not:
+          description: >
+            The child must NOT hold. This is the TREE negation, and it is not a
+            synonym for the `<>` leaf — the distinction is ruled explicitly in spec
+            section 8 R-2 and it decides what happens to records that never said.
+
+
+            `{not: {p, "=", v}}` INCLUDES records where `p` is absent (FR-008): "days
+            I did not meditate" must contain the days carrying no value at all,
+            precisely the days being asked about. `{p, "<>", v}` EXCLUDES them,
+            because in SQL `x <> 'v'` over a NULL `x` drops the row, and adopting
+            SQL's names without SQL's semantics is exactly what ruling R-B forbids.
+
+
+            A comparison that could not be MADE is not re-admitted by negation
+            either. A non-conforming value (R-4), an unresolved relation (R-8) or an
+            operator no rule defines for the declared type is REPORTED in `problems`
+            and the record EXCLUDED — from the negated node as well as the plain one.
+            Counting a corrupt value as "not done" by double negation would be a
+            silent wrong answer, which is the failure this whole surface exists to
+            remove.
+          allOf:
+            - $ref: '#/components/schemas/VaultFilterNode'
+        property:
+          type: string
+          minLength: 1
+          description: >
+            LEAF FORM. The declared property to compare, resolved against the queried
+            record type's schema and no other (property types are scoped to their
+            record type, D3.3). A name the schema does not declare REJECTS the query
+            with the declared names listed (FR-024) — it MUST NOT return zero
+            records, because a typo and a genuinely empty result look identical to
+            the caller and the typo is far more common.
+          example: "status"
+        op:
+          type: string
+          enum:
+            - "="
+            - "<>"
+            - "<"
+            - "<="
+            - ">"
+            - ">="
+            - "LIKE"
+            - "IN"
+            - "IS NULL"
+            - "IS NOT NULL"
+          description: >
+            LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly
+            what the engine implements and the section 8 truth table covers — no more
+            and no fewer.
+
+
+            `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and
+            element-wise on a `many` property (R-9). The four ordering operators are
+            UNDEFINED against a `many` property and are refused naming the remedy
+            rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never
+            a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern
+            with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its
+            `values` list must be non-empty. `IS NULL` is the one operator an absent
+            operand does not make false, and `IS NOT NULL` is its complement — an
+            empty string, an empty list and a zero are all VALUES, not absence (R-3).
+          example: "="
+        value:
+          type: string
+          description: >
+            LEAF FORM, every operator except `IN`, `IS NULL` and `IS NOT NULL`. The
+            operand in LEXICAL form — the same text a frontmatter file would hold — so
+            it is read by exactly the same parser as a record's own value (R-12: the
+            rules apply identically whether a value came from a query literal or from
+            a note).
+
+
+            It is a string on the wire for that reason, and the reason is not
+            convenience. A JSON number would arrive already parsed by a JSON decoder
+            into a binary float, at which point a decimal property's exactness is
+            gone before the engine ever sees it. A literal that cannot be read in the
+            property's declared type is REFUSED naming both (FR-022e), never coerced.
+          example: "open"
+        values:
+          type: array
+          minItems: 1
+          description: >
+            LEAF FORM, `IN` only. The candidate set, in the same lexical form as
+            `value`. It MUST be non-empty: an empty `IN` list can match nothing, so
+            honouring one would return zero records for a query the caller believes
+            selects something — the silent empty result this surface exists to
+            prevent, arriving through a different door. It is REFUSED instead
+            (FR-022d). A single-element list means `=`.
+          items:
+            type: string
+          example: ["open", "won"]
+    VaultFindResponse:
+      $ref: ./components/schemas/VaultFindResponse.yaml
+    VaultFindSort:
+      $ref: ./components/schemas/VaultFindSort.yaml
+    VaultFindGroupBy:
+      $ref: ./components/schemas/VaultFindGroupBy.yaml
+    VaultFindAggregate:
+      $ref: ./components/schemas/VaultFindAggregate.yaml
+    VaultFindRow:
+      $ref: ./components/schemas/VaultFindRow.yaml
+    VaultFindCell:
+      $ref: ./components/schemas/VaultFindCell.yaml
+    VaultFindJoin:
+      $ref: ./components/schemas/VaultFindJoin.yaml
+    VaultFindGroup:
+      $ref: ./components/schemas/VaultFindGroup.yaml
+    VaultFindSubgroup:
+      $ref: ./components/schemas/VaultFindSubgroup.yaml
+    VaultFindTotal:
+      $ref: ./components/schemas/VaultFindTotal.yaml
+    VaultFindAction:
+      $ref: ./components/schemas/VaultFindAction.yaml
+    VaultFindCounts:
+      $ref: ./components/schemas/VaultFindCounts.yaml
+    VaultFindPlanStep:
+      $ref: ./components/schemas/VaultFindPlanStep.yaml
+    VaultIndexState:
+      $ref: ./components/schemas/VaultIndexState.yaml
+    VaultTermCount:
+      $ref: ./components/schemas/VaultTermCount.yaml
+    VaultSearchRequest:
+      $ref: ./components/schemas/VaultSearchRequest.yaml
+    VaultSearchResponse:
+      $ref: ./components/schemas/VaultSearchResponse.yaml
+    VaultSearchNoteHit:
+      $ref: ./components/schemas/VaultSearchNoteHit.yaml
+    VaultSearchRecordHit:
+      $ref: ./components/schemas/VaultSearchRecordHit.yaml
+    VaultSearchViewHit:
+      $ref: ./components/schemas/VaultSearchViewHit.yaml
+    ValidationReport:
+      $ref: ./components/schemas/ValidationReport.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
@@ -7266,6 +8230,55 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
+  /library/{workspace_id}/content-binary:
+    put:
+      operationId: putLibraryContentBinary
+      summary: Write a file's BINARY content from the Library editor
+      description: >
+        Sibling of PUT .../content for content that is not valid UTF-8 text
+        (a filled PDF, an image, any other binary attachment) — see
+        LibraryBinaryContentRequest's description for why the text route
+        cannot carry it. Writes the base64-decoded bytes to the file at the
+        given workspace-relative path, creating the file if it does not
+        already exist and overwriting any existing content entirely.
+        Returns 400 if content_base64 is not valid base64 or decodes to more
+        than 25 MB. Returns 403 if path resolves outside the workspace's
+        work tree; 404 if the path's parent directory does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryBinaryContentRequest'
+      responses:
+        '200':
+          description: The written file's updated entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
   /library/{workspace_id}/upload:
     post:
       operationId: uploadLibraryFiles
@@ -7367,6 +8380,57 @@ paths:
                 $ref: '#/components/schemas/LibraryEntry'
         '201':
           description: The directory (and any missing intermediate directories) was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/vaults:
+    post:
+      operationId: createVault
+      summary: Create a new knowledge base ("vault") in a workspace's work tree
+      description: >
+        Creates a folder at parent_rel_path/name (or the work-tree root when
+        parent_rel_path is omitted) and initialises it as an Omnipus
+        knowledge base: the .omnipus-vault/ marker (FR-022/FR-023) plus
+        empty records/ and views/ control-plane directories, so
+        knowledge_configure can write record types and saved views into it
+        immediately. Rejects (409) if an entry already exists at the
+        resulting path — this endpoint never adopts or converts an existing
+        folder. Returns 403 if the resulting path resolves outside the
+        workspace's work tree; 404 if parent_rel_path does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVaultRequest'
+      responses:
+        '201':
+          description: The vault's directory entry.
           content:
             application/json:
               schema:
@@ -7490,6 +8554,614 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/preview-token:
+    post:
+      operationId: mintLibraryPreviewToken
+      summary: Mint a short-lived preview token for a Library file or bundle
+      description: >
+        Mints the path-bearing credential a SANDBOXED preview needs
+        (ADR-067 FR-003a, FR-003f). A document served under the isolation
+        policy has an opaque origin, so it can send neither the
+        SameSite=Strict session cookie nor an Authorization header on its
+        own <link>, <script>, font or media requests — without this token
+        an HTML bundle simply cannot load its own subresources.
+
+
+        Minting is authenticated and never widens access: the caller must
+        already be able to read the path, and the grant covers one workspace
+        and one path only — a single file, or one bundle root and its
+        descendants (FR-003b). The token lives 15 minutes and is also
+        invalidated by logout, mount revoke, and deletion or move of the
+        named path (FR-003d).
+
+
+        Re-minting returns a NEW token and invalidates the previous one
+        (FR-003m). There is no renewal endpoint.
+
+
+        Both this endpoint and the /library-preview/<token>/<path> serving
+        prefix are rate-limited, and a session may hold at most 8 live
+        tokens; a 9th mint request is refused with 429 (FR-003k).
+
+
+        The serving prefix itself is deliberately NOT in this document: it
+        is a bare, token-authenticated path on the main listener (ADR-044
+        shape) that returns file bytes or an HTML error page, carries no
+        JSON contract, and answers GET and HEAD only — every other method is
+        405 with Allow: GET, HEAD (FR-003j).
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryPreviewTokenRequest'
+      responses:
+        '201':
+          description: >
+            Token minted. The caller should put url into an iframe src and
+            drive its expiry notice from expires_at.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryPreviewTokenResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/inline-disposition:
+    get:
+      operationId: getLibraryInlineDisposition
+      summary: Ask whether a Library file may be previewed inline, and as what
+      description: >
+        Returns the server's own answer for one file: allow-listed for
+        inline display or not, the extension-derived Content-Type it will be
+        served with, which SPA renderer should draw it, and whether drawing
+        it makes the browser execute it (ADR-067 D15).
+
+
+        Exists so the SPA never re-derives any of that from the filename.
+        The allow-list and the extension-to-type table are compiled into the
+        binary and are the single source of truth (FR-015a, FR-015b); a
+        second copy in TypeScript would be a second answer, and the two
+        would disagree the first time an extension was added to one of them.
+
+
+        Returns 403 if path resolves outside the workspace's work tree; 404
+        if path does not exist or names a directory.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the file to classify.
+        example: "reports/q3/index.html"
+      responses:
+        '200':
+          description: How this file may be displayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryInlineDisposition'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge:
+    get:
+      operationId: getKnowledgeBaseInfo
+      summary: Detect whether a folder is a knowledge base, and describe it
+      description: >
+        Marker-based detection (ADR-067 FR-020, FR-021): a folder is a
+        knowledge base when its root contains .omnipus-vault/ or .obsidian/.
+        File CONTENT is never read to decide this.
+
+
+        Returns 200 with is_knowledge_base=false for an ordinary folder —
+        that is an answer, not an error. A marker that exists but cannot be
+        read is reported through detection_error rather than silently
+        downgrading the folder to ordinary (E-9).
+
+
+        Carries no index counts. Index progress is a streaming state pushed
+        over the WebSocket as knowledge_index_progress (FR-080); polling
+        this endpoint for it is the mistake that contract is written to
+        prevent.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: >
+          Workspace-relative path of the folder to test. Use "" or "." for
+          the work-tree root.
+        example: "notes/vault"
+      responses:
+        '200':
+          description: Detection result for this folder.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBaseInfo'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        # NO 409 HERE, DELIBERATELY (FR-026a). This operation MOUNTS NOTHING —
+        # it reports whether a folder looks like a knowledge base — so it has no
+        # way to produce a mount conflict. Worse than dead documentation, a 409
+        # here states the wrong rule: FR-026 constrains what ONE knowledge base
+        # is (exactly one folder), not how many a workspace may hold, and
+        # knowledge.ResolveScope deliberately supports a workspace with several.
+        # A client written against a 409 here would treat an ordinary second
+        # collection as an error. KnowledgeMountConflictError stays in
+        # components/schemas and belongs to the operation that MOUNTS, where
+        # Collection.AttachRoot is the real enforcement point.
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/search:
+    post:
+      operationId: searchKnowledgeBase
+      summary: Relevance search over one knowledge base
+      description: >
+        Returns ranked hits with path, title and a matched excerpt (FR-050),
+        AND — in the same response — the incompleteness statement qualifying
+        them (FR-035). A caller cannot obtain results without also obtaining
+        the statement, which is the point: a partial answer that looks whole
+        is worse than no answer.
+
+
+        The excerpt is re-read from the file at query time and never stored
+        in the index (FR-050a), so it always matches disk. When the re-read
+        cannot be done — the file moved, became unreadable, or the latency
+        budget ran out — the hit is still returned with path and title and a
+        machine-readable excerpt_unavailable reason. Never a fabricated
+        excerpt; never a silently dropped result.
+
+
+        A limit above the server cap is clamped and the clamp is reported
+        (FR-037). A collection outside the caller's workspace scope returns
+        an EMPTY result set rather than a permission error (FR-052, FR-053),
+        so the error channel cannot be used to probe for collections the
+        caller may not see. POST rather than GET because a query plus its
+        filters does not belong in a URL that lands in request logs.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KnowledgeSearchRequest'
+      responses:
+        '200':
+          description: Hits and the incompleteness statement qualifying them.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeSearchResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/find:
+    post:
+      operationId: findVault
+      summary: Human vault search — notes, records and views in one query
+      description: >
+        The human-facing counterpart to the agent's knowledge_find tool
+        (library-b-c-design-2026-09-07 §C1). One free-text query is answered
+        across three kinds at once: notes matched by body text (with a snippet),
+        records matched by their typed property values, and saved views matched
+        by name or label.
+
+
+        It runs over the SAME engine the agent uses
+        (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it
+        inherits that engine's prefix-matching, coverage and freshness
+        behaviour — there is no second search engine.
+
+
+        Honest states: an empty result is EMPTY, not an error. When the index
+        is not ready (never built, or still catching up with disk), the response
+        is complete=false with a complete_reason carrying the freshness signal,
+        so the UI can say "still indexing" rather than "no results". A
+        collection outside the caller's workspace scope returns the same
+        empty-but-complete shape rather than a permission error, so the error
+        channel cannot be used to probe for collections the caller may not see.
+        POST rather than GET because a free-text query does not belong in a URL
+        that lands in request logs.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VaultSearchRequest'
+      responses:
+        '200':
+          description: The three grouped hit lists and the completeness verdict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultSearchResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/graph:
+    get:
+      operationId: getKnowledgeGraph
+      summary: Links, backlinks, unresolved links, orphans or a neighbourhood
+      description: >
+        One operation serves all five graph queries (FR-051) because they
+        differ only in which subgraph is selected, not in what a link is.
+
+
+        Link resolution follows a fixed ladder — exact path, unique
+        basename, shortest path, lexicographic (FR-040) — and an ambiguous
+        basename is resolved by that rule AND reported as ambiguous
+        (FR-041): resolving it is not a licence to stay quiet about it. A
+        link with no match, or one whose target lies outside the collection
+        root, is reported unresolved and the target is not read (FR-042,
+        FR-043). Symbolic links are skipped and reported rather than
+        followed (FR-044), which is also how a symlink loop terminates.
+
+
+        Every query is bounded by hop count and node count (FR-054) and
+        reports its own truncation, so a small graph is never mistaken for a
+        clipped one.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: collection_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The KnowledgeBaseInfo.collection_id to query.
+        example: "kb_3d1c9a7e5b2f4806"
+      - name: kind
+        in: query
+        required: true
+        schema:
+          type: string
+          enum:
+          - links
+          - backlinks
+          - unresolved
+          - orphans
+          - neighbourhood
+        description: Which graph query to run.
+        example: "backlinks"
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+        description: >
+          Collection-relative path of the note the query is about. Required
+          for links, backlinks and neighbourhood; ignored for unresolved and
+          orphans, which are collection-wide.
+        example: "architecture/sandboxing.md"
+      - name: hops
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+        description: >
+          Maximum hops for a neighbourhood query. Clamped to the server
+          bound; the value actually used is echoed as hop_limit_applied.
+        example: 2
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+        description: >
+          Maximum nodes in the response. Clamped to the server bound; the
+          value actually used is echoed as node_limit_applied.
+        example: 200
+      responses:
+        '200':
+          description: The selected subgraph, with whatever the walk skipped.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeGraphResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/outline:
+    get:
+      operationId: getKnowledgeOutline
+      summary: Heading outline for a markdown file
+      description: >
+        Returns the heading outline that drives the reading rail, for ANY
+        markdown file — whether or not it belongs to a knowledge base
+        (FR-062). An outline is parsed from the one file in hand and needs
+        no index, which is exactly why search and backlinks stay
+        knowledge-base-only: those do need one. The is_knowledge_base field
+        tells the client which other rail panels it may offer.
+
+
+        Headings come back as a FLAT list in document order with nesting
+        carried by level, not as a tree — a document that skips from H1 to
+        H3 has one honest representation that way, where a tree would force
+        the server to invent an intermediate heading the author never wrote.
+
+
+        Frontmatter that is not valid YAML is reported through
+        frontmatter_malformed; the file is still outlined and still indexed
+        for body text (E-17).
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the markdown file.
+        example: "notes/vault/architecture/sandboxing.md"
+      responses:
+        '200':
+          description: The file's headings in document order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeOutline'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/base-views:
+    get:
+      operationId: getKnowledgeBaseViews
+      summary: The saved views imported from one .base file
+      description: >
+        Lists the saved views whose `source` names the given `.base` file,
+        with the slug each one is actually addressed by, its display label,
+        its kind, and whether it can be served at all — plus the enclosing
+        collection, so a caller can evaluate any of them without a second
+        lookup.
+
+
+        THE SLUG IS THE SERVER'S TO GIVE. Import is one-shot (FR-102) and the
+        importer's SlugRegistry appends a collision counter that nothing
+        outside it can reconstruct, so a client that re-derived slugs by
+        parsing the `.base` file mapped two colliding view names onto one
+        slug and rendered the first view's rows under the second view's name.
+        Every `name` here is read from the saved view file itself and must be
+        passed VERBATIM to GET .../knowledge/view.
+
+
+        A `.base` outside any knowledge base answers 200 with
+        is_knowledge_base=false and no views: nothing imported it, so it has
+        no views to run, which is a stated answer rather than an error. View
+        files that name this base but failed to load are counted in
+        unloadable_count rather than silently reducing the list.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the .base file.
+        example: "notes/vault/CRM/Invoices.base"
+      responses:
+        '200':
+          description: The views imported from that base file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBaseViews'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/view:
+    get:
+      operationId: getKnowledgeViewResult
+      summary: Evaluate a saved view and return everything needed to draw it
+      description: >
+        Resolves a saved view by name within one in-scope knowledge base,
+        evaluates its filter/grouping/aggregation through the SAME engine
+        knowledge_find uses (there is exactly one query engine), and returns
+        the view's resolved part stack with every aggregate precomputed
+        server-side (view-kinds-design-2026-09-03 §7) — per-group subtotals
+        and totals ONCE PER UNIT VALUE, never across units (G2), with rows
+        whose unit is missing shown, excluded from every total and counted
+        (G3). A legacy view with no `parts` serves as its single
+        layout-derived part.
+
+
+        A view that cannot be answered — unknown, stored disabled (FR-105),
+        refused at load, a layout with no drawable part, or an engine
+        refusal — returns 200 with `refusal` set and empty parts/rows, so
+        the client can show WHY. A collection_id outside this workspace's
+        scope answers exactly like an unknown view (FR-052/FR-053): the
+        error channel must not confirm what exists elsewhere.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: collection_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The KnowledgeBaseInfo.collection_id holding the view.
+        example: "kb_3d1c9a7e5b2f4806"
+      - name: view
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The saved view's name, exactly as declared.
+        example: "unpaid--by-client"
+      responses:
+        '200':
+          description: The evaluated view, or the named reason it cannot answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ViewResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

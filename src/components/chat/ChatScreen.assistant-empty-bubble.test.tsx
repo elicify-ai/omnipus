@@ -21,7 +21,7 @@
 //   Given: the same message now has streamed-in text
 //   Then:  the bubble shows that text AND the Copy button
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
@@ -162,6 +162,85 @@ function seedStreamingAssistant(assistantContent: string): void {
     },
     messages: allMessages,
     isStreaming: true,
+    isReplaying: false,
+    replayCompletedForSession: SID,
+  }))
+  useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+  useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
+}
+
+/**
+ * Seeds a user message followed by a TERMINAL (isStreaming:false,
+ * status:'done') assistant message with empty content — the uncovered
+ * variant of the D-fix bug (live UAT, 2026-08-26): the provider returned a
+ * response the engine judged empty (pkg/agent/loop.go's `defaultResponse`
+ * sentinel path), and the message finalized (`done` arrived) before that
+ * fallback text was merged onto it. Unlike seedStreamingAssistant('') above
+ * — where isStreaming:true and the message is still IN PROGRESS — this
+ * message is DONE: not streaming, not interrupted, not a typed error, and
+ * still holding nothing. The bug: showEmptyPlaceholder (pre-fix) required
+ * isRunning, so a terminal-empty message fell through to the normal render
+ * branch and showed an avatar + name + a bare "Copy message" button with no
+ * content paragraph above it — a Copy affordance for literally nothing to
+ * copy, and (unlike the streaming case) no thinking indicator either, since
+ * nothing is actually in progress.
+ *
+ * Render path note: because this message is NOT streaming,
+ * VirtualizedMessageListInner's `hasStreamingMessage` gate (ChatScreen.tsx)
+ * is false, so — unlike seedStreamingAssistant's placeholder — it is never
+ * routed through the live `ThreadPrimitive.Messages`/AssistantMessage()
+ * path; it renders through the historical VirtualAssistantMessageRow
+ * instead, exactly as it would in the real app once the store flips
+ * isStreaming to false. The companion describe block below force-disables
+ * `ResizeObserver` so ChatScreen falls back to PlainMessageList (see
+ * VirtualizedMessageList's own feature-detection comment) rather than the
+ * virtualizer, which computes zero visible rows under jsdom's absent
+ * layout engine — PlainMessageList renders every message unconditionally,
+ * through the same VirtualAssistantMessageRow component a real browser
+ * would use once virtualization is active.
+ */
+function seedTerminalEmptyAssistant(): void {
+  const userMsg: ChatMessage = {
+    id: 'msg_user',
+    role: 'user',
+    content: 'hi',
+    timestamp: new Date().toISOString(),
+    status: 'done',
+  }
+  const terminalEmptyMsg: ChatMessage = {
+    id: 'msg_assistant',
+    role: 'assistant',
+    content: '',
+    timestamp: new Date().toISOString(),
+    status: 'done',
+    isStreaming: false,
+  }
+  const allMessages = [userMsg, terminalEmptyMsg]
+  const bucket = makeBucketMessages(allMessages)
+  useChatStore.setState((s) => ({
+    ...s,
+    sessionsById: {
+      [SID]: {
+        ...((s.sessionsById ?? {})[SID] ?? {}),
+        ...bucket,
+        isStreaming: false,
+        isReplaying: false,
+        replayCompletedForSession: SID,
+        toolCalls: {},
+        toolCallOrder: [],
+        textAtToolCallStart: {},
+        sessionTokens: 0,
+        sessionCost: 0,
+        rateLimitEvent: null,
+        lastUserMessageAt: null,
+        cancelStage: null,
+        lastReceivedEventTime: null,
+        spanByParentCallId: {},
+        trimmedCount: 0,
+      },
+    },
+    messages: allMessages,
+    isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
   }))
@@ -318,5 +397,62 @@ describe('D: empty streaming assistant bubble (live AssistantMessage render)', (
     const bubble = screen.getByTestId('assistant-message')
     expect(within(bubble).getByTestId('assistant-text').textContent).toBe('Hello there')
     expect(within(bubble).getByText('Copy')).toBeInTheDocument()
+  })
+})
+
+describe('D2 (2026-08-26 live UAT): terminal-empty assistant bubble — the uncovered variant', () => {
+  // BDD:
+  //   Given: the last assistant message is DONE (isStreaming:false,
+  //          status:'done') — not interrupted, not a typed error — with
+  //          empty content, no tool calls, no media, no subagent spans
+  //   Then:  the bubble shows neither the thinking indicator (nothing is
+  //          in progress) NOR a Copy button (there is nothing to copy) —
+  //          just the avatar and agent name, matching a bubble with
+  //          nothing to show rather than offering a broken affordance
+  //
+  // This message is terminal (not streaming), so ChatScreen routes it
+  // through VirtualAssistantMessageRow, not the live AssistantMessage()
+  // path (see seedTerminalEmptyAssistant's doc comment). @tanstack/
+  // react-virtual — the module-scope ResizeObserverStub's real consumer —
+  // computes zero visible rows under jsdom (no layout engine), so this
+  // block disables ResizeObserver for its own tests to force ChatScreen's
+  // documented PlainMessageList fallback, which renders every message
+  // unconditionally through the same row component a real, laid-out browser
+  // would virtualize into view.
+  const originalResizeObserver = globalThis.ResizeObserver
+  beforeEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test-only global deletion to trigger ChatScreen's documented feature-detection fallback
+    delete (globalThis as any).ResizeObserver
+  })
+  afterEach(() => {
+    globalThis.ResizeObserver = originalResizeObserver
+  })
+
+  it('renders no Copy button and no thinking indicator once a response has terminated empty', async () => {
+    seedTerminalEmptyAssistant()
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const bubble = screen.getByTestId('assistant-message')
+    // The defect: an empty bubble offering a Copy button that would copy
+    // nothing.
+    expect(within(bubble).queryByText('Copy')).toBeNull()
+    expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
+    // Nothing is in progress — the thinking indicator must not show either
+    // (that would misrepresent a finished turn as still running).
+    expect(
+      within(bubble).queryByText(
+        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+      ),
+    ).toBeNull()
+    // The bubble still identifies its speaker (avatar + name) — this is a
+    // real, finished assistant turn, not a message that failed to mount.
+    expect(within(bubble).getByTestId('agent-label')).toBeInTheDocument()
   })
 })

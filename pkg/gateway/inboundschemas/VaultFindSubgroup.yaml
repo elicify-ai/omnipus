@@ -1,0 +1,45 @@
+title: VaultFindSubgroup
+description: >
+  The INNER level of a two-level grouping (spec FR-027).
+
+  It carries no children of its own, which is how the two-level limit is
+  expressed in the contract rather than only in the engine. A record holding
+  several values of the grouped property appears in every subgroup it belongs
+  to (FR-028), so subgroup counts can sum to more than the parent's count —
+  which is why each states its own.
+type: object
+additionalProperties: false
+required:
+  - property
+  - key
+  - count
+  - paths
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: The property this level groups by.
+    example: "status"
+  key:
+    type: string
+    description: >
+      The group's value, rendered. An empty key is the ABSENT group; read it
+      with `absent`, because an empty string is itself a value (R-3) and must
+      not collide with absence.
+    example: "open"
+  absent:
+    type: boolean
+    description: True when this group holds the records where the property is absent.
+    example: false
+  count:
+    type: integer
+    minimum: 0
+    description: Evaluated records in this subgroup.
+    example: 4
+  paths:
+    type: array
+    description: >
+      The member rows, by path. Always present — an empty array, never null.
+    items:
+      type: string
+      minLength: 1

@@ -5,6 +5,9 @@
 package gateway
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +21,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -101,6 +106,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	case "content-binary":
+		if r.Method != http.MethodPut {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryContentBinaryPut(w, r, workspaceID)
 	case "upload":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -113,6 +124,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryMkdir(w, r, workspaceID)
+	case "vaults":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryCreateVault(w, r, workspaceID)
 	case "rename":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -125,6 +142,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryDownload(w, r, workspaceID)
+	case "inline-disposition":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryInlineDisposition(w, r, workspaceID)
 	default:
 		http.NotFound(w, r)
 	}
@@ -192,6 +215,40 @@ func (a *restAPI) openLibraryRoot(w http.ResponseWriter, workspaceID, label stri
 		return nil, false
 	}
 	return root, true
+}
+
+// checkCreateName applies the DESTINATION root's name-shape rules to rel and
+// writes the 400 itself when they refuse, returning ok=false (ADR-067
+// FR-0001a). Every create/rename handler calls it on its destination path,
+// after the root is open.
+//
+// Why a helper rather than the method inline five times: FR-0001a names
+// exactly five handlers that create or rename — content-put, upload, mkdir,
+// rename, transfer — and observes that "the one that forgot would silently
+// accept what the other four refuse". A one-line call is the smallest thing a
+// sixth handler's author can copy correctly.
+//
+// Two properties this signature is deliberately shaped for:
+//
+//   - root is the DESTINATION's root, not the caller's convenient one. For a
+//     cross-workspace move or copy that is toRoot, because population
+//     (workspace storage vs. mount) is a property of where the file lands.
+//   - The error goes through mapLibraryErr, not a bespoke jsonErr. Root's
+//     ValidateCreateName wraps ErrInvalidPath precisely so the existing 400
+//     mapping covers it with no new branch; routing it anywhere else would
+//     re-invent that mapping and let the two drift.
+//
+// Nothing on the READ path may call this. Listing, opening, downloading and
+// deleting an existing file are reads of the operator's disk, and FR-0001
+// removes name shape from them entirely: a file already on disk is, by
+// construction, inside its own filesystem's limits, and Omnipus did not name
+// it.
+func checkCreateName(w http.ResponseWriter, root *library.Root, rel, op, workspaceID string) bool {
+	if err := root.ValidateCreateName(rel); err != nil {
+		mapLibraryErr(w, op, workspaceID, err)
+		return false
+	}
+	return true
 }
 
 // --- GET /library/workspaces ---
@@ -289,6 +346,11 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 		mapLibraryErr(w, "delete entry", workspaceID, err)
 		return
 	}
+	// ADR-067 FR-003d: the granted path is gone, so any preview token naming it
+	// — or naming something beneath it — must stop working now rather than in
+	// fifteen minutes. InvalidatePath covers the beneath-it half: deleting the
+	// directory "reports" also kills a bundle token scoped to "reports/q3".
+	a.revokePreviewTokensForPath(workspaceID, rel)
 	a.logLibraryAudit(r, "library.delete", workspaceID, map[string]any{"path": rel})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -367,7 +429,111 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	}
 	defer root.Close()
 
+	if !checkCreateName(w, root, rel, "put content", workspaceID) {
+		return
+	}
+
 	fi, err := root.WriteContent(rel, []byte(req.Content))
+	if err != nil {
+		mapLibraryErr(w, "put content", workspaceID, err)
+		return
+	}
+	jsonOK(w, library.EntryFromInfo(rel, fi))
+}
+
+// maxLibraryBinaryContentBytes is the decoded-byte cap for PUT
+// .../content-binary (LibraryBinaryContentRequest.content_base64) — 25 MB,
+// matching the size a filled PDF or other binary attachment realistically
+// needs and the cap the schema documents. It intentionally does NOT reuse
+// library.MaxContentBytes (10 MB): that constant also gates GET .../content's
+// inline-render threshold for TEXT files, and binary attachments are never
+// rendered inline through that path.
+const maxLibraryBinaryContentBytes = 25 * 1024 * 1024
+
+// maxLibraryBinaryContentBodyBytes bounds the raw JSON request body read for
+// PUT .../content-binary. It is NOT decodeAndValidate's usual 1 MB cap:
+// standard base64 inflates the payload to ~4/3 of the decoded size, so a
+// legal 25 MB attachment needs room for its ~33.3 MB encoded form plus the
+// JSON envelope and the "path" field. The +4096 is slack for that envelope,
+// not part of the size budget being enforced.
+const maxLibraryBinaryContentBodyBytes = (maxLibraryBinaryContentBytes/3+1)*4 + 4096
+
+// handleLibraryContentBinaryPut is the binary-capable sibling of
+// handleLibraryContentPut: PUT .../content carries UTF-8 text as a JSON
+// string, which corrupts arbitrary bytes, so this route instead carries the
+// content as standard base64 (LibraryBinaryContentRequest.content_base64) and
+// writes the decoded bytes verbatim. It cannot go through decodeAndValidate
+// unmodified because that helper hard-caps the body read at 1 MB regardless
+// of schema — far too small for a base64-encoded PDF — so this handler reads
+// and validates the body itself, at a size ceiling sized for the 25 MB
+// decoded cap, before decoding into the generated type.
+func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	lr := io.LimitReader(r.Body, maxLibraryBinaryContentBodyBytes+1)
+	raw, err := io.ReadAll(lr)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	if int64(len(raw)) > maxLibraryBinaryContentBodyBytes {
+		jsonErr(w, http.StatusBadRequest, "content exceeds the 25 MB limit")
+		return
+	}
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "request body is required")
+		return
+	}
+
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if validateEnabled {
+		if errMsg, serverErr := validateBodyAgainstSchema("LibraryBinaryContentRequest", raw); errMsg != "" {
+			if serverErr {
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("request body does not match schema LibraryBinaryContentRequest: %s", errMsg))
+			}
+			return
+		}
+	}
+
+	var req gen.LibraryBinaryContentRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	rel, err := library.CleanRelPath(req.Path)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(req.ContentBase64)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "content_base64 is not valid base64")
+		return
+	}
+	if len(decoded) > maxLibraryBinaryContentBytes {
+		jsonErr(w, http.StatusBadRequest, "content exceeds the 25 MB limit")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	if !checkCreateName(w, root, rel, "put content", workspaceID) {
+		return
+	}
+
+	fi, err := root.WriteContent(rel, decoded)
 	if err != nil {
 		mapLibraryErr(w, "put content", workspaceID, err)
 		return
@@ -452,6 +618,21 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 		destRel := sanitized
 		if targetDir != "" {
 			destRel = targetDir + "/" + sanitized
+		}
+
+		// The full destination, not just the leaf. SanitizeUploadFilename above
+		// already judged the leaf, so on a POSIX build this adds nothing a
+		// caller can observe — every POSIX shape rule is a per-component byte
+		// budget the host filesystem enforces anyway. What it adds on a Windows
+		// build is the two rules the leaf check cannot see: targetDir's own
+		// segments, and the whole-path MAX_PATH budget that a short filename in
+		// a deep directory blows without any single component coming close.
+		// FR-0001a names upload as one of the five for that reason.
+		if nameErr := root.ValidateCreateName(destRel); nameErr != nil {
+			part.Close()
+			rollback()
+			mapLibraryErr(w, "upload", workspaceID, nameErr)
+			return
 		}
 
 		finalRel, f, createErr := root.CreateUnique(destRel)
@@ -542,6 +723,10 @@ func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, wor
 	}
 	defer root.Close()
 
+	if !checkCreateName(w, root, rel, "mkdir", workspaceID) {
+		return
+	}
+
 	fi, created, err := root.Mkdir(rel)
 	if err != nil {
 		mapLibraryErr(w, "mkdir", workspaceID, err)
@@ -554,6 +739,260 @@ func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, wor
 	} else {
 		jsonOK(w, entry)
 	}
+}
+
+// handleLibraryCreateVault creates a new Omnipus knowledge base ("vault") at
+// parent_rel_path/name inside workspaceID's work tree.
+//
+// Unlike handleLibraryMkdir this is NOT idempotent and does NOT auto-create
+// missing intermediate directories: it behaves like content-put/rename
+// (requires the immediate parent to already exist, 404 otherwise) and rejects
+// (409) ANY entry — file, plain directory, or existing vault — already at
+// the target path, because adopting an existing folder into a vault or
+// silently reusing one is never this endpoint's job (CreateVaultRequest's
+// description).
+//
+// SEEDING DECISION: after knowledge.CreateInWorkspace writes the
+// .omnipus-vault/ marker, this handler additionally creates empty
+// records/ and views/ control-plane directories (records.SchemaDir,
+// records.ViewsDir) so knowledge_configure has somewhere to write into
+// immediately. It deliberately does NOT seed a starter saved view. A view
+// is validated against the vault's schema set and must name an existing
+// record TYPE (pkg/records/view.go's RejectViewMissingType /
+// ValidateViewAgainstSchemas) — a brand-new vault has zero record types, so
+// there is no type this handler could reference without inventing a schema
+// shape, which view.go's own doc comment reserves to knowledge_configure's
+// write path alone ("THERE IS NO WRITER [here], on purpose"). Empty
+// records/ + views/ plus the marker is a valid, detectable, immediately
+// usable vault; a fabricated view would not be.
+func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	var req gen.CreateVaultRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "CreateVaultRequest", &req, validateEnabled) {
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+		jsonErr(w, http.StatusBadRequest, "invalid vault name")
+		return
+	}
+
+	parentRel := ""
+	if req.ParentRelPath != nil {
+		cleaned, err := library.CleanRelPath(*req.ParentRelPath)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid parent_rel_path")
+			return
+		}
+		parentRel = cleaned
+	}
+	joined := name
+	if parentRel != "" {
+		joined = parentRel + "/" + name
+	}
+	rel, err := library.CleanRelPath(joined)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	if !checkCreateName(w, root, rel, "create vault", workspaceID) {
+		return
+	}
+	if parentRel != "" {
+		if _, err := root.StatDir(parentRel); err != nil {
+			mapLibraryErr(w, "create vault", workspaceID, err)
+			return
+		}
+	}
+
+	// ValidateCreateName only judges name SHAPE (FR-0001a), not collision —
+	// check for an existing entry at rel ourselves so this route can refuse
+	// with 409 rather than silently adopting or converting whatever is
+	// already there.
+	switch _, statErr := root.StatDir(rel); {
+	case statErr == nil, errors.Is(statErr, library.ErrNotDir):
+		jsonErr(w, http.StatusConflict, "an entry already exists at that path")
+		return
+	case errors.Is(statErr, library.ErrNotFound):
+		// Expected: nothing there yet.
+	default:
+		mapLibraryErr(w, "create vault", workspaceID, statErr)
+		return
+	}
+
+	collection, err := knowledge.CreateInWorkspace(a.homePath, workspaceID, rel, knowledge.Marker{DisplayName: name})
+	if err != nil {
+		switch {
+		case errors.Is(err, knowledge.ErrAlreadyKnowledgeBase):
+			jsonErr(w, http.StatusConflict, "an entry already exists at that path")
+		case errors.Is(err, knowledge.ErrMarkerInvalid):
+			jsonErr(w, http.StatusBadRequest, "invalid vault name")
+		case errors.Is(err, knowledge.ErrOutsideCollection):
+			jsonErr(w, http.StatusForbidden, "path resolves outside the workspace work tree")
+		default:
+			logger.ErrorCF("rest", "library: create vault failed",
+				map[string]any{"workspace_id": workspaceID, "path": rel, "error": err.Error()})
+			jsonErr(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+	}
+
+	if mkErr := os.MkdirAll(records.SchemaDir(collection.Root()), 0o755); mkErr != nil {
+		logger.ErrorCF("rest", "library: create vault: seed records dir failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": mkErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if mkErr := os.MkdirAll(records.ViewsDir(collection.Root()), 0o755); mkErr != nil {
+		logger.ErrorCF("rest", "library: create vault: seed views dir failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": mkErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	fi, err := root.StatDir(rel)
+	if err != nil {
+		mapLibraryErr(w, "create vault", workspaceID, err)
+		return
+	}
+	entry := library.EntryFromInfo(rel, fi)
+	a.logLibraryAudit(r, "library.create_vault", workspaceID, map[string]any{"path": rel})
+	jsonCreated(w, entry)
+}
+
+// rfc5987AttrChars is the punctuation RFC 5987 §3.2.1 lets an ext-value carry
+// unencoded, alongside ALPHA and DIGIT. Everything else — space, "%", "(",
+// every non-ASCII byte — is percent-encoded. Kept as an explicit allow-list
+// rather than a "deny these" test so a character nobody thought about is
+// encoded, not emitted.
+const rfc5987AttrChars = "!#$&+-.^_`|~"
+
+// percentEncodeRFC5987 percent-encodes s (already UTF-8, as every Go string
+// from a filesystem name is) into an RFC 5987 ext-value body — the part after
+// the charset-and-language prefix of a filename* parameter. Byte-wise, not
+// rune-wise: the encoding is defined over the octets of the charset, so a
+// multi-byte rune becomes several %XX escapes.
+func percentEncodeRFC5987(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			strings.IndexByte(rfc5987AttrChars, c) >= 0:
+			b.WriteByte(c)
+		default:
+			b.WriteString(fmt.Sprintf("%%%02X", c))
+		}
+	}
+	return b.String()
+}
+
+// asciiFallbackFilename reduces name to something safe inside an HTTP
+// quoted-string: printable US-ASCII only, with `"` and `\` backslash-escaped.
+// Any other byte — non-ASCII, DEL, or a control character that somehow got
+// this far — becomes "_".
+//
+// This is the RFC 6266 §4.3 fallback, read only by a client too old to
+// understand filename*. It is allowed to be lossy; the exact name travels in
+// filename*.
+func asciiFallbackFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r >= 0x20 && r < 0x7F:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "download"
+	}
+	return b.String()
+}
+
+// contentDispositionAttachment builds an RFC 6266 Content-Disposition value
+// for a download of filename (ADR-067 FR-0003).
+//
+// What was wrong with the previous fmt.Sprintf("attachment; filename=%q", …),
+// and what was not: header injection was NOT the problem. %q escapes CR, LF,
+// NUL and the double quote, and CleanRelPath refuses control characters
+// upstream besides — verified by running it, and the injection cases are kept
+// as regression controls in the tests rather than presented as new coverage.
+//
+// The real defect is non-ASCII. %q leaves a rune like "ü" as its raw UTF-8
+// bytes inside a quoted-string, and a quoted-string carries no charset
+// declaration, so a client is free to read those bytes as Latin-1 and save
+// "Ãœnï…". Stage 0 makes non-ASCII names strictly more common — that is the
+// point of it — so the fix ships with it.
+//
+// The output for a pure-ASCII name is byte-identical to the old construction,
+// which is deliberate: the overwhelming majority of downloads must not change
+// their headers because of this.
+//
+// mime.FormatMediaType is not used. It emits filename* ALONE with no ASCII
+// fallback (FR-0003 requires both), and it returns the empty string on failure
+// — which, written into a header unchecked, produces a bare
+// "Content-Disposition:" and a browser that renders the file inline instead of
+// downloading it. A silent downgrade from attachment to inline is exactly the
+// class of failure this handler must not have.
+// contentDispositionDisposition builds an RFC 6266 Content-Disposition value
+// for either disposition, sharing one encoder so the two can never disagree
+// about how a name is escaped.
+//
+// The inline form KEEPS the filename. Dropping it (a bare "inline") is not a
+// hardening measure — the type comes from the extension table plus nosniff,
+// never from the name — and it silently changes what the browser offers when
+// the reader saves from an inline view. Unifying the two routes on the shared
+// helper did exactly that to the media route, and only the integration test
+// noticed.
+func contentDispositionWith(kind, filename string) string {
+	ascii := asciiFallbackFilename(filename)
+	needsExtended := false
+	for i := 0; i < len(filename); i++ {
+		if filename[i] >= 0x80 {
+			needsExtended = true
+			break
+		}
+	}
+	if !needsExtended {
+		return kind + `; filename="` + ascii + `"`
+	}
+	// filename first, filename* second: RFC 6266 §4.3 says a recipient that
+	// understands both MUST prefer filename*, and Go's own mime.ParseMediaType
+	// does, so ordering is a courtesy to lenient parsers rather than a
+	// correctness requirement — but it costs nothing to put the fallback where
+	// a strictly-first-wins parser finds the safe one.
+	return kind + `; filename="` + ascii + `"; filename*=UTF-8''` + percentEncodeRFC5987(filename)
+}
+
+// contentDispositionInline is the inline half. An empty name yields a bare
+// "inline", which is the correct value when there is no name to offer.
+func contentDispositionInline(filename string) string {
+	if filename == "" {
+		return "inline"
+	}
+	return contentDispositionWith("inline", filename)
+}
+
+func contentDispositionAttachment(filename string) string {
+	return contentDispositionWith("attachment", filename)
 }
 
 // --- GET /library/{workspace_id}/download ---
@@ -587,10 +1026,18 @@ func (a *restAPI) handleLibraryDownload(w http.ResponseWriter, r *http.Request, 
 	}
 	defer f.Close()
 
-	filename := path.Base(rel)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	http.ServeContent(w, r, filename, fi.ModTime(), f)
+	// ADR-067 FR-015a/FR-003g. This used to call http.ServeContent with the
+	// filename and no Content-Type, so the type came from the HOST MIME
+	// registry and, failing that, from sniffing the first 512 bytes — both
+	// forbidden by FR-015, and the registry half means the same binary answers
+	// differently on a developer Mac and in a scratch container.
+	//
+	// forceAttachment is true and must stay true: FR-003g keeps the
+	// authenticated Library path serving attachments unchanged, so this
+	// response also carries no isolation policy (MV-13's second half). Inline
+	// serving belongs to the preview-token path, which is the only URL whose
+	// credential is scoped to a single file.
+	serveLibraryContent(w, r, f, fi.ModTime(), path.Base(rel), true)
 }
 
 // --- POST /library/{workspace_id}/rename ---
@@ -623,13 +1070,87 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 	}
 	defer root.Close()
 
+	// The DESTINATION only. fromRel names something that already exists —
+	// judging its shape would be judging a name Omnipus is not creating, and
+	// would make an operator's existing file un-renameable precisely because
+	// its current name is the thing they want to fix.
+	if !checkCreateName(w, root, toRel, "rename", workspaceID) {
+		return
+	}
+
 	fi, err := root.Rename(fromRel, toRel)
 	if err != nil {
 		mapLibraryErr(w, "rename", workspaceID, err)
 		return
 	}
+	// ADR-067 FR-003d: the granted path has MOVED, so every token naming it —
+	// or naming something beneath it — must stop working now.
+	//
+	// The SOURCE only, and that is not an oversight. A token over the
+	// DESTINATION cannot exist: minting requires the path to be readable at mint
+	// time, and this handler refuses a destination that already exists (409,
+	// root.Rename's ErrExists). If that ever stops being true — an overwrite
+	// mode, a force flag — the destination becomes a live grant over bytes its
+	// holder never saw, and this is the line that has to grow a second call.
+	a.revokePreviewTokensForPath(workspaceID, fromRel)
 	a.logLibraryAudit(r, "library.rename", workspaceID, map[string]any{"from": fromRel, "to": toRel})
 	jsonOK(w, library.EntryFromInfo(toRel, fi))
+}
+
+// --- GET /library/{workspace_id}/inline-disposition ---
+
+// handleLibraryInlineDisposition answers, for ONE file, whether the Library may
+// serve it inline, as what Content-Type, which SPA surface should draw it, and
+// whether drawing it makes the browser execute it (ADR-067 D15, FR-080).
+//
+// WHY THIS ENDPOINT EXISTS RATHER THAN THE SPA WORKING IT OUT. The §10.4
+// allow-list and the extension→type table are compiled into the binary and are
+// the single source of truth (FR-015a, FR-015b). A second copy in TypeScript is
+// a second answer, and the two disagree the first time an extension is added to
+// one of them — at which point the SPA mounts a surface for bytes the server
+// will not serve that way, which is exactly the type confusion FR-015 exists to
+// prevent, arriving from the inside.
+//
+// IT ANSWERS ABOUT THE FILE, NOT ABOUT A GRANT. Nothing here mints anything;
+// fetching the bytes inline still requires a preview token. What it does owe the
+// caller is the same containment the rest of the Library owes: the path is
+// shape-checked by library.CleanRelPath and then resolved through an
+// os.Root-confined Stat, so an out-of-root symlink is a 403 here rather than a
+// confident answer about a file the caller may not read.
+//
+// The file must EXIST. An answer for a path that is not there would be a
+// perfectly plausible, entirely fictional classification — and the SPA would
+// mount a renderer for it before discovering the 404.
+func (a *restAPI) handleLibraryInlineDisposition(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
+		jsonErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	rel, err := library.CleanRelPath(rawPath)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	// StatFile, not Stat: a directory has no disposition, and mapLibraryErr
+	// turns library.ErrIsDir into the 404 the contract specifies for it.
+	if _, statErr := root.StatFile(rel); statErr != nil {
+		mapLibraryErr(w, "inline disposition", workspaceID, statErr)
+		return
+	}
+
+	jsonOK(w, libraryInlineDispositionFor(rel))
 }
 
 // --- POST /library/move, POST /library/copy ---
@@ -693,6 +1214,16 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 		defer toRoot.Close()
 	}
 
+	// toRoot, never fromRoot: for a cross-workspace transfer the two are
+	// different roots with different mount tables, and the question
+	// ValidateCreateName answers — "is Omnipus about to create this name in
+	// storage it owns?" — is a property of where the file LANDS. Asking
+	// fromRoot would consult the wrong workspace's mounts and, for a copy out
+	// of a mount into workspace storage, would skip the check entirely.
+	if !checkCreateName(w, toRoot, toRel, string(mode), req.ToWorkspaceId) {
+		return
+	}
+
 	var fi os.FileInfo
 	var opErr error
 	switch mode {
@@ -704,6 +1235,16 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	if opErr != nil {
 		mapLibraryErr(w, string(mode), req.FromWorkspaceId, opErr)
 		return
+	}
+
+	// ADR-067 FR-003d. A MOVE vacates from_path, so every token over it dies —
+	// in the SOURCE workspace, which for a cross-workspace transfer is not the
+	// one the entry landed in. A COPY destroys nothing and moves nothing, so it
+	// is not one of FR-003d's events and revokes nothing; the destination cannot
+	// hold a live grant either, because both modes refuse an existing
+	// destination (409) and a token can only be minted over a path that exists.
+	if mode == transferModeMove {
+		a.revokePreviewTokensForPath(req.FromWorkspaceId, fromRel)
 	}
 
 	entry := library.EntryFromInfo(toRel, fi)

@@ -1,0 +1,60 @@
+title: ValidationReport
+description: >
+  The result of running the schema across records (ADR-068 D15, record_validate).
+
+  Its purpose is to turn "the view looks wrong" into a clearable worklist:
+  every failure named per record, with the reason and the expected shape.
+
+  `complete` and `problems` are REQUIRED for the same structural reason they
+  are on RecordQueryResponse: a validation run that could not cover everything
+  it was asked to cover, and does not say so, is worse than no validation at
+  all — it certifies a corpus nobody checked. An empty `problems` array with
+  `complete: true` is the only combination that means "this corpus is clean".
+type: object
+additionalProperties: false
+required:
+  - complete
+  - problems
+  - records_checked
+  - types_checked
+properties:
+  complete:
+    type: boolean
+    description: >
+      REQUIRED. True only when every record of every requested type within
+      scope was checked. False when scope resolution was itself incomplete
+      (FR-062a), when a bound stopped the run, or when a schema could not be
+      loaded — with the reason in `problems`.
+    example: false
+  problems:
+    type: array
+    description: >
+      REQUIRED. Every finding, named per record with the reason and, where
+      applicable, the expected shape. Always present — an EMPTY ARRAY when the
+      corpus is clean, never null and never absent.
+    items:
+      $ref: "./RecordProblem.yaml"
+      x-go-type: RecordProblem
+  records_checked:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      How many records were actually examined. Stated so a clean report over
+      zero records cannot be mistaken for a clean report over the corpus.
+    example: 63
+  types_checked:
+    type: integer
+    format: int64
+    minimum: 0
+    description: How many record types were examined.
+    example: 4
+  types:
+    type: array
+    description: >
+      The record types examined, by name. Present so the caller can see what
+      the run covered without inferring it from the findings.
+    items:
+      type: string
+      minLength: 1
+    example: ["company", "deal"]

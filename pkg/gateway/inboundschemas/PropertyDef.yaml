@@ -1,0 +1,247 @@
+title: PropertyDef
+description: >
+  One declared property of a record type (ADR-068 D2, D3). EIGHT property
+  types exist and no more: text, enum, relation, date, integer, decimal,
+  person, checkbox.
+
+  The count was seven through Draft 9. `checkbox` joined in spec Draft 11
+  (FR-004c, ADR-068 D24.5) and this line is the record of when it changed —
+  a rewrite of this sentence back to "seven" re-creates the staleness UAT
+  case C-8 was written to catch. Before that, in ADR-068 revision 7, the
+  membership changed while the count did not: `money` was deleted and
+  `number` was split into `integer` and `decimal`.
+
+  ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and
+  `required` carry no default and are never inferred, because the single
+  most-reported failure in the research corpus is a scalar property silently
+  becoming a list the moment a second value is added — after which every query
+  written against it returns nothing, with no error (D3.1). A property whose
+  arity is merely "absent" reproduces exactly that ambiguity on the wire.
+
+  Property types are scoped to their record type (D3.3, FR-009): `status` on
+  one type and `status` on another are unrelated declarations. This contract
+  therefore never carries a vault-wide property table.
+
+  ADR-068 D0: the product ships NO record types and NO properties of its own.
+  Every PropertyDef on the wire came from a schema file the operator's vault
+  declared. The names used in the examples here are illustrative of the
+  mechanism only.
+type: object
+additionalProperties: false
+required:
+  - name
+  - type
+  - many
+  - required
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      The frontmatter key, exactly as the operator declared it. Never renamed
+      and never prefixed by us — only fields Omnipus itself maintains carry
+      the `omni_` prefix (D8), so removing Omnipus leaves a working note.
+    example: "status"
+  type:
+    type: string
+    enum:
+      - text
+      - enum
+      - relation
+      - date
+      - integer
+      - decimal
+      - person
+      - checkbox
+    x-enum-varnames:
+      - PropertyDefTypeText
+      - PropertyDefTypeEnum
+      - PropertyDefTypeRelation
+      - PropertyDefTypeDate
+      - PropertyDefTypeInteger
+      - PropertyDefTypeDecimal
+      - PropertyDefTypePerson
+      - PropertyDefTypeCheckbox
+    description: >
+      "text" — prose, never validated. On the CURRENT query grammar (ruling
+      R-B, the ten SQL operators of VaultFilterNode) a text property answers
+      `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and
+      `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value
+      (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the
+      only wildcards and they must be spelled. Full-text relevance retrieval
+      is ADR-067's search surface, not this one.
+
+
+      *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY
+      in RecordFilter.yaml, which is RecordQueryRequest's own filter shape.
+      The flat view format that also used it is deleted; a saved view and a
+      knowledge_find request both speak the ten SQL operators above and
+      nothing else.*
+      "enum" — one of a closed SET (`values`). The set is closed; it is not
+      ordered — sorting is lexical over the folded value (D4, R-5), and an
+      author who wants a domain order prefixes the values: `1-lead`,
+      `2-qualified`.
+      "relation" — a typed edge to another record (D5); `to` names the target
+      record type and `inverse` names the derived reverse direction.
+      "date" — a day or an instant, comparable.
+      "integer" — a signed 64-bit whole number, bound-checked and REFUSED
+      outside int64 rather than saturated or widened to a float. `unit` is
+      declared metadata, never glued into the property name.
+      "decimal" — an exact, arbitrary-precision number, at most 100 decimal
+      places; a value past the bound is refused naming it, never rounded.
+      `unit` applies here too.
+      "person" — a relation to a person record, kept distinct from a name
+      typed as text so one vault cannot model the same concept both ways.
+      "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings
+      `true` and `false`, case-folded, parse; anything else is
+      NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE
+      — "days I did not meditate" is a native question here rather than a
+      trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`,
+      `IS NOT NULL`; the ordering operators are REFUSED naming the remedy
+      (R-13's pattern), because a boolean has no order to compare on. It is
+      the domain of the `checked` and `unchecked` aggregates
+      (RecordAggregate.yaml, FR-150).
+    example: "enum"
+  many:
+    type: boolean
+    description: >
+      Declared ARITY (D3.1). True means a list, false means a scalar. Writing
+      a list to a scalar property is rejected with the expected shape named
+      (FR-006), rather than silently widening the property.
+    example: false
+  required:
+    type: boolean
+    description: >
+      True when a record of this type MUST carry the property. A record
+      missing a required property is named by validation with the property and
+      the reason (RecordProblem.code = missing_required).
+    example: true
+  label:
+    type: string
+    description: Human-readable label for display. Absent means render `name`.
+    example: "Status"
+  values:
+    type: array
+    description: >
+      The closed value set. Present only when type is "enum", and then
+      non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION
+      lists the permitted values in, so the operator reads their own file back.
+
+
+      Sorting and the `min`/`max` aggregates are LEXICAL OVER THE CASE-FOLDED
+      VALUE (ruling R-5/R-E, FR-010): there is no declared-position ordinal,
+      and `Won`, `won` and `WON` sort together exactly as they group together.
+      A domain order is expressed by PREFIXING the values (`1-lead`,
+      `2-qualified`) — visible in the operator's own file, doing exactly what
+      it appears to do.
+    items:
+      $ref: "./EnumValueDef.yaml"
+      x-go-type: EnumValueDef
+  to:
+    type: string
+    minLength: 1
+    description: >
+      Target record type name. Present only when type is "relation" or
+      "person". A relation pointing at a note that exists but is not of this
+      type is a validation finding, not a silent accept (FR-034).
+    example: "company"
+  inverse:
+    type: string
+    minLength: 1
+    description: >
+      Name of the DERIVED reverse direction (D5). The inverse is computed from
+      the index and is NEVER stored in any file (FR-032) — the hand-maintained
+      reverse list is the field that drifts the first time anyone forgets.
+    example: "deals"
+  unit:
+    type: string
+    description: >
+      Unit of measure for an "integer" or "decimal" property, declared as
+      metadata rather than glued into the property name (D3). Absent means
+      unitless.
+
+
+      IT IS THE FIXED UNIT, THE SAME ON EVERY RECORD. A number whose unit
+      VARIES per record — an amount that is SGD on one invoice and EUR on the
+      next — declares `unit_property` instead, naming the sibling property that
+      carries it.
+    example: "minutes"
+  unit_property:
+    type: string
+    minLength: 1
+    description: >
+      Name of a SIBLING property on this same record type that carries this
+      number's unit PER RECORD (view-kinds-design-2026-09-03 §5). Optional, and
+      valid only on "integer" and "decimal".
+
+
+      WHY IT IS DECLARED AND NEVER INFERRED. Pairing a number with any nearby
+      enum works perfectly on invoices and is wrong the first time a record
+      holds two amounts — a `total` in the record's currency beside a
+      `tax_rate` that is a percentage. Where a number and a unit-like enum
+      coexist UNDECLARED, knowledge_describe may MENTION the candidate pairing;
+      nothing acts on it.
+
+
+      WHAT IT BUYS. The pair renders as ONE value ("12,480.00 SGD") and the
+      unit property loses its own row. More importantly it makes the totalling
+      rule enforceable: a number with a unit totals ONCE PER UNIT VALUE and
+      NEVER across units (design §3 G2), and a row whose unit is missing is
+      shown, EXCLUDED from every total, and counted separately (G3). Without
+      the declaration there is nothing to enforce that against, and summing
+      across currencies produces a wrong number that looks right — the one
+      failure mode in this area that reports nothing at all.
+
+
+      VALIDATED AT LOAD, PER FILE, AND REFUSED BY NAME. The named property must
+      EXIST on this record type, must be a DIFFERENT property (a number cannot
+      be its own unit), and must be an "enum" or a "text" — a unit is a label,
+      and a date or a second number is not one. A violation rejects this schema
+      file naming the property and the reason; every other record type in the
+      vault goes on loading.
+    example: "currency"
+  formula:
+    type: string
+    minLength: 1
+    description: >
+      DECLARED HERE, THIS KEY IS REFUSED, AND THE SCHEMA FILE IS REJECTED
+      NAMING IT. It stays DEFINED in this contract so the refusal has something
+      to be about: an author who writes `formula:` on a schema property gets
+      one message at load, at authoring time, telling them where a formula
+      actually goes. A key silently ignored is how a promise becomes a blank
+      column.
+
+
+      WHY. Nothing evaluates it. A query reaches a formula only as
+      `formula.<name>` (FR-140), and that name is served by a saved VIEW's
+      `formulas:` map (ADR-068 D24.3, FR-140/FR-141). A schema property is read
+      from the note's own frontmatter, where a computed value never appears —
+      so a type-level formula would render BLANK on every row while the answer
+      still reported itself COMPLETE. Measured, on a `plant` type declaring
+      `double_height: height_cm * 2` over a note holding `height_cm: 12.5`: the
+      column came back empty and the result said "COMPLETE: yes — 1 of 1
+      shown". A blank that claims completeness is indistinguishable from a note
+      with no value, so the operator concludes their DATA is wrong rather than
+      that the feature was never wired.
+
+
+      REFUSED RATHER THAN WIRED, deliberately. The surface is specified
+      nowhere: wiring it needs an ADR amendment saying where a type-level
+      formula is addressed, whether a view formula of the same name shadows it,
+      and what an unqualified `select` renders for it. Refusing is the reading
+      that leaves the specification and the behaviour agreeing.
+
+
+      REFUSED AT LOAD, PER FILE. Only the schema file declaring it is rejected;
+      every other record type in the vault goes on loading and answering. The
+      query path deliberately does NOT raise this — a schema that loaded clean
+      used to kill its whole record type on a query that had nothing to do with
+      formulas.
+
+
+      THE REMEDY, which the refusal states: delete `formula:` from this
+      property and declare the same expression in a saved view's `formulas:`
+      map, where a query reaches it as `formula.` + this property's name — or,
+      if the value belongs on the note itself, drop `formula:` and keep this as
+      an ordinary stored property that notes write.
+    example: "amount * quantity"

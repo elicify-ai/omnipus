@@ -21,19 +21,28 @@
 // no-op whenever no editor is open or nothing is unsaved (see
 // preview/unsavedGuard.ts), so it does not change behavior for any caller
 // that never touches the editor.
+//
+// Deep-linking (ADR-067 FR-012, US-3 AS-2/3/4/5): "which workspace, which
+// file" is expressible as an ADDRESS — see `LibraryAddress` below. A caller
+// that can put that address in a URL (the /library pop-out route) passes it
+// in and receives every change back; a caller that cannot (the docked
+// panel) passes neither and this component keeps the same state internally,
+// exactly as before. The addressed mode is deliberately CONTROLLED rather
+// than an initial-value-plus-sync-effect: there is then no second copy of
+// the selection to drift out of step with the URL, and an inbound change —
+// the back button, a pasted link, a wikilink or search hit in a later wave —
+// is an ordinary re-render instead of a reconciliation pass. What this file
+// still owns in both modes is the BROWSED FOLDER, which is derived from the
+// address rather than carried in it (see `browsedDir`).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Files,
   CaretRight,
-  UploadSimple,
-  FolderPlus,
-  FolderSimpleDashed,
   X,
   ArrowSquareOut,
   Tray,
-  SpinnerGap,
   FolderOpen,
 } from '@phosphor-icons/react'
 import { Switch } from '@/components/ui/switch'
@@ -70,17 +79,75 @@ import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
 import { LibraryAddMountDialog } from './LibraryAddMountDialog'
+import { LibraryCreateMenu } from './LibraryCreateMenu'
 import { LibraryMountsDialog } from './LibraryMountsDialog'
 import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
+import { KnowledgePanel } from './knowledge/KnowledgePanel'
+import { LibrarySearchBar } from './search/LibrarySearchBar'
+import { WorkspaceIcon } from './icons'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
+/**
+ * The URL-addressable location of the Library (ADR-067 FR-012).
+ *
+ * Historically only two fields. The BROWSED FOLDER was deliberately not one
+ * of them: a folder is always derivable from a selected file, and addressing
+ * folders too would put two things in the URL that can disagree with each
+ * other. Closing the preview therefore leaves you in the folder you were
+ * reading from without that folder ever having been in the address.
+ *
+ * C4 (library-b-c-design-2026-09-07.md "fullscreen carries the selection")
+ * adds `folder` as a narrow, one-directional exception to that rule — see
+ * its own doc below. It does not reopen the "two things that can disagree"
+ * risk: `goTo()` (this file's one place address changes are emitted) NEVER
+ * includes `folder` in what it reports back, so nothing in normal navigation
+ * ever WRITES it, and it is consumed only once, at mount, before either field
+ * has had a chance to move. There is exactly one path where it applies (no
+ * `path` is set) and it never fights a `path` that IS set.
+ */
+export interface LibraryAddress {
+  /** undefined = the virtual root (every workspace as a top-level node). */
+  workspaceId?: string
+  /** Work-tree-relative path of the selected FILE; undefined = nothing selected. */
+  path?: string
+  /**
+   * Work-tree-relative path of the BROWSED FOLDER, consulted ONLY as a
+   * one-time initial seed when `path` is absent (a selected file's own
+   * parent folder always wins over this — see `selectedDir` below). Exists
+   * so a caller that can only address a folder, not a file inside it — the
+   * fullscreen pop-out's initial URL, built from whatever folder the docked
+   * panel had open with nothing selected (C4) — can still land there. Never
+   * emitted by `goTo()`/`onAddressChange`, so it cannot drift into a second,
+   * disagreeing source of truth once real navigation begins.
+   */
+  folder?: string
+}
+
 export interface LibraryExplorerProps {
-  /** undefined = start at the virtual root (D-3 sidebar entry point). */
+  /** undefined = start at the virtual root (D-3 sidebar entry point).
+   *  Ignored when `address` (+ `onAddressChange`) is supplied — the address
+   *  says where to be, and says it again on every change, so an "initial"
+   *  value would only be a second answer to the same question. */
   initialWorkspaceId?: string
+  /**
+   * URL-addressed location (ADR-067 FR-012). Supply this together with
+   * `onAddressChange` to hand the caller control of workspace + selection;
+   * omit both to keep them as this component's own state (the docked panel).
+   *
+   * One without the other is treated as "not addressed": an `address` with no
+   * way to report a change back would freeze selection on whatever the URL
+   * happened to say, which is worse than not deep-linking at all.
+   */
+  address?: LibraryAddress
+  /** Fires whenever the explorer's own navigation changes the address —
+   *  selecting a file, closing the preview, changing workspace, or a
+   *  rename/delete/move that moves or removes the selected file. Always
+   *  called AFTER the unsaved-edits guard has passed, never before. */
+  onAddressChange?: (next: LibraryAddress) => void
   /** Omit to hide the Close button (e.g. the fullscreen pop-out route). */
   onClose?: () => void
   /** Omit to hide the pop-out button (the pop-out route itself has nowhere further to pop out to). */
@@ -88,13 +155,27 @@ export interface LibraryExplorerProps {
   /** Extra classes for the root element — e.g. the pop-out route's `absolute inset-0` fill. */
   className?: string
   /** Fires whenever the workspace currently being VIEWED changes (including
-   * the initial mount) — null for the virtual root. This tracks internal
-   * navigation state, which is independent of any URL search param a caller
-   * may have opened this component with (library-spec.md D-4's pop-out
-   * route uses this to know what to announce via libraryHandoff.ts when the
-   * tab closes, since the URL param alone goes stale the moment the user
-   * navigates to a different workspace inside the explorer). */
+   * the initial mount) — null for the virtual root. library-spec.md D-4's
+   * pop-out route uses this to know what to announce via libraryHandoff.ts,
+   * and it must keep using THIS rather than reading the workspace back out of
+   * its own URL: this fires at the moment the workspace changes, whereas the
+   * URL is written by a router navigation that settles a tick later — and at
+   * `pagehide` there is no later tick. (Before deep-linking the reason was
+   * different but the conclusion identical: the param went stale the moment
+   * the user navigated inside the explorer.) */
   onWorkspaceChange?: (workspaceId: string | null) => void
+  /**
+   * Fires whenever the CURRENT selection changes (the selected file, or —
+   * with no file selected — the browsed folder), including the initial
+   * mount. C4's fullscreen pop-out (LibraryPanel.tsx's `handlePopOut`) uses
+   * this to build the pop-out URL from wherever the docked panel actually
+   * is, the same way `onWorkspaceChange` already does for the workspace
+   * half of the address. Deliberately a plain reporting callback, not
+   * `onAddressChange` — the docked panel that needs this is NOT addressed
+   * (it owns its own navigation state; see `addressed` below), so there is
+   * no address for it to "change".
+   */
+  onSelectionChange?: (selection: { path: string | null; folder: string }) => void
   /**
    * How the file list and the open preview divide the space.
    *
@@ -115,26 +196,59 @@ function sortEntries(entries: LibraryEntry[]): LibraryEntry[] {
   })
 }
 
+/** Work-tree-relative parent folder of a file path; '' for a top-level file. */
+function parentDirOf(filePath: string): string {
+  const cut = filePath.lastIndexOf('/')
+  return cut === -1 ? '' : filePath.slice(0, cut)
+}
+
+function baseNameOf(filePath: string): string {
+  const cut = filePath.lastIndexOf('/')
+  return cut === -1 ? filePath : filePath.slice(cut + 1)
+}
+
 export function LibraryExplorer({
   initialWorkspaceId,
+  address,
+  onAddressChange,
   onClose,
   onPopOut,
   className,
   onWorkspaceChange,
+  onSelectionChange,
   layout = 'stacked',
 }: LibraryExplorerProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const [workspaceId, setWorkspaceId] = useState<string | null>(initialWorkspaceId ?? null)
-  const [path, setPath] = useState('')
+  // Uncontrolled fallbacks — used only when the caller does NOT address the
+  // Library by URL. In addressed mode these are never read or written, so
+  // there is exactly one copy of "where am I" at any moment.
+  //
+  // They seed from `address` as well, which matters only in the degraded case
+  // of an address supplied with no `onAddressChange`: that caller still gets
+  // taken to the place it asked for, it simply owns nothing afterwards. A
+  // frozen pane is the failure mode being avoided here, not a lost initial
+  // position.
+  const [internalWorkspaceId, setInternalWorkspaceId] = useState<string | null>(
+    initialWorkspaceId ?? address?.workspaceId ?? null,
+  )
+  const [internalSelectedPath, setInternalSelectedPath] = useState<string | null>(address?.path ?? null)
+  const addressed = address !== undefined && onAddressChange !== undefined
+  const workspaceId = addressed ? address?.workspaceId ?? null : internalWorkspaceId
+  const selectedPath = addressed ? address?.path ?? null : internalSelectedPath
+
+  // C4: seeds the fullscreen pop-out's INITIAL browsed folder from
+  // `address.folder` when there is no `address.path` to derive one from
+  // (see LibraryAddress's own doc comment). Seeded once, like
+  // `initialWorkspaceId`/`internalSelectedPath` above — the pop-out route
+  // never remounts on a later address change, so this initializer running
+  // exactly once at mount is precisely "the tab's starting folder", not an
+  // ongoing sync.
+  const [browsedDir, setBrowsedDir] = useState(address?.path ? parentDirOf(address.path) : address?.folder ?? '')
   const [includeHidden, setIncludeHidden] = useState(false)
-  const [selectedEntry, setSelectedEntry] = useState<LibraryEntry | null>(null)
   const isSplit = layout === 'split'
-  // The preview pane needs a real workspace to fetch from, so the virtual root
-  // never opens one however the selection got set.
-  const previewOpen = selectedEntry !== null && workspaceId !== null
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
   const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
@@ -167,6 +281,28 @@ export function LibraryExplorer({
      
   }, [workspaceId])
 
+  // C4: reports the current selection (selected file, or — with none — the
+  // browsed folder) on every change, mirroring the onWorkspaceChange effect
+  // just above. The docked LibraryPanel is the one caller today (it is not
+  // `addressed`, so it has no other way to learn this), and uses it to build
+  // the fullscreen pop-out's URL from wherever the panel actually is.
+  useEffect(() => {
+    onSelectionChange?.({ path: selectedPath, folder: browsedDir })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath, browsedDir])
+
+  // A file address implies its folder, and that implication is the whole of
+  // "a deep link opens the containing folder" (US-3 AS-5): the listing this
+  // component fetches is `browsedDir`, so pointing it at the selection's
+  // parent is what puts the file's own folder on screen — whether the file
+  // turns out to exist or not. It also means closing the preview leaves you
+  // IN that folder rather than bouncing to the workspace root.
+  const selectedDir = selectedPath === null ? null : parentDirOf(selectedPath)
+  useEffect(() => {
+    if (selectedDir === null) return
+    setBrowsedDir((cur) => (cur === selectedDir ? cur : selectedDir))
+  }, [selectedDir])
+
   // Always fetched (cheap, small list) — backs the virtual-root listing AND
   // resolves the current workspace's display name for the breadcrumb + the
   // destination picker inside LibraryTransferDialog.
@@ -177,8 +313,8 @@ export function LibraryExplorer({
   })
 
   const entriesQuery = useQuery({
-    queryKey: libraryQueryKeys.entries(workspaceId ?? '', path, includeHidden),
-    queryFn: () => fetchLibraryEntries(workspaceId as string, path, includeHidden),
+    queryKey: libraryQueryKeys.entries(workspaceId ?? '', browsedDir, includeHidden),
+    queryFn: () => fetchLibraryEntries(workspaceId as string, browsedDir, includeHidden),
     enabled: workspaceId !== null,
     staleTime: 10_000,
   })
@@ -188,6 +324,52 @@ export function LibraryExplorer({
     [workspacesQuery.data],
   )
   const sortedEntries = useMemo(() => sortEntries(entriesQuery.data ?? []), [entriesQuery.data])
+
+  // The selected FILE is resolved from the folder listing rather than stored
+  // as a second copy of it, so an address arriving from outside (a fresh
+  // load, the back button, a link) needs no different code path from a click.
+  const lastResolvedEntryRef = useRef<LibraryEntry | null>(null)
+  const selectedEntry = useMemo(() => {
+    if (selectedPath === null) return null
+    const hit = sortedEntries.find((e) => e.path === selectedPath && !e.is_dir)
+    if (hit) return hit
+    // Listing for this folder is mid-flight (a "Show hidden" toggle, a
+    // post-mutation invalidation): keep the entry already resolved for THIS
+    // path rather than tearing the open preview down and rebuilding it. A
+    // different path never matches, so a real navigation is never masked.
+    return lastResolvedEntryRef.current?.path === selectedPath ? lastResolvedEntryRef.current : null
+  }, [selectedPath, sortedEntries])
+  useEffect(() => {
+    if (selectedEntry) lastResolvedEntryRef.current = selectedEntry
+  }, [selectedEntry])
+
+  // The preview pane needs a real workspace to fetch from, so the virtual root
+  // never opens one however the selection got set.
+  const previewOpen = selectedEntry !== null && workspaceId !== null
+
+  // US-3 AS-5 — an address naming a file that isn't there must land on the
+  // containing folder with a message, never an error page and never a blank
+  // pane. Claimed ONLY when the listing on screen is the one that would hold
+  // the file (`selectedDir === browsedDir`) and it actually loaded: while it
+  // is loading, or when the folder itself failed to load, we do not know that
+  // the file is missing and must not say so. A failed folder listing keeps
+  // its own retryable error state instead.
+  const deepLinkUnresolved =
+    selectedPath !== null &&
+    selectedEntry === null &&
+    workspaceId !== null &&
+    selectedDir === browsedDir &&
+    entriesQuery.isSuccess
+  // A dot-prefixed target IS in the folder, just filtered out of the listing.
+  // Saying "not found" there would be a plain falsehood, so it gets its own
+  // wording and the action that fixes it.
+  const deepLinkHiddenFromView =
+    deepLinkUnresolved && selectedPath !== null && baseNameOf(selectedPath).startsWith('.') && !includeHidden
+  const deepLinkMessage = !deepLinkUnresolved
+    ? null
+    : deepLinkHiddenFromView
+      ? `"${selectedPath}" is a hidden file. Turn on Show hidden to open it.`
+      : `"${selectedPath}" was not found. Showing the folder that would contain it.`
 
   // The mounts visible at the CURRENT level. Only a first-segment name can
   // identify a mount, and the transfer destination is expressed relative to the
@@ -209,6 +391,30 @@ export function LibraryExplorer({
 
   const currentWorkspaceName =
     sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId ?? ''
+
+  /**
+   * The ONE place workspace + selection change. In addressed mode it reports
+   * the new address and changes nothing locally (the caller writes the URL and
+   * the new address comes back as props); otherwise it writes the local state.
+   * Routing every navigation through here is what keeps the two modes from
+   * growing separate behaviour — and every caller has already cleared the
+   * unsaved-edits guard by the time it gets here.
+   */
+  function goTo(nextWorkspaceId: string | null, nextPath: string | null) {
+    if (addressed) {
+      // Folder navigation with nothing selected leaves the address exactly as
+      // it was. Reporting it anyway would have the caller push a history entry
+      // identical to the current one, so leaving a folder would take as many
+      // back presses as folders you had opened.
+      const unchanged =
+        (address?.workspaceId ?? null) === nextWorkspaceId && (address?.path ?? null) === nextPath
+      if (unchanged) return
+      onAddressChange?.({ workspaceId: nextWorkspaceId ?? undefined, path: nextPath ?? undefined })
+      return
+    }
+    setInternalWorkspaceId(nextWorkspaceId)
+    setInternalSelectedPath(nextPath)
+  }
 
   function invalidateEntries(wsId: string) {
     void queryClient.invalidateQueries({ queryKey: ['library', wsId, 'entries'] })
@@ -286,7 +492,7 @@ export function LibraryExplorer({
       invalidateWorkspaces()
       addToast({ message: 'Deleted.', variant: 'success' })
       setDeleteTarget(null)
-      setSelectedEntry((cur) => (cur && cur.path === vars.entryPath ? null : cur))
+      if (selectedPath === vars.entryPath) goTo(workspaceId, null)
     },
     onError: (err) => {
       addToast({ message: getLibraryErrorMessage(err, 'Delete failed'), variant: 'error' })
@@ -304,7 +510,10 @@ export function LibraryExplorer({
       addToast({ message: 'Renamed.', variant: 'success' })
       setRenameTarget(null)
       setRenameError(undefined)
-      setSelectedEntry((cur) => (cur && cur.path === vars.from ? updated : cur))
+      // Renaming the open file follows it to its new path — which in
+      // addressed mode also keeps the URL pointing at the file the user is
+      // still looking at, rather than at a name that no longer exists.
+      if (selectedPath === vars.from) goTo(workspaceId, updated.path)
     },
     onError: (err) => {
       // Never silently swallowed: the dialog stays open (renameTarget is
@@ -333,8 +542,8 @@ export function LibraryExplorer({
       invalidateEntries(vars.body.to_workspace_id)
       invalidateWorkspaces()
       addToast({ message: vars.mode === 'move' ? 'Moved.' : 'Copied.', variant: 'success' })
-      if (vars.mode === 'move') {
-        setSelectedEntry((cur) => (cur && cur.path === vars.body.from_path ? null : cur))
+      if (vars.mode === 'move' && selectedPath === vars.body.from_path) {
+        goTo(workspaceId, null)
       }
       setTransferTarget(null)
       setTransferError(undefined)
@@ -416,38 +625,36 @@ export function LibraryExplorer({
 
   function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
     if (!confirmDiscardLibraryEdits()) return
-    setWorkspaceId(node.id)
-    setPath('')
-    setSelectedEntry(null)
+    setBrowsedDir('')
+    goTo(node.id, null)
   }
   function handleGoRoot() {
     if (!confirmDiscardLibraryEdits()) return
-    setWorkspaceId(null)
-    setPath('')
-    setSelectedEntry(null)
+    setBrowsedDir('')
+    goTo(null, null)
   }
   function handleGoWorkspaceRoot() {
     if (!confirmDiscardLibraryEdits()) return
-    setPath('')
-    setSelectedEntry(null)
+    setBrowsedDir('')
+    goTo(workspaceId, null)
   }
   function handleOpenDirectory(entry: LibraryEntry) {
     if (!confirmDiscardLibraryEdits()) return
-    setPath(entry.path)
-    setSelectedEntry(null)
+    setBrowsedDir(entry.path)
+    goTo(workspaceId, null)
   }
   function handleBreadcrumbSegment(index: number, segments: string[]) {
     if (!confirmDiscardLibraryEdits()) return
-    setPath(segments.slice(0, index + 1).join('/'))
-    setSelectedEntry(null)
+    setBrowsedDir(segments.slice(0, index + 1).join('/'))
+    goTo(workspaceId, null)
   }
   // Selecting a file that's ALREADY selected is not navigation (no editor
   // would be discarded), so it skips the guard entirely rather than prompting
   // to confirm leaving the file the user is already looking at.
   function handleSelectFile(entry: LibraryEntry) {
-    if (selectedEntry?.path === entry.path) return
+    if (selectedPath === entry.path) return
     if (!confirmDiscardLibraryEdits()) return
-    setSelectedEntry(entry)
+    goTo(workspaceId, entry.path)
   }
   function handleDownload(entry: LibraryEntry) {
     if (!workspaceId) return
@@ -463,16 +670,16 @@ export function LibraryExplorer({
   function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files
     if (!files || files.length === 0 || !workspaceId) return
-    uploadMutation.mutate({ wsId: workspaceId, files: Array.from(files), dir: path })
+    uploadMutation.mutate({ wsId: workspaceId, files: Array.from(files), dir: browsedDir })
     e.target.value = ''
   }
   function handleCreateFolder(name: string) {
     if (!workspaceId) return
-    const dirPath = path ? `${path}/${name}` : name
+    const dirPath = browsedDir ? `${browsedDir}/${name}` : name
     mkdirMutation.mutate({ wsId: workspaceId, dirPath })
   }
 
-  const pathSegments = path ? path.split('/').filter(Boolean) : []
+  const pathSegments = browsedDir ? browsedDir.split('/').filter(Boolean) : []
   // library-spec.md D-1: work/.library/ is the reserved, server-managed home
   // for chat-uploaded attachments (not user-organized files). Uploading or
   // creating new folders into it from the explorer itself would silently mix
@@ -483,7 +690,7 @@ export function LibraryExplorer({
   // silently; existing entries already inside .library are still fully
   // browsable/renamable/downloadable/deletable — only adding NEW content via
   // these two actions is restricted.
-  const isReservedLibraryDir = path === '.library' || path.startsWith('.library/')
+  const isReservedLibraryDir = browsedDir === '.library' || browsedDir.startsWith('.library/')
 
   return (
     <div className={cn('flex h-full flex-col', className)} data-testid="library-explorer">
@@ -559,81 +766,54 @@ export function LibraryExplorer({
               Show hidden
             </label>
           )}
-          {workspaceId !== null && (
-            <>
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={openNewFolderDialog}
-                disabled={isReservedLibraryDir}
-                aria-label="New folder"
-                title={
-                  isReservedLibraryDir
-                    ? "Can't create folders inside the reserved .library folder"
-                    : 'New folder'
-                }
-                data-testid="library-new-folder-button"
-                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
-              >
-                <FolderPlus size={16} />
-              </button>
-              {workspaceMounts.length > 0 && (
-                <button
-                  type="button"
-                  tabIndex={0}
-                  onClick={() => setMountsOpen(true)}
-                  title="Review and revoke mounted folders"
-                  aria-label={`Manage ${workspaceMounts.length} mounted folders`}
-                  data-testid="library-mounts-count"
-                  className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-info)] transition-colors"
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      workspaceMounts.some((e) => e.mount?.broad)
-                        ? 'bg-[var(--color-warning)]'
-                        : 'bg-[var(--color-info)]'
-                    }`}
-                  />
-                  {workspaceMounts.length} mounted
-                </button>
-              )}
-              {/* Adding a mount sits AMONG New folder and Upload, not above
-                  them: it is the rarer action, and nothing in this toolbar is
-                  filled or accented. */}
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={() => setAddMountOpen(true)}
-                aria-label="Add a folder from your Mac"
-                title="Add a folder from your Mac"
-                data-testid="library-add-mount-button"
-                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-info)] transition-colors"
-              >
-                <FolderSimpleDashed size={16} />
-              </button>
-              <input
-                tabIndex={0}
-                ref={fileInputRef}
-                type="file"
-                multiple
-                onChange={handleFileInputChange}
-                data-testid="library-upload-input"
-                className="hidden"
+          {/* Status indicator only — the ACTION that used to live on this
+              pill ("Manage mounted folders") moved into the unified "+"
+              create menu below, alongside New folder / Upload / Add mount /
+              New vault / New workspace (feature C2). This stays a passive
+              at-a-glance readout (count + broad-grant color) rather than a
+              second path to the same dialog the menu already opens. */}
+          {workspaceId !== null && workspaceMounts.length > 0 && (
+            <span
+              title="Folders on your Mac mounted into this workspace"
+              data-testid="library-mounts-count"
+              className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)]"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  workspaceMounts.some((e) => e.mount?.broad)
+                    ? 'bg-[var(--color-warning)]'
+                    : 'bg-[var(--color-info)]'
+                }`}
               />
-              <button
-                type="button"
-                tabIndex={0}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadMutation.isPending || isReservedLibraryDir}
-                aria-label="Upload files"
-                title={isReservedLibraryDir ? "Can't upload into the reserved .library folder" : 'Upload files'}
-                data-testid="library-upload-button"
-                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
-              >
-                {uploadMutation.isPending ? <SpinnerGap size={16} className="animate-spin" /> : <UploadSimple size={16} />}
-              </button>
-            </>
+              {workspaceMounts.length} mounted
+            </span>
           )}
+          {workspaceId !== null && (
+            <input
+              tabIndex={0}
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={handleFileInputChange}
+              data-testid="library-upload-input"
+              className="hidden"
+            />
+          )}
+          <LibraryCreateMenu
+            workspaceId={workspaceId}
+            workspaces={sortedWorkspaces}
+            isReservedLibraryDir={isReservedLibraryDir}
+            mountedCount={workspaceMounts.length}
+            uploadPending={uploadMutation.isPending}
+            onNewFolder={openNewFolderDialog}
+            onAddMount={() => setAddMountOpen(true)}
+            onManageMounts={() => setMountsOpen(true)}
+            onUpload={() => fileInputRef.current?.click()}
+            onVaultCreated={(wsId, entry) => {
+              setBrowsedDir(entry.path)
+              goTo(wsId, null)
+            }}
+          />
           {onPopOut && (
             <button
               type="button"
@@ -681,6 +861,45 @@ export function LibraryExplorer({
         </div>
       )}
 
+      {/* Deep link that resolved to nothing (US-3 AS-5). Not dismissible on
+          purpose: it is a statement about the address currently on screen, so
+          it clears itself the moment that address changes — a dismiss button
+          would only let it disagree with the URL. */}
+      {deepLinkMessage && (
+        <div className="shrink-0 p-2 pb-0">
+          <LibraryErrorBanner message={deepLinkMessage} testId="library-deeplink-unresolved" />
+        </div>
+      )}
+
+      {/* ── Knowledge base (ADR-067 US-4) ────────────────────────────────────
+          The one place a person reaches the knowledge-base surface: it sits
+          above the listing of the folder it is describing, so "is this a
+          collection, and is its index current?" is answered where the folder
+          is, rather than on a screen of its own (no new top-level screen).
+
+          Mounted only when a workspace is open — the virtual root lists
+          workspaces, not files, so there is no folder to ask about. The panel
+          itself decides what to say; it renders nothing at all for a folder
+          whose index is finished and current.
+
+          `progress` is not passed here because it is no longer this file's to
+          pass: the knowledge_index_progress WS frame is routed by
+          src/store/chat.ts into src/store/knowledgeIndex.ts, and KnowledgePanel
+          reads the frame for its own collection_id from there. Do not add a
+          poll — the frame is the contract's answer to progress (FR-080). */}
+      {workspaceId !== null && (
+        <div className="shrink-0 p-2 pb-0">
+          <KnowledgePanel
+            workspaceId={workspaceId}
+            path={browsedDir}
+            onOpenNote={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              goTo(workspaceId, workspacePath)
+            }}
+          />
+        </div>
+      )}
+
       {/* ── List + preview split ────────────────────────────────────────────
           Stacked in the docked aside, side-by-side in the fullscreen tab. In
           BOTH the list stays visible and clickable while a file is open, which
@@ -721,7 +940,13 @@ export function LibraryExplorer({
                   data-testid={`library-workspace-node-${node.id}`}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 hover:bg-[var(--color-surface-2)] text-left transition-colors"
                 >
-                  <Tray size={18} weight="fill" className="text-[var(--color-accent)] shrink-0" />
+                  {/* C3 (library-b-c-design §"Icon system — LOCKED"): the
+                      virtual-root's workspace nodes get the locked
+                      WorkspaceIcon (gold tile + 2×2 knockout), not the
+                      generic Phosphor Tray glyph — a workspace is a distinct
+                      container kind from vault/folder/mount, not a stand-in
+                      for "storage" in general. */}
+                  <WorkspaceIcon size={18} className="text-[var(--color-accent)] shrink-0" />
                   <span className="flex-1 truncate text-sm text-[var(--color-secondary)]">{node.name}</span>
                   <span className="text-xs text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}
@@ -730,7 +955,19 @@ export function LibraryExplorer({
               ))}
           </>
         ) : (
-          <>
+          // C1 — persistent Library search bar (library-b-c-design-2026-09-07
+          // §C1). LibrarySearchBar owns the input, the segmented filter, and
+          // the grouped results; `children` (this folder's existing listing,
+          // unchanged) renders exactly as before whenever no query is active,
+          // and is replaced entirely by results while one is.
+          <LibrarySearchBar
+            workspaceId={workspaceId}
+            folderPath={browsedDir}
+            onOpenNote={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              goTo(workspaceId, workspacePath)
+            }}
+          >
             {entriesQuery.isLoading && <ListSkeleton />}
             {entriesQuery.isError && (
               <QueryErrorState
@@ -743,7 +980,7 @@ export function LibraryExplorer({
             {!entriesQuery.isLoading && !entriesQuery.isError && sortedEntries.length === 0 && (
               <EmptyState
                 icon={<FolderOpen size={28} />}
-                message={path ? 'This folder is empty.' : 'No files in this workspace yet.'}
+                message={browsedDir ? 'This folder is empty.' : 'No files in this workspace yet.'}
               />
             )}
             {!entriesQuery.isLoading &&
@@ -753,7 +990,7 @@ export function LibraryExplorer({
                   key={entry.path}
                   workspaceId={workspaceId}
                   entry={entry}
-                  selected={selectedEntry?.path === entry.path}
+                  selected={selectedPath === entry.path}
                   onOpenDirectory={handleOpenDirectory}
                   onSelectFile={handleSelectFile}
                   onDownload={handleDownload}
@@ -763,7 +1000,7 @@ export function LibraryExplorer({
                   onUnmount={setUnmountTarget}
                 />
               ))}
-          </>
+          </LibrarySearchBar>
         )}
       </div>
 
@@ -781,9 +1018,17 @@ export function LibraryExplorer({
             entry={selectedEntry}
             onClose={() => {
               if (!confirmDiscardLibraryEdits()) return
-              setSelectedEntry(null)
+              goTo(workspaceId, null)
             }}
             onDownload={handleDownload}
+            // FR-012 / US-7 AS-7: following a wikilink, a relative link or a
+            // linked mention inside an open note swaps the pane to the target
+            // AND updates the address, so the note the reader is looking at is
+            // the note the URL names.
+            onOpenNote={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              goTo(workspaceId, workspacePath)
+            }}
           />
         </div>
       )}
@@ -847,6 +1092,7 @@ export function LibraryExplorer({
         open={mountsOpen}
         onOpenChange={setMountsOpen}
         mounts={workspaceMounts}
+        workspaceId={workspaceId}
         workspaceName={
           sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? 'this workspace'
         }

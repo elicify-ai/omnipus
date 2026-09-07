@@ -551,13 +551,84 @@ func DefaultConfig() *Config {
 				//    ceiling directly above pointless. Same defect shape as
 				//    inspect_session and plan_correct, third time.
 				//
-				// As always, raising the ceiling grants the tool to nobody by
-				// itself: the four base agents carry an explicit per-agent
-				// "allow" and every other seeded agent an explicit "deny"
-				// (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
+				// Raising the ceiling grants the tool to nobody who carries an
+				// entry of their own: the four base agents carry an explicit
+				// per-agent "allow" and every other seeded agent an explicit
+				// "deny" (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
 				// including the Worker's sparse-map deny — an absent key there
-				// would inherit this "allow").
+				// would inherit this "allow"). See the CEILING vs GRANT note
+				// under the ADR-068 block below for what an absent key means
+				// and what now guarantees there are none.
 				"list_jobs": "allow",
+
+				// --- ADR-068 D15.3 (FR-070) knowledge-base tools ---
+				// All six seeded "allow" at the ceiling, read tier and the
+				// three writes alike — superseding ADR-067 D17's nine (see
+				// pkg/coreagent/core.go's allStaticToolNames for the
+				// retirement).
+				//
+				// CEILING vs GRANT — the one thing to get right about this
+				// whole map. An "allow" here is a CEILING for an agent that
+				// carries its own entry for the same tool: the runtime merge
+				// is strictest-wins, so the agent's value wins whenever it is
+				// stricter. For an agent that carries NO entry it is a
+				// GRANT — pkg/tools/compositor.go's
+				// resolveEffectivePolicyWith reads `case a == "": return g`,
+				// so silence on the agent side resolves to the global value,
+				// not to a denial. This comment used to claim the flat
+				// opposite ("allow here grants the tools to NOBODY by
+				// itself"), which was true only because every agent the seed
+				// writes is fully enumerated (pkg/coreagent/core.go's
+				// coreAgentSeed: allow on all six for Jim, allow-read +
+				// ask-write for Ava/Mia/Ray, explicit deny on all six
+				// everywhere else including the Worker's sparse map, where an
+				// absent key would silently INHERIT this allow).
+				//
+				// That enumeration only ever ran on a FRESH install, so on an
+				// UPGRADE every agent that predated these six names had no
+				// entry for them and silently resolved this "allow" — the
+				// delegation-only subagents included. Note that
+				// ValidateToolPolicyCoverage does NOT catch that: it counts a
+				// global entry as coverage (deliberately — the Worker's sparse
+				// seed depends on exactly that inheritance), so it reports no
+				// gap and RepairIncompleteToolPolicyCoverage is handed nothing
+				// to repair. What closes it is
+				// pkg/coreagent/tool_policy_catalog_drift.go's
+				// backfillToolPolicyCatalogDrift, which runs at the end of
+				// SeedConfig on every boot and writes each pre-existing agent
+				// the explicit entry its own seed states (or, for an
+				// operator-created agent, the deny baseline). Adding a tool
+				// here without a matching per-agent posture in coreAgentSeed
+				// therefore grants it, on upgrade, to every agent the seed
+				// leaves silent.
+				//
+				// An "ask" ceiling on the write three (knowledge_edit,
+				// knowledge_restructure, knowledge_configure) would be the
+				// same landed defect recorded four times above
+				// (inspect_session, the ADR-052 three, plan_correct/
+				// stop_plan, list_jobs): the runtime global x agent merge is
+				// strictest-wins (pkg/tools/compositor.go:
+				// resolveEffectivePolicyWith), so a stricter ceiling here
+				// would drag Jim's deliberately-seeded "allow" back down to
+				// "ask" and make his one intentional exception (argued in
+				// his own coreAgentSeed case: he already holds unprompted
+				// bash, so an ask-gate on these three would gate nothing
+				// real for him) dead on every install while the seed data
+				// still read exactly as intended.
+				//
+				// The real containment for these tools is not the ceiling:
+				// it is the per-agent seed, the workspace-mount scoping the
+				// read tier enforces itself, and the per-mutation audit
+				// event (ADR-068's FR-090, carried forward from ADR-067
+				// D19).
+				// Read tier.
+				"knowledge_describe": "allow",
+				"knowledge_find":     "allow",
+				"knowledge_read":     "allow",
+				// Writes.
+				"knowledge_edit":        "allow",
+				"knowledge_restructure": "allow",
+				"knowledge_configure":   "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds

@@ -1,0 +1,34 @@
+title: ViewPartAggregate
+description: >
+  The reduction one part of a view applies to a number
+  (view-kinds-design-2026-09-03 §4). FIVE, and the list is closed.
+
+  IT IS DELIBERATELY NARROWER THAN RecordAggregate's FIFTEEN. RecordAggregate
+  is the query surface's full vocabulary, including the two population-class
+  ops that buffer a column (`median`, `unique`) and the domain-specific ones
+  (`earliest`, `checked`, `stddev`). A view PART's figure row and per-group
+  subtotal row are drawn for a reader, per unit value, on every render — so the
+  set here is the one every number answers and nothing here can abort mid-scan.
+  A view that genuinely needs a median asks for it through `aggregates`, which
+  is RecordAggregate's own field and is unchanged.
+
+  THE UNIT RULE IS NOT OPTIONAL AND IS NOT EXPRESSIBLE HERE. A number carrying
+  a companion unit property (PropertyDef.unit_property) totals ONCE PER UNIT
+  VALUE and NEVER across units (design §3 G2), and a row whose unit is missing
+  is shown, excluded from every total, and counted separately (G3). Those are
+  composer and renderer rules; this enum only names which reduction is asked
+  for.
+type: string
+enum:
+  - sum
+  - avg
+  - min
+  - max
+  - count
+x-enum-varnames:
+  - ViewPartAggregateSum
+  - ViewPartAggregateAvg
+  - ViewPartAggregateMin
+  - ViewPartAggregateMax
+  - ViewPartAggregateCount
+example: sum

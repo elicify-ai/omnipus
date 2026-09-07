@@ -1,0 +1,36 @@
+title: VaultFindJoin
+description: >
+  Columns BORROWED onto a row through a relation (spec FR-124).
+
+  It is a separate structure rather than extra cells on the row because the
+  rendering rule is a correctness rule, not a layout preference: a borrowed
+  value MUST render visibly as borrowed — `company [[Acme Ltd]]: status active`
+  — and must never be merged into the row's own columns. It is not a property of
+  this record, and a reader who takes it for one has been told something false
+  about the record in front of them.
+type: object
+additionalProperties: false
+required:
+  - relation
+  - target
+  - cells
+properties:
+  relation:
+    type: string
+    minLength: 1
+    description: The relation property the values were borrowed through.
+    example: "company"
+  target:
+    type: string
+    minLength: 1
+    description: The related note, as written — the wikilink the row points at.
+    example: "[[Acme Ltd]]"
+  cells:
+    type: array
+    description: >
+      The borrowed columns. Always present — an empty array, never null — so a
+      relation that resolved to a note carrying none of the requested
+      properties still renders as a resolved relation rather than vanishing.
+    items:
+      $ref: "./VaultFindCell.yaml"
+      x-go-type: VaultFindCell

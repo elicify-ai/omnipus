@@ -1,0 +1,39 @@
+title: VaultFindPlanStep
+description: >
+  One line of an `explain` plan (spec FR-073, AC-F3).
+
+  The plan names EVERY property the query touches and the index each will be
+  answered from. That specificity is the point: a criterion that only asked for
+  "a plan" passed for a constant-returning stub, so the plan must be derived
+  from the actual request and schema, and it must be BYTE-IDENTICAL across a
+  corpus mutation chosen to change it if evaluation were happening.
+type: object
+additionalProperties: false
+required:
+  - stage
+  - detail
+properties:
+  stage:
+    type: string
+    enum: [scope, narrow, retrieve, compare, join, group, sort, aggregate, render]
+    description: Which phase of the pipeline this step describes.
+    example: "compare"
+  property:
+    type: string
+    minLength: 1
+    description: The property this step touches, when it touches one.
+    example: "arr"
+  source:
+    type: string
+    enum: [properties_index, text_index, go_comparator, schema, none]
+    description: >
+      Where the step is answered from. `properties_index` NARROWS — record
+      type, note kind, path prefix, nothing else. `go_comparator` DECIDES every
+      comparison. A plan that shows a comparison sourced from
+      `properties_index` is reporting a ruling violation.
+    example: "go_comparator"
+  detail:
+    type: string
+    minLength: 1
+    description: What the step does, in one clause.
+    example: "arr >= 50000 evaluated in Go over the decimal column"

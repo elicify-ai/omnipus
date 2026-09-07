@@ -1,8 +1,195 @@
 import { defineConfig } from 'vitest/config'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { TanStackRouterVite } from '@tanstack/router-vite-plugin'
 import { fileURLToPath, URL } from 'url'
+import { createRequire } from 'node:module'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+
+// ── PDF.js runtime assets (ADR-067 FR-018a/b/c/d, D15.3/D15.7) ──────────────
+//
+// pdfjs-dist is TWO things, and only one of them is JavaScript. The parser is
+// bundled by rollup (see the `pdfjs` manualChunks branch below); the four
+// RUNTIME asset directories are fetched over HTTP *per document* and are not
+// reachable from the module graph at all, so bundling the library does not
+// bring them. Omitting them degrades silently and specifically:
+//
+//   cmaps/          missing -> a Japanese/Chinese/Korean PDF renders BLANK
+//   standard_fonts/ missing -> a PDF that embeds no fonts renders with wrong
+//                              metrics (overlapping / clipped text)
+//   wasm/           missing -> a scanned PDF (JPEG 2000 / JBIG2) loses images
+//   iccs/           missing -> colour profiles are ignored
+//
+// FR-018c: the list is ENUMERATED FROM THE INSTALLED PACKAGE at build time,
+// never hand-maintained — a hand-written list silently loses whatever the next
+// version adds, invisible until someone opens the one PDF that needs it. The
+// build FAILS if a directory is missing or empty rather than shipping a SPA
+// whose PDF viewer is quietly broken for a whole class of documents.
+//
+// FR-018d: `pdfjs-dist` is pinned to an EXACT version in package.json (no
+// caret) — it is a parser fed hostile input. Upgrade owner: the Library /
+// preview maintainer; an upgrade must re-run the FR-019a build gates
+// (no eval path in the shipped bundle, pdf.sandbox*.mjs absent).
+
+/** URL path prefix, relative to the SPA base, that all PDF.js runtime assets
+ *  and the worker are served from. The gateway's SPA handler MUST return a real
+ *  404 under this prefix instead of its index.html fallback (FR-018b) —
+ *  otherwise a missing character map arrives as an HTTP 200 HTML page and the
+ *  page renders blank with nothing naming the cause. */
+export const PDFJS_ASSET_PREFIX = 'pdfjs/'
+
+/** The four runtime asset directories, exactly as pdfjs-dist ships them. */
+export const PDFJS_ASSET_DIRS = ['cmaps', 'standard_fonts', 'wasm', 'iccs'] as const
+
+/** The worker, copied verbatim rather than run through Vite's worker pipeline.
+ *  That pipeline's default output format differs from what PDF.js ships, and
+ *  getting it wrong produces no build error — just a silent fall back to
+ *  parsing on the main thread (FR-019c). Copying the shipped file sidesteps it. */
+export const PDFJS_WORKER_FILE = `${PDFJS_ASSET_PREFIX}pdf.worker.min.mjs`
+
+/** Manifest of everything the build emitted, so the viewer can probe one file
+ *  per directory and turn a missing asset into a VISIBLE error (FR-018b). */
+export const PDFJS_MANIFEST_FILE = `${PDFJS_ASSET_PREFIX}asset-manifest.json`
+
+/** The PDF scripting interpreter, in every form pdfjs-dist ships it. It runs a
+ *  PDF's own JavaScript and MUST NOT ship (FR-019a): disabling scripting while
+ *  shipping its interpreter leaves the control one edit from being undone.
+ *  Absence beats a flag.
+ *
+ *  `pdf.sandbox*.mjs` is the module the ADR names. `wasm/quickjs-eval.*` is the
+ *  QuickJS engine it executes PDF JavaScript ON — 469 kB of general-purpose
+ *  JS interpreter that the runtime-asset enumeration would otherwise sweep in
+ *  behind the ADR's back. Verified against 6.2.108: those two files are
+ *  referenced ONLY by `build/pdf.sandbox*.mjs` — zero references from
+ *  `pdf.mjs` or `pdf.worker.mjs` — so excluding them cannot break rendering.
+ *
+ *  This is a DENY rule over the enumerated list, not a hand-maintained ALLOW
+ *  list, so FR-018c still holds: a new asset directory in the next version is
+ *  still picked up automatically. */
+const PDFJS_FORBIDDEN = /(?:^|\/)(?:pdf\.sandbox[^/]*\.mjs|quickjs-eval[^/]*)$/
+
+function pdfjsPackageRoot(): string {
+  return dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'))
+}
+
+function walkFiles(root: string, rel = ''): string[] {
+  const out: string[] = []
+  for (const name of readdirSync(join(root, rel)).sort()) {
+    const child = rel ? `${rel}/${name}` : name
+    if (statSync(join(root, child)).isDirectory()) out.push(...walkFiles(root, child))
+    else out.push(child)
+  }
+  return out
+}
+
+/**
+ * Enumerate PDF.js's runtime assets from the INSTALLED package (FR-018c).
+ * Exported so the build-gate test can assert the same list against the built
+ * SPA output rather than against a second, drifting copy of it.
+ *
+ * Throws if a directory is absent or empty — an empty enumeration must be a
+ * build failure, never a quiet pass.
+ */
+export function enumeratePdfjsRuntimeAssets(
+  pkgRoot: string = pdfjsPackageRoot(),
+): Record<string, string[]> {
+  const manifest: Record<string, string[]> = {}
+  for (const dir of PDFJS_ASSET_DIRS) {
+    let files: string[]
+    try {
+      files = walkFiles(join(pkgRoot, dir))
+    } catch (err) {
+      throw new Error(
+        `pdfjs runtime assets: cannot read ${join(pkgRoot, dir)} — PDFs will render ` +
+          `blank/mis-typeset for a whole class of documents (FR-018a). Cause: ${String(err)}`,
+      )
+    }
+    files = files.filter((f) => !PDFJS_FORBIDDEN.test(`${dir}/${f}`))
+    if (files.length === 0) {
+      throw new Error(`pdfjs runtime assets: ${dir}/ is empty (FR-018c forbids an empty enumeration)`)
+    }
+    manifest[dir] = files
+  }
+  return manifest
+}
+
+/**
+ * Emits PDF.js's runtime assets and its worker into the SPA output under
+ * `pdfjs/`, and serves the same tree in `vite dev` so the viewer behaves
+ * identically in both. Refuses to emit `pdf.sandbox*.mjs` (FR-019a).
+ */
+function pdfjsRuntimeAssetsPlugin(): Plugin {
+  return {
+    name: 'omnipus:pdfjs-runtime-assets',
+    // Dev server: the assets live in node_modules, outside `public/`, so
+    // nothing serves them under `vite dev` without this. Without it PDF
+    // preview is broken in dev only, which is the most confusing shape a
+    // breakage can take.
+    configureServer(server) {
+      const pkgRoot = pdfjsPackageRoot()
+      server.middlewares.use(`/${PDFJS_ASSET_PREFIX}`.replace(/\/$/, ''), (req, res, next) => {
+        const rel = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '')
+        const allowed =
+          rel === 'pdf.worker.min.mjs' ||
+          PDFJS_ASSET_DIRS.some((d) => rel.startsWith(`${d}/`))
+        if (!allowed || rel.includes('..') || PDFJS_FORBIDDEN.test(rel)) {
+          next()
+          return
+        }
+        const from = rel === 'pdf.worker.min.mjs' ? join(pkgRoot, 'build', rel) : join(pkgRoot, rel)
+        let body: Buffer
+        try {
+          body = readFileSync(from)
+        } catch {
+          // A real 404, not the SPA fallback — the same contract the gateway
+          // owes this prefix in production (FR-018b).
+          res.statusCode = 404
+          res.end('pdfjs asset not found')
+          return
+        }
+        res.setHeader('Content-Type', rel.endsWith('.mjs') ? 'text/javascript' : 'application/octet-stream')
+        res.end(body)
+      })
+    },
+    generateBundle() {
+      const pkgRoot = pdfjsPackageRoot()
+      const manifest = enumeratePdfjsRuntimeAssets(pkgRoot)
+      for (const [dir, files] of Object.entries(manifest)) {
+        for (const rel of files) {
+          this.emitFile({
+            type: 'asset',
+            fileName: `${PDFJS_ASSET_PREFIX}${dir}/${rel}`,
+            source: readFileSync(join(pkgRoot, dir, rel)),
+          })
+        }
+      }
+      this.emitFile({
+        type: 'asset',
+        fileName: PDFJS_WORKER_FILE,
+        source: readFileSync(join(pkgRoot, 'build', 'pdf.worker.min.mjs')),
+      })
+      this.emitFile({
+        type: 'asset',
+        fileName: PDFJS_MANIFEST_FILE,
+        source: JSON.stringify(manifest),
+      })
+    },
+    // Belt and braces for FR-019a: whatever route it arrived by — a future
+    // import, a copy step, a dependency bump — the scripting interpreter does
+    // not leave this build.
+    writeBundle(_options, bundle) {
+      const leaked = Object.keys(bundle).filter((f) => PDFJS_FORBIDDEN.test(f))
+      if (leaked.length > 0) {
+        throw new Error(
+          `FR-019a: pdf.sandbox*.mjs must not ship — the PDF scripting interpreter ` +
+            `reached the SPA build: ${leaked.join(', ')}`,
+        )
+      }
+    },
+  }
+}
 
 // autoCodeSplitting is enabled for the production build only, NOT under vitest.
 // It rewrites route files at transform time — extracting `component` out of the
@@ -25,6 +212,7 @@ export default defineConfig({
     // defaultPendingComponent wired in src/main.tsx.
     TanStackRouterVite({ autoCodeSplitting: !isVitest }),
     react(),
+    pdfjsRuntimeAssetsPlugin(),
   ],
   resolve: {
     alias: {
@@ -156,6 +344,34 @@ export default defineConfig({
         warn(warning)
       },
       output: {
+        // PDF.js gets a STABLE, unmistakable chunk name — and it is named here
+        // rather than in `manualChunks` below, which is not a style choice.
+        //
+        // MEASURED on this repo (rolldown-vite), three builds:
+        //   * `manualChunks` branch returning 'pdfjs'  -> the bundler folded
+        //     Vite's virtual `\0vite/preload-helper.js` INTO that chunk. The
+        //     helper is needed by the *importer*, so the entry then carried
+        //     `import{n as E}from"./pdfjs-<hash>.js"` and the whole 428 kB
+        //     parser loaded on first paint. Every name-based check still
+        //     passed — the chunk existed, was named `pdfjs`, and was still
+        //     also reached dynamically. Only the entry's STATIC imports showed
+        //     it. `manualChunks` cannot move the helper back out: it is a
+        //     virtual module and rolldown ignores manual assignment for it
+        //     (verified by returning both 'preload-helper' and 'react' for it,
+        //     twice, with no effect).
+        //   * no branch at all -> lazy and correct, but the chunk is auto-named
+        //     `pdf-<hash>.js` after pdf.mjs. (FR-018 assumed a bare dynamic
+        //     import yields a hash-ONLY name; on this bundler it does not.)
+        //     `pdf-` is too generic for a test to match safely.
+        //   * this branch -> lazy AND named `pdfjs-<hash>.js`.
+        //
+        // So: name it at emit time, keep it out of the chunking function.
+        chunkFileNames(chunk) {
+          if (chunk.moduleIds?.some((id) => id.includes('node_modules/pdfjs-dist'))) {
+            return 'assets/pdfjs-[hash].js'
+          }
+          return 'assets/[name]-[hash].js'
+        },
         // Vite 8 dropped the object form of manualChunks. The function form
         // takes a module-id string and returns a chunk name. Keep the same
         // 4 vendor splits as before (react / router / motion / icons) — these

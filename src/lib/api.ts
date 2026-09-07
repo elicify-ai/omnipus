@@ -196,6 +196,24 @@ import {
   WorkspaceMountCreateResponse as WorkspaceMountCreateResponseSchema,
   LibraryContentResponse as LibraryContentResponseSchema,
   LibraryUploadResponse as LibraryUploadResponseSchema,
+  // ADR-067 stage 2 — the knowledge-base READ surface (contract-first #8).
+  // Every one of the four endpoints validates through its generated schema;
+  // none of them hand-writes a wire type.
+  KnowledgeBaseInfo as KnowledgeBaseInfoSchema,
+  KnowledgeSearchRequest as KnowledgeSearchRequestSchema,
+  KnowledgeSearchResponse as KnowledgeSearchResponseSchema,
+  KnowledgeOutline as KnowledgeOutlineSchema,
+  // B+C — human vault search, create-vault, PDF binary save (contract-first #8):
+  VaultSearchRequest as VaultSearchRequestSchema,
+  VaultSearchResponse as VaultSearchResponseSchema,
+  CreateVaultRequest as CreateVaultRequestSchema,
+  LibraryBinaryContentRequest as LibraryBinaryContentRequestSchema,
+  KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
+  // view-kinds-design-2026-09-03 §7 — the evaluated saved-view result the
+  // Library's .base surface draws, and the list of views one .base owns
+  // (contract-first #8).
+  ViewResult as ViewResultSchema,
+  KnowledgeBaseViews as KnowledgeBaseViewsSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -491,6 +509,20 @@ import type {
   LibraryRenameRequest,
   LibraryUploadResponse,
   LibraryTransferRequest,
+  // ADR-067 stage 2 — the knowledge-base read surface (contract-first #8):
+  KnowledgeBaseInfo,
+  KnowledgeSearchRequest,
+  KnowledgeSearchResponse,
+  KnowledgeOutline,
+  // B+C wire types:
+  VaultSearchRequest,
+  VaultSearchResponse,
+  CreateVaultRequest,
+  LibraryBinaryContentRequest,
+  KnowledgeGraphResponse,
+  // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
+  ViewResult,
+  KnowledgeBaseViews,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -4406,6 +4438,186 @@ export function fetchLibraryEntries(
 }
 
 /**
+ * Ask whether a folder in a workspace's work tree is a knowledge base
+ * (ADR-067 FR-020/FR-021, GET /library/{workspace_id}/knowledge).
+ *
+ * Detection is marker-based — `.omnipus-vault/` or `.obsidian/` at the root —
+ * and never reads file content. `is_knowledge_base: false` is an ANSWER, not
+ * an error; a marker that exists but cannot be read comes back as
+ * `detection_error` instead, and the caller must surface that rather than
+ * treating the folder as ordinary (E-9).
+ *
+ * Carries no index counts, deliberately. Index progress is the
+ * `knowledge_index_progress` WebSocket frame (FR-080) — polling this endpoint
+ * for it is the mistake that contract exists to prevent, so callers must not
+ * put this on an interval.
+ *
+ * `path` is workspace-relative; '' means the work-tree root. Unlike the
+ * entries listing, the parameter is REQUIRED by the contract, so it is always
+ * sent — including as an empty string.
+ */
+export function fetchKnowledgeBaseInfo(workspaceId: string, path = ''): Promise<KnowledgeBaseInfo> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<KnowledgeBaseInfo>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge?${qs}`,
+    undefined,
+    KnowledgeBaseInfoSchema as ZodType<KnowledgeBaseInfo>,
+  )
+}
+
+/**
+ * Relevance search over one knowledge base
+ * (ADR-067 FR-035/FR-036/FR-037, POST /library/{workspace_id}/knowledge/search).
+ *
+ * WHY IT LIVES HERE AND NOT IN THE COMPONENT. It used to build its own
+ * `fetch()` inside `useKnowledgeSearch.ts`, which meant it silently opted out
+ * of everything `request()` does for every other wire call: the schema-error
+ * counter (`_recordApiSchemaError`), the dev-mode toast, `ApiSchemaError` with
+ * the raw body attached, `ApiError.fromResponse`, and the CSRF re-mint retry.
+ * Constraint #8 asks for "drop + counter + dev-mode toast on failure"; a bare
+ * `Schema.parse()` throwing a raw ZodError with no telemetry is half of that.
+ *
+ * The REQUEST body is validated too, not just the response: `limit` has a
+ * contract minimum and a query has a minimum length, and sending a body the
+ * contract forbids is a client bug worth failing on here rather than reading
+ * back as a 400 with no context.
+ */
+// `async` deliberately: `KnowledgeSearchRequestSchema.parse` THROWS, and a
+// function that sometimes throws synchronously and sometimes returns a rejected
+// promise is a trap for every caller with a `.catch()` chain. Marking it async
+// makes both failures arrive the same way.
+export async function searchKnowledge(
+  workspaceId: string,
+  body: KnowledgeSearchRequest,
+  signal?: AbortSignal,
+): Promise<KnowledgeSearchResponse> {
+  return request<KnowledgeSearchResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/search`,
+    {
+      method: 'POST',
+      body: JSON.stringify(KnowledgeSearchRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    },
+    KnowledgeSearchResponseSchema as ZodType<KnowledgeSearchResponse>,
+  )
+}
+
+/**
+ * The heading outline of one markdown file
+ * (ADR-067 FR-062, GET /library/{workspace_id}/knowledge/outline).
+ *
+ * Served for ANY markdown file, knowledge base or not — an outline is parsed
+ * from the one file in hand and needs no index. The response's
+ * `is_knowledge_base` / `collection_id` are what tell a caller whether it may
+ * ALSO offer search and linked mentions, which is why this one call is enough
+ * to decide the whole shape of the reading pane.
+ *
+ * `path` is workspace-relative and required.
+ */
+export function fetchKnowledgeOutline(
+  workspaceId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeOutline> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<KnowledgeOutline>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/outline?${qs}`,
+    signal ? { signal } : undefined,
+    KnowledgeOutlineSchema as ZodType<KnowledgeOutline>,
+  )
+}
+
+/** Query arguments for {@link fetchKnowledgeGraph}. Not a wire type — the wire
+ *  shape is the query string the contract declares; this is the SPA-side
+ *  argument bag for it. */
+export interface KnowledgeGraphQuery { // not-wire-format: query-parameter argument bag, never serialized as a JSON body
+  collectionId: string
+  kind: KnowledgeGraphResponse['kind']
+  /** COLLECTION-relative path of the note the query is about. Required by the
+   *  contract for links/backlinks/neighbourhood. */
+  path?: string
+  hops?: number
+  limit?: number
+}
+
+/**
+ * One of the five link-graph queries over a knowledge base
+ * (ADR-067 FR-051/FR-054, GET /library/{workspace_id}/knowledge/graph).
+ *
+ * Every query is bounded and reports its own truncation, so a caller can
+ * always tell a small graph from a clipped one — see KnowledgeGraphResponse's
+ * `truncated`, `node_limit_applied` and `skipped`.
+ */
+export function fetchKnowledgeGraph(
+  workspaceId: string,
+  query: KnowledgeGraphQuery,
+  signal?: AbortSignal,
+): Promise<KnowledgeGraphResponse> {
+  const params = new URLSearchParams({ collection_id: query.collectionId, kind: query.kind })
+  if (query.path !== undefined && query.path !== '') params.set('path', query.path)
+  if (query.hops !== undefined) params.set('hops', String(query.hops))
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  return request<KnowledgeGraphResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/graph?${params.toString()}`,
+    signal ? { signal } : undefined,
+    KnowledgeGraphResponseSchema as ZodType<KnowledgeGraphResponse>,
+  )
+}
+
+/**
+ * Evaluate one saved view and return everything needed to draw it
+ * (view-kinds-design-2026-09-03 §7, GET /library/{workspace_id}/knowledge/view).
+ *
+ * The server evaluates the view's filter/grouping/aggregation through the one
+ * query engine and precomputes every aggregate under the gate rules — per-unit
+ * totals only (G2), unit-less rows shown/excluded/counted (G3) — so the SPA
+ * only draws. A view that cannot answer is a 200 with `refusal` set, never a
+ * transport error; an out-of-scope collection answers exactly like an unknown
+ * view (FR-052/FR-053), so callers must treat that refusal as an answer too.
+ */
+export function fetchKnowledgeViewResult(
+  workspaceId: string,
+  collectionId: string,
+  view: string,
+  signal?: AbortSignal,
+): Promise<ViewResult> {
+  const qs = new URLSearchParams({ collection_id: collectionId, view }).toString()
+  return request<ViewResult>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/view?${qs}`,
+    signal ? { signal } : undefined,
+    ViewResultSchema as ZodType<ViewResult>,
+  )
+}
+
+/**
+ * The saved views one `.base` file owns
+ * (GET /library/{workspace_id}/knowledge/base-views).
+ *
+ * THE SERVER'S SLUGS ARE THE ONLY ADDRESSES. Import is one-shot: a `.base`'s
+ * views were translated into saved view files and the source is never read
+ * again. The SPA used to re-derive each slug by parsing the `.base` itself,
+ * which could not reproduce the importer's collision counter — two view names
+ * that kebab alike collapsed onto one slug and the second tab rendered the
+ * first view's rows. Every `name` returned here comes from the saved view
+ * file and must be passed VERBATIM to fetchKnowledgeViewResult.
+ *
+ * The answer also carries the enclosing collection, so a caller needs no
+ * ancestor walk of its own to learn where the views run.
+ */
+export function fetchKnowledgeBaseViews(
+  workspaceId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeBaseViews> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<KnowledgeBaseViews>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/base-views?${qs}`,
+    signal ? { signal } : undefined,
+    KnowledgeBaseViewsSchema as ZodType<KnowledgeBaseViews>,
+  )
+}
+
+/**
  * List the directories inside `path` on the operator's own machine, for the
  * mount folder picker.
  *
@@ -4558,6 +4770,61 @@ export function putLibraryContent(workspaceId: string, body: LibraryContentReque
     `/library/${encodeURIComponent(workspaceId)}/content`,
     { method: 'PUT', body: JSON.stringify(body) },
     LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Write binary file content (a filled PDF, image, any non-UTF-8 bytes) from the
+ * Library editor (feature B). Sibling of putLibraryContent — the text route
+ * cannot carry bytes. `content_base64` is standard base64; the server decodes,
+ * enforces a 25 MB decoded cap, and overwrites the file (PUT .../content-binary).
+ */
+export function putLibraryContentBinary(
+  workspaceId: string,
+  body: LibraryBinaryContentRequest,
+): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/content-binary`,
+    { method: 'PUT', body: JSON.stringify(LibraryBinaryContentRequestSchema.parse(body)) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Create a new Omnipus knowledge base ("vault") inside a workspace (feature C2).
+ * Scaffolds the `.omnipus-vault/` marker and returns the created directory entry.
+ * Rejects (409) if the target already exists (POST .../vaults).
+ */
+export function createVault(
+  workspaceId: string,
+  body: CreateVaultRequest,
+): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/vaults`,
+    { method: 'POST', body: JSON.stringify(CreateVaultRequestSchema.parse(body)) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Human vault search (feature C1) — text hits, records by typed property, and
+ * saved views, grouped as notes/records/views. Runs over the SAME index the
+ * agent's knowledge_find uses (POST .../knowledge/find). Never errors on an
+ * empty or not-yet-ready index — the response carries `complete`/`complete_reason`.
+ */
+export async function searchVault(
+  workspaceId: string,
+  body: VaultSearchRequest,
+  signal?: AbortSignal,
+): Promise<VaultSearchResponse> {
+  return request<VaultSearchResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/find`,
+    {
+      method: 'POST',
+      body: JSON.stringify(VaultSearchRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    },
+    VaultSearchResponseSchema as ZodType<VaultSearchResponse>,
   )
 }
 

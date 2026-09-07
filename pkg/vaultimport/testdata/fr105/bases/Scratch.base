@@ -1,0 +1,13 @@
+filters:
+  and:
+    - type == "task"
+    - not:
+        - file.inFolder("99-Temp")
+views:
+  - type: table
+    name: All but temp
+  - type: table
+    name: Shipping only
+    filters:
+      and:
+        - file.name.contains("Ship")

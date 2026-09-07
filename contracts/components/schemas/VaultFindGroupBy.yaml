@@ -1,0 +1,81 @@
+title: VaultFindGroupBy
+description: >
+  One grouping key of a knowledge_find request (spec FR-027, FR-018b).
+
+  IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS.
+  `group_by` used to be a bare list of property names. A saved view's own
+  `grouping` keys have carried a direction since ADR-068 D24.1, so a view that
+  recorded `DESC` was written to disk faithfully and then REFUSED at serve time
+  (records.ServeRefusalGroupDirection) — the request had nowhere to ask for
+  what the view had recorded. Refusing was right; the missing field was the
+  defect. This is that field.
+
+  Shaped exactly like `sort` (VaultFindSort) — same name kept, same optional
+  `direction`, same "omitted means asc" — because a request that expressed one
+  ordering as objects and the other as bare strings taught every caller two
+  grammars for one idea.
+type: object
+additionalProperties: false
+required:
+  - property
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The property to group on. Grouping by a relation is supported (FR-029),
+      and a record holding several values appears in EVERY group it belongs to
+      (FR-028) rather than being assigned to one arbitrarily. The reserved
+      namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+    example: "status"
+  direction:
+    type: string
+    enum:
+      - asc
+      - desc
+    x-enum-varnames:
+      - VaultFindGroupByDirectionAsc
+      - VaultFindGroupByDirectionDesc
+    description: >
+      Order of the GROUPS themselves — not of the records inside them, which is
+      `sort`'s job.
+
+
+      Omitted means `asc`. That default is stated here rather than declared as
+      a JSON Schema `default:` for the reason RecordFilter.yaml gives on
+      `negate`: openapi-typescript promotes a defaulted property to REQUIRED
+      while oapi-codegen still emits an optional pointer, so a `default:` here
+      would make the two generated languages disagree about one field.
+
+
+      `desc` IS THE EXACT REVERSE OF `asc` OVER THE VALUES, and what "the
+      values" means is the comparator's own answer (ruling R-1's comparison
+      domains), never a per-position rule invented for grouping:
+
+
+      * `enum` and `text` order LEXICALLY over the case-folded value — `Won`,
+        `won` and `WON` order as one, exactly as they GROUP as one (R-5c). An
+        enum has NO declared-position ordinal: `desc` on a `status` declared
+        `[lead, qualified, won]` returns `won, qualified, lead` because `w` >
+        `q` > `l`, and would return them in a different order the moment a
+        value were renamed. A domain order is expressed by prefixing the
+        declared values (`1-lead`, `2-qualified`), which is visible in the
+        operator's own file and does what it appears to do.
+      * `integer`, `decimal`, `date` and `datetime` order NATURALLY —
+        numerically and chronologically. `desc` over a backlink count returns
+        12 before 9; it does not return "9" before "12" because `9` > `1` as
+        text.
+      * every other declared type (`relation`, `person`, `checkbox`) orders
+        lexically over the rendered group label, which is what the group is
+        identified BY.
+
+
+      THE ABSENT GROUP SORTS LAST IN BOTH DIRECTIONS. This is a decision, not
+      the comparator's leftover: a record with no value has not got a small
+      value, and it has not got a large one either — absence is outside the
+      order rather than at one end of it. Reversing it into first place on
+      `desc` would put "nobody recorded this" exactly where a reader looking
+      for the biggest group is looking. It is the same rule row sorting already
+      applies (assemble.go's compareByProperty), stated once and applied to
+      both.
+    example: "desc"

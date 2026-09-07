@@ -11,6 +11,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/pkg/gateway/pathredact"
 )
 
 // writeJSONErr writes {"error": msg} with the given HTTP status. A post-header
@@ -49,7 +50,7 @@ func RequireNotBypass(next http.HandlerFunc) http.HandlerFunc {
 		bypassOn := cfg != nil && cfg.Gateway.DevModeBypass
 		if cfgMissing || bypassOn {
 			slog.Warn("gateway.admin_route_blocked_by_bypass_gate",
-				"path", r.URL.Path,
+				"path", pathredact.RequestPath(r.URL.Path),
 				"remote_addr", r.RemoteAddr,
 				"reason", reasonForBypassBlock(cfgMissing, bypassOn))
 			writeJSONErr(w, http.StatusServiceUnavailable, "this action is disabled while dev_mode_bypass is active")

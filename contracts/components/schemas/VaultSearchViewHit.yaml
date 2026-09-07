@@ -1,0 +1,28 @@
+title: VaultSearchViewHit
+description: >
+  One saved view (or imported base view) whose name or label matched the query
+  (library-b-c-design-2026-09-07 §C1). Opening it evaluates the view — the same
+  result the GET .../knowledge/view endpoint returns.
+type: object
+additionalProperties: false
+required:
+  - view
+  - label
+properties:
+  view:
+    type: string
+    minLength: 1
+    description: The view's identifier, passed VERBATIM to GET .../knowledge/view.
+    example: "open-deals"
+  label:
+    type: string
+    description: The view's display label — its declared label, falling back to its name.
+    example: "Open deals"
+  kind:
+    type: string
+    description: The view's declared kind, when it has one (table, board, gallery, …).
+    example: "table"
+  type:
+    type: string
+    description: The record type the view is scoped to, when it declares one.
+    example: "deal"

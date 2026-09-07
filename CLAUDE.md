@@ -46,6 +46,63 @@ Three-phase plan locked 2026-05-03.
   - `git config user.email "<their GitHub no-reply email>"` — derive via `gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"'`. The `…@users.noreply.github.com` form is required.
 - **Verify before every push:** `git log -1 --format='%an <%ae>'` is a real GitHub user, and `git log origin/main..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty.
 
+## Definition of Done (MANDATORY)
+
+**A feature is not done until a real user or a real agent can invoke it.** Green
+tests, green CI and closed review findings show the code is *correct*. They do not
+show it is *reachable*. Those are two separate claims and both must be true before
+anything is reported complete.
+
+Before reporting any feature goal met, run the reachability check FIRST:
+
+- Is the tool registered in the builtin catalog with an explicit policy entry for
+  every agent (Hard Constraint #6)? `grep -rl '"<tool_name>"' pkg/coreagent/ pkg/config/ pkg/tools/`
+  returning **0** means nobody can call it, whatever the tests say.
+- Is there a screen or component that renders it? A backend with no UI and no tool
+  registration is a library, not a feature.
+- Was the test plan **executed**, or only written? "Written, not executed" is not testing.
+
+State delivery in two lines that are never merged: *code correct and tested*, and
+*reachable by a user/agent*.
+
+**Why this rule exists:** the vault-records work was reported as six-of-six points
+complete with CI at 34/34 green, while all six `vault_*` tools were registered in
+zero config files, the superseded `knowledge_*` tools were still the only ones
+wired, and no record UI existed. The fact was noted twice — as an explanation for
+why a test was skipped — and never read as "the goal is not delivered."
+
+## Reporting Results (MANDATORY)
+
+**Never report success that was not verified, and check the instrument before
+trusting a green.** Ask: *could this check have detected the failure at all?*
+
+- If a search returns nothing, first search for something you know is present. A
+  grep over 1 of 523 asset files "proved" a field was absent when it appears in 3.
+- Capture exit codes directly, never through a pipe: `cmd > log 2>&1; echo "exit=$?"`.
+  Read the step's exit code, not the wrapper's — a wrapper reporting 0 has masked a
+  hard compile error here.
+- A pass under one flag set is not a pass. Race bugs need `-race`; cross-platform
+  breaks need `GOOS=<target> go vet` (a native-only gate missed a Windows break).
+- **A test that fails twice under an isolated re-run is not a flake.** Calling one a
+  flake is how a real defect survives.
+- Correct a wrong claim plainly and immediately; never bury it inside an otherwise
+  positive summary.
+
+## Language and formatting for the founder (MANDATORY)
+
+Write for a technically literate non-engineer. He understands business and
+technology well and does not read code for a living.
+
+- **Plain words over jargon.** Use a technical term only when it is the precise
+  word, and define it in half a sentence on first use. No unexplained acronyms.
+- **Lead with what it means**, then the mechanism only if it changes a decision.
+- **Structure every reply**: a short lead, then headed sections, tables for status
+  or comparisons, bullets for lists, code blocks for commands and output. Keep
+  paragraphs to a few lines. **Never a wall of unbroken text.**
+- Prefer a concrete example over an abstract explanation.
+- This governs register only — never drop a caveat, an unverified finding or a
+  number to make a sentence read more smoothly.
+
 ## Hard Constraints (non-negotiable)
 
 1. **Single Go binary** — all backend features compile into one binary. No new runtime deps. SPA embedded via `go:embed`.
@@ -59,11 +116,11 @@ Three-phase plan locked 2026-05-03.
 
 ## Tech Stack
 
-**Backend:** Go (go.mod requires 1.26.4; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `mymmrac/telego` (Telegram), `slack-go`, `modernc.org/sqlite` (pure-Go SQLite for whatsmeow, no CGo). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
+**Backend:** Go (go.mod requires 1.26.4; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `mymmrac/telego` (Telegram), `slack-go`, `modernc.org/sqlite` (pure-Go SQLite, no CGo — whatsmeow, Matrix's E2EE crypto store, and the vault's derived properties index; it cannot build on `linux/mipsle`, `netbsd/*` or `freebsd/arm`, see `pkg/gateway/channel_matrix.go:20-28`). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
 
 **Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind v4), AssistantUI (chat), Phosphor Icons, Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/`, embedded via `go:embed`.
 
-**Storage:** File-based only (JSON/JSONL); no PostgreSQL/Redis. SQLite is isolated to WhatsApp session storage only. Data dir `~/.omnipus/`. Atomic writes (temp file + rename, `fileutil.WriteFileAtomic`). Credentials in `credentials.json` (AES-256-GCM, Argon2id), never in `config.json`. Sessions: day-partitioned JSONL (`sessions/<id>/<YYYY-MM-DD>.jsonl`, default 90-day retention). Context paging (ADR-028): `windowTrim` (`pkg/agent/loop.go::windowTrim`) is the **only** compaction path — it evicts the oldest whole turn(s) on a token budget with **zero LLM calls** (deletes nothing on disk). The legacy LLM summariser is deleted: `maybeSummarize`, `summarizeSession`, and `forceCompression` no longer exist (`pkg/agent/window_trim_test.go` asserts those methods are never redefined). The sliding window is the authoritative history. ⚠️ **`pkg/agent/loop.go` and `turn.go` are ~11k-line files under constant churn — their line numbers go stale within days (every `file:line` in this paragraph was wrong by ~1.2k lines before 2026-08-03). Cite `file::symbol` here, not `file:line`.** Sessions: `meta.json` was split into **four** files per session dir (ADR-057 U5) — `meta.json` (identity) / `stats.json` / `goal.json` / `loop.json`, read and written independently by `pkg/session/unified_meta_files.go`. Concurrency: per-entity files for hot data (tasks, pins); memory uses a 64-shard mutex pool keyed by FNV-32a hash (`pkg/memory/jsonl.go::sessionLock`, delegating to the canonical `pkg/task/lock.go::StripedLock`). **`pkg/session` has a SECOND, independent 64-shard pool** (ADR-057 FR-048, `pkg/session/unified_lock.go`): `UnifiedStore.mu` was a single store-global `RWMutex` that serialized every fsync-bound create and stalled token streaming across unrelated sessions once every delegation became a real session. It is replaced by (a) `u4SessionStripedLock`, one shard per session id, and (b) a narrow `us.cacheMu` guarding only `metaCache`/`cacheLoadFailures`/the FR-097 parent index, **never held across an `os.*` or `fileutil.*` call** (FR-049). **Lock order (FR-050) is one-directional: `sessionLock(id)` → `cacheMu`.** Two session shards are never held at once, with exactly two sanctioned exceptions: `ClearAll`/`RetentionSweep` take every shard in **ascending index order** via `lockAllSessionShards`; and `CreateSessionWithID`'s parent-Owner copy (FR-082) reads the parent's meta under `lockSession(parentID)`, **unlocks**, then takes `lockSession(childID)` — never both at once. That two-shard protocol is caller discipline, not type-enforced; `go test -race` is not a lock-order checker, so the package routes every acquire/release through swappable `sessionLockAcquireFn`/`sessionLockReleaseFn` seams to make order observable in tests (FR-101). Advisory `unix.Flock` on Linux/macOS. **On Windows there is NO cross-process file locking anywhere in the file-store family** — `fileutil.WithFlock` is a no-op there (`pkg/fileutil/flock_windows.go`), and an ADR-054 audit of all six stores (`pkg/task`, `pkg/plan`, `pkg/session`, `pkg/credentials`, `pkg/auth`, `pkg/agentstore`) found that **none** implements the "single-writer goroutine pattern" this line used to claim; they all pair an in-process mutex with that same no-op. Treat Windows as in-process protection only until `LockFileEx` lands (see ADR-054 §5.1). `pkg/entity` (ADR-054 D3, the per-agent entity store) is simply the first store whose guarantee was actually TESTED. It layers a 64-shard striped `sync.Mutex` (in-process only, real on every platform) with a sidecar-file `fileutil.WithFlock` for cross-process mutual exclusion — proven by `pkg/entity/store_crossprocess_test.go` (re-execs the test binary as real OS processes) and isolated from the mutex by `pkg/entity/flock_isolation_test.go` (both `!windows`-gated). Because `WithFlock` is a documented no-op on Windows (`pkg/fileutil/flock_windows.go`), **the cross-process guarantee for `pkg/entity` is POSIX-only** — on Windows only the in-process striped mutex protects concurrent entity writes; two Windows processes (e.g. two gateway instances against the same `$OMNIPUS_HOME`) can lose an update to the same entity. See ADR-054 §5 for the accepted rationale (matching per-process protection everywhere else in the file-store family; a real Windows compensation — e.g. `LockFileEx` or the `pkg/tools/browser/coordinator_lock_other.go` O_EXCL pattern — is filed as follow-up work, not implemented here).
+**Storage:** File-based only (JSON/JSONL); no PostgreSQL/Redis. SQLite is used for WhatsApp and Matrix session storage and for the vault's derived properties index (ADR-068 D16); it is not a general application store. The properties index is **derived and disposable** — delete it and it rebuilds from the notes; nothing lives in SQLite that is not reconstructible from Markdown. **Records are a feature of the SQLite-capable builds** (ADR-068 D16.2a): `-tags lite` **KEEPS** them (lite drops whatsmeow only, Matrix is not lite-gated, so SQLite is still linked), while `linux/mipsle` — the one shipped target without SQLite — compiles a build-tagged stub (`pkg/records/propindex_stub.go`) that refuses typed filters, joins, grouping and aggregation **by name** and never returns an empty result. Data dir `~/.omnipus/`. Atomic writes (temp file + rename, `fileutil.WriteFileAtomic`). Credentials in `credentials.json` (AES-256-GCM, Argon2id), never in `config.json`. Sessions: day-partitioned JSONL (`sessions/<id>/<YYYY-MM-DD>.jsonl`, default 90-day retention). Context paging (ADR-028): `windowTrim` (`pkg/agent/loop.go::windowTrim`) is the **only** compaction path — it evicts the oldest whole turn(s) on a token budget with **zero LLM calls** (deletes nothing on disk). The legacy LLM summariser is deleted: `maybeSummarize`, `summarizeSession`, and `forceCompression` no longer exist (`pkg/agent/window_trim_test.go` asserts those methods are never redefined). The sliding window is the authoritative history. ⚠️ **`pkg/agent/loop.go` and `turn.go` are ~11k-line files under constant churn — their line numbers go stale within days (every `file:line` in this paragraph was wrong by ~1.2k lines before 2026-08-03). Cite `file::symbol` here, not `file:line`.** Sessions: `meta.json` was split into **four** files per session dir (ADR-057 U5) — `meta.json` (identity) / `stats.json` / `goal.json` / `loop.json`, read and written independently by `pkg/session/unified_meta_files.go`. Concurrency: per-entity files for hot data (tasks, pins); memory uses a 64-shard mutex pool keyed by FNV-32a hash (`pkg/memory/jsonl.go::sessionLock`, delegating to the canonical `pkg/task/lock.go::StripedLock`). **`pkg/session` has a SECOND, independent 64-shard pool** (ADR-057 FR-048, `pkg/session/unified_lock.go`): `UnifiedStore.mu` was a single store-global `RWMutex` that serialized every fsync-bound create and stalled token streaming across unrelated sessions once every delegation became a real session. It is replaced by (a) `u4SessionStripedLock`, one shard per session id, and (b) a narrow `us.cacheMu` guarding only `metaCache`/`cacheLoadFailures`/the FR-097 parent index, **never held across an `os.*` or `fileutil.*` call** (FR-049). **Lock order (FR-050) is one-directional: `sessionLock(id)` → `cacheMu`.** Two session shards are never held at once, with exactly two sanctioned exceptions: `ClearAll`/`RetentionSweep` take every shard in **ascending index order** via `lockAllSessionShards`; and `CreateSessionWithID`'s parent-Owner copy (FR-082) reads the parent's meta under `lockSession(parentID)`, **unlocks**, then takes `lockSession(childID)` — never both at once. That two-shard protocol is caller discipline, not type-enforced; `go test -race` is not a lock-order checker, so the package routes every acquire/release through swappable `sessionLockAcquireFn`/`sessionLockReleaseFn` seams to make order observable in tests (FR-101). Advisory `unix.Flock` on Linux/macOS. **On Windows there is NO cross-process file locking anywhere in the file-store family** — `fileutil.WithFlock` is a no-op there (`pkg/fileutil/flock_windows.go`), and an ADR-054 audit of all six stores (`pkg/task`, `pkg/plan`, `pkg/session`, `pkg/credentials`, `pkg/auth`, `pkg/agentstore`) found that **none** implements the "single-writer goroutine pattern" this line used to claim; they all pair an in-process mutex with that same no-op. Treat Windows as in-process protection only until `LockFileEx` lands (see ADR-054 §5.1). `pkg/entity` (ADR-054 D3, the per-agent entity store) is simply the first store whose guarantee was actually TESTED. It layers a 64-shard striped `sync.Mutex` (in-process only, real on every platform) with a sidecar-file `fileutil.WithFlock` for cross-process mutual exclusion — proven by `pkg/entity/store_crossprocess_test.go` (re-execs the test binary as real OS processes) and isolated from the mutex by `pkg/entity/flock_isolation_test.go` (both `!windows`-gated). Because `WithFlock` is a documented no-op on Windows (`pkg/fileutil/flock_windows.go`), **the cross-process guarantee for `pkg/entity` is POSIX-only** — on Windows only the in-process striped mutex protects concurrent entity writes; two Windows processes (e.g. two gateway instances against the same `$OMNIPUS_HOME`) can lose an update to the same entity. See ADR-054 §5 for the accepted rationale (matching per-process protection everywhere else in the file-store family; a real Windows compensation — e.g. `LockFileEx` or the `pkg/tools/browser/coordinator_lock_other.go` O_EXCL pattern — is filed as follow-up work, not implemented here).
 
 ### Credential provisioning
 

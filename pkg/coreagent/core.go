@@ -330,6 +330,17 @@ func GetPrompt(id string) string {
 //   - 2 ADR-055 (PlanSupervisor) supervision/containment tools — plan_correct
 //     and stop_plan, registered here for the same reason and under the same
 //     rule as the ADR-052 four.
+//   - 6 ADR-068 (vault-records knowledge base) tools, split by BLAST RADIUS
+//     rather than read/write — 3 read (knowledge_describe, knowledge_find,
+//     knowledge_read), knowledge_edit (one named file), knowledge_restructure
+//     (cascading rename/move/trash) and knowledge_configure (the schema/view
+//     control plane) — registered here for the same reason and under the
+//     same rule as the ADR-052 four. See D15.3/FR-070. Supersedes ADR-067's
+//     nine (knowledge_search, knowledge_graph, knowledge_create,
+//     knowledge_link, knowledge_set_property, knowledge_append_section,
+//     knowledge_tasks, knowledge_move, knowledge_rename), now retired from
+//     this literal; the split below says why the last two carry their own
+//     policy line rather than sharing knowledge_edit's.
 //   - ADR-056's list_jobs is counted in the 34 general tools above (it is a
 //     ScopeGeneral tool in pkg/tools, not a separate tier); it is called out
 //     here only because its seeded posture is a rule of its own — see
@@ -453,6 +464,70 @@ var allStaticToolNames = []string{
 	// map names them, because validateOverrideKeys panics on an override key
 	// that is not in this literal.
 	"plan_correct", "stop_plan",
+
+	// ADR-068 D15.3 (FR-070) — the knowledge-base tool family, SIX names
+	// split by BLAST RADIUS rather than by read/write, superseding ADR-067's
+	// nine (knowledge_search, knowledge_graph, knowledge_create,
+	// knowledge_link, knowledge_set_property, knowledge_append_section,
+	// knowledge_tasks, knowledge_move, knowledge_rename — all RETIRED from
+	// this literal; their Go implementations survive only because
+	// pkg/gateway/rest_knowledge.go's own REST endpoints, independent of the
+	// agent tool-calling surface, still call them). Listed here ahead of /
+	// independent of the pkg/knowledge / pkg/vaultprops implementation
+	// landing, under exactly the same rule as the ADR-052 four and the
+	// ADR-055 pair above, and for two distinct reasons:
+	//
+	//  1. validateOverrideKeys PANICS on a seed override naming a tool that
+	//     is not in this literal, so these names must exist here before
+	//     coreAgentSeed below can state a posture for any of them.
+	//  2. Being in the catalog is what makes the seeding FALSIFIABLE.
+	//     config.ValidateToolPolicyCoverage and
+	//     config.RepairIncompleteToolPolicyCoverage both derive their gap
+	//     list from this universe (via pkg/gateway's
+	//     buildKnownBuiltinToolNames, which mirrors this literal), and both
+	//     return NOTHING for a name the universe does not contain. A
+	//     knowledge tool omitted here is therefore not merely uncovered — it
+	//     is invisible to the boot-time check, and every test asserting "no
+	//     knowledge tool was backfilled to deny" passes vacuously.
+	//
+	// FR-071 is the failure this guards: the boot path repairs BEFORE it
+	// validates (pkg/gateway/gateway.go's
+	// repairAndValidateToolPolicyCoverage), and the repair backfills a gap
+	// with an explicit "deny" plus one WARN line. Boot does NOT abort. A
+	// forgotten knowledge tool ships silently denied with the feature dead.
+	//
+	// THE SPLIT, AND WHY IT REPLACES read/write AS THE SEEDING AXIS:
+	//
+	//   - READ tier — touch nothing outside what the caller asked for.
+	//     knowledge_describe (orientation: schema, saved views, index
+	//     state), knowledge_find (the one retrieval surface: words, typed
+	//     filter, saved views, relations, tasks — the FR-076a replacement
+	//     for the retired knowledge_tasks), knowledge_read (one note or one
+	//     section).
+	//   - knowledge_edit — mutates exactly the ONE file the caller named
+	//     (create / set_property / append_section / link / replace_body,
+	//     unified — ADR-068 folds knowledge_create, knowledge_link,
+	//     knowledge_set_property and knowledge_append_section into this one
+	//     name because all four have the identical blast radius: one
+	//     caller-named file).
+	//   - knowledge_restructure — rename / move / trash / restore. CASCADES:
+	//     a rename/move rewrites inbound links in every note that referenced
+	//     the target, none of which the caller named — the ADR-067
+	//     knowledge_move/knowledge_rename pair's own justification for being
+	//     one operation ("the same act — a note's path changes and every
+	//     inbound link must follow") extended to trash/restore, which
+	//     touches the SAME journal/link-rewrite machinery.
+	//   - knowledge_configure — the control plane: a record-type schema
+	//     edit reclassifies every record of that type already on disk, and a
+	//     saved view changes what a name resolves to for every future
+	//     caller. Neither touches a note's bytes, but both change what
+	//     EXISTING notes MEAN — a strictly wider blast radius than
+	//     knowledge_edit's one file, which is why it carries its own policy
+	//     line rather than sharing knowledge_edit's.
+	"knowledge_describe", "knowledge_find", "knowledge_read",
+	"knowledge_edit",
+	"knowledge_restructure",
+	"knowledge_configure",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -629,6 +704,25 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 // an omission: list_jobs' global ceiling is "allow", so an absent key there
 // would silently GRANT it.
 //
+// # SEED RULE — KNOWLEDGE POSTURE (ADR-067 D17, FR-070/FR-071)
+//
+// EVERY knowledge_* NAME IN allStaticToolNames CARRIES AN EXPLICIT, LITERAL
+// POSTURE FOR EACH OF THE FOUR BASE AGENTS: RETRIEVAL "allow" FOR ALL FOUR;
+// AUTHORING "allow" FOR JIM AND AVA, "ask" FOR MIA AND RAY.
+//
+// Stated over the tool family rather than as a list of the nine names so it
+// survives a tenth knowledge tool being added: add one to the catalog and it
+// arrives here at denyAllThenOverride's "deny" for every agent — a posture
+// nobody chose. That is not a loud failure. The deny is explicit, so coverage
+// validation is satisfied and boot is clean; the tool is simply dead, with no
+// signal anywhere. TestCoreAgentSeed_KnowledgeToolsCarrySeededPosture asserts
+// the property over the whole catalog, so forgetting is a red test.
+//
+// Everyone else is deny: the specialist tier and every system agent reach it
+// through denyAllThenOverride's fully-enumerated default, and the Worker's
+// SPARSE map writes nine explicit denies out for the reason stated there (all
+// nine ceilings are "allow", so an omission would GRANT).
+//
 // The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	allow := config.ToolPolicyAllow
@@ -644,6 +738,15 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// tightened past the global ceiling to "deny": channels, providers,
 		// platform, most of agents (list_agents stays open), most of tasks
 		// (list_tasks/update_task/set_todos stay open), and workspaces.
+		//
+		// This sparseness is preserved across upgrades:
+		// backfillToolPolicyCatalogDrift (tool_policy_catalog_drift.go) fills
+		// a pre-existing agent's missing entries from THIS map's keys, never
+		// from the full catalog, so a name deliberately left out here keeps
+		// inheriting the ceiling. The corollary is the one to remember when
+		// editing this map: a tool that should sit BELOW the ceiling must be
+		// written out here explicitly, on the upgrade path exactly as on the
+		// fresh-install path.
 		return tightenGlobalCeiling(map[string]config.ToolPolicy{
 			// --- Channels ---
 			"enable_channel":    deny,
@@ -731,6 +834,28 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// unrelated parent turns rather than its own work. See
 			// coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": deny,
+			// --- ADR-068 D15.3 knowledge-base tools ---
+			// EXPLICIT deny, all six — the "ceiling is allow, so absence
+			// GRANTS" trap once more (see inspect_session / stop_plan /
+			// list_jobs above). D15.3 seeds a posture for the FOUR BASE
+			// AGENTS and nobody else, and every other seeded agent reaches
+			// deny via denyAllThenOverride's fully-enumerated default. This
+			// sparse map is the one seed that would not, so the deny is
+			// written out.
+			//
+			// Read-only knowledge_describe/knowledge_find/knowledge_read are
+			// denied here for the same reason list_jobs is: the Worker id is
+			// occupied by every generic delegated session in the
+			// installation at once, so a grant to "the Worker" is a grant to
+			// all of them. An operator who wants a delegated worker reading
+			// a knowledge base changes this on their own install
+			// (Constraint #6 — this is seeded data, not a branch).
+			"knowledge_describe":    deny,
+			"knowledge_find":        deny,
+			"knowledge_read":        deny,
+			"knowledge_edit":        deny,
+			"knowledge_restructure": deny,
+			"knowledge_configure":   deny,
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -992,6 +1117,42 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Skill tool to load ANY skill's content at all — the "# Skills"
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS rather
+			// than by read/write (superseding ADR-067 D17's file). Retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is allow
+			// for all four base agents: read-only, and scoped by the tool
+			// itself to this agent's workspace mounts (ADR-068's own
+			// isolation carries forward D7's). Ava was previously full-allow
+			// on every ADR-067 write too, because under that model EVERY
+			// write touched exactly one file she named — "she is a BUILDER,
+			// so she holds the write half unprompted, the same way she
+			// holds create_agent/update_agent" no longer holds unmodified,
+			// because ADR-068's split changes what the writes DO:
+			// knowledge_edit is still that one-file case (kept unprompted-
+			// adjacent by staying "ask" rather than "allow" only because
+			// this is the family's FIRST release under the new engine —
+			// see coreAgentSeed's doc note on this being a conservative
+			// default, not a permanent verdict on her role); but
+			// knowledge_restructure CASCADES to files she never named
+			// (every inbound-linking note gets rewritten on a rename/move/
+			// trash) and knowledge_configure changes what EXISTING records
+			// MEAN (a schema edit reclassifies every record of that type
+			// already on disk — see its own execEditRecordType/
+			// execCreateRecordType cascade report). Neither blast radius is
+			// bounded by what Ava's own arguments named, which is precisely
+			// the property that made every other ADR-067 write safe to grant
+			// her unprompted. So all three writes are "ask" here, not
+			// "allow" — a role-based exception for a specific agent is a
+			// decision for a human operator to make on their own install
+			// (Constraint #6), not a default this seed grants on Ava's
+			// behalf for an operation whose full effect she cannot bound
+			// from her own call.
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        ask,
+			"knowledge_restructure": ask,
+			"knowledge_configure":   ask,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -1055,6 +1216,34 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Skill tool to load ANY skill's content at all — the "# Skills"
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+			// (superseding ADR-067 D17's file). Retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is allow —
+			// read-only, workspace-scoped by the tool itself, and this
+			// supersedes the ADR-067-era distinction between knowledge_tasks
+			// and knowledge_search: knowledge_find is now the ONE retrieval
+			// surface (it answers task queries too, via `kind: task` —
+			// FR-076a), so there is no longer a second, narrower read name
+			// for a stricter posture to attach to.
+			//
+			// knowledge_edit, knowledge_restructure and knowledge_configure
+			// are all "ask". Mia ROUTES heavy work rather than doing it, and
+			// every one of these lands on the operator's REAL disk outside
+			// the Library's audit path — so the everyday assistant asks
+			// before writing there, exactly as she asks before delete_task.
+			// This is the SAME "ask" ADR-067's knowledge_create/
+			// knowledge_move carried for her; ADR-068 does not loosen it —
+			// knowledge_restructure and knowledge_configure are, if
+			// anything, a WIDER blast radius than the single-file writes
+			// that already warranted asking (see coreAgentSeed's IDAva case
+			// for the cascade/control-plane argument, which applies
+			// identically here).
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        ask,
+			"knowledge_restructure": ask,
+			"knowledge_configure":   ask,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -1163,6 +1352,32 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Skill tool to load ANY skill's content at all — the "# Skills"
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+			// (superseding ADR-067 D17's file). Ray is the Scout: retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is squarely
+			// his job and is allow — "what is still open in this vault?" is
+			// a survey question, and knowledge_find now answers it directly
+			// via `kind: task` (FR-076a), superseding the old
+			// knowledge_tasks/knowledge_search split this comment used to
+			// reason about separately.
+			//
+			// knowledge_edit, knowledge_restructure and knowledge_configure
+			// are all "ask" — unchanged posture from ADR-067's knowledge_
+			// create/knowledge_move: he researches and reports rather than
+			// editing the operator's knowledge base, and his file writes go
+			// to the workspace (write_file/append_file above), not to a
+			// mounted vault. knowledge_restructure/knowledge_configure are a
+			// WIDER blast radius than the single-file writes that already
+			// warranted asking (see coreAgentSeed's IDAva case for the
+			// cascade/control-plane argument), so there is no case for
+			// loosening either past "ask" for a role whose job was never to
+			// write there at all.
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        ask,
+			"knowledge_restructure": ask,
+			"knowledge_configure":   ask,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -1322,6 +1537,41 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Skill tool to load ANY skill's content at all — the "# Skills"
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+			// (superseding ADR-067 D17's file). Retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is allow
+			// for all four base agents.
+			//
+			// UNLIKE Ava/Mia/Ray above, Jim's writes (knowledge_edit,
+			// knowledge_restructure, knowledge_configure) stay "allow" too,
+			// and this is a DELIBERATE exception argued from Jim's own
+			// already-seeded posture a few lines above ("bash": allow), not
+			// an oversight that forgot to tighten him along with the other
+			// three. An "ask" gate on knowledge_restructure/
+			// knowledge_configure has real teeth for an agent who cannot
+			// otherwise touch the operator's files — that is exactly why
+			// Ava/Mia/Ray hold it. Jim already holds unprompted bash, and
+			// bash can rewrite, rename or delete anything in a mounted
+			// collection — including reproducing knowledge_restructure's
+			// cascade or knowledge_configure's schema rewrite by hand, with
+			// no prompt at all. Gating the knowledge-tool EQUIVALENTS behind
+			// "ask" for him specifically would not reduce what he can do; it
+			// would only make the orchestrator depend on a human to do
+			// through the audited, journal-backed tool what he could
+			// already do unaudited through bash. That is exactly the
+			// "protects nothing" prompt this codebase's own seeding
+			// philosophy warns against — training an operator to click
+			// through confirmations that gate nothing real, which erodes
+			// trust in the ones that do (see the analogous
+			// knowledge_tasks-vs-knowledge_search reasoning this file
+			// carried before ADR-068, now superseded but the same warning
+			// still holds for Jim's case here).
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        allow,
+			"knowledge_restructure": allow,
+			"knowledge_configure":   allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
@@ -2128,6 +2378,22 @@ func SeedConfig(cfg *config.Config) bool {
 	// in the SAME boot for that double-upgrade case, with the token already
 	// renamed by the time this pass returns.
 	if applyDefineGoalRenameMigration(cfg) {
+		modified = true
+	}
+
+	// Close the upgrade hole in CLAUDE.md hard constraint 6 (see
+	// tool_policy_catalog_drift.go's header). Every branch above either
+	// creates an agent with a fully-enumerated policy map or leaves an
+	// existing agent's map alone — which means an agent that predates a tool
+	// carries no entry for it, and pkg/tools resolves that silence to the
+	// GLOBAL ceiling's value (87 of the 93 global entries are "allow") rather
+	// than to the agent's own seeded posture. config.ValidateToolPolicyCoverage
+	// counts the global entry as coverage, so it never reports the gap and
+	// config.RepairIncompleteToolPolicyCoverage is never handed anything to
+	// repair. This fills those gaps — and only those gaps — so an upgraded
+	// install converges on the posture a fresh install of the same binary
+	// would have had.
+	if len(backfillToolPolicyCatalogDrift(cfg)) > 0 {
 		modified = true
 	}
 

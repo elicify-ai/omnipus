@@ -1,0 +1,44 @@
+title: KnowledgeMountConflictError
+description: >
+  Typed 409 body for a refused knowledge-base mount. A knowledge base is
+  exactly ONE mounted folder (FR-026): a second root is refused, and the
+  error NAMES BOTH so the operator can see which existing collection is in
+  the way rather than guessing.
+
+  Beyond ADR-067 D18's seven-type table, added because FR-026 requires a
+  "typed error naming both" and that is by definition a cross-boundary type.
+  Without it here, the first implementer hand-writes the struct and trips
+  the Hard Constraint #8 lint gate.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+  - existing_root_path
+  - requested_root_path
+properties:
+  error:
+    type: string
+    minLength: 1
+    description: Human-readable message naming both roots.
+    example: "workspace already has a knowledge base at notes/vault; cannot also mount research/second-vault"
+  code:
+    type: string
+    enum:
+      - knowledge_mount_conflict
+    description: Machine-readable discriminator.
+    example: "knowledge_mount_conflict"
+  existing_root_path:
+    type: string
+    minLength: 1
+    description: Workspace-relative root of the collection already mounted.
+    example: "notes/vault"
+  requested_root_path:
+    type: string
+    minLength: 1
+    description: Workspace-relative root the caller asked to mount.
+    example: "research/second-vault"
+  existing_collection_id:
+    type: string
+    description: collection_id of the already-mounted collection, when known.
+    example: "kb_3d1c9a7e5b2f4806"

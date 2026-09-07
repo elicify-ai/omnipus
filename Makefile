@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -277,9 +277,30 @@ clean:
 vet: generate
 	@$(GO) vet $(GOFLAGS) ./...
 
+## vet-windows: go vet the whole module for windows/amd64 from this machine
+# The local equivalent of pr.yml's "GOOS=windows vet" step. It type-checks every
+# package AND every _test.go for Windows without a Windows machine, which is the
+# only way to catch a GOOS-selected file (e.g. pathsafe's rule-set selection,
+# ADR-067 Stage 0) that compiles on Linux and not on Windows.
+# Needs pkg/gateway/spa/ to exist for //go:embed all:spa — run `make spa-embed`
+# first, or the gateway package alone fails to load with "pattern all:spa: no
+# matching files found".
+vet-windows: generate
+	@GOOS=windows GOARCH=amd64 $(GO) vet $(GOFLAGS) ./...
+
 ## test: Test Go code
+# -timeout 30m is REQUIRED, not cosmetic: go test's default is 10m PER PACKAGE
+# TEST BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s)
+# on an uncontended machine, well past that default. Without an explicit
+# override, the default fires first and panics naming whatever test happened
+# to be in flight at that instant — a false-lead generator, not a real
+# failure signal (it sent one investigation chasing an innocent test,
+# TestMemory_RecallScoreOrdering, that had nothing to do with the actual
+# defect). 30m gives real headroom above the measured 19min baseline for a
+# loaded machine. See deploy/ci-worker/runci.sh's run_gotest/run_gorace for
+# the same fix applied to the CI worker's own gates.
 test: generate
-	@$(GO) test $(GOFLAGS) ./...
+	@$(GO) test $(GOFLAGS) -timeout 30m ./...
 
 ## golangci-lint-version-check: Fail loudly if $(GOLANGCI_LINT) isn't the version CI gates with.
 ## ADR-067 §5: a green measured with a different instrument is not a green — this refuses

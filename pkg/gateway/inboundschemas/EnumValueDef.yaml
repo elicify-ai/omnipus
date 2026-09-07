@@ -1,0 +1,41 @@
+title: EnumValueDef
+description: >
+  One value of a closed, ORDERED enum (ADR-068 D4). Order is data, carried in
+  `position`, so nobody has to encode it into the spelling — the
+  "1-Pending / 7-DoNotContact" prefix hack in real vaults exists only because
+  the tool sorted lexically and offered no other way to state sequence.
+
+  Sorting an enum property sorts by `position`, never lexically (FR-010).
+  A value outside the declared set is REJECTED with the permitted values named
+  (FR-011); it is never silently auto-created as a second de-facto value.
+type: object
+additionalProperties: false
+required:
+  - value
+  - position
+properties:
+  value:
+    type: string
+    minLength: 1
+    description: The token as written in the record's frontmatter.
+    example: "prospect"
+  label:
+    type: string
+    description: Human-readable label for display. Absent means render `value`.
+    example: "Prospect"
+  position:
+    type: integer
+    minimum: 0
+    description: >
+      Zero-based declared position. Sort order for this property (FR-010).
+    example: 0
+  group:
+    type: string
+    enum:
+      - open
+      - done
+      - cancelled
+    description: >
+      Optional lifecycle grouping (D4) so "is this finished?" is answerable
+      across record types whose vocabularies differ. Omitted means ungrouped.
+    example: "open"

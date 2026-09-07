@@ -1,0 +1,93 @@
+title: LibraryPreviewTokenResponse
+description: >
+  Response for POST /api/v1/library/preview-token (FR-003f). The minted
+  credential, where to point an iframe at it, and when it dies.
+
+  Lifetime is 15 minutes (FR-003d) — long enough to load and read a bundle,
+  short enough that a token found later in a log is already dead. Expiry
+  alone is not revocation: a token is ALSO invalidated when the minting
+  session logs out, when the workspace mount is revoked, and when the named
+  path is deleted or moved. The store is in memory, so a gateway restart
+  invalidates every live preview.
+
+  RE-MINTING RETURNS A NEW VALUE AND INVALIDATES THE PREVIOUS ONE
+  (FR-003m). Do not copy the same-token-for-the-same-directory behaviour of
+  the agent web_serve path: re-registering there returns the SAME string, so
+  the credential survives as long as the tab is open — exactly the property
+  a 15-minute lifetime exists to prevent.
+
+  There is no renewal endpoint and no silent timer-driven reload. The SPA
+  uses expires_at to show a visible expiry notice in Omnipus chrome OUTSIDE
+  the frame, with an explicit Reload, because the frame is cross-origin and
+  opaque: the embedder cannot detect that its request failed, and onload
+  fires for an error page exactly as it does for content.
+type: object
+additionalProperties: false
+required:
+  - token
+  - url
+  - expires_at
+  - expires_in_seconds
+  - scope
+  - scope_root
+properties:
+  token:
+    type: string
+    minLength: 43
+    maxLength: 43
+    description: >
+      The credential: 32 bytes from a cryptographic random source, encoded
+      base64url without padding — 43 characters (FR-003h). Minting FAILS
+      CLOSED if the entropy source errors: no token, no fallback, no
+      shortened value. This string is the entire security of an
+      unauthenticated bearer path, so it MUST NOT be logged, put in an audit
+      record, or sent in a Referer header (FR-003e).
+    example: "kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t"
+  url:
+    type: string
+    minLength: 1
+    description: >
+      Gateway-relative URL to put in the iframe's src. Serves GET and HEAD
+      only; every other method is 405 (FR-003j). Use it as
+      <iframe src="…"> and never as srcdoc — srcdoc resolves relative URLs
+      against the EMBEDDER, so no bundle subresource would load, and it has
+      no response to carry the isolation policy.
+    example: "/library-preview/kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t/index.html"
+  expires_at:
+    type: string
+    format: date-time
+    description: >
+      Absolute RFC3339 UTC instant at which the token stops working. Drives
+      the visible expiry notice (FR-003m).
+    example: "2026-08-22T14:45:00Z"
+  expires_in_seconds:
+    type: integer
+    minimum: 1
+    description: >
+      Seconds from the moment this response was produced until expires_at —
+      900 for the 15-minute lifetime. Present alongside the absolute instant
+      because a client whose clock is wrong would compute a wrong countdown
+      from expires_at alone, and a preview that claims to have expired while
+      it still works is as confusing as the reverse.
+    example: 900
+  scope:
+    type: string
+    enum:
+      - file
+      - bundle
+    description: The granted scope, echoed from the request.
+    example: "bundle"
+  scope_root:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path this token is confined to — the file itself for
+      scope "file", the bundle root for scope "bundle". Every request on the
+      token path resolves inside THIS root, not merely inside the workspace
+      (FR-003i).
+    example: "reports/q3"
+  workspace_id:
+    type: string
+    minLength: 1
+    description: Workspace the token is scoped to, echoed from the request.
+    example: "ws_7f3a"

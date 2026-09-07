@@ -1,0 +1,72 @@
+title: VaultRecord
+description: >
+  One record: an ordinary Markdown note in the operator's own vault that
+  declares a record type in its frontmatter (ADR-068 D1). There is no separate
+  database — a record IS the note, and a note whose type matches no schema is
+  simply an ordinary note, not an error (FR-005).
+
+  Derived values — counts, sums, last-interaction dates, relation inverses —
+  are NEVER present as stored properties here (D9, FR-046). They are computed
+  at query time, because an agent reading frontmatter cannot tell a stale
+  derived value from a fact, and every hand-maintained derived field found in
+  the research is wrong in somebody's vault right now.
+
+  NAMED VaultRecord, NOT Record. A component named "Record" generates a
+  TypeScript `export type Record = ...` that shadows the built-in
+  Record<K, V> utility type throughout the generated module, and tsc then
+  fails with "Type 'Record' is not generic" on every unrelated use of it in
+  the same file. That is a property of the generator's output, so no
+  hand-edit could survive a regeneration.
+type: object
+additionalProperties: false
+required:
+  - id
+  - type
+  - path
+  - properties
+properties:
+  id:
+    type: string
+    minLength: 1
+    description: >
+      The stable record identifier, minted on creation and immutable (D7,
+      FR-036) — identity is an ID, not the filename, so a rename cannot break
+      a relation. Unique within its type; a duplicate is a hard validation
+      error naming both paths (FR-039).
+    example: "CO-0142"
+  type:
+    type: string
+    minLength: 1
+    description: The declared record type this record belongs to.
+    example: "company"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Vault-relative path of the note. Always within the calling agent's
+      workspace scope — a record in a vault mounted only into another
+      workspace is not visible at all, and that case is indistinguishable from
+      an empty vault (FR-060, FR-062).
+    example: "CRM/Companies/Acme Ltd.md"
+  title:
+    type: string
+    description: Display title, for rendering without opening the file.
+    example: "Acme Ltd"
+  version_token:
+    type: string
+    minLength: 1
+    description: >
+      ADR-067 D14's opaque content-hash version token for this note. Present
+      on reads, and required back on a write; a stale token is REFUSED and the
+      refusal is audited (FR-043). Opaque — never parsed, compared only for
+      equality.
+    example: "sha256:3d1c9a7e5b2f4806"
+  properties:
+    type: array
+    description: >
+      The record's declared properties and their values, in the schema's
+      declaration order. Always present — an empty array, never null. A
+      property whose values array is empty is ABSENT (D3.2).
+    items:
+      $ref: "./RecordPropertyValue.yaml"
+      x-go-type: RecordPropertyValue

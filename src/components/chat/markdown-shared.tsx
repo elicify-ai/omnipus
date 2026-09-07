@@ -25,7 +25,7 @@
 
 import type { ComponentPropsWithoutRef, CSSProperties, ReactNode } from 'react'
 import type { Components } from 'react-markdown'
-import { ShikiHighlighter } from 'react-shiki'
+import { ShikiHighlighter, createJavaScriptRegexEngine } from 'react-shiki'
 import { ChatImage } from './ChatImage'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
@@ -183,10 +183,49 @@ export { MermaidDiagram }
 // have a message context" — not worth it for a check the historical path never
 // needs. If a third caller ever needs Shiki, it belongs here too; if it also
 // needs live-streaming mermaid awareness, that stays caller-side.
+// The regex engine, and why it is not Shiki's default
+//
+// Shiki's default engine is Oniguruma, compiled to WebAssembly. The SPA is
+// served under `script-src 'self'` (pkg/gateway/embed.go), and a browser
+// refuses `WebAssembly.instantiate` under that directive without
+// 'wasm-unsafe-eval'. react-shiki catches the CompileError and renders NOTHING
+// - no highlighted code, no plain-text fallback, an empty box - for EVERY
+// language, including 'text'. The console says so and nothing else does:
+//
+//   [react-shiki] highlight failed CompileError: WebAssembly.instantiate():
+//   Compiling or instantiating WebAssembly module violates the following
+//   Content Security policy directive because 'unsafe-eval' is not an allowed
+//   source of script in ... "script-src 'self'"
+//
+// embed.go's own comment listed this as an ASSUMPTION - "Shiki needs no
+// WebAssembly -> code blocks stop highlighting" - under a heading stating that
+// the policy string was never measured. The assumption was wrong, and the
+// symptom is worse than it predicted: the code VANISHES rather than merely
+// losing its colour. It surfaced through the "View raw" escape hatch on a
+// .base file (the 2026-09-05 UAT, D2), but it was never a .base problem - it
+// is every code block the SPA renders, in chat and in the Library alike.
+//
+// THE FIX IS THE LIBRARY, NOT THE POLICY. embed.go states both the rule and
+// the precedent: "NON-NEGOTIABLE: no 'unsafe-eval'. If a bundled library ever
+// needs it, the library is reconfigured or replaced - FR-019a is exactly that
+// move for PDF.js." Shiki ships a pure-JavaScript regex engine for exactly
+// this situation, so it is configured here rather than the policy widened.
+//
+// `forgiving: true` is Shiki's own option for the JS engine's one real
+// limitation: a few grammars use Oniguruma regex constructs JavaScript has no
+// equivalent for. Forgiving skips those individual patterns instead of
+// throwing, so an exotic grammar degrades to slightly coarser highlighting
+// rather than back to the blank box this comment is about.
+//
+// Built ONCE at module scope: the engine is stateless, and constructing it per
+// render would rebuild it on every keystroke of a streaming message.
+const shikiRegexEngine = createJavaScriptRegexEngine({ forgiving: true })
+
 export function ShikiCodeBlock({ language, code }: { language: string | undefined; code: string }) {
   return (
     <ShikiHighlighter
       language={language || 'text'}
+      engine={shikiRegexEngine}
       theme="vitesse-dark"
       addDefaultStyles={false}
       className="!bg-[var(--color-surface-2)] !rounded-b-md overflow-x-auto block w-full"

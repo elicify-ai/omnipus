@@ -1,0 +1,65 @@
+title: VaultFindGroup
+description: >
+  One group of a grouped answer (spec FR-027, FR-028, FR-029).
+
+  A record holding SEVERAL values of the grouped property appears in EVERY group
+  it belongs to (FR-028), so the group counts legitimately sum to more than the
+  row count. That is why each group states its own count rather than leaving a
+  reader to add them up: the sum of the parts is not the size of the whole, and
+  a rendering that implied otherwise would be arithmetically wrong.
+type: object
+additionalProperties: false
+required:
+  - property
+  - key
+  - count
+  - paths
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: The property this level groups by.
+    example: "status"
+  key:
+    type: string
+    description: >
+      The group's value, rendered. An EMPTY key is the ABSENT group — the
+      records that carry no value for this property at all. It is a real group
+      and it is labelled as absence rather than dropped: the records nobody
+      recorded a value for are frequently the ones being asked about.
+    example: "open"
+  absent:
+    type: boolean
+    description: >
+      True when this group holds the records where the property is ABSENT,
+      which `key` alone cannot express — an empty string is itself a value
+      (R-3) and must not collide with absence.
+    example: false
+  count:
+    type: integer
+    minimum: 0
+    description: Evaluated records in this group.
+    example: 12
+  paths:
+    type: array
+    description: >
+      The member rows, by path. Always present — an empty array, never null.
+      Groups reference rows rather than repeating them, so a record that landed
+      in three groups is still rendered once.
+    items:
+      type: string
+      minLength: 1
+  subgroups:
+    type: array
+    description: >
+      The second grouping level, when `group_by` named two.
+
+
+      It refs a DISTINCT, childless type rather than this one. That is
+      deliberate and it is not a codegen workaround: two levels is the stated
+      limit (FR-027), and a self-referential schema would advertise unbounded
+      nesting — a depth the engine refuses and no caller can reach. A contract
+      should not describe a shape the system will not produce.
+    items:
+      $ref: "./VaultFindSubgroup.yaml"
+      x-go-type: VaultFindSubgroup

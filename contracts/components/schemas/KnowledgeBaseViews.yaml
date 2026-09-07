@@ -1,0 +1,95 @@
+title: KnowledgeBaseViews
+description: >
+  The saved views that belong to one `.base` file, plus everything needed to
+  evaluate them — the answer to "open this base as its views"
+  (view-kinds-design-2026-09-03 §7).
+
+  WHY THIS ENDPOINT EXISTS. Nothing listed which saved views came from which
+  source file, so the SPA read the `.base` file itself and re-derived each
+  view's slug by mirroring the importer's slugger. Two things that cost:
+  the importer's collision COUNTER cannot be mirrored (two view names that
+  kebab alike collapsed onto one slug, and the second tab rendered the first
+  view's rows), and a hand-rolled YAML walk mistook a nested `name:` key for
+  the view's own name (a valid view then answered `unknown_view`). Both are
+  re-derivations of a fact the server already holds: every imported view file
+  records the `source` it came from, its own `name`, and its `label`. This
+  endpoint reports them, and the client re-derives nothing.
+
+  MATCHING IS ON `source`, NOT ON THE FILENAME. A view's `source` is the
+  vault-relative path of the `.base` it was imported from, written by the
+  importer; the slug's spelling is a convenience, not an index.
+type: object
+additionalProperties: false
+required:
+  - base_path
+  - is_knowledge_base
+  - views
+  - unloadable_count
+properties:
+  base_path:
+    type: string
+    minLength: 1
+    description: >
+      The workspace-relative path that was asked about, echoed back, so a
+      cached answer can never be shown against the wrong file.
+    example: "notes/vault/CRM/Invoices.base"
+  is_knowledge_base:
+    type: boolean
+    description: >
+      Whether the file sits inside a knowledge base at all. False means its
+      views have nowhere to run — nothing imported them, and there is no
+      collection to evaluate them against — and `views` is then empty. This
+      is a stated answer, not an error: an ordinary `.base` file sitting
+      outside a vault is an ordinary file.
+    example: true
+  collection_id:
+    type: string
+    minLength: 1
+    description: >
+      The enclosing collection, to be passed as `collection_id` when
+      evaluating one of these views. Absent exactly when `is_knowledge_base`
+      is false. Opaque — never parse a path out of it.
+    example: "kb_3d1c9a7e5b2f4806"
+  collection_root:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path of that collection's root, forward-slash
+      separated, matching KnowledgeBaseInfo.root_path. The SPA joins it with
+      a vault-relative attachment path to build a download URL. Absent
+      exactly when `is_knowledge_base` is false.
+    example: "notes/vault"
+  source:
+    type: string
+    minLength: 1
+    description: >
+      The vault-relative path the views were matched on — the value an
+      imported view carries in its own `source` field. Present exactly when
+      `is_knowledge_base` is true. Reported so a base with zero views can be
+      diagnosed without guessing what was looked for.
+    example: "CRM/Invoices.base"
+  views:
+    type: array
+    description: >
+      The views imported from this base, in the collection's own load order
+      (filename order, so it is stable across runs). Always present — an
+      empty array is the honest answer for a `.base` nothing imported, and
+      the caller must render it as such rather than as a blank.
+    items:
+      $ref: "./KnowledgeBaseView.yaml"
+      x-go-type: KnowledgeBaseView
+  unloadable_count:
+    type: integer
+    minimum: 0
+    description: >
+      How many view files name this base as their `source` but FAILED TO
+      LOAD — malformed YAML, an unknown key, a property the schema no longer
+      declares. They cannot appear in `views` because they have no usable
+      name to address, so they are counted here instead, and the caller says
+      "N views could not be loaded" rather than quietly showing fewer tabs
+      than the base has views.
+
+
+      A file so broken that its own `source` key is unreadable cannot be
+      attributed to any base and is counted against none.
+    example: 1

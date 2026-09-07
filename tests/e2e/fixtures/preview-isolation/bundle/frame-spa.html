@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>frame-the-spa</title>
+<!--
+  ADR-067 FR-006b / spec test 111 — a previewed page nesting the real app.
+
+  The measured policy (§10.3) contains `frame-src 'self'`, so this iframe is
+  PERMITTED by the preview's own policy and the request for the SPA shell really
+  does leave the browser and reach the gateway. What must not happen is the
+  nested context RENDERING: the shell answers with `frame-ancestors 'none'`
+  (FR-006b, pkg/gateway/embed.go's spaContentSecurityPolicy), so the browser
+  refuses the document after receiving it.
+
+  The oracle is therefore NOT "the shell request failed" — it succeeds — and NOT
+  console text, which the experiment found is worded differently by every engine
+  (§4.4). It is that the SPA's ENTRY CHUNK is never requested, because a refused
+  document never parses its own <script src>.
+-->
+</head>
+<body>
+<script>
+(function () {
+  function run() {
+    var f = document.createElement('iframe');
+    f.id = 'spa';
+    f.setAttribute('src', '/');
+    f.setAttribute('width', '600');
+    f.setAttribute('height', '400');
+    document.body.appendChild(f);
+
+    // The NON-VACUITY marker, readable from the test through the frame itself.
+    //
+    // It is deliberately NOT a network ping. WebKit does not surface a
+    // sandboxed frame's requests to the driver at all (measured 2026-08-23),
+    // so a request-arrival oracle would be blind there — and "no entry chunk
+    // was requested" is exactly the assertion that passes vacuously when the
+    // observer is blind. An element in this document is visible on every
+    // engine.
+    var m = document.createElement('pre');
+    m.id = 'frame-added';
+    m.textContent = 'spa-frame-appended';
+    document.body.appendChild(m);
+  }
+  // Run SYNCHRONOUSLY, not on `load`.
+  //
+  // This script sits at the end of <body>, so the document is already parsed.
+  // Waiting for `load` is what a fixture normally does and it is wrong here:
+  // the whole point of this page is an <iframe> whose load the browser REFUSES,
+  // and a refused subframe can leave the parent's `load` event unfired.
+  // Measured 2026-08-23 on WebKit — the marker never appeared and the test
+  // timed out at 90s having proved nothing.
+  run();
+})();
+</script>
+</body>
+</html>

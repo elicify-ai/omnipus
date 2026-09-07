@@ -24,6 +24,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/gateway/pathredact"
 )
 
 // CSRFCookieName is the name of the double-submit cookie under TLS.
@@ -124,10 +126,53 @@ var defaultExemptPaths = []string{
 //     CSRF check, so exempting this prefix does not weaken security: every
 //     WebhookPath()-bearing channel is statically required to implement
 //     verifySignature. Like /preview/, /webhook/ never overlaps /api/v1/*.
+//
+//   - /library-preview/ — the ADR-067 Library preview-token surface
+//     (gateway.registerLibraryPreviewRoutes). Its URLs are tokenized
+//     (/library-preview/<token>/<relative-path>), so an exact-path exemption
+//     can never match. TWO separate reasons, and the second is the one that
+//     bites in production:
+//
+//     (a) FR-003j requires every non-GET/HEAD method on that prefix to answer
+//     405 with `Allow: GET, HEAD`, and §10.3 requires EVERY response on the
+//     prefix to carry the measured isolation policy byte for byte. Without the
+//     exemption a cookie-less POST — the commonest browser case — is answered
+//     by this gate with a policy-free 403 JSON body before the router can 405
+//     it, so neither requirement holds for the case that actually occurs.
+//
+//     (b) A previewed document is bound to an OPAQUE origin (that is the whole
+//     of ADR-067's P0 control), which makes every subresource request it issues
+//     cross-site. The CSRF cookie is SameSite=Strict, so it is never sent — and
+//     the safe-method re-mint branch below fires on EVERY stylesheet, script,
+//     font, image and media request the previewed page makes, stamping a fresh
+//     Set-Cookie onto each preview response and rotating the operator's live
+//     CSRF cookie at a rate the attacker-authored page chooses. That is exactly
+//     the "preview responses picking up a stray Set-Cookie" hazard /preview/ is
+//     exempted for; /library-preview/ reproduces it byte for byte.
+//
+//     Exempting costs nothing: the route serves GET and HEAD only, never reads
+//     a request body, and mutates no state — which is FR-003f's argument for
+//     why it needs no CSRF protection in the first place. Like the two prefixes
+//     above, it never overlaps /api/v1/*, so the authenticated API surface
+//     keeps full enforcement. The MINT endpoint, which is a real POST that
+//     issues a credential, lives at /api/v1/library/preview-token and is
+//     therefore NOT exempt.
 var defaultExemptPrefixes = []string{
 	PreviewPathPrefix,
 	WebhookPathPrefix,
+	LibraryPreviewPathPrefix,
 }
+
+// LibraryPreviewPathPrefix is the bare, path-token-authenticated prefix the
+// ADR-067 Library preview serves from (§10.5). See defaultExemptPrefixes for
+// why it is CSRF-exempt for all methods.
+//
+// It is defined HERE, in the middleware package, and imported by pkg/gateway —
+// not the other way round — because pkg/gateway already imports this package,
+// and two independent spellings of a security-boundary prefix drift silently:
+// the middleware would keep exempting "/library-preview/" while the router
+// served something else.
+const LibraryPreviewPathPrefix = "/library-preview/"
 
 // WebhookPathPrefix is the path prefix under which platform-originated
 // webhook receivers are mounted (e.g. /webhook/google-chat, /webhook/line,
@@ -378,7 +423,7 @@ func CSRFMiddleware(opts ...Option) func(http.Handler) http.Handler {
 				if csrfCookieValue(r) == "" {
 					if err := IssueCSRFCookie(w, r); err != nil {
 						slog.Warn("csrf: re-mint on safe request failed",
-							"path", r.URL.Path, "method", r.Method, "error", err)
+							"path", pathredact.RequestPath(r.URL.Path), "method", r.Method, "error", err)
 					}
 				}
 				next.ServeHTTP(w, r)

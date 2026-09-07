@@ -1,0 +1,40 @@
+title: KnowledgeGraphSkip
+description: >
+  One path the walk deliberately did not follow, and why. Reported rather
+  than omitted: a file the system cannot address must be visible to the
+  caller, never silently absent (FR-112).
+type: object
+additionalProperties: false
+required:
+  - path
+  - reason
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: Collection-relative path that was skipped.
+    example: "notes/link-to-home"
+  reason:
+    type: string
+    enum:
+      - symlink
+      - outside_root
+      - unreadable
+      - not_addressable
+      - node_limit
+      - hop_limit
+    description: >
+      "symlink" — a symbolic link, skipped and reported rather than followed
+      (FR-044); this is also how a symlink loop terminates (E-8).
+      "outside_root" — the resolved target lay outside the collection root
+      and was not read (FR-043).
+      "unreadable" — permissions or I/O error; an evicted or unreadable file
+      fails loudly and is never indexed as empty (FR-111).
+      "not_addressable" — the name cannot be represented on this platform.
+      "node_limit" / "hop_limit" — the neighbourhood bound was reached
+      (FR-054).
+    example: "symlink"
+  detail:
+    type: string
+    description: Human-readable explanation, safe to display.
+    example: "symbolic link to /home/dan/other-vault — not followed"

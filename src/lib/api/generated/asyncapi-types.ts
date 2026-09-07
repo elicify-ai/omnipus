@@ -539,7 +539,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed";
+  notification_type: "schedule_failed" | "knowledge_drift";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";
@@ -784,6 +784,19 @@ export interface JudgeVerdictFrame {
   judge_agent_id: string;
 }
 
+export interface KnowledgeIndexProgressFrame {
+  type: "knowledge_index_progress";
+  collection_id: string;
+  workspace_id: string;
+  phase: "enumerating" | "indexing" | "idle" | "failed";
+  indexed_files: number;
+  total_known: boolean;
+  total_files?: number;
+  skipped_files?: number;
+  error?: string;
+  updated_at?: string;
+}
+
 export interface ErrorPayload {
   llm_error: LLMError;
 }
@@ -852,7 +865,8 @@ export type WsFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | KnowledgeIndexProgressFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -923,4 +937,5 @@ export type ServerFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | KnowledgeIndexProgressFrame;

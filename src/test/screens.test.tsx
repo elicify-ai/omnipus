@@ -49,6 +49,7 @@ vi.mock('react-shiki', () => {
   return {
     ShikiHighlighter: ({ children }: { children?: React.ReactNode }) =>
       React.createElement('pre', {}, children ?? null),
+    createJavaScriptRegexEngine: () => ({}),
   }
 })
 

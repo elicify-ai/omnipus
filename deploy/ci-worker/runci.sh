@@ -350,7 +350,18 @@ run_gotest() {
   # — a navigation timeout, not a broken SSRF guard. The flake filter correctly
   # refused to excuse it (it failed both runs), which is exactly why the gate
   # must not measure something GitHub does not.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
+  #
+  # -timeout 1800s is REQUIRED: go test's default is 10m PER PACKAGE TEST
+  # BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s) on
+  # an UNCONTENDED machine — this gate runs it under -p 2 (two package
+  # binaries sharing CPU/disk), which is worse. Without an explicit override
+  # the 10m default fires first and panics naming whatever test happened to
+  # be in flight at that instant, not the actual slow package — observed on
+  # this worker as a false lead that sent an investigation chasing an
+  # innocent test with nothing to do with the real timing. 1800s matches
+  # run_gorace's 900s with the extra margin plain (non-race) execution
+  # doesn't strictly need but a loaded shared worker does.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -383,7 +394,13 @@ run_gotest() {
     # CI=true here too: the isolated re-run must measure the same thing as the
     # contended run, or a package that only failed because it launched a real
     # Chrome would be re-run without one and stamped a flake (or vice versa).
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+    # -timeout 1800s: same reasoning as the contended run above — an
+    # isolated -p 1 re-run of a slow package (e.g. pkg/agent, ~19min
+    # uncontended) is just as exposed to go test's 10m-per-binary default,
+    # and this IS the exact re-run that would otherwise stamp such a package
+    # "REAL FAILURE (same test failed BOTH runs)" on a timeout artifact
+    # rather than a genuine repeat failure.
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
       echo "$run1" | sed 's/^/    /'
@@ -495,12 +512,17 @@ _e2e_build() {
   # across 5 shards — every one of them `browserType.launch: Executable doesn't exist`,
   # each "failing" in 4-6ms because no browser ever started. Infra noise indistinguishable
   # from a real regression at a glance.
-  log "e2e: install matching chromium"
+  log "e2e: install matching browsers (chromium, firefox, webkit)"
   local pw=./node_modules/.bin/playwright
   [ -x "$pw" ] || { echo "e2e: $pw missing or not executable — npm ci must run first" >&2; return 1; }
   # chromium_headless_shell is a SEPARATE download from chromium; the suite launches it
   # directly, so installing only `chromium` leaves the headless path broken.
-  "$pw" install chromium chromium-headless-shell || return 1
+  # ADR-067: the preview-isolation specs run on three engines, so all three must be
+  # present here or they fail with the same `Executable doesn't exist` signature this
+  # block already documents — 48 phantom failures in 4-6ms, indistinguishable from a
+  # real regression. Installing more than the suite needs is cheap; installing less is
+  # the failure mode above.
+  "$pw" install chromium chromium-headless-shell firefox webkit || return 1
 
   # A zero exit above is NOT proof the right browser landed — installing the WRONG
   # revision also exits 0. Verify the exact revision this runner resolves is on disk,
@@ -509,7 +531,7 @@ _e2e_build() {
     const fs = require("fs"), path = require("path");
     const root = process.env.PLAYWRIGHT_BROWSERS_PATH || "";
     const want = require("./node_modules/playwright-core/browsers.json").browsers
-      .filter(b => b.name === "chromium" || b.name === "chromium-headless-shell");
+      .filter(b => ["chromium", "chromium-headless-shell", "firefox", "webkit"].includes(b.name));
     let bad = 0;
     for (const b of want) {
       const dir = path.join(root, `${b.name.replace(/-/g, "_")}-${b.revision}`);
@@ -583,7 +605,7 @@ _e2e_run_shard() {
   "providers": [
     {
       "provider": "openrouter",
-      "model": "z-ai/glm-5.2",
+      "model": "z-ai/glm-5.3-flash",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
@@ -618,7 +640,7 @@ EOF
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
   jq -n --arg key "$key" \
-    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:"z-ai/glm-5.3-flash"},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }

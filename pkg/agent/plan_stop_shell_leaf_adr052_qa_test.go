@@ -1,3 +1,10 @@
+//go:build !windows
+
+// Not built on Windows: these tests drive REAL processes and assert with
+// syscall.Kill, which does not exist there. The behaviour under test is the
+// POSIX signal path; Windows cancels via Job Objects, a different mechanism
+// that needs its own test rather than a #ifdef of this one.
+
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

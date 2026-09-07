@@ -1,0 +1,57 @@
+title: RecordRef
+description: >
+  A reference from one record to another — the wire form of a "relation" or
+  "person" value (ADR-068 D5, D5.1).
+
+  What is stored ON DISK is a quoted wikilink, and nothing else. It renders and
+  navigates in Obsidian and carries no Omnipus-specific encoding, so removing
+  Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins
+  on is the target's record ID, resolved by following the wikilink to a file and
+  reading its id — so a rename cannot break a relation from either direction.
+
+  This type therefore carries BOTH, and `link` is the required half because it
+  is the half that always exists. `id` is absent exactly when the reference
+  could not be resolved, and `resolved` says so explicitly rather than leaving
+  the caller to infer it from a missing field. An unresolvable or ambiguous
+  wikilink is a validation finding (RecordProblem.dangling_relation), never a
+  silent drop and never rendered as a distinct group of one.
+type: object
+additionalProperties: false
+required:
+  - link
+  - resolved
+properties:
+  link:
+    type: string
+    minLength: 1
+    description: >
+      The wikilink target text as stored in the file, without the surrounding
+      brackets. This is the durable, human-editable form.
+    example: "Acme Ltd"
+  resolved:
+    type: boolean
+    description: >
+      True when the link resolved to exactly one record of the declared target
+      type. False for a dangling, ambiguous or wrong-type target — in which
+      case the query still returns the reference and the response carries a
+      matching RecordProblem (FR-033, FR-034).
+    example: true
+  id:
+    type: string
+    minLength: 1
+    description: >
+      The target's stable record identifier (D7). Present only when resolved
+      is true.
+    example: "CO-0142"
+  type:
+    type: string
+    minLength: 1
+    description: >
+      The target's record type. Present only when resolved is true. A target
+      that resolves to a record of the WRONG type is reported as
+      relation_type_mismatch, not silently accepted (FR-034).
+    example: "company"
+  title:
+    type: string
+    description: Display title of the target, for rendering without a second fetch.
+    example: "Acme Ltd"

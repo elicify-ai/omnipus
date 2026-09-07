@@ -599,7 +599,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.literal("schedule_failed"),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),
@@ -907,6 +907,21 @@ export const JudgeVerdictFrame = z
   })
   .strict();
 
+export const KnowledgeIndexProgressFrame = z
+  .object({
+    type: z.literal("knowledge_index_progress"),
+    collection_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+    phase: z.enum(["enumerating", "indexing", "idle", "failed"]),
+    indexed_files: z.number().int().min(0),
+    total_known: z.boolean(),
+    total_files: z.number().int().min(0).optional(),
+    skipped_files: z.number().int().min(0).optional(),
+    error: z.string().optional(),
+    updated_at: z.string().optional(),
+  })
+  .strict();
+
 export const ErrorPayload = z
   .object({
     llm_error: LLMError,
@@ -980,6 +995,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  KnowledgeIndexProgressFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
