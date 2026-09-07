@@ -168,17 +168,18 @@ func backfillToolPolicyCatalogDrift(cfg *config.Config) []toolPolicyBackfill {
 			// workspace root and mounts (FR-020) that the founder ruling
 			// judged safe enough to backfill unprompted even here.
 			//
-			// This is deliberately narrower than "grep is always allow for a
-			// custom agent": it is an UPGRADE/backfill-path exception only.
-			// A BRAND-NEW custom agent created after this change still gets
-			// grep "deny" from NewCustomAgentToolsCfg's own conservative,
-			// operator-opts-in baseline — creating a new agent is a
-			// deliberate, human-reviewed event with its own tool picker, a
-			// different risk profile from an agent silently re-seeded on an
-			// upgrade it took no part in. Widening NewCustomAgentToolsCfg's
-			// own default was out of scope for this change; if that is
-			// wanted too, it is a separate, deliberate edit to that
-			// function, not an implication of this backfill exception.
+			// This is no longer narrower than "grep is always allow for a
+			// custom agent": NewCustomAgentToolsCfg (core.go, the seed a
+			// BRAND-NEW custom agent gets from either creation path) was
+			// itself widened to an explicit "grep": allow override (commit
+			// 6cf0f67d4, closing the one gap the original ADR-081 D11
+			// change had deliberately left open — see that constructor's
+			// own comment for the founder ruling: "There must not be any
+			// tool default to deny — the global policy sets the default,
+			// not any hardcoded default."). A brand-new custom agent and an
+			// upgraded pre-existing one now both resolve grep to "allow" by
+			// the same explicit-entry rule this file states throughout —
+			// never a silent ceiling fallthrough, on either path.
 			want["grep"] = config.ToolPolicyAllow
 		}
 

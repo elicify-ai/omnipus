@@ -130,6 +130,7 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchResul
   // superseded request can tell it is stale without inspecting what it threw.
   const requestTokenRef = useRef(0)
   const controllerRef = useRef<AbortController | null>(null)
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const active = enabled && workspaceId !== null && debouncedQuery !== ''
 
@@ -186,7 +187,8 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchResul
             // MV-11: keep whatever is already on screen, retry once, no
             // error flash for a typist who happened to collide with another
             // search.
-            setTimeout(() => {
+            retryTimeoutRef.current = setTimeout(() => {
+              retryTimeoutRef.current = null
               if (isCurrent()) run(1)
             }, FILE_SEARCH_RETRY_DELAY_MS)
             return
@@ -201,6 +203,13 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchResul
 
     return () => {
       controllerRef.current?.abort()
+      // A pending 429 retry (MV-11) is a live timer, not just an in-flight
+      // request — left uncleared, a superseded or unmounted hook would still
+      // fire it and occupy a walk-semaphore slot nothing will ever abort.
+      if (retryTimeoutRef.current !== null) {
+        clearTimeout(retryTimeoutRef.current)
+        retryTimeoutRef.current = null
+      }
     }
     // searchFn is deliberately NOT a dependency — it is read through
     // searchFnRef (see useVaultSearch.ts's identical comment) so that

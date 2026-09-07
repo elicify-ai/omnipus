@@ -282,3 +282,81 @@ describe('useFileSearch — 429 keeps prior results and retries exactly once (MV
     expect(searchFn).toHaveBeenCalledTimes(1)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MV-11 — a pending 429 retry must not outlive the hook that scheduled it
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('useFileSearch — a superseded/unmounted hook never fires its pending 429 retry', () => {
+  it('issues no further request when the hook unmounts before the retry delay elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      const searchFn = vi
+        .fn()
+        .mockRejectedValueOnce(new ApiError(429, 'Too many requests'))
+        .mockResolvedValueOnce(response())
+
+      const { unmount } = renderHook(() =>
+        useFileSearch({ workspaceId: 'ws-1', folderPath: '', query: 'report', searchFn }),
+      )
+
+      // Let attempt 0 fire and its 429 rejection schedule the retry timer.
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(searchFn).toHaveBeenCalledTimes(1)
+
+      unmount()
+
+      // Advance past the retry delay — an unmounted hook must not occupy
+      // the 2-slot walk semaphore with a request nothing can ever abort.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(FILE_SEARCH_RETRY_DELAY_MS + 50)
+      })
+
+      expect(searchFn).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('issues no further request for the abandoned folder when folderPath changes before the retry delay elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      const searchFn = vi
+        .fn()
+        .mockRejectedValueOnce(new ApiError(429, 'Too many requests')) // folder A, attempt 0
+        .mockResolvedValue(response()) // folder B, and any leaked folder-A retry
+
+      const { rerender } = renderHook(
+        ({ folderPath }: { folderPath: string }) =>
+          useFileSearch({ workspaceId: 'ws-1', folderPath, query: 'report', searchFn }),
+        { initialProps: { folderPath: 'A' } },
+      )
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(searchFn).toHaveBeenCalledTimes(1)
+
+      rerender({ folderPath: 'B' })
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+      // Folder B's own attempt 0 fires immediately.
+      expect(searchFn).toHaveBeenCalledTimes(2)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(FILE_SEARCH_RETRY_DELAY_MS + 50)
+      })
+
+      // No third call — folder A's superseded retry must never fire.
+      expect(searchFn).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
