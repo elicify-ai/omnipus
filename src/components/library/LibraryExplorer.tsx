@@ -912,7 +912,13 @@ export function LibraryExplorer({
         )}
       >
         {workspaceId === null ? (
-          <>
+          // US-4 AS-2: the bar renders in EVERY Library location, disabled at
+          // the virtual root (workspaceId null) with its explanatory
+          // placeholder. It wraps the workspace list rather than replacing it
+          // — LibrarySearchBar renders `children` untouched whenever it is
+          // disabled — so "one bar, everywhere" is literally true instead of
+          // true only once a workspace is open.
+          <LibrarySearchBar workspaceId={null} folderPath="" onOpenNote={() => {}}>
             {workspacesQuery.isLoading && <ListSkeleton />}
             {workspacesQuery.isError && (
               <QueryErrorState
@@ -949,7 +955,7 @@ export function LibraryExplorer({
                   </span>
                 </button>
               ))}
-          </>
+          </LibrarySearchBar>
         ) : (
           // C1 — persistent Library search bar (library-b-c-design-2026-09-07
           // §C1). LibrarySearchBar owns the input, the segmented filter, and

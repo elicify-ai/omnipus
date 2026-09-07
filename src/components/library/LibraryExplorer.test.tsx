@@ -255,6 +255,31 @@ describe('LibraryExplorer — virtual root (sidebar entry point, D-3)', () => {
     expect(mockedFetchEntries).not.toHaveBeenCalled()
   })
 
+  // US-4 AS-2: "one bar, every Library location" is only true if the bar is
+  // actually MOUNTED at the virtual root. A real-browser UAT found it absent
+  // there entirely — the root rendered its workspace list INSTEAD of the bar,
+  // so the promise held everywhere except the first screen a person sees.
+  // LibrarySearchBar already knew how to render disabled for a null
+  // workspaceId; nothing mounted it.
+  it('renders the search bar DISABLED at the virtual root, wrapping the workspace list', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([
+      makeWorkspaceNode({ id: 'ws-1', name: 'Website API', entry_count: 3 }),
+    ])
+
+    renderExplorer(undefined)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument()
+    })
+
+    const boxes = screen.getAllByRole('searchbox')
+    expect(boxes).toHaveLength(1)
+    expect(boxes[0]).toBeDisabled()
+    // The workspace list must still render THROUGH the bar, not be replaced
+    // by it — the bar renders `children` untouched while disabled.
+    expect(screen.getByText('Website API')).toBeInTheDocument()
+  })
+
   it('drills into a workspace on click, scoping subsequent listing calls to it (same component, D-3)', async () => {
     mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1', name: 'Website API' })])
     mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'notes', path: 'notes', is_dir: true })])
