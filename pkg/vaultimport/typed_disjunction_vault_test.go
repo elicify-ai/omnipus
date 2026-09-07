@@ -60,7 +60,7 @@ func TestTypedDisjunction_TheSevenAreEnabledAndNoneBroadens(t *testing.T) {
 		t.Fatalf("import failed: %v", err)
 	}
 
-	data, err := os.ReadFile(oraclePath) //nolint:gosec // operator-supplied acceptance oracle
+	data, err := os.ReadFile(oraclePath)
 	if err != nil {
 		t.Fatalf("reading the oracle: %v", err)
 	}

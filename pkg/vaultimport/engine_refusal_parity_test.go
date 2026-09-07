@@ -534,7 +534,7 @@ func w4TreeDeps(t *testing.T, root string) (knowledgefind.Deps, *records.ViewSet
 	})
 	text := &parityText{hashes: map[string]string{}}
 	for name := range w4TreeNotes {
-		data, rerr := os.ReadFile(filepath.Join(root, name)) //nolint:gosec // a temp fixture this test wrote
+		data, rerr := os.ReadFile(filepath.Join(root, name))
 		if rerr != nil {
 			t.Fatalf("ReadFile: %v", rerr)
 		}

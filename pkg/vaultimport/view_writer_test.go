@@ -161,7 +161,7 @@ func TestWrittenViews_CarryNoRetiredKeys(t *testing.T) {
 		t.Fatal("the import wrote no view files")
 	}
 	for _, e := range entries {
-		data, readErr := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // path from this test's own temp dir
+		data, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", e.Name(), readErr)
 		}
@@ -196,7 +196,7 @@ func TestWrittenViews_CarryTheFullGrammar(t *testing.T) {
 
 	read := func(slug string) map[string]any {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join(records.ViewsDir(root), slug+".yaml")) //nolint:gosec // path from this test's own temp dir
+		data, err := os.ReadFile(filepath.Join(records.ViewsDir(root), slug+".yaml"))
 		if err != nil {
 			t.Fatalf("reading %s: %v", slug, err)
 		}

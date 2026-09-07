@@ -88,7 +88,7 @@ func fr105Fixture(t *testing.T) (root string, rep *Report) {
 			if relErr != nil {
 				return relErr
 			}
-			data, readErr := os.ReadFile(path) //nolint:gosec // committed fixture path
+			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr
 			}
@@ -143,7 +143,7 @@ func fr105Notes(t *testing.T, root string) map[string]fr105Note {
 	}
 	out := map[string]fr105Note{}
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}

@@ -299,7 +299,7 @@ func emptyLiteralNotes(t *testing.T, root string) []fr105Note {
 	}
 	out := make([]fr105Note, 0, len(inv.Notes))
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}

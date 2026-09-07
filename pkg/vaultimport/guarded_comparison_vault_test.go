@@ -142,7 +142,7 @@ func w4Serve(t *testing.T) (root string, rep *Report, s w4Served) {
 		if filepath.Ext(path) != ".md" {
 			return nil
 		}
-		data, readErr := os.ReadFile(path) //nolint:gosec // a temp copy of the fixture vault
+		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
@@ -256,7 +256,7 @@ func w4OracleRows(t *testing.T, base, view string) ([]string, bool) {
 	if path == "" {
 		t.Skipf("%s is unset — set it to the hand-derived expected-row-set JSON for the real vault", fr105OracleEnv)
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // operator-supplied acceptance oracle
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading the oracle: %v", err)
 	}

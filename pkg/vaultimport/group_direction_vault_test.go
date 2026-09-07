@@ -156,7 +156,7 @@ func TestFixtureVault_MostConnectedMatchesTheOracle(t *testing.T) {
 		t.Fatalf("import failed: %v", err)
 	}
 
-	data, err := os.ReadFile(oraclePath) //nolint:gosec // operator-supplied acceptance oracle
+	data, err := os.ReadFile(oraclePath)
 	if err != nil {
 		t.Fatalf("reading the oracle: %v", err)
 	}
@@ -253,7 +253,7 @@ func notesByPath(t *testing.T, root string) map[string]fr105Note {
 	}
 	out := map[string]fr105Note{}
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}

@@ -201,7 +201,7 @@ func TestAuthoredFormula_TheViewIsEnabledAndNamesTheAuthoringInItsHeader(t *test
 		t.Fatalf("the outcome names %d authored formulas, want 2: %v", len(vo.AuthoredFormulas), vo.AuthoredFormulas)
 	}
 
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(vo.OutputRelPath))) //nolint:gosec // a path this test's own import produced
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(vo.OutputRelPath)))
 	if err != nil {
 		t.Fatalf("reading the produced view: %v", err)
 	}
@@ -245,7 +245,7 @@ func authoredFixture(t *testing.T) string {
 				continue
 			}
 			from := filepath.Join(base, e.Name())
-			data, readErr := os.ReadFile(from) //nolint:gosec // committed fixture path
+			data, readErr := os.ReadFile(from)
 			if readErr != nil {
 				t.Fatalf("reading %s: %v", from, readErr)
 			}
@@ -257,7 +257,7 @@ func authoredFixture(t *testing.T) string {
 			if mkErr := os.MkdirAll(filepath.Dir(dst), 0o755); mkErr != nil {
 				t.Fatalf("creating %s: %v", filepath.Dir(dst), mkErr)
 			}
-			if wErr := os.WriteFile(dst, data, 0o644); wErr != nil { //nolint:gosec // test fixture
+			if wErr := os.WriteFile(dst, data, 0o644); wErr != nil {
 				t.Fatalf("writing %s: %v", dst, wErr)
 			}
 		}
@@ -335,7 +335,7 @@ func authoredLoadImported(t *testing.T, root string) clockImported {
 		t.Fatalf("re-scanning the imported vault: %v", err)
 	}
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}

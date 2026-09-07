@@ -275,7 +275,7 @@ func authoredDealCloseDates(t *testing.T, root string) map[string]string {
 	}
 	out := map[string]string{}
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}
@@ -311,7 +311,7 @@ func authoredOwnerTextMatches(t *testing.T, root, property, target string) []str
 	}
 	var out []string
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}
