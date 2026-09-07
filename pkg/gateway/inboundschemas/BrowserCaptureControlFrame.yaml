@@ -82,3 +82,48 @@ properties:
       stretched over 2x display pixels — uniformly blurry video, reported
       from live use on macOS 2026-08-12. The tabs.get convergence check
       stays in CSS pixels; only the media constraints scale.
+
+  capture_health:
+    type: object
+    description: Fresh capture-stage observations on ping; absent for older encoders. Silence alone is not a failure.
+    additionalProperties: false
+    required: [generation, track_state, track_muted, peer_state]
+    properties:
+      generation:
+        type: integer
+        minimum: 0
+      track_state:
+        type: string
+        enum: [live, ended, absent]
+      track_muted:
+        type: boolean
+      peer_state:
+        type: string
+        enum: [new, connecting, connected, disconnected, failed, closed, absent]
+      source_frames:
+        type: integer
+        minimum: 0
+      encoded_frames:
+        type: integer
+        minimum: 0
+      packets_sent:
+        type: integer
+        minimum: 0
+      sample_timestamp_ms:
+        type: number
+        minimum: 0
+  capture_generation:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+    description: >-
+      Server-issued target and CSS geometry generation, scoped to the capture
+      session. Input names the generation actually displayed; stale generations
+      must be rejected. Viewer answers bind the negotiated stream to this value.
+  target_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      CDP page target identity for this capture generation. The encoder must
+      verify its selected Chrome tab maps to this identity before offering.

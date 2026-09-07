@@ -106,3 +106,11 @@ properties:
       server applies the same SSRF/scheme validation as the browser_navigate
       tool before dispatching page.Navigate, and only while the viewer holds
       control. See ADR-039.
+  capture_generation:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+    description: >-
+      Server-issued target and CSS geometry generation, scoped to the capture
+      session. Input names the generation actually displayed; stale generations
+      must be rejected. Viewer answers bind the negotiated stream to this value.

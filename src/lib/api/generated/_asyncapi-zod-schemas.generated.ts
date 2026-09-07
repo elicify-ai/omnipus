@@ -636,6 +636,7 @@ export const BrowserInputFrame = z
     text: z.string().max(8192).optional(),
     modifiers: z.number().int().min(0).max(15).optional(),
     url: z.string().max(2048).optional(),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -708,6 +709,7 @@ export const BrowserWebRTCOfferFrame = z
     agent_id: z.string().min(1).max(128),
     session_id: z.string().min(1).max(128),
     sdp: z.string().min(1).max(131072),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -716,6 +718,7 @@ export const BrowserWebRTCAnswerFrame = z
     type: z.literal("browser_webrtc_answer"),
     session_id: z.string().max(128).optional(),
     sdp: z.string().min(1).max(131072),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -742,10 +745,13 @@ export const BrowserVideoHealthFrame = z
   .object({
     type: z.literal("browser_video_health"),
     session_id: z.string().max(128).optional(),
-    state: z.enum(["lost", "recovering", "recovered", "unrecoverable"]),
+    state: z.enum(["transitioning", "lost", "recovering", "recovered", "unrecoverable"]),
     attempt: z.number().int().min(0).max(16).optional(),
     max_attempts: z.number().int().min(0).max(16).optional(),
     detail: z.string().max(512).optional(),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    target_id: z.string().min(1).max(128).optional(),
+    rtp_timestamp: z.number().int().min(0).max(4294967295).optional(),
   })
   .strict();
 
@@ -761,6 +767,8 @@ export const BrowserCaptureOfferFrame = z
   .object({
     type: z.literal("browser_capture_offer"),
     sdp: z.string().min(1).max(131072),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    target_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -780,6 +788,20 @@ export const BrowserCaptureControlFrame = z
     expected_width: z.number().int().min(1).max(16384).optional(),
     expected_height: z.number().int().min(1).max(16384).optional(),
     capture_scale: z.number().min(1).max(4).optional(),
+    capture_health: z
+    .object({
+      generation: z.number().int().min(0),
+      track_state: z.enum(["live", "ended", "absent"]),
+      track_muted: z.boolean(),
+      peer_state: z.enum(["new", "connecting", "connected", "disconnected", "failed", "closed", "absent"]),
+      source_frames: z.number().int().min(0).optional(),
+      encoded_frames: z.number().int().min(0).optional(),
+      packets_sent: z.number().int().min(0).optional(),
+      sample_timestamp_ms: z.number().min(0).optional(),
+    })
+    .strict().optional(),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+    target_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 

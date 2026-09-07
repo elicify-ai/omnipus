@@ -26,3 +26,11 @@ properties:
     description: >-
       Complete SDP answer (application/sdp body) from the gateway's Pion
       viewer PeerConnection, ICE-gathering-complete (non-trickle).
+  capture_generation:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+    description: >-
+      Server-issued target and CSS geometry generation, scoped to the capture
+      session. Input names the generation actually displayed; stale generations
+      must be rejected. Viewer answers bind the negotiated stream to this value.

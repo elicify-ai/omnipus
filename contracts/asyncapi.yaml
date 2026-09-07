@@ -3806,6 +3806,15 @@ components:
         url:
           type: string
           maxLength: 2048
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Server-issued target and CSS geometry generation, scoped to the capture
+            session. Input names the generation actually displayed; stale generations
+            must be rejected. Viewer answers bind the negotiated stream to this value.
+
     BrowserControlFrame:
       title: BrowserControlFrame
       description: 'Client → server. Take or release interactive control of the live browser. While a viewer holds control,
@@ -4057,6 +4066,15 @@ components:
           maxLength: 131072
           description: Complete SDP offer (application/sdp body), gathered with ICE candidates already resolved (non-trickle,
             ADR-047 D4).
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Server-issued target and CSS geometry generation, scoped to the capture
+            session. Input names the generation actually displayed; stale generations
+            must be rejected. Viewer answers bind the negotiated stream to this value.
+
     BrowserWebRTCAnswerFrame:
       title: BrowserWebRTCAnswerFrame
       description: 'Server → client. Pion SDP answer to a browser_webrtc_offer, sent once the gateway''s relay has created
@@ -4083,6 +4101,15 @@ components:
           maxLength: 131072
           description: Complete SDP answer (application/sdp body) from the gateway's Pion viewer PeerConnection, ICE-gathering-complete
             (non-trickle).
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Server-issued target and CSS geometry generation, scoped to the capture
+            session. Input names the generation actually displayed; stale generations
+            must be rejected. Viewer answers bind the negotiated stream to this value.
+
     BrowserWebRTCStateFrame:
       title: BrowserWebRTCStateFrame
       description: 'Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection,
@@ -4215,6 +4242,7 @@ components:
         state:
           type: string
           enum:
+          - transitioning
           - lost
           - recovering
           - recovered
@@ -4243,6 +4271,31 @@ components:
             Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly
             as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because
             they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Server-issued target and CSS geometry generation, scoped to the capture
+            session. Input names the generation actually displayed; stale generations
+            must be rejected. Viewer answers bind the negotiated stream to this value.
+        target_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            CDP page target identity for this capture generation. The encoder must
+            verify its selected Chrome tab maps to this identity before offering.
+        rtp_timestamp:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+          description: >-
+            Forwarded video boundary for capture_generation. Zero is valid. Viewers
+            must observe presentation of this or a later frame from the matching
+            stream before enabling input. Serial comparison uses 32-bit wrap rules;
+            attach requires a current boundary to avoid half-range ambiguity.
+
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame
       description: 'Client (capture extension) → server (gateway). First frame on the loopback-only /api/v1/browser/capture-ingest
@@ -4298,6 +4351,22 @@ components:
           maxLength: 131072
           description: Complete SDP offer (application/sdp body) from the encoder page's ingest PeerConnection, ICE-gathering-complete
             (non-trickle).
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Server-issued target and CSS geometry generation, scoped to the capture
+            session. Input names the generation actually displayed; stale generations
+            must be rejected. Viewer answers bind the negotiated stream to this value.
+        target_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            CDP page target identity for this capture generation. The encoder must
+            verify its selected Chrome tab maps to this identity before offering.
+
     BrowserCaptureAnswerFrame:
       title: BrowserCaptureAnswerFrame
       description: 'Server (gateway) → client (capture extension). Pion SDP answer to a browser_capture_offer, completing
@@ -4383,6 +4452,50 @@ components:
             only the media constraints scale.'
 
     # ── Planning & Goals (ADR-049) ──────────────────────────────────────────────
+        capture_health:
+          type: object
+          description: Fresh capture-stage observations on ping; absent for older encoders. Silence alone is not a failure.
+          additionalProperties: false
+          required: [generation, track_state, track_muted, peer_state]
+          properties:
+            generation:
+              type: integer
+              minimum: 0
+            track_state:
+              type: string
+              enum: [live, ended, absent]
+            track_muted:
+              type: boolean
+            peer_state:
+              type: string
+              enum: [new, connecting, connected, disconnected, failed, closed, absent]
+            source_frames:
+              type: integer
+              minimum: 0
+            encoded_frames:
+              type: integer
+              minimum: 0
+            packets_sent:
+              type: integer
+              minimum: 0
+            sample_timestamp_ms:
+              type: number
+              minimum: 0
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Server-issued target and CSS geometry generation, scoped to the capture
+            session. Input names the generation actually displayed; stale generations
+            must be rejected. Viewer answers bind the negotiated stream to this value.
+        target_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            CDP page target identity for this capture generation. The encoder must
+            verify its selected Chrome tab maps to this identity before offering.
 
     GoalStatusFrame:
       title: GoalStatusFrame

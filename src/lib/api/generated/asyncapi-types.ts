@@ -572,6 +572,7 @@ export interface BrowserInputFrame {
   text?: string;
   modifiers?: number;
   url?: string;
+  capture_generation?: number;
 }
 
 export interface BrowserControlFrame {
@@ -628,12 +629,14 @@ export interface BrowserWebRTCOfferFrame {
   agent_id: string;
   session_id: string;
   sdp: string;
+  capture_generation?: number;
 }
 
 export interface BrowserWebRTCAnswerFrame {
   type: "browser_webrtc_answer";
   session_id?: string;
   sdp: string;
+  capture_generation?: number;
 }
 
 export interface BrowserWebRTCStateFrame {
@@ -654,10 +657,13 @@ export interface BrowserWebRTCStateFrame {
 export interface BrowserVideoHealthFrame {
   type: "browser_video_health";
   session_id?: string;
-  state: "lost" | "recovering" | "recovered" | "unrecoverable";
+  state: "transitioning" | "lost" | "recovering" | "recovered" | "unrecoverable";
   attempt?: number;
   max_attempts?: number;
   detail?: string;
+  capture_generation?: number;
+  target_id?: string;
+  rtp_timestamp?: number;
 }
 
 export interface BrowserCaptureHelloFrame {
@@ -669,6 +675,8 @@ export interface BrowserCaptureHelloFrame {
 export interface BrowserCaptureOfferFrame {
   type: "browser_capture_offer";
   sdp: string;
+  capture_generation?: number;
+  target_id?: string;
 }
 
 export interface BrowserCaptureAnswerFrame {
@@ -684,6 +692,18 @@ export interface BrowserCaptureControlFrame {
   expected_width?: number;
   expected_height?: number;
   capture_scale?: number;
+  capture_health?: {
+    generation: number;
+    track_state: "live" | "ended" | "absent";
+    track_muted: boolean;
+    peer_state: "new" | "connecting" | "connected" | "disconnected" | "failed" | "closed" | "absent";
+    source_frames?: number;
+    encoded_frames?: number;
+    packets_sent?: number;
+    sample_timestamp_ms?: number;
+  };
+  capture_generation?: number;
+  target_id?: string;
 }
 
 export interface GoalStatusFrame {

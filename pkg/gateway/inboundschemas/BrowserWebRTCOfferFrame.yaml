@@ -55,3 +55,11 @@ properties:
     description: >-
       Complete SDP offer (application/sdp body), gathered with ICE
       candidates already resolved (non-trickle, ADR-047 D4).
+  capture_generation:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+    description: >-
+      Server-issued target and CSS geometry generation, scoped to the capture
+      session. Input names the generation actually displayed; stale generations
+      must be rejected. Viewer answers bind the negotiated stream to this value.
