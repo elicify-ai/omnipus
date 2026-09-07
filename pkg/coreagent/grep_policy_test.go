@@ -18,6 +18,19 @@
 // preconditions and would fail (not vacuously pass) against a store that
 // still carries those six but is missing only "grep".
 //
+// FOUNDER RULING (2026-09-07): "There must not be any tool default to deny —
+// the global policy sets the default, not any hardcoded default." Applied to
+// grep specifically, this closed a gap this suite's ORIGINAL version left
+// open on purpose (documented at length in the prior report as a deliberate,
+// narrower scope decision): a BRAND-NEW custom agent — created fresh, never
+// having predated grep's release — used to still get a hardcoded per-agent
+// "grep": deny from coreagent.NewCustomAgentToolsCfg(), unlike every
+// pre-existing agent's upgrade-path backfill (which already resolved
+// allow). NewCustomAgentToolsCfg now seeds "grep": allow explicitly (see its
+// own doc comment in core.go) — the fresh-create and upgrade-backfill paths
+// agree again. TestGrep_PolicyAllTiersAndDriftBackfill's new
+// "fresh custom agent creation" subtest below pins this.
+//
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -35,6 +48,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // grepRoster is the full set of agents whose seed MUST carry an explicit
@@ -263,5 +277,51 @@ func TestGrep_PolicyAllTiersAndDriftBackfill(t *testing.T) {
 			assert.NotEqualf(t, "grep", g.ToolName,
 				"grep must have ZERO coverage gaps after SeedConfig; found gap for agent %q", g.AgentID)
 		}
+	})
+
+	t.Run("fresh custom agent creation: grep resolves allow, not a hardcoded deny (founder ruling 2026-09-07)", func(t *testing.T) {
+		// coreagent.NewCustomAgentToolsCfg() is the SINGLE shared seed both
+		// agent-creation paths call (POST /api/v1/agents' createAgent and the
+		// LLM-driven system.agent.create tool) whenever the caller submits no
+		// tools_cfg of its own — i.e. what a genuinely brand-new custom agent
+		// gets with zero configuration. Before this founder ruling, "grep"
+		// was absent from its overrides and therefore took
+		// denyAllThenOverride's base "deny" like every other unopted-in
+		// tool — a hardcoded per-agent deny that BEATS the global ceiling's
+		// "allow" under strictest-wins, contradicting FR-009's "no posture
+		// left to silent inheritance ... explicit allow for every agent
+		// tier" for the one tier (fresh custom agents) that ruling's first
+		// pass deliberately left out of scope.
+		toolsCfg := coreagent.NewCustomAgentToolsCfg()
+		require.NotNil(t, toolsCfg)
+		p, ok := toolsCfg.Builtin.Policies["grep"]
+		require.Truef(t, ok,
+			"a freshly created custom agent must carry an EXPLICIT grep entry — "+
+				"NewCustomAgentToolsCfg is built via denyAllThenOverride, which fully "+
+				"enumerates every static builtin name (Constraint #6); there is no sparse "+
+				"variant of this constructor for an entry to be silently absent from")
+		assert.Equalf(t, config.ToolPolicyAllow, p,
+			"a freshly created custom agent must seed grep=allow — founder ruling (2026-09-07): "+
+				"\"there must not be any tool default to deny — the global policy sets the "+
+				"default, not any hardcoded default\"")
+
+		// Resolve through the REAL compositor merge against the real
+		// fresh-install ceiling — the same strictest-wins global x agent
+		// merge the agent loop and gateway approval hook both resolve
+		// through (mirrors seed_upgrade_catalog_drift_test.go's
+		// resolveUpgraded, applied to a raw not-yet-persisted AgentToolsCfg
+		// rather than one already in cfg.Agents.List).
+		cfg := config.DefaultConfig()
+		global := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
+		for k, v := range cfg.Sandbox.ToolPolicies {
+			global[k] = config.ToolPolicy(v)
+		}
+		resolved := tools.ResolveEffectivePolicy(&tools.ToolPolicyCfg{
+			Policies:       toolsCfg.Builtin.Policies,
+			GlobalPolicies: global,
+		}, "grep")
+		assert.Equal(t, "allow", resolved,
+			"a freshly created custom agent's grep must RESOLVE allow through the real "+
+				"compositor, matching every other agent tier")
 	})
 }

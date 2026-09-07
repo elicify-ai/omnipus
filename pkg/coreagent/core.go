@@ -2955,6 +2955,30 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// Skill tool to load ANY skill's content at all — the "# Skills"
 				// menu advertises skills but nothing else can ever load one.
 				"Skill": allow,
+				// ADR-081 D11 (FR-009), FOUNDER RULING (2026-09-07, updated
+				// after this constructor originally shipped grep as a
+				// hardcoded deny like every other unopted-in tool): "There
+				// must not be any tool default to deny — the global policy
+				// sets the default, not any hardcoded default." grep is
+				// EXPLICIT "allow" here, not merely omitted: this map is
+				// built via denyAllThenOverride, which fully enumerates
+				// every static builtin name with a literal value (no sparse
+				// variant exists for this constructor — see
+				// TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage's ElementsMatch pin and
+				// pkg/gateway/rest.go's createAgent, which validates a
+				// CALLER-submitted map for completeness via
+				// ValidateSubmittedToolPolicyMap under the same
+				// fully-enumerated contract), so an explicit "allow" is the
+				// only way to make a brand-new custom agent's grep resolve
+				// to the global ceiling's "allow" instead of a hardcoded
+				// per-agent deny that would otherwise BEAT the ceiling under
+				// strictest-wins. This closes the one gap the original
+				// ADR-081 D11 governance change deliberately left open (a
+				// fresh custom agent still denied grep by default,
+				// unlike every pre-existing agent's upgrade-path backfill,
+				// which already resolves allow — see
+				// tool_policy_catalog_drift.go's matching MV-8 exception).
+				"grep": allow,
 			}),
 		},
 	}
