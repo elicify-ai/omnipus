@@ -27,4 +27,12 @@ Fields remain schema-optional to stage the protocol across existing constructors
 
 ## Required evidence
 
+### Health ownership regression plan
+
+FR-012 and FR-013 require recovery to use evidence from the current capture connection. Each authenticated ingest binding owns a heartbeat epoch, separate from both the encoder's local attempt counter and the displayed-frame generation. Binding a replacement clears the previous stage sample. A late heartbeat from the superseded connection, an unbound connection, or a stopped capture must change neither the heartbeat timestamp nor stage health. A current bare heartbeat updates liveness while retaining the last stage sample until its independent freshness limit expires.
+
+The tests use a real CaptureSession with inert transport callbacks, and compare full health snapshots and heartbeat timestamps across explicit bind/unbind/stop-state transitions. Expected outcomes follow the ownership rule above, not recorded implementation output. Planned mutations remove the epoch check, the stopped/unbound check, and replacement sample reset. Network delivery and watchdog recovery are covered separately by gateway tests; these tests establish atomic state ownership only.
+
+Observed evidence: the initial focused run exited 1 with five behavioral failures (replacement reset plus four inactive-sender cases). After the ownership fix it exited 0. All three planned mutations exited 1 with the corresponding behavioral assertion failures; after restoring the implementation, the focused suite exited 0 in 2.961 seconds. The current-sender positive case also checks zero-valued measured counters and bare-heartbeat preservation. Gateway mapping and complete watchdog recovery remain a separate integration gate.
+
 Tests must cover stale input after switch and resize; same-size tabs with distinct visual fixtures; duplicate URLs and wrong foreground; delayed old RTP; sequence/timestamp wrap; delayed boundary messages on static pages; missing RTP and presentation metadata; fallback negotiation racing another transition; session replacement; and release cleanup across generations. Runtime acceptance additionally checks corner/edge clicks for padding introduced by capture alignment and measures resize-to-present latency against the two-second requirement.

@@ -1091,6 +1091,7 @@ func (cs *CaptureSession) BindIngest(
 	cs.ingestSend = send
 	cs.ingestClose = closeConn
 	cs.lastPingAt = time.Now()
+	cs.captureHealth = CaptureHealthObservation{}
 	return previousClose, cs.ingestEpoch
 }
 

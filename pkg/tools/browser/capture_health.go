@@ -19,6 +19,23 @@ type CaptureHealthObservation struct { // not-wire-format: gateway maps the gene
 	ObservedAt        time.Time
 }
 
+// RecordIngestHeartbeat updates liveness and optional stage evidence together,
+// only while the sender still owns the authenticated ingest binding.
+func (cs *CaptureSession) RecordIngestHeartbeat(epoch uint64, sample *CaptureHealthObservation) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.stopped || epoch == 0 || epoch != cs.ingestEpoch || cs.ingestSend == nil {
+		return false
+	}
+	now := time.Now()
+	cs.lastPingAt = now
+	if sample != nil {
+		cs.captureHealth = *sample
+		cs.captureHealth.ObservedAt = now
+	}
+	return true
+}
+
 func (cs *CaptureSession) RecordCaptureHealth(sample CaptureHealthObservation) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
