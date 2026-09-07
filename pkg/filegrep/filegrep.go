@@ -257,17 +257,15 @@ func excerpt(line []byte, pos int) string {
 			start = end - ExcerptCapBytes
 		}
 	}
-	for start > 0 && start < len(line) && !utf8.RuneStart(line[start]) {
-		start--
+	// Snapping INWARD (trimming a partial leading/trailing rune) rather than
+	// outward can only shrink [start, end), so the pre-snap size — already
+	// <=ExcerptCapBytes above — bounds the result unconditionally; no
+	// separate reclamp is needed.
+	for start < end && !utf8.RuneStart(line[start]) {
+		start++
 	}
-	for end < len(line) && !utf8.RuneStart(line[end]) {
-		end++
-	}
-	if end-start > ExcerptCapBytes+utf8.UTFMax {
-		end = start + ExcerptCapBytes
-		for end > start && end < len(line) && !utf8.RuneStart(line[end]) {
-			end--
-		}
+	for end > start && end < len(line) && !utf8.RuneStart(line[end]) {
+		end--
 	}
 	result := line[start:end]
 	if !utf8.Valid(result) {

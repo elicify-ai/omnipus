@@ -22,13 +22,8 @@ func TestFileGrep_UTF8SafeExcerpts(t *testing.T) {
 			t.Fatalf("want 1 hit, got %d", len(res.Hits))
 		}
 		e := res.Hits[0].Excerpt
-		// excerpt() snaps both edges outward to the nearest rune boundary,
-		// so pathological alignment can overshoot ExcerptCapBytes by up to
-		// utf8.UTFMax-1 bytes on each side — bounded by excerpt()'s own
-		// safety reclamp at ExcerptCapBytes+utf8.UTFMax. That tolerance is
-		// intentional (see excerpt() in filegrep.go), not a truncation bug.
-		if len(e) > ExcerptCapBytes+utf8.UTFMax {
-			t.Fatalf("excerpt length %d exceeds cap+UTFMax %d", len(e), ExcerptCapBytes+utf8.UTFMax)
+		if len(e) > ExcerptCapBytes {
+			t.Fatalf("excerpt length %d exceeds ExcerptCapBytes %d", len(e), ExcerptCapBytes)
 		}
 		if !utf8.ValidString(e) {
 			t.Fatalf("excerpt is not valid UTF-8: %q", e)
@@ -72,8 +67,8 @@ func TestFileGrep_UTF8SafeExcerpts(t *testing.T) {
 			if !utf8.ValidString(e) {
 				t.Fatalf("excerpt(line, %d) not valid UTF-8: %q", pos, e)
 			}
-			if len(e) > ExcerptCapBytes+utf8.UTFMax {
-				t.Fatalf("excerpt(line, %d) length %d exceeds cap+UTFMax", pos, len(e))
+			if len(e) > ExcerptCapBytes {
+				t.Fatalf("excerpt(line, %d) length %d exceeds ExcerptCapBytes", pos, len(e))
 			}
 		}
 	})
@@ -81,6 +76,17 @@ func TestFileGrep_UTF8SafeExcerpts(t *testing.T) {
 	t.Run("empty line", func(t *testing.T) {
 		if got := excerpt(nil, 0); got != "" {
 			t.Fatalf("excerpt(nil, 0) = %q, want empty", got)
+		}
+	})
+
+	t.Run("rune-boundary snap on both edges never exceeds the cap", func(t *testing.T) {
+		line := []byte(strings.Repeat("あ", 1000)) // 3-byte runes, cap not a multiple of 3
+		e := excerpt(line, 0)
+		if len(e) > ExcerptCapBytes {
+			t.Fatalf("excerpt length %d exceeds ExcerptCapBytes %d", len(e), ExcerptCapBytes)
+		}
+		if !utf8.ValidString(e) {
+			t.Fatalf("excerpt is not valid UTF-8: %q", e)
 		}
 	})
 }
@@ -114,8 +120,8 @@ func FuzzExcerpt(f *testing.F) {
 		if !utf8.ValidString(got) {
 			t.Fatalf("excerpt(%q, %d) produced invalid UTF-8: %q", line, pos, got)
 		}
-		if len(got) > ExcerptCapBytes+utf8.UTFMax {
-			t.Fatalf("excerpt(%q, %d) length %d exceeds cap+UTFMax", line, pos, len(got))
+		if len(got) > ExcerptCapBytes {
+			t.Fatalf("excerpt(%q, %d) length %d exceeds ExcerptCapBytes", line, pos, len(got))
 		}
 	})
 }
