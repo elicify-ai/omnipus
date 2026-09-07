@@ -336,6 +336,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
   it('does not push a viewport while focus sits in a panel input', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('visualViewport', { scale: 1, height: window.innerHeight - 250, offsetTop: 0, addEventListener: vi.fn(), removeEventListener: vi.fn() })
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
@@ -366,6 +367,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.unstubAllGlobals()
       vi.useRealTimers()
     }
   })
@@ -479,6 +481,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
   it('does not commit a size measured after focus entered a text field', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('visualViewport', { scale: 1, height: window.innerHeight - 250, offsetTop: 0, addEventListener: vi.fn(), removeEventListener: vi.fn() })
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
@@ -509,6 +512,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.unstubAllGlobals()
       vi.useRealTimers()
     }
   })
@@ -537,7 +541,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
   // blur produces no resize either — without an explicit blur catch-up the
   // resize is suppressed once and never retried. Resize the window while typing
   // a URL and the panel stayed pinned to the old geometry indefinitely.
-  it('commits a real resize that happened while a text field had focus, once focus leaves', async () => {
+  it('commits desktop resizing before blur and deduplicates the later blur', async () => {
     vi.useFakeTimers()
     try {
       const el = mountSettled()
@@ -554,7 +558,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
         window.dispatchEvent(new Event('resize'))
       })
       await vi.advanceTimersByTimeAsync(2000)
-      expect(mockSendViewport).not.toHaveBeenCalled()
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(890, 1300, window.devicePixelRatio || 1)
 
       // Blur with NO further resize event. The focusout catch-up is the only
       // thing that can rescue the 1300 height now.
@@ -563,7 +567,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
       })
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(mockSendViewport).toHaveBeenCalledWith(890, 1300, expect.any(Number))
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(890, 1300, window.devicePixelRatio || 1)
     } finally {
       vi.useRealTimers()
     }
@@ -627,4 +631,22 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
       vi.useRealTimers()
     }
   })
+})
+
+// Real layout resizing must proceed on desktop even while the user types.
+it('applies a desktop resize while the address bar remains focused', async () => {
+  vi.useFakeTimers()
+  try {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
+    act(() => { callbacksRef.current?.onConnected?.(); emitFirstFrame() })
+    const frame = screen.getByTestId('browser-live-frame')
+    vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue({ width: 800, height: 600 } as DOMRect)
+    act(() => screen.getByLabelText('Address bar').focus())
+    act(() => window.dispatchEvent(new Event('resize')))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mockSendViewport).toHaveBeenLastCalledWith(800, 600, window.devicePixelRatio || 1)
+    expect(document.activeElement).toBe(screen.getByLabelText('Address bar'))
+  } finally {
+    vi.useRealTimers()
+  }
 })

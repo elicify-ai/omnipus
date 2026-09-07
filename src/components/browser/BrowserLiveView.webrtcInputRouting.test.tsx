@@ -31,7 +31,7 @@ const {
   machineHasConnectedOnceRef,
   machineStateRef,
 } = vi.hoisted(() => ({
-  mockSendInput: vi.fn(() => true),
+  mockSendInput: vi.fn<(input: Record<string, unknown>) => boolean>(() => true),
   mockSendControl: vi.fn(() => true),
   mockSendTabAction: vi.fn(() => true),
   mockSendWebRTCOffer: vi.fn(() => true),
@@ -199,8 +199,8 @@ function ackDriving(container: HTMLElement) {
   mockSendControl.mockClear()
 }
 
-describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2-B)', () => {
-  it('DC not open: pointer input falls back to WS', () => {
+describe('BrowserLiveView — input routing: one ordered socket during video connection changes', () => {
+  it('pointer input uses the ordered socket before the data channel opens', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     // Never fire onInputChannelOpen — the DC never reports open.
@@ -214,7 +214,7 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('video mode, DC open, acked driving: mouse_down goes over the data channel as a JSON-serialized BrowserInputFrame, not WS', () => {
+  it('mouse input stays on the ordered socket after the data channel opens', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -224,13 +224,13 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
-    expect(mockSendInput).not.toHaveBeenCalled()
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
-    expect(payload).toEqual(expect.objectContaining({ type: 'browser_input', kind: 'mouse_down', x: 10, y: 10 }))
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
+    const payload = mockSendInput.mock.calls[0][0]
+    expect(payload).toEqual(expect.objectContaining({ kind: 'mouse_down', x: 10, y: 10 }))
   })
 
-  it('video mode, DC open: key/text input also goes over the data channel', () => {
+  it('keyboard input stays on the ordered socket after the data channel opens', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -241,13 +241,13 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
 
     fireEvent.keyDown(container, { key: 'a' })
 
-    expect(mockSendInput).not.toHaveBeenCalled()
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
-    expect(payload).toEqual(expect.objectContaining({ type: 'browser_input', kind: 'text', text: 'a' }))
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
+    const payload = mockSendInput.mock.calls[0][0]
+    expect(payload).toEqual(expect.objectContaining({ kind: 'text', text: 'a' }))
   })
 
-  it('video mode, DC open, but the DC send itself fails: falls through to WS rather than dropping the event', () => {
+  it('a failing unused data channel does not duplicate socket input', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -258,11 +258,11 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('video mode, DC open then closed mid-session: input reverts to WS the moment onInputChannelClose fires', () => {
+  it('closing the data channel does not change input transport', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -277,7 +277,7 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('implicit-take gesture (UAT 2026-07-18): with the DC open, the WHOLE acquiring gesture — mouse_down, coalesced moves, mouse_up — rides the WS so it can never race ahead of the browser_control{take} frame; the NEXT acked gesture uses the DC', () => {
+  it('initial and later gestures share the same ordered socket as control', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -292,14 +292,14 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
 
-    // Ack lands; gesture 2 is ordinary acked driving — DC-first again.
+    // Ack lands; gesture 2 is ordinary acked driving — still the same socket.
     act(() => wsCallbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
     mockMachineSendInput.mockClear()
     mockSendInput.mockClear()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendInput).not.toHaveBeenCalled()
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)).toEqual(
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
+    expect(mockSendInput.mock.calls[0][0]).toEqual(
       expect.objectContaining({ kind: 'mouse_down' }),
     )
   })
@@ -371,9 +371,9 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
-    expect(mockSendInput).not.toHaveBeenCalled()
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
+    const payload = mockSendInput.mock.calls[0][0]
     expect(payload).toEqual(
       expect.objectContaining({ kind: 'mouse_down', capture_width: 1280, capture_height: 720 }),
     )
@@ -387,7 +387,7 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockMachineSendInput).not.toHaveBeenCalled()
   })
 
@@ -410,8 +410,8 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
       fireEvent.wheel(container, { deltaX: 0, deltaY: 120, clientX: 10, clientY: 10 })
       await vi.advanceTimersByTimeAsync(60)
 
-      const wheels = mockMachineSendInput.mock.calls
-        .map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
+      const wheels = mockSendInput.mock.calls
+        .map((c) => c[0] as Record<string, unknown>)
         .filter((p) => p.kind === 'wheel')
       expect(wheels).toHaveLength(1)
       expect(wheels[0]).toEqual(
@@ -443,8 +443,8 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
       }
       await vi.advanceTimersByTimeAsync(60)
 
-      const wheels = mockMachineSendInput.mock.calls
-        .map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
+      const wheels = mockSendInput.mock.calls
+        .map((c) => c[0] as Record<string, unknown>)
         .filter((p) => p.kind === 'wheel')
       expect(wheels).toHaveLength(1)
       expect(wheels[0].delta_y).toBe(120)
@@ -466,8 +466,8 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
     // one-shot `text` insert isPrintableKey routes single characters to.
     fireEvent.keyDown(container, { key: 'Tab' })
 
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string) as Record<string, unknown>
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
+    const payload = mockSendInput.mock.calls[0][0] as Record<string, unknown>
     expect(payload.kind).toBe('key_down')
     expect(payload).not.toHaveProperty('capture_width')
     expect(payload).not.toHaveProperty('capture_height')
@@ -508,8 +508,8 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
         vi.runAllTimers()
       })
 
-      expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-      const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
+      expect(mockSendInput).toHaveBeenCalledTimes(1)
+      const payload = mockSendInput.mock.calls[0][0]
       expect(payload).toEqual(
         expect.objectContaining({ kind: 'mouse_move', capture_width: 1280, capture_height: 720 }),
       )
@@ -630,7 +630,7 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
   // path now. A fallback no longer swaps to a second sink; it tears the
   // interactive surface down ENTIRELY (no silent degrade, no blank panel) and
   // the panel's empty state shows the honest error instead.
-  it('on fallback, unmounts the interactive surface entirely and stops routing input over the DC (nothing left to click)', () => {
+  it('on fallback, unmounts the interactive surface entirely and stops routing input (nothing left to click)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))

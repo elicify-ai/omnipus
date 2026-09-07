@@ -673,3 +673,20 @@ describe('translateBrowserErrorMessage — D5 protocol-internal closed set', () 
     expect(translateBrowserErrorMessage('completely unrelated message')).toBe('completely unrelated message')
   })
 })
+
+// Input must stay bounded locally. No replay is safe for non-idempotent clicks
+// or text after a congested connection has accepted earlier events.
+describe('browser input backpressure', () => {
+  it.each([65535, 65536, 65537])('bounds queued input at 64 KiB (buffer=%i)', (bufferedAmount) => {
+    const conn = new BrowserLiveWsConnection('s1', 'a1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    Object.defineProperty(lastWsInstance, 'bufferedAmount', { value: bufferedAmount })
+    lastWsInstance.send.mockClear()
+    const sent = conn.sendInput({ kind: 'text', text: 'x' })
+    expect(sent).toBe(bufferedAmount < 65536)
+    expect(sentFrames()).toEqual(bufferedAmount < 65536 ? [{ type: 'browser_input', kind: 'text', text: 'x' }] : [])
+    expect(lastWsInstance.close.mock.calls).toEqual(bufferedAmount < 65536 ? [] : [[4008, 'input_backpressure']])
+    conn.close()
+  })
+})

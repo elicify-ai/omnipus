@@ -20,7 +20,7 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 
 const { mockSendInput, callbacksRef } = vi.hoisted(() => ({
-  mockSendInput: vi.fn(),
+  mockSendInput: vi.fn<(input: unknown) => boolean>(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
 
@@ -269,12 +269,7 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
     expect(moveCalls()[0][0]).toMatchObject({ kind: 'mouse_move', x: 40, y: 40 })
   })
 
-  // Reviewer finding (queued-move leak): flushPendingMove now re-validates
-  // the drive gate at FLUSH time, not just at schedule time — a position
-  // queued WHILE driving must not leak into the tab if the agent starts
-  // working in the gap before the animation-frame/timer flush actually
-  // fires.
-  it('drops a queued mouse_move if the agent starts working before the flush fires', () => {
+  it('delivers queued human movement when chat starts before the flush', () => {
     const container = mountControllingWithFrame()
 
     act(() => {
@@ -292,8 +287,8 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
       vi.runAllTimers()
     })
 
-    // The queued position must NOT have leaked into the tab.
-    expect(moveCalls()).toHaveLength(0)
+    expect(moveCalls()).toHaveLength(1)
+    expect(moveCalls()[0][0]).toMatchObject({ kind: 'mouse_move', x: 10, y: 10 })
   })
 })
 

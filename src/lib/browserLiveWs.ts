@@ -411,6 +411,13 @@ export class BrowserLiveWsConnection {
 
   /** Sends a browser_input frame. `type` is added internally — pass just the input payload. */
   sendInput(input: Omit<BrowserInputFrame, 'type'>): boolean {
+    // A growing send buffer means input is stale before it reaches Chrome.
+    // Close this attachment so the server can release its held keys/buttons;
+    // never replay uncertain clicks or text on the replacement connection.
+    if (this.ws && this.ws.bufferedAmount >= 64 * 1024) {
+      this.ws.close(4008, 'input_backpressure')
+      return false
+    }
     const frame: BrowserInputFrame = { type: 'browser_input', ...input }
     return this._rawSend(frame)
   }

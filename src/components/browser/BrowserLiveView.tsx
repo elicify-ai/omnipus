@@ -1,40 +1,8 @@
-// BrowserLiveView — shared live-view core for the ADR-038/039/040/047
-// interactive browser panel. Rendered by two callers:
-//   1. BrowserLivePanel.tsx  — inside the app-root Sheet overlay (or docked
-//      beside chat when pinned — layout is entirely the panel owner's call)
-//   2. routes/_app/browser-live.tsx — the fullscreen pop-out window
-//
-// Owns the second WS connection (browserLiveWs.ts, used for control/input/
-// tab/signaling frames), the WebRTC viewer session (browserWebRTC.ts) that is
-// the ONLY live-video path (ADR-047 — the JPEG screencast fallback was
-// removed outright, not flagged off: there is no second sink to degrade to
-// any more), the ADR-040 "implicit control" state machine (D2), and
-// pointer/keyboard capture while driving. Deliberately has NO knowledge of
-// how it's being hosted (docked panel vs. fullscreen route) — onPopOut/
-// onClose are optional callbacks so each host wires up its own chrome
-// semantics (window.open vs. store close vs. window.close).
-//
-// ADR-040 "Take the wheel" redesign: control is no longer a persistent
-// Take/Release toggle. It is implicit and contextual, derived from two
-// existing signals — the live-view control lock (unchanged, still owned by
-// this component) and the chat store's per-session `isStreaming` for THIS
-// panel's pinned (sessionId, agentId) (agent's turn in flight):
-//   - agent working (isStreaming) → watch-only by default: wheel/keyboard
-//     never drive the page unprompted. The FIRST interactive action — the
-//     "Take over" button, a frame click, a tab-strip click, or a URL
-//     submit — pauses the agent (reuses the chat store's existing
-//     cancelStream — the same action the chat Stop button calls) AND
-//     acquires the lock AND (for frame-click/omnibox/tab actions) dispatches
-//     that same action, all in ONE take (see takeWheelIfNeeded). UAT fix:
-//     this used to require a second click, because the chat store doesn't
-//     flip `isStreaming` false synchronously — see agentPausedByUserRef's
-//     doc comment (further down) for the local-override fix.
-//   - agent idle + user doesn't hold the lock → the first pointer
-//     interaction on the frame implicitly acquires the lock, then dispatches
-//     that same input.
-//   - user holds the lock → drives normally (unchanged from ADR-038/039).
-// The old "Hand to agent" button is gone — handing back is just sending a
-// chat message (the shared tab means the agent resumes on the current page).
+// Shared browser panel for the docked view and fullscreen pop-out.
+// Video uses WebRTC; all human input, navigation and control use one ordered
+// WebSocket. Human input remains available during agent activity. Only the
+// explicit Take over button stops the chat response. Control status is a
+// presentation hint, not a prerequisite for input; annotation stays local.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -181,30 +149,7 @@ export interface BrowserLiveViewProps {
 /** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
 type VisualState = 'agent-working' | 'you-driving' | 'annotating' | 'error' | 'idle'
 
-/**
- * ADR-040 D2 refactor (reviewer finding) — the single "who can drive right
- * now" mode. Previously this was re-derived independently in five different
- * places (the wheel listener, handlePointerMove/Down/Up, handleKeyDown/Up,
- * the cursor style ternary, and the `visualState` ternary), each combining
- * `agentWorkingRef`/`controllingRef`/`annotateMode`/`connected`/
- * `controlledByOther` in a slightly different order — the cursor ternary
- * checked `isControlling` BEFORE `agentWorking` while `visualState` checked
- * `agentWorking` first, so a stale `isControlling:true` during the brief gap
- * before the auto-release effect's ack landed showed a "driving" cursor
- * (none, synthetic cursor visible) at the exact moment the Take-over overlay
- * was already up and dispatch was already blocked.
- *
- * `computeDriveMode` is the ONE place priority is decided (annotating >
- * agent-working > you-driving > disconnected > other-driving > idle).
- * `driveMode` below is the AUTHORITATIVE call — computed from real
- * `isControlling` only, mirrored into `driveModeRef` for the stable-identity
- * handlers, and is what `canDispatchInput`, the cursor style, and
- * `handlePointerDown`'s own "can I acquire the lock" branch all derive
- * from. It must stay tied to the confirmed server state ONLY — see
- * `visualDriveMode`'s doc comment (further down, where `pendingTake` is
- * folded in) for why a DISPLAY-only second call exists instead of adding an
- * optimistic flag to this one.
- */
+/** Presentation state; only annotation and connectivity gate input. */
 type DriveMode = 'annotating' | 'agent-working' | 'you-driving' | 'disconnected' | 'other-driving' | 'idle'
 
 function computeDriveMode(state: {
@@ -215,9 +160,9 @@ function computeDriveMode(state: {
   controlledByOther: boolean
 }): DriveMode {
   if (state.annotateMode) return 'annotating'
-  if (state.agentWorking) return 'agent-working'
-  if (state.isControlling) return 'you-driving'
   if (!state.connected) return 'disconnected'
+  if (state.isControlling) return 'you-driving'
+  if (state.agentWorking) return 'agent-working'
   if (state.controlledByOther) return 'other-driving'
   return 'idle'
 }
@@ -324,24 +269,15 @@ const VIEWPORT_SETTLE_MS = 250
 // limiter. Not requestAnimationFrame — see scheduleInputFlush.
 const MOVE_FLUSH_MS = 25
 
-// textFieldHasFocus reports whether a text-entry element currently holds focus,
-// meaning any container resize right now is probably the on-screen keyboard or
-// an AutoFill accessory bar rather than something the user asked for.
-//
-// Scope is DOCUMENT-WIDE, not the frame's subtree: the address bar is a sibling
-// of the frame's body wrapper, and the chat composer on the other side of the
-// app opens the same accessory bar and shrinks the same container. `frameEl` is
-// excluded because the frame itself is focusable (tabIndex=0) and focusing it is
-// how normal driving begins — that must never suppress a real resize.
-//
-// Reads live focus rather than a stored flag deliberately: a blur that never
-// fires (element unmounted, window deactivated) would wedge a flag on forever
-// and suppress every subsequent resize.
+// Defer capture resizing only while an editable field coincides with a
+// keyboard-sized visual viewport occlusion. Desktop focus alone is harmless.
 function textFieldHasFocus(frameEl: Element | null): boolean {
   const active = document.activeElement
   if (!active || active === frameEl) return false
   const tag = active.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable === true
+  const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable === true
+  const viewport = window.visualViewport
+  return editable && !!viewport && viewport.scale === 1 && viewport.height + viewport.offsetTop < window.innerHeight - 1
 }
 
 // BLANK_TAB_URL is the placeholder a not-yet-navigated tab reports. The address
@@ -490,12 +426,6 @@ export function BrowserLiveView({
   const attachedRef = useRef(false)
   const controllingRef = useRef(false)
   // ── ADR-040 D2 implicit control model ───────────────────────────────────
-  // agentWorkingRef mirrors the `agentWorking` (chat-store isStreaming for
-  // this session) state into a ref so the pointer/keyboard/wheel handlers
-  // below (all stable useCallbacks) always read the LATEST value without
-  // needing it in their dependency arrays — same rationale as
-  // attachedRef/controllingRef.
-  const agentWorkingRef = useRef(false)
   // True from the instant an implicit (click-to-drive) or explicit (Take
   // over) `sendControl('take')` is sent until the server's 'controlling'
   // browser_status round-trips back (or the take is superseded/abandoned).
@@ -507,41 +437,11 @@ export function BrowserLiveView({
   // `driveMode` needs for the chip/glow to update immediately) never drifts
   // out of sync with it.
   const pendingTakeRef = useRef(false)
-  // UAT fix (two-click take-over bug) — mirrors pendingTakeRef/pendingTake's
-  // exact ref+state pattern below. The chat store's cancelStream() does NOT
-  // flip the session bucket's `isStreaming` synchronously — it deliberately
-  // waits for the server's terminal `done` frame (see store/chat.ts's own
-  // doc comment: "The done frame arrives within a few seconds... Clearing it
-  // here would cause the useEffect([isStreaming]) to immediately reset
-  // stopLabel"). But `agentWorking` (derived from that same `isStreaming`)
-  // is the TOP-PRIORITY signal `computeDriveMode` checks — used for BOTH the
-  // optimistic "You're driving" chip (`visualDriveMode`) and actual input
-  // dispatch (`driveMode` → `canDispatchInput`) — so a take-over initiated
-  // WHILE the agent is working stayed blind to its own success for however
-  // long that chat-level cancellation confirmation takes: the browser-live
-  // WS's 'controlling' ack (a separate, fast round trip) routinely lands
-  // WHILE `agentWorking` is still stale-true, leaving driveMode stuck at
-  // 'agent-working' (no visual feedback, canDispatchInput false) and —worse—
-  // tripping the auto-release effect below (`agentWorking && isControlling`
-  // both true) into immediately releasing the lock it had JUST been granted,
-  // so the take silently reverted and a genuine SECOND click was needed.
-  // `agentPausedByUserRef`/`agentPausedByUser` records "I already asked this
-  // session's agent to stop, as of THIS take" the instant `takeWheelIfNeeded`
-  // decides to call cancelStream, and `effectiveAgentWorking` (computed
-  // alongside `driveMode` further down) substitutes it for the stale real
-  // signal for every consumer (driveMode, visualDriveMode, the auto-release
-  // effect) — never diverging between them, matching the "one place decides"
-  // rule computeDriveMode's own doc comment establishes. Cleared once the
-  // real `agentWorking` finally catches up to false (see the agentWorkingRef
-  // effect below), re-arming protection for a genuinely NEW, later
-  // agent-initiated turn.
-  const agentPausedByUserRef = useRef(false)
   // True for the span of a single pointer gesture that implicitly acquired
   // the lock (click-to-drive) — lets pointermove/pointerup for THAT SAME
   // gesture keep dispatching input even though the server's 'controlling'
   // ack (which flips controllingRef) may not have landed yet. Cleared on
   // pointerup (end of the gesture) and whenever the agent starts working.
-  const implicitDriveRef = useRef(false)
   // UAT finding FE-6, carried into the ADR-040 model: mirrors
   // `controlledByOther` state so the click-to-drive / Take-over paths can
   // avoid racing a control lock a DIFFERENT connection of this same session
@@ -687,9 +587,7 @@ export function BrowserLiveView({
   // ONLY via `setPendingTake` below, in lockstep with the ref.
   const [pendingTake, setPendingTakeFlag] = useState(false)
   // UAT fix (two-click take-over bug) — reactive mirror of
-  // agentPausedByUserRef, same lockstep pattern as pendingTake/pendingTakeRef
-  // above. Written ONLY via `setAgentPausedByUser` below.
-  const [agentPausedByUser, setAgentPausedByUserFlag] = useState(false)
+
 
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ──────────────────
   const [urlInput, setUrlInput] = useState('')
@@ -855,17 +753,7 @@ export function BrowserLiveView({
   // session store — see the `key={sessionId:agentId}` comment on both hosts).
   const agentWorking = useChatStore((s) => s.sessionsById[sessionId]?.isStreaming ?? false)
 
-  // UAT fix (two-click take-over bug) — see agentPausedByUserRef's own doc
-  // comment above for the full mechanism. `effectiveAgentWorking` is the ONE
-  // substitution point: every consumer that used to read raw `agentWorking`
-  // for drive-mode purposes (driveMode, visualDriveMode, the auto-release
-  // effect) now reads this instead, so none of them can drift out of sync
-  // with each other — exactly the discipline computeDriveMode's own doc
-  // comment already establishes for the rest of this state machine. Does NOT
-  // affect the chip's "{agent} is browsing…" LABEL text or agentWorkingRef
-  // (which takeWheelIfNeeded reads to decide whether to call cancelStream at
-  // all) — both intentionally keep reading the real, un-overridden signal.
-  const effectiveAgentWorking = agentWorking && !agentPausedByUser
+
 
   // ── ADR-040 D6 / ADR-043 D3 — agent identity for the header chip ──────────
   // Best-effort, read-only cache lookup against the SAME `['agents']` query
@@ -892,41 +780,13 @@ export function BrowserLiveView({
   // to "Agent" too, not render an empty chip label.
   const agentDisplayName = resolvedAgentName || 'Agent'
 
-  // ── ADR-040 D2 refactor — the single AUTHORITATIVE "who can actually
-  // drive right now" mode (see computeDriveMode's doc comment above for the
-  // priority order and the cursor/visualState inconsistency it fixes).
-  // `canDispatchInput`, the cursor style, and every pointer/keyboard/wheel
-  // handler's own gate derive from this ONE value — never from
-  // `visualDriveMode` below, which is display-only.
-  const driveMode: DriveMode = computeDriveMode({ annotateMode, agentWorking: effectiveAgentWorking, isControlling, connected, controlledByOther })
+  // Server-confirmed presentation state, separate from input eligibility.
+  const driveMode: DriveMode = computeDriveMode({ annotateMode, agentWorking, isControlling, connected, controlledByOther })
 
-  // ── UAT finding A8 (both testers) — a DISPLAY-only second call to the
-  // exact same priority function, used ONLY to compute `visualState` (→ the
-  // header chip + D6 glow border) below. A take (explicit "Take over", or
-  // the implicit click-to-drive first pointerdown) only flips the real
-  // `isControlling` once the server's 'controlling' browser_status ack
-  // round-trips back; right after Take-over, `cancelStream` (called first)
-  // often flips `agentWorking` to false well BEFORE that ack lands, so
-  // `driveMode` above used to fall all the way through to 'idle' ("Click to
-  // drive") for that whole async window — even though the user just
-  // explicitly took the wheel. Passing `isControlling: isControlling ||
-  // pendingTake` here (pendingTake: true from the instant a take is SENT
-  // until it's acknowledged/rejected/abandoned/disconnected — see
-  // `setPendingTake`) makes the chip/glow show "you're driving" immediately.
-  //
-  // Deliberately NOT folded into `driveMode` itself: an earlier version of
-  // this fix did exactly that, and it broke the "a second gesture starting
-  // while the first take is still unacked must not double-dispatch" guard —
-  // `handlePointerDown` reads the authoritative `driveMode` to decide
-  // whether it's allowed to try ACQUIRING the lock (`mode !== 'idle'`); if
-  // that read already said 'you-driving' during the optimistic window, a
-  // brand-new gesture skipped the `pendingTakeRef` in-flight check entirely
-  // and dispatched input for a take that was never actually confirmed.
-  // Keeping `driveMode` strictly tied to the confirmed `isControlling` and
-  // only optimistic-izing this separate display value avoids that.
+  // Show immediate feedback for a control request, bounded by its timeout.
   const visualDriveMode: DriveMode = computeDriveMode({
     annotateMode,
-    agentWorking: effectiveAgentWorking,
+    agentWorking,
     isControlling: isControlling || pendingTake,
     connected,
     controlledByOther,
@@ -951,21 +811,12 @@ export function BrowserLiveView({
     visualState = 'idle'
   }
 
-  // ── ADR-040 D6 — hover cursor over the frame, derived from the SAME
-  // `driveMode` visualState just used. Reviewer finding: this used to be a
-  // SEPARATE nested ternary that checked `isControlling` BEFORE
-  // `agentWorking` — the opposite order from visualState (which checked
-  // `agentWorking` first) — so during the brief async gap before the
-  // auto-release effect's ack landed, the cursor showed 'none' (driving,
-  // synthetic cursor visible) while the chip already showed "agent is
-  // browsing" and the Take-over overlay was already up. Both now derive
-  // from `driveMode`, so they can never disagree. Converted from a nested
-  // ternary to if/else per CLAUDE.md.
+  // Use the native pointer even while the agent is working.
   let cursorStyle: React.CSSProperties['cursor']
   if (driveMode === 'annotating') {
     cursorStyle = 'crosshair'
   } else if (driveMode === 'agent-working') {
-    cursorStyle = 'not-allowed'
+    cursorStyle = 'default'
   } else if (driveMode === 'you-driving') {
     // Native cursor — no synthetic overlay (the user sees their real cursor,
     // which is more accurate than a rendered icon). The old 'none' + synthetic
@@ -988,12 +839,11 @@ export function BrowserLiveView({
     setPendingTakeFlag(value)
   }, [])
 
-  // UAT fix (two-click take-over bug) — mirrors setPendingTake exactly, the
-  // ONE place agentPausedByUserRef/agentPausedByUser is ever written.
-  const setAgentPausedByUser = useCallback((value: boolean) => {
-    agentPausedByUserRef.current = value
-    setAgentPausedByUserFlag(value)
-  }, [])
+  useEffect(() => {
+    if (!pendingTake) return
+    const timer = setTimeout(() => setPendingTake(false), 3000)
+    return () => clearTimeout(timer)
+  }, [pendingTake, setPendingTake])
 
   useEffect(() => {
     attachedRef.current = attached
@@ -1006,20 +856,6 @@ export function BrowserLiveView({
     if (isControlling) setPendingTake(false)
   }, [isControlling, setPendingTake])
   useEffect(() => {
-    agentWorkingRef.current = agentWorking
-    // A gesture-scoped implicit-drive window (see implicitDriveRef's doc
-    // comment) is meaningless once the agent starts working — watch-only
-    // must win immediately, not just at the next pointerup.
-    if (agentWorking) implicitDriveRef.current = false
-    // UAT fix (two-click take-over bug): once the real store signal finally
-    // confirms the pause this connection asked for has landed, the local
-    // override's job is done — clearing it re-arms protection for a
-    // genuinely NEW, later agent-initiated turn (see agentPausedByUserRef's
-    // own doc comment above for why leaving this stuck `true` forever would
-    // silently defeat watch-only for every future agent turn).
-    if (!agentWorking) setAgentPausedByUser(false)
-  }, [agentWorking, setAgentPausedByUser])
-  useEffect(() => {
     controlledByOtherRef.current = controlledByOther
   }, [controlledByOther])
   useEffect(() => {
@@ -1028,50 +864,6 @@ export function BrowserLiveView({
   useEffect(() => {
     driveModeRef.current = driveMode
   }, [driveMode])
-  // ADR-040 D2 "must-handle": if the agent starts a turn while the user is
-  // mid-drive, watch-only wins — release the lock rather than letting the
-  // user's live input and the agent's tool input reach the tab
-  // simultaneously. (If the release races the agent's own first input frame,
-  // the backend's existing serialization on the browser session — not this
-  // component — is the actual correctness boundary; this is the client-side
-  // half of "never let both drive at once".)
-  //
-  // Reviewer finding: this used to fire unconditionally and ignore
-  // `sendControl`'s return value — a dead/reconnecting transport (no
-  // `connectedRef` guard) or a send that silently failed on a
-  // technically-open socket left a phantom stuck lock: the SERVER never
-  // actually heard 'release', yet nothing here noticed. `computeDriveMode`
-  // already gives `agent-working` top priority over `isControlling`, so
-  // input dispatch stays correctly blocked regardless — but the server-side
-  // lock would stay wrongly held, and a FUTURE `takeWheelIfNeeded()` would
-  // wrongly think this connection is "already driving" (`controllingRef`
-  // still true) and skip re-sending 'take'. Guard with connectivity, and on
-  // a failed send force the local lock state back to released (rather than
-  // leaving it silently wedged at 'controlling') and tell the user it needs
-  // a retry.
-  //
-  // UAT fix (two-click take-over bug): gated on `effectiveAgentWorking`, not
-  // raw `agentWorking` — a take-over THIS connection itself just initiated
-  // (agentPausedByUser) must not immediately auto-release the very lock it
-  // was granted just because the chat store's cancellation confirmation
-  // hasn't caught up yet. A genuinely NEW agent turn starting while the user
-  // is unrelatedly already driving (the scenario this effect actually
-  // protects against) is unaffected — effectiveAgentWorking equals real
-  // agentWorking whenever agentPausedByUser is false, which is always true
-  // for that case (see effectiveAgentWorking's own doc comment).
-  useEffect(() => {
-    if (effectiveAgentWorking && isControlling && connectedRef.current) {
-      const released = wsRef.current?.sendControl('release')
-      if (!released) {
-        setStatusState('released')
-        useUiStore.getState().addToast({
-          message: 'Could not confirm pausing control — click Take over again if needed.',
-          variant: 'error',
-        })
-      }
-    }
-  }, [effectiveAgentWorking, isControlling])
-
   // Keep pendingAnnotationRef in sync so the unmount-cleanup effect below
   // (which must run with empty deps, i.e. read only refs) always revokes the
   // CURRENT preview object URL rather than a stale one captured on mount.
@@ -1310,6 +1102,7 @@ export function BrowserLiveView({
         setConnError(null)
       },
       onDisconnected: () => {
+        pressedInputsRef.current.clear()
         setConnected(false)
         // The WebRTC session's fate is unknown once the signaling transport
         // that negotiated it drops — stop it outright (closes the PC/DC,
@@ -1349,12 +1142,12 @@ export function BrowserLiveView({
         // browser_status round-trip after reconnect starts clean. Also
         // drops the optimistic "you're driving" chip (UAT A8).
         setPendingTake(false)
-        implicitDriveRef.current = false
       },
     })
     wsRef.current = conn
     conn.connect()
     return () => {
+      releaseInputsRef.current()
       conn.detach()
       conn.close()
       wsRef.current = null
@@ -1429,59 +1222,60 @@ export function BrowserLiveView({
     [activeFrameDims],
   )
 
-  // ── ADR-040 D2 refactor — the single "can this event reach the remote tab"
-  // gate. Every handler below (wheel/pointerMove/pointerUp/keyDown/keyUp)
-  // consults this instead of re-deriving its own agentWorking/controlling
-  // combination — see computeDriveMode's doc comment for why the priority
-  // order matters. `implicitDriveActive` lets pointerMove/pointerUp pass a
-  // caller-captured snapshot of `implicitDriveRef.current` (pointerUp reads
-  // it BEFORE clearing the ref for the gesture that's ending, so it must be
-  // captured, not re-read live) — wheel/keyDown/keyUp, which never
-  // participate in the implicit-drive gesture window, just pass `false`.
-  // handlePointerDown has its OWN bespoke branching (it's the one handler
-  // that can ACQUIRE the lock, not just check it) but still reads the same
-  // `driveModeRef` this reads from.
-  const canDispatchInput = useCallback((implicitDriveActive: boolean) => {
-    return driveModeRef.current === 'you-driving' || implicitDriveActive
+  // Shared human input is independent of control ownership and chat state.
+  const canDispatchInput = useCallback(() => {
+    return connectedRef.current && driveModeRef.current !== 'annotating'
   }, [])
 
-  // ── The ONE place a `browser_input` payload picks its transport. Rule
-  // (wave-plan W2-B): DC-first (the WebRTC machine's "input" data channel)
-  // when BOTH the video sink is attached (`mediaStream` set) AND that
-  // channel is actually open right now; otherwise the WS `browser_input`
-  // path (before/between DC availability — there is no other fallback mode
-  // left). Only pointer/key/wheel/text input kinds ever reach this
-  // function — `navigate`/`navigate_back`/`reload` (control-gated, like
-  // `browser_control`/`browser_tab_action`) stay on WS unconditionally at
-  // their own call sites, matching the gateway's input-frame parsing
-  // (recon-digest.md "Wire payloads..."). A DC send that reports success is
-  // trusted; a DC send that FAILS despite an open readyState (a same-tick
-  // close race) falls through to WS rather than silently dropping the
-  // event — mirrors every other `sendX` failure-recovery pattern in this
-  // file (see e.g. `takeWheelIfNeeded`'s `sendControl('take')` handling).
-  //
-  // `forceWs` (UAT 2026-07-18, reviewer finding): the ONE exception to
-  // DC-first. An implicit click-to-drive take sends `browser_control{take}`
-  // over the WS, but the DC is a wholly separate transport with NO ordering
-  // guarantee relative to it — a same-gesture `mouse_down` (or a `mouse_up`,
-  // which would leave the remote page with a stuck-held button) riding the
-  // DC can reach the server BEFORE the take is processed and be silently
-  // dropped as not-controlling. Every input belonging to the implicit-take
-  // gesture (down/moves/up — the callers pass their gesture's implicit-drive
-  // flag) therefore rides the SAME WS as the take frame, whose in-order
-  // delivery guarantees the server sees take → down → … → up. Subsequent
-  // gestures (ack landed, implicit window closed on pointerup) use the DC
-  // as usual.
+  // All human input shares the ordered control socket. Successful send means
+  // queued locally, never proof that Chrome executed it. Do not replay on a
+  // second transport: a delayed click or text insertion could execute twice.
+  const pressedInputsRef = useRef(new Map<string, Omit<BrowserInputFrame, 'type'>>())
+  const releaseInputsRef = useRef<() => void>(() => {})
+  const inputFailureAtRef = useRef(-Infinity)
   const dispatchInput = useCallback(
-    (input: Omit<BrowserInputFrame, 'type'>, opts?: { forceWs?: boolean }): boolean => {
-      if (!opts?.forceWs && mediaStream && inputChannelOpenRef.current && webrtcRef.current) {
-        const sent = webrtcRef.current.sendInput(JSON.stringify({ type: 'browser_input', ...input }))
-        if (sent) return true
+    (input: Omit<BrowserInputFrame, 'type'>): boolean => {
+      const sent = wsRef.current?.sendInput(input) ?? false
+      if (!sent) {
+        if (Date.now() - inputFailureAtRef.current >= 3000) {
+          inputFailureAtRef.current = Date.now()
+          useUiStore.getState().addToast({ message: 'Browser input was not sent. Check the connection and try again.', variant: 'error' })
+        }
+        return false
       }
-      return wsRef.current?.sendInput(input) ?? false
-    },
-    [mediaStream],
+      const held = pressedInputsRef.current
+      if (input.kind === 'key_down') held.set(`key:${input.code || input.key}`, { ...input, kind: 'key_up', modifiers: 0 })
+      if (input.kind === 'key_up') held.delete(`key:${input.code || input.key}`)
+      if (input.kind === 'mouse_down') held.set(`button:${input.button}`, { ...input, kind: 'mouse_up', modifiers: 0 })
+      if (input.kind === 'mouse_up') held.delete(`button:${input.button}`)
+      if (input.kind === 'mouse_move') {
+        for (const [key, release] of held) {
+          if (release.kind === 'mouse_up') held.set(key, { ...release, x: input.x, y: input.y })
+        }
+      }
+      return true
+    }, [],
   )
+  const releasePressedInputs = useCallback(() => {
+    pendingMoveRef.current = null
+    pendingWheelRef.current = null
+    const releases = [...pressedInputsRef.current.values()]
+    pressedInputsRef.current.clear()
+    for (const release of releases) dispatchInput(release)
+  }, [dispatchInput])
+  useEffect(() => {
+    releaseInputsRef.current = releasePressedInputs
+    const onVisibility = () => { if (document.hidden) releasePressedInputs() }
+    window.addEventListener('blur', releasePressedInputs)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('blur', releasePressedInputs)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [releasePressedInputs])
+  useEffect(() => {
+    if (annotateMode) releasePressedInputs()
+  }, [annotateMode, releasePressedInputs])
 
   // ── Adaptive viewport (2026-07-31 operator UAT) ──────────────────────────
   // Report the panel's render box so the backend can size the CAPTURED TAB to
@@ -1664,6 +1458,7 @@ export function BrowserLiveView({
     // and harmlessly dedups). Routing through schedule() rather than push()
     // reuses the debounce, so focus churn cannot stampede the settle chase.
     document.addEventListener('focusout', schedule)
+    window.visualViewport?.addEventListener('resize', schedule)
 
     // ResizeObserver is guarded, not assumed. Adaptive sizing is an
     // enhancement; an environment without the API (jsdom under test, an old
@@ -1681,6 +1476,7 @@ export function BrowserLiveView({
         if (settleRef.current !== null) clearTimeout(settleRef.current)
         window.removeEventListener('resize', schedule)
         document.removeEventListener('focusout', schedule)
+      window.visualViewport?.removeEventListener('resize', schedule)
       }
     }
 
@@ -1690,6 +1486,7 @@ export function BrowserLiveView({
       if (timer !== null) clearTimeout(timer)
       if (settleRef.current !== null) clearTimeout(settleRef.current)
       document.removeEventListener('focusout', schedule)
+      window.visualViewport?.removeEventListener('resize', schedule)
       ro.disconnect()
     }
     // `attached` is load-bearing, not incidental (BLOCKER caught in review):
@@ -1704,16 +1501,6 @@ export function BrowserLiveView({
     // reason.
   }, [connected, attached])
 
-  // ── coalesced pointer-move + wheel pacing ────────────────────────────────
-  // Native pointermove fires far faster than the backend's input rate limiter
-  // (50 events/sec) can absorb — a 120Hz+ mouse/trackpad would flood it,
-  // causing silent server-side drops and a janky remote cursor. Coalesce to
-  // "at most one send per animation frame": every handlePointerMove call
-  // overwrites pendingMoveRef with the latest position; a single scheduled
-  // flush (idempotent — inputFlushScheduledRef guards re-scheduling) drains
-  // whatever is pending when the frame/timer fires. Mirrors the rAF-or-
-  // setTimeout(0) fallback ws.ts already uses for inbound batching (rAF is
-  // unavailable in jsdom/node and a hidden tab never fires it).
   const flushPendingMove = useCallback(() => {
     const pending = pendingMoveRef.current
     if (!pending) return
@@ -1724,10 +1511,8 @@ export function BrowserLiveView({
     // between the pointermove that scheduled this flush and the animation
     // frame/timer actually firing. Without this, a queued position captured
     // while still driving could leak into the tab a frame later, after
-    // watch-only has already taken over.
-    if (!canDispatchInput(implicitDriveRef.current)) return
-    // forceWs while the implicit-take gesture is still open — see
-    // dispatchInput's own doc comment (WS/DC ordering).
+    // annotation or disconnection has disabled input.
+    if (!canDispatchInput()) return
     dispatchInput(
       {
         kind: 'mouse_move',
@@ -1738,7 +1523,6 @@ export function BrowserLiveView({
         // here — see pendingMoveRef's and captureDimsFields's doc comments.
         ...captureDimsFields(pending),
       },
-      { forceWs: implicitDriveRef.current },
     )
   }, [canDispatchInput, dispatchInput])
 
@@ -1763,7 +1547,7 @@ export function BrowserLiveView({
     // Same flush-time re-validation as the move drain: the agent can take over,
     // annotate mode can engage, or the socket can drop between the wheel event
     // and this tick.
-    if (!canDispatchInput(false)) return
+    if (!canDispatchInput()) return
     dispatchInput({
       kind: 'wheel',
       x: pending.x,
@@ -1809,12 +1593,12 @@ export function BrowserLiveView({
     const el = containerRef.current
     if (!el) return undefined
     function onWheel(e: WheelEvent) {
-      // ADR-040 D2: watch-only never dispatches page input, wheel included;
+      // Annotation and disconnection block remote wheel input;
       // annotate mode excludes driving too (canDispatchInput's driveMode
       // gives annotating top priority — closes a latent gap where a stale
       // isControlling:true during the annotate-entry release race used to
       // let a scroll through).
-      if (!canDispatchInput(false) || !attachedRef.current) return
+      if (!canDispatchInput() || !attachedRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
       const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
@@ -1850,78 +1634,12 @@ export function BrowserLiveView({
     }
   }, [])
 
-  // ── ADR-040 D2 — the single "acquire the wheel" entry point ──────────────
-  // Shared by click-to-drive (implicit, on the first pointerdown while idle
-  // OR — UAT fix — while the agent is working), the omnibox submit handler
-  // (D5 — submitting while not driving takes the wheel first), the tab-strip
-  // actions (switch/close/open — ADR-041 D4), and the explicit "Take over"
-  // button (D2 — shown only while watch-only). All six of these paths now
-  // acquire the wheel in ONE user action, including while the agent is
-  // working — see agentPausedByUserRef's own doc comment above for the fix
-  // that made the take-over-while-working case actually stick instead of
-  // needing a second click. All refs (plus the stable `sessionId` prop), so
-  // this stays safe to reference from any other stable useCallback below.
+  // Record human activity without pausing chat or waiting for ownership.
   const takeWheelIfNeeded = useCallback(() => {
-    // Defense in depth: the other callers (omnibox submit, "Take over", tab
-    // actions) already gate their button on `disabled={!connected}`, but a
-    // dead transport must never attempt a take regardless of caller — mirrors the
-    // pre-ADR-040 "no silent send attempts while disconnected" coverage.
     if (!connectedRef.current) return
     if (controllingRef.current) return // already driving — nothing to acquire
     if (pendingTakeRef.current) return // a take is already in flight — never double-fire
-    // NO controlledByOther bail-out (operator directive, 2026-08-03). This used
-    // to return early whenever ANY other connection held the lock, which meant a
-    // second panel, a pop-out, or a stale automation session silently disabled
-    // the real human's mouse, keyboard and omnibox — the panel showed "Someone
-    // else is driving" and dropped everything. The panel is a real browser: the
-    // human's input always proceeds, and the server no longer gates dispatch on
-    // a control lock either (see dispatchInput).
-    if (agentWorkingRef.current) {
-      // ADR-040 D2 "Take over": pause the agent FIRST, via the exact same
-      // chat-store action the chat Stop button calls — reusing it here
-      // rather than inventing a new backend path is the point of this ADR.
-      // Reviewer finding (CRITICAL): `cancelStream` now takes an explicit
-      // session id and defaults to whichever session is currently ACTIVE in
-      // chat when omitted. This panel's pinned `sessionId` is not
-      // necessarily that active session (see the `agentWorking` selector's
-      // own doc comment above, which reads `sessionsById[sessionId]`
-      // directly for exactly this reason) — an unscoped call would pause
-      // whatever chat happens to be foregrounded instead of the turn THIS
-      // panel is actually watching, and since THIS session's isStreaming
-      // never actually goes false, the auto-release effect would
-      // immediately hand the lock right back (acquire → instant auto-release
-      // loop). Always pass this panel's own pinned session id.
-      useChatStore.getState().cancelStream(sessionId)
-      // UAT fix (two-click take-over bug): cancelStream above does NOT flip
-      // this session's isStreaming synchronously — the store deliberately
-      // waits for the server's terminal `done` frame (can take a few
-      // seconds; see store/chat.ts). Recording the pause locally, right now,
-      // is what lets effectiveAgentWorking stop treating the agent as
-      // working for THIS take the instant it's granted, instead of for
-      // however long that chat-level confirmation takes — see
-      // agentPausedByUserRef's own doc comment above for the full
-      // before/after. Set unconditionally here (not inside the `if (sent)`
-      // check below) because the agent WAS genuinely just asked to stop
-      // regardless of whether the take itself goes on to succeed.
-      setAgentPausedByUser(true)
-    }
-    // UAT finding A8: flip the reactive chip/glow to "you're driving"
-    // OPTIMISTICALLY, the same instant the take is sent — see
-    // `visualDriveMode`'s doc comment for why waiting on the server's ack
-    // (isControlling) left a visible "Click to drive" flash, and why this is
-    // display-only (driveMode/canDispatchInput still wait for the real ack).
     setPendingTake(true)
-    // Reviewer finding F3: `sendControl('take')`'s boolean return used to be
-    // discarded here. If the socket was left technically OPEN but the send
-    // itself failed (or the transport had already begun closing before the
-    // `close` event fired), no frame ever reaches the server, no ack ever
-    // lands, and `pendingTakeRef`/`pendingTake` would stay stuck true
-    // forever — the "take control" affordance permanently shows "you're
-    // driving" while real control never transfers, and every later click is
-    // no-op'd by `takeWheelIfNeeded`'s own `pendingTakeRef.current` guard
-    // above. Mirrors the auto-release effect's existing failed-send
-    // recovery (further up this file): clear the optimistic flag and tell
-    // the user to retry rather than leaving it wedged.
     const sent = wsRef.current?.sendControl('take')
     if (!sent) {
       setPendingTake(false)
@@ -1930,7 +1648,7 @@ export function BrowserLiveView({
         variant: 'error',
       })
     }
-  }, [sessionId, setPendingTake, setAgentPausedByUser])
+  }, [setPendingTake])
 
   // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
 
@@ -1967,7 +1685,6 @@ export function BrowserLiveView({
     // (computeDriveMode already gives 'annotating' top priority over a
     // stale pendingTake, but clearing it here too keeps the ref and the
     // reactive state from drifting once annotate mode exits again.)
-    implicitDriveRef.current = false
     setPendingTake(false)
     setAnnotateMode(true)
   }, [annotateMode, isControlling, handleCancelAnnotation, setPendingTake])
@@ -2044,111 +1761,65 @@ export function BrowserLiveView({
     [cropFrameToFile, resetSelection, activeFrameDims],
   )
 
-  // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ───────────────────
-  // Submitting is itself a driving action: if the viewer doesn't currently
-  // hold the lock, `takeWheelIfNeeded` acquires it first (pausing the agent
-  // first, via cancelStream, if it was mid-turn) — exactly the "Take over
-  // first, then navigate" behaviour D5 specifies — then the navigate input
-  // is dispatched on the same connection right after.
+  // Address-bar navigation uses the same ordered connection as live input.
   const handleOmniboxSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
       const resolved = resolveOmniboxInput(urlInput)
       if (!resolved) return
-      // Reviewer finding (CRITICAL): submitting is itself a driving action
-      // (D5), so it must be gated through the SAME `driveMode` the
-      // pointer/keyboard handlers consult, not a hand-rolled duplicate of
-      // takeWheelIfNeeded's guards (the previous inline
-      // `!controllingRef.current && (!connectedRef.current ||
-      // controlledByOtherRef.current)` expression never accounted for
-      // annotate mode at all, so submitting while annotating would still
-      // implicitly take the wheel and navigate — the same "annotate excludes
-      // driving" gap the pointer handlers were already closed against).
-      // Blocks exactly the cases takeWheelIfNeeded itself would refuse to
-      // acquire for (disconnected / a different connection already driving)
-      // plus annotate mode; 'agent-working' and 'idle' are both legitimate
-      // starting points for a drive acquisition.
-      const mode = driveModeRef.current
-      if (mode !== 'you-driving' && mode !== 'agent-working' && mode !== 'idle') return
-      // UAT finding: a prior blocked-navigate error banner persisted through a
-      // subsequent SUCCESSFUL navigate (a successful navigate emits only
-      // screencast frames, never a browser_status, so nothing cleared it).
-      // Clear it optimistically on each new submit — if THIS navigate is also
-      // rejected, a fresh browser_status(error) re-raises the banner.
+      if (!canDispatchInput()) return
       setStatusMessage(null)
       setStatusIsError(false)
-      // When agent-working, takeWheelIfNeeded pauses THIS panel's session
-      // (cancelStream(sessionId)) then sends control:take; when idle it just
-      // sends control:take; when already you-driving it's a no-op. Either
-      // way the navigate below rides the SAME connection right after —
-      // same-connection WS ordering (as the click-to-drive path relies on)
-      // guarantees the server processes control:take before this
-      // browser_input{navigate}, so the navigate is dispatched as part of
-      // the SAME drive acquisition, never ahead of it.
       takeWheelIfNeeded()
-      wsRef.current?.sendInput({ kind: 'navigate', url: resolved })
+      releasePressedInputs()
+      if (!dispatchInput({ kind: 'navigate', url: resolved })) return
       setUrlInput(resolved)
-      // Submit ends the edit: the tab-follow effect may now correct this to the
-      // url the browser actually landed on (a redirect, a normalised form).
       urlBarEditingRef.current = false
     },
-    [urlInput, takeWheelIfNeeded],
+    [urlInput, takeWheelIfNeeded, canDispatchInput, dispatchInput, releasePressedInputs],
   )
 
-  // Back / Refresh toolbar actions — Chrome-style nav controls. Same drive-
-  // acquisition discipline as the omnibox (D5): take the wheel first, then
-  // dispatch navigate_back / reload on the same connection so the server
-  // honours them (these are control-gated input kinds, like navigate).
   const handleToolbarNav = useCallback(
     (kind: 'navigate_back' | 'reload') => {
-      const mode = driveModeRef.current
-      if (mode !== 'you-driving' && mode !== 'agent-working' && mode !== 'idle') return
+      if (!canDispatchInput()) return
       setStatusMessage(null)
       setStatusIsError(false)
       takeWheelIfNeeded()
-      wsRef.current?.sendInput({ kind })
+      releasePressedInputs()
+      dispatchInput({ kind })
     },
-    [takeWheelIfNeeded],
+    [takeWheelIfNeeded, canDispatchInput, dispatchInput, releasePressedInputs],
   )
 
-  // ── Tab strip actions (ADR-041 D4) — switching/opening/closing a tab is a
-  // driving action, exactly like the omnibox (D5): the backend only honours
-  // `browser_tab_action` when this connection holds the control lock, or
-  // nobody controls (idle) — a merely-watching viewer's tab action would be
-  // rejected. Reviewer finding F1: every handler below routes through
-  // `takeWheelIfNeeded()` FIRST, matching the omnibox's own "take, then act
-  // on the same connection" ordering — same-connection WS message ordering
-  // guarantees the server processes `browser_control{take}` before the
-  // `browser_tab_action` sent right after it, so a user watching the agent
-  // browse who clicks a tab takes over before the switch/close/open is
-  // honoured. Reviewer finding F2: `sendTabAction`'s boolean return is now
-  // checked — a failed send (dead/reconnecting transport) surfaces a toast
-  // instead of silently no-opping. The resulting highlight/list update
-  // itself still comes from the next `browser_tabs` broadcast (see the
-  // `tabState` doc comment), never from a local write here.
   const handleTabSwitch = useCallback((index: number) => {
+    if (!canDispatchInput()) return
+    releasePressedInputs()
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('switch', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not switch tabs — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded])
+  }, [takeWheelIfNeeded, canDispatchInput, releasePressedInputs])
 
   const handleTabClose = useCallback((index: number) => {
+    if (!canDispatchInput()) return
+    releasePressedInputs()
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('close', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not close that tab — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded])
+  }, [takeWheelIfNeeded, canDispatchInput, releasePressedInputs])
 
   const handleTabOpen = useCallback(() => {
+    if (!canDispatchInput()) return
+    releasePressedInputs()
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('open')
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not open a new tab — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded])
+  }, [takeWheelIfNeeded, canDispatchInput, releasePressedInputs])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -2157,12 +1828,7 @@ export function BrowserLiveView({
       setSelectionCurrent({ x: e.clientX - rect.left, y: e.clientY - rect.top })
       return
     }
-    // ADR-040 D2: dispatch while EITHER actually driving OR mid-way through
-    // the same gesture that just implicitly acquired the lock (the server's
-    // ack may not have landed yet — see implicitDriveRef's doc comment).
-    // canDispatchInput folds in the agent-working / annotate-mode / drive
-    // gates that used to be re-derived here separately.
-    if (!canDispatchInput(implicitDriveRef.current) || !attachedRef.current || !containerRef.current) return
+    if (!canDispatchInput() || !attachedRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
@@ -2243,50 +1909,9 @@ export function BrowserLiveView({
     // it here keeps a single source of truth instead of introducing a
     // second, parallel one.
     if (!attachedRef.current || !activeFrameDims() || !containerRef.current) return
-    // ADR-040 D2, UAT fix (two-click take-over bug): a click on the frame
-    // while the agent is working now takes the wheel in ONE action, exactly
-    // like the omnibox submit handler (which has always allowed
-    // 'agent-working' as a valid starting mode) and the dedicated "Take
-    // over" button — see takeWheelIfNeeded's own doc comment for why pausing
-    // the agent (cancelStream) then taking control on the same connection is
-    // safe to do unconditionally here. This is the one handler that can
-    // ACQUIRE the lock (not just check it), so it reads `driveModeRef`
-    // directly rather than the shared canDispatchInput boolean gate.
-    const mode = driveModeRef.current
-    if (mode !== 'you-driving') {
-      // A dead/reconnecting transport, or a DIFFERENT connection of this
-      // same session already holding the lock (FE-6), must never attempt a
-      // take NOR dispatch input — matches the pre-ADR-040 "no silent send
-      // attempts" coverage (takeWheelIfNeeded also re-guards both cases, but
-      // bail out here too so the dispatch below never even runs). Reviewer
-      // finding (pending-take residual): a take already in flight from a
-      // DIFFERENT gesture (pendingTakeRef) must not let THIS gesture start
-      // dispatching either — we don't yet know whether that pending take
-      // will actually land, and takeWheelIfNeeded would silently no-op the
-      // (redundant) take anyway, leaving this gesture's input to go out
-      // regardless if it weren't guarded here too.
-      // 'other-driving' is explicitly ALLOWED through here (operator
-      // directive, 2026-08-03). It used to fall into this bail-out, which is
-      // what made the reported session's mouse and keyboard dead: another
-      // attached viewer put this panel in 'other-driving' and every pointer
-      // gesture returned right here, before dispatching anything. Control is
-      // shared — a human's click always acts.
-      if ((mode !== 'idle' && mode !== 'agent-working' && mode !== 'other-driving') || pendingTakeRef.current) return
-      // Idle: the first pointer interaction implicitly takes the wheel
-      // (ADR-040 D2). Agent-working (UAT fix): the click ALSO implicitly
-      // takes the wheel — takeWheelIfNeeded pauses the agent (cancelStream)
-      // first, exactly like the dedicated "Take over" button, before
-      // acquiring the lock. Either way, dispatch this SAME input
-      // immediately: same-connection WS message ordering guarantees the
-      // server processes the `browser_control{take}` frame before this
-      // `browser_input{mouse_down}` frame — WHICH IS EXACTLY WHY the
-      // dispatch below rides the WS (forceWs), never the DC: the data
-      // channel is a separate transport with no ordering guarantee against
-      // the WS take frame (see dispatchInput's doc comment; UAT 2026-07-18
-      // reviewer finding — the DC-routed first click could reach the server
-      // pre-take and be dropped as not-controlling).
+    if (!connectedRef.current) return
+    if (driveModeRef.current !== 'you-driving') {
       takeWheelIfNeeded()
-      implicitDriveRef.current = true
     }
     // attachedRef/containerRef are already guarded by the readiness check at
     // the top of this handler (which also requires a real activeFrameDims())
@@ -2325,7 +1950,6 @@ export function BrowserLiveView({
         // captureDimsFields's doc comment.
         ...captureDimsFields(device),
       },
-      { forceWs: implicitDriveRef.current },
     )
   }, [
     annotateMode,
@@ -2357,9 +1981,7 @@ export function BrowserLiveView({
     // regardless of what happens below — captured BEFORE clearing so
     // canDispatchInput sees the value that was true for this gesture's
     // duration, not the just-cleared one.
-    const wasImplicitDrive = implicitDriveRef.current
-    implicitDriveRef.current = false
-    if (!canDispatchInput(wasImplicitDrive) || !attachedRef.current || !containerRef.current) return
+    if (!canDispatchInput() || !attachedRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
@@ -2374,10 +1996,6 @@ export function BrowserLiveView({
     pendingMoveRef.current = null
     cancelInputFlush()
     flushPendingWheel()
-    // forceWs when this gesture implicitly took the wheel — a DC-routed
-    // mouse_up racing ahead of the WS take frame would be dropped as
-    // not-controlling and leave the remote page holding a stuck button
-    // (see dispatchInput's doc comment).
     dispatchInput(
       {
         kind: 'mouse_up',
@@ -2389,7 +2007,6 @@ export function BrowserLiveView({
         // captureDimsFields's doc comment.
         ...captureDimsFields(device),
       },
-      { forceWs: wasImplicitDrive },
     )
   }, [
     annotateMode,
@@ -2434,17 +2051,6 @@ export function BrowserLiveView({
       })
   }, [pendingAnnotation, annotateComment, resetSelection, sessionId, agentId])
 
-  // ── WCAG 2.1.2 "No Keyboard Trap" fix — the ONE additional way (besides a
-  // mouse click elsewhere, entering annotate mode, or the agent starting a
-  // new turn) driving ends: pressing Escape while you-driving (handleKeyDown
-  // below). Mirrors the auto-release effect's and handleToggleAnnotate's own
-  // `sendControl('release')` call + failed-send recovery (toast + force the
-  // local status back to 'released' so the UI never claims control is still
-  // held when the server never actually heard it) — this is the SAME release
-  // path those already use, just triggered by a keyboard exit instead of a
-  // state transition. Also moves focus to the address bar so focus lands
-  // somewhere useful instead of a container that's about to stop capturing
-  // keys at all.
   const releaseWheel = useCallback(() => {
     const released = wsRef.current?.sendControl('release')
     if (!released) {
@@ -2458,12 +2064,7 @@ export function BrowserLiveView({
   }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    // ADR-040 D2: watch-only never dispatches page input, keyboard included —
-    // canDispatchInput's driveMode gives agent-working (and annotating) top
-    // priority over a stale/in-flight controllingRef, closing the same
-    // "async release gap" this used to only defend against for agent-working
-    // specifically.
-    if (!canDispatchInput(false)) return
+    if (!canDispatchInput()) return
     // WCAG 2.1.2 "No Keyboard Trap" — Escape is the advertised, always
     // available way to stop driving (see the hand-back hint below, which now
     // advertises it too). This panel used to be hosted in a Radix Sheet,
@@ -2498,7 +2099,7 @@ export function BrowserLiveView({
   }, [canDispatchInput, releaseWheel, dispatchInput])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!canDispatchInput(false)) return
+    if (!canDispatchInput()) return
     // Escape's release already happened on keydown above — nothing left to
     // forward for its key_up half (and driveMode may still read stale
     // 'you-driving' for the brief async gap before the release ack lands).
@@ -2506,7 +2107,7 @@ export function BrowserLiveView({
     e.preventDefault()
     // 'text' input is a one-shot insert (no matching key_up — mirrors
     // Input.insertText on the backend, which has no down/up phase).
-    if (!isPrintableKey(e)) {
+    if (!isPrintableKey(e) && pressedInputsRef.current.has(`key:${e.code || e.key}`)) {
       dispatchInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }
   }, [canDispatchInput, dispatchInput])
@@ -2914,6 +2515,9 @@ export function BrowserLiveView({
             onPointerUp={handlePointerUp}
             onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
+            onBlur={releasePressedInputs}
+            onPointerCancel={releasePressedInputs}
+            onLostPointerCapture={releasePressedInputs}
             onDragStart={(e) => e.preventDefault()}
           >
             {/* The ONLY video sink — mounted the instant a WebRTC stream is
@@ -3007,7 +2611,7 @@ export function BrowserLiveView({
         )}
 
         {/* ADR-040 D2/D6 — "Take over" — the ONLY affordance shown while
-            watch-only (agent working, user doesn't hold the lock). Adjacent
+            agent activity (an explicit action to pause the response). Adjacent
             to the frame (not a header button — D1's header stays limited to
             Close/Pin/Pen/Pop-out). Rendered whenever agent-working, even
             before the video has attached, so the user can pause the agent
@@ -3016,7 +2620,10 @@ export function BrowserLiveView({
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
             <button tabIndex={0}
               type="button"
-              onClick={takeWheelIfNeeded}
+              onClick={() => {
+                useChatStore.getState().cancelStream(sessionId)
+                takeWheelIfNeeded()
+              }}
               // No longer disabled by controlledByOther (2026-08-03): another
               // attached viewer must never make this button dead, since taking
               // over from the agent is exactly what the user is trying to do.
