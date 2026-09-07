@@ -30,7 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -332,8 +332,8 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	var oldRec setGoalRecord
 	if strings.TrimSpace(currentRecordJSON) != "" {
 		if uErr := json.Unmarshal([]byte(currentRecordJSON), &oldRec); uErr != nil {
-			slog.Warn("set_goal: current record JSON failed to parse; proceeding without its prior-record carry-over",
-				"component", "goal", "session_id", sessionID, "error", uErr)
+			logger.WarnCF("goal", "set_goal: current record JSON failed to parse; proceeding without its prior-record carry-over",
+				map[string]any{"session_id": sessionID, "error": uErr.Error()})
 			oldRec = setGoalRecord{}
 		}
 	}
@@ -449,13 +449,13 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(fmt.Sprintf("set_goal: failed to persist the goal record: %v", wErr)).WithError(wErr)
 	}
 
-	slog.Info("goal: set_goal write",
-		"component", "goal", "session_id", sessionID, "mode", string(mode),
-		"criteria_count", len(normCriteria), "dod_count", len(normDoD))
+	logger.InfoCF("goal", "set_goal write",
+		map[string]any{"session_id": sessionID, "mode": string(mode),
+			"criteria_count": len(normCriteria), "dod_count": len(normDoD)})
 	if assessment != nil {
-		slog.Info("goal: set_goal assessment",
-			"component", "goal", "session_id", sessionID,
-			"clarity", assessment.Clarity, "assumption_count", len(assessment.Assumptions))
+		logger.InfoCF("goal", "set_goal assessment",
+			map[string]any{"session_id": sessionID,
+				"clarity": assessment.Clarity, "assumption_count": len(assessment.Assumptions)})
 	}
 
 	payload := map[string]any{
@@ -472,7 +472,8 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 	encoded, payloadErr := json.Marshal(payload)
 	if payloadErr != nil {
-		slog.Error("set_goal: could not encode result payload", "session_id", sessionID, "error", payloadErr)
+		logger.ErrorCF("goal", "set_goal: could not encode result payload",
+			map[string]any{"session_id": sessionID, "error": payloadErr.Error()})
 		return NewToolResult(fmt.Sprintf("goal record %s: %d criteria, %d DoD items", mode, len(normCriteria), len(normDoD)))
 	}
 	return NewToolResult(string(encoded))
@@ -704,12 +705,13 @@ func localDiffSummary(oldJSON, newJSON string) string {
 	var oldRec, newRec setGoalRecord
 	if strings.TrimSpace(oldJSON) != "" {
 		if err := json.Unmarshal([]byte(oldJSON), &oldRec); err != nil {
-			slog.Warn("set_goal: could not parse the prior record JSON for diffing; showing an additive-only summary",
-				"component", "goal", "error", err)
+			logger.WarnCF("goal", "set_goal: could not parse the prior record JSON for diffing; showing an additive-only summary",
+				map[string]any{"error": err.Error()})
 		}
 	}
 	if err := json.Unmarshal([]byte(newJSON), &newRec); err != nil {
-		slog.Error("set_goal: could not parse its own freshly-encoded record JSON for diffing", "component", "goal", "error", err)
+		logger.ErrorCF("goal", "set_goal: could not parse its own freshly-encoded record JSON for diffing",
+			map[string]any{"error": err.Error()})
 	}
 	critAdded, critChanged, critDropped := diffCriteriaByText(oldRec.Criteria, newRec.Criteria)
 	dodAdded, dodChanged, dodDropped := diffCriteriaByText(oldRec.DoD, newRec.DoD)
