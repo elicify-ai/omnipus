@@ -520,7 +520,7 @@ func TestFixtureVault_TheInvalidationCounterCanActuallyFire(t *testing.T) {
 		t.Fatal("no note in the fixture fills in a date-typed property, so the counter cannot be driven to fire — and the acceptance bar next door is therefore unproven")
 	}
 
-	data, err := os.ReadFile(victimPath) //nolint:gosec // a path from this test's own scan of its own temp copy
+	data, err := os.ReadFile(victimPath)
 	if err != nil {
 		t.Fatalf("reading the note to break: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestFixtureVault_FormulaEvidencedViewsNeverBroadenAgainstTheOracle(t *testi
 		t.Fatal("the run typed no property from a base formula, so this grading is vacuous")
 	}
 
-	data, err := os.ReadFile(oraclePath) //nolint:gosec // operator-supplied acceptance oracle
+	data, err := os.ReadFile(oraclePath)
 	if err != nil {
 		t.Fatalf("reading the oracle: %v", err)
 	}

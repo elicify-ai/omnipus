@@ -292,7 +292,7 @@ func clockFixture(t *testing.T) string {
 				continue
 			}
 			from := filepath.Join(base, e.Name())
-			data, readErr := os.ReadFile(from) //nolint:gosec // committed fixture path
+			data, readErr := os.ReadFile(from)
 			if readErr != nil {
 				t.Fatalf("reading %s: %v", from, readErr)
 			}
@@ -304,7 +304,7 @@ func clockFixture(t *testing.T) string {
 			if mkErr := os.MkdirAll(filepath.Dir(dst), 0o755); mkErr != nil {
 				t.Fatalf("creating %s: %v", filepath.Dir(dst), mkErr)
 			}
-			if wErr := os.WriteFile(dst, data, 0o644); wErr != nil { //nolint:gosec // test fixture
+			if wErr := os.WriteFile(dst, data, 0o644); wErr != nil {
 				t.Fatalf("writing %s: %v", dst, wErr)
 			}
 		}
@@ -386,7 +386,7 @@ func clockLoadImported(t *testing.T, root string) clockImported {
 		t.Fatalf("re-scanning the imported vault: %v", err)
 	}
 	for _, abs := range inv.Notes {
-		data, readErr := os.ReadFile(abs) //nolint:gosec // path from this run's own scan
+		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", abs, readErr)
 		}

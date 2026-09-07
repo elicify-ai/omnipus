@@ -595,7 +595,7 @@ func writeTypeKey(absPath, typeName string) error {
 	if !isPlainYAMLScalar(typeName) {
 		return fmt.Errorf("refusing to write type %q: it is not a plain scalar and would need quoting rules this edit does not implement", typeName)
 	}
-	src, err := os.ReadFile(absPath) //nolint:gosec // the path came from this importer's own vault scan
+	src, err := os.ReadFile(absPath)
 	if err != nil {
 		return err
 	}

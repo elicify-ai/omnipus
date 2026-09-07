@@ -386,7 +386,7 @@ func TestRelationLiteral_FounderVaultHappensToCoincide(t *testing.T) {
 			return nil //nolint:nilerr // a path that will not relativise against the root is not a note of this vault
 		}
 		paths = append(paths, filepath.ToSlash(rel))
-		b, rerr := os.ReadFile(p) //nolint:gosec // a fixture path supplied by the operator's own env var
+		b, rerr := os.ReadFile(p)
 		if rerr != nil {
 			return nil //nolint:nilerr // an unreadable note is skipped; the grader checks below catch a census gone empty
 		}
@@ -587,7 +587,7 @@ func TestRelationLiteral_FounderVaultHasUnresolvedOwners(t *testing.T) {
 			return nil //nolint:nilerr // a path that will not relativise against the root is not a note of this vault
 		}
 		paths = append(paths, filepath.ToSlash(rel))
-		b, rerr := os.ReadFile(p) //nolint:gosec // a fixture path supplied by the operator's own env var
+		b, rerr := os.ReadFile(p)
 		if rerr != nil {
 			return nil //nolint:nilerr // an unreadable note is skipped; the grader checks below catch a census gone empty
 		}
