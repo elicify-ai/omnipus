@@ -180,8 +180,8 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if err != nil {
 		return ErrorResult("grep: " + err.Error())
 	}
-	if err := validateGrepScope(scope); err != nil {
-		return ErrorResult("grep: " + err.Error())
+	if scopeErr := validateGrepScope(scope); scopeErr != nil {
+		return ErrorResult("grep: " + scopeErr.Error())
 	}
 
 	includeGlobs, err := grepStringSliceArg(args, "include_globs")
@@ -480,7 +480,7 @@ func grepStringSliceArg(args map[string]any, key string) ([]string, error) {
 	if !ok || raw == nil {
 		return nil, nil
 	}
-	if s, ok := raw.(string); ok {
+	if s, isStr := raw.(string); isStr {
 		if s == "" {
 			return nil, nil
 		}

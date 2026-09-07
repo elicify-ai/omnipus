@@ -217,7 +217,7 @@ func serveLibraryPath(
 	absPath string,
 	displayName string,
 ) error {
-	f, err := os.Open(absPath) //nolint:gosec // caller-confined path; see doc comment
+	f, err := os.Open(absPath)
 	if err != nil {
 		return err
 	}

@@ -594,7 +594,7 @@ func vaultSearchReadNoteHead(collectionRoot, relPath string) (string, bool) {
 // (an ASCII-only class silently dropped them, leaving those hits snippet-less).
 func vaultSearchQueryTerms(query string) []string {
 	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
-		return !(r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r))
+		return r != '_' && r != '-' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 	seen := map[string]bool{}
 	var out []string

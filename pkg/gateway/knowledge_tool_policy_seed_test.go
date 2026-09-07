@@ -199,7 +199,7 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 		restored, ok := cfg.Sandbox.ToolPolicies[victimTool]
 		require.Truef(t, ok,
 			"ReconcileToolPolicyCeiling must restore the deleted catalog tool %q to the ceiling", victimTool)
-		assert.Equal(t, "allow", string(restored),
+		assert.Equal(t, "allow", restored,
 			"restored to the SHIPPED default (defaults.go: knowledge_find=allow), never a "+
 				"code-branch deny — ADR-077's whole point")
 

@@ -521,7 +521,7 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 	}
 
 	var req gen.LibraryBinaryContentRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
+	if unmarshalErr := json.Unmarshal(raw, &req); unmarshalErr != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -831,8 +831,8 @@ func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if parentRel != "" {
-		if _, err := root.StatDir(parentRel); err != nil {
-			mapLibraryErr(w, "create vault", workspaceID, err)
+		if _, statErr := root.StatDir(parentRel); statErr != nil {
+			mapLibraryErr(w, "create vault", workspaceID, statErr)
 			return
 		}
 	}
@@ -913,7 +913,7 @@ func percentEncodeRFC5987(s string) string {
 			strings.IndexByte(rfc5987AttrChars, c) >= 0:
 			b.WriteByte(c)
 		default:
-			b.WriteString(fmt.Sprintf("%%%02X", c))
+			fmt.Fprintf(&b, "%%%02X", c)
 		}
 	}
 	return b.String()

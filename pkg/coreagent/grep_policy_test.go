@@ -58,7 +58,7 @@ import (
 // enumerations, never hand-copied, so a future roster addition is picked up
 // automatically rather than silently skipped by this suite.
 func grepRoster() []string {
-	var ids []string
+	ids := make([]string, 0, len(coreagent.All())+len(coreagent.SystemAgents()))
 	for _, ca := range coreagent.All() {
 		ids = append(ids, string(ca.ID))
 	}

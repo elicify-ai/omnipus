@@ -223,7 +223,7 @@ func knowledgeDriftMessage(r knowledge.DriftReport) (title, body string) {
 
 	var b strings.Builder
 	b.WriteString("Omnipus checks each knowledge base against its folder on a schedule. ")
-	b.WriteString(fmt.Sprintf("This check found that its search index for %s no longer matched the folder: ", r.Root))
+	fmt.Fprintf(&b, "This check found that its search index for %s no longer matched the folder: ", r.Root)
 	b.WriteString(knowledgeDriftFindingsSentence(r))
 	b.WriteString(" Your files were not changed — only Omnipus's own index of them was wrong. ")
 	b.WriteString("It is re-reading the folder now; search results for this knowledge base may be incomplete until that finishes.")
