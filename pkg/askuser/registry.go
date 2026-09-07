@@ -690,6 +690,45 @@ func ParseResumeCardID(content string) (cardID string, ok bool) {
 	return rest[:end], true
 }
 
+// ResumeAnswers is a §0.2 resume message fully decoded: the card id plus its
+// JSON payload (status + answers).
+type ResumeAnswers struct {
+	CardID  string
+	Status  SetStatus
+	Answers []Answer
+}
+
+// ParseResumeMessage recognizes a §0.2 resume message (the exact shape
+// ResumeMessage renders, mirroring ParseResumeCardID's prefix/card-id
+// recognition) and additionally decodes its JSON payload. Exists for
+// consumers that need the answers themselves, not just the card id — e.g.
+// ADR-079 D3's goal-compile resume, which must key on the card id (C1: a
+// non-matching or non-resume message must pass through untouched) and then
+// feed the parsed answers into the resumed compile.
+//
+// ok=false means content is not a §0.2 resume message at all (mirrors
+// ParseResumeCardID's contract exactly — same prefix/card-id recognition, so
+// the two never disagree on "is this a resume message"). ok=true with a
+// non-nil err means content WAS recognized as a resume message but its JSON
+// payload failed to decode — callers should treat this as a corrupt/foreign
+// message, never silently consume it as a valid answer.
+func ParseResumeMessage(content string) (ResumeAnswers, bool, error) {
+	cardID, ok := ParseResumeCardID(content)
+	if !ok {
+		return ResumeAnswers{}, false, nil
+	}
+	const sep = "): "
+	rest := content[len(resumeMessagePrefix)+len(cardID):]
+	if !strings.HasPrefix(rest, sep) {
+		return ResumeAnswers{}, true, fmt.Errorf("askuser: resume message missing %q separator", sep)
+	}
+	var p resumePayload
+	if err := json.Unmarshal([]byte(rest[len(sep):]), &p); err != nil {
+		return ResumeAnswers{}, true, fmt.Errorf("askuser: resume message payload: %w", err)
+	}
+	return ResumeAnswers{CardID: cardID, Status: p.Status, Answers: p.Answers}, true, nil
+}
+
 // validateSubmission applies the §3 server-side submission validation over a
 // full submission: every question answered exactly once (matched by header),
 // no unknown headers, per-answer label membership, arity respecting

@@ -364,10 +364,12 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id     *string           `json:"id,omitempty"`
-	Kind   gen.PlanDodKind   `json:"kind"`
-	Status gen.PlanDodStatus `json:"status"`
-	Text   string            `json:"text"`
+	Id         *string                `json:"id,omitempty"`
+	Judgment   gen.PlanDodJudgment    `json:"judgment"`
+	Kind       gen.PlanDodKind        `json:"kind"`
+	Provenance *gen.PlanDodProvenance `json:"provenance,omitempty"`
+	Status     gen.PlanDodStatus      `json:"status"`
+	Text       string                 `json:"text"`
 } {
 	out := make([]struct {
 		Author struct {
@@ -384,10 +386,12 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id     *string           `json:"id,omitempty"`
-		Kind   gen.PlanDodKind   `json:"kind"`
-		Status gen.PlanDodStatus `json:"status"`
-		Text   string            `json:"text"`
+		Id         *string                `json:"id,omitempty"`
+		Judgment   gen.PlanDodJudgment    `json:"judgment"`
+		Kind       gen.PlanDodKind        `json:"kind"`
+		Provenance *gen.PlanDodProvenance `json:"provenance,omitempty"`
+		Status     gen.PlanDodStatus      `json:"status"`
+		Text       string                 `json:"text"`
 	}, 0, len(cs))
 	for _, c := range cs {
 		item := struct { // not-wire-format: intermediate value built to match gen.Plan.Dod's oapi-codegen anonymous element type, not a parallel wire type
@@ -405,14 +409,21 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 				Command          string `json:"command"`
 				ExpectedExitCode int    `json:"expected_exit_code"`
 			} `json:"check,omitempty"`
-			Id     *string           `json:"id,omitempty"`
-			Kind   gen.PlanDodKind   `json:"kind"`
-			Status gen.PlanDodStatus `json:"status"`
-			Text   string            `json:"text"`
+			Id         *string                `json:"id,omitempty"`
+			Judgment   gen.PlanDodJudgment    `json:"judgment"`
+			Kind       gen.PlanDodKind        `json:"kind"`
+			Provenance *gen.PlanDodProvenance `json:"provenance,omitempty"`
+			Status     gen.PlanDodStatus      `json:"status"`
+			Text       string                 `json:"text"`
 		}{
-			Kind:   gen.PlanDodKind(c.Kind),
-			Status: gen.PlanDodStatus(c.Status),
-			Text:   c.Text,
+			Kind:     gen.PlanDodKind(c.Kind),
+			Judgment: gen.PlanDodJudgment(wireCriterionJudgment(c)),
+			Status:   gen.PlanDodStatus(c.Status),
+			Text:     c.Text,
+		}
+		if c.Provenance != "" {
+			p := gen.PlanDodProvenance(c.Provenance)
+			item.Provenance = &p
 		}
 		item.Author.Id = c.Author.ID
 		item.Author.Kind = gen.PlanDodAuthorKind(c.Author.Kind)
@@ -473,10 +484,12 @@ func planDoDFromCreateWire(items []struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id     *string                        `json:"id,omitempty"`
-	Kind   *gen.PlanCreateRequestDodKind  `json:"kind,omitempty"`
-	Status gen.PlanCreateRequestDodStatus `json:"status"`
-	Text   string                         `json:"text"`
+	Id         *string                             `json:"id,omitempty"`
+	Judgment   *gen.PlanCreateRequestDodJudgment   `json:"judgment,omitempty"`
+	Kind       *gen.PlanCreateRequestDodKind       `json:"kind,omitempty"`
+	Provenance *gen.PlanCreateRequestDodProvenance `json:"provenance,omitempty"`
+	Status     gen.PlanCreateRequestDodStatus      `json:"status"`
+	Text       string                              `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
@@ -485,11 +498,18 @@ func planDoDFromCreateWire(items []struct {
 			Status: task.CriterionStatus(it.Status),
 			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
 		}
-		// ADR-074 D2 (spec FR-002): the gateway performs NO kind defaulting —
-		// an absent kind passes THROUGH as empty and is inferred downstream by
-		// the store's NormalizeCriteria.
+		// ADR-074 D2 (spec FR-002) / ADR-080 D-TYPES: the gateway performs NO
+		// kind/judgment defaulting — an absent kind or judgment passes THROUGH
+		// as empty and is inferred downstream by the store's NormalizeCriteria
+		// (task.InferCriterionKind / task.InferJudgment).
 		if it.Kind != nil {
 			c.Kind = task.CriterionKind(*it.Kind)
+		}
+		if it.Judgment != nil {
+			c.Judgment = task.JudgmentKind(*it.Judgment)
+		}
+		if it.Provenance != nil {
+			c.Provenance = task.CriterionProvenance(*it.Provenance)
 		}
 		if it.Id != nil {
 			c.ID = *it.Id
@@ -522,10 +542,12 @@ func planDoDFromUpdateWire(items []struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id     *string                        `json:"id,omitempty"`
-	Kind   *gen.PlanUpdateRequestDodKind  `json:"kind,omitempty"`
-	Status gen.PlanUpdateRequestDodStatus `json:"status"`
-	Text   string                         `json:"text"`
+	Id         *string                             `json:"id,omitempty"`
+	Judgment   *gen.PlanUpdateRequestDodJudgment   `json:"judgment,omitempty"`
+	Kind       *gen.PlanUpdateRequestDodKind       `json:"kind,omitempty"`
+	Provenance *gen.PlanUpdateRequestDodProvenance `json:"provenance,omitempty"`
+	Status     gen.PlanUpdateRequestDodStatus      `json:"status"`
+	Text       string                              `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
@@ -534,11 +556,18 @@ func planDoDFromUpdateWire(items []struct {
 			Status: task.CriterionStatus(it.Status),
 			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
 		}
-		// ADR-074 D2 (spec FR-002): the gateway performs NO kind defaulting —
-		// an absent kind passes THROUGH as empty and is inferred downstream by
-		// the store's NormalizeCriteria.
+		// ADR-074 D2 (spec FR-002) / ADR-080 D-TYPES: the gateway performs NO
+		// kind/judgment defaulting — an absent kind or judgment passes THROUGH
+		// as empty and is inferred downstream by the store's NormalizeCriteria
+		// (task.InferCriterionKind / task.InferJudgment).
 		if it.Kind != nil {
 			c.Kind = task.CriterionKind(*it.Kind)
+		}
+		if it.Judgment != nil {
+			c.Judgment = task.JudgmentKind(*it.Judgment)
+		}
+		if it.Provenance != nil {
+			c.Provenance = task.CriterionProvenance(*it.Provenance)
 		}
 		if it.Id != nil {
 			c.ID = *it.Id

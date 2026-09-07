@@ -1,16 +1,18 @@
-# DERIVED SCHEMA (ADR-074 D2) — AcceptanceCriterion.yaml is CANONICAL.
-# This is the authoring-time (request-body) shape of AcceptanceCriterion: the
-# ONLY difference is that `kind` is absent from `required` (the server infers
-# it from the payload — see the `kind` description). Any other edit belongs in
-# AcceptanceCriterion.yaml FIRST and is mirrored here; the pair is a known
-# drift surface guarded by a contract test asserting field-set equality with
-# a required-delta of exactly {kind}.
+# DERIVED SCHEMA (ADR-074 D2, extended ADR-080 D-TYPES) —
+# AcceptanceCriterion.yaml is CANONICAL. This is the authoring-time
+# (request-body) shape of AcceptanceCriterion: the difference is that `kind`
+# and `judgment` are absent from `required` (the server infers `kind` from
+# the payload and `judgment` from the effective kind — see each field's
+# description). Any other edit belongs in AcceptanceCriterion.yaml FIRST and
+# is mirrored here; the pair is a known drift surface guarded by a contract
+# test asserting field-set equality with a required-delta of exactly
+# {kind, judgment}.
 #
-# CODEGEN TRAP — do NOT add an OpenAPI `default:` key to `kind` here: a
-# `default:` on a field absent from `required` makes openapi-typescript emit
-# the field as NON-optional, silently defeating this relaxation (the trap is
-# documented on TaskCreateRequest.yaml's `is_join` as well). The optionality
-# is documented in the description ONLY.
+# CODEGEN TRAP — do NOT add an OpenAPI `default:` key to `kind` or
+# `judgment` here: a `default:` on a field absent from `required` makes
+# openapi-typescript emit the field as NON-optional, silently defeating this
+# relaxation (the trap is documented on TaskCreateRequest.yaml's `is_join` as
+# well). The optionality is documented in the description ONLY.
 title: AcceptanceCriterionInput
 description: >
   Authoring-time (request) shape of a Definition-of-Done criterion — ADR-074
@@ -53,6 +55,36 @@ properties:
       `prose`. (No schema `default:` here on purpose — see the header
       comment's codegen trap.)
     example: "check"
+  judgment:
+    type: string
+    enum:
+      - boolean
+      - quantitative
+      - artifact
+    description: >
+      ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`,
+      `quantitative`, or `artifact` — orthogonal to `kind` (the
+      verification MECHANISM). OPTIONAL on this input shape: when
+      omitted, the server infers it from the effective `kind` via
+      `task.InferJudgment` — `check` => `boolean`, `behavior` =>
+      `quantitative`, `prose` => `boolean` (the default for the
+      honestly-subjective catch-all). An EXPLICIT `judgment` that
+      mismatches a technical `kind` (e.g. `judgment: artifact` with
+      `kind: check`) is a 400. (No schema `default:` here on purpose —
+      see the header comment's codegen trap.)
+    example: "boolean"
+  provenance:
+    type: string
+    enum:
+      - stated
+      - workspace
+      - floor
+      - inferred
+    description: >
+      ADR-080 D-DOD. The authority layer this criterion (typically a DoD
+      item) was derived from. ADDITIVE-OPTIONAL: meaningful only on
+      `Goal.dod` items; absent/ignored elsewhere. Never required.
+    example: "floor"
   text:
     type: string
     minLength: 1

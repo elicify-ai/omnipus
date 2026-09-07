@@ -350,11 +350,13 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			return nil, fmt.Errorf("criteria[%d]: must be an object", i)
 		}
 		kind, _ := m["kind"].(string)
+		judgment, _ := m["judgment"].(string)
 		text, _ := m["text"].(string)
 		c := task.AcceptanceCriterion{
-			Kind:   task.CriterionKind(kind),
-			Text:   text,
-			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
+			Kind:     task.CriterionKind(kind),
+			Judgment: task.JudgmentKind(judgment),
+			Text:     text,
+			Author:   task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
 		}
 		if chk, ok := m["check"].(map[string]any); ok {
 			command, _ := chk["command"].(string)
@@ -377,6 +379,17 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
 		}
 		c.Kind = k
+		// ADR-080 D-TYPES: judgment is likewise optional at authoring time —
+		// resolve it from the now-resolved kind HERE (mirroring InferCriterionKind
+		// immediately above), so every criterion this parser produces carries an
+		// explicit judgment before it ever reaches criterionKey/sameShape
+		// dedup comparisons against already-normalized (and therefore
+		// judgment-backfilled) stored criteria.
+		j, jErr := task.InferJudgment(&c)
+		if jErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, jErr)
+		}
+		c.Judgment = j
 		out = append(out, c)
 	}
 	return out, nil
@@ -415,7 +428,7 @@ func (t *TaskCreateTool) Description() string {
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
 		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
-		"with none is rejected. Before authoring acceptance criteria, load the define-done skill " +
+		"with none is rejected. Before authoring acceptance criteria, load the define-goal skill " +
 		"(via the Skill tool) and follow its quality bar. " +
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +

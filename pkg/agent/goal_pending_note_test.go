@@ -49,8 +49,12 @@ func TestGoalPendingNote_InjectedWhileFreshPending(t *testing.T) {
 	if note == "" {
 		t.Fatal("buildGoalPendingNote returned empty for a fresh pending goal")
 	}
-	if !strings.Contains(note, "write the report") {
-		t.Fatalf("note missing the intent, got:\n%s", note)
+	// ADR-080 D-STATEMENT: the compiled restatement (compileJSON's fixed
+	// "the goal is compiled" definition) now leads the "Goal:" line in place
+	// of the raw intent/prompt — the note's own shared renderer
+	// (formatGoalStatementAndCriteria) is exercised end to end here.
+	if !strings.Contains(note, "the goal is compiled") {
+		t.Fatalf("note missing the compiled statement (D-STATEMENT), got:\n%s", note)
 	}
 	if !strings.Contains(note, "the report is saved") {
 		t.Fatalf("note missing the criterion text, got:\n%s", note)
@@ -269,8 +273,10 @@ func TestGoalTwoPhase_PendingConfirmReplyTaxonomy_CarriesNote(t *testing.T) {
 		if note == "" {
 			t.Fatal("the subsequent turn must carry the pending-goal note (ADR-078 D2/D3)")
 		}
-		if !strings.Contains(note, "write the report") {
-			t.Fatalf("note must describe the still-pending goal, got:\n%s", note)
+		// ADR-080 D-STATEMENT: same as above — the compiled restatement
+		// leads, not the raw intent.
+		if !strings.Contains(note, "the goal is compiled") {
+			t.Fatalf("note must describe the still-pending goal's compiled statement, got:\n%s", note)
 		}
 	})
 }

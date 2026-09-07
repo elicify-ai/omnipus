@@ -400,11 +400,38 @@ type GoalStatusFrame struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id     *string `json:"id,omitempty"`
-		Kind   string  `json:"kind"`
-		Status string  `json:"status"`
-		Text   string  `json:"text"`
+		Id         *string `json:"id,omitempty"`
+		Judgment   string  `json:"judgment"`
+		Kind       string  `json:"kind"`
+		Provenance *string `json:"provenance,omitempty"`
+		Status     string  `json:"status"`
+		Text       string  `json:"text"`
 	} `json:"criteria,omitempty"`
+	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Present on the `queued` (pending-confirm) emission; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	Definition *string `json:"definition,omitempty"`
+	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	Dod []struct {
+		Author struct {
+			Id   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int    `json:"max_count,omitempty"`
+			MinCount *int    `json:"min_count,omitempty"`
+			Scope    *string `json:"scope,omitempty"`
+			Tool     string  `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id         *string `json:"id,omitempty"`
+		Judgment   string  `json:"judgment"`
+		Kind       string  `json:"kind"`
+		Provenance *string `json:"provenance,omitempty"`
+		Status     string  `json:"status"`
+		Text       string  `json:"text"`
+	} `json:"dod,omitempty"`
 	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
 	GoalId       *string `json:"goal_id,omitempty"`
 	LatestReason string  `json:"latest_reason"`

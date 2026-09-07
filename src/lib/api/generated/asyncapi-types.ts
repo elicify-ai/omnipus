@@ -691,6 +691,7 @@ export interface GoalStatusFrame {
   session_id: string;
   goal_id?: string;
   condition: string;
+  definition?: string;
   round: number;
   max_rounds: number;
   latest_reason: string;
@@ -701,6 +702,30 @@ export interface GoalStatusFrame {
   criteria?: Array<{
     id?: string;
     kind: "check" | "prose" | "behavior";
+    judgment: "boolean" | "quantitative" | "artifact";
+    provenance?: "stated" | "workspace" | "floor" | "inferred";
+    text: string;
+    check?: {
+      command: string;
+      expected_exit_code: number;
+    };
+    behavior?: {
+      tool: string;
+      min_count?: number;
+      max_count?: number;
+      scope?: "attempt" | "task_session";
+    };
+    author: {
+      kind: "agent" | "user";
+      id: string;
+    };
+    status: "pending" | "met" | "unmet";
+  }>;
+  dod?: Array<{
+    id?: string;
+    kind: "check" | "prose" | "behavior";
+    judgment: "boolean" | "quantitative" | "artifact";
+    provenance?: "stated" | "workspace" | "floor" | "inferred";
     text: string;
     check?: {
       command: string;

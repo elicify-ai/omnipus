@@ -36,6 +36,11 @@ func (f *fakeAskRegistry) CancelOnSessionStop(key string) bool {
 	return true
 }
 
+func (f *fakeAskRegistry) CancelByUser(cardID, _ string) error {
+	f.cancelled = append(f.cancelled, cardID)
+	return nil
+}
+
 func newAskTool(reg AskUserQuestionRegistry) *AskUserQuestionTool {
 	return NewAskUserQuestionTool(func() AskUserQuestionRegistry { return reg })
 }

@@ -26,6 +26,7 @@ function makeGoal(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFrame {
 function makeCriterion(overrides: Partial<GoalCriterion> = {}): GoalCriterion {
   return {
     kind: 'prose',
+    judgment: 'boolean',
     text: 'the release notes are written',
     author: { kind: 'agent', id: 'mia' },
     status: 'pending',
@@ -108,6 +109,106 @@ describe('GoalEchoCard', () => {
   it('hides the criteria section when the frame carries none (legacy frames)', () => {
     render(<GoalEchoCard frame={makeGoal()} />)
     expect(screen.queryByTestId('goal-echo-criteria')).not.toBeInTheDocument()
+  })
+
+  // ADR-080 D-STATEMENT: the restated goal statement renders as a lead line,
+  // distinct from and above the existing compiled `condition`.
+  it('renders the restated goal statement as a lead line above the condition', () => {
+    const frame = makeGoal({
+      condition: 'goal_marker_a1b2',
+      definition: 'Ship the release with a written changelog.',
+    })
+    render(<GoalEchoCard frame={frame} />)
+    const statement = screen.getByTestId('goal-echo-statement')
+    expect(statement).toHaveTextContent('Ship the release with a written changelog.')
+    expect(screen.getByTestId('goal-echo-condition')).toHaveTextContent('goal_marker_a1b2')
+  })
+
+  it('renders no statement line when the frame carries no definition (legacy/ambiguous frames)', () => {
+    render(<GoalEchoCard frame={makeGoal()} />)
+    expect(screen.queryByTestId('goal-echo-statement')).not.toBeInTheDocument()
+  })
+
+  // ADR-080 D-TYPES: every criterion row carries a small judgment badge.
+  it('renders a judgment badge (boolean/quantitative/artifact) on every criterion row', () => {
+    const frame = makeGoal({
+      criteria: [
+        makeCriterion({ text: 'the release notes are written', judgment: 'boolean' }),
+        makeCriterion({ text: 'at least 3 changelog entries', judgment: 'quantitative' }),
+        makeCriterion({ text: 'a signed changelog file exists', judgment: 'artifact' }),
+      ],
+    })
+    render(<GoalEchoCard frame={frame} />)
+    const badges = screen.getAllByTestId('criterion-judgment-badge')
+    expect(badges).toHaveLength(3)
+    expect(badges[0]).toHaveTextContent('boolean')
+    expect(badges[1]).toHaveTextContent('quantitative')
+    expect(badges[2]).toHaveTextContent('artifact')
+  })
+
+  // ADR-080 D-DOD: a distinct "Definition of Done" block, separate from the
+  // criteria's "Done when" section, with inferred items flagged for
+  // approve/drop.
+  describe('Definition of Done (ADR-080 D-DOD)', () => {
+    it('renders a distinct DoD block, grouped separately from the criteria', () => {
+      const frame = makeGoal({
+        criteria: [makeCriterion({ text: 'the release notes are written' })],
+        dod: [
+          {
+            kind: 'prose',
+            judgment: 'boolean',
+            provenance: 'floor',
+            text: 'no secrets or credentials appear in the output',
+            author: { kind: 'agent', id: 'mia' },
+            status: 'pending',
+          },
+        ],
+      })
+      render(<GoalEchoCard frame={frame} />)
+      expect(screen.getByTestId('goal-echo-criteria')).toBeInTheDocument()
+      const dodBlock = screen.getByTestId('goal-echo-dod')
+      expect(dodBlock).toHaveTextContent('Definition of Done')
+      expect(dodBlock).toHaveTextContent('no secrets or credentials appear in the output')
+    })
+
+    it('flags a provenance:inferred DoD item as "inferred — confirm or drop"', () => {
+      const frame = makeGoal({
+        dod: [
+          {
+            kind: 'prose',
+            judgment: 'boolean',
+            provenance: 'inferred',
+            text: 'the response avoids speculative claims',
+            author: { kind: 'agent', id: 'mia' },
+            status: 'pending',
+          },
+        ],
+      })
+      render(<GoalEchoCard frame={frame} />)
+      expect(screen.getByTestId('goal-echo-dod')).toHaveTextContent('inferred — confirm or drop')
+    })
+
+    it('does NOT flag a stated/workspace/floor DoD item as inferred', () => {
+      const frame = makeGoal({
+        dod: [
+          {
+            kind: 'prose',
+            judgment: 'boolean',
+            provenance: 'stated',
+            text: 'the setter explicitly asked for this',
+            author: { kind: 'agent', id: 'mia' },
+            status: 'pending',
+          },
+        ],
+      })
+      render(<GoalEchoCard frame={frame} />)
+      expect(screen.getByTestId('goal-echo-dod')).not.toHaveTextContent('inferred — confirm or drop')
+    })
+
+    it('hides the DoD block entirely when the frame carries none', () => {
+      render(<GoalEchoCard frame={makeGoal()} />)
+      expect(screen.queryByTestId('goal-echo-dod')).not.toBeInTheDocument()
+    })
   })
 
   // ADR-078 D1: the card now also offers click-to-confirm buttons. The prose

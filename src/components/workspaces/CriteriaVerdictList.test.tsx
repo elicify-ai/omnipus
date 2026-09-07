@@ -16,6 +16,7 @@ function makeCriterion(overrides: Partial<AcceptanceCriterion> = {}): Acceptance
   return {
     id: 'crit-1',
     kind: 'check',
+    judgment: 'boolean',
     text: 'Tests pass',
     author: { kind: 'user', id: 'alice' },
     status: 'pending',
@@ -268,5 +269,49 @@ describe('CriteriaVerdictList — evidence viewer expand (US-11 AS-4)', () => {
     render(<CriteriaVerdictList criteria={criteria} evidence={evidence} />)
     fireEvent.click(screen.getByRole('button', { name: /expand evidence/i }))
     expect(screen.getByTestId('evidence-policy-denied')).toBeInTheDocument()
+  })
+})
+
+// ADR-080 D-DOD: the Judge scores `criteria ∪ dod` as one judged set, so a
+// caller rendering a goal's judged criteria passes its DoD too — grouped
+// separately, under a distinct "Definition of Done" subheading.
+describe('CriteriaVerdictList — Definition of Done (ADR-080 D-DOD)', () => {
+  it('renders dod items grouped under a distinct "Definition of Done" subheading', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', text: 'the outcome is achieved' })]
+    const dod = [makeCriterion({ id: 'dod-1', text: 'no secrets appear in the output' })]
+    render(<CriteriaVerdictList criteria={criteria} dod={dod} />)
+
+    expect(screen.getByText('the outcome is achieved')).toBeInTheDocument()
+    const dodGroup = screen.getByTestId('criteria-verdict-dod')
+    expect(dodGroup).toHaveTextContent('Definition of Done')
+    expect(dodGroup).toHaveTextContent('no secrets appear in the output')
+  })
+
+  it('gives each dod item its own per-criterion verdict, same as a regular criterion', () => {
+    const dod = [makeCriterion({ id: 'dod-1', text: 'lints clean', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'dod-1', met: false, reason: 'golangci-lint reported 2 issues' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={[]} dod={dod} verdicts={verdicts} />)
+    expect(screen.getByTestId('criteria-verdict-dod')).toHaveTextContent('golangci-lint reported 2 issues')
+  })
+
+  it('renders nothing when both criteria and dod are empty', () => {
+    const { container } = render(<CriteriaVerdictList criteria={[]} dod={[]} />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('renders the dod group even when criteria is empty (dod-only judged set)', () => {
+    const dod = [makeCriterion({ id: 'dod-1', text: 'the floor gate is satisfied' })]
+    render(<CriteriaVerdictList criteria={[]} dod={dod} />)
+    expect(screen.getByTestId('criteria-verdict-dod')).toBeInTheDocument()
+    expect(screen.queryByRole('list')).toBeInTheDocument()
+  })
+
+  it('omits the dod group entirely when dod is not passed (Task callers unaffected)', () => {
+    render(<CriteriaVerdictList criteria={[makeCriterion()]} />)
+    expect(screen.queryByTestId('criteria-verdict-dod')).not.toBeInTheDocument()
   })
 })

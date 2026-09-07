@@ -32,6 +32,13 @@ func (f *fakeAskCancelRegistry) CancelOnSessionStop(key string) bool {
 	return true
 }
 
+func (f *fakeAskCancelRegistry) CancelByUser(cardID, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelled = append(f.cancelled, cardID)
+	return nil
+}
+
 func TestRequestCancel_CancelsPendingAskWithoutActiveTurn(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	reg := &fakeAskCancelRegistry{}

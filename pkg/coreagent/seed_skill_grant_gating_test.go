@@ -43,10 +43,10 @@ func TestSeedConfig_FreshInstallSeedsCoreGrants(t *testing.T) {
 	// pkg/coreagent/skill_allowlist_seed_test.go's FR-9.4 comment, which
 	// predates D5.1 but seeds the identical mapping).
 	want := map[string][]string{
-		"mia": {"daily-briefing", "define-done", "summarize"},
-		"ray": {"define-done", "summarize"},
-		"jim": {"define-done", "plan"},
-		"ava": {"define-done", "skill-authoring"},
+		"mia": {"daily-briefing", "define-goal", "summarize"},
+		"ray": {"define-goal", "summarize"},
+		"jim": {"define-goal", "plan"},
+		"ava": {"define-goal", "skill-authoring"},
 	}
 
 	for id, wantSkills := range want {

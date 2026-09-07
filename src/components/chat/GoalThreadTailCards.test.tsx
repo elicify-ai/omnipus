@@ -52,12 +52,14 @@ describe('GoalThreadTailCards', () => {
           criteria: [
             {
               kind: 'prose',
+              judgment: 'boolean',
               text: 'the post names every shipped feature',
               author: { kind: 'agent', id: 'mia' },
               status: 'pending',
             },
             {
               kind: 'check',
+              judgment: 'boolean',
               text: 'the site builds',
               check: { command: 'npm run build', expected_exit_code: 0 },
               author: { kind: 'agent', id: 'mia' },

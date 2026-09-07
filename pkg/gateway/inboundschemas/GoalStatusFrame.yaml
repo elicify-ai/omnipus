@@ -48,6 +48,16 @@ properties:
     type: string
     description: The proof-driven condition text set by `/goal <condition>`.
     example: "make the tests pass"
+  definition:
+    type: string
+    description: >
+      ADR-080 D-STATEMENT — the compiled SMART restatement of the goal
+      (mirrors `Goal.definition`), one clear sentence staying close to
+      the setter's own words, rendered BEFORE the criteria breakdown.
+      ADDITIVE-OPTIONAL: present on the `queued` (pending-confirm)
+      emission alongside `criteria`/`dod`; absent on round/lifecycle
+      pushes.
+    example: "All pkg/plan tests pass and golangci-lint reports zero issues."
   round:
     type: integer
     minimum: 0
@@ -150,3 +160,16 @@ properties:
       it carries a hand-synced INLINE duplicate of the AcceptanceCriterion
       shape (the JudgeVerdictFrame/CriterionVerdict precedent) — any field
       edit to AcceptanceCriterion.yaml MUST be mirrored there.
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT
+      from `criteria` (mirrors `Goal.dod`), itemized per-item so the
+      confirmation surface can flag `provenance == inferred` items as
+      "inferred — confirm or drop". ADDITIVE-OPTIONAL: present on the
+      `queued` (pending-confirm) emission alongside `criteria`/
+      `definition`; absent on round/lifecycle pushes. Same hand-sync
+      obligation as `criteria` above — the asyncapi.yaml inline copy must
+      be kept in sync by hand.

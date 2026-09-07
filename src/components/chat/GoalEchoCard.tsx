@@ -1,6 +1,7 @@
 // GoalEchoCard — ADR-053 FE-8 / US-3 / design §1 (D11); criteria breakdown
 // per ADR-074 D5.2 / judgment-first FR-011 (US-6). Confirm/Cancel/Amend
-// buttons per ADR-078 D1.
+// buttons per ADR-078 D1. Restated statement + judgment badges + Definition
+// of Done block per ADR-080 D-STATEMENT/D-TYPES/D-DOD.
 //
 // Renders the compiled-goal ECHO in the chat thread: when the engine compiles
 // user intent into the goal definition + acceptance-criteria ladder (including
@@ -11,15 +12,30 @@
 // natural-language reply like "yeah let's do it" is not — the buttons remove
 // the need to guess the exact confirm token.
 //
+// ADR-080 D-STATEMENT: the `queued` frame carries an additive-optional
+// `definition` — the request restated as ONE clear sentence, distinct from
+// `condition` (the compiled marker/condition text) — rendered as a lead line
+// above the condition, when present (absent on legacy/ambiguous frames).
+//
 // The criteria breakdown arrives on the goal_status frame's optional
 // `criteria` field (present on the `queued` pending-confirm emission,
 // ADR-074 D5.2). Rendering is plain-language-FIRST: each row leads with the
 // criterion text; a technical payload (machine-check command verbatim, or a
 // behavior count) renders as a quiet per-row "verifies via:" chip. Row and
-// chip rendering — including the chip's formatting — is delegated entirely
-// to the shared CriteriaBreakdown component (D5.4), so the same criterion
-// reads identically here and in the Create Task / Create Plan flows. `[kind]`
-// classification tokens are NOT user-facing content and never render.
+// chip rendering — including the chip's formatting and the ADR-080 judgment
+// badge — is delegated entirely to the shared CriteriaBreakdown component
+// (D5.4), so the same criterion reads identically here and in the Create
+// Task / Create Plan flows. `[kind]` classification tokens are NOT
+// user-facing content and never render.
+//
+// ADR-080 D-DOD: the `queued` frame's optional `dod` array is the goal's
+// Definition of Done — generic standing quality gates, DISTINCT from the
+// outcome-specific `criteria` — rendered as its own labeled block below the
+// criteria. Every DoD item is judgment-tagged like a criterion; an item whose
+// `provenance === 'inferred'` (the compiler's bounded layer-4 guess, never
+// silently activated) is flagged "inferred — confirm or drop" by the shared
+// CriteriaBreakdown renderer so the setter can approve or drop it before
+// confirming.
 //
 // Purely presentational — driven by props. Literal commands are shown
 // verbatim so the user can vet them before confirming — they run under the
@@ -47,6 +63,7 @@ export interface GoalEchoCardProps {
 
 export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCardProps) {
   const criteria = frame.criteria ?? []
+  const dod = frame.dod ?? []
   const isPending = frame.state === 'queued'
   return (
     <div
@@ -61,6 +78,19 @@ export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCa
         </span>
       </div>
 
+      {/* Restated goal statement (ADR-080 D-STATEMENT) — one clear sentence,
+          the request restated close to the setter's own words, rendered as
+          the LEAD line above the compiled condition. Additive-optional: not
+          present on legacy/ambiguous frames. */}
+      {frame.definition && (
+        <p
+          className="text-[var(--color-secondary)] break-words font-medium"
+          data-testid="goal-echo-statement"
+        >
+          {frame.definition}
+        </p>
+      )}
+
       {/* Condition (the compiled goal definition) */}
       <p className="text-[var(--color-secondary)] break-words" data-testid="goal-echo-condition">
         {frame.condition}
@@ -72,15 +102,31 @@ export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCa
       </p>
 
       {/* Criteria breakdown — plain language first, per-row verifies-via chip
-          for technical payloads (ADR-074 D5.2 / FR-011). Rendered by the
-          shared CriteriaBreakdown (D5.4) so criteria read identically on
-          every confirmation surface. */}
+          for technical payloads (ADR-074 D5.2 / FR-011), a small judgment
+          badge (boolean/quantitative/artifact, ADR-080 D-TYPES) on every
+          row. Rendered by the shared CriteriaBreakdown (D5.4) so criteria
+          read identically on every confirmation surface. */}
       {criteria.length > 0 && (
         <div className="mt-2.5" data-testid="goal-echo-criteria">
           <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
             Done when
           </div>
           <CriteriaBreakdown criteria={criteria} />
+        </div>
+      )}
+
+      {/* Definition of Done (ADR-080 D-DOD) — a DISTINCT block, generic
+          standing quality gates rather than outcome-specific checks. Every
+          item carries a judgment badge like a criterion; an item derived by
+          bounded inference (`provenance === 'inferred'`) is flagged
+          "inferred — confirm or drop" by the shared CriteriaBreakdown
+          renderer, so a layer-4 gate is never silently activated. */}
+      {dod.length > 0 && (
+        <div className="mt-2.5 border-t border-[var(--color-border)] pt-2.5" data-testid="goal-echo-dod">
+          <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
+            Definition of Done
+          </div>
+          <CriteriaBreakdown criteria={dod} />
         </div>
       )}
 

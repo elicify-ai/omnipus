@@ -1,9 +1,10 @@
-# CANONICAL SCHEMA (ADR-074 D2) — AcceptanceCriterionInput.yaml is DERIVED
-# from this file: the authoring-time (request-body) shape, identical except
-# `kind` is absent from its `required` (the server infers it from the
-# payload). Any field-shape edit here MUST be mirrored there; the pair is a
-# known drift surface guarded by a contract test asserting field-set equality
-# with a required-delta of exactly {kind}.
+# CANONICAL SCHEMA (ADR-074 D2, extended ADR-080 D-TYPES) —
+# AcceptanceCriterionInput.yaml is DERIVED from this file: the authoring-time
+# (request-body) shape, identical except `kind` and `judgment` are absent
+# from its `required` (the server infers both from the payload/kind). Any
+# field-shape edit here MUST be mirrored there; the pair is a known drift
+# surface guarded by a contract test asserting field-set equality with a
+# required-delta of exactly {kind, judgment}.
 title: AcceptanceCriterion
 description: >
   A single Definition-of-Done criterion on a Task (`task.criteria[]`) or Plan
@@ -18,6 +19,7 @@ description: >
 type: object
 required:
   - kind
+  - judgment
   - text
   - author
   - status
@@ -44,6 +46,45 @@ properties:
       WITHOUT the LLM verifier or `inspect_session`. Ladder order:
       machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
     example: "check"
+  judgment:
+    type: string
+    enum:
+      - boolean
+      - quantitative
+      - artifact
+    description: >
+      ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind`
+      answers "by what MECHANISM is this verified" (`check`/`prose`/
+      `behavior`), `judgment` answers "what SHAPE of claim is this" —
+      `boolean` (a yes/no fact the Judge can rule true or false),
+      `quantitative` (a value against a threshold/comparator), or
+      `artifact` (a named produced/changed/sent thing whose existence is
+      checkable). Fully server-inferable for the technical kinds
+      (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to
+      `boolean` for `prose` when the author omits it — see
+      `task.InferJudgment`. REQUIRED here because the server always
+      persists an explicit value (`normalizeCriteria` backfills via
+      `InferJudgment`, including a load-time backfill of pre-ADR-080
+      persisted criteria).
+    example: "boolean"
+  provenance:
+    type: string
+    enum:
+      - stated
+      - workspace
+      - floor
+      - inferred
+    description: >
+      ADR-080 D-DOD — the authority layer this criterion (typically a DoD
+      item) was derived from, highest first: `stated` (the setter named
+      it explicitly), `workspace` (derived from workspace/project
+      instructions), `floor` (one of the built-in universal quality
+      gates, guaranteeing a DoD always exists), `inferred` (bounded,
+      type-appropriate inference — SHOWN for the setter's approval, never
+      silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod`
+      items; absent/ignored on regular acceptance criteria and on
+      task/plan criteria. Never required.
+    example: "floor"
   text:
     type: string
     minLength: 1

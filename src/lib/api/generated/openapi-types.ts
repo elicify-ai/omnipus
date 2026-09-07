@@ -10038,6 +10038,18 @@ export interface components {
              */
             kind: "check" | "prose" | "behavior";
             /**
+             * @description ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+             * @example boolean
+             * @enum {string}
+             */
+            judgment: "boolean" | "quantitative" | "artifact";
+            /**
+             * @description ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+             * @example floor
+             * @enum {string}
+             */
+            provenance?: "stated" | "workspace" | "floor" | "inferred";
+            /**
              * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
              * @example All new pkg/plan tests pass
              */
@@ -10118,6 +10130,18 @@ export interface components {
              * @enum {string}
              */
             kind?: "check" | "prose" | "behavior";
+            /**
+             * @description ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+             * @example boolean
+             * @enum {string}
+             */
+            judgment?: "boolean" | "quantitative" | "artifact";
+            /**
+             * @description ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+             * @example floor
+             * @enum {string}
+             */
+            provenance?: "stated" | "workspace" | "floor" | "inferred";
             /**
              * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
              * @example All new pkg/plan tests pass
@@ -11315,6 +11339,8 @@ export interface components {
             definition?: string;
             /** @description REUSED unchanged (S1) — `kind: check` is the machine-checkable ladder rung ("machine" = `check`), `behavior` the deterministic tool-call-log rung, `prose` the subjective Judge rung. */
             criteria: components["schemas"]["AcceptanceCriterion"][];
+            /** @description ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from `criteria`: generic standing quality gates (e.g. no secrets in the output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped (judged identically) but modelled as its own array, mirroring the existing `Plan.dod` precedent — never mixed into `criteria`. REQUIRED with `minItems: 1` — the compiler's built-in floor layer guarantees at least one item on every newly-compiled goal. A pre-ADR-080 persisted goal with no `dod` is backfilled with the built-in floor DoD at load time (before this schema validates), so a legacy goal always satisfies `minItems: 1` too. The Judge evaluates `criteria` UNION `dod` together. */
+            dod: components["schemas"]["AcceptanceCriterion"][];
             /**
              * @description Attempt ceiling before the goal loop wakes the owner (3 native / 6 default per session_messaging config, restart-gated).
              * @example 3

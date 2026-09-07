@@ -44,10 +44,20 @@ const webChannelName = "webchat"
 
 // AskUserQuestionRegistry is the narrow registry seam the tool needs
 // (implemented by *askuser.Registry; the gateway wires the live instance).
+//
+// CancelByUser (fix-wave finding #5) lets a caller that created a pending
+// set and then failed to durably record its OWN side of the correlation
+// (e.g. pkg/agent's emitGoalClarificationCard, whose goalClarificationRecord
+// SetMeta can fail after a successful CreatePending) undo the create rather
+// than strand the card: cancelCommon removes the in-memory entry, persists
+// the terminal record, and unlocks the SPA composer BEFORE it ever attempts
+// a resume dispatch, so it is safe to call even when the caller's own state
+// never got recorded.
 type AskUserQuestionRegistry interface {
 	CreatePending(set *askuser.PendingSet) error
 	PendingForSession(sessionID string) (*askuser.PendingSet, bool)
 	CancelOnSessionStop(key string) bool
+	CancelByUser(cardID, sessionID string) error
 }
 
 // AskUserQuestionTool implements the AskUserQuestion tool.

@@ -15,6 +15,7 @@ required:
   - source
   - prompt
   - criteria
+  - dod
   - attempts_max
   - judge_rounds_max
   - round
@@ -75,6 +76,23 @@ properties:
       REUSED unchanged (S1) — `kind: check` is the machine-checkable
       ladder rung ("machine" = `check`), `behavior` the deterministic
       tool-call-log rung, `prose` the subjective Judge rung.
+  dod:
+    type: array
+    items:
+      $ref: './AcceptanceCriterion.yaml'
+    minItems: 1
+    description: >
+      ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from
+      `criteria`: generic standing quality gates (e.g. no secrets in the
+      output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped
+      (judged identically) but modelled as its own array, mirroring the
+      existing `Plan.dod` precedent — never mixed into `criteria`.
+      REQUIRED with `minItems: 1` — the compiler's built-in floor layer
+      guarantees at least one item on every newly-compiled goal. A
+      pre-ADR-080 persisted goal with no `dod` is backfilled with the
+      built-in floor DoD at load time (before this schema validates), so
+      a legacy goal always satisfies `minItems: 1` too. The Judge
+      evaluates `criteria` UNION `dod` together.
   attempts_max:
     type: integer
     minimum: 1

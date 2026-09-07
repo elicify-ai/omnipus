@@ -1121,10 +1121,11 @@ func SoftTierCriterion(title, description, prompt string) *task.AcceptanceCriter
 		text = string(runes[:maxCriterionTextRunes])
 	}
 	return &task.AcceptanceCriterion{
-		ID:     softTierCriterionID,
-		Kind:   task.KindProse,
-		Text:   text,
-		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "system"},
-		Status: task.CritPending,
+		ID:       softTierCriterionID,
+		Kind:     task.KindProse,
+		Judgment: task.JudgmentBoolean,
+		Text:     text,
+		Author:   task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "system"},
+		Status:   task.CritPending,
 	}
 }

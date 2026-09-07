@@ -566,14 +566,15 @@ func DefaultConfig() *Config {
 		// config.json is self-documenting; validateBootConfig still applies
 		// the same defaults for any field an operator zeroes out later.
 		Planning: PlanningConfig{
-			TaskMaxAttempts:      DefaultTaskMaxAttempts,
-			GoalMaxRounds:        DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:          DefaultLoopMaxRuns,
-			IdleExpiryDays:       DefaultIdleExpiryDays,
-			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
-			VerifierWindowTokens: DefaultVerifierWindowTokens,
+			TaskMaxAttempts:         DefaultTaskMaxAttempts,
+			GoalMaxRounds:           DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:             DefaultLoopMaxRuns,
+			IdleExpiryDays:          DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:     DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:     DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens:    DefaultVerifierWindowTokens,
+			GoalCompileWindowTokens: DefaultGoalCompileWindowTokens,
 		},
 		// SessionMessaging holds the ADR-053 §8 session-control-plane
 		// operability config (FR-195's 21 keys). Seeded explicitly so a fresh

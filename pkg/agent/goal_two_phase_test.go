@@ -31,7 +31,7 @@ import (
 
 // scriptedCompileProvider is an LLM double for the goal-compile seam: script
 // receives the 1-based call number AND the messages, so tests can assert what
-// the engine put into the compile context (define-done injection, repair
+// the engine put into the compile context (define-goal injection, repair
 // feedback, the clarification answer) and script different responses per call.
 type scriptedCompileProvider struct {
 	mu     sync.Mutex
@@ -70,21 +70,40 @@ func (p *scriptedCompileProvider) messagesOfCall(n int) []providers.Message {
 	return p.msgs[n-1]
 }
 
+// compileJSON builds a "clear"-branch compile response (ADR-079 D2, ADR-080
+// D-STATEMENT/D-TYPES/D-DOD): a definition, each criterion tagged
+// judgment:"boolean" (the honestly-subjective default, D-TYPES), and a
+// single floor-provenance DoD item (the built-in guarantee that a compile
+// never emits an empty dod). Tests that need a specific definition/judgment/
+// dod shape call parseGoalCompileResponse or construct the JSON directly
+// (see TestParseGoalCompileResponse_SchemaEnforcesINV1D2D-TYPES below).
 func compileJSON(criteria ...string) *providers.LLMResponse {
 	var sb strings.Builder
-	sb.WriteString(`{"criteria":[`)
+	sb.WriteString(`{"assessment":{"clarity":"clear"},"definition":"the goal is compiled","criteria":[`)
 	for i, c := range criteria {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		sb.WriteString(`{"text":"` + c + `"}`)
+		sb.WriteString(`{"text":"` + c + `","judgment":"boolean"}`)
 	}
-	sb.WriteString(`]}`)
+	sb.WriteString(`],"dod":[{"text":"no secrets or credentials appear in the output",` +
+		`"judgment":"boolean","provenance":"floor"}]}`)
 	return &providers.LLMResponse{Content: sb.String()}
 }
 
+// questionJSON builds an "ambiguous"-branch compile response (ADR-079 D2/D3)
+// carrying exactly one clarifying question, shaped as a full askuser.Question
+// (header + question text + a valid 2-option answer menu — every real
+// AskUserQuestion needs options, MinOptions=2, even though free text is
+// always ALSO available). joinClarifyingQuestions collapses a 1-element
+// slice to the bare .Question text, so every existing single-question
+// substring assertion in this file keeps working unchanged.
 func questionJSON(q string) *providers.LLMResponse {
-	return &providers.LLMResponse{Content: `{"clarifying_question":"` + q + `"}`}
+	return &providers.LLMResponse{
+		Content: `{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+			`{"header":"Q1","question":"` + q + `","options":[{"label":"Option A"},{"label":"Option B"}]}` +
+			`]}`,
+	}
 }
 
 // twoPhaseHarness builds the loop with a scripted compile provider on the
@@ -309,34 +328,111 @@ func TestGoalTwoPhase_Mixed_MarkerByteIdenticalThroughLLMPath(t *testing.T) {
 
 // --- Test 11c (INV-1): the compile schema rejects technical kinds ----------
 
+// goodDoD is a minimal valid dod array shared by the "bad" fixtures below so
+// each one isolates the ONE schema violation it names, rather than also
+// tripping the (separately tested) "dod required" rule.
+const goodDoD = `"dod":[{"text":"g","judgment":"boolean","provenance":"floor"}]`
+
 func TestParseGoalCompileResponse_SchemaEnforcesINV1(t *testing.T) {
 	bad := []string{
-		`{"criteria":[{"text":"x","kind":"check"}]}`,
-		`{"criteria":[{"text":"x","check":{"command":"rm -rf /"}}]}`,
-		`{"criteria":[{"text":"x","behavior":{"tool":"bash"}}]}`,
-		`{"criteria":[{"tool":"bash"}]}`,
-		`{"criteria":[{"text":"x","command":"true"}]}`,
-		`{"criteria":[{"text":""}]}`,
-		`{"criteria":[{"text":"x"}],"clarifying_question":"both?"}`, // both halves
-		`{}`, // neither half
+		// INV-1: technical payload keys on a criterion are a hard schema error.
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"boolean","kind":"check"}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"boolean","check":{"command":"rm -rf /"}}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"boolean","behavior":{"tool":"bash"}}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD + `,"criteria":[{"tool":"bash"}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"boolean","command":"true"}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD + `,"criteria":[{"text":""}]}`,
+		// both halves / neither half / no JSON at all.
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"boolean"}],"clarifying_questions":["both?"]}`,
+		`{}`,
 		`no json here at all`,
+		// missing/invalid assessment.clarity.
+		`{"definition":"d",` + goodDoD + `,"criteria":[{"text":"x","judgment":"boolean"}]}`,
+		`{"assessment":{"clarity":"maybe"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"boolean"}]}`,
+		// ADR-080 D-TYPES: a criterion missing/invalid judgment is rejected.
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD + `,"criteria":[{"text":"x"}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d",` + goodDoD +
+			`,"criteria":[{"text":"x","judgment":"maybe"}]}`,
+		// ADR-080 D-STATEMENT: clear requires a non-empty definition.
+		`{"assessment":{"clarity":"clear"},` + goodDoD + `,"criteria":[{"text":"x","judgment":"boolean"}]}`,
+		// ADR-080 D-DOD: clear requires a non-empty dod, each item judgment-
+		// and provenance-tagged.
+		`{"assessment":{"clarity":"clear"},"definition":"d","criteria":[{"text":"x","judgment":"boolean"}]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d","criteria":[{"text":"x","judgment":"boolean"}],"dod":[]}`,
+		`{"assessment":{"clarity":"clear"},"definition":"d","criteria":[{"text":"x","judgment":"boolean"}],` +
+			`"dod":[{"text":"g","judgment":"boolean"}]}`, // missing provenance
+		`{"assessment":{"clarity":"clear"},"definition":"d","criteria":[{"text":"x","judgment":"boolean"}],` +
+			`"dod":[{"text":"g","provenance":"floor"}]}`, // missing judgment
+		// ambiguous must not carry the clear-branch fields.
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":["q"],` +
+			`"criteria":[{"text":"x","judgment":"boolean"}]}`,
+		`{"assessment":{"clarity":"ambiguous"}}`, // no questions
 	}
 	for _, raw := range bad {
 		if _, err := parseGoalCompileResponse(raw); err == nil {
-			t.Errorf("parseGoalCompileResponse(%q) accepted, want a schema error (INV-1)", raw)
+			t.Errorf("parseGoalCompileResponse(%q) accepted, want a schema error (INV-1/ADR-079 D2/ADR-080)", raw)
 		}
 	}
 
-	good, err := parseGoalCompileResponse("Here you go:\n```json\n{\"criteria\":[{\"text\":\"the doc is written\"}]}\n```")
+	good, err := parseGoalCompileResponse("Here you go:\n```json\n" +
+		`{"assessment":{"clarity":"clear"},"definition":"the doc is finished",` +
+		`"criteria":[{"text":"the doc is written","judgment":"boolean"}],` + goodDoD + `}` +
+		"\n```")
 	if err != nil {
-		t.Fatalf("valid fenced criteria rejected: %v", err)
+		t.Fatalf("valid fenced compile response rejected: %v", err)
 	}
-	if len(good.Criteria) != 1 || good.Criteria[0] != "the doc is written" {
-		t.Fatalf("unexpected parse: %+v", good)
+	if good.Clarity != "clear" {
+		t.Fatalf("Clarity = %q, want \"clear\"", good.Clarity)
 	}
-	q, err := parseGoalCompileResponse(`{"clarifying_question":"Which repo?"}`)
-	if err != nil || q.ClarifyingQuestion != "Which repo?" {
-		t.Fatalf("valid question rejected: %+v, %v", q, err)
+	if good.Definition != "the doc is finished" {
+		t.Fatalf("Definition = %q", good.Definition)
+	}
+	if len(good.Criteria) != 1 || good.Criteria[0].Text != "the doc is written" ||
+		good.Criteria[0].Judgment != task.JudgmentBoolean {
+		t.Fatalf("unexpected criteria parse: %+v", good.Criteria)
+	}
+	if len(good.DoD) != 1 || good.DoD[0].Text != "g" ||
+		good.DoD[0].Judgment != task.JudgmentBoolean || good.DoD[0].Provenance != task.ProvenanceFloor {
+		t.Fatalf("unexpected dod parse: %+v", good.DoD)
+	}
+
+	q, err := parseGoalCompileResponse(`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+		`{"header":"Repo","question":"Which repo?","options":[{"label":"omnipus"},{"label":"other"}]}` +
+		`]}`)
+	if err != nil {
+		t.Fatalf("valid question rejected: %v", err)
+	}
+	if q.Clarity != "ambiguous" || len(q.ClarifyingQuestions) != 1 ||
+		q.ClarifyingQuestions[0].Question != "Which repo?" || q.ClarifyingQuestions[0].Header != "Repo" {
+		t.Fatalf("unexpected question parse: %+v", q)
+	}
+}
+
+// TestParseGoalCompileResponse_AmbiguousQuestionNeedsOptions is ADR-079 D3's
+// schema extension: a clarifying question with no options (or too few) is a
+// hard schema error — every real askuser.Question needs 2-6 real answer
+// options (free text is always ALSO available, never a substitute).
+func TestParseGoalCompileResponse_AmbiguousQuestionNeedsOptions(t *testing.T) {
+	bad := []string{
+		// No options field at all.
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[{"header":"H","question":"q?"}]}`,
+		// Only one option (MinOptions=2).
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+			`{"header":"H","question":"q?","options":[{"label":"only one"}]}]}`,
+		// Missing header.
+		`{"assessment":{"clarity":"ambiguous"},"clarifying_questions":[` +
+			`{"question":"q?","options":[{"label":"a"},{"label":"b"}]}]}`,
+	}
+	for _, raw := range bad {
+		if _, err := parseGoalCompileResponse(raw); err == nil {
+			t.Errorf("parseGoalCompileResponse(%q) accepted, want a schema error (ADR-079 D3 options requirement)", raw)
+		}
 	}
 }
 
@@ -968,17 +1064,17 @@ func TestGoalTwoPhase_NilAgentInst_FallbackNoLLM(t *testing.T) {
 	}
 }
 
-// --- Engine-side define-done injection (US-4 S5 seam, exercised here) ------
+// --- Engine-side define-goal injection (US-4 S5 seam, exercised here) ------
 
-func TestGoalTwoPhase_DefineDoneInjectedEngineSide(t *testing.T) {
+func TestGoalTwoPhase_DefineGoalInjectedEngineSide(t *testing.T) {
 	al, agentInst, provider, _, _, opts := twoPhaseHarness(t,
 		func(int, []providers.Message) (*providers.LLMResponse, error) {
 			return compileJSON("the report is saved"), nil
 		}, nil)
 
 	// The harness (newGoalLoopTestLoop) pins OMNIPUS_HOME to a temp dir; seed
-	// the define-done skill file where SeedDefaults would put it.
-	skillDir := filepath.Join(config.OmnipusHomeDir(), "skills", "define-done")
+	// the define-goal skill file where SeedDefaults would put it.
+	skillDir := filepath.Join(config.OmnipusHomeDir(), "skills", "define-goal")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -998,6 +1094,6 @@ func TestGoalTwoPhase_DefineDoneInjectedEngineSide(t *testing.T) {
 		}
 	}
 	if !strings.Contains(sysText, marker) {
-		t.Fatalf("define-done content must be injected engine-side into the compile call, got:\n%s", sysText)
+		t.Fatalf("define-goal content must be injected engine-side into the compile call, got:\n%s", sysText)
 	}
 }

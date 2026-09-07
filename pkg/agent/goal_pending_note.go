@@ -5,7 +5,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -75,16 +74,11 @@ func buildGoalPendingNote(store *session.UnifiedStore, sessionID string) string 
 	sb.WriteString("# Pending goal (awaiting user confirmation)\n\n")
 	sb.WriteString("A goal has been compiled from the user's intent and is awaiting their confirmation — " +
 		"it is NOT yet active.\n\n")
-	sb.WriteString("Goal: ")
-	if pending.Prompt != "" {
-		sb.WriteString(pending.Prompt)
-	} else {
-		sb.WriteString(pending.Intent)
-	}
-	sb.WriteString("\n\nDone when (a reviewer will verify each of these):\n")
-	for i, c := range pending.Criteria {
-		fmt.Fprintf(&sb, "  %d. %s\n", i+1, criterionEchoLine(c))
-	}
+	// ADR-080 §122: the SAME statement/criteria/DoD renderer formatGoalEcho
+	// uses, so the model's own view of a pending goal never drifts from what
+	// the user was shown to confirm — including the restated statement and
+	// the Definition of Done block with inferred items flagged.
+	sb.WriteString(formatGoalStatementAndCriteria(pending))
 	sb.WriteString("\nHow to treat the user's current message while this goal is pending:\n")
 	sb.WriteString("- If it expresses confirmation intent (e.g. \"yes\", \"go ahead\", \"sounds good\"), do NOT activate " +
 		"the goal yourself — activation is deterministic and happens only on an exact reply. Tell the user to reply \"" +

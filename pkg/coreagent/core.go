@@ -1482,17 +1482,19 @@ func systemAgentSkills(id CoreAgentID) []string {
 		//     supersede / targeted-retry / append → record the falsified
 		//     assumption → honest exit) that PlanSupervisorDefaultRubric is
 		//     derived from rule-for-rule.
-		//   - define-done: the built-in criteria-authoring quality bar.
-		//     PlanSupervisor authors acceptance criteria whenever a
-		//     correction adds tail members (plan_correct append/supersede),
-		//     so the skill that governs criteria-writing everywhere else
-		//     governs it here too.
+		//   - define-goal (renamed from define-done by ADR-080 D-SKILL): the
+		//     built-in criteria-authoring quality bar. PlanSupervisor
+		//     authors acceptance criteria whenever a correction adds tail
+		//     members (plan_correct append/supersede), so the skill that
+		//     governs criteria-writing everywhere else governs it here too.
 		//
 		// Because seedSystemAgents re-enforces a non-nil allowlist with an
 		// exact-equality overwrite on every boot, this is the one agent
-		// where the define-done grant reaches existing installs
-		// automatically — no migration marker involved (ADR-074 D4).
-		return []string{"plan", "define-done"}
+		// where the define-goal grant reaches existing installs
+		// automatically — no migration marker involved (ADR-074 D4; the
+		// ADR-080 D-SKILL rename rides the same exact-equality
+		// re-enforcement, not the applyDefineGoalRenameMigration below).
+		return []string{"plan", "define-goal"}
 	default:
 		return nil
 	}
@@ -1562,12 +1564,13 @@ Return ONLY valid JSON, in this field order:
 // classify → supersede / targeted-retry / append → record the falsified
 // assumption → honest exit), which is the first of the exactly-two skills
 // PlanSupervisor's allowlist grants (systemAgentSkills above; the second,
-// define-done, is the ADR-074 D4 criteria-authoring quality bar). THE
-// GRANTED SKILLS AND THIS RUBRIC MUST NOT DRIFT: where this rubric states a
-// rule the plan skill also states, the plan SKILL is the source; and where
-// this rubric states a criteria-quality rule define-done also states,
-// define-done is the source (ADR-074 D4 extends the original plan-only
-// no-drift invariant to span both granted skills).
+// define-goal (renamed from define-done by ADR-080 D-SKILL), is the ADR-074
+// D4 criteria-authoring quality bar). THE GRANTED SKILLS AND THIS RUBRIC
+// MUST NOT DRIFT: where this rubric states a rule the plan skill also
+// states, the plan SKILL is the source; and where this rubric states a
+// criteria-quality rule define-goal also states, define-goal is the source
+// (ADR-074 D4 extends the original plan-only no-drift invariant to span
+// both granted skills).
 // The only additions are facts the skill cannot know — the ROLE fact that the
 // corrector is a different actor from the plan's author, and the STALL wake,
 // which the skill does not cover. Marked in the spec as a first draft open to
@@ -1683,27 +1686,28 @@ func SystemAgentDefaultSoul(id CoreAgentID) string {
 //	plan            → Jim, Planner
 //	skill-authoring → Ava
 //	daily-briefing  → Mia
-//	define-done     → every agent above (ADR-074 D4: any agent that authors
+//	define-goal     → every agent above (ADR-074 D4: any agent that authors
 //	                  acceptance criteria or a Definition of Done carries the
-//	                  one built-in criteria-authoring skill)
+//	                  one built-in criteria-authoring skill; renamed from
+//	                  define-done by ADR-080 D-SKILL)
 //
 // Returns nil for an agent that has no seeded skills (no restriction seeded).
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"summarize", "daily-briefing", "define-done"}
+		return []string{"summarize", "daily-briefing", "define-goal"}
 	case IDRay:
-		return []string{"summarize", "define-done"}
+		return []string{"summarize", "define-goal"}
 	case IDJim:
-		return []string{"plan", "define-done"}
+		return []string{"plan", "define-goal"}
 	case IDAva:
-		return []string{"skill-authoring", "define-done"}
+		return []string{"skill-authoring", "define-goal"}
 	case IDPlanner:
 		// The Planner decomposes goals into a task DAG — the plan skill is its core.
-		return []string{"plan", "define-done"}
+		return []string{"plan", "define-goal"}
 	case IDExplorer, IDResearcher:
 		// Explorer + Researcher synthesize what they find.
-		return []string{"summarize", "define-done"}
+		return []string{"summarize", "define-goal"}
 	default:
 		return nil
 	}
@@ -2108,9 +2112,22 @@ func SeedConfig(cfg *config.Config) bool {
 
 	// ADR-074 D4: one-shot, marker-keyed, additive-only define-done migration
 	// for existing installs. Runs AFTER the seeding loops so a fresh install's
-	// just-seeded lists (which already contain define-done via
-	// coreAgentSkills) take no append and only the marker is recorded.
+	// just-seeded lists (which already contain define-goal via coreAgentSkills
+	// — ADR-080 D-SKILL renamed the seeded grant — take no append via the
+	// define-goal guard inside applyDefineDoneSkillsMigration below) and only
+	// the marker is recorded.
 	if applyDefineDoneSkillsMigration(cfg) {
+		modified = true
+	}
+
+	// ADR-080 D-SKILL: one-shot, marker-keyed REWRITE migration for installs
+	// that already hold the old "define-done" token (seeded fresh by an
+	// earlier release, or just appended by applyDefineDoneSkillsMigration
+	// immediately above on an install upgrading straight from pre-ADR-074).
+	// Must run AFTER applyDefineDoneSkillsMigration so both markers can land
+	// in the SAME boot for that double-upgrade case, with the token already
+	// renamed by the time this pass returns.
+	if applyDefineGoalRenameMigration(cfg) {
 		modified = true
 	}
 
@@ -2139,7 +2156,13 @@ const SkillsMigrationDefineDone = "adr074-define-done"
 //   - Marker present → no-op in full (second boot is byte-identical).
 //   - Marker absent → for each CORE-ROSTER agent whose compiled-in seed
 //     carries an allowlist (coreAgentSkills != nil): append "define-done"
-//     only when the live list is non-nil AND non-empty AND lacks it.
+//     only when the live list is non-nil AND non-empty AND lacks it AND
+//     lacks its ADR-080 rename "define-goal" (a list that already carries
+//     the renamed grant — e.g. a genuinely fresh install seeded directly
+//     from coreAgentSkills, which now returns "define-goal" — is already
+//     granted in substance; appending the OLD name onto it would reintroduce
+//     define-done onto an install that never had it, defeating the D-SKILL
+//     rename this same boot's applyDefineGoalRenameMigration performs).
 //   - Nil stays nil (unrestricted already resolves every installed skill).
 //   - Empty [] stays empty (an operator who zeroed the list opted out —
 //     respected, per ADR-072 D5.1).
@@ -2157,7 +2180,10 @@ func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
 			return false
 		}
 	}
-	const skillDefineDone = "define-done"
+	const (
+		skillDefineDone = "define-done"
+		skillDefineGoal = "define-goal"
+	)
 	for i := range cfg.Agents.List {
 		a := &cfg.Agents.List[i]
 		ca := ByID(CoreAgentID(a.ID))
@@ -2177,7 +2203,7 @@ func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
 		}
 		alreadyGranted := false
 		for _, s := range a.Skills {
-			if s == skillDefineDone {
+			if s == skillDefineDone || s == skillDefineGoal {
 				alreadyGranted = true
 				break
 			}
@@ -2187,6 +2213,94 @@ func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
 		}
 	}
 	cfg.SeededSkillGrants = append(cfg.SeededSkillGrants, SkillsMigrationDefineDone)
+	return true
+}
+
+// SkillsMigrationDefineGoalRename is the ADR-080 D-SKILL marker recorded in
+// config.seeded_skill_grants once the one-shot "define-done"→"define-goal"
+// allowlist-REWRITE migration has run on an install. Exported so
+// pkg/gateway can gate the matching skill-DIRECTORY cleanup (deleting the
+// orphaned $OMNIPUS_HOME/skills/define-done/, ADR-080 §151 step 2) on the
+// SAME marker after SeedConfig returns, mirroring how SkillsMigrationDefineDone
+// gates persistSeededSkillGrants.
+//
+// Deliberately a NEW, distinct marker — never a rename of
+// SkillsMigrationDefineDone itself, whose value ("adr074-define-done") stays
+// exactly as ADR-074 recorded it (history, permanently). The literal chosen
+// here ("adr080-define-goal-rename") also carries none of "migrat"/"legacy"/
+// "alias"/"deprecat"/"retired"/"backcompat"/"back_compat" (case-insensitive),
+// the token set scripts/check-greenfield-providers.sh's SC-009 scan forbids
+// in pkg/providers and pkg/config — though as a pkg/coreagent constant this
+// marker sits outside those two scanned roots regardless.
+const SkillsMigrationDefineGoalRename = "adr080-define-goal-rename"
+
+// applyDefineGoalRenameMigration is the ADR-080 D-SKILL one-shot,
+// marker-keyed REWRITE migration (ADR-080 §151 step 1).
+//
+// Background: ADR-080 D-SKILL renames the built-in criteria-authoring skill
+// "define-done" → "define-goal". coreAgentSkills/systemAgentSkills above now
+// seed "define-goal" for every fresh grant, so an install that already holds
+// the OLD token — either seeded by an earlier release, or just appended by
+// applyDefineDoneSkillsMigration immediately above (the pre-ADR-074 →
+// post-ADR-080 double-upgrade case) — is left holding "define-done" in its
+// allowlist unless this migration rewrites it in place.
+//
+// Semantics, exactly as ratified (ADR-080 §151.1):
+//   - Marker present → no-op in full (second boot is byte-identical).
+//   - Marker absent → for EVERY agent in cfg.Agents.List — core-roster,
+//     user-created, AND System Agents alike. Unlike SkillsMigrationDefineDone
+//     this is NOT restricted to the core roster: it is a pure rename of an
+//     ALREADY-granted permission, never a new grant, so ADR-072 D5.1's
+//     "never restore a grant the operator removed" concern does not apply —
+//     there is nothing to restore, only a token to relabel. When the live
+//     Skills list is non-nil AND non-empty AND contains "define-done" AND
+//     lacks "define-goal": REPLACE the token in its existing slot (rewrite,
+//     not append), preserving the list's order.
+//   - Nil stays nil (unrestricted already resolves every installed skill).
+//   - Empty [] stays empty (an operator who zeroed the list opted out —
+//     respected, per ADR-072 D5.1 — same discipline as
+//     applyDefineDoneSkillsMigration).
+//   - A list that already carries "define-goal" is left alone even if it
+//     (unusually) also still carries "define-done" — there is nothing to
+//     rewrite INTO, and a dedup rule is out of scope for what is meant to
+//     stay a narrow, mechanical token substitution.
+//
+// Returns true when it modified cfg (it always does when the marker was
+// absent, because writing the marker is itself a modification).
+func applyDefineGoalRenameMigration(cfg *config.Config) bool {
+	for _, marker := range cfg.SeededSkillGrants {
+		if marker == SkillsMigrationDefineGoalRename {
+			return false
+		}
+	}
+	const (
+		skillDefineDone = "define-done"
+		skillDefineGoal = "define-goal"
+	)
+	for i := range cfg.Agents.List {
+		a := &cfg.Agents.List[i]
+		if len(a.Skills) == 0 {
+			// Nil stays nil; operator-emptied [] stays empty.
+			continue
+		}
+		hasDefineGoal := false
+		defineDoneIdx := -1
+		for idx, s := range a.Skills {
+			if s == skillDefineGoal {
+				hasDefineGoal = true
+			}
+			if s == skillDefineDone {
+				defineDoneIdx = idx
+			}
+		}
+		if hasDefineGoal || defineDoneIdx == -1 {
+			// Already renamed, or never carried the old token — nothing to
+			// rewrite.
+			continue
+		}
+		a.Skills[defineDoneIdx] = skillDefineGoal
+	}
+	cfg.SeededSkillGrants = append(cfg.SeededSkillGrants, SkillsMigrationDefineGoalRename)
 	return true
 }
 

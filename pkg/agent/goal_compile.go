@@ -86,10 +86,25 @@ type CompiledGoal struct {
 	// Prompt is the steering prompt fed to the worker turn (the prose remainder
 	// of the intent after marker extraction — the subjective goal statement).
 	Prompt string `json:"prompt"`
+	// Definition is ADR-080 D-STATEMENT's compiled SMART restatement of the
+	// goal — one clear sentence, distinct from Prompt (the steering remainder)
+	// — rendered before the criteria in every echo surface. Populated by the
+	// compile-response parser (parseGoalCompileResponse); zero-value on the
+	// deterministic/marker paths, where formatGoalEcho's Prompt/Intent
+	// fallback applies.
+	Definition string `json:"definition,omitempty"`
 	// Criteria is the compiled criteria ladder: behavior (countables), check
 	// (deterministic machine), prose (subjective). Schema-validated via
 	// task.NormalizeCriteria before this struct is returned.
 	Criteria []task.AcceptanceCriterion `json:"criteria"`
+	// DoD is ADR-080 D-DOD's Definition of Done — generic standing quality
+	// gates, DISTINCT from Criteria's outcome-specific checks, evaluated
+	// together (Criteria UNION DoD, the judged-set union in
+	// compiledGoalCriteriaFor). Every
+	// loaded goal carries at least one item — see dodFloorConstructor /
+	// loadCompiledGoal's legacy-goal backfill below, which guarantees this
+	// in-memory invariant even for a pre-ADR-080 persisted goal with no DoD.
+	DoD []task.AcceptanceCriterion `json:"dod,omitempty"`
 }
 
 // FeasibilityRejection is a compile-time gate failure (FR-111/D9): the
@@ -317,6 +332,21 @@ func compileGoalIntent(intent string, fc FeasibilityContext, authorID string) Co
 		Intent:   intent,
 		Prompt:   prose,
 		Criteria: normalized,
+		// Fix-wave finding #2 (echo-vs-judged divergence): populate the
+		// floor DoD (ADR-080 D-DOD layer 3) HERE, at compile time, not just
+		// on load. compiledGoalCriteriaFor unions Criteria+DoD for
+		// adjudication regardless of which path compiled the goal, so a
+		// deterministic-fallback or marker-only goal that carried NO DoD at
+		// compile time was still judged against the floor DoD once
+		// loadCompiledGoal's own load-time backfill kicked in — but every
+		// confirm echo (formatGoalEcho/formatGoalStatementAndCriteria,
+		// buildGoalPendingNote, the queued goal_status frame) is built from
+		// the freshly compiled CompiledGoal BEFORE it round-trips through
+		// GoalCriteriaJSON, so the user confirmed against a bar they never
+		// saw. Setting it here makes echoed == judged on every path; it also
+		// makes loadCompiledGoal's own backfill a legacy-goal-only
+		// fallback (a goal compiled after this fix never needs it).
+		DoD: newFloorDoD(),
 	}}
 }
 
@@ -489,12 +519,61 @@ var hedgingTokens = map[string]bool{
 
 // --- Echo & confirm + amendment diff (FR-113/D11/N-6) ----------------------
 
+// formatGoalStatementAndCriteria renders the shared CORE of every goal echo
+// surface (ADR-080 D-STATEMENT/D-DOD, §122's "formatGoalEcho on EVERY
+// surface"): the restated goal statement, the criteria ladder, and a
+// DISTINCT "Definition of Done" block with `provenance == inferred` items
+// flagged for approve/drop. formatGoalEcho (the web card AND the channel
+// plain-text echo — one renderer, no separate channel path) and
+// buildGoalPendingNote (goal_pending_note.go, ADR-078 D2) both build their
+// surface-specific framing around this so a channel user who confirms by
+// TYPING sees exactly what the web GoalEchoCard shows — the R-C2 fix: DoD
+// and its inferred gates were previously web-card-only.
+func formatGoalStatementAndCriteria(g *CompiledGoal) string {
+	var sb strings.Builder
+	sb.WriteString("Goal: ")
+	switch {
+	case g.Definition != "":
+		// D-STATEMENT: the compiled SMART restatement leads every surface —
+		// in place of the old Prompt/Intent fallback, which now only applies
+		// to a goal compiled before this field existed (deterministic
+		// fallback path, or a pre-ADR-080 persisted goal).
+		sb.WriteString(g.Definition)
+	case g.Prompt != "":
+		sb.WriteString(g.Prompt)
+	default:
+		sb.WriteString(g.Intent)
+	}
+	sb.WriteString("\n\nDone when (a reviewer will verify each of these):\n")
+	for i, c := range g.Criteria {
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, criterionEchoLine(c))
+	}
+	if len(g.DoD) > 0 {
+		// D-DOD: a DISTINCT block, never merged into the criteria numbering —
+		// they are judged together (the verifier_adjudication.go union seam)
+		// but shown separately so the setter can tell "what I asked for" from
+		// "the standing quality bar every goal carries".
+		sb.WriteString("\nDefinition of Done (standing quality gates, judged alongside the criteria above):\n")
+		for i, c := range g.DoD {
+			line := criterionEchoLine(c)
+			if c.Provenance == task.ProvenanceInferred {
+				line += " (inferred — confirm or drop)"
+			}
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, line)
+		}
+	}
+	return sb.String()
+}
+
 // formatGoalEcho renders the compiled goal for the chat echo (FR-113/D11/G-8,
 // delivered by ADR-074 D4a's pending step — this is the confirmation surface
 // in chat history): the literal commands are included verbatim (never
 // paraphrased away), and the whole echo is what the user confirms by a chat
 // reply — no form/modal. The user's confirming reply (any of
-// confirmGoalAliases, or `/goal confirm`) activates the goal.
+// confirmGoalAliases, or `/goal confirm`) activates the goal. This IS the
+// channel plain-text echo (no separate renderer) — see
+// formatGoalStatementAndCriteria for the statement/criteria/DoD core it
+// shares with buildGoalPendingNote.
 //
 // Plain-language-first (spec US-6 S4, FR-011): criteria are itemized as
 // readable statements with their technical payloads verbatim per row —
@@ -505,16 +584,7 @@ func formatGoalEcho(g *CompiledGoal) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("Here's the goal I've compiled for your confirmation.\n\n")
-	sb.WriteString("Goal: ")
-	if g.Prompt != "" {
-		sb.WriteString(g.Prompt)
-	} else {
-		sb.WriteString(g.Intent)
-	}
-	sb.WriteString("\n\nDone when (a reviewer will verify each of these):\n")
-	for i, c := range g.Criteria {
-		fmt.Fprintf(&sb, "  %d. %s\n", i+1, criterionEchoLine(c))
-	}
+	sb.WriteString(formatGoalStatementAndCriteria(g))
 	sb.WriteString("\nReply **" + ConfirmGoalWord + "** (or `/goal confirm`) to activate this goal, " +
 		"`/goal <new intent>` to restate it, or `/goal clear` to discard.")
 	return sb.String()
@@ -526,24 +596,46 @@ func formatGoalEcho(g *CompiledGoal) string {
 const goalEchoFallbackNote = "\n\nNote: the automatic quality-bar rewrite was unavailable, " +
 	"so these criteria were compiled directly from your wording without it."
 
+// judgmentEchoSuffix renders a short, plain-language tag for a criterion's
+// ADR-080 D-TYPES judgment kind (the "what SHAPE of claim is this" axis,
+// distinct from Kind's verification mechanism) — appended to every echo line
+// so the setter reviews not just the criterion's text but what shape of
+// verdict the Judge will form on it. Never a raw enum token (same
+// plain-language-first bar formatGoalEcho's own doc comment states for Kind).
+func judgmentEchoSuffix(j task.JudgmentKind) string {
+	switch j {
+	case task.JudgmentBoolean:
+		return " (judged yes/no)"
+	case task.JudgmentQuantitative:
+		return " (judged against a measured value)"
+	case task.JudgmentArtifact:
+		return " (judged by checking for the named result)"
+	default:
+		return ""
+	}
+}
+
 // criterionEchoLine renders one criterion's literal verification shape for the
-// echo (commands included verbatim — FR-113 "including literal commands").
+// echo (commands included verbatim — FR-113 "including literal commands"),
+// followed by its ADR-080 D-TYPES judgment tag (judgmentEchoSuffix).
 func criterionEchoLine(c task.AcceptanceCriterion) string {
+	base := c.Text
 	switch c.Kind {
 	case task.KindBehavior:
 		if c.Behavior != nil {
 			minCount := c.Behavior.EffectiveMinCount()
 			if c.Behavior.MaxCount != nil {
-				return fmt.Sprintf("%s: call %s between %d and %d times", c.Text, c.Behavior.Tool, minCount, *c.Behavior.MaxCount)
+				base = fmt.Sprintf("%s: call %s between %d and %d times", c.Text, c.Behavior.Tool, minCount, *c.Behavior.MaxCount)
+			} else {
+				base = fmt.Sprintf("%s: call %s at least %d times", c.Text, c.Behavior.Tool, minCount)
 			}
-			return fmt.Sprintf("%s: call %s at least %d times", c.Text, c.Behavior.Tool, minCount)
 		}
 	case task.KindCheck:
 		if c.Check != nil {
-			return fmt.Sprintf("%s: `%s` (expected exit %d)", c.Text, c.Check.Command, c.Check.ExpectedExitCode)
+			base = fmt.Sprintf("%s: `%s` (expected exit %d)", c.Text, c.Check.Command, c.Check.ExpectedExitCode)
 		}
 	}
-	return c.Text
+	return base + judgmentEchoSuffix(c.Judgment)
 }
 
 // ConfirmGoalWord is the chat reply that activates an echoed goal (FR-113/D11).
@@ -567,62 +659,91 @@ func IsGoalConfirm(reply string) bool {
 // Proposed goal is what they confirm to amend to (minting a new goal generation
 // — criteria stay immutable per D9; re-statement AMENDS via a fresh record).
 type GoalAmendment struct {
-	Added    []task.AcceptanceCriterion `json:"added"`
-	Changed  []task.AcceptanceCriterion `json:"changed"`
-	Dropped  []task.AcceptanceCriterion `json:"dropped"`
-	Proposed *CompiledGoal              `json:"proposed"`
+	Added   []task.AcceptanceCriterion `json:"added"`
+	Changed []task.AcceptanceCriterion `json:"changed"`
+	Dropped []task.AcceptanceCriterion `json:"dropped"`
+	// DoDAdded/DoDChanged/DoDDropped are fix-wave finding #4's DoD diff
+	// (ADR-080 D-DOD): a `/goal <new intent>` amendment recompiles a new DoD
+	// alongside Criteria — both are unioned into the judged set on confirm
+	// (compiledGoalCriteriaFor) — so the amendment echo must show DoD
+	// deltas too, not just Criteria's. Kept as separate fields (not merged
+	// into Added/Changed/Dropped) so formatAmendmentEcho can render them in
+	// their own "Definition of Done changes" block, mirroring
+	// formatGoalStatementAndCriteria's distinct DoD block on the plain
+	// compile echo.
+	DoDAdded   []task.AcceptanceCriterion `json:"dod_added,omitempty"`
+	DoDChanged []task.AcceptanceCriterion `json:"dod_changed,omitempty"`
+	DoDDropped []task.AcceptanceCriterion `json:"dod_dropped,omitempty"`
+	Proposed   *CompiledGoal              `json:"proposed"`
 }
 
-// HasChanges reports whether the amendment actually differs from current.
+// HasChanges reports whether the amendment actually differs from current
+// (Criteria OR DoD).
 func (a *GoalAmendment) HasChanges() bool {
 	if a == nil {
 		return false
 	}
-	return len(a.Added) > 0 || len(a.Changed) > 0 || len(a.Dropped) > 0
+	return len(a.Added) > 0 || len(a.Changed) > 0 || len(a.Dropped) > 0 ||
+		len(a.DoDAdded) > 0 || len(a.DoDChanged) > 0 || len(a.DoDDropped) > 0
 }
 
-// diffGoalAmendment computes the added/changed/dropped diff between the current
-// active goal and a proposed re-statement (N-6). A criterion is "changed" when
-// its Text matches an existing one but its verification shape (Check/Behavior)
-// differs; "dropped" when present in current but not proposed; "added" when
-// present in proposed but not current. The proposed goal's criteria drive the
-// new generation on confirm.
+// diffGoalAmendment computes the added/changed/dropped diff between the
+// current active goal and a proposed re-statement (N-6), for BOTH Criteria
+// and DoD (fix-wave finding #4 — a re-statement recompiles a new DoD too,
+// and it must not be diffed silently). A criterion is "changed" when its
+// Text matches an existing one but its verification shape (Check/Behavior)
+// or judgment differs; "dropped" when present in current but not proposed;
+// "added" when present in proposed but not current. The proposed goal's
+// criteria (and DoD) drive the new generation on confirm.
 func diffGoalAmendment(current, proposed *CompiledGoal) *GoalAmendment {
 	amd := &GoalAmendment{Proposed: proposed}
 	if proposed == nil {
 		return amd
 	}
-	if current == nil {
-		amd.Added = append(amd.Added, proposed.Criteria...)
-		return amd
+	var curCriteria, curDoD []task.AcceptanceCriterion
+	if current != nil {
+		curCriteria = current.Criteria
+		curDoD = current.DoD
 	}
-	// Index current criteria by normalized text for shape comparison.
+	amd.Added, amd.Changed, amd.Dropped = diffCriteriaSet(curCriteria, proposed.Criteria)
+	amd.DoDAdded, amd.DoDChanged, amd.DoDDropped = diffCriteriaSet(curDoD, proposed.DoD)
+	return amd
+}
+
+// diffCriteriaSet is the shared added/changed/dropped set-diff (by
+// normalized text + sameShape) that diffGoalAmendment runs once for
+// Criteria and once for DoD — a single implementation so the two ladders
+// diff identically (fix-wave finding #4).
+func diffCriteriaSet(current, proposed []task.AcceptanceCriterion) (added, changed, dropped []task.AcceptanceCriterion) {
 	curByText := map[string]task.AcceptanceCriterion{}
-	for _, c := range current.Criteria {
+	for _, c := range current {
 		curByText[normalizeCritText(c.Text)] = c
 	}
 	propSeen := map[string]bool{}
-	for _, c := range proposed.Criteria {
+	for _, c := range proposed {
 		key := normalizeCritText(c.Text)
 		propSeen[key] = true
 		if existing, ok := curByText[key]; ok {
 			if !sameShape(existing, c) {
-				amd.Changed = append(amd.Changed, c)
+				changed = append(changed, c)
 			}
 			// identical text + shape → unchanged (not listed)
 		} else {
-			amd.Added = append(amd.Added, c)
+			added = append(added, c)
 		}
 	}
-	for _, c := range current.Criteria {
+	for _, c := range current {
 		if !propSeen[normalizeCritText(c.Text)] {
-			amd.Dropped = append(amd.Dropped, c)
+			dropped = append(dropped, c)
 		}
 	}
-	return amd
+	return added, changed, dropped
 }
 
-// formatAmendmentEcho renders the amendment for chat confirmation (N-6).
+// formatAmendmentEcho renders the amendment for chat confirmation (N-6),
+// including the DoD delta block (fix-wave finding #4) whenever the
+// amendment touches DoD, with inferred items flagged for approve/drop
+// exactly like formatGoalStatementAndCriteria's own DoD block.
 func formatAmendmentEcho(a *GoalAmendment) string {
 	if a == nil || a.Proposed == nil {
 		return "No amendment to apply."
@@ -641,8 +762,31 @@ func formatAmendmentEcho(a *GoalAmendment) string {
 	for _, c := range rangeCriteria(a.Dropped) {
 		sb.WriteString("  - [dropped] " + criterionEchoLine(c) + "\n")
 	}
+	if len(a.DoDAdded) > 0 || len(a.DoDChanged) > 0 || len(a.DoDDropped) > 0 {
+		sb.WriteString("\nDefinition of Done changes (standing quality gates, judged alongside the criteria above):\n")
+		for _, c := range a.DoDAdded {
+			sb.WriteString("  + [added]   " + dodAmendmentEchoLine(c) + "\n")
+		}
+		for _, c := range a.DoDChanged {
+			sb.WriteString("  ~ [changed] " + dodAmendmentEchoLine(c) + "\n")
+		}
+		for _, c := range rangeCriteria(a.DoDDropped) {
+			sb.WriteString("  - [dropped] " + dodAmendmentEchoLine(c) + "\n")
+		}
+	}
 	sb.WriteString("\nReply **" + ConfirmGoalWord + "** to apply this amendment, or restate again.")
 	return sb.String()
+}
+
+// dodAmendmentEchoLine renders one DoD delta line, flagging
+// provenance==inferred items exactly like formatGoalStatementAndCriteria's
+// own DoD block (fix-wave finding #4).
+func dodAmendmentEchoLine(c task.AcceptanceCriterion) string {
+	line := criterionEchoLine(c)
+	if c.Provenance == task.ProvenanceInferred {
+		line += " (inferred — confirm or drop)"
+	}
+	return line
 }
 
 // rangeCriteria is a trivial identity-iterator kept so the dropped-loop reads
@@ -660,9 +804,17 @@ func normalizeCritText(s string) string {
 }
 
 // sameShape reports whether two criteria with the same Text have the same
-// verification shape (Check or Behavior payload).
+// verification shape (Check or Behavior payload) AND the same judgment
+// (ADR-080 D-TYPES: two criteria are "the same shape" only if their judgment
+// matches too — a re-statement that keeps the same text and Check/Behavior
+// payload but retags the judgment, e.g. boolean -> quantitative, is still a
+// real change the amendment diff must surface as "changed", not silently
+// treat as identical).
 func sameShape(a, b task.AcceptanceCriterion) bool {
 	if a.Kind != b.Kind {
+		return false
+	}
+	if a.Judgment != b.Judgment {
 		return false
 	}
 	switch a.Kind {
@@ -937,6 +1089,39 @@ func (a agentFeasibilityContext) BashReachable() bool {
 		a.agentInst.LoadToolPolicy(), tools.ScopeCore, a.agentInst.AgentType, "bash") != "deny"
 }
 
+// goalDoDFloorAuthorID tags the built-in floor DoD's author identity (no
+// human/agent authored these — they are the ADR-080 D-DOD layer-3
+// guarantee). Mirrors judge.go's softTierCriterionID pattern: a fixed,
+// recognizable sentinel rather than a fresh UUID, so re-derivations are
+// byte-stable and a floor item is identifiable at a glance in logs/echoes.
+const goalDoDFloorAuthorID = "system"
+
+// newFloorDoD constructs ADR-080 D-DOD's built-in floor Definition of Done
+// (layer 3): a few universal quality gates that GUARANTEE a goal always
+// carries at least one DoD item (>= 1), even when nothing was stated, no
+// workspace convention applied, and no bounded inference ran. Defined once
+// as a single reusable constructor (per the ADR) so both the legacy-goal
+// load-time backfill below and the compiler's own layer-3 fallback (a later
+// wave) stay identical. IDs are fixed sentinels, not fresh UUIDs, so the
+// floor DoD is byte-stable across repeated loads of the same legacy goal.
+func newFloorDoD() []task.AcceptanceCriterion {
+	author := task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorID}
+	return []task.AcceptanceCriterion{
+		{
+			ID: "goal-dod-floor-no-secrets", Kind: task.KindProse,
+			Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
+			Text:   "No secrets or credentials appear in the output.",
+			Author: author, Status: task.CritPending,
+		},
+		{
+			ID: "goal-dod-floor-grounded-claims", Kind: task.KindProse,
+			Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
+			Text:   "Every factual claim is grounded, not assumed.",
+			Author: author, Status: task.CritPending,
+		},
+	}
+}
+
 // marshalCompiledGoal serializes a CompiledGoal for GoalCriteriaJSON persistence.
 func marshalCompiledGoal(g *CompiledGoal) (string, error) {
 	if g == nil {
@@ -976,6 +1161,48 @@ func loadCompiledGoal(raw string) *CompiledGoal {
 			"(falling back to a single prose criterion from GoalCondition)", nil)
 		return nil
 	}
+	// ADR-080 D-DOD legacy-goal backfill: a pre-ADR-080 persisted goal has no
+	// DoD at all (the field did not exist yet). Inject the built-in floor DoD
+	// here, in the goal-LOAD path, BEFORE any schema validation of the wire
+	// Goal record — mirrors normalizeCriteria's own load-time judgment
+	// backfill — so a legacy goal always satisfies the wire schema's
+	// `dod: minItems: 1` instead of failing the read.
+	if len(g.DoD) == 0 {
+		g.DoD = newFloorDoD()
+	}
+
+	// Fix-wave finding #8: run BOTH ladders through the real
+	// task.NormalizeCriteria — until this fix, criterion.go's own doc
+	// comment claimed a "load-time backfill path for legacy persisted
+	// criteria carrying no judgment", but loadCompiledGoal bare-unmarshaled
+	// straight from JSON with no schema pass at all, so a goal compiled
+	// before ADR-080 D-TYPES existed (every criterion's Judgment field
+	// empty) stayed with an empty Judgment forever — the claimed invariant
+	// was never actually enforced for goals (only for task/plan store
+	// writes, which route through normalizeCriteria on every Create/Update).
+	// This is genuinely load-BEARING now, not just a compile-time nicety:
+	// buildJudgeUserContent and the DoD-provenance echo both read Judgment
+	// off these structs. A NormalizeCriteria failure is treated exactly
+	// like the parse/zero-criteria corruption cases above — logged loud,
+	// falls back (nil) — rather than handing the caller a goal that fails
+	// the wire schema's own judgment/kind invariants downstream.
+	normCriteria, cErr := task.NormalizeCriteria(g.Criteria)
+	if cErr != nil {
+		logger.WarnCF("agent", "goal: GoalCriteriaJSON's criteria failed NormalizeCriteria "+
+			"(falling back to a single prose criterion from GoalCondition)",
+			map[string]any{"error": cErr.Error()})
+		return nil
+	}
+	g.Criteria = normCriteria
+	normDoD, dErr := task.NormalizeCriteria(g.DoD)
+	if dErr != nil {
+		logger.WarnCF("agent", "goal: GoalCriteriaJSON's dod failed NormalizeCriteria "+
+			"(falling back to a single prose criterion from GoalCondition)",
+			map[string]any{"error": dErr.Error()})
+		return nil
+	}
+	g.DoD = normDoD
+
 	return &g
 }
 
@@ -984,15 +1211,37 @@ func loadCompiledGoal(raw string) *CompiledGoal {
 // present (Phase 2), else a single prose criterion synthesized from condition
 // (back-compat with pre-Phase-2 /goal sessions). This is the single point at
 // which the goal loop reads its criteria — DoD-11 (one implementation).
+//
+// ADR-080 D-DOD's "judged-set union seam" (§120, the load-bearing part):
+// when a compiled ladder exists, the returned slice is Criteria UNION DoD —
+// every Definition-of-Done item rides alongside the acceptance criteria into
+// JudgeCriteria (both callers, goal_triggers.go's runGoalAdjudication and
+// goal_loop.go's own pre-Phase-2 amendment-diff seed, feed this straight into
+// adjudication), so each DoD item gets its own per-criterion verdict exactly
+// like an acceptance criterion and an unmet DoD item fails the round via the
+// SAME dedupeJudgeCriteriaAnyUnmetWins path (verifier_adjudication.go) —
+// there is no separate DoD adjudication call, no separate Judge feed, and no
+// change to JudgeCriteria/runVerifierAdjudication's own shape: DoD items are
+// AcceptanceCriterion-shaped (KindProse) and simply widen in.Criteria. IDs
+// never collide (normalizeCriteria mints a fresh UUID per item; the fixed
+// floor-DoD IDs — newFloorDoD — are namespaced "goal-dod-floor-*", disjoint
+// from any criterion ID). Without this union the DoD would be defined,
+// confirmed, and never scored (ADR-080 R-C1).
 func compiledGoalCriteriaFor(rawJSON, condition, sessionID string) []task.AcceptanceCriterion {
 	if g := loadCompiledGoal(rawJSON); g != nil {
-		return g.Criteria
+		if len(g.DoD) == 0 {
+			return g.Criteria
+		}
+		union := make([]task.AcceptanceCriterion, 0, len(g.Criteria)+len(g.DoD))
+		union = append(union, g.Criteria...)
+		union = append(union, g.DoD...)
+		return union
 	}
 	if strings.TrimSpace(condition) == "" {
 		return nil
 	}
 	return []task.AcceptanceCriterion{{
-		ID: "goal-condition", Kind: task.KindProse, Text: condition,
+		ID: "goal-condition", Kind: task.KindProse, Judgment: task.JudgmentBoolean, Text: condition,
 		Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: sessionID},
 		Status: task.CritPending,
 	}}

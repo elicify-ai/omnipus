@@ -123,6 +123,92 @@ func TestGoalCompile_EchoConfirm_Amendment(t *testing.T) {
 
 func intp(v int) *int { return &v }
 
+// TestGoalCompile_AmendmentEcho_ShowsDoDDelta is code-review fix-wave finding
+// #4: an amendment diff (diffGoalAmendment/formatAmendmentEcho) must show DoD
+// deltas alongside Criteria deltas — a `/goal <new intent>` over an active
+// goal recompiles a new DoD (unioned into the judged set on confirm via
+// compiledGoalCriteriaFor) but the old amendment echo showed only Criteria
+// deltas, silently changing what gets judged without telling the user.
+func TestGoalCompile_AmendmentEcho_ShowsDoDDelta(t *testing.T) {
+	au := task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "tester"}
+	sysAuthor := task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorID}
+
+	current := &CompiledGoal{
+		Intent: "land the feature", Prompt: "land the feature",
+		Criteria: []task.AcceptanceCriterion{
+			{ID: "c1", Kind: task.KindProse, Text: "the feature works", Author: au},
+		},
+		DoD: []task.AcceptanceCriterion{
+			{ID: "d1", Kind: task.KindProse, Text: "no secrets leak", Judgment: task.JudgmentBoolean,
+				Provenance: task.ProvenanceFloor, Author: sysAuthor},
+		},
+	}
+	proposed := &CompiledGoal{
+		Intent: "land the feature, keeping it secure", Prompt: "land the feature, keeping it secure",
+		Criteria: []task.AcceptanceCriterion{
+			{ID: "c2", Kind: task.KindProse, Text: "the feature works", Author: au}, // unchanged
+		},
+		DoD: []task.AcceptanceCriterion{
+			// same text as current's DoD item, but judgment retagged → "changed".
+			{ID: "d2", Kind: task.KindProse, Text: "no secrets leak", Judgment: task.JudgmentQuantitative,
+				Provenance: task.ProvenanceFloor, Author: sysAuthor},
+			// a NEW inferred DoD item → "added", flagged for approve/drop.
+			{ID: "d3", Kind: task.KindProse, Text: "input is validated before use",
+				Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceInferred, Author: sysAuthor},
+		},
+	}
+
+	amd := diffGoalAmendment(current, proposed)
+	if len(amd.DoDChanged) != 1 || amd.DoDChanged[0].ID != "d2" {
+		t.Fatalf("want DoDChanged=[d2] (judgment retag), got %+v", amd.DoDChanged)
+	}
+	if len(amd.DoDAdded) != 1 || amd.DoDAdded[0].ID != "d3" {
+		t.Fatalf("want DoDAdded=[d3], got %+v", amd.DoDAdded)
+	}
+	if len(amd.DoDDropped) != 0 {
+		t.Fatalf("want no dropped DoD items, got %+v", amd.DoDDropped)
+	}
+	if !amd.HasChanges() {
+		t.Fatal("HasChanges must be true when only DoD differs")
+	}
+
+	echo := formatAmendmentEcho(amd)
+	if !strings.Contains(echo, "Definition of Done changes") {
+		t.Fatalf("amendment echo must render a DoD delta block, got:\n%s", echo)
+	}
+	if !strings.Contains(echo, "input is validated before use") {
+		t.Fatalf("amendment echo must list the added DoD item, got:\n%s", echo)
+	}
+	if !strings.Contains(echo, "(inferred — confirm or drop)") {
+		t.Fatalf("amendment echo must flag the inferred DoD item, got:\n%s", echo)
+	}
+	if !strings.Contains(echo, "no secrets leak") {
+		t.Fatalf("amendment echo must list the changed DoD item, got:\n%s", echo)
+	}
+}
+
+// TestGoalCompile_AmendmentEcho_DoDOnlyUnchanged_NoDeltaBlock is the negative
+// control: identical DoD on both sides renders no DoD delta block at all.
+func TestGoalCompile_AmendmentEcho_DoDOnlyUnchanged_NoDeltaBlock(t *testing.T) {
+	dod := []task.AcceptanceCriterion{
+		{ID: "d1", Kind: task.KindProse, Text: "no secrets leak", Judgment: task.JudgmentBoolean,
+			Provenance: task.ProvenanceFloor, Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: goalDoDFloorAuthorID}},
+	}
+	au := task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "tester"}
+	current := &CompiledGoal{Criteria: []task.AcceptanceCriterion{{ID: "c1", Kind: task.KindProse, Text: "a", Author: au}}, DoD: dod}
+	proposed := &CompiledGoal{Criteria: []task.AcceptanceCriterion{{ID: "c2", Kind: task.KindProse, Text: "b", Author: au}}, DoD: dod}
+
+	amd := diffGoalAmendment(current, proposed)
+	if len(amd.DoDAdded) != 0 || len(amd.DoDChanged) != 0 || len(amd.DoDDropped) != 0 {
+		t.Fatalf("identical DoD must produce no DoD delta, got added=%+v changed=%+v dropped=%+v",
+			amd.DoDAdded, amd.DoDChanged, amd.DoDDropped)
+	}
+	echo := formatAmendmentEcho(amd)
+	if strings.Contains(echo, "Definition of Done changes") {
+		t.Fatalf("no DoD delta block expected when DoD is unchanged, got:\n%s", echo)
+	}
+}
+
 // --- FR-111/D9: feasibility gate rejects out-of-policy + unjudgeable --------
 
 func TestFeasibilityGate_RejectsOutOfPolicy(t *testing.T) {
