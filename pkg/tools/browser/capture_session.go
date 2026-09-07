@@ -46,6 +46,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -563,35 +565,19 @@ func newCaptureSessionWithDeps(
 	return cs
 }
 
-// captureInjectPayload is the exact shape encoder.js's readConfig() expects
-// at window.__omnipusCapture — {token, ingestUrl, stunServer} (see
-// pkg/tools/browser/captureext/embedded/encoder.js's readConfig doc
-// comment). Not a cross-gateway-boundary wire type in the Constraint #8
-// sense (it never round-trips through pkg/gateway's REST/WS surface — it is
-// injected directly into a CDP-driven page via
-// Page.addScriptToEvaluateOnNewDocument), so a package-local struct here is
-// correct, not a lint violation.
-//
-// StunServer carries the STUN policy for the encoder's own browser-side
-// RTCPeerConnection. It MUST NOT be `omitempty`, and that is not a style
-// preference — encoder.js's resolveIceServers reads this field as a
-// TRI-state:
-//
-//	"stun:…" present -> use that server
-//	""      present  -> host candidates only, no STUN at all
-//	key ABSENT       -> back-compat fallback to Google's public STUN server
-//
-// `omitempty` erases the difference between the middle case and the last
-// one, so an explicit "no STUN" was silently delivered to the page as "use
-// stun.l.google.com". Measured 2026-09-05 with the repro harness: with
-// omitempty in place, an encoder configured for host-only ICE still offered
-// server-reflexive candidates from a public STUN server it had been told not
-// to use. Emitting the empty string is what makes the middle case reachable
-// at all.
-type captureInjectPayload struct {
-	Token      string `json:"token"`
-	IngestURL  string `json:"ingestUrl"`
-	StunServer string `json:"stunServer"`
+// captureInjectPayload is injected before the encoder document executes. Its
+// target, generation and geometry describe one immutable prepared frame.
+// StunServer must stay present even when empty: empty disables STUN, whereas
+// an absent property selects the encoder's legacy default.
+type captureInjectPayload struct { // not-wire-format: CDP-injected page configuration.
+	Token             string  `json:"token"`
+	IngestURL         string  `json:"ingestUrl"`
+	StunServer        string  `json:"stunServer"`
+	CaptureGeneration uint64  `json:"capture_generation"`
+	TargetID          string  `json:"target_id"`
+	ExpectedWidth     int     `json:"expected_width"`
+	ExpectedHeight    int     `json:"expected_height"`
+	CaptureScale      float64 `json:"capture_scale"`
 }
 
 // panelTabSet reports the manager-level tab set this capture is bound to
@@ -612,120 +598,109 @@ func (cs *CaptureSession) panelTabSet() string {
 	return cs.mgr.OperatorSessionID()
 }
 
-// defaultEncoderStarter is the production EncoderStarter: it ensures the
-// tab set the live panel resolved exists (so there is a tab to capture),
-// ensures the capture extension is loaded into this workspace's Chrome,
-// creates an UNTRACKED CDP target — deliberately NOT via mgr.OpenTab, which
-// would register it in the visible tab strip; the encoder page is a
-// gateway-internal target the agent and the user never see — injects
-// window.__omnipusCapture BEFORE
-// navigating (Page.addScriptToEvaluateOnNewDocument runs before any of the
-// target document's own scripts, per its CDP doc comment), then navigates to
-// chrome-extension://<captureext.ExtensionID>/encoder.html. stunServer (may
-// be empty) is forwarded into the injected captureInjectPayload verbatim.
-func defaultEncoderStarter(
-	ctx context.Context,
-	mgr *BrowserManager,
-	panelSessionID, tokenHex, ingestURL, stunServer string,
-) (context.Context, context.CancelFunc, error) {
+// captureInjectionScript serializes one startup configuration snapshot.
+func captureInjectionScript(token, ingestURL, stun string, frame CaptureFrameState) (string, error) {
+	if frame.Generation == 0 || frame.Generation > 9007199254740991 ||
+		strings.TrimSpace(frame.TargetID) == "" || len(frame.TargetID) > 128 ||
+		frame.Width < 1 || frame.Width > 16384 || frame.Height < 1 || frame.Height > 16384 ||
+		math.IsNaN(frame.Scale) || frame.Scale < 1 || frame.Scale > 4 {
+		return "", fmt.Errorf("capture session: invalid confirmed frame")
+	}
+	payload, err := json.Marshal(captureInjectPayload{Token: token, IngestURL: ingestURL, StunServer: stun,
+		CaptureGeneration: frame.Generation, TargetID: frame.TargetID, ExpectedWidth: frame.Width, ExpectedHeight: frame.Height, CaptureScale: frame.Scale})
+	if err != nil {
+		return "", fmt.Errorf("capture session: marshal inject payload: %w", err)
+	}
+	return "window.__omnipusCapture = " + string(payload) + ";", nil
+}
+
+// runEncoderStartup links cancellation only while creating and navigating the
+// target. The successful target keeps a persistent coordinator-root lifetime.
+// The supplied functions are the CDP I/O boundary, not lifecycle substitutes.
+func runEncoderStartup(caller, root context.Context, create func(context.Context) (*tabEntry, error), navigate func(context.Context) error) (context.Context, context.CancelFunc, error) {
+	startup, cancelStartup := context.WithTimeout(caller, captureStartTimeout)
+	defer cancelStartup()
+	if err := startup.Err(); err != nil {
+		return nil, nil, err
+	}
+	lifetime, closeLifetime := context.WithCancel(root)
+	stopLink := context.AfterFunc(startup, closeLifetime)
+	defer stopLink()
+	tab, err := create(lifetime)
+	if err != nil {
+		closeLifetime()
+		return nil, nil, err
+	}
+	closeTarget := func() { closeLifetime(); tab.cancel() }
+	if err := startup.Err(); err != nil {
+		closeTarget()
+		return nil, nil, err
+	}
+	deadline, _ := startup.Deadline()
+	runCtx, cancelRun := context.WithDeadline(tab.ctx, deadline)
+	err = navigate(runCtx)
+	cancelRun()
+	if err != nil {
+		closeTarget()
+		return nil, nil, err
+	}
+	// Detach before cancelStartup runs; otherwise success would close the tab.
+	if !stopLink() || startup.Err() != nil {
+		closeTarget()
+		return nil, nil, startup.Err()
+	}
+	return tab.ctx, closeTarget, nil
+}
+
+// defaultEncoderStarter is a temporary compatibility entry until the production
+// constructor installs its prepared-frame closure. Never invent frame identity.
+func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
+	return nil, nil, fmt.Errorf("capture session: confirmed frame identity is required")
+}
+
+// startEncoderWithFrame creates an untracked encoder target in the workspace's
+// shared Chrome. The caller has already prepared the captured target under the
+// live-input gate; this function performs no focus-based target selection.
+func startEncoderWithFrame(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string, frame CaptureFrameState) (context.Context, context.CancelFunc, error) {
+	injectScript, err := captureInjectionScript(tokenHex, ingestURL, stunServer, frame)
+	if err != nil {
+		return nil, nil, err
+	}
 	if mgr == nil {
 		return nil, nil, fmt.Errorf("capture session: no browser manager")
 	}
-
-	// 1. Ensure the tab set being watched exists — the encoder page must share
-	// ITS window (see this file's top-of-file doc comment for why).
-	//
-	// panelSessionID is what the live panel resolved for this viewer (issue
-	// #671): the watched chat's own tab set, or the operator's workspace-owned
-	// one. Passing the operator's unconditionally is the bug — with an empty
-	// operator set THIS call was what lazily created the blank /browser-start
-	// tab the video then showed, while the agent browsed in the chat's set.
-	// Empty falls back to the operator's set, the behaviour every caller
-	// without panel context had before.
-	//
-	// Either way it is a real (key, owner) tab set, never a hardcoded default
-	// session: that identity was deleted by FR-002b, and
-	// TestNoResidualDefaultSessionID exists to keep it deleted.
-	if panelSessionID == "" {
-		panelSessionID = mgr.OperatorSessionID()
-	}
-	if _, err := mgr.Session(panelSessionID); err != nil {
-		return nil, nil, fmt.Errorf("capture session: ensure agent browsing context: %w", err)
-	}
-
-	// 2. Ensure the capture extension is loaded into THIS WORKSPACE'S Chrome.
-	// There is one per workspace now (FR-037), not one shared by the gateway,
-	// so the extension is loaded per browser and not once per process.
 	coord := mgr.Coordinator()
 	if coord == nil {
-		return nil, nil, fmt.Errorf(
-			"capture session: no shared-Chrome coordinator attached (WebRTC capture requires the shared-Chrome coordinator)",
-		)
+		return nil, nil, fmt.Errorf("capture session: no shared-Chrome coordinator attached (WebRTC capture requires the shared-Chrome coordinator)")
 	}
-	if coord.LoadedExtensionID() != captureext.ExtensionID {
-		if _, err := coord.LoadExtension(ctx); err != nil {
-			return nil, nil, fmt.Errorf("capture session: load capture extension: %w", err)
-		}
-	}
-
-	// 3. Create the encoder target as a child of the coordinator's pipe
-	// rootCtx — i.e. in this workspace's browser, alongside every tab that
-	// browser holds. There is exactly one browser context here (FR-031), so
-	// "which context" is no longer a decision this code makes; encoder.js's
-	// tab-selection query and chrome.tabCapture both see the workspace's own
-	// tabs because there is nowhere else for them to be.
-	//
-	// The target is still created WITHOUT mgr.OpenTab, and that part is a
-	// live decision rather than history: OpenTab would register the encoder
-	// page in the visible tab strip, and it is a gateway-internal page the
-	// agent and the user must never see or be able to drive.
-	//
-	// Why the encoder page is not simply put wherever is convenient — the
-	// constraint that shaped this, kept because it is the reason the code
-	// looks like this and not because it still binds: against the retired
-	// per-agent CDP-created contexts, Chrome refused to load
-	// chrome-extension:// pages at all (net::ERR_BLOCKED_BY_CLIENT, even with
-	// enableInIncognito:true), and chrome.tabCapture answered "Invalid tab
-	// specified." for any tab inside one (ADR-048, real Chrome 150). Both
-	// findings are what make a per-workspace Chrome PROCESS the right
-	// isolation boundary and a CDP context the wrong one. Do not reintroduce
-	// a CDP context to "isolate" anything here: it would break capture and
-	// nothing else, which is a failure that shows up only on a machine with a
-	// real browser.
 	rootCtx := coord.rootContext()
 	if rootCtx == nil {
 		return nil, nil, fmt.Errorf("capture session: shared Chrome is not live (no root context for the encoder page)")
 	}
-
-	tab, err := mgr.createTab(rootCtx, "")
-	if err != nil {
-		return nil, nil, fmt.Errorf("capture session: create encoder target: %w", err)
-	}
-
-	payload, err := json.Marshal(captureInjectPayload{Token: tokenHex, IngestURL: ingestURL, StunServer: stunServer})
-	if err != nil {
-		tab.cancel()
-		return nil, nil, fmt.Errorf("capture session: marshal inject payload: %w", err)
-	}
-	injectScript := "window.__omnipusCapture = " + string(payload) + ";"
-	encoderURL := "chrome-extension://" + captureext.ExtensionID + "/encoder.html"
-
-	runCtx, cancel := context.WithTimeout(tab.ctx, captureStartTimeout)
-	runErr := chromedp.Run(
-		runCtx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)
-			return err
-		}),
-		chromedp.Navigate(encoderURL),
-	)
-	cancel()
-	if runErr != nil {
-		tab.cancel()
-		return nil, nil, fmt.Errorf("capture session: inject config + navigate encoder page: %w", runErr)
-	}
-
-	return tab.ctx, tab.cancel, nil
+	return runEncoderStartup(ctx, rootCtx, func(lifetime context.Context) (*tabEntry, error) {
+		if coord.LoadedExtensionID() != captureext.ExtensionID {
+			if _, err := coord.LoadExtension(lifetime); err != nil {
+				return nil, fmt.Errorf("capture session: load capture extension: %w", err)
+			}
+		}
+		tab, err := mgr.createTab(lifetime, "")
+		if err != nil {
+			return nil, fmt.Errorf("capture session: create encoder target: %w", err)
+		}
+		return tab, nil
+	}, func(runCtx context.Context) error {
+		err := chromedp.Run(runCtx,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)
+				return err
+			}),
+			chromedp.Navigate("chrome-extension://"+captureext.ExtensionID+"/encoder.html"),
+		)
+		if err != nil {
+			return fmt.Errorf("capture session: inject config + navigate encoder page: %w", err)
+		}
+		return nil
+	})
 }
 
 // Start idempotently begins this capture session's encoder-page lifecycle.
