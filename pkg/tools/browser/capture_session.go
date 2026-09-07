@@ -65,7 +65,7 @@ const captureTokenBytes = 32
 
 // captureStartTimeout bounds the encoder-page inject+navigate CDP round trip
 // — NOT Start() itself (Start contains no chromedp.Run call of its own), but
-// the EncoderStarter it invokes: defaultEncoderStarter derives its own
+// the EncoderStarter it invokes: startEncoderWithFrame derives its own
 // runCtx from this constant around its chromedp.Run(injectScript, Navigate)
 // call, below. Generous for a cold managed-Chrome extension load, but
 // bounded so a wedged CDP transport can't hang a viewer's offer forever.
@@ -274,7 +274,7 @@ type viewerRegistration struct {
 // LOW finding: this was previously never passed to the encoder page at all).
 // Exported purely as a test-injection seam (mirrors this package's existing
 // createTabFn/pipeLauncher/listTargets testability pattern) — production code
-// always uses defaultEncoderStarter.
+// always uses startEncoderWithFrame.
 //
 // panelSessionID (issue #671) is the manager-level tab set the LIVE PANEL
 // resolved for this capture — the encoder page must be raised alongside
@@ -444,7 +444,7 @@ type CaptureSession struct {
 // agent's BrowserManager — NOT because the encoder page is created in a
 // context of its own (it is not; there is one default context per browser
 // since FR-031), but because mgr is how this reaches the workspace's
-// coordinator, whose BrowserConfig.ExtensionDir defaultEncoderStarter loads
+// coordinator, whose BrowserConfig.ExtensionDir startEncoderWithFrame loads
 // the capture extension from, set once at gateway boot. cfg is the Pion
 // relay's ICE config (wave-plan item 7:
 // Tools.Browser.WebRTCStunServer), sink receives every "input" data-channel
@@ -464,7 +464,7 @@ func NewCaptureSession(
 		return nil, fmt.Errorf("capture session: mint token: %w", err)
 	}
 	relay := webrtc.NewSession(cfg, sink, logf)
-	cs := newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf)
+	cs := newCaptureSessionWithDeps(mgr, agentID, relay, nil, token, logf)
 	// The encoder page gets NO STUN server, whatever the operator configured.
 	// tools.browser.webrtc_stun_server governs the VIEWER leg, which is the
 	// only leg with a real network between its peers; the encoder page is this
@@ -478,13 +478,23 @@ func NewCaptureSession(
 	// (resolveIceServers's tri-state), which is exactly what this leg wants.
 	cs.stunServer = ""
 	cs.panelSessionID = panelSessionID
+	cs.startEncoder = func(ctx context.Context, mgr *BrowserManager, panelID, token, ingestURL, stun string) (context.Context, context.CancelFunc, error) {
+		frame, err := cs.prepareEncoderFrame(ctx, measureCaptureGeometry)
+		if err != nil {
+			return nil, nil, err
+		}
+		return startEncoderWithFrame(ctx, mgr, panelID, token, ingestURL, stun, frame)
+	}
+	relay.SetOnVideoBoundary(func(generation uint64, targetID string, timestamp uint32) {
+		cs.CommitFrameBoundary(generation, targetID, timestamp)
+	})
 	return cs, nil
 }
 
 // NewCaptureSessionWithDeps is the fully-injectable constructor: relay
 // satisfies RelaySession (a fake in tests, *webrtc.Session in production —
 // see NewCaptureSession) and startEncoder satisfies EncoderStarter (a fake
-// in tests that never touches real chromedp, defaultEncoderStarter in
+// in tests that never touches real chromedp, startEncoderWithFrame in
 // production). Exported for other packages' tests (pkg/gateway's WebRTC
 // signaling handler tests construct a real *CaptureSession with these two
 // seams faked, exercising the actual CaptureSession lifecycle logic against
@@ -652,12 +662,6 @@ func runEncoderStartup(caller, root context.Context, create func(context.Context
 	return tab.ctx, closeTarget, nil
 }
 
-// defaultEncoderStarter is a temporary compatibility entry until the production
-// constructor installs its prepared-frame closure. Never invent frame identity.
-func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
-	return nil, nil, fmt.Errorf("capture session: confirmed frame identity is required")
-}
-
 // startEncoderWithFrame creates an untracked encoder target in the workspace's
 // shared Chrome. The caller has already prepared the captured target under the
 // live-input gate; this function performs no focus-based target selection.
@@ -763,31 +767,6 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 		cs.tabCancel = tabCancel
 		cs.started = true
 		cs.mu.Unlock()
-		// Deterministic capture-target binding (UAT 2026-07-18 "video black
-		// when the agent drives" root cause): encoder.js resolves its capture
-		// target as "the ACTIVE tab in the LAST-FOCUSED window"
-		// (findActiveTargetTab). The encoder target startEncoder just created
-		// lives in its own freshly-created window, which is the last-focused
-		// window at resolution time — the active-tab query then finds only
-		// the (filtered-out) extension page and falls back to "first
-		// non-extension tab", i.e. the OLDEST tab in THIS WORKSPACE'S Chrome.
-		// With one agent that is coincidentally correct; and since FR-037 put
-		// every agent on a workspace into that one browser, a second agent on
-		// the same workspace is the ordinary case, not the exotic one — the
-		// fallback then binds the WRONG agent's tab. Bringing
-		// the REQUESTING agent's active tab to front here — after the
-		// encoder-target creation (the last window-focus-stealing step) and
-		// strictly before the encoder resolves its target (which happens only
-		// after its page loads AND the ingest-WS hello/config round-trip
-		// completes) — makes the last-focused window deterministically this
-		// agent's, so the active-tab query resolves it directly, no fallback.
-		// This is what lets handleWebRTCOffer's ADR-048 condition-2 fence be
-		// scoped to ACTIVELY-VIEWED conflicting captures instead of denying
-		// on any other live agent session. (Same BringToFront-before-capture
-		// precedent as live.go's StartScreencast/rebindScreencast.)
-		if !cs.bringAgentTabToFront(ctx) {
-			cs.reassertForegroundAsync()
-		}
 		cs.logf("capture[%s]: started (encoder page navigating)", cs.agentID)
 	})
 
@@ -844,7 +823,7 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 		// Focus the tab that EXISTS; never manufacture one as a side effect of
 		// focusing. By the time this runs on the real path the encoder starter
 		// has already ensured the workspace-owned browsing context (step 1 of
-		// defaultEncoderStarter), so a missing context here means the capture is
+		// startEncoderWithFrame), so a missing context here means the capture is
 		// running against a manager that has none — and lazily creating one
 		// would open a tab nobody asked for, on a code path whose whole
 		// contract is best-effort.
