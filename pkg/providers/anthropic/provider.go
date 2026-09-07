@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -351,26 +350,16 @@ func buildParams(
 		params.Temperature = anthropic.Float(temp)
 	}
 
+	if len(tools) > 0 {
+		params.Tools = translateTools(tools)
+	}
+
 	// Extended Thinking / Adaptive Thinking
 	// The thinking_level value directly determines the API parameter format:
 	//   "adaptive" → {thinking: {type: "adaptive"}} + output_config.effort
 	//   "low/medium/high/xhigh" → {thinking: {type: "enabled", budget_tokens: N}}
-	//
-	// Resolved BEFORE tool-choice (below) is applied: Anthropic rejects a
-	// request that combines tool_choice:{type:"any"} (forced/required) with
-	// thinking:{type:"enabled"|"adaptive"} (API 400), so applyToolChoice must
-	// know whether thinking will be on this request to degrade Required to
-	// Auto instead of emitting the incompatible pair.
-	thinkingLevel, thinkingOK := options["thinking_level"].(string)
-	thinkingEnabled := thinkingOK && thinkingLevel != "" && thinkingLevel != "off"
-
-	if len(tools) > 0 {
-		params.Tools = translateTools(tools)
-		applyToolChoice(&params, options, thinkingEnabled)
-	}
-
-	if thinkingEnabled {
-		applyThinkingConfig(&params, thinkingLevel)
+	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
+		applyThinkingConfig(&params, level)
 	}
 
 	return params, nil
@@ -441,55 +430,6 @@ func levelToBudget(level string) int {
 		return 64000
 	default:
 		return 0
-	}
-}
-
-// warnForcedToolChoiceThinkingConflictOnce logs the forced-tool-choice /
-// extended-thinking degrade at most once per process (mirrors
-// pkg/gateway/auth.go's warnUnauthOnce pattern) — this can fire on every
-// goal-forcing turn otherwise (ADR-081 D3 Layer 1 sets Required on every
-// first request of a goal generation), and Layers 2-3 already cover the
-// invariant, so a repeat WARN carries no new information.
-var warnForcedToolChoiceThinkingConflictOnce sync.Once
-
-// applyToolChoice sets params.ToolChoice from the typed ToolChoice threaded
-// through options (ADR-081 D3 [G-B1]). Anthropic's wire format is
-// tool_choice: {"type":"auto"} / {"type":"any"} ("any" = required — the
-// SDK's ToolChoiceAnyParam; there is no "required" literal on this API).
-//
-// NEW code: this provider never set ToolChoice before. When ResolveToolChoice
-// returns ok=false (the common case — no forcing requested), ToolChoice is
-// left at its zero value, which `omitzero` drops from the request entirely;
-// the API defaults an omitted tool_choice to "auto" itself, so this is
-// behaviorally identical to the pre-ADR-081 state for every caller that
-// never sets the option.
-//
-// thinkingEnabled: the Anthropic API rejects tool_choice:{type:"any"}
-// combined with thinking:{type:"enabled"|"adaptive"} (HTTP 400) — extended/
-// adaptive thinking requires the model be free to decide whether to call a
-// tool at all. When both would otherwise apply, forced choice is degraded to
-// Auto instead of emitting the incompatible pair; ADR-081 D3's Layers 2
-// (validation + bounded retry) and 3 (keeper backstop + engine fallback
-// compile) still drive the model toward set_goal/AskUserQuestion without a
-// hard API rejection.
-func applyToolChoice(params *anthropic.MessageNewParams, options map[string]any, thinkingEnabled bool) {
-	tc, ok := protocoltypes.ResolveToolChoice(options, "anthropic")
-	if !ok {
-		return
-	}
-	switch tc.Mode {
-	case protocoltypes.ToolChoiceRequired:
-		if thinkingEnabled {
-			warnForcedToolChoiceThinkingConflictOnce.Do(func() {
-				logger.WarnCF("anthropic", "forced tool_choice incompatible with extended thinking on "+
-					"anthropic; degrading to auto — layers 2-3 cover", nil)
-			})
-			params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{}}
-			return
-		}
-		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
-	case protocoltypes.ToolChoiceAuto:
-		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{}}
 	}
 }
 

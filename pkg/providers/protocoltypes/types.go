@@ -1,11 +1,5 @@
 package protocoltypes
 
-import (
-	"fmt"
-
-	"github.com/elicify-ai/omnipus/pkg/logger"
-)
-
 type ToolCall struct {
 	ID               string         `json:"id"`
 	Type             string         `json:"type,omitempty"`
@@ -107,77 +101,4 @@ type ToolFunctionDefinition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
-}
-
-// ToolChoiceMode selects how a provider should treat tool/function calling
-// for a single request (ADR-081 D3 [G-B1]).
-type ToolChoiceMode string
-
-const (
-	// ToolChoiceAuto lets the model decide whether to call a tool — the
-	// behavior every native builder already had before this type existed.
-	ToolChoiceAuto ToolChoiceMode = "auto"
-	// ToolChoiceRequired forces the model to call one of the offered tools.
-	// Model-specific single-tool forcing (naming exactly one tool by name)
-	// is deliberately NOT represented: ADR-081 D3 narrows the offered tool
-	// list to the exact set the caller wants forced, rather than asking a
-	// provider to pin one tool while other tools are still on offer.
-	ToolChoiceRequired ToolChoiceMode = "required"
-)
-
-// ToolChoice is the typed tool-choice-forcing value threaded through
-// LLMProvider.Chat/ChatStream's options map under OptionKeyToolChoice
-// (ADR-081 D3 [G-B1], threading-mechanism choice (a): a well-known options
-// key whose VALUE is a typed struct, resolved by a checked type assertion
-// that WARNs on mismatch — see ResolveToolChoice). This replaces a bare
-// options["tool_choice"] string key, whose typo would silently degrade
-// every builder to its own default instead of failing anywhere: a caller
-// must construct a ToolChoice value, so passing the wrong Go type is caught
-// by ResolveToolChoice's WARN-and-degrade path, and an unrecognized Mode
-// value is caught the same way, instead of a misspelled string sailing
-// straight into a wire request unnoticed.
-type ToolChoice struct {
-	Mode ToolChoiceMode
-}
-
-// OptionKeyToolChoice is the options map key under which a ToolChoice value
-// is threaded through LLMProvider.Chat/ChatStream (ADR-081 D3 [G-B1]).
-const OptionKeyToolChoice = "tool_choice"
-
-// ResolveToolChoice reads a typed ToolChoice from options under
-// OptionKeyToolChoice. ok is true only when the key holds a ToolChoice
-// value with a recognized Mode; every native builder is expected to treat
-// ok=false as "leave tool_choice at this provider's pre-ADR-081 default"
-// (typically omitted/auto), never as an error.
-//
-// Absence of the key is silent and does not log: it is overwhelmingly the
-// common case (tool_choice is only set on a goal turn's forced first move,
-// ADR-081 D3), and warning on "not present" would spam every ordinary
-// request on every other turn. A key PRESENT with the wrong Go type, or a
-// Mode this package does not recognize, is different — that is always a
-// caller bug (a stale string, a copy-paste typo, a value from a future
-// schema version) — and is logged at WARN naming providerName so an
-// operator can trace which builder saw it, then degrades to ok=false
-// rather than panicking or erroring the whole request.
-func ResolveToolChoice(options map[string]any, providerName string) (ToolChoice, bool) {
-	raw, present := options[OptionKeyToolChoice]
-	if !present {
-		return ToolChoice{}, false
-	}
-	tc, ok := raw.(ToolChoice)
-	if !ok {
-		logger.WarnCF(providerName, "tool_choice option has unexpected type; degrading to provider default", map[string]any{
-			"type": fmt.Sprintf("%T", raw),
-		})
-		return ToolChoice{}, false
-	}
-	switch tc.Mode {
-	case ToolChoiceAuto, ToolChoiceRequired:
-		return tc, true
-	default:
-		logger.WarnCF(providerName, "tool_choice option has unrecognized mode; degrading to provider default", map[string]any{
-			"mode": string(tc.Mode),
-		})
-		return ToolChoice{}, false
-	}
 }

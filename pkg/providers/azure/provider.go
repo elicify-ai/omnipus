@@ -113,10 +113,9 @@ func (p *Provider) Chat(
 	if len(tools) > 0 {
 		enableWebSearch, _ := options["native_search"].(bool)
 		requestBody.Tools = orc.TranslateTools(tools, enableWebSearch)
-		// ADR-081 D3 [G-B1]: resolves options[protocoltypes.OptionKeyToolChoice]
-		// to Required when forced, else the same explicit Auto this line
-		// always sent.
-		requestBody.ToolChoice = orc.ResolveToolChoiceUnion(options, "azure")
+		requestBody.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+		}
 	}
 
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok {

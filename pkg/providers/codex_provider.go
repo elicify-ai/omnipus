@@ -247,12 +247,6 @@ func buildCodexParams(
 
 	if len(tools) > 0 || enableWebSearch {
 		params.Tools = orc.TranslateTools(tools, enableWebSearch)
-		// ADR-081 D3 [G-B1]: NEW — this builder never set tool_choice before;
-		// the Responses API already defaulted an omitted field to "auto", so
-		// making that explicit (and honoring Required when forced) does not
-		// change the effective behavior for a caller that never sets the
-		// option.
-		params.ToolChoice = orc.ResolveToolChoiceUnion(options, "codex_provider")
 	}
 
 	return params

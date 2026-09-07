@@ -26,33 +26,12 @@ func NewCodexCliProvider(workspace string) *CodexCliProvider {
 	}
 }
 
-// SupportsToolChoiceForcing implements ToolChoiceForcingCapable: false —
-// tools are flattened into the prompt text (buildPrompt below), so there is
-// no request-shape tool_choice field to force (ADR-081 D3 [G-B1], spec
-// FR-009). Review-round-1 finding #12: this interface is the engine's
-// primary check (pkg/agent/loop.go's isCLIBridgedProvider); the per-request
-// no-op+WARN in Chat, above, remains the last line of defense.
-func (p *CodexCliProvider) SupportsToolChoiceForcing() bool { return false }
-
 // Chat implements LLMProvider.Chat by executing the codex CLI in non-interactive mode.
 func (p *CodexCliProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
 	if p.command == "" {
 		return nil, fmt.Errorf("codex command not configured")
-	}
-
-	// ADR-081 D3 [G-B1]: tool-choice forcing is structurally inapplicable to
-	// this CLI-bridged provider — tools are flattened into the prompt text
-	// below (buildPrompt), there is no request-shape "tool_choice" field to
-	// set. The engine is expected to never force here (FR-009: forcing MUST
-	// NOT occur on a CLI-bridged provider); this is belt-and-suspenders — if
-	// it happens anyway, NO-OP rather than error, but WARN once so a future
-	// engine regression that DOES force here is visible instead of silently
-	// doing nothing.
-	if tc, ok := ResolveToolChoice(options, "codex_cli"); ok && tc.Mode == ToolChoiceRequired {
-		slog.Warn("tool_choice=required requested but the codex CLI provider cannot force tool use (tools are flattened to prompt text); ignoring",
-			"provider", "codex-cli")
 	}
 
 	prompt := p.buildPrompt(messages, tools)

@@ -304,19 +304,6 @@ func buildRequestBody(
 	// Add tools if present
 	if len(tools) > 0 {
 		result["tools"] = buildTools(tools)
-		// ADR-081 D3 [G-B1]: NEW — this builder never set tool_choice before.
-		// Wire format is {"type":"auto"} / {"type":"any"} ("any" = required).
-		// When no ToolChoice was forced, the key is left absent entirely (not
-		// even an explicit "auto"), matching this builder's pre-ADR-081
-		// behavior byte-for-byte — Anthropic's own default for an omitted
-		// tool_choice is "auto".
-		if tc, ok := protocoltypes.ResolveToolChoice(options, "anthropic_messages"); ok {
-			wireType := "auto"
-			if tc.Mode == protocoltypes.ToolChoiceRequired {
-				wireType = "any"
-			}
-			result["tool_choice"] = map[string]any{"type": wireType}
-		}
 	}
 
 	return result, nil

@@ -194,9 +194,13 @@ func (p *Provider) Chat(
 		input.InferenceConfig = inferenceConfig
 	}
 
-	// Convert tools to Bedrock format and apply tool-choice forcing.
-	if toolConfig := buildToolConfig(tools, options); toolConfig != nil {
-		input.ToolConfig = toolConfig
+	// Convert tools to Bedrock format
+	// Only set ToolConfig if at least one valid tool was produced
+	if len(tools) > 0 {
+		toolConfig := convertTools(tools)
+		if len(toolConfig.Tools) > 0 {
+			input.ToolConfig = toolConfig
+		}
 	}
 
 	// Call Bedrock Converse API
@@ -460,40 +464,6 @@ func buildAssistantContent(msg Message) []types.ContentBlock {
 	}
 
 	return content
-}
-
-// buildToolConfig converts tools to a Bedrock ToolConfiguration and applies
-// the typed ToolChoice option (ADR-081 D3 [G-B1]). Returns nil when no valid
-// tools were produced — Bedrock's Converse API rejects a request whose
-// toolConfig.tools is empty, and "required" with zero tools offered is a
-// guaranteed error, so this returns no ToolConfig at all in that case rather
-// than a ToolChoice=Any alongside an empty Tools list.
-func buildToolConfig(tools []ToolDefinition, options map[string]any) *types.ToolConfiguration {
-	if len(tools) == 0 {
-		return nil
-	}
-	toolConfig := convertTools(tools)
-	if len(toolConfig.Tools) == 0 {
-		return nil
-	}
-	if tc, ok := protocoltypes.ResolveToolChoice(options, "bedrock"); ok {
-		toolConfig.ToolChoice = resolveBedrockToolChoice(tc)
-	}
-	return toolConfig
-}
-
-// resolveBedrockToolChoice maps the typed ToolChoice (ADR-081 D3 [G-B1]) to
-// the Bedrock Converse API's ToolChoice union. types.ToolChoiceMemberTool
-// (model-specific single-tool forcing) is deliberately unused — see
-// protocoltypes.ToolChoiceMode's doc comment. NEW code: this provider never
-// set ToolConfiguration.ToolChoice before; a nil/omitted ToolChoice already
-// meant "auto" to the Converse API, so ToolChoiceMemberAuto is behaviorally
-// identical to the pre-ADR-081 state.
-func resolveBedrockToolChoice(tc protocoltypes.ToolChoice) types.ToolChoice {
-	if tc.Mode == protocoltypes.ToolChoiceRequired {
-		return &types.ToolChoiceMemberAny{}
-	}
-	return &types.ToolChoiceMemberAuto{}
 }
 
 // convertTools converts tool definitions to Bedrock format.
