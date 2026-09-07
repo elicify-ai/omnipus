@@ -591,10 +591,12 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	coll, collDone := newEventCollector(t, al)
 	defer collDone()
 
-	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty after
-	// confirm) and emits the confirm-in-chat surface. ADR-074 D4a: a PROSE
-	// intent parks as a pending goal (pill=queued) and activates on the
-	// explicit confirm (pill=active).
+	// (1) ADR-081 D1 (work-first): a PROSE /goal activates INSTANTLY — the
+	// condition persists, the record (GoalCriteriaJSON) is a LEGAL, expected
+	// transient empty (the D3 forcing predicate), and NO confirm surface
+	// exists anymore. The record is then authored by the working agent via
+	// set_goal; here the t0 node simulates that registration directly
+	// (the set_goal drive itself is covered by goal_flow_integration_test.go).
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal land the contract-first layer", UserInitiated: true},
 		agentInst, &opts)
@@ -603,12 +605,27 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if meta.GoalCondition == "" {
 		t.Fatal("(1) /goal set must persist the goal condition")
 	}
-	if meta.GoalCriteriaJSON == "" {
-		t.Fatal("(1) /goal set must run the SMART compile (GoalCriteriaJSON non-empty) — t0 SMART-compile node")
+	if meta.GoalCriteriaJSON != "" {
+		t.Fatalf("(1) ADR-081: instant activation must NOT compile — the record starts empty (got %q)", meta.GoalCriteriaJSON)
 	}
+	regJSON, merr := marshalCompiledGoal(&CompiledGoal{
+		Intent: "land the contract-first layer",
+		Prompt: "land the contract-first layer",
+		Criteria: []task.AcceptanceCriterion{{
+			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+			Text: "the contract-first layer is landed",
+		}},
+	})
+	if merr != nil {
+		t.Fatal(merr)
+	}
+	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &regJSON}); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ = store.GetMeta(sid)
 	compiled := loadCompiledGoal(meta.GoalCriteriaJSON)
 	if compiled == nil || len(compiled.Criteria) == 0 {
-		t.Fatalf("(1) SMART compile must produce a criteria ladder, got GoalCriteriaJSON=%q", meta.GoalCriteriaJSON)
+		t.Fatalf("(1) the registered record must load as a criteria ladder, got GoalCriteriaJSON=%q", meta.GoalCriteriaJSON)
 	}
 	// The Judge is swapped AFTER compile so its verdict echoes the REAL
 	// compiled criterion IDs (not the legacy "goal-condition" back-compat).
