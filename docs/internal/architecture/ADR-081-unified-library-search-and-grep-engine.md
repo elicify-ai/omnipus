@@ -1,8 +1,13 @@
-# ADR-069 — Unified Library search, general file search, and the grep engine
+# ADR-081 — Unified Library search, general file search, and the grep engine
 
 - **Status:** Accepted (founder-directed, 2026-09-07). Core decisions ratified in the
   design conversation of 2026-09-07; three sub-decisions are marked OPEN below and do
   not block the shape of the design.
+- **Renumbered 2026-09-07:** originally drafted as "ADR-069" on the pre-merge feature
+  branch; release/v0.1.1 already owns ADR-069 (universal live browser connectivity), so
+  this document is ADR-081. Validated against the MERGED tree
+  (integrate/library-improvements-v0.1.1 @ f37346338) — see the "merged-tree
+  obligations" in §2 D11.
 - **Date:** 2026-09-07
 - **Supersedes/relates:** the C1 "human vault search" from
   `docs/internal/specs/library-b-c-design-2026-09-07.md` (which shipped a *second* search
@@ -29,9 +34,12 @@ Three problems, discovered during the B+C UAT:
    index only); they cannot grep arbitrary files across folders and mounts.
 
 Verified facts the decisions rest on:
-- `/knowledge/find` and the agent's `knowledge_find` tool (`pkg/agent/knowledge_tools.go`)
-  run over the **same** engine (`vaultprops.OpenFindEnv` + `knowledgefind.Find`) — it is
-  already the shared agent+human mechanism.
+- `/knowledge/find` and the agent's `knowledge_find` tool run over the **same** engine —
+  already the shared agent+human mechanism. Precisely, on the merged tree: the agent
+  tool is `pkg/vaultprops.FindTool` (the ADR-068 D15.3 adapter, registered via
+  `pkg/agent/knowledge_tools.go::registerKnowledgeTools`), and the human endpoint is
+  `pkg/gateway/rest_knowledge_find.go`; both drive `pkg/records/knowledgefind.Find`
+  through `vaultprops.OpenFindEnv`.
 - `/knowledge/search` (`pkg/gateway/rest_knowledge.go::handleKnowledgeSearch`) is a
   **separate, human-only** path; **no agent tool uses it** (verified by grep of
   `pkg/sysagent`, `pkg/agent`, `pkg/coreagent`, `pkg/tools`).
@@ -132,6 +140,26 @@ scanning, and the bounds are all present. Precedent that this is achievable in p
 Both index and live grep can only search **text** content; binaries are skipped. Name/path
 search matches all files (including PDFs/binaries by filename). Making PDF/office *content*
 searchable needs text extraction — out of scope here, noted as future.
+
+**D11 — Merged-tree obligations for any NEW tool this ADR introduces (validated
+2026-09-07 against integrate/library-improvements-v0.1.1).**
+The merge brought release's tool governance; a new `grep`/`file_search` agent tool must
+satisfy all of it, none of which existed when this ADR was drafted:
+- **ADR-071 manifest tier:** the tool must be deliberately tiered. Default ruling here:
+  **search-only/lazy** (like the knowledge family — pinned by
+  `pkg/tools/manifest_test.go::TestVisibility_KnowledgeToolsAreSearchOnly`); its schema
+  must not join the every-turn manifest. Add it to the tier pinning tests.
+- **ADR-077 two-layer policy:** add the tool to the static catalog
+  (`pkg/coreagent/core.go::allStaticToolNames`), give it a shipped GLOBAL ceiling
+  default in `pkg/config/defaults.go` (recommended: `allow` — read-only, confined), and
+  a posture in every core agent's seed. Update the load-bearing pin
+  `pkg/coreagent/catalog_count_test.go::catalogSizeToday` (currently 101) following that
+  test's own documented procedure, naming the tool in the commit message.
+- **Guards that will police it:** `TestRequestPathRedaction_SourceInventory` (if it ever
+  logs request paths), `TestNoUnprotectedInlineRoute` (N/A — it returns JSON, never raw
+  bytes), and the pre-commit falsification-mutation gate.
+- The REST endpoint pattern to follow is `rest_knowledge_find.go` (auth wrap, honest
+  partial/`complete_reason`, decodeAndValidate against a generated schema).
 
 ---
 
