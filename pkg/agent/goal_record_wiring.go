@@ -185,8 +185,8 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 	)
 
 	if route := goalTriggers().routeFor(sessionID); route.channel != "" && route.channel != goalForcingWebChannel {
-		switch {
-		case al.bus == nil:
+		switch al.bus {
+		case nil:
 			logger.WarnCF("agent", "goal: channel record echo skipped — no message bus wired",
 				map[string]any{"component": "goal", "session_id": sessionID, "channel": route.channel})
 		default:
@@ -206,4 +206,51 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 
 	logger.InfoCF("agent", "goal: record write applied",
 		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": meta.GoalID, "diff": diffSummary})
+}
+
+// EmitGoalStatusRehydrate re-emits ONE goal_status event for sessionID
+// carrying its CURRENT persisted definition/criteria/dod — reusing the SAME
+// emission call afterGoalRecordWrite (above) uses — when (and only when)
+// the session carries an active, non-terminal goal with a registered
+// record. No-op (returns false, no event emitted) when there is no active
+// goal, no record yet (D1's legal transient empty-record state), the
+// record fails to parse, or the session/store cannot be resolved.
+//
+// Item 14 (review-round-1, ADR-081): a WS reattach (SPA reload/reconnect)
+// has no rehydration path for a goal's already-registered record —
+// goal_status is a pure live push (EventKindGoalStatusChanged), never a
+// persisted, replayable transcript entry, so the record card the SPA
+// renders from it never reappeared after a reload. The gateway's
+// handleAttachSession (pkg/gateway/websocket.go) calls this once, right
+// after replay + hydration complete, so the reattaching connection (already
+// registered for live-event forwarding earlier in that same function) sees
+// exactly the event it would have seen had it never disconnected. Cheap:
+// one GetMeta read, only on attach, only when a record genuinely exists.
+func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return false
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return false
+	}
+	if meta.GoalCondition == "" || meta.GoalCriteriaJSON == "" {
+		// No active goal, or the D1 legal-transient empty-record state
+		// (nothing registered yet to rehydrate) — a genuinely terminal goal
+		// also reads GoalCondition == "" (clearGoal empties it), so this
+		// same check excludes terminal goals for free.
+		return false
+	}
+	g := loadCompiledGoal(meta.GoalCriteriaJSON)
+	if g == nil {
+		// Non-empty but unparseable/corrupt/zero-criteria — loadCompiledGoal
+		// already WARN-logged the specifics; nothing safe to re-emit.
+		return false
+	}
+	al.emitGoalStatusFrameWithCriteriaAndDoD(
+		sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
+		meta.GoalLatestReason, goalPillActive, g.Definition, g.Criteria, g.DoD,
+	)
+	return true
 }

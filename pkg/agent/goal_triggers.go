@@ -88,6 +88,14 @@ var goalIdleQuietWindow = 60 * time.Second //nolint:gochecknoglobals
 // never the idle path's full quiet-window cost).
 const goalBareClaimCostThreshold = 2
 
+// goalRoutingLostReason is FR-031's "routing lost" GoalLatestReason note
+// (routeFor, below). Named so the write can be made conditional
+// (review-round-1 finding #10: never overwrite a fresher, more informative
+// reason already there, and never re-write the identical note every idle
+// cycle) and so both the write and the "already says this" comparison read
+// from ONE source of truth.
+const goalRoutingLostReason = "keeper cannot reach the goal's channel — routing lost"
+
 // goalZeroOutputPushMax is ADR-081 FR-014b/FR-017's "N=2" bound — SHARED by
 // TWO ladders through the SAME persisted GoalZeroOutputPushes field
 // (session.UnifiedMeta), a deliberate decision (reported per the lane
@@ -835,8 +843,19 @@ func goalContinuePushPrompt(condition string) string {
 // deterministic marker parser) still applies underneath this call, so SOME
 // record lands either way, closing FR-017's invariant that every active
 // goal ends up judgeable.
+//
+// review-round-1 (keeper wedge): unlike dispatchGoalAsyncFollowUp, this
+// function NEVER hands off to a dispatched turn — it writes the record
+// directly via SetMeta, engine-side. checkGoalLoopAfterTurn's
+// bumpGoalActivityOnTurn (the ONLY place that clears the idleSettling
+// marker markGoalIdleFired set before this call was reached) therefore
+// never runs for this path, on success OR failure. Without the unconditional
+// defer below, the keeper wedges permanently at the goalIsIdleSettling gate
+// the very first time nudge exhaustion is reached — every exit here must
+// clear the marker itself.
 func (al *AgentLoop) dispatchGoalFallbackCompile(store *session.UnifiedStore, s *session.UnifiedMeta, agentInst *AgentInstance) {
 	sessionID := s.ID
+	defer al.goalMarkIdleSettling(sessionID, false)
 	logger.WarnCF("agent", "goal fallback compile invoked after nudge exhaustion",
 		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "nudges": s.GoalZeroOutputPushes})
 
@@ -879,8 +898,14 @@ func (al *AgentLoop) dispatchGoalFallbackCompile(store *session.UnifiedStore, s 
 	}
 	logger.InfoCF("agent", "goal: engine-authored fallback record registered",
 		map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "used_deterministic_parser": outcome.UsedFallback})
-	al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, s.GoalID, s.GoalCondition, s.GoalRoundsUsed, s.GoalMaxRounds, "", goalPillActive,
-		outcome.Result.Goal.Definition, outcome.Result.Goal.Criteria, outcome.Result.Goal.DoD)
+	// review-round-1 finding #11: route the fallback registration through
+	// the SAME shared post-write path set_goal and the marker paths (#8)
+	// use, instead of a raw frame emission — the bare
+	// emitGoalStatusFrameWithCriteriaAndDoD call this replaced skipped the
+	// FR-020 channel echo entirely, on the path MOST likely to serve
+	// channel goals (a channel-origin recordless goal that never got a
+	// set_goal call from its own agent within two nudges).
+	al.afterGoalRecordWrite(sessionID, criteriaJSON, reason)
 }
 
 // --- D6a repairs: in-flight suppression, parked-card suppression, and the
@@ -940,12 +965,19 @@ func (al *AgentLoop) goalHasLiveTurn(sessionID string) bool {
 // from GoalLastActivityAt (see outputWatermarks' doc comment for why: this
 // SAME evaluation's own dispatched push/nudge turn bumps GoalLastActivityAt
 // forward once it runs, which would make every later check compare against
-// a boundary chronologically AFTER the very output that produced it). On the
-// FIRST-EVER observation for a goal-id (fresh goal, or a post-restart
-// re-baseline — this watermark is in-memory only) there is nothing to
-// compare against yet: the triple is conservatively treated as holding
-// (a harmless extra push/nudge at worst, never a premature fail-closed
-// verdict) and tracking starts from here.
+// a boundary chronologically AFTER the very output that produced it).
+//
+// review-round-1 finding #4(b): on the FIRST-EVER observation for a goal-id
+// (fresh goal, or — since outputWatermarks is in-memory only — indistinguishable
+// from a post-restart re-baseline) there is nothing to compare against yet.
+// The PRIOR behavior conservatively treated the triple as HOLDING here,
+// which meant every gateway restart mid-goal handed the very next idle cycle
+// a "free" push — burning one of the bounded goalZeroOutputPushMax slots
+// with zero evidence either way about whether the goal was genuinely idle
+// across the outage. This is now the opposite: unknown is treated as ACTIVE,
+// never as a free push — the watermark is still seeded to `now` (so the
+// NEXT call has a real boundary to compare against), but THIS evaluation
+// reports the triple as NOT holding, routing to normal settlement instead.
 func (al *AgentLoop) goalZeroOutputTripleHolds(store *session.UnifiedStore, s *session.UnifiedMeta, now time.Time) bool {
 	sessionID := s.ID
 	gs := goalTriggers()
@@ -958,7 +990,7 @@ func (al *AgentLoop) goalZeroOutputTripleHolds(store *session.UnifiedStore, s *s
 	diffZero := al.resolveGoalScopedDiffEmpty(sessionID, s.WorkspaceID)
 
 	if !hadWatermark {
-		return true
+		return false
 	}
 
 	outputZero := !al.goalHasTranscriptOutputSince(store, sessionID, prevWatermark)
@@ -997,10 +1029,12 @@ func (al *AgentLoop) goalZeroEvidenceRecords(sessionID string) bool {
 
 // goalHasTranscriptOutputSince is FR-014b's third triple term (negated):
 // reports whether sessionID OR any of its delegated descendant sessions
-// recorded any transcript entry timestamped strictly after since. A goal
-// whose agent delegated ALL of its work MUST NOT read as empty (US-6 A2) —
-// each delegate owns its own store-backed transcript post-ADR-057, so a
-// scan of the root session alone would silently miss real work.
+// recorded any ADJUDICABLE transcript entry timestamped strictly after
+// since — see sessionHasTranscriptOutputSince's doc comment for what counts
+// (review-round-1 finding #4(a)). A goal whose agent delegated ALL of its
+// work MUST NOT read as empty (US-6 A2) — each delegate owns its own
+// store-backed transcript post-ADR-057, so a scan of the root session alone
+// would silently miss real work.
 //
 // Descendants are resolved via the DURABLE ParentSessionID chain over
 // store.ListSessions() — NOT al.goalHasLiveTurn's in-memory turnState scan,
@@ -1058,16 +1092,38 @@ func goalDescendantSessionIDs(all []*session.UnifiedMeta, rootID string) []strin
 }
 
 // sessionHasTranscriptOutputSince reports whether sessionID's OWN transcript
-// (not its descendants — the caller walks those separately) has any entry
-// timestamped strictly after since. Best-effort: a read failure is treated
-// as "no output", never a hard failure of the wider sweep.
+// (not its descendants — the caller walks those separately) has any
+// ADJUDICABLE entry timestamped strictly after since. Best-effort: a read
+// failure is treated as "no output", never a hard failure of the wider
+// sweep.
+//
+// review-round-1 finding #4(a): "adjudicable" means an entry showing
+// ATTEMPTED WORK — session.EntryTypeToolCall (a tool invocation, carrying
+// its own result once settled; pkg/agent/turn.go's appendToolCallTranscript
+// is the sole writer). Two categories that pass the OLD unconditional
+// Timestamp check but are NOT adjudicable, and must NOT count:
+//   - the keeper's OWN push/nudge prompt (dispatchGoalAsyncFollowUp), which
+//     lands as an ordinary "user"-role message entry — counting it would
+//     let the triple "break itself" the moment the keeper speaks, defeating
+//     the whole bounded-push ladder (push → immediately-false triple →
+//     normal adjudication on the very next tick, regardless of whether the
+//     agent did anything);
+//   - a plain text-only assistant acknowledgment ("Sure, continuing.") with
+//     no tool calls — session.TranscriptEntry.Role == "assistant" entries
+//     never carry ToolCalls inline (each tool call is its own standalone
+//     EntryTypeToolCall entry, per turn.go), so a bare reply is
+//     indistinguishable from silence in terms of genuine progress.
+//
+// Every real tool call — the ONLY way this codebase persists "the agent did
+// something" — is its own EntryTypeToolCall entry, so filtering on that Type
+// is exact, not a heuristic over Role/Content.
 func (al *AgentLoop) sessionHasTranscriptOutputSince(store *session.UnifiedStore, sessionID string, since time.Time) bool {
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
 		return false
 	}
 	for _, e := range entries {
-		if e.Timestamp.After(since) {
+		if e.Type == session.EntryTypeToolCall && e.Timestamp.After(since) {
 			return true
 		}
 	}
@@ -1107,15 +1163,29 @@ func (al *AgentLoop) idleSteerDeliverer(sessionID string) func(steer string) {
 // itself when genuinely absent on both sides, FR-031) are all silent no-ops
 // here — the NEXT idle check gets another chance, never a hard failure of
 // the sweep.
+//
+// review-round-1 (keeper wedge): every caller of this function is reached
+// only after markGoalIdleFired has already set the idleSettling marker
+// (maybeSettleGoalIdle sets it BEFORE dispatching). That marker is cleared
+// ONLY by a genuine turn running checkGoalLoopAfterTurn's
+// bumpGoalActivityOnTurn (D6b's origin gate). A successful Notify() below
+// hands off to exactly such a turn — the marker legitimately stays set,
+// awaiting that turn's own activity bump. Every exit that does NOT achieve
+// that hand-off (no content/no notifier, missing route, Notify error) must
+// clear the marker itself, or the keeper wedges at the goalIsIdleSettling
+// gate forever, indistinguishable from a genuinely quiet goal.
 func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, content string) {
 	if content == "" || al.asyncNotifier == nil {
+		al.goalMarkIdleSettling(sessionID, false)
 		return
 	}
 	route := goalTriggers().routeFor(sessionID)
 	if route.channel == "" || route.chatID == "" {
 		// routeFor itself already WARNed + persisted latest_reason when the
 		// route is missing on BOTH sides (FR-031); nothing further to log
-		// here beyond what it already did.
+		// here beyond what it already did. No turn will ever be dispatched
+		// for this evaluation — un-wedge the keeper.
+		al.goalMarkIdleSettling(sessionID, false)
 		return
 	}
 	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1131,6 +1201,10 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, content string) {
 	}); err != nil {
 		logger.WarnCF("agent", "goal: follow-up turn dispatch failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
+		// The intended turn never dispatched — nothing will clear the
+		// marker downstream. Un-wedge the keeper so the next idle cycle
+		// gets another chance instead of wedging forever.
+		al.goalMarkIdleSettling(sessionID, false)
 	}
 }
 
@@ -1173,10 +1247,29 @@ func (s *goalTriggerState) routeFor(sessionID string) goalRoute {
 		if route.channel == "" && route.chatID == "" {
 			logger.WarnCF("agent", "goal trigger: no routing available (neither in-memory nor persisted) — keeper cannot reach the goal's channel",
 				map[string]any{"session_id": sessionID})
-			lostReason := "keeper cannot reach the goal's channel — routing lost"
-			if perr := store.SetMeta(sessionID, session.MetaPatch{GoalLatestReason: &lostReason}); perr != nil {
-				logger.WarnCF("agent", "goal trigger: could not persist routing-lost reason",
-					map[string]any{"session_id": sessionID, "error": perr.Error()})
+			// review-round-1 finding #10: the WARN above always fires, but the
+			// META WRITE below is now conditional. This same routeFor call
+			// can run right after a real judge verdict in the SAME settle
+			// pass (adjudicate -> deliverSteer -> routeFor) — unconditionally
+			// overwriting GoalLatestReason here stomped that fresh verdict
+			// reason with a generic routing note on EVERY idle cycle for a
+			// pre-upgrade goal with no persisted route. Write the
+			// routing-lost note only when there is nothing more informative
+			// already there; skip the write entirely when it already says
+			// routing-lost (no churn — an identical re-write on every cycle
+			// serves no one).
+			switch meta.GoalLatestReason {
+			case goalRoutingLostReason:
+				// already says routing-lost — no churn.
+			case "":
+				lostReason := goalRoutingLostReason
+				if perr := store.SetMeta(sessionID, session.MetaPatch{GoalLatestReason: &lostReason}); perr != nil {
+					logger.WarnCF("agent", "goal trigger: could not persist routing-lost reason",
+						map[string]any{"session_id": sessionID, "error": perr.Error()})
+				}
+			default:
+				// holds a real, more informative reason (e.g. a fresh judge
+				// verdict from this same settle pass) — never stomp it.
 			}
 		}
 		return route

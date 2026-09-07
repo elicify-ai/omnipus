@@ -2854,6 +2854,17 @@ drainDone:
 		})
 	}
 
+	// Item 14 (review-round-1, ADR-081): goal_status is a pure live push
+	// (agent.EventKindGoalStatusChanged) — never a persisted, replayable
+	// transcript entry the streamReplay above reconstructs — so a
+	// registered goal's record card (definition/criteria/dod) had no
+	// rehydration path on an SPA reload/reconnect. This connection already
+	// registered for live-event forwarding earlier in this function (before
+	// replay started), so a re-emitted event here reaches it exactly like
+	// any other live goal_status push. No-op when the attached session has
+	// no active goal or no record registered yet.
+	h.agentLoop.EmitGoalStatusRehydrate(attachID)
+
 	slog.Debug("ws: attached to session", "chat_id", chatID, "session_id", attachID)
 }
 

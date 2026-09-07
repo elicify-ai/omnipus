@@ -613,7 +613,8 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 		Prompt: "land the contract-first layer",
 		Criteria: []task.AcceptanceCriterion{{
 			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
-			Text: "the contract-first layer is landed",
+			Text:   "the contract-first layer is landed",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: agentInst.ID},
 		}},
 	})
 	if merr != nil {
@@ -695,11 +696,12 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 			walk = append(walk, p)
 		}
 	}
-	// ADR-074 D4a prepends the pending step: queued (compiled, awaiting the
-	// user's confirmation) precedes active.
-	wantWalk := []string{goalPillQueued, goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
+	// ADR-081 D1 (instant activation): there is no pending/confirm step
+	// anymore, so the walk starts at active — never queued (goalPillQueued
+	// is no longer emitted anywhere in the activation path).
+	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
 	if !equalStringSlices(walk, wantWalk) {
-		t.Fatalf("(5) pill walk = %v, want %v (queued→active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
+		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
 	}
 
 	// (6) /goal clear cancels an in-flight verifier session registered for this

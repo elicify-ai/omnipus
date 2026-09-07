@@ -163,7 +163,8 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 	}
 
 	// A prose restate rewrites the working prompt and continues the turn —
-	// no confirm ritual, no amendment echo.
+	// no confirm ritual, no amendment echo — and patches the durable
+	// GoalCondition to the new intent (review-round-1 finding #9).
 	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition B", UserInitiated: true}, agentInst, &opts)
 	if !matched || handled {
@@ -179,8 +180,10 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.GoalCondition != "condition A" {
-		t.Fatalf("condition after restate = %q, want condition A untouched (the agent updates it via set_goal)", after.GoalCondition)
+	if after.GoalCondition != "condition B" {
+		t.Fatalf("finding #9: condition after restate = %q, want it patched to the new intent %q "+
+			"(keeper prompts/status/fallback all cite GoalCondition — leaving it stale would have them "+
+			"cite the superseded intent forever)", after.GoalCondition, "condition B")
 	}
 	if after.GoalID != firstID {
 		t.Fatalf("restate must NOT mint a new GoalID (FR-001), got %q want %q", after.GoalID, firstID)
@@ -1255,6 +1258,86 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	}
 	if !sawSecondID {
 		t.Fatal("expected at least one emitted frame carrying the second goal's id")
+	}
+}
+
+// TestGoalBudgets_ResetAcrossGenerations is review-round-1 finding #5: a
+// fresh goal generation must get fresh budgets. Neither
+// activateInstantGoal's fresh-activation SetMeta nor clearGoal's SetMeta
+// used to zero GoalQuestionRoundsUsed (FR-010's question-round door) or
+// GoalZeroOutputPushes (FR-014b's bounded-push streak) — both counters
+// silently carried over from whatever the PREVIOUS goal generation on this
+// session had already spent, so a goal that itself never asked a single
+// question could inherit an already-exhausted ask door. Goal A spends both
+// budgets, is cleared, and goal B — a brand new activation on the SAME
+// session — must see both back at zero.
+func TestGoalBudgets_ResetAcrossGenerations(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+
+	// --- Goal A: instant activation (prose intent, no markers). ---
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal goal A prose intent", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
+	metaA, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaA.GoalID == "" {
+		t.Fatal("setup: goal A must be active")
+	}
+	if metaA.GoalQuestionRoundsUsed != 0 || metaA.GoalZeroOutputPushes != 0 {
+		t.Fatalf("setup: a freshly-activated goal must start with both budgets at 0, got question=%d pushes=%d",
+			metaA.GoalQuestionRoundsUsed, metaA.GoalZeroOutputPushes)
+	}
+
+	// Spend both budgets on goal A — simulating a question round taken
+	// (FR-010) and the zero-output push streak exhausted (FR-014b).
+	spent := 1
+	maxed := goalZeroOutputPushMax
+	if setMetaErr := store.SetMeta(sid, session.MetaPatch{
+		GoalQuestionRoundsUsed: &spent,
+		GoalZeroOutputPushes:   &maxed,
+	}); setMetaErr != nil {
+		t.Fatal(setMetaErr)
+	}
+
+	// --- Clear goal A. ---
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal clear", UserInitiated: true}, agentInst, &opts)
+	metaCleared, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaCleared.GoalQuestionRoundsUsed != 0 || metaCleared.GoalZeroOutputPushes != 0 {
+		t.Fatalf("clearGoal must zero both budgets: question=%d pushes=%d",
+			metaCleared.GoalQuestionRoundsUsed, metaCleared.GoalZeroOutputPushes)
+	}
+
+	// --- Goal B: a brand new activation on the SAME session must have the
+	// ask door again — not inherit goal A's exhausted budgets. ---
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal goal B prose intent", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
+	metaB, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaB.GoalID == "" || metaB.GoalID == metaA.GoalID {
+		t.Fatalf("goal B must be a fresh generation (new GoalID), got %q (goal A was %q)", metaB.GoalID, metaA.GoalID)
+	}
+	if metaB.GoalQuestionRoundsUsed != 0 {
+		t.Fatalf("goal B: GoalQuestionRoundsUsed = %d, want 0 — the ask door must be fresh, not inherited from goal A",
+			metaB.GoalQuestionRoundsUsed)
+	}
+	if metaB.GoalZeroOutputPushes != 0 {
+		t.Fatalf("goal B: GoalZeroOutputPushes = %d, want 0 — fresh push budget, not inherited from goal A",
+			metaB.GoalZeroOutputPushes)
 	}
 }
 

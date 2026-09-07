@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -114,8 +115,8 @@ func TestGoalRecordAccess_WriteRecord_SideEffects(t *testing.T) {
 		`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"it renders and accepts input","author":{"kind":"agent","id":"tester"}}],` +
 		`"dod":[{"id":"d1","kind":"prose","judgment":"boolean","provenance":"floor","text":"no secrets","author":{"kind":"agent","id":"tester"}}]}`
 	access := agentLoopGoalRecordAccess{al: al}
-	if err := access.WriteRecord(sid, recordJSON); err != nil {
-		t.Fatalf("WriteRecord: %v", err)
+	if writeErr := access.WriteRecord(sid, recordJSON); writeErr != nil {
+		t.Fatalf("WriteRecord: %v", writeErr)
 	}
 
 	afterMeta, err := store.GetMeta(sid)
@@ -232,6 +233,204 @@ func TestGoalRecordAccess_ChannelEcho(t *testing.T) {
 		case <-time.After(300 * time.Millisecond):
 		}
 	})
+}
+
+// --- Marker-path activation/restate route through the SAME post-write path
+// set_goal uses (review-round-1 finding #8) -------------------------------
+
+// TestGoalMarkerActivation_EmitsCriteriaCarryingFrame proves a fresh
+// marker-only `/goal [tests pass]` activation (applyGoalCommandPrompt's
+// marker-compile branch, goal_loop.go) emits its goal_status frame through
+// afterGoalRecordWrite — carrying the compiled criteria/dod ladder — rather
+// than the bare emitGoalStatusFrame this call site used before the fix
+// (which carried no criteria at all, unlike set_goal's own writes).
+func TestGoalMarkerActivation_EmitsCriteriaCarryingFrame(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	// The [tests pass] marker synthesizes a KindCheck criterion, which the
+	// compile-time feasibility gate rejects unless bash is policy-reachable
+	// (FR-111/FR-112) — this test's own concern is frame emission, not
+	// feasibility, so grant it explicitly (allowBashPolicy, judge_test.go).
+	allowBashPolicy(agentInst)
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+
+	collector, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	// A goalless session's fresh /goal with ONLY a marker (no prose) takes
+	// the deterministic marker-compile branch (goalIntentNeedsLLMCompile
+	// returns false), never the D1 instant-activation branch — the branch
+	// that carries a real compiled criteria ladder from the moment it
+	// activates.
+	matched, handled, _ := al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal [tests pass]", UserInitiated: true}, agentInst, &opts)
+	if !matched || handled {
+		t.Fatalf("marker activation: matched=%v handled=%v, want matched=true handled=false", matched, handled)
+	}
+	meta, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.GoalCriteriaJSON == "" {
+		t.Fatal("precondition: a marker-only activation must compile a non-empty record immediately")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var payloads []GoalStatusChangedPayload
+	for time.Now().Before(deadline) {
+		payloads = goalStatusPayloadsFor(collector, sid)
+		if len(payloads) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(payloads) == 0 {
+		t.Fatal("marker activation must emit a goal_status frame")
+	}
+	last := payloads[len(payloads)-1]
+	if last.State != goalPillActive {
+		t.Fatalf("frame state = %q, want %q", last.State, goalPillActive)
+	}
+	if len(last.Criteria) == 0 {
+		t.Fatal("finding #8: the marker-activation frame must carry the compiled criteria ladder, got none")
+	}
+	if len(last.DoD) == 0 {
+		t.Fatal("finding #8: the marker-activation frame must carry the DoD (the built-in floor, absent an explicit one), got none")
+	}
+}
+
+// TestGoalMarkerActivation_ChannelOrigin_GetsOneFormattedEcho proves FR-020
+// now reaches the marker-activation path too: a channel-routed marker
+// `/goal` gets exactly one formatted record echo, same as a set_goal-authored
+// write — the bare emitGoalStatusFrame this call site used before the fix
+// never triggered a channel echo at all.
+func TestGoalMarkerActivation_ChannelOrigin_GetsOneFormattedEcho(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	allowBashPolicy(agentInst) // see the sibling test's comment for why
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "telegram", ChatID: "chat-77", SessionKey: "sk-telegram", UserInitiated: true,
+	}
+
+	matched, handled, _ := al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal [tests pass]", UserInitiated: true}, agentInst, &opts)
+	if !matched || handled {
+		t.Fatalf("marker activation: matched=%v handled=%v, want matched=true handled=false", matched, handled)
+	}
+	meta, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.GoalCriteriaJSON == "" {
+		t.Fatal("precondition: a marker-only activation must compile a non-empty record immediately")
+	}
+
+	select {
+	case msg := <-al.bus.OutboundChan():
+		if msg.Channel != "telegram" || msg.ChatID != "chat-77" {
+			t.Fatalf("echo routed to %s/%s, want telegram/chat-77", msg.Channel, msg.ChatID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("finding #8: a channel-origin marker activation must get exactly one formatted echo, got none")
+	}
+	select {
+	case msg := <-al.bus.OutboundChan():
+		t.Fatalf("expected exactly ONE echo, got a second: %+v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// --- EmitGoalStatusRehydrate (WS reattach rehydration, item 14) ------------
+
+// TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame is
+// item 14's own test: on a session carrying an active goal with a
+// REGISTERED record, EmitGoalStatusRehydrate emits exactly one goal_status
+// frame carrying the definition/criteria/dod ladder — proving the gateway's
+// WS attach path (pkg/gateway/websocket.go's handleAttachSession, which
+// calls this once per attach) has a real rehydration path for the record
+// card an SPA reload otherwise loses (goal_status is a pure live push,
+// never a persisted transcript entry).
+func TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	setActiveGoalRecordless(t, store, sid, "goal-rehydrate-1", "build a game")
+
+	recordJSON := `{"intent":"i","prompt":"p","definition":"Build a tetris clone",` +
+		`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"it renders and accepts input","author":{"kind":"agent","id":"tester"}}],` +
+		`"dod":[{"id":"d1","kind":"prose","judgment":"boolean","provenance":"floor","text":"no secrets","author":{"kind":"agent","id":"tester"}}]}`
+	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &recordJSON}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the SPA reload: a fresh WS connection attaches (represented
+	// here by starting a fresh event collector — no earlier live emission
+	// exists in its buffer) and the gateway calls EmitGoalStatusRehydrate
+	// exactly once, mirroring handleAttachSession's own call site.
+	collector, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	if ok := al.EmitGoalStatusRehydrate(sid); !ok {
+		t.Fatal("EmitGoalStatusRehydrate must report true for an active goal with a registered record")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var payloads []GoalStatusChangedPayload
+	for time.Now().Before(deadline) {
+		payloads = goalStatusPayloadsFor(collector, sid)
+		if len(payloads) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("EmitGoalStatusRehydrate must emit exactly ONE goal_status frame, got %d", len(payloads))
+	}
+	got := payloads[0]
+	if got.State != goalPillActive {
+		t.Fatalf("rehydrate frame state = %q, want %q", got.State, goalPillActive)
+	}
+	if got.Definition != "Build a tetris clone" {
+		t.Fatalf("rehydrate frame definition = %q, want the record's definition", got.Definition)
+	}
+	if len(got.Criteria) != 1 || len(got.DoD) != 1 {
+		t.Fatalf("rehydrate frame must carry the record's criteria/dod, got criteria=%d dod=%d", len(got.Criteria), len(got.DoD))
+	}
+}
+
+// TestEmitGoalStatusRehydrate_NoRecord_IsANoOp proves the D1 legal-transient
+// empty-record state (active goal, GoalCriteriaJSON still empty — the
+// working agent hasn't called set_goal yet) is correctly a no-op: nothing
+// to rehydrate, so nothing is emitted.
+func TestEmitGoalStatusRehydrate_NoRecord_IsANoOp(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	setActiveGoalRecordless(t, store, sid, "goal-rehydrate-2", "build a game") // GoalCriteriaJSON left empty
+
+	if ok := al.EmitGoalStatusRehydrate(sid); ok {
+		t.Fatal("EmitGoalStatusRehydrate must be a no-op (false) when no record has been registered yet")
+	}
+}
+
+// TestEmitGoalStatusRehydrate_NoActiveGoal_IsANoOp proves a goalless (or
+// cleared/terminal) session is correctly a no-op — GoalCondition == "" is
+// both states, so this also proves terminal goals never get a stray
+// rehydrate frame.
+func TestEmitGoalStatusRehydrate_NoActiveGoal_IsANoOp(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	_, sid := newGoalTestSession(t, al, agentInst.ID) // no active goal at all
+
+	if ok := al.EmitGoalStatusRehydrate(sid); ok {
+		t.Fatal("EmitGoalStatusRehydrate must be a no-op (false) for a session with no active goal")
+	}
 }
 
 // --- DiffFn (D2 mode:update) -------------------------------------------------

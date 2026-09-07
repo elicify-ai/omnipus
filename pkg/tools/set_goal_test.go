@@ -481,3 +481,172 @@ func TestSetGoalTool_UpdateDiffs(t *testing.T) {
 		}
 	})
 }
+
+// TestSetGoalTool_UpdateMergesKindFromOldRecord is review-round-1 finding
+// #7(a): this tool's own Parameters() schema has no check/behavior input
+// shape (criteria items offer only text+judgment) — so mode:update's
+// hardcoded KindProse must not silently downgrade a marker-authored
+// machine-verifiable criterion the agent merely re-submits by text as part
+// of an otherwise-unrelated steering update. The prior record here is seeded
+// directly (simulating a marker-authored record from compileGoalIntent,
+// which this tool cannot itself author) with one Kind=check criterion
+// carrying a real Check payload.
+func TestSetGoalTool_UpdateMergesKindFromOldRecord(t *testing.T) {
+	const sessionID = "session_goal_kind_merge"
+	const agentID = "mia"
+
+	access := newFakeGoalRecordAccess()
+	access.condition[sessionID] = "an active goal"
+
+	priorRec := setGoalRecord{
+		Definition: "Ship a tetris game.",
+		Criteria: []task.AcceptanceCriterion{
+			{
+				ID: "c-check-1", Kind: task.KindCheck, Judgment: task.JudgmentBoolean,
+				Text:   "the test suite passes",
+				Check:  &task.CriterionCheck{Command: "go test ./...", ExpectedExitCode: 0},
+				Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: agentID},
+				Status: task.CritPending,
+			},
+			{
+				ID: "c-prose-1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+				Text:   "the game feels fun to play",
+				Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: agentID},
+				Status: task.CritPending,
+			},
+		},
+	}
+	priorJSON, err := json.Marshal(priorRec)
+	if err != nil {
+		t.Fatalf("seeding prior record: %v", err)
+	}
+	access.record[sessionID] = string(priorJSON)
+
+	tool := newSetGoalTool(access)
+	updateRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"mode":       "update",
+		"definition": "Ship a tetris game, polished.",
+		"criteria": []any{
+			// Re-submitted by TEXT only — this tool's schema cannot express
+			// kind/check at all, so a caller merely restating an existing
+			// machine-verifiable criterion has no way to preserve it itself.
+			map[string]any{"text": "the test suite passes", "judgment": "boolean"},
+			// A genuinely NEW criterion — must stay prose (no old match).
+			map[string]any{"text": "the controls feel responsive", "judgment": "boolean"},
+		},
+	})
+	if updateRes.IsError {
+		t.Fatalf("update failed: %s", updateRes.ForLLM)
+	}
+
+	var after setGoalRecord
+	if err := json.Unmarshal([]byte(access.record[sessionID]), &after); err != nil {
+		t.Fatalf("updated record does not parse: %v", err)
+	}
+	if len(after.Criteria) != 2 {
+		t.Fatalf("want 2 criteria after update, got %d: %+v", len(after.Criteria), after.Criteria)
+	}
+
+	var checkCrit, newCrit *task.AcceptanceCriterion
+	for i := range after.Criteria {
+		switch after.Criteria[i].Text {
+		case "the test suite passes":
+			checkCrit = &after.Criteria[i]
+		case "the controls feel responsive":
+			newCrit = &after.Criteria[i]
+		}
+	}
+	if checkCrit == nil {
+		t.Fatal("the re-submitted 'test suite passes' criterion is missing from the updated record")
+	}
+	if checkCrit.Kind != task.KindCheck {
+		t.Fatalf("finding #7(a): re-submitting a matching-text criterion on update must KEEP its old Kind, "+
+			"got Kind=%q want %q", checkCrit.Kind, task.KindCheck)
+	}
+	if checkCrit.Check == nil || checkCrit.Check.Command != "go test ./..." {
+		t.Fatalf("finding #7(a): the old Check payload must be carried onto the merged criterion, got %+v", checkCrit.Check)
+	}
+	if newCrit == nil {
+		t.Fatal("the genuinely new 'controls feel responsive' criterion is missing from the updated record")
+	}
+	if newCrit.Kind != task.KindProse {
+		t.Fatalf("a criterion with NO match in the old record must stay prose (the tool's only authorable kind), got %q", newCrit.Kind)
+	}
+}
+
+// TestSetGoalTool_UpdateDoD_OmittedCarriesForward_ExplicitEmptyResetsFloor is
+// review-round-1 finding #7(b): an omitted `dod` arg on mode:update must
+// carry the PRIOR DoD forward unchanged (the caller didn't touch it) — not
+// silently replace it with the generic floor. An EXPLICIT empty `dod: []`,
+// by contrast, is a deliberate "reset to the floor" instruction and must
+// still apply the floor, exactly as it always has.
+func TestSetGoalTool_UpdateDoD_OmittedCarriesForward_ExplicitEmptyResetsFloor(t *testing.T) {
+	const sessionID = "session_goal_dod_carry"
+	const agentID = "mia"
+
+	access := newFakeGoalRecordAccess()
+	access.condition[sessionID] = "an active goal"
+	tool := newSetGoalTool(access)
+
+	// register with an explicit, CUSTOM (non-floor) DoD.
+	registerRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"definition": "Ship a tetris game.",
+		"criteria":   minimalCriteriaArg(),
+		"dod": []any{
+			map[string]any{"text": "a custom quality gate", "judgment": "boolean", "provenance": "stated"},
+		},
+	})
+	if registerRes.IsError {
+		t.Fatalf("register failed: %s", registerRes.ForLLM)
+	}
+	var afterRegister setGoalRecord
+	if err := json.Unmarshal([]byte(access.record[sessionID]), &afterRegister); err != nil {
+		t.Fatalf("registered record does not parse: %v", err)
+	}
+	if len(afterRegister.DoD) != 1 || afterRegister.DoD[0].Text != "a custom quality gate" {
+		t.Fatalf("setup: register must have persisted the custom DoD, got %+v", afterRegister.DoD)
+	}
+
+	// update with `dod` OMITTED entirely — must carry the custom DoD forward
+	// unchanged, not fall back to the floor.
+	updateRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"mode":       "update",
+		"definition": "Ship a tetris game, polished.",
+		"criteria":   minimalCriteriaArg(),
+	})
+	if updateRes.IsError {
+		t.Fatalf("update (dod omitted) failed: %s", updateRes.ForLLM)
+	}
+	var afterOmitted setGoalRecord
+	if err := json.Unmarshal([]byte(access.record[sessionID]), &afterOmitted); err != nil {
+		t.Fatalf("updated record does not parse: %v", err)
+	}
+	if len(afterOmitted.DoD) != 1 || afterOmitted.DoD[0].Text != "a custom quality gate" {
+		t.Fatalf("finding #7(b): an omitted dod on update must carry the PRIOR DoD forward unchanged, got %+v", afterOmitted.DoD)
+	}
+
+	// update with `dod` EXPLICITLY empty — a deliberate reset to the floor.
+	updateReset := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"mode":       "update",
+		"definition": "Ship a tetris game, polished, reset.",
+		"criteria":   minimalCriteriaArg(),
+		"dod":        []any{},
+	})
+	if updateReset.IsError {
+		t.Fatalf("update (dod explicit empty) failed: %s", updateReset.ForLLM)
+	}
+	var afterReset setGoalRecord
+	if err := json.Unmarshal([]byte(access.record[sessionID]), &afterReset); err != nil {
+		t.Fatalf("reset record does not parse: %v", err)
+	}
+	wantFloor := setGoalFloorDoD()
+	if len(afterReset.DoD) != len(wantFloor) {
+		t.Fatalf("an EXPLICIT empty dod on update must reset to the floor (%d items), got %d: %+v",
+			len(wantFloor), len(afterReset.DoD), afterReset.DoD)
+	}
+	for i, want := range wantFloor {
+		if afterReset.DoD[i].ID != want.ID {
+			t.Fatalf("floor DoD item %d id = %q, want %q", i, afterReset.DoD[i].ID, want.ID)
+		}
+	}
+}

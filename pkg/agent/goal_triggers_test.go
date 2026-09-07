@@ -113,26 +113,32 @@ func setGoalRoundsArmedRecorded(t *testing.T, store *session.UnifiedStore, sid, 
 }
 
 // primeGoalZeroOutputTripleFalse seeds an outputWatermarks entry and a prior
-// transcript entry for sid so ADR-081 FR-014b's zero-adjudicable-output
-// triple evaluates FALSE on the very next idle check for this goal-id — the
-// pre-existing tests below were written before ADR-081 D6a and assumed idle
-// settlement always judges immediately regardless of whether any real work
-// had happened yet (root cause 4, "judge-on-empty", that D6a deliberately
-// changes: a genuinely fresh/untouched goal-id's FIRST observation now
-// dispatches a bounded push instead, goalZeroOutputTripleHolds' own
-// degenerate-baseline rule). Priming keeps these tests exercising their OWN
-// original concern (round advance, claimless empty-claim-text, self-race,
-// per-goal-id independence, judge-unavailable marker clearing) instead of
-// incidentally exercising the new zero-output push ladder.
+// ADJUDICABLE transcript entry (a tool call — review-round-1 finding #4(a):
+// a bare text message no longer counts, see sessionHasTranscriptOutputSince)
+// for sid so ADR-081 FR-014b's zero-adjudicable-output triple evaluates
+// FALSE on the very next idle check for this goal-id — the pre-existing
+// tests below were written before ADR-081 D6a and assumed idle settlement
+// always judges immediately regardless of whether any real work had happened
+// yet (root cause 4, "judge-on-empty", that D6a deliberately changes: a
+// genuinely fresh/untouched goal-id's FIRST observation ALSO now evaluates
+// FALSE, but for a different reason — "no watermark yet" (finding #4(b))
+// rather than "real output since the watermark" — this helper deliberately
+// primes the latter so it stays a clean, unambiguous "real work happened"
+// setup independent of the first-observation rule). Priming keeps these
+// tests exercising their OWN original concern (round advance, claimless
+// empty-claim-text, self-race, per-goal-id independence, judge-unavailable
+// marker clearing) instead of incidentally exercising the zero-output
+// push ladder or the first-observation rule.
 func primeGoalZeroOutputTripleFalse(t *testing.T, store *session.UnifiedStore, sid, agentID string) {
 	t.Helper()
 	goalTriggersSingleton.mu.Lock()
 	goalTriggersSingleton.outputWatermarks[sid] = time.Now().Add(-2 * time.Hour)
 	goalTriggersSingleton.mu.Unlock()
 	if err := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
-		ID:   fmt.Sprintf("prime-%s-%d", sid, time.Now().UnixNano()),
-		Type: session.EntryTypeMessage, Role: "assistant",
-		Content: "earlier real work", Timestamp: time.Now().Add(-90 * time.Minute), AgentID: agentID,
+		ID:        fmt.Sprintf("prime-%s-%d", sid, time.Now().UnixNano()),
+		Type:      session.EntryTypeToolCall,
+		ToolCalls: []session.ToolCall{{ID: session.ToolCallID(fmt.Sprintf("prime-tc-%d", time.Now().UnixNano())), Tool: "bash", Status: "success"}},
+		Timestamp: time.Now().Add(-90 * time.Minute), AgentID: agentID,
 	}); err != nil {
 		t.Fatal(err)
 	}

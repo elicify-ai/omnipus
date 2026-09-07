@@ -84,3 +84,50 @@ func TestToolChoice_Anthropic_RequiredWithNoTools_Guarded(t *testing.T) {
 		t.Errorf("ToolChoice = %+v, want the zero value (no tools offered)", params.ToolChoice)
 	}
 }
+
+// TestToolChoice_Anthropic_RequiredWithThinking_DegradesToAuto proves the
+// review-round-1 fix: Anthropic's API rejects tool_choice:{type:"any"}
+// combined with thinking:{type:"enabled"|"adaptive"} (HTTP 400). When both
+// a forced Required tool-choice and a non-off thinking_level are resolved on
+// the same request, buildParams must degrade to Auto instead of emitting the
+// incompatible pair — Layers 2-3 (validation + keeper/fallback) still drive
+// the model toward the narrowed tools without a hard API rejection.
+func TestToolChoice_Anthropic_RequiredWithThinking_DegradesToAuto(t *testing.T) {
+	options := map[string]any{
+		protocoltypes.OptionKeyToolChoice: protocoltypes.ToolChoice{Mode: protocoltypes.ToolChoiceRequired},
+		"thinking_level":                  "medium",
+		"max_tokens":                      8192,
+	}
+	params, err := buildParams([]Message{{Role: "user", Content: "hi"}}, anthropicToolsFixture(), "claude-sonnet-4.6", options)
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+	if params.ToolChoice.OfAny != nil {
+		t.Errorf("ToolChoice.OfAny is set, want it degraded to Auto because thinking is enabled")
+	}
+	if params.ToolChoice.OfAuto == nil {
+		t.Fatalf("ToolChoice.OfAuto is nil, want it set (degraded from Required)")
+	}
+	if params.Thinking.OfEnabled == nil {
+		t.Fatalf("Thinking.OfEnabled is nil — the test fixture's own precondition (thinking on) is broken")
+	}
+}
+
+// TestToolChoice_Anthropic_RequiredWithoutThinking_StaysForced proves the
+// degrade in the test above is conditional on thinking actually being
+// enabled — Required alone (no thinking_level) is untouched.
+func TestToolChoice_Anthropic_RequiredWithoutThinking_StaysForced(t *testing.T) {
+	options := map[string]any{
+		protocoltypes.OptionKeyToolChoice: protocoltypes.ToolChoice{Mode: protocoltypes.ToolChoiceRequired},
+	}
+	params, err := buildParams([]Message{{Role: "user", Content: "hi"}}, anthropicToolsFixture(), "claude-sonnet-4.6", options)
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+	if params.ToolChoice.OfAny == nil {
+		t.Fatalf("ToolChoice.OfAny is nil, want it set (no thinking in play, Required stays forced)")
+	}
+	if params.ToolChoice.OfAuto != nil {
+		t.Errorf("ToolChoice.OfAuto is set, want only OfAny (no thinking to conflict with)")
+	}
+}
