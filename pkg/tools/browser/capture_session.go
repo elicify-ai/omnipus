@@ -246,6 +246,13 @@ type viewerOfferHandler interface {
 	CloseViewerIfCurrent(handle any)
 }
 
+// contextViewerOfferHandler retains the original attachment lifetime in a
+// relay that also supports the existing exact-handle cleanup contract.
+type contextViewerOfferHandler interface {
+	viewerOfferHandler
+	HandleViewerOfferHandleContext(context.Context, string, string) (string, any, error)
+}
+
 // viewerRegistration is the value CaptureSession.viewers stores per attached
 // viewerID (see that field's doc comment): the generation token AddViewer
 // minted for the current attach attempt, and — once known — the relay's own
@@ -468,11 +475,21 @@ func NewCaptureSession(
 	sink webrtc.InputSink,
 	logf func(string, ...any),
 ) (*CaptureSession, error) {
+	var contextSink webrtc.ContextInputSink
+	if sink != nil {
+		contextSink = func(_ context.Context, viewerID string, raw []byte) { sink(viewerID, raw) }
+	}
+	return NewCaptureSessionWithContextInput(mgr, agentID, panelSessionID, cfg, contextSink, logf)
+}
+
+// NewCaptureSessionWithContextInput retains the originating input-source
+// lifetime while preserving the same confirmed-frame startup and relay callbacks.
+func NewCaptureSessionWithContextInput(mgr *BrowserManager, agentID, panelSessionID string, cfg webrtc.Config, sink webrtc.ContextInputSink, logf func(string, ...any)) (*CaptureSession, error) {
 	token := make([]byte, captureTokenBytes)
 	if _, err := rand.Read(token); err != nil {
 		return nil, fmt.Errorf("capture session: mint token: %w", err)
 	}
-	relay := webrtc.NewSession(cfg, sink, logf)
+	relay := webrtc.NewSessionWithContextInput(cfg, sink, logf)
 	cs := newCaptureSessionWithDeps(mgr, agentID, relay, nil, token, logf)
 	// The encoder page gets NO STUN server, whatever the operator configured.
 	// tools.browser.webrtc_stun_server governs the VIEWER leg, which is the
@@ -1174,25 +1191,37 @@ func (cs *CaptureSession) HandleViewerOffer(
 	viewerID, sdp string,
 	gen uint64,
 ) (answer string, handle *ViewerAttachHandle, err error) {
+	return cs.HandleViewerOfferContext(context.Background(), viewerID, sdp, gen)
+}
+
+// HandleViewerOfferContext passes the persistent attachment lifetime through
+// the relay. Legacy injected relays remain synchronous; cancellation is checked
+// again after their call returns, rather than claiming their IO is interruptible.
+// Rejection before delegation removes only this capture registration and returns
+// no relay cleanup handle. After an attempt, its exact handle is always retained.
+func (cs *CaptureSession) HandleViewerOfferContext(parent context.Context, viewerID, sdp string, gen uint64) (answer string, handle *ViewerAttachHandle, err error) {
+	if parent == nil {
+		cs.RemoveViewerIfCurrent(viewerID, gen)
+		return "", nil, fmt.Errorf("capture session: viewer offer: nil attachment context")
+	}
+	if contextErr := parent.Err(); contextErr != nil {
+		cs.RemoveViewerIfCurrent(viewerID, gen)
+		return "", nil, contextErr
+	}
 	var relayHandle any
-	if cs.offerHandler != nil {
+	if handler, ok := cs.relay.(contextViewerOfferHandler); ok {
+		answer, relayHandle, err = handler.HandleViewerOfferHandleContext(parent, viewerID, sdp)
+	} else if cs.offerHandler != nil {
 		answer, relayHandle, err = cs.offerHandler.HandleViewerOfferHandle(viewerID, sdp)
 	} else {
 		answer, err = cs.relay.HandleViewerOffer(viewerID, sdp)
 	}
-	// GAP 2 fix-wave finding: record the relay's own identity handle for
-	// THIS registration (if any -- see viewerRegistration's doc comment for
-	// when it's nil) alongside gen, so a later relay-confirmed eviction
-	// notification (removeViewerByRelayHandle) can tell whether it describes
-	// the registration currently on file for viewerID before removing
-	// anything. Recorded regardless of err: even a call that later fails
-	// further down (SetRemoteDescription/CreateAnswer/SetLocalDescription)
-	// may already have registered a live PeerConnection at the relay (see
-	// HandleViewerOfferHandle's own doc comment on the registration point) —
-	// that registration is exactly what CleanupViewerOffer's
-	// CloseViewerIfCurrent branch will need to find in order to close it.
-	cs.recordViewerRelayHandle(viewerID, gen, relayHandle)
 	handle = &ViewerAttachHandle{viewerID: viewerID, gen: gen, relay: relayHandle}
+	// A failed negotiation may still own a registered relay peer. Retain the
+	// exact cleanup handle even when cancellation prevents recording it.
+	if contextErr := cs.recordViewerRelayHandle(parent, viewerID, gen, relayHandle); contextErr != nil {
+		return "", handle, contextErr
+	}
 	return answer, handle, err
 }
 
@@ -1207,18 +1236,24 @@ func (cs *CaptureSession) HandleViewerOffer(
 // this specific attempt never reached registration — see CleanupViewerOffer's
 // CRITICAL fix-wave finding for that second case) — nothing meaningful to
 // record either way.
-func (cs *CaptureSession) recordViewerRelayHandle(viewerID string, gen uint64, relayHandle any) {
-	if relayHandle == nil {
-		return
-	}
+// The cancellation check and registration share the relay-removal callback lock,
+// preventing a canceled completion from recording after its cleanup notification.
+func (cs *CaptureSession) recordViewerRelayHandle(parent context.Context, viewerID string, gen uint64, relayHandle any) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if relayHandle == nil {
+		return nil
+	}
 	reg, exists := cs.viewers[viewerID]
 	if !exists || reg.gen != gen {
-		return
+		return nil
 	}
 	reg.relayHandle = relayHandle
 	cs.viewers[viewerID] = reg
+	return nil
 }
 
 // removeViewerByRelayHandle is wired as the relay's SetOnViewerRemoved
