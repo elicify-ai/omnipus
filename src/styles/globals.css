@@ -26,11 +26,10 @@
   --color-accent-hover: #c49e2f;
   --color-error-hover: #dc2626;
 
-  /* Library icon system (docs/internal/specs/library-b-c-design-2026-09-07.md
-     §"Icon system — LOCKED"): the Mount icon's colour. Liquid-Silver pewter —
-     distinct from --color-info (used for the mount BADGE/target text in
-     LibraryEntryRow) so the icon reads as its own kind rather than borrowing
-     an unrelated semantic-info blue. */
+  /* Library icon system (icon-consistency pass, 2026-09-07): MountFolderIcon's
+     colour. Liquid-Silver pewter — distinct from --color-info (used for the
+     mount BADGE/target text in LibraryEntryRow) so the icon reads as its own
+     kind rather than borrowing an unrelated semantic-info blue. */
   --color-mount: #8ea3bd;
 
   /* Surface elevations (dark-first).

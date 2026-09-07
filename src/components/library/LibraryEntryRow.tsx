@@ -6,10 +6,11 @@
 // REST endpoints via the callbacks LibraryExplorer passes down.
 
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import {
+  Books,
   DotsThree,
   DownloadSimple,
+  FolderSimple,
   PencilSimple,
   ArrowsLeftRight,
   Trash,
@@ -29,8 +30,7 @@ import { libraryDownloadUrl } from '@/lib/api'
 import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
-import type { KnowledgeBaseInfo } from '@/lib/api/generated/openapi-types'
-import { VaultIcon, FolderIcon, MountIcon } from './icons'
+import { MountFolderIcon } from './icons'
 
 /** Format a byte count as a compact human-readable size. */
 export function formatLibrarySize(bytes: number): string {
@@ -76,43 +76,34 @@ export function LibraryEntryRow({
   onDelete,
   onUnmount,
 }: LibraryEntryRowProps) {
-  const queryClient = useQueryClient()
-
   // A mount is a real folder on the operator's machine, not workspace storage.
   // It must never borrow the gold vault/folder icon: gold means "yours,
   // inside the workspace", and a write inside a mount lands on their actual
   // disk. Broad grants (home directory, filesystem root) shift to the
   // warning colour so "you mounted your whole home folder" is legible
-  // without opening anything — that safety escalation predates, and is kept
-  // alongside, the locked icon system's default Mount colour
-  // (`--color-mount`, docs/internal/specs/library-b-c-design-2026-09-07.md
-  // §"Icon system — LOCKED").
+  // without opening anything — that safety escalation predates, and survives,
+  // the icon-consistency pass's Mount colour (`--color-mount`).
   const mount = entry.mount
   const mountColor = mount?.broad ? 'var(--color-warning)' : 'var(--color-mount)'
 
-  // Vault detection (C3): is this directory itself a knowledge base? There is
-  // no bulk "which of these children are vaults" endpoint — KnowledgeBaseInfo
-  // is answered per folder (GET /library/{ws}/knowledge?path=…), and
-  // KnowledgePanel already asks it for whichever folder LibraryExplorer is
-  // CURRENTLY browsing, caching the answer under
-  // ['knowledge-base-info', workspaceId, path] (see KnowledgePanel.tsx).
-  // Reading that cache here is a passive lookup — it fires no request of its
-  // own — so a directory the operator has already opened at least once this
-  // session (as browsedDir, or via "New vault") shows its true Vault icon
-  // retroactively when its PARENT listing renders; one never yet opened
-  // falls back to the plain Folder icon, which is the honest default rather
-  // than a guess. Explicitly NOT a per-row network probe (C3's requirement).
-  const cachedKnowledgeInfo = entry.is_dir
-    ? queryClient.getQueryData<KnowledgeBaseInfo>(['knowledge-base-info', workspaceId, entry.path])
-    : undefined
-  const isVault = cachedKnowledgeInfo?.is_knowledge_base === true
+  // Vault detection (icon-consistency fix, 2026-09-07): is_knowledge_base is
+  // a field the LISTING ITSELF states (LibraryEntry.is_knowledge_base),
+  // computed server-side from the same marker detection
+  // GET /library/{ws}/knowledge?path=… answers per folder. This used to be a
+  // react-query cache lookup keyed on ['knowledge-base-info', workspaceId,
+  // path] — passive, so a directory never opened in THIS session (or a
+  // reload that evicted the cache) rendered as a plain folder even when it
+  // really was a vault, non-deterministically. Reading the wire field
+  // instead makes the icon a fact from the server, not a guess from
+  // whichever folders this session happened to have queried.
+  const isVault = entry.is_dir && entry.is_knowledge_base === true
 
   const containerIcon = mount
-    ? { Icon: MountIcon, color: mountColor }
+    ? { Icon: MountFolderIcon, color: mountColor }
     : entry.is_dir
       ? isVault
-        ? { Icon: VaultIcon, color: 'var(--color-accent)' }
-        : { Icon: FolderIcon, color: 'var(--color-muted)' }
+        ? { Icon: Books, color: 'var(--color-accent)' }
+        : { Icon: FolderSimple, color: 'var(--color-muted)' }
       : null
   const fileMeta = containerIcon ? null : fileTypeMeta(entry.name, entry.mime)
   const color = containerIcon?.color ?? (fileMeta as NonNullable<typeof fileMeta>).color
@@ -162,19 +153,25 @@ export function LibraryEntryRow({
           a frame rather than the whole file — a directory of large videos must
           not become a directory of large downloads just by being listed. */}
       <div
-        className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center overflow-hidden"
+        className={cn(
+          'shrink-0 w-8 h-8 flex items-center justify-center',
+          // Only a THUMBNAIL needs a fixed, clipped, rounded frame — a real
+          // image/video needs `object-cover` to have somewhere to crop into.
+          // An icon is not a card or a button and must not look like one
+          // (operator direction, icon-consistency pass): no tinted backdrop,
+          // no rounding, just the glyph on the row's own background. The box
+          // itself (w-8 h-8 flex centring) stays in BOTH cases so row text
+          // stays aligned whether this cell holds a thumbnail or a glyph.
+          showThumb && 'rounded-md overflow-hidden',
+        )}
         style={
           showThumb
             ? undefined
-            : // `color-mix()` (not string-concatenating an alpha suffix onto
-              // `color`): the container icons' colours are CSS custom
-              // properties (`var(--color-accent)` etc.), and
-              // `` `${color}22` `` — the old formula — produces the
-              // syntactically invalid `"var(--color-accent)22"`, which the
-              // browser silently drops, leaving no background tint at all.
-              // `color-mix` works uniformly whether `color` is a var() or
-              // (for file rows, via fileTypeMeta) a literal hex string.
-              { backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`, color }
+            : // Not chrome — this is how the icon itself gets its tint:
+              // Phosphor (and MountFolderIcon) fill with `currentColor`, and
+              // `color` here is a CSS custom property (`var(--color-accent)`
+              // etc.) that the SVG below inherits.
+              { color }
         }
         aria-hidden="true"
       >
@@ -201,9 +198,9 @@ export function LibraryEntryRow({
             />
           )
         ) : containerIcon ? (
-          // The locked custom set (Workspace/Vault/Folder/Mount) already
-          // encodes its own fill-vs-outline treatment per kind — no `weight`
-          // prop to plumb through, unlike the Phosphor file icons below.
+          // Plain Phosphor components (Books/FolderSimple) plus the one
+          // deliberate exception, MountFolderIcon — no `weight` prop to plumb
+          // through, unlike the Phosphor file icons below.
           <containerIcon.Icon size={18} />
         ) : (
           fileMeta && <fileMeta.Icon size={18} weight="regular" />

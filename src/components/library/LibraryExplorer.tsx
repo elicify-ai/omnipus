@@ -38,11 +38,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Buildings,
   Files,
   CaretRight,
   X,
   ArrowSquareOut,
-  Tray,
   FolderOpen,
 } from '@phosphor-icons/react'
 import { Switch } from '@/components/ui/switch'
@@ -87,7 +87,6 @@ import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
-import { WorkspaceIcon } from './icons'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
@@ -929,7 +928,7 @@ export function LibraryExplorer({
               />
             )}
             {!workspacesQuery.isLoading && !workspacesQuery.isError && sortedWorkspaces.length === 0 && (
-              <EmptyState icon={<Tray size={28} />} message="No workspaces yet." />
+              <EmptyState icon={<Buildings size={28} />} message="No workspaces yet." />
             )}
             {!workspacesQuery.isLoading &&
               !workspacesQuery.isError &&
@@ -942,13 +941,13 @@ export function LibraryExplorer({
                   data-testid={`library-workspace-node-${node.id}`}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 hover:bg-[var(--color-surface-2)] text-left transition-colors"
                 >
-                  {/* C3 (library-b-c-design §"Icon system — LOCKED"): the
-                      virtual-root's workspace nodes get the locked
-                      WorkspaceIcon (gold tile + 2×2 knockout), not the
-                      generic Phosphor Tray glyph — a workspace is a distinct
-                      container kind from vault/folder/mount, not a stand-in
-                      for "storage" in general. */}
-                  <WorkspaceIcon size={18} className="text-[var(--color-accent)] shrink-0" />
+                  {/* Icon-consistency pass (2026-09-07): every surface that
+                      names a workspace uses the same Phosphor Buildings glyph
+                      — the sidebar workspace list and the workspace tab bar
+                      both moved off Tray to this same icon, so a workspace no
+                      longer wears three different glyphs depending on where
+                      it is shown. */}
+                  <Buildings size={18} className="text-[var(--color-accent)] shrink-0" />
                   <span className="flex-1 truncate text-sm text-[var(--color-secondary)]">{node.name}</span>
                   <span className="text-xs text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}

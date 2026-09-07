@@ -46,7 +46,7 @@ import type { LibraryEntry } from '@/lib/api'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { resolveKnowledgeFirstRunState } from './knowledge/KnowledgePanel'
 import { KnowledgeEmptyState } from './knowledge/KnowledgeEmptyState'
-import { MountIcon } from './icons'
+import { MountFolderIcon } from './icons'
 
 interface LibraryMountsDialogProps {
   open: boolean
@@ -154,10 +154,10 @@ export function LibraryMountsDialog({
                 className="rounded border border-[var(--color-border)] px-3 py-2"
               >
                 <div className="flex items-center gap-3">
-                  {/* Locked icon system (C3): Mount = --color-mount, escalated
-                      to --color-warning for a broad grant — same rule
-                      LibraryEntryRow applies to this same entry in the tree. */}
-                  <MountIcon
+                  {/* Same shared MountFolderIcon LibraryEntryRow renders for
+                      this same entry in the tree: --color-mount, escalated
+                      to --color-warning for a broad grant. */}
+                  <MountFolderIcon
                     size={18}
                     className={mount.broad ? 'text-[var(--color-warning)]' : 'text-[var(--color-mount)]'}
                   />

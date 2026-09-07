@@ -6,7 +6,7 @@ import {
   CalendarBlank,
   UsersThree,
   Files,
-  Tray,
+  Buildings,
   CaretDown,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -156,7 +156,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
           )}
         >
-          <Tray size={16} weight={settingsActive ? 'fill' : 'regular'} className="flex-shrink-0" />
+          <Buildings size={16} weight={settingsActive ? 'fill' : 'regular'} className="flex-shrink-0" />
           <span className="truncate">{workspaceName}</span>
           {settingsActive && (
             <motion.div
@@ -224,7 +224,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               )}
             >
               {settingsActive ? (
-                <Tray size={16} weight="fill" className="text-[var(--color-accent)]" />
+                <Buildings size={16} weight="fill" className="text-[var(--color-accent)]" />
               ) : (
                 activeTab && <activeTab.Icon size={16} weight="fill" className="text-[var(--color-accent)]" />
               )}
@@ -248,7 +248,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 settingsActive && 'text-[var(--color-accent)]',
               )}
             >
-              <Tray size={15} weight={settingsActive ? 'fill' : 'regular'} />
+              <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} />
               <span>{SEGMENT_LABELS.settings}</span>
               {settingsActive && (
                 <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">

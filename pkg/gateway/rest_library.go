@@ -336,7 +336,40 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 	if entries == nil {
 		entries = []gen.LibraryEntry{}
 	}
+	annotateKnowledgeBaseEntries(root, entries)
 	jsonOK(w, entries)
+}
+
+// annotateKnowledgeBaseEntries sets IsKnowledgeBase on every directory entry
+// in place, so vault-ness is a fact the listing STATES rather than something
+// the SPA infers from whichever folders it happened to have queried this
+// session (a folder never opened yet, or a session whose react-query cache
+// was evicted, used to render as a plain folder even though it was a real
+// knowledge base — reproduced with a vault named "UAT Vault" showing the
+// plain-folder icon right after creation).
+//
+// Reuses knowledge.IsKnowledgeBase over the entry's real host path — the SAME
+// detection GET .../knowledge?path=... answers per folder (handleKnowledgeInfo
+// resolves through root.HostPath the identical way), never a second rule that
+// could disagree with it. One directory read per directory entry, no network
+// call, matching this listing's existing "cheap, small list" cost profile.
+//
+// A detection failure (unreadable target, a broken mount) leaves the field
+// absent for that one entry rather than failing the whole listing — the
+// folder still renders, just without the vault fact this request could not
+// establish, mirroring root.List's own per-entry tolerance for a raced
+// concurrent delete.
+func annotateKnowledgeBaseEntries(root *library.Root, entries []gen.LibraryEntry) {
+	for i := range entries {
+		if !entries[i].IsDir {
+			continue
+		}
+		isKB, detErr := knowledge.IsKnowledgeBase(root.HostPath(entries[i].Path))
+		if detErr != nil {
+			continue
+		}
+		entries[i].IsKnowledgeBase = &isKB
+	}
 }
 
 func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Request, workspaceID string) {

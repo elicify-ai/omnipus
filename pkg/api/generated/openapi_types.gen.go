@@ -12244,6 +12244,9 @@ type LibraryEntry struct {
 	// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
 	IsHidden bool `json:"is_hidden"`
 
+	// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
+	IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
+
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
 
@@ -12411,6 +12414,9 @@ type LibraryUploadResponse struct {
 
 		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
 		IsHidden bool `json:"is_hidden"`
+
+		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
+		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
 
 		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 		IsTextEditable bool `json:"is_text_editable"`
