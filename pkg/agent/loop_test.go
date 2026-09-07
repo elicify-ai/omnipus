@@ -3592,55 +3592,6 @@ func TestIsNativeSearchProvider_NoInterface(t *testing.T) {
 	}
 }
 
-// --- isCLIBridgedProvider (review-round-1 finding #12) ---------------------
-
-// toolChoiceForcingProvider is a minimal fake directly implementing
-// providers.ToolChoiceForcingCapable, exercising isCLIBridgedProvider's
-// interface-first check independent of the two known concrete CLI types —
-// the exact "provider-pool fallback candidate" gap finding #12 closes.
-type toolChoiceForcingProvider struct {
-	supported bool
-}
-
-func (p *toolChoiceForcingProvider) Chat(
-	ctx context.Context, msgs []providers.Message, tools []providers.ToolDefinition,
-	model string, opts map[string]any,
-) (*providers.LLMResponse, error) {
-	return &providers.LLMResponse{Content: "ok"}, nil
-}
-
-func (p *toolChoiceForcingProvider) GetDefaultModel() string { return "test-model" }
-
-func (p *toolChoiceForcingProvider) SupportsToolChoiceForcing() bool { return p.supported }
-
-func TestIsCLIBridgedProvider_InterfaceCapable_NotBridged(t *testing.T) {
-	if isCLIBridgedProvider(&toolChoiceForcingProvider{supported: true}) {
-		t.Fatal("a provider declaring SupportsToolChoiceForcing()=true must NOT be treated as CLI-bridged")
-	}
-}
-
-func TestIsCLIBridgedProvider_InterfaceIncapable_IsBridged(t *testing.T) {
-	if !isCLIBridgedProvider(&toolChoiceForcingProvider{supported: false}) {
-		t.Fatal("a provider declaring SupportsToolChoiceForcing()=false must be treated as CLI-bridged, " +
-			"via the interface — even though it is NOT one of the two hardcoded concrete types")
-	}
-}
-
-func TestIsCLIBridgedProvider_KnownConcreteTypes(t *testing.T) {
-	if !isCLIBridgedProvider(providers.NewCodexCliProvider(t.TempDir())) {
-		t.Fatal("CodexCliProvider must be treated as CLI-bridged")
-	}
-	if !isCLIBridgedProvider(providers.NewCopilotCliProviderWithCommand("", t.TempDir())) {
-		t.Fatal("CopilotCliProvider must be treated as CLI-bridged")
-	}
-}
-
-func TestIsCLIBridgedProvider_PlainProvider_NotBridged(t *testing.T) {
-	if isCLIBridgedProvider(&plainProvider{}) {
-		t.Fatal("a provider implementing neither the interface nor a known concrete type must not be treated as CLI-bridged")
-	}
-}
-
 func TestFilterClientWebSearch_RemovesWebSearch(t *testing.T) {
 	defs := []providers.ToolDefinition{
 		{Type: "function", Function: providers.ToolFunctionDefinition{Name: "search_web"}},

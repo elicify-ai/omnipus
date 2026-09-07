@@ -845,7 +845,58 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		al.bumpGoalActivityOnTurn(store, sessionID)
 		al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed,
 			meta.GoalMaxRounds, meta.GoalLatestReason, goalPillActive)
+		// ADR-081 D3 AMENDMENT item 3 (2026-09-07): the immediate post-turn
+		// correction that replaces provider tool-choice forcing as the
+		// enforcement point. An ordinary (non-parked, non-waiting, non-claim)
+		// goal turn just completed with the compiled record STILL empty —
+		// the working agent skipped its first-move door entirely. Nudge it
+		// right now rather than waiting for the idle keeper's quiet window
+		// (D6c) to notice.
+		al.maybeNudgeUnregisteredGoal(store, sessionID, meta, agentInst, opts)
 	}
+}
+
+// maybeNudgeUnregisteredGoal is ADR-081 D3 amendment item 3's immediate
+// post-turn correction: called only from checkGoalLoopAfterTurn's ordinary-
+// turn branch (default case — a claim, a waiting_on_user pause, or a bare
+// claim all take their own dedicated action and never reach here). When the
+// goal is still recordless after an ordinary turn, this dispatches the SAME
+// registration nudge D6c's idle ladder would eventually dispatch — reusing
+// settleRecordlessGoal (goal_triggers.go) rather than a second dispatch
+// path, so there is exactly one persisted counter (GoalZeroOutputPushes)
+// and exactly one nudge-or-fallback decision function.
+//
+// Two guards keep this from misfiring:
+//   - a parked AskUserQuestion card (goalHasParkedCard) means the agent
+//     DID take a first-move door — it is waiting on the operator's answer,
+//     not stalled — so nudging now would talk over that pending question.
+//   - a turn whose SenderID is goalLoopFollowUpSenderID is itself a
+//     goal-loop-dispatched follow-up (a nudge, a continue-push, or an idle
+//     steer) that STILL didn't register. Re-dispatching immediately from
+//     here would tight-loop with zero delay between attempts. Instead this
+//     case is deliberately left to the existing idle ladder
+//     (maybeSettleGoalIdle -> settleRecordlessGoal, goal_triggers.go),
+//     which advances the SAME GoalZeroOutputPushes counter after the
+//     normal quiet window — still bounded by goalZeroOutputPushMax before
+//     the D7 engine fallback takes over, so the guarantee holds either way;
+//     only the FIRST registration attempt is sped up by this function, not
+//     every subsequent retry.
+func (al *AgentLoop) maybeNudgeUnregisteredGoal(
+	store *session.UnifiedStore, sessionID string, meta *session.UnifiedMeta,
+	agentInst *AgentInstance, opts processOptions,
+) {
+	if meta.GoalCriteriaJSON != "" {
+		return // registered — nothing to correct
+	}
+	if al.goalHasParkedCard(sessionID) {
+		return // waiting on the operator's answer, not stalled
+	}
+	if opts.SenderID == goalLoopFollowUpSenderID {
+		return // a goal-loop follow-up that itself failed — let the idle ladder pick it up
+	}
+	logger.InfoCF("agent", "goal: record not registered on the turn; nudging immediately",
+		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": meta.GoalID})
+	al.settleRecordlessGoal(store, meta, agentInst)
 }
 
 // goalVerdictReasonText builds a human-readable summary of the judge's unmet

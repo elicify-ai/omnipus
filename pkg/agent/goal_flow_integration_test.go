@@ -6,8 +6,10 @@
 // for ADR-081 (work-first goal flow): it drives full, multi-turn scripted-
 // provider lifecycles through the REAL runTurn/processMessage/
 // processSystemMessage machinery, gluing together the per-area coverage
-// already proven in goal_forcing_test.go (D3/D4), goal_keeper_repairs_test.go
-// (D6), and goal_record_wiring_test.go (D2/D5/D7). Traces to:
+// already proven in goal_first_move_test.go (D3/D4, renamed from
+// goal_forcing_test.go on the D3 amendment — tool-choice forcing is
+// deleted; narrowing survives), goal_keeper_repairs_test.go (D6), and
+// goal_record_wiring_test.go (D2/D5/D7). Traces to:
 // docs/internal/architecture/ADR-081-work-first-goal-flow.md,
 // docs/internal/specs/work-first-goal-flow-spec.md tests 21/22/23.
 package agent
@@ -33,7 +35,7 @@ import (
 // ============================================================================
 
 // e2eCapturedCall is one full LLM request an e2eScriptedProvider observed —
-// messages ARE captured (unlike goal_forcing_test.go's capturedRequest),
+// messages ARE captured (unlike goal_first_move_test.go's capturedRequest),
 // since this suite needs to inspect a tool_result's content (e.g. the
 // set_goal(mode:update) diff echoed back to the model on the following
 // request).
@@ -44,8 +46,8 @@ type e2eCapturedCall struct {
 }
 
 // e2eScriptedProvider scripts a sequence of LLM responses by 1-based call
-// number, mirroring goal_forcing_test.go's forcedDoorCaptureProvider but
-// extended to span MULTIPLE runTurn/processSystemMessage invocations across
+// number, mirroring goal_first_move_test.go's narrowedDoorCaptureProvider
+// but extended to span MULTIPLE runTurn/processSystemMessage invocations across
 // one test — the work-first lifecycle is not one round-loop, it is several
 // separate turns dispatched on the same session over the life of a goal.
 // Calls beyond len(scripted) return `fallback` as a plain terminal response
@@ -298,13 +300,16 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatal("expected a second LLM call on the resume turn — the predicate must still hold")
 		}
 		// FR-010: the question budget is now spent — the predicate still
-		// holds (record still empty) so forcing narrows to {set_goal} alone.
+		// holds (record still empty) so narrowing still applies, to
+		// {set_goal} alone.
 		if len(second.tools) != 1 || second.tools[0].Function.Name != tools.SetGoalToolName {
 			t.Fatalf("resume request must narrow to {set_goal} alone (budget spent), got %v", toolNamesOf(second.tools))
 		}
-		tc, ok := second.options[providers.OptionKeyToolChoice].(providers.ToolChoice)
-		if !ok || tc.Mode != providers.ToolChoiceRequired {
-			t.Fatal("the resume request must still carry tool_choice=required — the predicate still holds")
+		// D3 amendment (2026-09-07): no request EVER carries a tool-choice
+		// option — provider tool-choice forcing is deleted. Determinism
+		// comes from the immediate post-turn correction, not the request.
+		if _, present := second.options["tool_choice"]; present {
+			t.Fatal("no request may ever carry a tool-choice option — forcing is deleted (D3 amendment)")
 		}
 
 		afterMeta, err := store.GetMeta(sid)
@@ -627,12 +632,13 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		t.Fatal("provider was never called")
 	}
 	if len(first.tools) != 2 {
-		t.Fatalf("request 1 must offer EXACTLY 2 tools (the forced pair), got %d: %v",
+		t.Fatalf("request 1 must offer EXACTLY 2 tools (the narrowed pair), got %d: %v",
 			len(first.tools), toolNamesOf(first.tools))
 	}
-	tc, ok := first.options[providers.OptionKeyToolChoice].(providers.ToolChoice)
-	if !ok || tc.Mode != providers.ToolChoiceRequired {
-		t.Fatal("request 1 must carry tool_choice=required")
+	// D3 amendment (2026-09-07): narrowing the tool surface is the whole
+	// mechanism now — no request ever carries a tool-choice option.
+	if _, present := first.options["tool_choice"]; present {
+		t.Fatal("request 1 must NOT carry a tool-choice option — forcing is deleted (D3 amendment)")
 	}
 
 	meta1, err := store.GetMeta(sid)
@@ -655,8 +661,8 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		t.Fatalf("request 2 must restore the FULL policy-filtered surface (> 2 tools), got %d: %v",
 			len(second.tools), toolNamesOf(second.tools))
 	}
-	if _, present := second.options[providers.OptionKeyToolChoice]; present {
-		t.Fatal("request 2 must NOT carry a tool-choice option — forcing applies to request 1 only")
+	if _, present := second.options["tool_choice"]; present {
+		t.Fatal("request 2 must NOT carry a tool-choice option — forcing is deleted (D3 amendment)")
 	}
 
 	// --- Turn 2: an ordinary steering message updates the record via set_goal(mode:update). ---
@@ -674,8 +680,8 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a third LLM call for the steering turn")
 	}
-	if _, present := third.options[providers.OptionKeyToolChoice]; present {
-		t.Fatal("the steering turn's first request must NOT be forced — the record already exists (predicate false)")
+	if _, present := third.options["tool_choice"]; present {
+		t.Fatal("the steering turn's first request must NOT carry a tool-choice option — the record already exists (predicate false), and no request ever carries one anyway (D3 amendment)")
 	}
 
 	meta2, err := store.GetMeta(sid)
@@ -845,8 +851,15 @@ func TestGoalFlow_EndToEnd_Channel(t *testing.T) {
 		if !ok {
 			t.Fatal("provider was never called")
 		}
-		if _, present := first.options[providers.OptionKeyToolChoice]; present {
-			t.Fatal("a channel-origin goal turn must NEVER be forced (AskUserQuestion is web-only, G-B2)")
+		// D3 amendment (2026-09-07): narrowing now applies on channel
+		// origins too — with AskUserQuestion permanently web-only (G-B2),
+		// the narrowed pair degrades to {set_goal} alone. No request ever
+		// carries a tool-choice option (forcing is deleted).
+		if len(first.tools) != 1 || first.tools[0].Function.Name != tools.SetGoalToolName {
+			t.Fatalf("a channel-origin goal turn must narrow to {set_goal} alone, got %v", toolNamesOf(first.tools))
+		}
+		if _, present := first.options["tool_choice"]; present {
+			t.Fatal("a channel-origin goal turn must NEVER carry a tool-choice option")
 		}
 
 		meta, err := store.GetMeta(sid)
@@ -926,8 +939,11 @@ func TestGoalFlow_EndToEnd_Channel(t *testing.T) {
 		if !ok {
 			t.Fatal("provider was never called")
 		}
-		if _, present := first.options[providers.OptionKeyToolChoice]; present {
-			t.Fatal("a channel-origin turn must never carry a forced tool-choice")
+		if len(first.tools) != 1 || first.tools[0].Function.Name != tools.SetGoalToolName {
+			t.Fatalf("a channel-origin goal turn must narrow to {set_goal} alone, got %v", toolNamesOf(first.tools))
+		}
+		if _, present := first.options["tool_choice"]; present {
+			t.Fatal("a channel-origin turn must never carry a tool-choice option")
 		}
 	})
 }
