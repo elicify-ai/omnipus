@@ -8312,10 +8312,17 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	if opts.SendResponse && result.finalContent != "" {
+		// ADR-082 D6/FR-011: carry the transcript session id so
+		// webchatChannel.Send (pkg/gateway/webchat_channel.go) can resolve
+		// delivery targets by session id first, chat id second — the fix for
+		// E5 (keeper-originated turns carrying a stale ChatID whose only
+		// live connection may have moved to a different chatID via
+		// reconnect/second-tab attach, while the session id stays valid).
 		if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: result.finalContent,
+			Channel:   opts.Channel,
+			ChatID:    opts.ChatID,
+			Content:   result.finalContent,
+			SessionID: opts.TranscriptSessionID,
 		}); err != nil {
 			logger.ErrorCF("agent", "Failed to publish outbound response after turn",
 				map[string]any{"channel": opts.Channel, "chat_id": opts.ChatID, "error": err.Error()})

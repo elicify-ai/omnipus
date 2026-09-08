@@ -12,23 +12,26 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// buildWsStreamer constructs a wsStreamer whose conn's sendCh is captured so
-// we can inspect the done frame emitted by Finalize.
+// buildWsStreamer constructs a wsStreamer bound (via a real WSHandler, ADR-082
+// D2) to one connection whose sendCh is captured so we can inspect the done
+// frame emitted by Finalize.
 func buildWsStreamer(t *testing.T) (*wsStreamer, chan []byte) {
 	t.Helper()
 	ch := make(chan []byte, 8)
 
-	// We need a real *wsConn because wsStreamer holds *wsConn by pointer and
-	// sendConnGenFrame accesses conn.sendCh. Build the smallest valid *wsConn.
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
 	conn := &wsConn{
 		sendCh: ch,
 		doneCh: make(chan struct{}),
 	}
+	bindTestConnToSession(handler, "test-chat", "test-session", conn)
 
 	s := &wsStreamer{
-		conn:      conn,
 		sessionID: "test-session",
 		chatID:    "test-chat",
+		channel:   newWebchatChannel(handler),
 	}
 	return s, ch
 }
