@@ -2764,7 +2764,7 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 }
 
 // Passive events retain the original session across dispatch and retries. A nil
-// owner preserves direct reconciliation, whose caller already found the target.
+// owner preserves direct adoption without an externally retained snapshot.
 func (m *BrowserManager) adoptTargetForSession(sessionID string, targetID target.ID, owner *sessionEntry) (tabAdoptResult, error) {
 	if targetID == "" {
 		return tabAdoptResult{}, nil
@@ -3078,7 +3078,7 @@ func (m *BrowserManager) adoptTargetWithRetryForSession(sessionID string, target
 	})
 }
 
-// Caller holds m.mu. The nil owner belongs only to direct reconciliation.
+// Caller holds m.mu. A nil owner denotes direct adoption without a snapshot.
 func (m *BrowserManager) adoptionSessionCurrentLocked(sessionID string, owner *sessionEntry) bool {
 	return owner == nil || m.sessions[sessionID] == owner && owner.browserCtx != nil && owner.browserCtx.Err() == nil
 }
@@ -3139,7 +3139,7 @@ type ReconcileOutcome struct {
 // (see ReconcileOutcome's doc comment) — a click that spawns two new targets
 // where one adopts and the other is stranded reports BOTH.
 func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, error) {
-	infos, tracked, err := m.reconcileTargetSnapshot(sessionID)
+	infos, tracked, owner, err := m.reconcileTargetSnapshot(sessionID)
 	if err != nil {
 		return ReconcileOutcome{}, err
 	}
@@ -3158,7 +3158,11 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 		if _, openerIsOurs := tracked[info.OpenerID]; !openerIsOurs {
 			continue // opened by a target outside this browsing context
 		}
-		result, aerr := m.adoptTarget(sessionID, info.TargetID)
+		result, aerr := m.adoptTargetForSession(sessionID, info.TargetID, owner)
+		if errors.Is(aerr, errBrowserSessionChanged) {
+			// Earlier results no longer describe the current tab set.
+			return ReconcileOutcome{}, aerr
+		}
 		if aerr != nil {
 			logger.WarnCF("browser", "reconcile: failed to adopt detected tab", map[string]any{
 				"session_id": sessionID,
@@ -3182,6 +3186,14 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 			}
 			out.UnadoptedCount++
 			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
+		}
+	}
+	if owner != nil {
+		m.mu.Lock()
+		current := m.adoptionSessionCurrentLocked(sessionID, owner)
+		m.mu.Unlock()
+		if !current {
+			return ReconcileOutcome{}, errBrowserSessionChanged
 		}
 	}
 	return out, nil

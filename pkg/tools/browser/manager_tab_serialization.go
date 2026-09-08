@@ -76,10 +76,12 @@ func (m *BrowserManager) publishCurrentTabSnapshot(sessionID string, se *session
 // reconcileTargetSnapshot gates the bounded read phase. The caller releases it
 // before waiting for individual adoptions, whose pending winner may itself be
 // waiting for admission; retaining the gate across that wait would deadlock.
-func (m *BrowserManager) reconcileTargetSnapshot(sessionID string) ([]*target.Info, map[target.ID]struct{}, error) {
+// The original session accompanies the list so each later adoption can qualify
+// its lifetime; historically tracked openers may close after this snapshot.
+func (m *BrowserManager) reconcileTargetSnapshot(sessionID string) ([]*target.Info, map[target.ID]struct{}, *sessionEntry, error) {
 	release, err := m.acquireLegacyTabCommand(sessionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer release()
 
@@ -87,7 +89,7 @@ func (m *BrowserManager) reconcileTargetSnapshot(sessionID string) ([]*target.In
 	se, ok := m.sessions[sessionID]
 	if !ok || len(se.tabs) == 0 {
 		m.mu.Unlock()
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	execCtx := se.active().ctx
 	tracked := make(map[target.ID]struct{}, len(se.tabs))
@@ -105,8 +107,8 @@ func (m *BrowserManager) reconcileTargetSnapshot(sessionID string) ([]*target.In
 	infos, lerr := listTargets(timeoutCtx)
 	cancel()
 	if lerr != nil {
-		return nil, nil, fmt.Errorf("browser: failed to list targets for reconcile: %w", lerr)
+		return nil, nil, nil, fmt.Errorf("browser: failed to list targets for reconcile: %w", lerr)
 	}
 
-	return infos, tracked, nil
+	return infos, tracked, se, nil
 }
