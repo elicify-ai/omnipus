@@ -254,7 +254,7 @@ func parseInotifyEvents(buf []byte) []rawInotifyEvent {
 	var out []rawInotifyEvent
 	off := 0
 	for off+unix.SizeofInotifyEvent <= len(buf) {
-		raw := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off])) //nolint:gosec // fixed-layout kernel record, bounds-checked by the loop condition
+		raw := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off]))
 		nameLen := int(raw.Len)
 		if nameLen < 0 || off+unix.SizeofInotifyEvent+nameLen > len(buf) {
 			break // a malformed/truncated tail; stop rather than read out of bounds

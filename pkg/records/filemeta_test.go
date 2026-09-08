@@ -667,7 +667,7 @@ func TestFileMeta_MethodTranslationRefusals(t *testing.T) {
 		{"asLink with an argument is still presentation", FileMethodAsLink, "x", []string{"presentation"}},
 		{"an unknown method is refused by name", FileMethod("contains"), "x", []string{"not a file method"}},
 		{"an empty argument is refused", FileMethodInFolder, "  ", []string{"empty argument"}},
-		{"the vault root is refused", FileMethodInFolder, "/", []string{"vault root"}},
+		{"the knowledge base root is refused", FileMethodInFolder, "/", []string{"knowledge base root"}},
 		{"a bare hash names no tag", FileMethodHasTag, "#", []string{"names no tag"}},
 	}
 	for _, tc := range cases {
