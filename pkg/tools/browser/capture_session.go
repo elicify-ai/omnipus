@@ -430,6 +430,7 @@ type CaptureSession struct {
 	ingestRecoveryAttempts int
 	videoHealthVersion     uint64
 	videoHealthExhausted   bool
+	videoHealthLatest      VideoHealthEvent
 	ingestRecoveryEpoch    uint64
 	ingestRecoveryCtx      context.Context
 	ingestRecoveryCancel   context.CancelFunc

@@ -1,0 +1,17 @@
+# Capture frame and health publication
+
+Approved contract: each capture publishes one versioned VideoHealthEvent stream. A new frame is transitioning until an accepted boundary; an initial ready boundary may be recovered. A boundary alone must preserve an existing lost/recovering/unrecoverable claim, including its attempts and detail. Every claim retains the original full frame and a fresh monotonic version. Current snapshot reads do not advance the version and cannot expose mutable saved audience slices. Uninitialized, stopped, invalidated, or exhausted claims cannot authorize publication.
+
+Gateway publication uses exact registered capture pointer/capture ID and original attachment context. Full immutable frame metadata uses the latest-video slot with the original version validator retained through final writer admission. Registration replay targets the explicitly registered viewer independent of the old event's audience; its boolean is queue admission, not delivery or displayed-picture proof. Stopped-stream fan-out is similarly scoped to the original capture/context. Root owns Begin/Commit hooks and immutable encoder control; media owns the viewer-answer path.
+
+Core tests leave CaptureSession/frame tracker/version claims real, using the existing fake relay at the transport edge. Cases: pending and measured transition; first accepted timestamp zero; each of three active failure states at boundary; new frame discards old failure; callback/current-snapshot audience mutation; absent/stopped/invalidated/exhausted snapshot. Fault probes target lost-state overwrite, retaining prior-frame failure, saved audience aliasing, and snapshot audience aliasing. Gateway cases will cover coherent wire fields, exact registry/capture/context filtering, delayed-version rejection, replay, and stopped-capture replacement. Existing redaction/optional-field checks remain relevant; no full CI run in this lane.
+
+Pre-edit impacts: CaptureSession LOW4 symbols/1 indexed direct caller, onVideoHealth LOW0; videoHealthEventLocked UNKNOWN in the partial index. Manual source scope for the latter is the four health state claims plus root's forthcoming Begin/Commit claim calls. New helpers are unindexed. Callback delivery stays outside cs.mu.
+
+## Core dependency verification
+
+Observed red: retained run 17079 exited 1, with eight intended behavioral failures and four passing unavailable-state controls (12 leaves, 6.246 s). After implementation, retained run 16549 exited 0: all 12 leaves passed, no skips, 2.926 s. Both used `CGO_ENABLED=0 GOMAXPROCS=2 go test -tags goolm,stdjson -p 1 ./pkg/tools/browser -run '^TestCaptureFramePublication' -count=1 -v`.
+
+This is a dependency handoff, not completed production integration. The parent owns actual BeginFrameTransition/CommitFrameBoundary claim/reset hooks; gateway publication/replay remains pending. By the agreed verification sequence, targeted fault injection and race checks will run with that real integration, avoiding a redundant isolated helper cycle. No full CI or production browser acceptance has been claimed.
+
+Pre-commit detect_changes was attempted for the isolated worktree, which is not registered in GitNexus. Manual staged scope is exactly the five core source/test/evidence files; the parent will map the integrated commit against its indexed checkout.

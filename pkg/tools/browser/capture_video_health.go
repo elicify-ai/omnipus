@@ -73,8 +73,8 @@ const (
 	// Attempt/MaxAttempts say which one, so the panel can be specific rather
 	// than showing an unbounded spinner.
 	VideoHealthRecovering VideoHealthState = "recovering"
-	// VideoHealthRecovered — video is flowing again. Sent only when something
-	// was actually wrong, never on a first, ordinary start.
+	// VideoHealthRecovered — video is flowing, including the first accepted
+	// frame boundary when no active failure remains.
 	VideoHealthRecovered VideoHealthState = "recovered"
 	// VideoHealthUnrecoverable — the attempt budget is spent. Terminal for
 	// this failure: nothing further is retried automatically until video comes
@@ -126,7 +126,9 @@ func (cs *CaptureSession) videoHealthEventLocked(state VideoHealthState, attempt
 	for id := range cs.viewers {
 		viewers = append(viewers, id)
 	}
-	return VideoHealthEvent{Version: cs.nextVideoHealthVersionLocked(), Frame: cs.frameStateLocked(), AgentID: cs.agentID, ViewerIDs: viewers, State: state, Attempt: attempt, MaxAttempts: maxIngestRecoveryAttempts, Detail: detail}
+	event := VideoHealthEvent{Version: cs.nextVideoHealthVersionLocked(), Frame: cs.frameStateLocked(), AgentID: cs.agentID, ViewerIDs: viewers, State: state, Attempt: attempt, MaxAttempts: maxIngestRecoveryAttempts, Detail: detail}
+	cs.videoHealthLatest = cloneVideoHealthEvent(event)
+	return event
 }
 
 // emitVideoHealth delivers an already-claimed immutable event outside cs.mu.
