@@ -1715,11 +1715,19 @@ export function BrowserLiveView({
       if (!device) return
       // Accumulate; the shared pacer dispatches. preventDefault() still has to
       // happen synchronously above, or the host page scrolls instead.
-      const prev = pendingWheelRef.current
+      const modifiers = computeModifiers(e)
+      let prev = pendingWheelRef.current
+      if (prev && (prev.x !== device.x || prev.y !== device.y || prev.modifiers !== modifiers)) {
+        // A changed position can target another scroll container; a changed
+        // modifier can turn scrolling into zoom. Finish the original gesture.
+        flushPendingMove()
+        flushPendingWheel()
+        prev = null
+      }
       pendingWheelRef.current = {
         x: device.x,
         y: device.y,
-        modifiers: computeModifiers(e),
+        modifiers,
         deltaX: (prev?.deltaX ?? 0) + e.deltaX,
         deltaY: (prev?.deltaY ?? 0) + e.deltaY,
       }
@@ -1727,7 +1735,7 @@ export function BrowserLiveView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [attached, canDispatchInput, mapPointerToDeviceCoords, scheduleInputFlush])
+  }, [attached, canDispatchInput, mapPointerToDeviceCoords, scheduleInputFlush, flushPendingMove, flushPendingWheel])
 
 
   // Cancel any in-flight coalesced move on unmount — nothing to flush once

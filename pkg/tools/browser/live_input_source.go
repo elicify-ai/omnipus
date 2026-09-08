@@ -10,7 +10,7 @@ func inputSourceEnded(source context.Context) bool {
 
 func navigationInputKind(kind string) bool {
 	switch kind {
-	case "navigate", "back", "forward", "reload":
+	case "navigate", "navigate_back", "reload":
 		return true
 	default:
 		return false

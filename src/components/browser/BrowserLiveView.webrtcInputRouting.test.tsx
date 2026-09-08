@@ -494,6 +494,32 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
     }
   })
 
+  it.each([
+    ['modifier', { clientX: 10, clientY: 10, ctrlKey: true }, { x: 10, y: 10, modifiers: 2 }],
+    ['x position', { clientX: 30, clientY: 10 }, { x: 30, y: 10, modifiers: 0 }],
+    ['y position', { clientX: 10, clientY: 20 }, { x: 10, y: 20, modifiers: 0 }],
+  ])('video mode: wheel preserves each %s boundary', async (_name, secondEvent, secondPoint) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectAndFrame()
+      const container = stubFrameRect()
+      stubVideoDims()
+      ackDriving(container)
+      mockSendInput.mockClear()
+      fireEvent.wheel(container, { deltaX: 0, deltaY: 100, clientX: 10, clientY: 10 })
+      fireEvent.wheel(container, { deltaX: 0, deltaY: 1, ...secondEvent })
+      await vi.advanceTimersByTimeAsync(60)
+      const wheels = mockSendInput.mock.calls.map(c => c[0]).filter(p => p.kind === 'wheel')
+      expect(wheels).toEqual([
+        { kind: 'wheel', x: 10, y: 10, modifiers: 0, delta_x: 0, delta_y: 100, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', ...secondPoint, delta_x: 0, delta_y: 1, capture_id: 'capture-test', capture_generation: 1 },
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('video mode: key_down frames never carry capture_width/capture_height (no x/y to correct)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
@@ -319,7 +320,8 @@ func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
 //
 //   - a run of mouse_move frames collapses to its NEWEST frame (a cursor
 //     stream is sampled state; the freshest sample supersedes the rest);
-//   - a run of wheel frames collapses to its newest frame carrying the SUM
+//   - a run of wheel frames with identical non-delta fields collapses to
+//     its newest frame carrying the SUM
 //     of the run's delta_x/delta_y (wheel is a stream of increments; the
 //     merged frame preserves total scroll distance while costing one
 //     dispatch instead of dozens);
@@ -327,8 +329,8 @@ func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
 //     unchanged in place.
 //
 // The wheel merge round-trips the newest frame through map[string]any so
-// every other field (coordinates, modifiers, capture_width/height, ...)
-// rides along untouched — this package still never mirrors the
+// every other field (coordinates, modifiers, capture identity and geometry)
+// remains unchanged; changes to these fields split the run. This package never mirrors the
 // BrowserInputFrame wire struct (see wireInputDataChannel's doc comment);
 // like isCoalescableInputKind's `kind` probe it touches named fields only.
 // If any frame in a wheel run fails to parse, that run is passed through
@@ -347,6 +349,9 @@ func coalesceInputBatch(batch [][]byte) [][]byte {
 		}
 		j := i + 1
 		for j < len(batch) && inputKindOf(batch[j]) == kind {
+			if kind == "wheel" && !sameWheelBasis(batch[i], batch[j]) {
+				break
+			}
 			j++
 		}
 		run := batch[i:j]
@@ -358,6 +363,20 @@ func coalesceInputBatch(batch [][]byte) [][]byte {
 		i = j
 	}
 	return out
+}
+
+// Preserve every non-delta field, including future protocol additions. A
+// scroll increment cannot be reassigned to another picture or gesture.
+func sameWheelBasis(first, next []byte) bool {
+	var a, b map[string]json.RawMessage
+	if json.Unmarshal(first, &a) != nil || json.Unmarshal(next, &b) != nil {
+		return false
+	}
+	delete(a, "delta_x")
+	delete(a, "delta_y")
+	delete(b, "delta_x")
+	delete(b, "delta_y")
+	return reflect.DeepEqual(a, b)
 }
 
 // inputKindOf peeks the frame's `kind` (empty string on parse failure, which
