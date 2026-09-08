@@ -51,6 +51,7 @@ import {
   Warning,
   FileText,
   FileMagnifyingGlass,
+  FolderSimple,
   IdentificationCard,
   SquaresFour,
   Paperclip,
@@ -139,6 +140,10 @@ export interface LibrarySearchBarProps {
    *  vault hits are collection-relative and translated here first; file hits
    *  are already workspace-relative (US-2/US-4). */
   onOpenNote: (workspacePath: string) => void
+  /** Navigate INTO a matched folder. A directory hit (FileSearchHit.is_dir)
+   *  addresses a container, so opening it as a file would select a directory
+   *  in the preview pane instead of browsing it. */
+  onOpenFolder?: (workspacePath: string) => void
   /** The file list to show while no query is active. Replaced entirely by
    *  grouped results while one is (library-b-c-design-2026-09-07 §C1). */
   children: ReactNode
@@ -297,6 +302,7 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
  *  hit's collection-relative path — no translation is needed here). */
 function FileHitRow({ hit, onOpen }: { hit: FileSearchHit; onOpen: () => void }) {
   const isContent = hit.match_kind === 'content'
+  const isDir = hit.is_dir === true
   return (
     <li>
       <button
@@ -307,7 +313,9 @@ function FileHitRow({ hit, onOpen }: { hit: FileSearchHit; onOpen: () => void })
         className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
       >
         <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
-          {isContent ? (
+          {isDir ? (
+            <FolderSimple size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
+          ) : isContent ? (
             <FileMagnifyingGlass size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           ) : (
             <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
@@ -343,6 +351,7 @@ export function LibrarySearchBar({
   workspaceId,
   folderPath,
   onOpenNote,
+  onOpenFolder,
   children,
   limit,
   debounceMs,
@@ -731,7 +740,9 @@ export function LibrarySearchBar({
                     <FileHitRow
                       key={`${hit.path}:${hit.line ?? 0}:${i}`}
                       hit={hit}
-                      onOpen={() => openFile(hit.path)}
+                      onOpen={() =>
+                        hit.is_dir === true && onOpenFolder ? onOpenFolder(hit.path) : openFile(hit.path)
+                      }
                     />
                   ))}
                 </ul>

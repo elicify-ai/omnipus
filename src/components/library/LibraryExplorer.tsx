@@ -968,6 +968,11 @@ export function LibraryExplorer({
               if (!confirmDiscardLibraryEdits()) return
               goTo(workspaceId, workspacePath)
             }}
+            onOpenFolder={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              setBrowsedDir(workspacePath)
+              goTo(workspaceId, null)
+            }}
           >
             {entriesQuery.isLoading && <ListSkeleton />}
             {entriesQuery.isError && (

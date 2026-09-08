@@ -281,6 +281,7 @@ type fileSearchHitWire = struct { // not-wire-format: type alias of the generate
 	ContextAfter  *[]string                           `json:"context_after,omitempty"`
 	ContextBefore *[]string                           `json:"context_before,omitempty"`
 	Excerpt       *string                             `json:"excerpt,omitempty"`
+	IsDir         *bool                               `json:"is_dir,omitempty"`
 	Line          *int                                `json:"line,omitempty"`
 	MatchKind     gen.FileSearchResponseHitsMatchKind `json:"match_kind"`
 	Path          string                              `json:"path"`
@@ -310,6 +311,10 @@ func fileSearchResponseFromResult(result filegrep.Result) gen.FileSearchResponse
 	resp.Stats.FilesPrunedIgnored = result.Stats.FilesPrunedIgnored
 	resp.Stats.FilesSkippedPerFileCap = result.Stats.FilesSkippedFileCap
 	resp.Stats.HitsCappedPerFile = result.Stats.HitsCappedPerFile
+	dirsVisited := result.Stats.DirsVisited
+	resp.Stats.DirsVisited = &dirsVisited
+	filesFilteredGlob := result.Stats.FilesFilteredGlob
+	resp.Stats.FilesFilteredGlob = &filesFilteredGlob
 
 	return resp
 }
@@ -323,6 +328,10 @@ func fileSearchHitFromEngine(h filegrep.Hit) fileSearchHitWire {
 	out := fileSearchHitWire{
 		Path:      h.Path,
 		MatchKind: gen.FileSearchResponseHitsMatchKind(string(h.Kind)),
+	}
+	if h.IsDir {
+		isDir := true
+		out.IsDir = &isDir
 	}
 	if h.Kind == filegrep.KindContent {
 		line := h.Line
