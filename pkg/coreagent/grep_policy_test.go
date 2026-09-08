@@ -277,6 +277,34 @@ func TestGrep_PolicyAllTiersAndDriftBackfill(t *testing.T) {
 			assert.NotEqualf(t, "grep", g.ToolName,
 				"grep must have ZERO coverage gaps after SeedConfig; found gap for agent %q", g.AgentID)
 		}
+
+		// Review finding F6 (docs/internal/false-green-patterns.md: "a for
+		// loop continues past a condition with no assertion after the
+		// loop"): the loop above only fires if ValidateToolPolicyCoverage
+		// actually returns a "grep" gap. If it ever came back empty for the
+		// WRONG reason — e.g. a future refactor drops "grep" from
+		// coreagent.AllStaticToolNames(), so ValidateToolPolicyCoverage
+		// treats it as an unknown tool and stops checking its coverage
+		// entirely — this subtest would report green having verified
+		// nothing about grep specifically, despite being titled a
+		// precondition on exactly that. These two blocks re-derive the same
+		// property directly from ground truth, independent of
+		// ValidateToolPolicyCoverage's own machinery, so a regression in
+		// EITHER path still fails this subtest.
+		_, grepKnown := known["grep"]
+		require.True(t, grepKnown,
+			"\"grep\" must be a known static tool name, or ValidateToolPolicyCoverage silently stops "+
+				"checking its coverage at all — the loop above would then report green unconditionally")
+		require.NotEmpty(t, cfg.Agents.List, "SeedConfig must have seeded at least one agent")
+		for i := range cfg.Agents.List {
+			ac := cfg.Agents.List[i]
+			require.NotNilf(t, ac.Tools, "agent %q must carry a tools config after SeedConfig", ac.ID)
+			p, ok := ac.Tools.Builtin.Policies["grep"]
+			require.Truef(t, ok, "agent %q has no explicit grep policy entry after SeedConfig", ac.ID)
+			assert.Equalf(t, config.ToolPolicyAllow, p,
+				"agent %q's seeded grep policy must be allow (FR-009: no posture left to silent "+
+					"inheritance for any agent tier), got %q", ac.ID, p)
+		}
 	})
 
 	t.Run("fresh custom agent creation: grep resolves allow, not a hardcoded deny (founder ruling 2026-09-07)", func(t *testing.T) {

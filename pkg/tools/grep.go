@@ -193,6 +193,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if scopeErr := validateGrepScope(scope); scopeErr != nil {
 		return ErrorResult("grep: " + scopeErr.Error())
 	}
+	scope = normalizeGrepScope(scope)
 
 	includeGlobs, err := grepStringSliceArg(args, "include_globs")
 	if err != nil {
@@ -577,6 +578,37 @@ func grepScopeStatError(subPath, label string, err error) error {
 	}
 }
 
+// grepIgnoreFileNames mirrors filegrep's own (unexported) ignoreFileNames
+// list (pkg/filegrep/ignore.go's `var ignoreFileNames = [...]string{".gitignore",
+// ".ignore"}` — not importable from here, filegrep exports no equivalent
+// constant): the two filenames the engine's walk reads, unconditionally, at
+// the root of every Root.FS it is handed (`loadIgnoreLayer(root.FS, "")`,
+// filegrep.go). singleEntryFS (below) must let Open see these two names in
+// addition to the one entry it otherwise narrows to, or a file-scoped search
+// silently loses its OWN parent directory's ignore rules while the
+// equivalent directory-scoped search honors them (F1, review finding): with
+// "src/build/.gitignore" containing "generated.go", `grep path="src"` prunes
+// src/build/generated.go, but `grep path="src/build/generated.go"` used to
+// search it anyway — the singleEntryFS wrapper refused Open(".gitignore")
+// for any name other than the target, so loadIgnoreLayer's read of the
+// parent's own .gitignore came back ErrNotExist and that layer was silently
+// empty. LoadAncestorIgnore (used for the ancestor chain ABOVE the parent)
+// was never the gap; the parent's OWN file was.
+//
+// If filegrep ever adds a third ignore filename this list drifts silently —
+// there is no way to import the same list from here. A grep_singlefile_test.go
+// case pins the two names this list currently needs to match.
+var grepIgnoreFileNames = [...]string{".gitignore", ".ignore"}
+
+func isGrepIgnoreFileName(name string) bool {
+	for _, n := range grepIgnoreFileNames {
+		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
 // singleEntryFS narrows a directory FS to expose exactly one named entry —
 // the file grep's `path` argument resolved to when it names a regular file
 // rather than a directory (see resolveScopedRoot). os.Root can only be
@@ -587,6 +619,14 @@ func grepScopeStatError(subPath, label string, err error) error {
 // .gitignore/.ignore, include_globs/exclude_globs) to the one entry it is
 // shown, exactly as it would if that file had been discovered during an
 // ordinary directory walk.
+//
+// Open ALSO passes through grepIgnoreFileNames (F1, review finding): the
+// engine reads a root's own ignore files via a direct Open of ".gitignore"/
+// ".ignore" — a separate codepath from the directory listing ReadDir
+// returns, and one that never registers those files as walk/search
+// candidates. Letting Open reach them (while ReadDir still narrows to only
+// the target entry) restores the parent directory's own ignore rules
+// without exposing anything new as a hit.
 type singleEntryFS struct {
 	fsys fs.FS
 	name string // the one visible entry's base name
@@ -596,7 +636,7 @@ func (s singleEntryFS) Open(name string) (fs.File, error) {
 	if name == "." {
 		return s.fsys.Open(name)
 	}
-	if name != s.name {
+	if name != s.name && !isGrepIgnoreFileName(name) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
 	return s.fsys.Open(name)
@@ -956,6 +996,42 @@ func validateGrepScope(scope string) error {
 	return nil
 }
 
+// normalizeGrepScope canonicalises a validated `path` argument to the same
+// slash-clean form filegrep.Root.Name is built from and every reported hit
+// path (and include_globs/exclude_globs pattern) is matched against (F5,
+// review finding): (*os.Root).Stat happily accepts an unnormalized spelling
+// like "./src" or "src/" or "src//build", so grep used to search it — but
+// resolveScopedRoot then echoed that RAW string into `name := subPath`
+// (every reported hit's path prefix) and into filegrep.Root.ScopePrefix. A
+// caller who ALSO supplied an anchored include_globs like "src/**" then got
+// a silent, unexplained zero-hit result: doublestar.Match("src/**",
+// "./src/foo.go") is false, because "./src/foo.go" and "src/foo.go" name the
+// same file but are two different strings to it. "**/"-prefixed globs still
+// matched regardless (which is what kept this lower severity), but the
+// reported path and the caller's own glob disagreeing about the scope's
+// spelling is a defect either way.
+//
+// Must run AFTER validateGrepScope, never before or instead of it:
+// path.Clean alone happily collapses a ".." into whatever prefix preceded it
+// (e.g. "a/../../etc" -> "../etc"), which would silently turn a rejected
+// escape attempt into a shorter, still-outside-the-workspace one.
+// validateGrepScope has already refused any ".." segment outright by the
+// time this runs, so Clean here can only ever shorten a legitimate path, it
+// can never launder an illegitimate one.
+func normalizeGrepScope(scope string) string {
+	if scope == "" {
+		return ""
+	}
+	cleaned := path.Clean(scope)
+	if cleaned == "." {
+		// "." and "./" both mean "the whole workspace" — the same thing ""
+		// means, which takes the full-workspace-plus-mounts branch in
+		// grepRoots.
+		return ""
+	}
+	return cleaned
+}
+
 // unreachableRootFS stands in for a Root whose real folder could not be
 // opened. See grepRoots' doc comment for why this exists instead of
 // dropping the root.
@@ -1049,9 +1125,9 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 	fmt.Fprintf(&b, " case=%s\n", caseMode)
 
 	// The match count AND the truncation verdict are stated here, in the
-	// first few lines, DELIBERATELY — not only in the stats footer after
-	// every hit. A heavily truncated result can carry hundreds of hits
-	// (each up to ~512 bytes of excerpt), so the footer is exactly what
+	// first few lines, DELIBERATELY — not only in a stats footer after every
+	// hit. A heavily truncated result can carry hundreds of hits (each up to
+	// ~512 bytes of excerpt), so the END of the body is exactly what
 	// grepCapOutput's 64,000-char cap slices away first; putting the
 	// authoritative truncated/reason verdict here instead means it survives
 	// that cut every time (MV-3a: the engine's reason must remain visible to
@@ -1063,19 +1139,36 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 	} else {
 		b.WriteString(" — truncated: false")
 	}
+	b.WriteString("\n")
+
+	// Review finding F4: the accounting line used to live ONLY after every
+	// hit, which is exactly the tail grepCapOutput's cap destroys first on
+	// any large result — the truncation verdict above was deliberately
+	// hoisted to the top for this same reason (MV-3a), but the accounting
+	// was not, so a heavily truncated search could report "truncated: true"
+	// while every one of Stats' own numbers explaining WHY was already gone.
+	// There is exactly one copy of the accounting in the body now, living
+	// here instead of at the bottom, so it is under the same guarantee as
+	// the truncation verdict it sits beside.
+	b.WriteString(grepStatsLine(res.Stats))
 	b.WriteString("\n\n")
 
 	if len(res.Hits) == 0 {
 		b.WriteString("(no hits)\n")
 		// OBS-G1: a zero-hit result caused by include_globs/exclude_globs
 		// filtering out every candidate is otherwise indistinguishable from
-		// "the term genuinely is not there" — the stats footer below states
-		// the count either way, but that footer is exactly what
-		// grepCapOutput's cap slices away first on a large result, and on a
-		// SMALL (here, zero-hit) result a reader has no reason to scan all
-		// the way down to it. Stating the cause here, right next to the
-		// verdict it explains, makes the two outcomes look different instead
-		// of identical.
+		// "the term genuinely is not there" — the stats line above states
+		// the count either way, but on a SMALL (here, zero-hit) result a
+		// reader has no reason to scan back up and cross-reference it.
+		// Stating the cause here, right next to the verdict it explains,
+		// makes the two outcomes look different instead of identical.
+		//
+		// Review finding F3: the same reasoning applies verbatim to
+		// FilesPrunedIgnored (the commonest real cause — a term living in a
+		// gitignored directory, e.g. "dist/") and to binary files (content-
+		// unsearchable by contract, FR-005, with no dedicated counter of
+		// their own to report) — both extended here alongside the original
+		// glob-only explanation.
 		if res.Stats.FilesFilteredGlob > 0 {
 			fmt.Fprintf(&b, "%d file(s)/director(ies) were excluded by include_globs/exclude_globs before any "+
 				"match was attempted — this alone can produce a zero-hit result even when the term exists.",
@@ -1091,6 +1184,18 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 					"use \"**/name.ext\" to match at any depth.")
 			}
 			b.WriteString("\n")
+		}
+		if res.Stats.FilesPrunedIgnored > 0 {
+			fmt.Fprintf(&b, "%d file(s)/director(ies) were pruned by .gitignore/.ignore rules (or are hidden/"+
+				"internal paths) before any match was attempted — this alone can produce a zero-hit result "+
+				"even when the term exists; pass `path` at (or `include_globs` for) the specific file if you "+
+				"believe it should still be searched.\n",
+				res.Stats.FilesPrunedIgnored)
+		}
+		if res.Stats.FilesVisited > 0 {
+			b.WriteString("Binary files (a NUL byte in their first 8 KiB) are name-matchable only, never " +
+				"content-searched (FR-005) — a term that exists solely inside a binary file's content will " +
+				"never produce a hit here, even though that file was visited.\n")
 		}
 	} else {
 		for _, h := range res.Hits {
@@ -1113,27 +1218,46 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 		}
 	}
 
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "stats: %d file(s) visited, %d byte(s) scanned", res.Stats.FilesVisited, res.Stats.BytesScanned)
-	if res.Stats.FilesSkippedProblems > 0 {
-		fmt.Fprintf(&b, ", %d unreadable/skipped", res.Stats.FilesSkippedProblems)
+	// The truncated/reason verdict and the stats accounting are both already
+	// stated at the top (see above) — neither is repeated here, so there is
+	// exactly one place in the body that can ever disagree with itself.
+	return b.String()
+}
+
+// grepStatsLine renders the "stats: …" accounting line shared by every
+// renderGrepResult call. Split out so it can be composed once, near the top
+// of the body (see renderGrepResult's F4 comment) rather than duplicated.
+func grepStatsLine(stats filegrep.Stats) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "stats: %d file(s) visited, %d byte(s) scanned", stats.FilesVisited, stats.BytesScanned)
+	// Review finding F2: DirsVisited is rendered unconditionally, right
+	// alongside FilesVisited — the engine added this counter specifically so
+	// a directory-heavy search that hits ReasonMaxMatches (or any other
+	// budget) no longer reports "0 files searched" while DirsVisited
+	// silently explains where the work actually went (filegrep.go's own
+	// comment on Stats.DirsVisited). REST already carries it
+	// (rest_library_files_search.go); this renderer omitted it entirely, so
+	// the exact scenario that comment describes was still what the agent
+	// saw. Conditioning this on ">0" would hide it in precisely that
+	// scenario whenever a search happened to visit zero regular files, so it
+	// is unconditional like FilesVisited and BytesScanned, not gated like
+	// the optional counters below.
+	fmt.Fprintf(&b, ", %d dir(s) visited", stats.DirsVisited)
+	if stats.FilesSkippedProblems > 0 {
+		fmt.Fprintf(&b, ", %d unreadable/skipped", stats.FilesSkippedProblems)
 	}
-	if res.Stats.FilesPrunedIgnored > 0 {
-		fmt.Fprintf(&b, ", %d pruned (.gitignore/hidden/internal)", res.Stats.FilesPrunedIgnored)
+	if stats.FilesPrunedIgnored > 0 {
+		fmt.Fprintf(&b, ", %d pruned (.gitignore/hidden/internal)", stats.FilesPrunedIgnored)
 	}
-	if res.Stats.FilesSkippedFileCap > 0 {
-		fmt.Fprintf(&b, ", %d file(s) beyond the per-file content cap", res.Stats.FilesSkippedFileCap)
+	if stats.FilesSkippedFileCap > 0 {
+		fmt.Fprintf(&b, ", %d file(s) beyond the per-file content cap", stats.FilesSkippedFileCap)
 	}
-	if res.Stats.HitsCappedPerFile > 0 {
-		fmt.Fprintf(&b, ", %d file(s) hit the per-file match cap", res.Stats.HitsCappedPerFile)
+	if stats.HitsCappedPerFile > 0 {
+		fmt.Fprintf(&b, ", %d file(s) hit the per-file match cap", stats.HitsCappedPerFile)
 	}
-	if res.Stats.FilesFilteredGlob > 0 {
-		fmt.Fprintf(&b, ", %d file(s)/director(ies) excluded by include_globs/exclude_globs", res.Stats.FilesFilteredGlob)
+	if stats.FilesFilteredGlob > 0 {
+		fmt.Fprintf(&b, ", %d file(s)/director(ies) excluded by include_globs/exclude_globs", stats.FilesFilteredGlob)
 	}
-	b.WriteString("\n")
-	// The truncated/reason verdict is already stated at the top (see above)
-	// — it is not repeated here so there is exactly one place in the body
-	// that can ever disagree with itself.
 	return b.String()
 }
 

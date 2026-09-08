@@ -74,7 +74,7 @@ The Go test/build suite is run on a dedicated Fly worker, **never in the dev pod
   ```bash
   fly ssh console --app ci-omnipus -C "/cache/runci.sh <ref> <gate>"
   ```
-- **Gates**: `all | go-build | go-vet | go-test | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `e2e` runs the full Playwright matrix (40 specs, ~20–30 min) — see "E2E gate" below.
+- **Gates**: `all | go-build | go-vet | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (40 specs, ~20–30 min) — see "E2E gate" below.
 - **When to use it**:
   - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
   - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).

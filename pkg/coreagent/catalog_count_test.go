@@ -272,6 +272,20 @@ func TestCatalog_Stage4Arithmetic(t *testing.T) {
 // first two terms here are the fact about what the merge actually did — see
 // the "THE FEAT→RELEASE MERGE" comment above; postMergeAdditions is simply
 // the running tally of everything since.
+//
+// Review finding F6: this test used to compare its arithmetic against
+// catalogSizeToday — a constant declared a few lines above IN THIS SAME
+// FILE, never against allStaticToolNames (the actual production catalog).
+// Four local constants agreeing with each other proves the person editing
+// this file did their bookkeeping, not that any of it still matches the
+// real catalog: a coordinated (but wrong) edit to catalogSizeToday and
+// postMergeAdditions together could stay green forever without the catalog
+// itself ever changing. TestCatalog_SizeIsPinned already pins
+// catalogSizeToday against len(allStaticToolNames) — that is this file's
+// real discriminator — so this test now closes the loop by comparing its
+// OWN arithmetic against len(allStaticToolNames) directly, making the
+// merge-history narrative traceable to the actual code instead of to
+// another hardcoded number.
 func TestCatalog_MergeArithmetic(t *testing.T) {
 	const (
 		releaseV011BaselineSize = 95
@@ -287,9 +301,11 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 			newKnowledgeToolCount, len(currentKnowledgeToolNames))
 	}
 	got := releaseV011BaselineSize + newKnowledgeToolCount + postMergeAdditions
-	if got != catalogSizeToday {
-		t.Fatalf("the merge arithmetic plus post-merge additions is %d + %d + %d = %d, but "+
-			"catalogSizeToday says %d. One of the numbers in this file is wrong.",
-			releaseV011BaselineSize, newKnowledgeToolCount, postMergeAdditions, got, catalogSizeToday)
+	realCount := len(allStaticToolNames)
+	if got != realCount {
+		t.Fatalf("the merge arithmetic plus post-merge additions is %d + %d + %d = %d, but the catalog "+
+			"actually holds %d tools (len(allStaticToolNames); catalogSizeToday says %d). One of the "+
+			"numbers in this file is wrong, or the catalog changed without a matching postMergeAdditions bump.",
+			releaseV011BaselineSize, newKnowledgeToolCount, postMergeAdditions, got, realCount, catalogSizeToday)
 	}
 }

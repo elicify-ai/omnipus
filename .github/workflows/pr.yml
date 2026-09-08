@@ -1469,6 +1469,41 @@ jobs:
             exit 1
           fi
 
+      - name: Run records_no_sqlite propindexless honesty-contract tests
+        # Review finding F7: pkg/gateway/rest_knowledge_find_propindexless_test.go
+        # is gated `//go:build records_no_sqlite || mipsle || netbsd || (freebsd &&
+        # arm)` — the platform/feature carve-out for a build with no SQLite-backed
+        # properties index (ADR-081 / MV-9). That tag combination appeared NOWHERE
+        # in CI: every other step here, and deploy/ci-worker/runci.sh, builds and
+        # tests with `-tags goolm,stdjson` only — so deleting this file's whole
+        # attachment carve-out (the honesty contract it exists to pin: a
+        # properties-index-only request group must refuse with complete:false and
+        # the engine's own reason, never a silently bare empty group) would have
+        # left every other gate green. Same #615/Landlock-step shape: a build-tag
+        # branch nothing runs is silent coverage loss, not merely untested code.
+        #
+        # -p 1: matches this file's own doc comment (its documented run command)
+        # and this package's existing convention for the sibling propindex-backed
+        # suite — the propindexless tests flip package-level state to simulate the
+        # carve-out and must not run concurrently with anything else in the same
+        # test binary.
+        #
+        # Pass-floor mirrors the Landlock step above (docs/internal/false-green-
+        # patterns.md: "ok with zero --- PASS lines" is a build-tag miscompile or a
+        # silently-skipped suite, not a real pass) — 2 is exact (grep this test
+        # file for `^func Test` before changing it).
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go test -v -tags goolm,stdjson,records_no_sqlite -count=1 -timeout 300s \
+            -run '^TestVaultSearch_Propindexless' -p 1 ./pkg/gateway/ 2>&1 | tee /tmp/records-no-sqlite.log
+
+          passes=$(grep -c -- '--- PASS' /tmp/records-no-sqlite.log || true)
+          echo "records_no_sqlite propindexless passing tests: $passes"
+          if [ "$passes" -lt 2 ]; then
+            echo "::error::Only $passes of the 2 known records_no_sqlite propindexless tests passed. This build-tag honesty contract has silently lost coverage (or a test was added/renamed without updating this step)." >&2
+            exit 1
+          fi
+
   # Split out of `test` (ADR-067 parallelism pass). Measured on a real run,
   # the single Tests job spent 355s on `go test` and then a further 648s on
   # `go test -race` — 58% of an 18.7-minute job, running strictly AFTER the
