@@ -260,26 +260,10 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 	// close whatever ingest connection preceded it (if any). Only this late
 	// swap, not the earlier build/negotiate steps, ever tears down a
 	// previously-healthy ingest connection.
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return "", fmt.Errorf("webrtc: session closed")
+	old, err := s.installIngestCandidate(ctx, pc, admission, generation, targetID)
+	if err != nil {
+		return "", err
 	}
-	if admissionErr := s.ingestAdmissionErrorLocked(admission); admissionErr != nil {
-		s.mu.Unlock()
-		return "", admissionErr
-	}
-	old := s.ingestPC
-	s.ingestPC = pc
-	s.ingestInstalledBindingToken = 0
-	if admission != nil {
-		s.ingestInstalledBindingToken = admission.bindingToken
-	}
-	s.videoFeedID = 0
-	s.audioFeedID = 0
-	s.videoForward.retire()
-	s.audioForward.retire()
-	s.mu.Unlock()
 	installed = true
 
 	if old != nil {
@@ -391,6 +375,8 @@ func (s *Session) scheduleIngestDisconnectEviction(prefix string, pc *webrtc.Pee
 func (s *Session) clearIngestIfCurrent(prefix string, pc *webrtc.PeerConnection, reason string) bool {
 	s.mu.Lock()
 	cleared := s.ingestPC == pc
+	var videoFeed, audioFeed int64
+	var mediaCancel context.CancelFunc
 	if cleared {
 		s.ingestPC = nil
 		// Issue #674: retire the feed tokens too. The shared local tracks
@@ -407,23 +393,33 @@ func (s *Session) clearIngestIfCurrent(prefix string, pc *webrtc.PeerConnection,
 		// blocking Read finally unblocks, which on a degraded transport can
 		// lag the connection's death by a long way; the connection's own
 		// terminal state is available immediately and is just as conclusive.
-		s.videoFeedID = 0
-		s.audioFeedID = 0
-		s.videoForward.retire()
-		s.audioForward.retire()
+		videoFeed, audioFeed = s.videoFeedID, s.audioFeedID
+		s.videoFeedID, s.audioFeedID = 0, 0
+		mediaCancel = s.ingestMediaCancel
+		s.ingestMediaCtx, s.ingestMediaCancel = nil, nil
 	}
 	notify := s.onIngestLost
+	notifyForOffer := s.onIngestLostForOffer
+	bindingToken, offerID := s.ingestInstalledBindingToken, s.ingestInstalledOfferID
+	generation, targetID := s.ingestInstalledGeneration, s.ingestInstalledTargetID
 	s.mu.Unlock()
 	if !cleared {
 		return false
+	}
+	if mediaCancel != nil {
+		mediaCancel()
 	}
 	s.logf("%s ingest connection %s — cleared; a fresh capture is required", prefix, reason)
 	// Ask the owner (CaptureSession) to re-establish capture. Without this the
 	// session sits with no ingest at all and nothing ever asks the encoder to
 	// reconnect, which is indistinguishable to the user from a hung browser.
-	if notify != nil {
+	if notifyForOffer != nil {
+		go notifyForOffer(bindingToken, offerID, generation, targetID)
+	} else if notify != nil {
 		go notify()
 	}
+	s.videoForward.retireIfFeed(videoFeed)
+	s.audioForward.retireIfFeed(audioFeed)
 	return true
 }
 
@@ -547,22 +543,24 @@ func (r *seqRewriter) rewrite(in uint16) uint16 {
 func (s *Session) endFeed(prefix string, kind webrtc.RTPCodecType, feedID int64) {
 	s.mu.Lock()
 	var cleared bool
+	var forward *mediaForwarder
 	switch kind {
 	case webrtc.RTPCodecTypeVideo:
 		if s.videoFeedID == feedID {
 			s.videoFeedID = 0
-			s.videoForward.retire()
+			forward = &s.videoForward
 			cleared = true
 		}
 	case webrtc.RTPCodecTypeAudio:
 		if s.audioFeedID == feedID {
 			s.audioFeedID = 0
-			s.audioForward.retire()
+			forward = &s.audioForward
 			cleared = true
 		}
 	}
 	s.mu.Unlock()
 	if cleared {
+		forward.retireIfFeed(feedID)
 		s.logf("%s ingest %s feed ended — nothing is writing to the shared local track now", prefix, kind)
 	}
 }
@@ -574,9 +572,8 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 	// OnTrack callbacks for the same kind race (ingest replacement).
 	feedID := s.feedSeq.Add(1)
 
-	s.mu.Lock()
-	if s.closed || s.ingestPC != pc {
-		s.mu.Unlock()
+	forward, release, err := s.acquireIngestTrackInstallation(pc, kind)
+	if err != nil {
 		return
 	}
 	var local *webrtc.TrackLocalStaticRTP
@@ -590,7 +587,7 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 		var err error
 		local, err = webrtc.NewTrackLocalStaticRTP(codec.RTPCodecCapability, kind.String(), "omnipus-browser")
 		if err != nil {
-			s.mu.Unlock()
+			release()
 			s.logf("%s attachIngestTrack: NewTrackLocalStaticRTP(%s) failed: %v", prefix, kind, err)
 			return
 		}
@@ -601,16 +598,12 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 			s.audioTrack = local
 		}
 	}
-	forward := &s.videoForward
-	if kind == webrtc.RTPCodecTypeAudio {
-		forward = &s.audioForward
-	}
 	if kind == webrtc.RTPCodecTypeVideo {
-		forward.beginWithReceipt(feedID, codec.ClockRate, VideoReceipt{
+		forward.beginWithReceiptLocked(feedID, codec.ClockRate, VideoReceipt{
 			BindingToken: s.ingestInstalledBindingToken, Generation: generation, TargetID: targetID,
 		})
 	} else {
-		forward.begin(feedID, codec.ClockRate)
+		forward.beginWithReceiptLocked(feedID, codec.ClockRate, VideoReceipt{})
 	}
 	var live func()
 	var boundary func(uint64, string, uint32)
@@ -627,7 +620,7 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 		s.audioCodec = codec.MimeType
 		s.audioFeedID = feedID
 	}
-	s.mu.Unlock()
+	release()
 	// From here on this goroutine OWNS the feed token, so every exit path must
 	// retire it — including the RTCP-drain/forward loop's `return`s below.
 	defer s.endFeed(prefix, kind, feedID)

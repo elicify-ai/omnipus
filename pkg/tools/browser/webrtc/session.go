@@ -81,12 +81,20 @@ type Session struct {
 	ingestOfferID               uint64
 	ingestOfferCancel           context.CancelFunc
 	ingestInstalledBindingToken uint64
+	ingestInstalledOfferID      uint64
+	ingestInstalledGeneration   uint64
+	ingestInstalledTargetID     string
+	// Installed media outlives successful offer negotiation. Its cancellation
+	// ends obsolete OnTrack admission waits without waiting for writer IO.
+	ingestMediaCtx    context.Context
+	ingestMediaCancel context.CancelFunc
 	// onIngestLost is invoked (in its own goroutine, no lock held) when the
 	// installed ingest connection dies — see the OnConnectionStateChange
 	// handler in ingest.go. The owner uses it to ask the encoder for a fresh
 	// capture; nil is a valid no-op.
-	onIngestLost    func()
-	onVideoBoundary func(uint64, string, uint32)
+	onIngestLostForOffer func(uint64, uint64, uint64, string)
+	onIngestLost         func()
+	onVideoBoundary      func(uint64, string, uint32)
 
 	// onBitrateTarget is invoked (no lock held) when the viewer leg's own RTCP
 	// receiver reports move the congestion target. ADR-069 Finding 2: without
@@ -635,13 +643,16 @@ func (s *Session) Close() error {
 	// video feed: waitForTracks is reachable from a viewer offer that raced
 	// this Close, and answering it from a track nothing writes to is the exact
 	// dead-panel failure the feed tokens exist to prevent.
-	s.videoFeedID = 0
-	s.audioFeedID = 0
-	s.videoForward.retire()
-	s.audioForward.retire()
+	videoFeed, audioFeed := s.videoFeedID, s.audioFeedID
+	s.videoFeedID, s.audioFeedID = 0, 0
+	mediaCancel := s.ingestMediaCancel
+	s.ingestMediaCtx, s.ingestMediaCancel = nil, nil
 	bindingCancel, offerCancel := s.ingestBindingCancel, s.ingestOfferCancel
 	s.ingestBindingCancel, s.ingestOfferCancel = nil, nil
 	s.mu.Unlock()
+	if mediaCancel != nil {
+		mediaCancel()
+	}
 	if offerCancel != nil {
 		offerCancel()
 	}
@@ -682,6 +693,11 @@ func (s *Session) Close() error {
 		}
 	}
 
+	// Cancel signaling and close transports before joining the writer boundary;
+	// a stalled outgoing write must not prevent the actions that unblock it.
+	s.videoForward.retireIfFeed(videoFeed)
+	s.audioForward.retireIfFeed(audioFeed)
+
 	if len(errs) == 0 {
 		return nil
 	}
@@ -703,14 +719,23 @@ func (s *Session) SetOnVideoBoundary(cb func(uint64, string, uint32)) {
 // CurrentVideoBoundary returns the current feed's latest display boundary.
 func (s *Session) CurrentVideoBoundary() (uint64, string, uint32, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.videoGeneration == 0 {
+	if s.closed || s.videoGeneration == 0 || s.videoFeedID == 0 {
+		s.mu.Unlock()
 		return 0, "", 0, false
 	}
-	// Match the same Session -> forwarder lock order as begin and retire.
-	_, timestamp, ok := s.videoForward.boundary(s.videoFeedID)
+	feed, generation, target := s.videoFeedID, s.videoGeneration, s.videoTargetID
+	s.mu.Unlock()
+	// Successful-forward evidence may wait for a writer, but never while
+	// holding the session's control lock. Ingress receipts are not a substitute.
+	_, timestamp, ok := s.videoForward.boundary(feed)
 	if !ok {
 		return 0, "", 0, false
 	}
-	return s.videoGeneration, s.videoTargetID, timestamp, true
+	s.mu.Lock()
+	current := !s.closed && s.videoFeedID == feed && s.videoGeneration == generation && s.videoTargetID == target
+	s.mu.Unlock()
+	if !current {
+		return 0, "", 0, false
+	}
+	return generation, target, timestamp, true
 }
