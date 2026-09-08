@@ -119,7 +119,7 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 	cs.mu.Lock()
 	cs.foregroundAssertFn = func(context.Context) bool { return true }
 	cs.mu.Unlock()
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
 
 	var (
 		mu       sync.Mutex

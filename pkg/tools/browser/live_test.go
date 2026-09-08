@@ -980,7 +980,7 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 	var calls int32
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-death", relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
 
 	lv := &LiveView{
 		mgr:          mgr,
@@ -1042,7 +1042,7 @@ func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(
 	var calls int32
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-recapture", relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
 
 	lv := &LiveView{
 		mgr:                mgr,

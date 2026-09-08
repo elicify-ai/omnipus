@@ -1,10 +1,10 @@
 package browser
 
-// capture_session.go implements the ADR-047 / wave-plan W2-A per-agent WebRTC
+// capture_session.go implements the ADR-047 / wave-plan W2-A WebRTC
 // capture session: it owns the gateway-owned encoder page's lifecycle (the
 // capture extension's chrome-extension://<id>/encoder.html target), plus the
-// Pion SFU relay Session that backs it. One CaptureSession exists per agent
-// (BrowserManager.capture), created lazily on the first WebRTC-capable viewer
+// Pion SFU relay Session that backs it. BrowserManager indexes captures by
+// resolved panel tab set, created lazily on the first WebRTC-capable viewer
 // offer and torn down on last-viewer-detach (after a grace period) or on
 // browser death (live.go's watchForUnexpectedDeath) or manager Shutdown.
 //

@@ -179,7 +179,7 @@ func TestViewportBasis_TabBacksTheCache_KeepsMappingAndRequestsRecapture(t *test
 	mgr := &BrowserManager{started: true}
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-basis", relay, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
 
 	var probes int
 	lv := &LiveView{
@@ -276,7 +276,7 @@ func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 	relay := &fakeRelay{}
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-reapply", relay, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
 
 	type applied struct {
 		bounds []windowBoundsAction

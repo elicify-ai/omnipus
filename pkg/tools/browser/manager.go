@@ -542,12 +542,12 @@ type BrowserManager struct {
 	// agentID identifies this per-agent manager to the coordinator (Register/
 	// Release/RemoveAgent are keyed by it). Set via AttachSharedChrome.
 	agentID string
-	// capture/captureMu (ADR-047, wave-plan W2-A) hold this manager's single
-	// active WebRTC CaptureSession, guarded by their own mutex — see
-	// CaptureSession()/EnsureCaptureSession()'s doc comments for why this is
-	// deliberately NOT m.mu.
-	capture   *CaptureSession
+	// captures is keyed by resolved panel tab-set ID. Capture lifecycle code
+	// calls back into the manager, so its mutex is separate from m.mu.
+	captures  map[string]*CaptureSession
 	captureMu sync.Mutex
+	// Guard capture admission until every concurrent connection teardown ends.
+	captureTeardowns int
 	// videoHealthObs is the gateway's live-video health observer (issue
 	// #674), registered once per manager by the browser WS handler and
 	// installed on every CaptureSession this manager creates. Guarded by
@@ -1125,57 +1125,22 @@ func (m *BrowserManager) TotalOpenTabs() int {
 	return m.totalTabCountLocked()
 }
 
-// CaptureSession returns this manager's active WebRTC CaptureSession, or nil
-// if none has been created yet (ADR-047 D2, wave-plan W2-A). Guarded by its
-// own mutex (m.captureMu), deliberately separate from m.mu, because
-// CaptureSession's own lifecycle methods call back into m.Session()/
-// m.createTab() etc., which take m.mu themselves — holding m.mu across that
-// would deadlock.
+// CaptureSession returns the workspace operator tab set's capture. Callers with
+// a resolved panel identity must use CaptureSessionForPanel.
 func (m *BrowserManager) CaptureSession() *CaptureSession {
-	m.captureMu.Lock()
-	defer m.captureMu.Unlock()
-	return m.capture
+	return m.CaptureSessionForPanel(m.OperatorSessionID())
 }
 
-// EnsureCaptureSession returns this manager's existing CaptureSession, or
-// lazily constructs one via newFn if none exists yet. newFn is called at
-// most once per manager (subsequent viewers reuse the same session, "one
-// active stream per agent" — wave-plan W2-A item 4); it receives no
-// arguments because every dependency a production CaptureSession needs
-// (this manager, its agent id, WebRTC config, the input sink) is already
-// known to the caller's closure. newFn's error (NewCaptureSession's own
-// crypto/rand.Read failure — effectively never happens, but MUST NOT be
-// silently swallowed) is propagated to the caller rather than caching a nil
-// session, so a transient failure doesn't wedge this manager into always
-// returning nil for the rest of the process's life.
+// EnsureCaptureSession reuses or creates the workspace operator's capture.
+// Panel-aware callers use EnsureCaptureSessionForPanel with their resolved ID.
 func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, error)) (*CaptureSession, error) {
-	m.captureMu.Lock()
-	defer m.captureMu.Unlock()
-	if m.capture != nil {
-		return m.capture, nil
-	}
-	cs, err := newFn()
-	if err != nil {
-		return nil, err
-	}
-	// Install the gateway's video-health observer on the session BEFORE it is
-	// published (issue #674). newFn is the gateway's own constructor closure,
-	// but it lives in a file this wiring must not touch, so the observer is
-	// registered on the MANAGER (SetVideoHealthObserver, from browser_attach)
-	// and attached here — the one place that sees every CaptureSession this
-	// manager will ever own, exactly once each.
-	if m.videoHealthObs != nil {
-		cs.SetOnVideoHealth(m.videoHealthObs)
-	}
-	m.capture = cs
-	return cs, nil
+	return m.EnsureCaptureSessionForPanel(m.OperatorSessionID(), newFn)
 }
 
 // SetVideoHealthObserver registers fn as the observer notified whenever the
-// live-browser video path for this manager's capture changes state — lost,
+// live-browser video path for this manager's captures changes state — lost,
 // recovering, recovered, or unrecoverable (issue #674). It is installed on the
-// CURRENT CaptureSession if one already exists, and on every session created
-// afterwards.
+// current captures and on every session created afterwards.
 //
 // Registered on the manager rather than passed to NewCaptureSession because
 // the gateway learns which manager it is dealing with at browser_attach time,
@@ -1188,11 +1153,12 @@ func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, err
 // CaptureSession lock held. Pass nil to unregister.
 func (m *BrowserManager) SetVideoHealthObserver(fn func(VideoHealthEvent)) {
 	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
 	m.videoHealthObs = fn
-	cur := m.capture
-	m.captureMu.Unlock()
-	if cur != nil {
-		cur.SetOnVideoHealth(fn)
+	for _, cs := range m.captures {
+		if cs != nil {
+			cs.SetOnVideoHealth(fn)
+		}
 	}
 }
 
@@ -1207,8 +1173,10 @@ func (m *BrowserManager) SetVideoHealthObserver(fn func(VideoHealthEvent)) {
 func (m *BrowserManager) ClearCaptureSession(cur *CaptureSession) {
 	m.captureMu.Lock()
 	defer m.captureMu.Unlock()
-	if m.capture == cur {
-		m.capture = nil
+	for panel, cs := range m.captures {
+		if cs == cur {
+			delete(m.captures, panel)
+		}
 	}
 }
 
@@ -3998,25 +3966,12 @@ func (m *BrowserManager) InvalidateExecPathCache() {
 // Chrome. Either way the bookkeeping (sessions, started, allocCancel) is
 // reset cleanly and idempotently.
 func (m *BrowserManager) Shutdown() {
-	// Fix-wave CRIT (reviewer 1, conf 88): stop this manager's WebRTC
-	// CaptureSession, if any, BEFORE the connection/session teardown below.
-	// Without this, a live capturing session was orphaned by Shutdown — its
-	// encoder tab lives in the shared-Chrome coordinator's own root context
-	// (capture_session.go's defaultEncoderStarter), not any of the sessions
-	// torn down here, so it survives; its ping beacon keeps the encoder-
-	// liveness watchdog happy; and the registry entry it still occupies
-	// (BrowserManager.capture) is never cleared, making it unstoppable once
-	// this manager itself is gone (e.g. hot-reload via pkg/agent/loop.go's
-	// registerSharedTools, which calls Shutdown on the OLD manager while a
-	// NEW one takes over — the orphaned session's own token still resolves
-	// in the gateway's captureRegistry, but nothing ever calls Stop() on it
-	// again). cs.Stop() is idempotent and safe to call even if the manager
-	// never actually started a capture session (CaptureSession() returns nil
-	// then). Deliberately taken via m.CaptureSession() BEFORE m.mu.Lock()
-	// below: cs.Stop() can block for a few seconds (its own best-effort
-	// ingest control-frame write, now bounded by fix 5's write deadline) and
-	// must never hold m.mu — a separate mutex (m.captureMu) — while doing so.
-	if cs := m.CaptureSession(); cs != nil {
+	// Encoder targets outlive the tab contexts below. Stop every panel capture
+	// first, outside manager locks: Stop can perform I/O and its callback removes
+	// the exact capture from this manager.
+	captures := m.beginCaptureTeardown()
+	defer m.endCaptureTeardown()
+	for _, cs := range captures {
 		cs.Stop()
 	}
 
@@ -4097,7 +4052,9 @@ func (m *BrowserManager) invalidateConnection() {
 	// NOT route through Shutdown, so it needs its own identical guard. Taken
 	// before m.mu.Lock() for the same reason: cs.Stop() must never block
 	// while holding m.mu.
-	if cs := m.CaptureSession(); cs != nil {
+	captures := m.beginCaptureTeardown()
+	defer m.endCaptureTeardown()
+	for _, cs := range captures {
 		cs.Stop()
 	}
 

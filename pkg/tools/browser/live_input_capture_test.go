@@ -33,7 +33,7 @@ func TestLiveInputRequiresCurrentCommittedCapture(t *testing.T) {
 			calls := 0
 			lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
 			cs, _ := newRecoveryTestSession(t, &fakeRelay{})
-			lv.mgr.capture = cs
+			lv.mgr.captures = map[string]*CaptureSession{lv.mgr.OperatorSessionID(): cs}
 			lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{{ctx: lv.tabCtx, targetID: "target-a"}}}
 			frame, err := cs.BeginFrameTransition("target-a", 800, 600, 1)
 			if err != nil {
@@ -59,7 +59,7 @@ func TestLiveInputRequiresCurrentCommittedCapture(t *testing.T) {
 				in.CaptureGeneration = frame.Generation
 			case "capture not initialized":
 				uninitialized, _ := newRecoveryTestSession(t, &fakeRelay{})
-				lv.mgr.capture = uninitialized
+				lv.mgr.captures = map[string]*CaptureSession{lv.mgr.OperatorSessionID(): uninitialized}
 			case "stopped capture":
 				cs.Stop()
 			}
@@ -79,7 +79,7 @@ func TestLiveInputCaptureClaimIsCheckedAfterQueueWait(t *testing.T) {
 	var calls atomic.Int32
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls.Add(1); return nil })
 	cs, _ := newRecoveryTestSession(t, &fakeRelay{})
-	lv.mgr.capture = cs
+	lv.mgr.captures = map[string]*CaptureSession{lv.mgr.OperatorSessionID(): cs}
 	lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{{ctx: lv.tabCtx, targetID: "target-a"}}}
 	frame, err := cs.BeginFrameTransition("target-a", 800, 600, 1)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestLiveInputOwnedReleaseSurvivesCaptureTransition(t *testing.T) {
 		return nil
 	})
 	cs, _ := newRecoveryTestSession(t, &fakeRelay{})
-	lv.mgr.capture = cs
+	lv.mgr.captures = map[string]*CaptureSession{lv.mgr.OperatorSessionID(): cs}
 	lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{{ctx: lv.tabCtx, targetID: "target-a"}}}
 	frame, err := cs.BeginFrameTransition("target-a", 800, 600, 1)
 	if err != nil {
