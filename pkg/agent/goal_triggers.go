@@ -37,6 +37,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- Pill state constants (D14 crosswalk, FR / Pill-state enum) -----------
@@ -906,6 +907,51 @@ func (al *AgentLoop) dispatchGoalFallbackCompile(store *session.UnifiedStore, s 
 	// channel goals (a channel-origin recordless goal that never got a
 	// set_goal call from its own agent within two nudges).
 	al.afterGoalRecordWrite(sessionID, criteriaJSON, reason)
+
+	// ADR-082 D9 (review CR8): this is the path MOST likely to produce a
+	// record the operator never sees — no turn ran, no tool ran, and under
+	// D9 the card renders only from a set_goal call's own result. Anchor
+	// the engine-authored record as a synthetic set_goal(mode:register)
+	// call: transcript entry (replays after reload) plus live start/end
+	// frames (the card appears now on a bound webchat connection).
+	route := goalTriggers().routeFor(sessionID)
+	anchorAgentID := route.agentID
+	if agentInst != nil {
+		anchorAgentID = agentInst.ID
+	}
+	if _, aerr := al.anchorGoalRecordInTranscript(goalRecordAnchor{
+		store: store, sessionID: sessionID, agentID: anchorAgentID, chatID: route.chatID,
+		mode:      tools.SetGoalModeRegister,
+		narration: goalAnchorNarrationFallback,
+		record:    outcome.Result.Goal,
+		assumptions: []string{
+			"Engine-authored fallback record after nudge exhaustion (ADR-081 D7): the agent never called set_goal, so the goal statement was compiled by the engine.",
+		},
+	}); aerr != nil {
+		return
+	}
+	// A web-routed goal gets no FR-020 channel echo (the frame is the
+	// surface there), and no turn follows this write to close the SPA's
+	// bubble: the live tool_call_start above opens an assistant bubble on
+	// the bound connection and nothing else would ever finalize it. Deliver
+	// the narration as one ordinary outbound message — the webchat channel
+	// turns it into token+done frames (pkg/gateway/webchat_channel.go's
+	// Send), which lands the text beside the card and closes the bubble,
+	// while the transcript entry written above stays the single durable
+	// copy (webchat Send never writes the transcript itself). AgentID is
+	// deliberately left empty: this is a system-originated send
+	// (bus.OutboundMessage.AgentID's contract), not a send_message call.
+	if route.channel == goalForcingWebChannel && al.bus != nil {
+		if perr := al.bus.PublishOutbound(context.Background(), bus.OutboundMessage{
+			Channel:   route.channel,
+			ChatID:    route.chatID,
+			SessionID: sessionID,
+			Content:   goalAnchorNarrationFallback,
+		}); perr != nil {
+			logger.WarnCF("agent", "goal fallback compile: narration delivery to webchat failed",
+				map[string]any{"session_id": sessionID, "goal_id": s.GoalID, "error": perr.Error()})
+		}
+	}
 }
 
 // --- D6a repairs: in-flight suppression, parked-card suppression, and the

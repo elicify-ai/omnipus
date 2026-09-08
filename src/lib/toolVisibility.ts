@@ -144,11 +144,15 @@ export function shouldRenderToolCall(
       // reader-facing meaning). This `false` governs only the RAW call
       // chip's own visibility (GenericToolCall/the Fallback, which a
       // registered dedicated tool UI bypasses entirely) — it does not hide
-      // the card itself. No error exception: unlike ToolSearch/Skill, a
-      // failed/rejected `set_goal` submission is a bounded-retry validation
-      // loop the calling agent handles inline (D2) — there is no separate
-      // "why did registration fail" question for a reader that the card
-      // can't already answer once the retry succeeds.
+      // the card itself. No error exception HERE: unlike ToolSearch/Skill,
+      // a failed/rejected `set_goal` submission does not bring the RAW call
+      // chip back — but it is not invisible either (ADR-082 D9 review S4):
+      // the dedicated UI renders a one-line quiet "Goal registration
+      // failed" trace (detail on expand) for a failed call when verbose
+      // chat is off, and falls through to GenericToolCall — this `true`
+      // branch above — when it is on. See SetGoalToolUI.tsx's
+      // classifySetGoalCall, the single decision table both the renderer
+      // and ChatScreen's wouldToolCallBeVisible consult.
       return false
 
     case 'delegate': {

@@ -66,6 +66,16 @@ import { CriteriaBreakdown, type CriteriaBreakdownItem } from '@/components/shar
 export interface GoalEchoCardProps {
   /** The goal_status frame describing the active goal's record (condition + accounting + criteria breakdown). */
   frame: GoalStatusFrame
+  /**
+   * Whether the frame's progress/accounting fields (`max_rounds`, `cap`)
+   * are real and may be shown. Defaults to `true` (a genuine goal_status
+   * frame). ADR-082 D9 review S3: a card built from a `set_goal` call's own
+   * result BEFORE any goal_status frame has landed for its goal_id carries
+   * no accounting at all — rendering "0 rounds · 0 concurrent loops" there
+   * would be a false claim, so SetGoalToolUI passes `false` until a pill
+   * provides the numbers.
+   */
+  showProgress?: boolean
 }
 
 /**
@@ -125,7 +135,7 @@ function GoalAccordionSection({
   )
 }
 
-export function GoalEchoCard({ frame }: GoalEchoCardProps) {
+export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) {
   const criteria = frame.criteria ?? []
   const dod: CriteriaBreakdownItem[] = frame.dod ?? []
   const inferredDodCount = dod.filter((d) => d.provenance === 'inferred').length
@@ -164,10 +174,12 @@ export function GoalEchoCard({ frame }: GoalEchoCardProps) {
         {frame.condition}
       </p>
 
-      {/* Round accounting */}
-      <p className="text-[var(--color-muted)] mt-1.5 tabular-nums" data-testid="goal-echo-round">
-        {frame.max_rounds} rounds · {frame.cap} concurrent loop{frame.cap === 1 ? '' : 's'}
-      </p>
+      {/* Round accounting — only when the numbers are real (see showProgress). */}
+      {showProgress && (
+        <p className="text-[var(--color-muted)] mt-1.5 tabular-nums" data-testid="goal-echo-round">
+          {frame.max_rounds} rounds · {frame.cap} concurrent loop{frame.cap === 1 ? '' : 's'}
+        </p>
+      )}
 
       {/* Criteria breakdown — collapsed-by-default accordion. Plain language
           first, a per-row verifies-via chip for technical payloads

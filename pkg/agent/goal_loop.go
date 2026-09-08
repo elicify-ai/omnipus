@@ -279,9 +279,37 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// FR-020 echo exactly like a set_goal-authored one.
 	al.afterGoalRecordWrite(sessionID, criteriaJSON, "")
 
+	// ADR-082 D9 (review CR8): this write never ran the set_goal tool, and
+	// under D9 the record card renders ONLY from a set_goal call's own
+	// result at the call's position — the frame above feeds the pill and
+	// the live overlay, never the card. Anchor the record as a synthetic
+	// set_goal call (transcript entry + live start/end frames) so a marker-
+	// activated goal gets its card exactly like a set_goal-authored one.
+	// Non-fatal: the record is already durable; a failed anchor is logged
+	// inside anchorGoalRecordInTranscript.
+	_, _ = al.anchorGoalRecordInTranscript(goalRecordAnchor{
+		store: store, sessionID: sessionID, agentID: routeAgentID, chatID: opts.ChatID,
+		mode:      tools.SetGoalModeRegister,
+		narration: goalAnchorNarrationMarkerRegister,
+		record:    compiled,
+		assumptions: []string{
+			"Record compiled deterministically by the engine from the explicit markers in the /goal command, not authored by the agent.",
+		},
+	})
+
 	opts.UserMessage = condition
 	return true, false, ""
 }
+
+// Narration lines for the engine-anchored set_goal transcript calls (ADR-082
+// D9, review CR8) — the assistant-role content preceding the card. Short,
+// plain, and honest about WHO authored the record: the engine, not the
+// agent.
+const (
+	goalAnchorNarrationMarkerRegister = "Goal registered from the markers in your /goal command."
+	goalAnchorNarrationMarkerRestate  = "Goal record updated from the markers in your /goal command."
+	goalAnchorNarrationFallback       = "The agent did not register this goal's record itself, so the engine compiled one from the goal statement after repeated nudges. The record below is now the working assumption."
+)
 
 // formatCompileRejection renders a feasibility-gate rejection (FR-111/D9) for
 // chat: the criterion the runtime cannot verify, fail-closed (no rejected
@@ -385,6 +413,26 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 	// param was read before the SetMeta write above) — same diff-summary
 	// shape set_goal's own update path logs.
 	al.afterGoalRecordWrite(sessionID, criteriaJSON, goalRecordDiffAdapter(meta.GoalCriteriaJSON, criteriaJSON))
+	// ADR-082 D9 (review CR8): anchor the amended record as a synthetic
+	// set_goal(mode:update) call at THIS position — the amend card renders
+	// where the amendment happened (D9), exactly as a tool-authored update
+	// does. The chat routing was recorded at activation (recordGoalRouting);
+	// the agent falls back to the session's active agent when the route
+	// carries none.
+	route := goalTriggers().routeFor(sessionID)
+	anchorAgentID := route.agentID
+	if anchorAgentID == "" {
+		anchorAgentID = meta.ActiveAgentID
+	}
+	_, _ = al.anchorGoalRecordInTranscript(goalRecordAnchor{
+		store: store, sessionID: sessionID, agentID: anchorAgentID, chatID: route.chatID,
+		mode:      tools.SetGoalModeUpdate,
+		narration: goalAnchorNarrationMarkerRestate,
+		record:    compiled,
+		assumptions: []string{
+			"Record re-compiled deterministically by the engine from the explicit markers in the /goal restate, not authored by the agent.",
+		},
+	})
 	return fmt.Sprintf("Goal updated: %s\nAcceptance criteria: %d.", condition, len(compiled.Criteria))
 }
 

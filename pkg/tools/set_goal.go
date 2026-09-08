@@ -40,18 +40,91 @@ import (
 // SetGoalToolName is the catalog name (allStaticToolNames member).
 const SetGoalToolName = "set_goal"
 
+// SetGoalModeRegister / SetGoalModeUpdate are the tool's `mode` enum values
+// (ADR-081 D2), exported so pkg/agent's engine-authored record writes (the
+// marker-path activation/restate and the D7 keeper fallback compile) can
+// anchor themselves in the transcript as a set_goal call carrying the SAME
+// mode vocabulary a real call carries (ADR-082 D9, review CR8).
+const (
+	SetGoalModeRegister = "register"
+	SetGoalModeUpdate   = "update"
+)
+
 // setGoalMode is the tool's mode enum (ADR-081 D2).
 type setGoalMode string
 
 const (
 	// setGoalModeRegister is the default: the agent's first authoring of this
 	// goal's record.
-	setGoalModeRegister setGoalMode = "register"
+	setGoalModeRegister setGoalMode = SetGoalModeRegister
 	// setGoalModeUpdate re-validates and REPLACES the record (steering); a
 	// change summary is computed against the prior record and returned in
 	// the tool result.
-	setGoalModeUpdate setGoalMode = "update"
+	setGoalModeUpdate setGoalMode = SetGoalModeUpdate
 )
+
+// SetGoalResultCore is the input to SetGoalResultPayload — everything the
+// set_goal success result carries. Assessment is any JSON-marshalable value
+// (Execute passes its parsed *setGoalAssessment; pkg/agent's synthetic
+// anchors pass a plain map) and is omitted from the payload when nil. Diff
+// is emitted only when DiffSet is true (mode:update's change summary — a
+// register result never carries a `diff` key, even an empty one).
+type SetGoalResultCore struct {
+	Mode       string
+	GoalID     string
+	Definition string
+	Criteria   []task.AcceptanceCriterion
+	DoD        []task.AcceptanceCriterion
+	Assessment any
+	Diff       string
+	DiffSet    bool
+}
+
+// SetGoalResultPayload builds the JSON-shaped success result of a set_goal
+// call (ADR-082 D9/FR-016) — the ONE place that shape is defined. Execute
+// below returns exactly this (marshaled) on a successful write, and
+// pkg/agent's goal_record_wiring.go reuses it verbatim for the synthetic
+// set_goal transcript call it appends whenever a goal record is written by
+// an engine path that never ran the tool (marker activation, marker restate,
+// the D7 fallback compile — review CR8), so the SPA's dedicated set_goal card
+// (SetGoalToolUI.tsx's parseSetGoalResult) parses an engine-anchored record
+// and a tool-authored one identically.
+//
+// Shape: mode, goal_id, definition, criteria_count, dod_count, criteria, dod
+// [, assessment] [, diff]. criteria/dod are marshaled as the same
+// task.AcceptanceCriterion shape the goal_status frame's own arrays use
+// (id/kind/judgment/provenance/text/check/behavior/author/status), so the
+// SPA's existing GoalStatusFrame-shaped rendering needs no new parsing
+// logic. criteria_count/dod_count are kept alongside the full arrays — the
+// calling model reads the counts, the SPA reads the arrays. A nil Criteria/
+// DoD slice is emitted as an empty array (never JSON null) so the SPA's
+// Array.isArray checks hold.
+func SetGoalResultPayload(c SetGoalResultCore) map[string]any {
+	criteria := c.Criteria
+	if criteria == nil {
+		criteria = []task.AcceptanceCriterion{}
+	}
+	dod := c.DoD
+	if dod == nil {
+		dod = []task.AcceptanceCriterion{}
+	}
+	payload := map[string]any{
+		"mode":           c.Mode,
+		"goal_id":        c.GoalID,
+		"definition":     c.Definition,
+		"criteria_count": len(criteria),
+		"dod_count":      len(dod),
+		"criteria":       criteria,
+		"dod":            dod,
+	}
+	if c.Assessment != nil {
+		payload["assessment"] = c.Assessment
+	}
+	if c.DiffSet {
+		payload["diff"] = c.Diff
+	}
+	return payload
+}
 
 // setGoalRecord mirrors pkg/agent.CompiledGoal's JSON wire shape exactly
 // (field names, field types, omitempty behavior) — see the package doc
@@ -470,29 +543,25 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// VirtualAssistantMessageRow replay branch render the goal card
 	// directly from THIS result, anchored at this call's own position,
 	// instead of the old thread-tail GoalThreadTailCards mount that read
-	// only goalPills (populated solely by the goal_status frame). criteria/
-	// dod are marshaled as the same task.AcceptanceCriterion shape the
-	// goal_status frame's own criteria/dod arrays already use (id/kind/
-	// judgment/provenance/text/check/behavior/author/status) so the SPA's
-	// existing GoalStatusFrame-shaped rendering (CriteriaBreakdown et al.)
-	// needs no new parsing logic. criteria_count/dod_count are kept
-	// alongside the full arrays — the calling model reads the counts, the
-	// SPA reads the arrays.
-	payload := map[string]any{
-		"mode":           string(mode),
-		"goal_id":        goalID,
-		"definition":     definition,
-		"criteria_count": len(normCriteria),
-		"dod_count":      len(normDoD),
-		"criteria":       normCriteria,
-		"dod":            normDoD,
+	// only goalPills (populated solely by the goal_status frame). The shape
+	// is built by SetGoalResultPayload (the single definition — pkg/agent's
+	// engine-anchored synthetic calls reuse it, review CR8).
+	core := SetGoalResultCore{
+		Mode:       string(mode),
+		GoalID:     goalID,
+		Definition: definition,
+		Criteria:   normCriteria,
+		DoD:        normDoD,
+		Diff:       diffSummary,
+		DiffSet:    mode == setGoalModeUpdate,
 	}
 	if assessment != nil {
-		payload["assessment"] = assessment
+		// Only a non-nil pointer is boxed: a typed-nil *setGoalAssessment
+		// inside an `any` would read as non-nil to SetGoalResultPayload and
+		// emit `"assessment": null`.
+		core.Assessment = assessment
 	}
-	if mode == setGoalModeUpdate {
-		payload["diff"] = diffSummary
-	}
+	payload := SetGoalResultPayload(core)
 	encoded, payloadErr := json.Marshal(payload)
 	if payloadErr != nil {
 		logger.ErrorCF("goal", "set_goal: could not encode result payload",
