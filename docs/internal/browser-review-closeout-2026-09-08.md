@@ -108,8 +108,8 @@ embedded SPA files.
 
 Run `99078` exited 1 after 20.7 minutes. The sole failure was the final 100-click
 decoded-video latency assertion: p95 was **247.19999992847443ms**, above the
-unchanged **200ms** target. A short diagnostic is pending; no production change
-or cause attribution follows from this result.
+unchanged **200ms** target. Short diagnostic run `69699` is now running on
+unchanged source `2259cd81f`; no result or cause attribution is claimed yet.
 
 Before that assertion, both idle and mixed-input phases met their independent
 600,000ms minimums. Assertions passed for 550 exact ordered trusted native
@@ -123,13 +123,43 @@ Evidence retention is incomplete: the line reporter did not persist body
 attachments, including all 100 latency samples, detailed JSON and phase images.
 Their absence prevents independent reconstruction of the latency distribution
 from retained artifacts. The recorded p95 failure and final screenshot survive;
-artifact persistence is being corrected before the diagnostic. Retained files:
+artifact persistence and the short diagnostic were subsequently integrated in
+`b293c9808`. This does not recover the original missing artifacts. Retained files:
 
 - `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/final-soak.log`
 - `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/final-soak/browser-improvements-soak--73306-exact-mixed-input-for-10min/test-failed-1.png`
 
 This result does not prove audio, remote network/TURN behavior, the native macOS
 app, startup/resize targets or final CI. Those acceptance requirements remain open.
+
+## Gateway viewport fixture correction
+
+Focused gateway race run `99178` exited 1 after 34.114s: 33 groups passed, one
+failed and 11 Linux-only groups skipped, with no race warnings. The sole failure
+was `TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns`: its socket
+was authenticated but never attached, so the current viewport admission guard
+returned before the blocking handler seam. This was a stale fixture prerequisite,
+not evidence that the production reader blocked.
+
+Integrated correction `7a404a82e` uses the existing external browser-protocol
+fixture and a real socket attachment, then installs the original handler blocker.
+The handler-entered assertion, next-frame response assertion and original
+timeouts remain unchanged. Driver `43028` completed with exit 0:
+
+- Both viewport/attach reader checks passed initially in 18.420s.
+- Temporary inline viewport dispatch failed the socket-response assertion
+  (fault run exit 1), after successfully reaching the handler-entry assertion.
+- Production bytes were restored exactly; both checks passed with race detection
+  in 17.538s, with zero skips or race reports.
+
+The specific fixture failure is closed without a production change. This does
+not relabel the original batch as green or establish Linux execution. The binary
+still contains source `2259cd81f`. Retained logs:
+
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/gateway-final-focused-race.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/viewport-reader-final-green.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/viewport-reader-final-fault.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/viewport-reader-final-restored-race.log`
 
 ## Release-base inventory and review limits
 

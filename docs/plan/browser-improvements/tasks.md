@@ -151,8 +151,20 @@ held-input/release checks, capture continuity, no renegotiation and no viewer
 error assertions passed. This is partial acceptance evidence, not a passing soak.
 Detailed latency samples, JSON and phase images were not persisted by the line
 reporter; the terminal log and final failure screenshot are retained. Artifact
-persistence correction and a short latency diagnostic are pending, with no
-production change made for this result. See the closeout ledger for exact paths.
+persistence correction and a short diagnostic were integrated as `b293c9808`.
+Diagnostic run `69699` is running against unchanged source `2259cd81f`; no
+result is claimed yet. See the closeout ledger for exact paths.
+
+Gateway followup: run `99178` passed 33 groups, failed one obsolete viewport
+fixture and skipped 11 Linux-only groups (34.114s, no race warnings). The fixture
+had authenticated without attaching, so current admission correctly refused it.
+Correction `7a404a82e` establishes a real attachment and retains the original
+handler-entry and socket-response assertions. Driver `43028` passed both reader
+checks (18.420s), caught a temporary inline-dispatch fault at the intended
+socket-response assertion, then restored production exactly and passed both
+checks with race detection (17.538s, zero skips/races). This closes that fixture
+failure; it does not turn the original failed batch or Linux skips into passes.
+No production correction was required.
 
 Go test/build batches remain serial within this team; independent source work
 continues in isolated worktrees. No full CI is run for each fix. Other operators'
