@@ -684,8 +684,10 @@ type SessionStateFrame struct {
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
 	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
-	Type        string                `json:"type"`
-	UserId      string                `json:"user_id"`
+	// ADR-082 (review CR3) — the transcript session this snapshot describes; absent on the connection-open emit. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	UserId    string  `json:"user_id"`
 }
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.

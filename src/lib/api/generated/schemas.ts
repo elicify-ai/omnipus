@@ -11184,6 +11184,7 @@ export const SessionStateFrame = z
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
+    session_id: z.string().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     emitted_at: z.string(),
   })

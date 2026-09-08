@@ -3455,6 +3455,12 @@ components:
             PENDING AskUserQuestion card (global registry cap 64) so a
             reconnecting SPA re-hydrates its card + composer lock. Optional
             (older gateways omit it); absent/empty means no pending sets.
+        session_id:
+          type: string
+          description: >
+            ADR-082 (review CR3) — the transcript session this snapshot
+            describes; absent on the connection-open emit. Keep in sync by
+            hand with components/schemas/SessionStateFrame.yaml.
         active_turn:
           $ref: '#/components/schemas/SessionStateActiveTurn'
           description: >
