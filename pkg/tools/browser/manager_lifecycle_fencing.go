@@ -11,6 +11,9 @@ func (m *BrowserManager) retireTabCommandsLocked(sessionID string) {
 	delete(m.pendingTabNotifications, sessionID)
 	if gate := m.tabCommands[sessionID]; gate != nil {
 		gate.retired = true
+		if gate.stop != nil {
+			gate.stop(errBrowserSessionChanged)
+		}
 	}
 }
 

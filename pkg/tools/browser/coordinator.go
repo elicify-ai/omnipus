@@ -124,9 +124,8 @@ type BrowserCoordinator struct {
 	pipeLauncher func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
 
 	// Chrome process state (lives on the coordinator; managers never touch it).
-	launched   bool
-	launching  bool       // single-flight: a launch is in progress
-	launchDone *sync.Cond // signaled when a launch completes (nil-safe via mu)
+	launched bool
+	startup  *startupCohort // one launch shared by its live request cohort
 	// rootCtx is the chromedp context returned by the pipe allocator (binds the
 	// shared *Browser). In-process managers drive the shared Chrome through
 	// chromedp CHILD contexts of this (one pipe, multiplexed) — NOT a
@@ -192,7 +191,6 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinato
 		managers:     make(map[string]*BrowserManager),
 		pipeLauncher: launchManagedPipe,
 	}
-	c.launchDone = sync.NewCond(&c.mu)
 	// ADR-075 D1.5a/FR-059: there is no tab budget to report. Every counter —
 	// the global one and the per-agent one — is deleted, and the only limit is
 	// live memory, enforced at each tab open by the manager's own gate. An
@@ -243,7 +241,7 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig) *BrowserCoordinato
 //
 // Launches Chrome if none is live. The blocking launch runs with c.mu
 // RELEASED (ADR-038 no-lock-across-blocking-call). Concurrent Register
-// callers serialize on the single-flight launch (c.launching / c.launchDone);
+// callers serialize on the single-flight launch (the startup cohort);
 // the winner launches, the losers wait and then observe c.launched.
 //
 // Register creates NO CDP target. It used to: alongside the per-agent browser
@@ -274,6 +272,14 @@ func (c *BrowserCoordinator) Register(
 	}
 
 	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.shutdown || !c.launched || c.rootCtx == nil || c.rootCtx.Err() != nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("browser: coordinator: Chrome not ready while registering %q", agentID)
+	}
 	c.managers[agentID] = mgr
 	rootCtx = c.rootCtx
 	c.mu.Unlock()
@@ -532,8 +538,8 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	// boundedCallContext(ctx, loadExtensionDefaultTimeout) honors ctx as-is
 	// when it already carries a deadline (however short or long the caller
 	// chose), and falls back to the 20s default otherwise (e.g.
-	// launchChrome's best-effort auto-load below, which passes
-	// context.Background()). Unlike createTab's target-attach (manager.go's
+	// launchChrome's best-effort auto-load below, whose temporary startup
+	// context has no deadline). Unlike createTab's target-attach (manager.go's
 	// runFirstAttach), Extensions.loadUnpacked has no long-lived background
 	// goroutine bound to its call context — chromedp.Browser.execute's
 	// per-command listener (browser.go) is scoped to just this one round
@@ -623,6 +629,7 @@ func (c *BrowserCoordinator) Shutdown() {
 		return
 	}
 	c.shutdown = true
+	startup := c.startup
 	rootCancel := c.rootCancel
 	lockFile := c.lockFile
 	c.rootCancel = nil
@@ -632,6 +639,10 @@ func (c *BrowserCoordinator) Shutdown() {
 	c.launched = false
 	c.killCount++
 	c.mu.Unlock()
+
+	if startup != nil {
+		startup.cancel()
+	}
 
 	// Kill the Chrome process by canceling the pipe allocator context:
 	// cdppipe's CancelFunc cancels the chromedp context, closes the pipe
@@ -664,10 +675,10 @@ func (c *BrowserCoordinator) Shutdown() {
 //
 // Thin public wrapper over the exact same ensureLaunched every Register call
 // already funnels through: single-flight (a concurrent WarmUp racing a real
-// Register serializes on the same c.launching/c.launchDone latch — whichever
+// Register serializes on the same startup cohort — whichever
 // wins launches, the other observes c.launched), idempotent (a no-op once
-// Chrome is already live), and panic-safe (ensureLaunched's own deferred
-// cleanup).
+// Chrome is already live), and panic-safe (the cohort worker reports a launch
+// panic as an error and releases the pending startup).
 //
 // SCOPE, and this line has been WRONG since FR-037 landed: it used to say a
 // Chrome pool was out of scope and deferred to issue #570. There IS a pool now
@@ -695,83 +706,49 @@ func (c *BrowserCoordinator) managerCount() int {
 // goroutine. Releases c.mu across the blocking launch. Returns nil if Chrome is
 // already live or was just launched by this/another goroutine.
 func (c *BrowserCoordinator) ensureLaunched(ctx context.Context) error {
-	c.mu.Lock()
-	if c.launched {
-		c.mu.Unlock()
-		return nil
-	}
-	if c.shutdown {
-		c.mu.Unlock()
-		return fmt.Errorf("browser: coordinator is shut down — cannot launch Chrome")
-	}
-	// Single-flight: if another goroutine is already launching, wait for it.
-	for c.launching {
-		c.launchDone.Wait()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		if c.shutdown {
+			c.mu.Unlock()
+			return fmt.Errorf("browser: coordinator is shut down — cannot launch Chrome")
+		}
 		if c.launched {
 			c.mu.Unlock()
 			return nil
 		}
-		if c.shutdown {
-			c.mu.Unlock()
-			return fmt.Errorf("browser: coordinator shut down during Chrome launch")
+		flight := c.startup
+		launch := flight == nil
+		if launch {
+			flight = newStartupCohort()
 		}
-		// Loop: re-check launched (the launcher may have failed; try once more
-		// as the designated launcher).
-	}
-	if c.launched { // re-check after the loop
+		leave, joined := flight.join(ctx)
+		if !joined {
+			c.mu.Unlock()
+			if launch {
+				flight.cancel()
+				return ctx.Err()
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-flight.done:
+				continue
+			}
+		}
+		if launch {
+			c.startup = flight
+		}
 		c.mu.Unlock()
-		return nil
-	}
-	c.launching = true
-	c.mu.Unlock()
-
-	// CRIT-2 (panic-safety): c.launching MUST always be cleared + c.launchDone
-	// broadcast, even if launchChrome panics — otherwise every future Register
-	// deadlocks on c.launchDone.Wait(). The cleanup runs via defer so a panic
-	// in launchChrome (chromedp internals, a nil deref in a CDP handler) can
-	// never wedge the single-flight latch. launchChrome's own chromedp.Run-
-	// failure cleanup (rootCancel/allocCancel on its locals) is separate and
-	// still runs for the ordinary error path.
-	defer func() {
-		c.mu.Lock()
-		c.launching = false
-		c.launchDone.Broadcast() // wake all waiters regardless of outcome
-		c.mu.Unlock()
-	}()
-
-	if err := c.launchChrome(ctx); err != nil {
+		if launch {
+			go c.runStartup(flight)
+		}
+		err := flight.wait(ctx)
+		leave()
 		return err
 	}
-
-	// CRIT-1 (Shutdown races in-flight launch → orphan Chrome): there is a
-	// window between the pipe launch succeeding (Chrome alive) and
-	// launchChrome installing c.rootCancel/c.lockFile. If Shutdown runs in
-	// that window it sees nil cancels, logs a FALSE "process killed", and
-	// returns — then launchChrome installs the LIVE Chrome's cancel AFTER
-	// Shutdown, producing an unkillable orphan. Close the window: re-check
-	// c.shutdown now (launchChrome has installed the cancel + lock by the
-	// time it returned nil). If Shutdown won the race, tear down the
-	// just-launched Chrome + release the lock ourselves and return an error;
-	// do NOT set c.launched=true. (cdppipe's CancelFunc is idempotent, so a
-	// double-cancel is harmless.)
-	c.mu.Lock()
-	if c.shutdown {
-		rootCancel := c.rootCancel
-		lockFile := c.lockFile
-		c.rootCtx = nil
-		c.rootCancel = nil
-		c.lockFile = nil
-		c.cmd = nil
-		c.mu.Unlock()
-		if rootCancel != nil {
-			rootCancel()
-		}
-		releaseLaunchLock(lockFile)
-		return fmt.Errorf("browser: shared Chrome launch aborted by concurrent shutdown")
-	}
-	c.launched = true
-	c.mu.Unlock()
-	return nil
 }
 
 // launchChrome does the blocking work of starting the one shared Chrome over
@@ -839,7 +816,11 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	if res.cmd != nil && res.cmd.Process != nil {
 		pid = res.cmd.Process.Pid
 	}
-	product := readBrowserProduct(res.rootCtx)
+	productCtx, cancelProduct := context.WithCancel(res.rootCtx)
+	stopProduct := context.AfterFunc(ctx, cancelProduct)
+	product := readBrowserProduct(productCtx)
+	stopProduct()
+	cancelProduct()
 	// MED-2: a pid of 0 (Process()==nil — e.g. cdppipe couldn't capture the
 	// cmd handle) MUST NOT be written as a marker: takeLaunchLock treats a
 	// held lock whose marker pid is dead/zero as stale (removable), so a 0
@@ -883,7 +864,7 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	// browsing tools must keep working even if the optional extension can't
 	// load.
 	if c.cfg.ExtensionDir != "" && c.cfg.ExtensionID != "" {
-		if _, lerr := c.LoadExtension(context.Background()); lerr != nil {
+		if _, lerr := c.LoadExtension(ctx); lerr != nil {
 			logger.WarnCF(
 				"browser",
 				"coordinator: failed to auto-load configured extension (continuing without it)",
@@ -941,6 +922,15 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	if c.shutdown || !c.launched {
 		c.mu.Unlock()
 		return // shutting down, or already marked dead by a prior detection
+	}
+	if c.rootCtx == nil {
+		c.mu.Unlock()
+		return
+	}
+	installed := chromedp.FromContext(c.rootCtx)
+	if installed == nil || installed.Browser != b {
+		c.mu.Unlock()
+		return // a delayed notification belongs to a replaced browser
 	}
 	c.launched = false
 	oldCancel := c.rootCancel

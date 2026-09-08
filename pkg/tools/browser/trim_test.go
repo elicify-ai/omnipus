@@ -170,11 +170,11 @@ func TestTrim_SkipsLiveProfile(t *testing.T) {
 
 		// Exactly the state Acquire installs before it calls p.launch: the
 		// single-flight entry, and nothing else. No instance, no lock.
-		done := make(chan struct{})
+		flight := newStartupCohort()
 		f.pool.mu.Lock()
-		f.pool.launching[key.String()] = done
+		f.pool.launching[key.String()] = flight
 		f.pool.mu.Unlock()
-		t.Cleanup(func() { f.pool.finishLaunch(key.String(), done) })
+		t.Cleanup(func() { f.pool.finishLaunch(key.String(), flight, nil) })
 
 		f.pool.mu.Lock()
 		_, live := f.pool.instances[key.String()]

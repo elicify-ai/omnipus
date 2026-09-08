@@ -9,9 +9,11 @@ import (
 const liveTabCommandTimeout = 5 * time.Second
 
 type liveTabCommandGate struct {
-	gate    chan struct{}
-	users   int
-	retired bool // guarded by BrowserManager.mu; rejected users drain normally.
+	gate     chan struct{}
+	users    int
+	lifetime context.Context
+	stop     context.CancelCauseFunc
+	retired  bool // guarded by BrowserManager.mu; rejected users drain normally.
 }
 
 // acquireLiveTabCommand serializes a tab set's target operations, including

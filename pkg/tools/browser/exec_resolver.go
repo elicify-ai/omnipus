@@ -377,9 +377,8 @@ type pipeLaunchResult struct {
 // Chrome must outlive any single request/tool call — exactly as the pre-pipe
 // chromedp.NewExecAllocator(context.Background(), ...) did).
 func launchManagedPipe(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error) {
-	_ = ctx
 	var captured *exec.Cmd
-	rootCtx, cancel, err := cdppipe.NewPipeAllocator(context.Background(), execPath, cdppipe.PipeOptions{
+	rootCtx, cancel, err := cdppipe.NewPipeAllocatorWithStartupContext(context.Background(), ctx, execPath, cdppipe.PipeOptions{
 		Args:        cfg.args,
 		Env:         cfg.env,
 		UserDataDir: cfg.userDataDir,

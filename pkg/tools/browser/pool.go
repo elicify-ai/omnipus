@@ -222,7 +222,7 @@ type BrowserPool struct {
 	// launching is the per-key single-flight. A key's entry exists while a
 	// launch is in progress; waiters block on the channel with pool.mu
 	// RELEASED (P-2).
-	launching map[string]chan struct{}
+	launching map[string]*startupCohort
 
 	closed bool
 
@@ -278,7 +278,7 @@ func NewBrowserPool(homeDir string, cfg BrowserConfig) *BrowserPool {
 		homeDir:           homeDir,
 		cfg:               cfg,
 		instances:         make(map[string]*chromeInstance),
-		launching:         make(map[string]chan struct{}),
+		launching:         make(map[string]*startupCohort),
 		reopens:           make(map[string][]time.Time),
 		thrashWarned:      make(map[string]bool),
 		idleCloseTTL:      cfg.IdleCloseTTL,
@@ -634,7 +634,11 @@ func (p *BrowserPool) Register(
 	// ErrBrowserRestarting.
 	p.mu.Lock()
 	live, ok := p.instances[key.String()]
-	stillLive := ok && live == inst
+	stillLive := ok && live == inst && !p.closed
+	if err := ctx.Err(); err != nil {
+		p.mu.Unlock()
+		return nil, nil, err
+	}
 	if stillLive {
 		inst.mgrs[mgr] = struct{}{}
 	}
@@ -670,7 +674,14 @@ func (p *BrowserPool) Acquire(ctx context.Context, key BrowsingKey) (*chromeInst
 	id := key.String()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		p.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			p.mu.Unlock()
+			return nil, err
+		}
 		if p.closed {
 			p.mu.Unlock()
 			return nil, errPoolClosed
@@ -683,14 +694,23 @@ func (p *BrowserPool) Acquire(ctx context.Context, key BrowsingKey) (*chromeInst
 		// Another goroutine is launching this same key. Wait for it with
 		// p.mu RELEASED (P-2), then re-loop — the winner will have installed
 		// the instance, or failed and left the key launchable again.
-		if wait, ok := p.launching[id]; ok {
+		if flight, ok := p.launching[id]; ok {
+			leave, joined := flight.join(ctx)
 			p.mu.Unlock()
-			select {
-			case <-wait:
-				continue
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			if !joined {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-flight.done:
+					continue
+				}
 			}
+			err := flight.wait(ctx)
+			leave()
+			if err != nil {
+				return nil, err
+			}
+			continue
 		}
 
 		// P-3: the gate, and nothing gets past it.
@@ -727,39 +747,34 @@ func (p *BrowserPool) Acquire(ctx context.Context, key BrowsingKey) (*chromeInst
 			continue
 		}
 
-		// We own the launch for this key.
-		done := make(chan struct{})
-		p.launching[id] = done
+		// Register the first waiter before launching; cancellation never makes
+		// that caller the owner of other requests' startup lifetime.
+		flight := newStartupCohort()
+		leave, joined := flight.join(ctx)
+		if !joined {
+			p.mu.Unlock()
+			flight.cancel()
+			return nil, ctx.Err()
+		}
+		p.launching[id] = flight
 		cfg, cfgErr := p.configFor(key)
 		p.mu.Unlock()
-
-		if cfgErr != nil {
-			p.finishLaunch(id, done)
-			return nil, cfgErr
+		go p.runStartup(key, cfg, flight, cfgErr)
+		err := flight.wait(ctx)
+		leave()
+		if err != nil {
+			return nil, err
 		}
-
-		inst, launchErr := p.launch(ctx, key, cfg)
-		p.mu.Lock()
-		if launchErr == nil {
-			inst.lastUsed = p.clock()
-			p.instances[id] = inst
-		}
-		p.mu.Unlock()
-		p.finishLaunch(id, done)
-		if launchErr != nil {
-			return nil, launchErr
-		}
-		return inst, nil
 	}
 }
 
-func (p *BrowserPool) finishLaunch(id string, done chan struct{}) {
+func (p *BrowserPool) finishLaunch(id string, flight *startupCohort, err error) {
 	p.mu.Lock()
-	if cur, ok := p.launching[id]; ok && cur == done {
+	if p.launching[id] == flight {
 		delete(p.launching, id)
 	}
 	p.mu.Unlock()
-	close(done)
+	flight.finish(err)
 }
 
 // launch builds this key's coordinator and brings its Chrome up. Runs with
@@ -775,6 +790,8 @@ func (p *BrowserPool) launch(ctx context.Context, key BrowsingKey, cfg BrowserCo
 	}
 	coord := build(p.homeDir, cfg, key)
 	if err := coord.WarmUp(ctx); err != nil {
+		coord.Shutdown()
+		coord.waitStartupDrain()
 		return nil, fmt.Errorf("browser: workspace %s could not start its browser: %w", key.WorkspaceID(), err)
 	}
 	logger.InfoCF("browser", "started this workspace's own browser", map[string]any{
@@ -1104,12 +1121,19 @@ func (p *BrowserPool) Shutdown() {
 		return
 	}
 	p.closed = true
+	startups := make([]*startupCohort, 0, len(p.launching))
+	for _, flight := range p.launching {
+		startups = append(startups, flight)
+	}
 	all := make([]*chromeInstance, 0, len(p.instances))
 	for _, inst := range p.instances {
 		all = append(all, inst)
 	}
 	p.instances = make(map[string]*chromeInstance)
 	p.mu.Unlock()
+	for _, flight := range startups {
+		flight.cancel()
+	}
 	for _, inst := range all {
 		inst.coord.Shutdown()
 		_ = os.Remove(p.markerPathFor(inst.key))

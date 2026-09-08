@@ -85,6 +85,13 @@ func NewPipeAllocator(
 	execPath string,
 	opts PipeOptions,
 ) (context.Context, context.CancelFunc, error) {
+	return newPipeAllocator(parent, parent, execPath, opts)
+}
+
+func newPipeAllocator(parent, startup context.Context, execPath string, opts PipeOptions) (context.Context, context.CancelFunc, error) {
+	if err := startup.Err(); err != nil {
+		return nil, nil, err
+	}
 	if opts.ExecPath != "" {
 		execPath = opts.ExecPath
 	}
@@ -101,10 +108,23 @@ func NewPipeAllocator(
 	// The chromedp context the pipe *Browser will be bound onto. parent must not
 	// already be a chromedp context (the managed-Chrome launcher passes context.Background()).
 	lifetime, lifetimeCancel := context.WithCancelCause(parent)
+	// The startup request may cancel a partially launched child, but must not
+	// own an accepted browser's lifetime. Remove this link before publishing it.
+	stopStartup := context.AfterFunc(startup, func() { lifetimeCancel(context.Cause(startup)) })
+	defer stopStartup()
+	cancellationErr := func() error {
+		if err := startup.Err(); err != nil {
+			return err
+		}
+		return parent.Err()
+	}
 	ctx, baseCancel := chromedp.NewContext(lifetime)
 
 	l := &launch{opts: opts, execPath: execPath, onExit: lifetimeCancel}
 	if err := l.start(ctx); err != nil {
+		if canceled := cancellationErr(); canceled != nil {
+			err = canceled
+		}
 		baseCancel()
 		lifetimeCancel(context.Canceled)
 		l.teardown()
@@ -126,7 +146,7 @@ func NewPipeAllocator(
 	// client conn, and the bridge completes the websocket handshake over it.
 	b, err := chromedp.NewBrowser(ctx, l.wsURL, browserOpts...)
 	if err != nil {
-		err = l.startupError("connect browser over pipe", err, parent.Err())
+		err = l.startupError("connect browser over pipe", err, cancellationErr())
 		baseCancel()
 		lifetimeCancel(context.Canceled)
 		l.teardown()
@@ -144,7 +164,18 @@ func NewPipeAllocator(
 	_, err = target.GetTargets().Do(cdp.WithExecutor(probeCtx, b))
 	probeCancel()
 	if err != nil {
-		err = l.startupError("CDP liveness probe failed over pipe", err, parent.Err())
+		err = l.startupError("CDP liveness probe failed over pipe", err, cancellationErr())
+		baseCancel()
+		lifetimeCancel(context.Canceled)
+		l.teardown()
+		return nil, nil, err
+	}
+
+	if !stopStartup() || cancellationErr() != nil {
+		err := cancellationErr()
+		if err == nil {
+			err = context.Canceled
+		}
 		baseCancel()
 		lifetimeCancel(context.Canceled)
 		l.teardown()

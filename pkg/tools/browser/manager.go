@@ -503,8 +503,9 @@ type BrowserManager struct {
 	// of also calling chromedp.NewContext/Run for that ID (which would
 	// create and leak a second tab, and corrupt the tab count). Lazily
 	// initialized; nil is a valid empty state.
-	pending map[string]chan struct{}
-	started bool
+	pending      map[string]chan struct{}
+	started      bool
+	localStartup *startupCohort
 
 	// execPath holds the Chromium-binary resolution caches (success + negative),
 	// refactored into a reusable struct shared with the BrowserCoordinator
@@ -1236,32 +1237,18 @@ func (m *BrowserManager) ValidateURL(ctx context.Context, rawURL string) error {
 	return nil
 }
 
-// ensureStarted lazily initializes the browser. Must be called under m.mu.
-//
-// ADR-038 discipline extended to exec-path resolution: resolveExecPath
-// (below) can now shell out to probe PATH candidates (`--version`, up to
-// chromiumProbeTimeout each) or even trigger a managed chrome-for-testing
-// download on first use. Neither may run with m.mu held — a slow/broken
-// probe or an in-flight 100+MB download would otherwise freeze every OTHER
-// browser tool call (any session, any tab) for its entire duration,
-// recreating the exact "single global mutex held across a blocking external
-// call" shape Session()'s doc comment describes as the ADR-038 postmortem
-// bug, just with exec(1) standing in for CDP. So: m.mu is released for the
-// resolveExecPath call only, then re-acquired before continuing. A
-// concurrent caller that raced in during that window (another
-// Session()/createFirstTab()/OpenTab() call, still seeing m.started ==
-// false) and ALSO ran ensureStarted's managed-mode setup to completion is
-// detected by re-checking m.started immediately after re-acquiring the
-// lock — this goroutine's own (fully valid, just redundant) exec-path
-// resolution is then discarded in favor of whichever goroutine's
-// chromedp.NewExecAllocator call and m.allocCtx/m.started assignment
-// happened to win, mirroring the discard-the-loser pattern
-// createFirstTab/OpenTab already use for a redundant tab. This never
-// double-launches a subprocess: chromedp.NewExecAllocator only builds an
-// allocator config, it does not spawn Chromium — that happens later and
-// lazily, in bootstrapBrowserCtx's chromedp.Run, which only ever reads the
-// WINNING m.allocCtx field, never a discarded local variable.
+// ensureStarted retains the legacy background caller policy. It must be called
+// with m.mu held and returns with it held. Resolution, downloads, process launch,
+// and waits all release that mutex. SessionContext supplies a caller and gate
+// lifetime through ensureStartedContext instead.
 func (m *BrowserManager) ensureStarted() error {
+	return m.ensureStartedContext(context.Background())
+}
+
+func (m *BrowserManager) ensureStartedContext(ctx context.Context) error {
+	if err := sessionStartupError(ctx); err != nil {
+		return err
+	}
 	if m.started {
 		return nil
 	}
@@ -1288,8 +1275,8 @@ func (m *BrowserManager) ensureStarted() error {
 	// coordinator.go's Register doc comment).
 	//
 	// Register blocks on the (possibly cold) Chrome launch, so m.mu is released
-	// around it — same ADR-038 no-lock-across-blocking-call discipline as the
-	// resolveExecPath unlock/relock below. A concurrent ensureStarted that won
+	// around it — the same no-lock-across-blocking-call discipline as the
+	// local startup cohort. A concurrent ensureStarted that won
 	// while m.mu was released is handled by the post-relock m.started check.
 	if m.pool != nil || m.coordinator != nil {
 		agentID := m.agentID
@@ -1302,11 +1289,14 @@ func (m *BrowserManager) ensureStarted() error {
 			regErr  error
 		)
 		if pool != nil {
-			coord, rootCtx, regErr = pool.Register(context.Background(), key, m)
+			coord, rootCtx, regErr = pool.Register(ctx, key, m)
 		} else {
-			rootCtx, regErr = coord.Register(context.Background(), agentID, m)
+			rootCtx, regErr = coord.Register(ctx, agentID, m)
 		}
 		m.mu.Lock()
+		if err := sessionStartupError(ctx); err != nil {
+			return err
+		}
 		if regErr != nil {
 			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
 		}
@@ -1333,84 +1323,9 @@ func (m *BrowserManager) ensureStarted() error {
 		return nil
 	}
 
-	// US-4: Managed mode — launch local Chromium (no coordinator: tests +
-	// the legacy one-manager-one-Chrome path).
-	if err := os.MkdirAll(m.cfg.ProfileDir, 0o700); err != nil {
-		return fmt.Errorf("browser: cannot create profile directory %s: %w", m.cfg.ProfileDir, err)
-	}
-
-	// Clean up stale SingletonLock files. When Chromium exits ungracefully
-	// (kill -9, crash, or the gateway's chromedp allocator canceling mid-
-	// startup), `SingletonLock` / `SingletonCookie` / `SingletonSocket`
-	// stay behind in the profile dir. The next launch refuses to start with:
-	//   "Failed to create .../SingletonLock: File exists (17)
-	//    Failed to create a ProcessSingleton for your profile directory."
-	// and every subsequent browser_navigate fails. We always own this
-	// profile directory exclusively (single chromedp allocator per gateway
-	// process; tabs share the same Chromium instance), so it is safe to
-	// remove these on each lazy-init. Symlinks (which is what Chrome uses
-	// for SingletonLock — a symlink whose target encodes pid + hostname)
-	// must be removed with os.Remove; os.RemoveAll would fail to follow
-	// them in some edge cases.
-	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
-		path := filepath.Join(m.cfg.ProfileDir, name)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			logger.WarnCF("browser", "Failed to remove stale Chromium singleton file", map[string]any{
-				"path":  path,
-				"error": err.Error(),
-			})
-		}
-	}
-
-	// Release m.mu across exec-path resolution — see this function's doc
-	// comment above for why (the probe/download it can trigger must never
-	// run with m.mu held).
-	m.mu.Unlock()
-	execPath, err := m.resolveExecPath(context.Background())
-	m.mu.Lock()
-	if err != nil {
-		return fmt.Errorf("browser: cannot locate chromium: %w", err)
-	}
-	if m.started {
-		// A concurrent ensureStarted() call raced in and already finished
-		// setting up the allocator while m.mu was released above — discard
-		// our own now-redundant resolution instead of launching a second
-		// allocator. See this function's doc comment.
-		return nil
-	}
-
-	// Render the Chrome command line via the shared helper (managedExecAllocatorOpts,
-	// exec_resolver.go) — identical to the coordinator's launch path, so the two
-	// never diverge (MAJ-001). See that helper for the per-flag rationale
-	// (hardening set, sandbox disable, stealth flags, XDG/HOME jail, etc.).
-	//
-	// CRIT-001: launch over the CDP pipe (cdppipe — no TCP debug port; see
-	// coordinator.go's file doc). The launcher is a seam (m.pipeLauncherFn)
-	// so tests never spawn real Chrome — mirrors the coordinator's
-	// pipeLauncher field exactly.
-	cmdline := managedExecAllocatorOpts(m.cfg, chromeMajorVersion(context.Background(), execPath))
-	launch := m.pipeLauncherFn
-	if launch == nil {
-		launch = launchManagedPipe
-	}
-	res, err := launch(context.Background(), execPath, pipeLaunchConfig{
-		args:        cmdline.Args,
-		env:         cmdline.Env,
-		userDataDir: m.cfg.ProfileDir,
-	})
-	if err != nil {
-		return fmt.Errorf("browser: failed to launch managed Chrome over the CDP pipe: %w", err)
-	}
-	m.allocCtx = res.rootCtx
-	m.allocCancel = res.cancel
-	m.started = true
-
-	logger.InfoCF("browser", "Browser allocator ready (managed mode)", map[string]any{
-		"headless":    m.cfg.Headless,
-		"profile_dir": m.cfg.ProfileDir,
-		"exec_path":   execPath,
-	})
-	return nil
+	// The legacy local browser uses the same waiter lifetime as shared startup;
+	// never hold manager.mu while a process is being launched.
+	return m.ensureLocalStartedLocked(ctx)
 }
 
 // resolveExecPath returns the path to the Chromium binary chromedp should
@@ -1422,8 +1337,8 @@ func (m *BrowserManager) ensureStarted() error {
 //
 // Safe to call without m.mu held, and safe to call WHILE some other goroutine
 // holds m.mu: the only state resolve touches is execPathCaches.mu, never m.mu.
-// ensureStarted relies on this — it releases m.mu before calling here so a slow
-// first-time probe/download never blocks concurrent tab/session bookkeeping.
+// Startup workers resolve with m.mu released, so a slow first-time probe or
+// download never blocks concurrent tab/session bookkeeping.
 func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	return m.execPath.resolve(ctx, m.cfg)
 }
@@ -1560,19 +1475,22 @@ func probeChromiumBinaryWithTimeout(
 // concurrent caller waits and then observes the now-populated
 // m.sessions[sessionID] instead of creating a second one.
 func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
-	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
-	if admissionErr != nil {
-		return nil, admissionErr
+	release, err := m.acquireLegacyTabCommand(sessionID)
+	if err != nil {
+		return nil, err
 	}
 	defer release()
+	return m.sessionUnderGate(context.Background(), sessionID)
+}
 
+func (m *BrowserManager) sessionWithContext(ctx context.Context, sessionID string) (context.Context, error) {
 	// Cancels collected under m.mu and run after it is dropped (see the
 	// crash-recovery branch below). Declared out here so the retry loop reuses
 	// one slice rather than allocating per iteration.
 	var pendingCancels []func()
 	for {
 		m.mu.Lock()
-		if err := m.ensureStarted(); err != nil {
+		if err := m.ensureStartedContext(ctx); err != nil {
 			m.mu.Unlock()
 			return nil, err
 		}
@@ -1622,7 +1540,7 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 		}
 		pendingCancels = nil
 
-		if err := m.createFirstTab(sessionID); err != nil {
+		if err := m.createFirstTabContext(ctx, sessionID); err != nil {
 			return nil, err
 		}
 		// Loop back to the top to read the freshly-created (or, if we lost
@@ -1661,13 +1579,17 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 //
 // Must be called with NO BrowserManager lock held.
 func (m *BrowserManager) createFirstTab(sessionID string) error {
+	return m.createFirstTabContext(context.Background(), sessionID)
+}
+
+func (m *BrowserManager) createFirstTabContext(ctx context.Context, sessionID string) error {
 	for {
 		m.mu.Lock()
 		if gate := m.tabCommands[sessionID]; gate != nil && gate.retired {
 			m.mu.Unlock()
 			return errBrowserSessionChanged
 		}
-		if err := m.ensureStarted(); err != nil {
+		if err := m.ensureStartedContext(ctx); err != nil {
 			m.mu.Unlock()
 			return err
 		}
@@ -1688,7 +1610,11 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			// re-check m.sessions, rather than racing to create a second
 			// tab for the same ID.
 			m.mu.Unlock()
-			<-wait
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return sessionStartupError(ctx)
+			}
 			continue
 		}
 
@@ -1718,11 +1644,11 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 		)
 		if existing != nil {
 			browserCtx = existing.browserCtx
-			tab, err = m.createTab(browserCtx, "")
+			tab, err = m.createLiveTab(ctx, browserCtx)
 		} else {
-			browserCtx, browserCancel, err = m.bootstrapBrowserCtx(allocCtx)
+			browserCtx, browserCancel, err = m.bootstrapBrowserCtxContext(ctx, allocCtx)
 			if err == nil {
-				tab, err = m.createTab(browserCtx, "")
+				tab, err = m.createLiveTab(ctx, browserCtx)
 				if err != nil {
 					browserCancel()
 				}
@@ -1730,7 +1656,7 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 		}
 
 		m.mu.Lock()
-		if m.pending[sessionID] != done || m.sessions[sessionID] != existing {
+		if sessionStartupError(ctx) != nil || m.pending[sessionID] != done || m.sessions[sessionID] != existing {
 			if m.pending[sessionID] == done {
 				delete(m.pending, sessionID)
 			}
@@ -1740,6 +1666,9 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 				cancelBounded(browserCancel, map[string]any{"session_id": sessionID, "origin": "retired_first_creation"})
 			}
 			close(done)
+			if callerErr := sessionStartupError(ctx); callerErr != nil {
+				return callerErr
+			}
 			return errBrowserSessionChanged
 		}
 		delete(m.pending, sessionID)
@@ -1802,7 +1731,7 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			// and the encoder would bind to that instead of the replacement
 			// this call just created. Best-effort and no lock held, like every
 			// other call site.
-			m.activateTabInChrome(newActiveCtx, sessionID, 0)
+			_ = m.liveTabFocus(ctx, sessionID, newActiveCtx, nil)
 			m.notifyTabsChanged(sessionID, tabs, 0)
 		}
 		return nil
@@ -1877,17 +1806,7 @@ var firstAttachTimeout = 20 * time.Second
 // createTab/bootstrapBrowserCtx already had — only the wait itself is now
 // bounded.
 func runFirstAttach(fn func() error, timeout time.Duration) error {
-	done := make(chan error, 1)
-	go func() { done <- fn() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(timeout):
-		return fmt.Errorf(
-			"browser: timed out after %s waiting for the browser to attach the tab (target may be unresponsive)",
-			timeout,
-		)
-	}
+	return runFirstAttachContext(context.Background(), fn, timeout)
 }
 
 // bootstrapBrowserCtx creates the ONE-TIME browser-owning chromedp context
@@ -1932,7 +1851,7 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 	// the workspace's own Chrome process and profile directory (FR-037), not
 	// a context id.
 	ctx, cancel := chromedp.NewContext(allocCtx)
-	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
+	if err := runFirstAttachContext(allocCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
 	}
@@ -2038,7 +1957,7 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	}
 	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
 
-	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
+	if err := runFirstAttachContext(parentCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, err
 	}
