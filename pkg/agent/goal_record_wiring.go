@@ -53,17 +53,22 @@ func wireGoalToolsForAgent(al *AgentLoop, agent *AgentInstance) {
 // implementation).
 type agentLoopGoalRecordAccess struct{ al *AgentLoop }
 
-// ReadGoalState implements tools.GoalRecordAccess.
-func (a agentLoopGoalRecordAccess) ReadGoalState(sessionID string) (goalCondition, recordJSON string, err error) {
+// ReadGoalState implements tools.GoalRecordAccess. GoalID is minted at goal
+// activation (goal_loop.go's newGoalID call), the SAME MetaPatch write that
+// first sets GoalCondition — so whenever GoalCondition is non-empty (the
+// only case set_goal proceeds past the goalless-session refusal), GoalID is
+// already present too; this is a read-only lookup, never a mint (ADR-082
+// D9/FR-016 — set_goal's result surfaces the id, it does not assign one).
+func (a agentLoopGoalRecordAccess) ReadGoalState(sessionID string) (goalID, goalCondition, recordJSON string, err error) {
 	store := a.al.ResolveSessionStore(sessionID)
 	if store == nil {
-		return "", "", fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
+		return "", "", "", fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
 	}
 	meta, gerr := store.GetMeta(sessionID)
 	if gerr != nil {
-		return "", "", fmt.Errorf("goal record access: reading session meta: %w", gerr)
+		return "", "", "", fmt.Errorf("goal record access: reading session meta: %w", gerr)
 	}
-	return meta.GoalCondition, meta.GoalCriteriaJSON, nil
+	return meta.GoalID, meta.GoalCondition, meta.GoalCriteriaJSON, nil
 }
 
 // WriteRecord implements tools.GoalRecordAccess: persists recordJSON as

@@ -90,12 +90,17 @@ type setGoalAssessment struct {
 // AskUserQuestionRegistry / AppendCorrectionFunc precedent elsewhere in this
 // package: a narrow contract this tool depends on, not the store itself.
 type GoalRecordAccess interface {
-	// ReadGoalState returns sessionID's current goal condition
+	// ReadGoalState returns sessionID's current goal id
+	// (session.SessionMeta.GoalID; minted server-side at goal activation,
+	// the SAME moment GoalCondition is first set — ADR-082 D9/FR-016 reads
+	// this so set_goal's result can carry it, letting the SPA key a
+	// goal_status live-progress overlay onto the record card it renders
+	// from this tool's own result), current goal condition
 	// (session.SessionMeta.GoalCondition; "" means no active goal — FR-005's
 	// goalless-session refusal reads this) and current goal record JSON
 	// (session.SessionMeta.GoalCriteriaJSON; legitimately "" for an active
 	// goal with no record registered yet — ADR-081 D1's transient state).
-	ReadGoalState(sessionID string) (goalCondition, recordJSON string, err error)
+	ReadGoalState(sessionID string) (goalID, goalCondition, recordJSON string, err error)
 	// WriteRecord durably persists recordJSON as sessionID's goal record —
 	// the same field the compile-time path writes today.
 	WriteRecord(sessionID, recordJSON string) error
@@ -297,7 +302,7 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			"the parent session's goal record (ADR-081 FR-005) — report your findings back to the parent instead")
 	}
 
-	goalCondition, currentRecordJSON, err := access.ReadGoalState(sessionID)
+	goalID, goalCondition, currentRecordJSON, err := access.ReadGoalState(sessionID)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("set_goal: could not read this session's goal state: %v", err)).WithError(err)
 	}
@@ -459,11 +464,28 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 				"clarity": assessment.Clarity, "assumption_count": len(assessment.Assumptions)})
 	}
 
+	// ADR-082 D9/FR-016: the result carries goal_id and the full registered
+	// record (definition/criteria/dod), not just the counts — the SPA's
+	// dedicated set_goal tool UI (SetGoalToolUI, live path) and its
+	// VirtualAssistantMessageRow replay branch render the goal card
+	// directly from THIS result, anchored at this call's own position,
+	// instead of the old thread-tail GoalThreadTailCards mount that read
+	// only goalPills (populated solely by the goal_status frame). criteria/
+	// dod are marshaled as the same task.AcceptanceCriterion shape the
+	// goal_status frame's own criteria/dod arrays already use (id/kind/
+	// judgment/provenance/text/check/behavior/author/status) so the SPA's
+	// existing GoalStatusFrame-shaped rendering (CriteriaBreakdown et al.)
+	// needs no new parsing logic. criteria_count/dod_count are kept
+	// alongside the full arrays — the calling model reads the counts, the
+	// SPA reads the arrays.
 	payload := map[string]any{
 		"mode":           string(mode),
+		"goal_id":        goalID,
 		"definition":     definition,
 		"criteria_count": len(normCriteria),
 		"dod_count":      len(normDoD),
+		"criteria":       normCriteria,
+		"dod":            normDoD,
 	}
 	if assessment != nil {
 		payload["assessment"] = assessment

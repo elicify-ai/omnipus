@@ -18,6 +18,7 @@ import (
 // test in this file. condition/record are keyed by session id, mirroring the
 // two session-meta fields the real wave-2 wiring reads/writes.
 type fakeGoalRecordAccess struct {
+	goalID    map[string]string
 	condition map[string]string
 	record    map[string]string
 	readErr   error
@@ -26,14 +27,25 @@ type fakeGoalRecordAccess struct {
 }
 
 func newFakeGoalRecordAccess() *fakeGoalRecordAccess {
-	return &fakeGoalRecordAccess{condition: map[string]string{}, record: map[string]string{}}
+	return &fakeGoalRecordAccess{goalID: map[string]string{}, condition: map[string]string{}, record: map[string]string{}}
 }
 
-func (f *fakeGoalRecordAccess) ReadGoalState(sessionID string) (string, string, error) {
+// ReadGoalState mirrors the real wave-2 wiring's invariant (see
+// agentLoopGoalRecordAccess.ReadGoalState's doc comment): GoalID is minted
+// at the SAME moment GoalCondition is first set. Tests that set
+// access.condition[sessionID] directly (most of this file, pre-dating
+// ADR-082 D9) without also setting access.goalID[sessionID] get a
+// deterministic synthesized id here rather than an empty string, so every
+// existing "active goal" fixture keeps behaving like a real activated goal.
+func (f *fakeGoalRecordAccess) ReadGoalState(sessionID string) (string, string, string, error) {
 	if f.readErr != nil {
-		return "", "", f.readErr
+		return "", "", "", f.readErr
 	}
-	return f.condition[sessionID], f.record[sessionID], nil
+	goalID := f.goalID[sessionID]
+	if goalID == "" && f.condition[sessionID] != "" {
+		goalID = "fake-goal-" + sessionID
+	}
+	return goalID, f.condition[sessionID], f.record[sessionID], nil
 }
 
 func (f *fakeGoalRecordAccess) WriteRecord(sessionID, recordJSON string) error {
@@ -648,5 +660,92 @@ func TestSetGoalTool_UpdateDoD_OmittedCarriesForward_ExplicitEmptyResetsFloor(t 
 		if afterReset.DoD[i].ID != want.ID {
 			t.Fatalf("floor DoD item %d id = %q, want %q", i, afterReset.DoD[i].ID, want.ID)
 		}
+	}
+}
+
+// TestSetGoal_ResultCarriesGoalIDAndRecord is T-21 (ADR-082 D9/FR-016,
+// ui-independent-turns-spec.md S-15): the success result must carry
+// goal_id and the FULL registered record (definition/criteria/dod), not
+// just the counts — this is what lets the SPA's dedicated set_goal tool UI
+// render the goal card directly from the call's own result, anchored at
+// the call's position, instead of the deleted GoalThreadTailCards mount
+// (which only ever read the goal_status frame via goalPills). A mode:update
+// (amend) call must report the SAME goal_id — ADR-081/ADR-053: GoalID never
+// changes within a goal generation, only a fresh goal (not exercised here)
+// mints a new one — with the amended record.
+func TestSetGoal_ResultCarriesGoalIDAndRecord(t *testing.T) {
+	const sessionID = "session_goal_result_shape"
+	const agentID = "mia"
+	const wantGoalID = "goal-result-shape-1"
+
+	access := newFakeGoalRecordAccess()
+	access.goalID[sessionID] = wantGoalID
+	access.condition[sessionID] = "an active goal"
+	tool := newSetGoalTool(access)
+
+	type resultPayload struct {
+		Mode          string                     `json:"mode"`
+		GoalID        string                     `json:"goal_id"`
+		Definition    string                     `json:"definition"`
+		CriteriaCount int                        `json:"criteria_count"`
+		DoDCount      int                        `json:"dod_count"`
+		Criteria      []task.AcceptanceCriterion `json:"criteria"`
+		DoD           []task.AcceptanceCriterion `json:"dod"`
+	}
+
+	registerRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"definition": "Ship a playable browser tetris game.",
+		"criteria":   minimalCriteriaArg(),
+	})
+	if registerRes.IsError {
+		t.Fatalf("register failed: %s", registerRes.ForLLM)
+	}
+	var registered resultPayload
+	if err := json.Unmarshal([]byte(registerRes.ForLLM), &registered); err != nil {
+		t.Fatalf("register result does not parse: %v (%q)", err, registerRes.ForLLM)
+	}
+	if registered.GoalID == "" {
+		t.Fatal("register result must carry a non-empty goal_id")
+	}
+	if registered.GoalID != wantGoalID {
+		t.Fatalf("goal_id = %q, want the session's minted id %q", registered.GoalID, wantGoalID)
+	}
+	if registered.Definition != "Ship a playable browser tetris game." {
+		t.Fatalf("result definition = %q, want the registered definition", registered.Definition)
+	}
+	if len(registered.Criteria) != 1 || registered.Criteria[0].Text != "the game is playable end to end" {
+		t.Fatalf("result must carry the FULL criteria array, got %+v", registered.Criteria)
+	}
+	if len(registered.DoD) != 2 {
+		t.Fatalf("result must carry the FULL dod array (floor-backfilled), got %+v", registered.DoD)
+	}
+	if registered.CriteriaCount != len(registered.Criteria) || registered.DoDCount != len(registered.DoD) {
+		t.Fatalf("criteria_count/dod_count must still match the array lengths: counts=%d/%d arrays=%d/%d",
+			registered.CriteriaCount, registered.DoDCount, len(registered.Criteria), len(registered.DoD))
+	}
+
+	amendRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"mode":       "update",
+		"definition": "Ship a playable browser tetris game with sound.",
+		"criteria": []any{
+			map[string]any{"text": "the game is playable end to end", "judgment": "boolean"},
+			map[string]any{"text": "sound effects play on line clear", "judgment": "boolean"},
+		},
+	})
+	if amendRes.IsError {
+		t.Fatalf("amend failed: %s", amendRes.ForLLM)
+	}
+	var amended resultPayload
+	if err := json.Unmarshal([]byte(amendRes.ForLLM), &amended); err != nil {
+		t.Fatalf("amend result does not parse: %v (%q)", err, amendRes.ForLLM)
+	}
+	if amended.GoalID != registered.GoalID {
+		t.Fatalf("amend must report the SAME goal_id as register, got %q want %q", amended.GoalID, registered.GoalID)
+	}
+	if amended.Definition != "Ship a playable browser tetris game with sound." {
+		t.Fatalf("amended result definition = %q, want the amended definition", amended.Definition)
+	}
+	if len(amended.Criteria) != 2 {
+		t.Fatalf("amended result must carry the amended (2-item) criteria array, got %+v", amended.Criteria)
 	}
 }

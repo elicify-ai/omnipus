@@ -33,20 +33,23 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 	access := agentLoopGoalRecordAccess{al: al}
 
 	t.Run("read_no_active_goal", func(t *testing.T) {
-		cond, rec, err := access.ReadGoalState(sid)
+		goalID, cond, rec, err := access.ReadGoalState(sid)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cond != "" || rec != "" {
-			t.Fatalf("a fresh session must read empty condition/record, got %q/%q", cond, rec)
+		if goalID != "" || cond != "" || rec != "" {
+			t.Fatalf("a fresh session must read empty goal id/condition/record, got %q/%q/%q", goalID, cond, rec)
 		}
 	})
 
 	t.Run("read_active_goal_empty_record", func(t *testing.T) {
 		setActiveGoalRecordless(t, store, sid, "goal-r1", "build a game")
-		cond, rec, err := access.ReadGoalState(sid)
+		goalID, cond, rec, err := access.ReadGoalState(sid)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if goalID != "goal-r1" {
+			t.Fatalf("goal id = %q, want the minted id (ADR-082 D9/FR-016)", goalID)
 		}
 		if cond != "build a game" {
 			t.Fatalf("condition = %q, want the active condition", cond)
@@ -63,7 +66,7 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 		if err := access.WriteRecord(sid, recordJSON); err != nil {
 			t.Fatalf("WriteRecord: %v", err)
 		}
-		_, rec, err := access.ReadGoalState(sid)
+		_, _, rec, err := access.ReadGoalState(sid)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +76,7 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 	})
 
 	t.Run("read_unknown_session_errors", func(t *testing.T) {
-		if _, _, err := access.ReadGoalState("no-such-session"); err == nil {
+		if _, _, _, err := access.ReadGoalState("no-such-session"); err == nil {
 			t.Fatal("an unresolvable session must return an error, not a silent empty read")
 		}
 	})

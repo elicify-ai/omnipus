@@ -1606,17 +1606,23 @@ function evictGoalPillsOverCap(pills: Record<string, GoalStatusFrame>): Record<s
  * `definition` — only the `set_goal` post-write emission populates the
  * record. Wholesale-replacing the stored pill on every frame (the previous
  * behavior) meant the very next routine frame after registration clobbered
- * the record-carrying pill, `GoalThreadTailCards`' `criteria.length>0`
- * filter went false, and the card unmounted seconds after appearing — until
- * the next `set_goal` write re-populated it.
+ * the record-carrying pill — the pre-ADR-082 thread-tail card component
+ * (retired; read `goalPills` as its ONLY source) lost its
+ * `criteria.length>0` filter and unmounted seconds after appearing, until
+ * the next `set_goal` write re-populated it. ADR-082 D9 moved the record
+ * card's primary source to each `set_goal` call's OWN result (SetGoalToolUI/
+ * SetGoalCardBlock) — `goalPills` is now the progress OVERLAY only (state/
+ * round/per-criterion status by goal_id) — but this merge rule still
+ * matters: the overlay reads the SAME map, and a criteria-less routine push
+ * clobbering the last known criteria/dod here would still corrupt what
+ * per-criterion status gets matched onto the card by text.
  *
  * Rule (see the case 'goal_status' comment for why): a frame that DOES
  * carry `criteria` always wins wholesale (it IS a fresh record — either the
  * initial author or a `set_goal(mode: update)` steering revision). A
  * terminal/cleared frame (`done`/`failed`/`cleared`) also always wins
  * wholesale — record display ends with the goal regardless of what was
- * stored, and GoalThreadTailCards never renders a terminal pill's record
- * anyway. Otherwise (incoming carries no criteria AND is non-terminal —
+ * stored. Otherwise (incoming carries no criteria AND is non-terminal —
  * i.e. a routine `active`/`judging`/`waiting_on_user`/... progress push)
  * carry the stored `criteria`/`dod`/`definition` forward while taking every
  * other field (state/round/reason/accounting) from the incoming frame — the
