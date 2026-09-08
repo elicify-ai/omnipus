@@ -111,7 +111,7 @@ func writeHeader(b *strings.Builder, r generated.VaultFindResponse) {
 		// is yes, so it is genuinely the first.
 		b.WriteString(" — 0 records matched")
 	default:
-		b.WriteString(fmt.Sprintf(" — %d of %d shown", r.Counts.Shown, r.Counts.Evaluated))
+		fmt.Fprintf(b, " — %d of %d shown", r.Counts.Shown, r.Counts.Evaluated)
 	}
 	if r.NextCursor != nil && *r.NextCursor != "" {
 		b.WriteString(" (more: cursor " + *r.NextCursor + ")")
@@ -121,8 +121,8 @@ func writeHeader(b *strings.Builder, r generated.VaultFindResponse) {
 	b.WriteString("QUERY: " + r.QueryEcho + "\n")
 
 	if r.Index != nil {
-		b.WriteString(fmt.Sprintf("INDEX: %d of %d returned records agree across both indexes",
-			r.Index.Agreeing, r.Index.Returned))
+		fmt.Fprintf(b, "INDEX: %d of %d returned records agree across both indexes",
+			r.Index.Agreeing, r.Index.Returned)
 		if r.Index.Epoch != nil {
 			b.WriteString("; index_epoch " + strconv.FormatInt(*r.Index.Epoch, 10))
 		}
@@ -161,8 +161,8 @@ func writeRows(b *strings.Builder, r generated.VaultFindResponse) {
 	}
 
 	if r.Elided != nil && *r.Elided > 0 {
-		b.WriteString(fmt.Sprintf("… %d more row(s) evaluated, not shown — beyond the response budget",
-			*r.Elided))
+		fmt.Fprintf(b, "… %d more row(s) evaluated, not shown — beyond the response budget",
+			*r.Elided)
 		if r.ElidedSummary != nil && *r.ElidedSummary != "" {
 			b.WriteString(" (" + *r.ElidedSummary + ")")
 		}
@@ -195,7 +195,7 @@ func renderRowLine(row generated.VaultFindRow, idW, titleW int) string {
 		if row.Text != nil {
 			text = *row.Text
 		}
-		b.WriteString(fmt.Sprintf(":%d  [%s]  %s", *row.Line, status, text))
+		fmt.Fprintf(&b, ":%d  [%s]  %s", *row.Line, status, text)
 		return b.String()
 	}
 
@@ -319,7 +319,7 @@ func writeProblems(b *strings.Builder, r generated.VaultFindResponse) {
 	if len(r.Problems) == 0 {
 		return
 	}
-	b.WriteString(fmt.Sprintf("\nPROBLEMS (%d)\n", len(r.Problems)))
+	fmt.Fprintf(b, "\nPROBLEMS (%d)\n", len(r.Problems))
 	for _, p := range r.Problems {
 		b.WriteString("  ")
 		if len(p.Records) > 0 {

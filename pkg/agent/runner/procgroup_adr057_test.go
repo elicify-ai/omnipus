@@ -34,7 +34,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -138,10 +137,6 @@ func u22AssertGroupKillReapsGrandchild(t *testing.T, pidFile string, cancel func
 // just the direct `claude` process, so a subprocess tree the CLI spawned
 // does not survive as an orphan.
 func TestU22ClaudeDriver_CancelKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script; FR-029 group-kill is POSIX-only")
-	}
-
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	stub := u22ProcessGroupStubScript(t, pidFile)
 
@@ -165,10 +160,6 @@ func TestU22ClaudeDriver_CancelKillsProcessGroup(t *testing.T) {
 //
 //nolint:dupl // parallel test scaffolding intentionally mirrors the claude/opencode variants (same mechanism, different driver/bin var)
 func TestU22CodexDriver_CancelKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script; FR-029 group-kill is POSIX-only")
-	}
-
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	stub := u22ProcessGroupStubScript(t, pidFile)
 
@@ -192,10 +183,6 @@ func TestU22CodexDriver_CancelKillsProcessGroup(t *testing.T) {
 //
 //nolint:dupl // parallel test scaffolding intentionally mirrors the claude/codex variants (same mechanism, different driver/bin var)
 func TestU22OpencodeDriver_CancelKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script; FR-029 group-kill is POSIX-only")
-	}
-
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	stub := u22ProcessGroupStubScript(t, pidFile)
 
@@ -220,10 +207,6 @@ func TestU22OpencodeDriver_CancelKillsProcessGroup(t *testing.T) {
 // Mirrors pkg/sandbox/hardened_exec_pgroup_test.go's
 // TestInstallProcessGroupCancel_SetsCancel for the same shape of guard.
 func TestU22SetupProcessGroup_InstallsGroupCancel(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Setpgid / group-kill cmd.Cancel override is POSIX-only (FR-029)")
-	}
-
 	cmd := exec.Command("true")
 	u22SetupProcessGroup(cmd)
 	u22InstallGroupCancel(cmd)
