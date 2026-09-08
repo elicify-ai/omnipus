@@ -232,6 +232,72 @@ func TestGrepTool_SecretCarveOutIsHonoured(t *testing.T) {
 	})
 }
 
+// TestGrepTool_ScopeSingleFile_CarveOutFileStillRefused is DEFECT-G1(a)'s own
+// carve-out requirement: naming a secret DIRECTLY as `path` — the shape a
+// single-file scope newly supports — must not become a way around the
+// carve-out subtraction that already applies to a directory scope
+// (guardCarveOuts wraps a single-file root exactly as it wraps a directory
+// root; see resolveScopedRoot). Every seeded secret's PARENT directory is
+// $OMNIPUS_HOME itself (seedCarveOutFixture), which is precisely the shape
+// carveOutFS's exhaustive per-entry check exists for (see
+// TestGrepCarveOutFastPathPremise) — so scoping straight at one of these
+// files exercises that check via the file-scope path instead of a directory
+// walk reaching it.
+func TestGrepTool_ScopeSingleFile_CarveOutFileStillRefused(t *testing.T) {
+	work, _, _ := seedCarveOutFixture(t)
+	tool, ctx := newCarveOutGrepTool(t, work)
+
+	for _, tc := range []struct {
+		name   string
+		scope  string
+		secret string
+	}{
+		{"master.key", "host/omnipus/master.key", "deadbeefCARVEOUTMASTERKEY"},
+		{"credentials.json", "host/omnipus/credentials.json", "sk-CARVEOUT-CREDENTIAL"},
+		{"cli.token", "host/omnipus/cli.token", "sk-CARVEOUT-CLITOKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := tool.Execute(ctx, map[string]any{"pattern": tc.secret, "path": tc.scope})
+			if res.IsError {
+				// A refusal (e.g. "does not exist" — the carve-out having
+				// already pruned it from the parent's own listing before
+				// grep's `path` resolution ever sees it as a candidate) is
+				// an ACCEPTABLE way to hold the guarantee; the only
+				// unacceptable outcome is the secret's content or an
+				// unambiguous confirmation of its existence leaking.
+				t.Logf("refused with an error (acceptable): %s", res.ForLLM)
+				return
+			}
+			// Asserted on the match COUNT, not a bare substring check for
+			// tc.secret — the rendered pattern echo at the top of every
+			// result repeats the query verbatim (grep_carveout_test.go's
+			// existing "hard link aliasing" case makes the same point), and
+			// here the query IS the secret, so a substring check would flag
+			// the echo itself as a "leak" even at zero real hits.
+			if !strings.Contains(res.ForLLM, "0 match(es)") {
+				t.Fatalf("a single-file scope named directly at a carved-out secret produced a real hit "+
+					"instead of 0 match(es):\n%s", res.ForLLM)
+			}
+		})
+	}
+
+	// Control: an ordinary (non-secret) file in the SAME mount, scoped
+	// directly by path, must still work — the carve-out suppresses the
+	// secret set specifically, not single-file scoping as a feature.
+	t.Run("an ordinary file in the same mount is still reachable by direct path", func(t *testing.T) {
+		res := tool.Execute(ctx, map[string]any{
+			"pattern": "sk-ORDINARY-PROJECT-FILE",
+			"path":    "host/project/notes.txt",
+		})
+		if res.IsError {
+			t.Fatalf("an ordinary file must remain scopable by direct path: %s", res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, "host/project/notes.txt:1:") {
+			t.Fatalf("expected a hit at host/project/notes.txt, got:\n%s", res.ForLLM)
+		}
+	})
+}
+
 // TestGrepCarveOutFastPathPremise pins the structural fact carveOutFS's
 // ReadDir fast path rests on: every carve-out root is a DIRECT CHILD of
 // $OMNIPUS_HOME. That is what makes "only $OMNIPUS_HOME's own listing needs

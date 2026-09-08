@@ -15,9 +15,11 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -116,19 +118,26 @@ func (t *GrepTool) Parameters() map[string]any {
 			},
 			"path": map[string]any{
 				"type": "string",
-				"description": "Narrow the search to one subdirectory of your workspace, or to one mounted " +
-					"folder by its mount name (optionally followed by a subpath, e.g. \"my-mount/src\"). " +
-					"Omit to search your whole workspace root plus every mount.",
+				"description": "Narrow the search to one subdirectory of your workspace, one mounted folder by " +
+					"its mount name (optionally followed by a subpath, e.g. \"my-mount/src\"), or a single FILE " +
+					"(e.g. \"src/main.go\" or \"my-mount/notes.txt\") to search just that one file. Omit to " +
+					"search your whole workspace root plus every mount.",
 			},
 			"include_globs": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Only report files whose path matches at least one of these doublestar globs (e.g. \"**/*.go\").",
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Only report files whose path matches at least one of these doublestar globs (e.g. \"**/*.go\"). " +
+					"A pattern matches the WHOLE path relative to the search root, not just the filename: a bare " +
+					"\"name.ext\" only matches a file sitting AT the root, never one in a subdirectory — write " +
+					"\"**/name.ext\" to match that file at any depth. A glob that matches nothing is never a silent " +
+					"no-op — the result states how many files it filtered out.",
 			},
 			"exclude_globs": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Never report files whose path matches any of these doublestar globs.",
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Never report files whose path matches any of these doublestar globs. Same anchoring " +
+					"rule as include_globs: a pattern matches the whole relative path, so a bare \"name.ext\" only " +
+					"excludes a root-level file — use \"**/name.ext\" to exclude it at any depth.",
 			},
 			"context_lines": map[string]any{
 				"type":        "integer",
@@ -362,33 +371,26 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 	if scope != "" {
 		if idx, rest, matched := splitGrepScopeMount(scope, mounts); matched {
 			m := mounts[idx]
-			name := m.Name
-			var fsys fs.FS
-			var scopePrefix string
-			var ancestor []filegrep.AncestorIgnoreLayer
+			var root filegrep.Root
 			mr, mErr := os.OpenRoot(m.HostPath)
 			if mErr != nil {
-				fsys = unreachableRootFS{err: mErr}
+				// FR-021: a dead mount is root_lost, not a request error —
+				// same unreachableRootFS carrier the default full-workspace
+				// search uses below for the identical failure.
+				root = filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}}
 			} else {
 				opened = append(opened, mr)
-				anchor, confined := m.HostPath, mr.FS()
-				if rest != "" {
-					ancestor = filegrep.LoadAncestorIgnore(mr.FS(), rest)
-					sub, sErr := mr.OpenRoot(rest)
-					if sErr != nil {
-						return nil, closeAll, fmt.Errorf("path %q not found inside mount %q: %w", rest, m.Name, sErr)
+				if rest == "" {
+					root = filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)}
+				} else {
+					r, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, &opened)
+					if rErr != nil {
+						return nil, closeAll, rErr
 					}
-					opened = append(opened, sub)
-					anchor, confined = filepath.Join(m.HostPath, filepath.FromSlash(rest)), sub.FS()
-					name = m.Name + "/" + rest
-					scopePrefix = rest
+					root = r
 				}
-				fsys = guardCarveOuts(anchor, confined, policy)
 			}
-			return []filegrep.Root{{
-				Name: name, FS: fsys,
-				ScopePrefix: scopePrefix, AncestorIgnore: ancestor,
-			}}, closeAll, nil
+			return []filegrep.Root{root}, closeAll, nil
 		}
 
 		wr, wErr := os.OpenRoot(policy.WorkDir)
@@ -396,17 +398,11 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 			return nil, closeAll, fmt.Errorf("cannot open your workspace root: %w", wErr)
 		}
 		opened = append(opened, wr)
-		ancestor := filegrep.LoadAncestorIgnore(wr.FS(), scope)
-		sub, sErr := wr.OpenRoot(scope)
-		if sErr != nil {
-			return nil, closeAll, fmt.Errorf("path %q not found in your workspace: %w", scope, sErr)
+		root, rErr := t.resolveScopedRoot(wr, policy.WorkDir, scope, "", "your workspace", policy, &opened)
+		if rErr != nil {
+			return nil, closeAll, rErr
 		}
-		opened = append(opened, sub)
-		anchor := filepath.Join(policy.WorkDir, filepath.FromSlash(scope))
-		return []filegrep.Root{{
-			Name: scope, FS: guardCarveOuts(anchor, sub.FS(), policy),
-			ScopePrefix: scope, AncestorIgnore: ancestor,
-		}}, closeAll, nil
+		return []filegrep.Root{root}, closeAll, nil
 	}
 
 	wr, wErr := os.OpenRoot(policy.WorkDir)
@@ -425,6 +421,188 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 		roots = append(roots, filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)})
 	}
 	return roots, closeAll, nil
+}
+
+// resolveScopedRoot resolves subPath (relative to container, whose real host
+// directory is containerHostPath) into exactly one filegrep.Root, routing on
+// what subPath ACTUALLY IS rather than assuming it names a directory
+// (DEFECT-G1, field report): (*os.Root).OpenRoot only ever opens a
+// directory, and calling it on an existing FILE fails with an opaque
+// platform-specific error (on macOS/Linux, a bare "not a directory" that
+// is neither fs.ErrNotExist nor syscall.ENOTDIR by errors.Is — verified
+// experimentally, not assumed) — which the old code wrapped as "not found
+// in your workspace" regardless of what the real problem was. An agent who
+// had just confirmed the file existed with `ls` was told, three calls
+// running, that it did not.
+//
+// Stat'ing subPath FIRST and branching on what it reports removes the
+// ambiguity at the source: OpenRoot is now only ever called on something
+// already confirmed to be a directory, so its own error, if any, means a
+// genuine race (e.g. the directory was replaced between the Stat and the
+// Open) rather than a routing mistake.
+//
+//   - A directory keeps exactly the prior behavior: a further-confined
+//     os.Root, with the ancestor .gitignore/.ignore layers above it
+//     preserved (F8).
+//   - A regular file becomes a SINGLE-FILE search: the file's PARENT
+//     directory is opened as the confined root (os.Root can only confine a
+//     directory), and singleEntryFS narrows that root's own listing to
+//     exactly that one child. Every other engine rule that would apply to
+//     the file if a directory walk had discovered it — hidden-dot pruning,
+//     .gitignore/.ignore (the walk's own layer for the parent directory,
+//     plus these same preserved ancestor layers above IT), and
+//     include_globs/exclude_globs — still runs against that one entry
+//     exactly as it would during an ordinary walk. A caller who ALSO
+//     supplied include_globs/exclude_globs therefore gets the natural AND:
+//     the named file must also pass those globs to produce a hit, not a
+//     second, competing notion of "the scope". The carve-out guard
+//     (guardCarveOuts) wraps this exactly as it wraps a directory scope, so
+//     a carved-out secret named directly as `path` is still refused — see
+//     grep_carveout_test.go's file-scope case.
+//   - Anything else (a socket, device, FIFO, or a symlink loop that somehow
+//     resolves to neither) is refused with a message naming what it
+//     actually is, never a claim that it does not exist.
+//
+// namePrefix is the reported-path prefix already established for container
+// ("" for the workspace root, the mount name for a mount); label names
+// container in a caller-facing sentence ("your workspace", `mount "x"`).
+// *opened accumulates every os.Root this opens so grepRoots' single
+// closeAll can close them all on the caller's defer.
+func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subPath, namePrefix, label string, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, error) {
+	info, statErr := container.Stat(subPath)
+	if statErr != nil {
+		return filegrep.Root{}, grepScopeStatError(subPath, label, statErr)
+	}
+
+	switch {
+	case info.IsDir():
+		ancestor := filegrep.LoadAncestorIgnore(container.FS(), subPath)
+		sub, sErr := container.OpenRoot(subPath)
+		if sErr != nil {
+			return filegrep.Root{}, fmt.Errorf("path %q in %s could not be opened as a directory: %w", subPath, label, sErr)
+		}
+		*opened = append(*opened, sub)
+		anchor := filepath.Join(containerHostPath, filepath.FromSlash(subPath))
+		name := subPath
+		if namePrefix != "" {
+			name = namePrefix + "/" + subPath
+		}
+		return filegrep.Root{
+			Name: name, FS: guardCarveOuts(anchor, sub.FS(), policy),
+			ScopePrefix: subPath, AncestorIgnore: ancestor,
+		}, nil
+
+	case info.Mode().IsRegular():
+		parentRel := path.Dir(subPath)
+		base := path.Base(subPath)
+
+		parent := container
+		if parentRel != "." {
+			p, pErr := container.OpenRoot(parentRel)
+			if pErr != nil {
+				return filegrep.Root{}, fmt.Errorf("path %q in %s could not be opened: %w", subPath, label, pErr)
+			}
+			*opened = append(*opened, p)
+			parent = p
+		}
+
+		var ancestor []filegrep.AncestorIgnoreLayer
+		scopePrefix := ""
+		name := namePrefix
+		if parentRel != "." {
+			ancestor = filegrep.LoadAncestorIgnore(container.FS(), parentRel)
+			scopePrefix = parentRel
+			if namePrefix != "" {
+				name = namePrefix + "/" + parentRel
+			} else {
+				name = parentRel
+			}
+		}
+
+		anchor := filepath.Join(containerHostPath, filepath.FromSlash(parentRel))
+		fsys := guardCarveOuts(anchor, singleEntryFS{fsys: parent.FS(), name: base}, policy)
+		return filegrep.Root{
+			Name: name, FS: fsys, ScopePrefix: scopePrefix, AncestorIgnore: ancestor,
+		}, nil
+
+	default:
+		return filegrep.Root{}, fmt.Errorf(
+			"path %q in %s is a %s, not a directory or a regular file — grep can only search directories and regular files",
+			subPath, label, info.Mode().Type())
+	}
+}
+
+// grepScopeStatError turns a failed Stat on a `path` argument into a message
+// that states what is actually true (DEFECT-G1's (b) requirement): the old
+// code's single blanket "not found" sentence fired even when the real
+// problem was "found, but it's a file" or "found, but permission was
+// denied" or "the path escapes the workspace through a symlink" — every one
+// of those produced the identical, sometimes false, wording. This routes on
+// the real error instead.
+func grepScopeStatError(subPath, label string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("path %q does not exist in %s", subPath, label)
+	case errors.Is(err, fs.ErrPermission):
+		return fmt.Errorf("path %q exists in %s but could not be read (permission denied): %w", subPath, label, err)
+	default:
+		// Neither "not found" nor "permission denied" — e.g. a path
+		// component treats a file as a directory, or a symlink escapes the
+		// confined root. Surface the engine's own reason via %w rather than
+		// guessing; it is truthful even when it isn't maximally specific.
+		return fmt.Errorf("path %q in %s could not be resolved: %w", subPath, label, err)
+	}
+}
+
+// singleEntryFS narrows a directory FS to expose exactly one named entry —
+// the file grep's `path` argument resolved to when it names a regular file
+// rather than a directory (see resolveScopedRoot). os.Root can only be
+// opened on a directory, so a file-scoped search opens the file's PARENT as
+// the confined root and uses this wrapper to restrict what that root's own
+// listing (and therefore the walk) can see to that one child; the walk
+// itself still applies every other per-entry rule (hidden-dot pruning,
+// .gitignore/.ignore, include_globs/exclude_globs) to the one entry it is
+// shown, exactly as it would if that file had been discovered during an
+// ordinary directory walk.
+type singleEntryFS struct {
+	fsys fs.FS
+	name string // the one visible entry's base name
+}
+
+func (s singleEntryFS) Open(name string) (fs.File, error) {
+	if name == "." {
+		return s.fsys.Open(name)
+	}
+	if name != s.name {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	return s.fsys.Open(name)
+}
+
+func (s singleEntryFS) Stat(name string) (fs.FileInfo, error) {
+	if name == "." {
+		return fs.Stat(s.fsys, name)
+	}
+	if name != s.name {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
+	}
+	return fs.Stat(s.fsys, name)
+}
+
+func (s singleEntryFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if name != "." && name != "" {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
+	}
+	entries, err := fs.ReadDir(s.fsys, ".")
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.Name() == s.name {
+			return []fs.DirEntry{e}, nil
+		}
+	}
+	return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
 }
 
 // guardCarveOuts wraps an os.Root-backed fs.FS so that no path the secret
@@ -866,6 +1044,31 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 
 	if len(res.Hits) == 0 {
 		b.WriteString("(no hits)\n")
+		// OBS-G1: a zero-hit result caused by include_globs/exclude_globs
+		// filtering out every candidate is otherwise indistinguishable from
+		// "the term genuinely is not there" — the stats footer below states
+		// the count either way, but that footer is exactly what
+		// grepCapOutput's cap slices away first on a large result, and on a
+		// SMALL (here, zero-hit) result a reader has no reason to scan all
+		// the way down to it. Stating the cause here, right next to the
+		// verdict it explains, makes the two outcomes look different instead
+		// of identical.
+		if res.Stats.FilesFilteredGlob > 0 {
+			fmt.Fprintf(&b, "%d file(s)/director(ies) were excluded by include_globs/exclude_globs before any "+
+				"match was attempted — this alone can produce a zero-hit result even when the term exists.",
+				res.Stats.FilesFilteredGlob)
+			// "Large relative to files visited" (spec wording): more got
+			// filtered out than survived to be searched — the shape a
+			// mis-anchored bare filename glob produces (e.g. "spike.txt"
+			// instead of "**/spike.txt"), as opposed to a glob that
+			// legitimately narrowed a big tree down to a few files.
+			if res.Stats.FilesFilteredGlob > res.Stats.FilesVisited {
+				b.WriteString(" doublestar patterns match the WHOLE relative path, not just a filename: a bare " +
+					"\"name.ext\" only matches a file sitting AT the search root, never one in a subdirectory — " +
+					"use \"**/name.ext\" to match at any depth.")
+			}
+			b.WriteString("\n")
+		}
 	} else {
 		for _, h := range res.Hits {
 			if h.Kind == filegrep.KindName {
@@ -900,6 +1103,9 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 	}
 	if res.Stats.HitsCappedPerFile > 0 {
 		fmt.Fprintf(&b, ", %d file(s) hit the per-file match cap", res.Stats.HitsCappedPerFile)
+	}
+	if res.Stats.FilesFilteredGlob > 0 {
+		fmt.Fprintf(&b, ", %d file(s)/director(ies) excluded by include_globs/exclude_globs", res.Stats.FilesFilteredGlob)
 	}
 	b.WriteString("\n")
 	// The truncated/reason verdict is already stated at the top (see above)
