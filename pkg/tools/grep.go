@@ -383,7 +383,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 					name = m.Name + "/" + rest
 					scopePrefix = rest
 				}
-				fsys = guardCarveOuts(anchor, home, confined, policy)
+				fsys = guardCarveOuts(anchor, confined, policy)
 			}
 			return []filegrep.Root{{
 				Name: name, FS: fsys,
@@ -404,7 +404,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 		opened = append(opened, sub)
 		anchor := filepath.Join(policy.WorkDir, filepath.FromSlash(scope))
 		return []filegrep.Root{{
-			Name: scope, FS: guardCarveOuts(anchor, home, sub.FS(), policy),
+			Name: scope, FS: guardCarveOuts(anchor, sub.FS(), policy),
 			ScopePrefix: scope, AncestorIgnore: ancestor,
 		}}, closeAll, nil
 	}
@@ -414,7 +414,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 		return nil, closeAll, fmt.Errorf("cannot open your workspace root: %w", wErr)
 	}
 	opened = append(opened, wr)
-	roots := []filegrep.Root{{Name: "", FS: guardCarveOuts(policy.WorkDir, home, wr.FS(), policy)}}
+	roots := []filegrep.Root{{Name: "", FS: guardCarveOuts(policy.WorkDir, wr.FS(), policy)}}
 	for _, m := range mounts {
 		mr, mErr := os.OpenRoot(m.HostPath)
 		if mErr != nil {
@@ -422,7 +422,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 			continue
 		}
 		opened = append(opened, mr)
-		roots = append(roots, filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, home, mr.FS(), policy)})
+		roots = append(roots, filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)})
 	}
 	return roots, closeAll, nil
 }
@@ -446,9 +446,11 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 // mount is never silently dropped"), so the coverage loss is stated to the
 // caller rather than silently taken.
 //
-// home is $OMNIPUS_HOME. An empty or unresolvable home makes every directory
-// take the exhaustive listing path below — the conservative direction.
-func guardCarveOuts(hostAbs, home string, fsys fs.FS, policy fspolicy.FSPolicy) fs.FS {
+// Every question the guard asks — both the deny decision and the decision to
+// run the exhaustive listing filter — is answered from policy alone. There is
+// no separately-sourced $OMNIPUS_HOME parameter, because two sources for one
+// identity can disagree: see carveOutRootHomes.
+func guardCarveOuts(hostAbs string, fsys fs.FS, policy fspolicy.FSPolicy) fs.FS {
 	resolved, err := resolveRealpathUnderWorkDir(hostAbs, "")
 	if err != nil {
 		logger.WarnCF("tool", "grep: cannot resolve a search root — refusing to search it unguarded", map[string]any{
@@ -456,13 +458,88 @@ func guardCarveOuts(hostAbs, home string, fsys fs.FS, policy fspolicy.FSPolicy) 
 		})
 		return unreachableRootFS{err: err}
 	}
-	guard := carveOutFS{fsys: fsys, root: resolved, policy: policy}
-	if home != "" {
-		if info, sErr := os.Stat(home); sErr == nil {
-			guard.home = info
-		}
+	return carveOutFS{
+		fsys:            fsys,
+		root:            resolved,
+		policy:          policy,
+		carveOutHomes:   carveOutRootHomes(policy),
+		hasCarveOutRoot: len(policy.CarveOuts) > 0,
 	}
-	return guard
+}
+
+// GuardCarveOuts is guardCarveOuts for callers outside this package.
+//
+// It exists because pkg/filegrep has TWO consumers — this package's `grep`
+// tool and the gateway's Library file-search endpoint
+// (pkg/gateway/rest_library_files_search.go) — and the engine's own contract
+// is that "confinement is the CALLER's job". Both callers face the identical
+// installation shape: a mount on an ancestor of $OMNIPUS_HOME, which
+// workspace.CheckMountTarget warns about rather than refusing, puts
+// credentials.json / master.key / cli.token / auth.json / the config backups /
+// system/audit.jsonl inside a searchable root.
+//
+// It is EXPORTED rather than reimplemented next to the second caller on
+// purpose: two independent deny implementations that can disagree is a worse
+// outcome than the bug either of them was written to fix. pkg/gateway already
+// imports pkg/tools, so this needs no new dependency edge and creates no cycle
+// (pkg/tools imports pkg/gateway/middleware, a different package).
+//
+// pkg/fspolicy would be the more natural home on merit — it owns IsCarveOut,
+// the predicate this delegates to — but that package is deliberately a
+// stdlib-only leaf (its own doc comment: importing pkg/tools or pkg/sandbox
+// there would be an import cycle), and this wrapper needs this package's
+// realpath resolver and the logger. pkg/tools is the closest package that can
+// hold it without breaking that constraint.
+//
+// hostAbs is the host directory fsys is anchored at; policy supplies both the
+// carve-out roots and the WorkDir whose own-tree exception keeps a caller's
+// own files readable. See guardCarveOuts and carveOutFS for the full contract.
+func GuardCarveOuts(hostAbs string, fsys fs.FS, policy fspolicy.FSPolicy) fs.FS {
+	return guardCarveOuts(hostAbs, fsys, policy)
+}
+
+// carveOutRootHomes returns the directories that DIRECTLY CONTAIN policy's own
+// carve-out roots, stat'd for identity comparison — in every production policy
+// that is exactly one directory, $OMNIPUS_HOME.
+//
+// The identity is derived from the carve-out entries the deny check itself
+// consults, never from a separately-sourced home path. Those were two values
+// until this function existed: the deny decision judged against
+// policy.CarveOuts (built by EffectiveFSPolicy from its own resolved root)
+// while the decision to RUN the exhaustive listing filter judged against
+// config.OmnipusHomeDir(). A policy whose CarveOuts came from a different root
+// — a re-rooted policy, a test-constructed one, a future multi-home shape —
+// made the two disagree, and the filter then never ran where the carve-out
+// roots actually live: master.key, credentials.json, cli.token and auth.json
+// became listable and NAME-matchable. Open() still refused their CONTENT, so
+// that failure was invisible to any content-leak assertion.
+//
+// filepath.Dir is the correct derivation because every carve-out root is a
+// direct child of $OMNIPUS_HOME (fspolicy's appCarveOutSecretPaths, and the
+// backup-prefix rule likewise covers only files sitting directly in it).
+// fspolicy.CoversSecretBackup already anchors on the carve-out roots this same
+// way, for this same reason — this is that precedent applied to the second
+// place the question is asked, not a new rule.
+//
+// Returns nil when any parent cannot be stat'd, which makes holdsCarveOutRoots
+// answer "yes" for every directory and take the exhaustive path — the
+// conservative direction.
+func carveOutRootHomes(policy fspolicy.FSPolicy) []os.FileInfo {
+	seen := make(map[string]struct{}, len(policy.CarveOuts))
+	out := make([]os.FileInfo, 0, 1)
+	for _, root := range policy.CarveOuts {
+		parent := filepath.Dir(filepath.Clean(root))
+		if _, dup := seen[parent]; dup {
+			continue
+		}
+		seen[parent] = struct{}{}
+		info, err := os.Stat(parent)
+		if err != nil {
+			return nil
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // carveOutFS subtracts the secret carve-out from one confined root.
@@ -526,9 +603,17 @@ func guardCarveOuts(hostAbs, home string, fsys fs.FS, policy fspolicy.FSPolicy) 
 // CONTENT stays refused, because Open runs the full check.
 type carveOutFS struct {
 	fsys   fs.FS
-	root   string      // absolute, symlink-resolved host path fsys is anchored at
-	home   os.FileInfo // $OMNIPUS_HOME, for identity comparison; nil disables the fast path
+	root   string // absolute, symlink-resolved host path fsys is anchored at
 	policy fspolicy.FSPolicy
+	// carveOutHomes are the directories directly containing policy.CarveOuts'
+	// own roots, stat'd for identity comparison — $OMNIPUS_HOME in every
+	// production policy. Empty means "could not be answered"; with
+	// hasCarveOutRoot set that forces the exhaustive path everywhere.
+	carveOutHomes []os.FileInfo
+	// hasCarveOutRoot records whether policy.CarveOuts holds anything at all,
+	// which is what distinguishes "nothing to suppress" from "cannot tell
+	// where the roots are".
+	hasCarveOutRoot bool
 }
 
 // abs maps one slash-separated path relative to the root onto its host path.
@@ -589,22 +674,44 @@ func (c carveOutFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	return kept, nil
 }
 
-// holdsCarveOutRoots reports whether this directory is $OMNIPUS_HOME — the
-// only directory whose entries can be carve-out roots or secret backups (see
-// carveOutFS's doc comment). Compared by filesystem identity, never by bytes:
-// on a case-insensitive volume $OMNIPUS_HOME and $OMNIPUS_home are one
-// directory and two strings, and it is the deny side that must not be fooled.
-// Anything unanswerable — no home to compare against, an unstattable
-// directory — returns true, so the exhaustive check runs.
+// holdsCarveOutRoots reports whether this directory directly contains any of
+// policy.CarveOuts' own roots — the only directory whose entries can be
+// carve-out roots or secret backups (see carveOutFS's doc comment). In every
+// production policy that is exactly $OMNIPUS_HOME.
+//
+// The directories it compares against are derived from policy.CarveOuts, the
+// same list the deny decision consults (carveOutRootHomes), so the existence
+// filter and the deny check can no longer disagree about where the secrets
+// live.
+//
+// Compared by filesystem identity, never by bytes: on a case-insensitive
+// volume $OMNIPUS_HOME and $OMNIPUS_home are one directory and two strings,
+// and it is the deny side that must not be fooled. Anything unanswerable — an
+// unstattable directory, carve-out roots whose parents could not be stat'd —
+// returns true, so the exhaustive check runs.
+//
+// A policy with NO carve-out roots returns false rather than true: with an
+// empty CarveOuts list, denied() cannot refuse any entry (every leg of
+// fspolicy.IsCarveOut — the backup prefix rule, the hard-link alias leg, and
+// the per-root loop — iterates that same empty list), so the exhaustive filter
+// would stat every entry's whole ancestor chain to reach a foregone "keep".
 func (c carveOutFS) holdsCarveOutRoots(name string) bool {
-	if c.home == nil {
+	if !c.hasCarveOutRoot {
+		return false
+	}
+	if len(c.carveOutHomes) == 0 {
 		return true
 	}
 	info, err := os.Stat(c.abs(name))
 	if err != nil {
 		return true
 	}
-	return os.SameFile(info, c.home)
+	for _, home := range c.carveOutHomes {
+		if os.SameFile(info, home) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitGrepScopeMount reports whether scope's first path segment names one
