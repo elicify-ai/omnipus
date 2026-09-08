@@ -28,6 +28,14 @@ type captureFrameTracker struct { // not-wire-format: capture-local state machin
 }
 
 func (f *captureFrameTracker) begin(geometry captureFrameGeometry) (captureFrameSnapshot, error) {
+	return f.beginTransition(geometry, false)
+}
+
+func (f *captureFrameTracker) beginForced(geometry captureFrameGeometry) (captureFrameSnapshot, error) {
+	return f.beginTransition(geometry, true)
+}
+
+func (f *captureFrameTracker) beginTransition(geometry captureFrameGeometry, force bool) (captureFrameSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if strings.TrimSpace(geometry.TargetID) == "" || len(geometry.TargetID) > 128 ||
@@ -36,7 +44,7 @@ func (f *captureFrameTracker) begin(geometry captureFrameGeometry) (captureFrame
 		math.IsNaN(geometry.Scale) || geometry.Scale < 1 || geometry.Scale > 4 {
 		return f.current, fmt.Errorf("invalid capture target or geometry")
 	}
-	if f.current.Generation != 0 && f.current.Geometry == geometry {
+	if !force && f.current.Generation != 0 && f.current.Geometry == geometry {
 		return f.current, nil
 	}
 	// Generations cross JavaScript and Go. Never wrap or exceed the exact

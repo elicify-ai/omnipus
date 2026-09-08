@@ -42,6 +42,28 @@ func (cs *CaptureSession) prepareEncoderFrame(ctx context.Context, measure captu
 			return CaptureFrameState{}, fmt.Errorf("capture session: prepare browsing session: %w", err)
 		}
 	}
+	for {
+		frame, err := cs.measureEncoderFrameWithGate(ctx, panelID, measure)
+		if err != nil {
+			return CaptureFrameState{}, err
+		}
+		if frame.Width > 0 && frame.Height > 0 {
+			return frame, nil
+		}
+		// A document paint/measurement needs the same command gate. Wait only
+		// after the measuring helper has released it, then revalidate the target.
+		if _, err := cs.WaitConfirmedFrame(ctx, "", 0); err != nil {
+			select {
+			case <-cs.done:
+				return CaptureFrameState{}, context.Canceled
+			default:
+			}
+			return CaptureFrameState{}, err
+		}
+	}
+}
+
+func (cs *CaptureSession) measureEncoderFrameWithGate(ctx context.Context, panelID string, measure captureGeometryReader) (CaptureFrameState, error) {
 	release, err := cs.mgr.acquireLiveTabCommand(ctx, panelID)
 	if err != nil {
 		return CaptureFrameState{}, err
@@ -50,6 +72,13 @@ func (cs *CaptureSession) prepareEncoderFrame(ctx context.Context, measure captu
 	targetCtx, targetID, err := cs.mgr.activeTargetSnapshot(panelID)
 	if err != nil {
 		return CaptureFrameState{}, err
+	}
+	cs.mu.Lock()
+	pending := cs.documentTransition != nil && cs.documentTransition.targetID == string(targetID)
+	frame := cs.frameStateLocked()
+	cs.mu.Unlock()
+	if pending {
+		return frame, nil
 	}
 	cs.mgr.mu.Lock()
 	entry := cs.mgr.sessions[panelID]

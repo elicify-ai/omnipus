@@ -30,6 +30,9 @@ func (cs *CaptureSession) BeginFrameTransition(targetID string, width, height in
 	frame, err := cs.frames.begin(captureFrameGeometry{TargetID: targetID, Width: width, Height: height, Scale: scale})
 	var event VideoHealthEvent
 	if err == nil && frame.Generation != before {
+		if cs.documentTransition != nil && targetID != cs.documentTransition.targetID {
+			cs.retireDocumentTransitionLocked()
+		}
 		cs.replaceFrameLifetimeLocked()
 		cs.resetCaptureHealthForFrameLocked()
 		event = cs.claimFramePublicationLocked()
@@ -64,7 +67,7 @@ func (cs *CaptureSession) SetOnFrameState(fn func(CaptureFrameState)) {
 
 func (cs *CaptureSession) CommitFrameBoundary(generation uint64, targetID string, timestamp uint32) bool {
 	cs.mu.Lock()
-	if cs.stopped || !cs.frames.commit(generation, targetID, timestamp) {
+	if cs.stopped || cs.documentPendingLocked() || !cs.frames.commit(generation, targetID, timestamp) {
 		cs.mu.Unlock()
 		return false
 	}
@@ -84,7 +87,7 @@ func (cs *CaptureSession) CommitFrameBoundary(generation uint64, targetID string
 func (cs *CaptureSession) AcceptsInputGeneration(captureID string, generation uint64) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	return !cs.stopped && captureID != "" && captureID == cs.frameStateLocked().CaptureID && cs.frames.accepts(generation)
+	return !cs.stopped && !cs.documentPendingLocked() && captureID != "" && captureID == cs.frameStateLocked().CaptureID && cs.frames.accepts(generation)
 }
 
 // frameStateLocked derives a public identity from the per-capture random token.
@@ -93,6 +96,9 @@ func (cs *CaptureSession) AcceptsInputGeneration(captureID string, generation ui
 // Caller holds cs.mu; observer callbacks must always run after releasing it.
 func (cs *CaptureSession) frameStateLocked() CaptureFrameState {
 	frame := cs.frames.snapshot()
+	if cs.documentTransition != nil {
+		frame.Geometry.Width, frame.Geometry.Height, frame.Ready = 0, 0, false
+	}
 	digest := sha256.Sum256(cs.token)
 	return CaptureFrameState{
 		CaptureID:  hex.EncodeToString(digest[:]),

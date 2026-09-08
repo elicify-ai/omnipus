@@ -172,7 +172,7 @@ func (cs *CaptureSession) reportIngestLoss(sample *CaptureHealthObservation) boo
 
 func (cs *CaptureSession) reportIngestLossClaim(sample *CaptureHealthObservation, offer *captureLostOffer) bool {
 	cs.mu.Lock()
-	if cs.stopped || sample != nil && (sample.BindingEpoch == 0 || sample.BindingEpoch != cs.ingestEpoch || cs.ingestSend == nil || (cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() != nil) || *sample != cs.captureHealth || !cs.healthMatchesFrameLocked(*sample)) {
+	if cs.stopped || cs.documentPendingLocked() || sample != nil && (sample.BindingEpoch == 0 || sample.BindingEpoch != cs.ingestEpoch || cs.ingestSend == nil || (cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() != nil) || *sample != cs.captureHealth || !cs.healthMatchesFrameLocked(*sample)) {
 		cs.mu.Unlock()
 		return false
 	}
@@ -246,7 +246,7 @@ func (cs *CaptureSession) onIngestVideoLive() {
 
 func (cs *CaptureSession) recordIngestVideoLive(requireProgress bool) {
 	cs.mu.Lock()
-	if cs.stopped {
+	if cs.stopped || cs.documentPendingLocked() {
 		cs.mu.Unlock()
 		return
 	}
@@ -300,7 +300,7 @@ func (cs *CaptureSession) runIngestRecoveryForEpoch(epoch uint64) {
 		return
 	}
 	cs.ingestRecoveryTimer = nil
-	if cs.stopped || cs.ingestRecoveryGaveUp || cs.ingestVideoLive {
+	if cs.stopped || cs.documentPendingLocked() || cs.ingestRecoveryGaveUp || cs.ingestVideoLive {
 		cs.mu.Unlock()
 		return
 	}

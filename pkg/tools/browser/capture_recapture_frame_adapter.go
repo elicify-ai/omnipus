@@ -8,7 +8,7 @@ import (
 // RecaptureFrame requests an ordinary recapture of the original measured frame.
 func (cs *CaptureSession) RecaptureFrame(frame CaptureFrameState) bool {
 	cs.mu.Lock()
-	if cs.stopped || !sameCaptureFrameIdentity(cs.frameStateLocked(), frame) ||
+	if cs.stopped || cs.documentPendingLocked() || !sameCaptureFrameIdentity(cs.frameStateLocked(), frame) ||
 		(cs.ingestContextBound && (frame.Width <= 0 || frame.Height <= 0 || cs.ingestRecapture == nil || cs.ingestBindingCtx == nil || cs.ingestBindingCtx.Err() != nil)) {
 		cs.mu.Unlock()
 		return false
@@ -30,6 +30,10 @@ func (cs *CaptureSession) RecaptureFrameContext(ctx context.Context, frame Captu
 		return false
 	}
 	cs.mu.Lock()
+	if cs.documentPendingLocked() {
+		cs.mu.Unlock()
+		return false
+	}
 	// The explicit legacy BindIngest API predates frame-qualified transport.
 	// Authenticated bindings retain ingestContextBound even after unbinding,
 	// so they cannot enter this compatibility path when their sender disappears.
@@ -69,7 +73,7 @@ func (cs *CaptureSession) RecaptureFrameContext(ctx context.Context, frame Captu
 	current := func() bool {
 		cs.mu.Lock()
 		defer cs.mu.Unlock()
-		return request.Err() == nil && binding.Err() == nil && frameCtx.Err() == nil && !cs.stopped &&
+		return request.Err() == nil && binding.Err() == nil && frameCtx.Err() == nil && !cs.stopped && !cs.documentPendingLocked() &&
 			cs.ingestEpoch == epoch && cs.ingestBindingCtx == binding && cs.frameCtx == frameCtx &&
 			sameCaptureFrameIdentity(cs.frameStateLocked(), frame)
 	}

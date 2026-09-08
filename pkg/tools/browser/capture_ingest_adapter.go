@@ -128,7 +128,7 @@ func (cs *CaptureSession) HandleIngestOfferForBinding(ctx context.Context, epoch
 
 func (cs *CaptureSession) matchesIngestFrameLocked(epoch, generation uint64, targetID string) bool {
 	frame := cs.frameStateLocked()
-	return !cs.stopped && epoch != 0 && epoch == cs.ingestEpoch && cs.ingestBindingToken != 0 && cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() == nil && generation != 0 && generation == frame.Generation && targetID != "" && targetID == frame.TargetID
+	return !cs.stopped && !cs.documentPendingLocked() && epoch != 0 && epoch == cs.ingestEpoch && cs.ingestBindingToken != 0 && cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() == nil && generation != 0 && generation == frame.Generation && targetID != "" && targetID == frame.TargetID
 }
 
 // These hooks only cancel standard-library contexts while holding cs.mu. They

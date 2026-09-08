@@ -15,7 +15,12 @@ func (cs *CaptureSession) runTabRecaptures(request captureTabRecaptureRequest) {
 	first := true
 	for {
 		if !first && !request.qualified {
-			cs.relay.SignalRecapture()
+			cs.mu.Lock()
+			current := cs.legacyTabRecaptureCurrentLocked(request)
+			cs.mu.Unlock()
+			if current {
+				cs.relay.SignalRecapture()
+			}
 		}
 		first = false
 		cs.runTabRecapture(request)
@@ -43,7 +48,7 @@ func (cs *CaptureSession) runTabRecapture(request captureTabRecaptureRequest) {
 		}
 		cs.assertForeground(ctx)
 		cs.mu.Lock()
-		current := ctx.Err() == nil && request.frameCtx.Err() == nil && !cs.stopped &&
+		current := ctx.Err() == nil && request.frameCtx.Err() == nil && !cs.stopped && !cs.documentPendingLocked() &&
 			cs.ingestBindingCtx == request.binding && cs.frameCtx == request.frameCtx &&
 			sameCaptureFrameIdentity(cs.frameStateLocked(), request.frame)
 		if current {
@@ -57,7 +62,7 @@ func (cs *CaptureSession) runTabRecapture(request captureTabRecaptureRequest) {
 	}
 	cs.assertForeground(context.Background())
 	cs.mu.Lock()
-	current := !cs.stopped && !cs.ingestContextBound
+	current := cs.legacyTabRecaptureCurrentLocked(request)
 	if current {
 		cs.noteExplicitRecaptureIssuedLocked(ingestRecoverySettle)
 	}
@@ -67,4 +72,8 @@ func (cs *CaptureSession) runTabRecapture(request captureTabRecaptureRequest) {
 			cs.logf("capture[%s]: legacy tab recapture failed: %v", cs.agentID, err)
 		}
 	}
+}
+
+func (cs *CaptureSession) legacyTabRecaptureCurrentLocked(request captureTabRecaptureRequest) bool {
+	return !cs.stopped && !cs.documentPendingLocked() && !cs.ingestContextBound && sameCaptureFrameIdentity(cs.frameStateLocked(), request.frame)
 }

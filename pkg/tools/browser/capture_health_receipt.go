@@ -32,12 +32,16 @@ func (cs *CaptureSession) WatchdogSnapshot() CaptureWatchdogSnapshot {
 		snapshot.VideoReceipt.Serial = uint64(max(int64(0), stats.VideoPackets))
 		snapshot.ReceiptCurrent = snapshot.VideoReceipt.Serial > 0
 	}
+	if cs.documentPendingLocked() {
+		snapshot.Health = CaptureHealthObservation{}
+		snapshot.ReceiptCurrent = false
+	}
 	return snapshot
 }
 
 func (cs *CaptureSession) receiptMatchesFrameLocked(receipt webrtc.VideoReceipt) bool {
 	frame := cs.frames.snapshot()
-	return !cs.stopped && cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() == nil && cs.ingestSend != nil &&
+	return !cs.stopped && !cs.documentPendingLocked() && cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() == nil && cs.ingestSend != nil &&
 		receipt.Serial > 0 && receipt.BindingToken != 0 && receipt.BindingToken == cs.ingestBindingToken &&
 		receipt.Generation != 0 && receipt.Generation == frame.Generation && receipt.TargetID != "" && receipt.TargetID == frame.Geometry.TargetID &&
 		frame.Geometry.Width > 0 && frame.Geometry.Height > 0

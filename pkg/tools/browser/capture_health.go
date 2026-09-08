@@ -73,6 +73,9 @@ func (cs *CaptureSession) RecordVideoProgress() {
 // Caller holds cs.mu. Legacy unbound test adapters have no frame identity;
 // authenticated context-bound encoders must name their actual sampled frame.
 func (cs *CaptureSession) healthMatchesFrameLocked(sample CaptureHealthObservation) bool {
+	if cs.documentPendingLocked() {
+		return false
+	}
 	if !cs.ingestContextBound {
 		return true
 	}
