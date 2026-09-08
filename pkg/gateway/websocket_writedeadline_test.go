@@ -173,9 +173,11 @@ func setupBackpressureWS(t *testing.T) (wc *wsConn, wpDone chan struct{}) {
 		srvConn = &wsConn{conn: conn, sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
 		close(connReady) // happens-before the receive below (Go memory model)
 
-		// writePump touches no WSHandler field — a zero-value receiver is
-		// sufficient and keeps this test independent of full gateway setup.
-		(&WSHandler{}).writePump(srvConn)
+		// writePump touches no WSHandler field beyond h.mu/h.sessions for the
+		// chatID unbind (ADR-082 review CR9/F4) — a zero-value receiver and
+		// an empty chatID are sufficient and keep this test independent of
+		// full gateway setup; the unbind is a no-op when chatID is "".
+		(&WSHandler{}).writePump(srvConn, "")
 		close(wpDone)
 	})
 

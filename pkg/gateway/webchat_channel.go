@@ -14,7 +14,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -78,7 +77,11 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	if sid == "" {
 		sid = c.wsHandler.sessionIDs[msg.ChatID]
 	}
-	conns := c.collectSessionConnsLocked(msg.ChatID, sid)
+	// ADR-082 review CR7: resolveSessionConnsLocked (WSHandler's own session
+	// resolver, shared with wsStreamer.Update/Finalize) now also accepts an
+	// origin-chatID fallback, unifying what used to be two independent
+	// resolvers with the same job — see that function's doc comment.
+	conns := c.wsHandler.resolveSessionConnsLocked(msg.ChatID, sid)
 	c.wsHandler.mu.Unlock()
 
 	if len(conns) == 0 {
@@ -113,37 +116,6 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	return nil
 }
 
-// collectSessionConnsLocked returns every wsConn that should receive a
-// session-scoped outbound frame: the originating chatID plus any other
-// connections (from different browser tabs) attached to the same session.
-// Caller must hold c.wsHandler.mu.
-func (c *webchatChannel) collectSessionConnsLocked(originChatID, sessionID string) []*wsConn {
-	out := make([]*wsConn, 0, 2)
-	seen := make(map[*wsConn]struct{}, 2)
-	if conn, ok := c.wsHandler.sessions[originChatID]; ok {
-		out = append(out, conn)
-		seen[conn] = struct{}{}
-	}
-	if sessionID == "" {
-		return out
-	}
-	for chatID, sid := range c.wsHandler.sessionIDs {
-		if sid != sessionID || chatID == originChatID {
-			continue
-		}
-		conn, ok := c.wsHandler.sessions[chatID]
-		if !ok {
-			continue
-		}
-		if _, dup := seen[conn]; dup {
-			continue
-		}
-		out = append(out, conn)
-		seen[conn] = struct{}{}
-	}
-	return out
-}
-
 func mediaRefURL(ref string) string {
 	if strings.HasPrefix(ref, media.WorkspaceRefPrefix) {
 		return "/api/v1/media/workspace/" + strings.TrimPrefix(ref, media.WorkspaceRefPrefix)
@@ -154,6 +126,28 @@ func mediaRefURL(ref string) string {
 // SendMedia delivers media attachments to the WebSocket client.
 // Implements channels.MediaSender so the channel manager can route
 // OutboundMediaMessage to the webchat channel.
+//
+// [ADR-082 review CR7] Previously resolved only msg.ChatID's single
+// connection (c.wsHandler.sessions[msg.ChatID]) and returned
+// channels.ErrSendFailed whenever that one connection was not live —
+// ignoring msg.SessionID entirely and, worse, ignoring EVERY other
+// connection bound to the same session (a second browser tab, or the SAME
+// tab reconnected under a NEW chatID after ADR-082 D2). On a reconnect the
+// attachment was lost both live (no connection found under the STALE
+// chatID) AND on replay: the caller (pkg/agent/loop.go's tool-media-delivery
+// block) treats a SendMedia error as fatal and REPLACES the tool result with
+// a plain error message, discarding toolResult.Media entirely — so nothing
+// about the attachment ever reaches the transcript either.
+//
+// Now resolves via the SAME session-bound connection set Send uses
+// (resolveSessionConnsLocked, with msg.ChatID as the origin-chatID
+// fallback), delivers to every one of them, and — matching Send's ADR-082 D6
+// "zero bound connections is not a failure" semantics exactly — returns nil
+// rather than ErrSendFailed when nobody is currently watching: the media
+// itself is durable (the caller's toolResult.Media references survive
+// untouched when this returns nil), so it will show up correctly on the
+// next attach_session replay regardless of whether anyone was live to see it
+// arrive.
 func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessage) error {
 	if len(msg.Parts) == 0 {
 		slog.Warn("webchat: SendMedia called with empty parts — skipping", "chat_id", msg.ChatID)
@@ -161,13 +155,20 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	}
 
 	c.wsHandler.mu.Lock()
-	conn, ok := c.wsHandler.sessions[msg.ChatID]
+	sid := msg.SessionID
+	if sid == "" {
+		sid = c.wsHandler.sessionIDs[msg.ChatID]
+	}
+	conns := c.wsHandler.resolveSessionConnsLocked(msg.ChatID, sid)
 	c.wsHandler.mu.Unlock()
 
-	if !ok {
-		// Same permanent-failure classification as Send — see comment above.
-		return fmt.Errorf("webchat: no active connection for chat %s: %w",
-			msg.ChatID, channels.ErrSendFailed)
+	if len(conns) == 0 {
+		// ADR-082 D6/FR-012, extended to media by CR7: no bound connection is
+		// not a failure — the caller still has msg's media refs and will
+		// persist them to the transcript; a reconnect replays them normally.
+		slog.Debug("webchat: SendMedia — no bound connection, media stays durable",
+			"chat_id", msg.ChatID, "session_id", sid)
+		return nil
 	}
 
 	parts := make([]generated.MediaPart, 0, len(msg.Parts))
@@ -197,17 +198,22 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 		)
 	}
 
-	slog.Debug("webchat: sending media frame", "chat_id", msg.ChatID, "parts", len(parts))
+	slog.Debug("webchat: sending media frame", "chat_id", msg.ChatID, "session_id", sid, "parts", len(parts), "conns", len(conns))
 
-	// Marshal and route through sendRawFrameBytes to get replay-divert and backpressure logic.
+	// Marshal once and route through sendRawFrameBytes (replay-divert +
+	// backpressure logic) to every connection bound to this session — a
+	// second browser tab (or the SAME tab reconnected under a new chatID)
+	// must see the attachment too, matching Send's fan-out above.
 	raw, err := json.Marshal(generated.MediaFrame{
 		Type:      string(generated.WsFrameTypeMedia),
-		SessionId: msg.SessionID,
+		SessionId: sid,
 		Parts:     parts,
 	})
 	if err != nil {
 		return fmt.Errorf("webchat: marshal media frame: %w", err)
 	}
-	sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw)
+	for _, conn := range conns {
+		sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw)
+	}
 	return nil
 }

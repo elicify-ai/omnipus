@@ -254,11 +254,24 @@ type WSHandler struct {
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
 
-	// streamOwners tracks, per chatID, which turn currently "owns" live
-	// TokenFrame delivery to that chat connection. Keys are chatID (string);
-	// values are streamOwnerClaim (owning turnID + the time it claimed the
-	// slot, the latter backing the stale-claim reclaim safety net described
-	// below).
+	// streamOwners tracks, per sessionID, which turn currently "owns" live
+	// TokenFrame delivery to that session's bound connections. Keys are
+	// sessionID (string); values are streamOwnerClaim (owning turnID + the
+	// time it claimed the slot, the latter backing the stale-claim reclaim
+	// safety net described below).
+	//
+	// [ADR-082 review F6] Originally keyed by chatID — the ORIGINATING
+	// connection's chatID a wsStreamer happened to be created with. Once
+	// ADR-082 D2 moved live delivery itself to be resolved purely by
+	// sessionID (resolveSessionConnsLocked), a chatID-keyed ownership claim
+	// stopped matching what it was supposed to gate: two turns with
+	// DIFFERENT origin chatIDs (e.g. a keeper/background turn's own internal
+	// chatID versus the user's live webchat chatID) that both deliver into
+	// the SAME session's bound connections never contended for the same
+	// claim, so both could become "owner" simultaneously and interleave
+	// their live tokens into the same viewers — the exact bug this map
+	// exists to prevent, just re-opened via the mismatched key. Keying by
+	// sessionID instead makes the claim key match the delivery key exactly.
 	//
 	// Root cause this closes (live UAT bug, persona "Alex"): TokenFrame and
 	// DoneFrame (contracts/asyncapi.yaml) carry only session_id (+ an
@@ -580,7 +593,12 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 
 // resolveSessionConnsLocked returns every live *wsConn currently bound to
 // sessionID — resolved via h.sessionIDs (chatID → sessionID) and h.sessions
-// (chatID → connection). Caller must already hold h.mu.
+// (chatID → connection) — plus originChatID's own connection (if it has one
+// live in h.sessions) even when its session mapping is empty or has not
+// caught up yet. Caller must already hold h.mu. Pass "" for originChatID
+// when there is no meaningful origin connection to fall back to (every
+// wsStreamer.Update/Finalize call site: streaming delivery is purely
+// session-scoped per ADR-082 D2, with no origin-chatID special case).
 //
 // ADR-082 D2: this is the SINGLE per-frame resolution point for webchat
 // delivery, replacing both the old single-target s.conn direct-send and the
@@ -590,18 +608,45 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 // call. No special-casing of "the originating connection" versus a
 // later-attached peer — both are just entries in h.sessionIDs pointing at
 // sessionID.
-func (h *WSHandler) resolveSessionConnsLocked(sessionID string) []*wsConn {
-	if sessionID == "" {
-		return nil
-	}
+//
+// [ADR-082 review CR7] Unifies what used to be TWO independent resolvers:
+// this function (session-only) and webchatChannel.collectSessionConnsLocked
+// (origin-chatID-first, then session). webchatChannel.Send and SendMedia
+// need the origin-chatID fallback — a message/media send can legitimately
+// fire before msg.SessionID's h.sessionIDs mapping exists yet (e.g. the very
+// first outbound message of a brand-new session) — so having two near-
+// identical implementations risked exactly the kind of drift CR7 found:
+// SendMedia's copy never gained the "zero connections is not a failure"
+// semantics Send's copy got under ADR-082 D6. One implementation now serves
+// both call shapes.
+func (h *WSHandler) resolveSessionConnsLocked(originChatID, sessionID string) []*wsConn {
 	var conns []*wsConn
+	var seen map[*wsConn]struct{}
+	if originChatID != "" {
+		if conn, ok := h.sessions[originChatID]; ok {
+			conns = append(conns, conn)
+			seen = map[*wsConn]struct{}{conn: {}}
+		}
+	}
+	if sessionID == "" {
+		return conns
+	}
 	for chatID, sid := range h.sessionIDs {
 		if sid != sessionID {
 			continue
 		}
-		if conn, ok := h.sessions[chatID]; ok {
-			conns = append(conns, conn)
+		conn, ok := h.sessions[chatID]
+		if !ok {
+			continue
 		}
+		if _, dup := seen[conn]; dup {
+			continue
+		}
+		conns = append(conns, conn)
+		if seen == nil {
+			seen = make(map[*wsConn]struct{}, 2)
+		}
+		seen[conn] = struct{}{}
 	}
 	return conns
 }
@@ -620,7 +665,28 @@ func (h *WSHandler) snapshotLiveStreamerLocked(sessionID string) (text, agentID 
 	}
 	st.statsMu.Lock()
 	agentID = st.agentID
+	persisted := st.transcriptPersisted
 	st.statsMu.Unlock()
+	// ADR-082 review CR5/F1: liveStreamers is per LLM ROUND, not per turn — a
+	// later round's GetStreamer call simply overwrites the map entry (see
+	// liveStreamers' own doc comment); the PREVIOUS round's streamer is never
+	// explicitly removed when the round ends, only implicitly superseded. A
+	// round whose narration text was already written to the transcript via
+	// appendIntermediateAssistantTranscript (Bug #416; the agent loop then
+	// calls markLastStreamerTranscriptPersisted → SuppressTranscriptWrite,
+	// setting transcriptPersisted here) BEFORE its tool calls run therefore
+	// stays registered as sessionID's live streamer for the ENTIRE tool-call
+	// window that follows, with its already-persisted text still sitting in
+	// st.accumulated. A connection binding during that window would
+	// otherwise receive this text TWICE: once from replay (already on disk)
+	// and again as a "catch-up" token from this snapshot — a duplicate
+	// bubble. Reporting ok=false once the round's text is confirmed persisted
+	// makes the catch-up carry only text NOT yet in the transcript: replay
+	// alone covers a persisted round, and a genuinely still-streaming round
+	// (transcriptPersisted still false) is unaffected.
+	if persisted {
+		return "", "", false
+	}
 	return st.accumulated.String(), agentID, true
 }
 
@@ -766,7 +832,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	go h.writePump(wc)
+	go h.writePump(wc, chatID)
 	go h.pingPump(wc)
 
 	// Emit session_state one-shot on every new WS connection (FR-052, FR-073, FR-081).
@@ -2688,6 +2754,23 @@ func (h *WSHandler) handleAttachSession(
 	h.sessionIDs[attachID] = attachID
 	h.sessionIDs[chatID] = attachID
 	catchUpText, catchUpAgentID, hasCatchUp := h.snapshotLiveStreamerLocked(attachID)
+	// ADR-082 review CR1/S1: emit session_state{session_id, active_turn} from
+	// this SAME h.mu critical section, BEFORE any replay frame — not, as
+	// before this fix, at the very end of this function (after the replay-
+	// terminating done, the catch-up token, AND the divert drain). Emitting
+	// it here, atomically with the bind+snapshot above, is what makes it the
+	// FIRST frame this attach delivers: emitSessionState only enqueues onto
+	// wc.sendCh (a non-blocking, best-effort select) and touches no state
+	// this critical section doesn't already hold, so calling it while still
+	// holding h.mu is safe — and it means the active_turn this frame reports
+	// is resolved at the exact same instant as the catch-up snapshot, closing
+	// the window where a turn ending between two separate lock acquisitions
+	// could make the two disagree. The wire order this produces:
+	// session_state → replay_message* → done{frames_emitted} →
+	// token{catch-up} → token*{live} → done{stats.tokens}. This call also
+	// covers the replay-error early return below (CR10) — session_state is
+	// already sent by the time any replay failure could occur.
+	h.emitSessionState(wc, attachID)
 	h.mu.Unlock()
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
@@ -2739,10 +2822,25 @@ func (h *WSHandler) handleAttachSession(
 
 	if replayErr != nil {
 		// Disarm the divert before emitting the abort frames so that sendConnGenFrame
-		// routes them to sendCh. On the error path we skip the divert drain — the
-		// buffered live frames are intentionally discarded because the replay itself
-		// is being abandoned and the client is being told to reset.
+		// routes them to sendCh.
 		wc.isReplayingLive.Store(false)
+		// ADR-082 review CR10: the divert was armed (wc.isReplayingLive.Store(true),
+		// above) and this connection could have been diverting live frames into
+		// wc.replayDivertCh for the whole failed-replay window — those frames
+		// have nowhere meaningful left to go (the client is about to be told,
+		// via the error+done frames below, that this replay was aborted and it
+		// should reset), so discard them here rather than leaving them sitting
+		// in the channel. wc.replayDivertCh is allocated once and REUSED across
+		// attaches on the same connection (see its allocation above) — an
+		// undrained buffer here does not just vanish, it leaks into the NEXT
+		// attach_session on this connection, delivered at the wrong point in
+		// that later attach's own frame sequence as stale duplicates. This
+		// connection was already bound (h.sessionIDs/h.taskChatIDs, above) and
+		// already got its session_state{session_id, active_turn} (CR1, emitted
+		// atomically with the bind before replay even started) — this fix adds
+		// only the missing divert cleanup; the previous version returned here
+		// leaving replayDivertCh untouched.
+		drainReplayDivertChDiscard(wc)
 		slog.Warn("ws: replay_aborted",
 			"event", "replay_aborted",
 			"session_id", attachID,
@@ -2805,11 +2903,27 @@ func (h *WSHandler) handleAttachSession(
 			catchUpFrame.AgentId = &catchUpAgentID
 		}
 		if data, mErr := json.Marshal(catchUpFrame); mErr == nil {
+			// ADR-082 review CR9/F4: route this through the SAME droppedTokens
+			// accounting path every other token send uses (sendRawFrameBytes),
+			// instead of the previous bare select that neither counted a
+			// timeout drop nor handled a dead connection at all (the
+			// ctx.Done() arm silently discarded the frame with no counter
+			// update, no log line). This send still must NOT go through
+			// sendRawFrameBytes itself — wc.isReplayingLive is still true at
+			// this point, so that function would (correctly, for every OTHER
+			// caller) divert it into replayDivertCh instead of sendCh, which
+			// would be wrong here: the catch-up token must land directly in
+			// sendCh, strictly between the replay history and the
+			// divert-buffered live frames drained just below.
 			select {
 			case wc.sendCh <- data:
+			case <-wc.doneCh:
+				wc.droppedTokens.Add(1)
 			case <-ctx.Done():
+				wc.droppedTokens.Add(1)
 			case <-time.After(5 * time.Second):
 				slog.Warn("ws: catch-up token send timed out", "session_id", attachID)
+				wc.droppedTokens.Add(1)
 			}
 		} else {
 			slog.Error("ws: marshal catch-up token frame failed", "session_id", attachID, "error", mErr)
@@ -2908,14 +3022,38 @@ drainDone:
 	// no active goal or no record registered yet.
 	h.agentLoop.EmitGoalStatusRehydrate(attachID)
 
-	// ADR-082 D4/S-07: now that this connection is bound to a real session
-	// id, re-emit session_state carrying active_turn (present iff a
-	// foreground turn is in flight for attachID) — the connection-open
-	// emitSessionState call necessarily ran before any session was known and
-	// could never populate this field.
-	h.emitSessionState(wc, attachID)
-
+	// ADR-082 review CR1/S1: session_state is now emitted ONCE, at the START
+	// of this attach (atomically with the bind + catch-up snapshot, above) —
+	// not here. The trailing re-emit this comment used to describe was itself
+	// the bug S1 found: it left session_state as the LAST frame of the
+	// attach (after the replay-terminating done, the catch-up token, and the
+	// divert drain), so a reconnecting SPA had no active_turn signal until
+	// after everything else had already arrived.
 	slog.Debug("ws: attached to session", "chat_id", chatID, "session_id", attachID)
+}
+
+// drainReplayDivertChDiscard empties wc.replayDivertCh, discarding every
+// buffered frame, without touching wc.sendCh or wc.isReplayingLive.
+//
+// [ADR-082 review CR10] Used by handleAttachSession's replay-error path. The
+// client has already been told, via the error+done frames sent immediately
+// around this call, that the replay was aborted and it should reset — so any
+// live frames buffered in replayDivertCh from the aborted replay window have
+// nowhere meaningful left to land in THIS attach. Simply leaving them
+// in the channel would not just be inert: wc.replayDivertCh is allocated
+// once and reused across every later attach_session on this same connection
+// (see its lazy allocation in handleAttachSession), so an undrained buffer
+// here leaks stale frames into the NEXT attach's own post-replay drain,
+// delivered at the wrong point in that later attach's sequence as
+// duplicates.
+func drainReplayDivertChDiscard(wc *wsConn) {
+	for {
+		select {
+		case <-wc.replayDivertCh:
+		default:
+			return
+		}
+	}
 }
 
 // wsPingMsg is a nil sentinel enqueued by pingPump to signal writePump to send a WebSocket ping.
@@ -2932,7 +3070,12 @@ var errSendTimeout = fmt.Errorf("ws: send channel full — replay send timeout")
 // writePump is the single goroutine that writes all frames to the WebSocket connection.
 // gorilla/websocket requires all writes to happen from the same goroutine.
 // A nil message on sendCh is the sentinel for a ping frame.
-func (h *WSHandler) writePump(wc *wsConn) {
+//
+// chatID (ADR-082 review CR9/F4) is this connection's own key in h.sessions —
+// passed in (rather than resolved from wc) purely so the deferred cleanup
+// below can promptly remove wc from h.sessions the instant this goroutine
+// exits, without waiting for readLoop to notice.
+func (h *WSHandler) writePump(wc *wsConn, chatID string) {
 	// 2026-07-31 review finding (mirrors the same fix in browser_ws.go's
 	// writePump): returning here on a write-side stall used to leave the
 	// connection write-dead but read-alive — nothing else in this function
@@ -2945,7 +3088,34 @@ func (h *WSHandler) writePump(wc *wsConn) {
 	// (ws.ts), not by anything server-side. wc.close() is sync.Once-guarded,
 	// so signalling here the moment the writer dies is safe to call alongside
 	// whatever else already calls it.
-	defer wc.close()
+	//
+	// [ADR-082 review CR9/F4] Also unbind wc from h.sessions[chatID] right
+	// here, the instant the writer dies — not just wc.close(). Before this,
+	// the ONLY place that removed a chatID from h.sessions was ServeHTTP's
+	// deferred cleanup, which runs after readLoop returns — and readLoop can
+	// keep blocking on its own read deadline (up to wsPongWait, tens of
+	// seconds) even though this connection's WRITE side is already dead.
+	// Every token sent to a write-dead-but-still-bound connection in that
+	// window pays sendRawFrameBytes' full backoff before dropping (bounded
+	// now by the doneCh case added alongside this fix, but still non-zero
+	// work) AND, more importantly, keeps the connection in every
+	// resolveSessionConnsLocked() target list — including the set a live,
+	// healthy viewer on the same session is waiting behind, since Update()
+	// delivers to targets sequentially. Removing it from h.sessions here
+	// drops it out of every future resolution immediately; ServeHTTP's own
+	// deferred delete (still needed to clean up h.sessionIDs/h.taskChatIDs,
+	// keyed by the same chatID) becomes a harmless, idempotent no-op repeat
+	// when it runs later.
+	defer func() {
+		wc.close()
+		if chatID != "" {
+			h.mu.Lock()
+			if h.sessions[chatID] == wc {
+				delete(h.sessions, chatID)
+			}
+			h.mu.Unlock()
+		}
+	}()
 
 	for {
 		select {
@@ -3079,14 +3249,30 @@ func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...
 func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	// W1-1: if replay mode is active, divert live frames into the replay buffer
 	// instead of wc.sendCh, so writePump never sees them while replay is running.
-	// "done", "error", and critical control frames are always sent to the canonical
-	// sendCh regardless of replay state — they are emitted by streamReplay itself
-	// and must reach writePump immediately.
+	// "error" and the exec_approval_* control frames are always sent to the
+	// canonical sendCh regardless of replay state — they are rare, connection-
+	// scoped signals that must reach the client immediately.
 	isCritical := frameType == "done" || frameType == "error" ||
 		frameType == "exec_approval_request" || frameType == "exec_approval_expired"
 
+	// [ADR-082 review CR6] "done" is critical (must never be silently dropped
+	// — see the isCritical branches below) but, UNLIKE error/exec_approval_*,
+	// it must still respect replay ordering on a connection that is mid-
+	// replay: a "done" marks a TURN ending, and a live turn finishing while a
+	// re-attaching connection is still replaying its own history must not
+	// jump the queue ahead of that connection's still-pending replay/catch-up
+	// frames — the client would see an orphan "done" (no matching bubble) and
+	// Stop would appear stuck. Diverting it like a token frame (still via the
+	// isCritical, never-drop send semantics inside the divert branch below)
+	// is what makes handleAttachSession's drain deliver
+	// replay → catch-up → tail tokens → done in that exact order. The
+	// replay's OWN synthetic "done" (streamReplay's frames_emitted summary)
+	// is written directly into wc.sendCh by handleAttachSession's emitFn, not
+	// through this function, so it is entirely unaffected by this change.
+	bypassDivertWhileReplaying := isCritical && frameType != "done"
+
 	// Fast path: not replaying (atomic check, no lock). This is the common case.
-	if !wc.isReplayingLive.Load() || isCritical {
+	if !wc.isReplayingLive.Load() || bypassDivertWhileReplaying {
 		// Fall through to the send logic below with targetCh = sendCh.
 	} else {
 		// Slow path: replay is active. Hold RLock so the drain's Lock() cannot disarm
@@ -3108,6 +3294,11 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 			case isCritical:
 				select {
 				case targetCh <- data:
+				case <-wc.doneCh:
+					// ADR-082 review CR9/F4: the connection is already dead
+					// (writePump has exited and closed doneCh) — no point
+					// waiting out the 5s timeout only to close() a connection
+					// that is already closing.
 				case <-time.After(5 * time.Second):
 					slog.Warn(
 						"ws: send channel full after timeout for critical frame, closing connection",
@@ -3118,12 +3309,15 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 				}
 			default:
 				backoffs := [...]time.Duration{0, 10 * time.Millisecond, 50 * time.Millisecond}
+				deadConn := false
 				for _, wait := range backoffs {
 					if wait == 0 {
 						select {
 						case targetCh <- data:
 							wc.droppedFrames.Store(0)
 							return
+						case <-wc.doneCh:
+							deadConn = true
 						default:
 						}
 					} else {
@@ -3133,11 +3327,28 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 							t.Stop()
 							wc.droppedFrames.Store(0)
 							return
+						case <-wc.doneCh:
+							t.Stop()
+							deadConn = true
 						case <-t.C:
 						}
 					}
+					if deadConn {
+						// ADR-082 review CR9/F4: stop retrying the moment the
+						// connection is known dead instead of paying out the
+						// full 0/10/50ms backoff schedule for every single
+						// token — that cost is serial across every connection
+						// Update() iterates, so a dead-but-still-bound viewer
+						// otherwise slows delivery to every OTHER, live
+						// viewer on the same session.
+						break
+					}
 				}
-				slog.Warn("ws: send channel full after backoff, frame dropped", "type", frameType)
+				if deadConn {
+					slog.Debug("ws: connection already closed, frame dropped without waiting out backoff", "type", frameType)
+				} else {
+					slog.Warn("ws: send channel full after backoff, frame dropped", "type", frameType)
+				}
 				wc.droppedTokens.Add(1)
 				wc.droppedFrames.Add(1)
 				if wc.droppedFrames.Load() >= int32(droppedFramesWarnThreshold) {
@@ -3152,6 +3363,7 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 					}
 					select {
 					case wc.sendCh <- degraded:
+					case <-wc.doneCh:
 					case <-time.After(5 * time.Second):
 						slog.Warn("ws: could not deliver degraded warning frame, closing connection")
 						wc.close()
@@ -3174,6 +3386,8 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 		// the full approval timeout (90 s) and then results in a mysterious denial.
 		select {
 		case targetCh <- data:
+		case <-wc.doneCh:
+			// ADR-082 review CR9/F4: already dead — see the divert-path twin above.
 		case <-time.After(5 * time.Second):
 			slog.Warn("ws: send channel full after timeout for critical frame, closing connection", "type", frameType)
 			wc.close()
@@ -3181,12 +3395,15 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	default:
 		// Try immediate send, then graduated retry delays (10 ms, 50 ms) before dropping.
 		backoffs := [...]time.Duration{0, 10 * time.Millisecond, 50 * time.Millisecond}
+		deadConn := false
 		for _, wait := range backoffs {
 			if wait == 0 {
 				select {
 				case targetCh <- data:
 					wc.droppedFrames.Store(0)
 					return
+				case <-wc.doneCh:
+					deadConn = true
 				default:
 				}
 			} else {
@@ -3196,14 +3413,33 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 					t.Stop()
 					wc.droppedFrames.Store(0)
 					return
+				case <-wc.doneCh:
+					t.Stop()
+					deadConn = true
 				case <-t.C:
 					// Timer expired, try next delay.
 				}
 			}
+			if deadConn {
+				// ADR-082 review CR9/F4: a dead-but-still-bound connection
+				// (writePump has exited, doneCh closed, but the ServeHTTP
+				// teardown that unbinds it from h.sessions has not run yet —
+				// readLoop can still be waiting out its own pong deadline,
+				// up to wsPongWait) must not pay the FULL 0/10/50ms backoff
+				// on every single token — that cost is paid serially, once
+				// per connection, inside Update()'s per-target loop, so a
+				// single dead viewer otherwise delays delivery to every
+				// OTHER, live viewer bound to the same session.
+				break
+			}
 		}
 
-		// All attempts exhausted — drop the frame and record backpressure.
-		slog.Warn("ws: send channel full after backoff, frame dropped", "type", frameType)
+		if deadConn {
+			slog.Debug("ws: connection already closed, frame dropped without waiting out backoff", "type", frameType)
+		} else {
+			// All attempts exhausted — drop the frame and record backpressure.
+			slog.Warn("ws: send channel full after backoff, frame dropped", "type", frameType)
+		}
 		wc.droppedTokens.Add(1)
 		wc.droppedFrames.Add(1)
 
@@ -3223,6 +3459,7 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 			}
 			select {
 			case wc.sendCh <- degraded:
+			case <-wc.doneCh:
 			case <-time.After(5 * time.Second):
 				slog.Warn("ws: could not deliver degraded warning frame, closing connection")
 				wc.close()
@@ -4698,20 +4935,25 @@ type streamOwnerClaim struct {
 // than "permanently mute chat" (see WSHandler.streamOwners' doc comment).
 const streamOwnershipStaleAfter = 10 * time.Minute
 
-// claimStreamOwnership attempts to claim (or re-confirm) chatID's live
+// claimStreamOwnership attempts to claim (or re-confirm) sessionID's live
 // TokenFrame-delivery slot in owners for turnID. See WSHandler.streamOwners'
-// doc comment for the full rationale. Returns true when turnID owns the slot
-// — either because it just claimed an empty slot, because it already owned
-// it (a single turn typically opens several sequential wsStreamer instances
-// across its own tool-calling iterations — see turnState.lastStreamer/
-// finalizeStreamer in pkg/agent/turn.go — and each must see itself as "still
-// the owner", not a foreign claimant), or because the existing claim is
-// older than streamOwnershipStaleAfter and was force-reclaimed. Returns
-// false only when a DIFFERENT, still-fresh turnID already owns the slot.
-func claimStreamOwnership(owners *sync.Map, chatID, turnID string) bool {
+// doc comment for the full rationale, including why this is keyed by
+// sessionID rather than the originating chatID (ADR-082 review F6). Returns
+// true when turnID owns the slot — either because it just claimed an empty
+// slot, because it already owned it (a single turn typically opens several
+// sequential wsStreamer instances across its own tool-calling iterations —
+// see turnState.lastStreamer/finalizeStreamer in pkg/agent/turn.go — and
+// each must see itself as "still the owner", not a foreign claimant), or
+// because the existing claim is older than streamOwnershipStaleAfter and was
+// force-reclaimed. Returns false only when a DIFFERENT, still-fresh turnID
+// already owns the slot. The generic `owners *sync.Map` / string-key
+// signature (unchanged by the sessionID rename) is also exercised directly
+// by unit tests with arbitrary string keys — see
+// TestClaimStreamOwnership_StaleClaimIsForceReclaimed and its sibling.
+func claimStreamOwnership(owners *sync.Map, sessionID, turnID string) bool {
 	now := time.Now()
 	newClaim := streamOwnerClaim{turnID: turnID, claimedAt: now}
-	actual, loaded := owners.LoadOrStore(chatID, newClaim)
+	actual, loaded := owners.LoadOrStore(sessionID, newClaim)
 	for {
 		if !loaded {
 			return true
@@ -4727,25 +4969,25 @@ func claimStreamOwnership(owners *sync.Map, chatID, turnID string) bool {
 		// succeeds if the entry is still exactly what we last observed, so a
 		// concurrent claimant racing us here safely retries instead of both
 		// believing they own the slot.
-		if owners.CompareAndSwap(chatID, actual, newClaim) {
+		if owners.CompareAndSwap(sessionID, actual, newClaim) {
 			return true
 		}
-		actual, loaded = owners.Load(chatID)
+		actual, loaded = owners.Load(sessionID)
 	}
 }
 
 // releaseStreamOwnershipClaim releases turnID's live-stream ownership claim
-// for chatID in owners, if it currently holds it. A no-op when turnID never
-// held the claim (e.g. a shadow stream, or a turn that never called
+// for sessionID in owners, if it currently holds it. A no-op when turnID
+// never held the claim (e.g. a shadow stream, or a turn that never called
 // Update()) or when it has already been released or force-reclaimed by a
 // stale-claim takeover. Load-then-CompareAndDelete rather than a bare delete
 // so a concurrent stale-claim reclaim racing this release can never clobber
 // a different, newer claimant's entry.
-func releaseStreamOwnershipClaim(owners *sync.Map, chatID, turnID string) {
+func releaseStreamOwnershipClaim(owners *sync.Map, sessionID, turnID string) {
 	if turnID == "" {
 		return
 	}
-	actual, ok := owners.Load(chatID)
+	actual, ok := owners.Load(sessionID)
 	if !ok {
 		return
 	}
@@ -4753,7 +4995,7 @@ func releaseStreamOwnershipClaim(owners *sync.Map, chatID, turnID string) {
 	if !ok || claim.turnID != turnID {
 		return
 	}
-	owners.CompareAndDelete(chatID, actual)
+	owners.CompareAndDelete(sessionID, actual)
 }
 
 // SetProducedModel stamps the model string that produced this streamed
@@ -4951,8 +5193,15 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	if !s.shadowResolved {
 		if s.parentSpawnCallID != "" {
 			s.isShadowStream = true
-		} else if s.turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
-			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, s.turnID)
+		} else if s.turnID != "" && s.sessionID != "" && s.channel != nil && s.channel.wsHandler != nil {
+			// ADR-082 review F6: keyed by sessionID, not s.chatID — delivery
+			// itself is resolved purely by session (resolveSessionConnsLocked),
+			// so ownership must be too, or two turns with different ORIGIN
+			// chatIDs (e.g. a keeper/background turn's internal chatID and the
+			// user's live webchat chatID) that both deliver into the SAME
+			// session's bound connections would never contend for the slot and
+			// could interleave their live tokens into the same viewers.
+			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.sessionID, s.turnID)
 		}
 		s.shadowResolved = true
 	}
@@ -4990,7 +5239,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		h.mu.Lock()
 		s.accumulated.WriteString(content)
 		if s.sessionID != "" {
-			targets = h.resolveSessionConnsLocked(s.sessionID)
+			targets = h.resolveSessionConnsLocked("", s.sessionID)
 		}
 		h.mu.Unlock()
 	} else {
@@ -5125,8 +5374,9 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	if !s.shadowResolved {
 		if parentSpawnCallID != "" {
 			s.isShadowStream = true
-		} else if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
-			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, turnID)
+		} else if turnID != "" && s.sessionID != "" && s.channel != nil && s.channel.wsHandler != nil {
+			// ADR-082 review F6: keyed by sessionID — see Update's identical gate.
+			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.sessionID, turnID)
 		}
 		s.shadowResolved = true
 	}
@@ -5143,21 +5393,24 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// never called). See ReleaseStreamOwnership for the other release
 	// points (Cancel, and finalizeStreamer's B4 abandoned-turn path, which
 	// deliberately skips the rest of this method).
+	// ReleaseStreamOwnership also unregisters this streamer from
+	// h.liveStreamers[s.sessionID] when it is still the currently-registered
+	// one (ADR-082 review CR4/F2) — see that method's doc comment. Finalize
+	// used to do this deletion itself, inline, right here; it is now shared
+	// with every other release path (Cancel, and finalizeStreamer's B4
+	// abandoned-turn early return, pkg/agent/turn.go) so an abandoned turn
+	// cannot leave a phantom liveStreamers entry (and therefore a phantom
+	// catch-up token with no done frame ever following it) for a session
+	// that no longer has any turn actually in flight.
 	s.ReleaseStreamOwnership()
 
 	// ADR-082 D2/D3: resolve the CURRENT set of connections bound to this
-	// session, and unregister this streamer from the in-flight registry —
-	// both under the SAME h.mu critical section Update uses, for the same
-	// "no duplicate, no gap" ordering reason (see Update's doc comment). A
-	// connection binding AFTER this point sees no in-flight streamer for
-	// this session (session_state.active_turn absent, no catch-up token).
+	// session, under the SAME h.mu critical section Update uses, for the
+	// same "no duplicate, no gap" ordering reason (see Update's doc comment).
 	var targets []*wsConn
 	if h := s.wsHandler(); h != nil && s.sessionID != "" {
 		h.mu.Lock()
-		targets = h.resolveSessionConnsLocked(s.sessionID)
-		if cur, ok := h.liveStreamers[s.sessionID]; ok && cur == s {
-			delete(h.liveStreamers, s.sessionID)
-		}
+		targets = h.resolveSessionConnsLocked("", s.sessionID)
 		h.mu.Unlock()
 	}
 
@@ -5185,7 +5438,13 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				tf := turnFailed
 				connStats.TurnFailed = &tf
 			}
-			if dropped := conn.droppedTokens.Load(); dropped > 0 {
+			// ADR-082 review F10: Swap(0), not Load — droppedTokens is a
+			// per-CONNECTION counter that outlives any single turn, so a bare
+			// Load would keep re-reporting turn 1's drops on every later
+			// turn's done frame forever. Atomically reading-and-resetting here
+			// makes this the per-turn DELTA: only drops that happened since
+			// the last done frame this connection received are reported.
+			if dropped := conn.droppedTokens.Swap(0); dropped > 0 {
 				droppedF := float64(dropped)
 				connStats.TokensDropped = &droppedF
 			}
@@ -5291,12 +5550,27 @@ func (s *wsStreamer) Cancel(_ context.Context) {
 	s.ReleaseStreamOwnership()
 }
 
-// ReleaseStreamOwnership releases this streamer's live-stream ownership
-// claim for its chatID (if held), allowing a different, still-running turn
-// on the same chatID to become the live owner (see WSHandler.streamOwners'
-// doc comment). Safe to call multiple times, concurrently, or when the claim
-// was never held — releaseStreamOwnershipClaim only deletes an entry that
-// still matches this exact turnID.
+// ReleaseStreamOwnership releases this streamer's live-stream ownership claim
+// for its sessionID (if held), allowing a different, still-running turn on
+// the same session to become the live owner (see WSHandler.streamOwners' doc
+// comment; keyed by sessionID, not chatID — ADR-082 review F6). Safe to call
+// multiple times, concurrently, or when the claim was never held —
+// releaseStreamOwnershipClaim only deletes an entry that still matches this
+// exact turnID.
+//
+// [ADR-082 review CR4/F2] Also unregisters this streamer from
+// WSHandler.liveStreamers[s.sessionID] when it is still the CURRENTLY
+// registered entry for that session — the same guarded delete Finalize used
+// to perform inline, now shared by every release path. Without this here,
+// only Finalize ever cleared liveStreamers: turnState.finalizeStreamer's B4
+// abandoned-turn early return (pkg/agent/turn.go) deliberately skips the rest
+// of Finalize and calls ONLY this method (via the streamOwnershipReleaser
+// optional interface), so an abandoned turn's streamer stayed registered in
+// liveStreamers forever — every later attach_session on that session then
+// got a phantom catch-up token (hasCatchUp=true, stale accumulated text)
+// with no done frame ever following it, since the turn that would have sent
+// one is dead. Cancel (defensive symmetry, no production call site today)
+// gets the same fix for free.
 //
 // This is the single implementation shared by Finalize, Cancel, and — via
 // the streamOwnershipReleaser optional interface pkg/agent's finalizeStreamer
@@ -5304,17 +5578,26 @@ func (s *wsStreamer) Cancel(_ context.Context) {
 // That early return deliberately skips the rest of Finalize (no done frame,
 // no transcript write, so a stuck goroutine cannot send a spurious signal to
 // the frontend) but was found, in a 7-reviewer gate, to also skip releasing
-// this claim: a background delegate that became the live owner for a chatID
-// and was later MarkAbandoned()'d by cancel.go's PHASE C left that chatID
-// permanently shadowed, since Finalize (the only other release point;
-// Cancel has no production call sites) never ran. Exported so pkg/agent can
-// reach it through bus.Streamer's optional-interface pattern without either
-// package importing the other's concrete type.
+// the ownership claim: a background delegate that became the live owner for
+// a session and was later MarkAbandoned()'d by cancel.go's PHASE C left that
+// session permanently shadowed, since Finalize (the only other release
+// point; Cancel has no production call sites) never ran. Exported so
+// pkg/agent can reach it through bus.Streamer's optional-interface pattern
+// without either package importing the other's concrete type.
 func (s *wsStreamer) ReleaseStreamOwnership() {
 	s.statsMu.Lock()
 	turnID := s.turnID
 	s.statsMu.Unlock()
-	if s.channel != nil && s.channel.wsHandler != nil {
-		releaseStreamOwnershipClaim(&s.channel.wsHandler.streamOwners, s.chatID, turnID)
+	h := s.wsHandler()
+	if h == nil {
+		return
+	}
+	if s.sessionID != "" {
+		releaseStreamOwnershipClaim(&h.streamOwners, s.sessionID, turnID)
+		h.mu.Lock()
+		if cur, ok := h.liveStreamers[s.sessionID]; ok && cur == s {
+			delete(h.liveStreamers, s.sessionID)
+		}
+		h.mu.Unlock()
 	}
 }

@@ -542,3 +542,75 @@ func TestTurn_NextRoundStreamsAfterDisconnect(t *testing.T) {
 	assert.Equal(t, int32(2), provider.streamCalls.Load(),
 		"both round 1 (tool call) and round 2 (final answer) must have used ChatStream")
 }
+
+// TestFix_CR4_F2_LiveStreamersClearedOnAbandonedPath proves the ADR-082
+// review CR4/F2 fix: h.liveStreamers[sid] used to be deleted ONLY inside
+// wsStreamer.Finalize — but turnState.finalizeStreamer's B4 abandoned-turn
+// early return (pkg/agent/turn.go) deliberately skips the rest of Finalize
+// and calls ONLY ReleaseStreamOwnership (via the streamOwnershipReleaser
+// optional interface). Before this fix, an abandoned turn's streamer stayed
+// registered in h.liveStreamers forever, so every LATER attach_session on
+// that session got a phantom catch-up token (hasCatchUp=true, stale
+// accumulated text) with no done frame ever following it, since the turn
+// that would have sent one is dead.
+func TestFix_CR4_F2_LiveStreamersClearedOnAbandonedPath(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+
+	streamerAny, ok := handler.GetStreamer(context.Background(), "webchat", "chat-cr4-origin", meta.ID)
+	require.True(t, ok)
+	streamer, ok := streamerAny.(*wsStreamer)
+	require.True(t, ok)
+	streamer.SetTurnID("turn-cr4-abandoned")
+	require.NoError(t, streamer.Update(context.Background(), "narration before stop"))
+
+	handler.mu.Lock()
+	_, stillRegistered := handler.liveStreamers[meta.ID]
+	handler.mu.Unlock()
+	require.True(t, stillRegistered, "sanity: the streamer must be registered as sessionID's in-flight streamer")
+
+	// Simulate turnState.finalizeStreamer's B4 abandoned-turn early return:
+	// it calls ONLY ReleaseStreamOwnership, never Finalize.
+	streamer.ReleaseStreamOwnership()
+
+	handler.mu.Lock()
+	_, stillThere := handler.liveStreamers[meta.ID]
+	handler.mu.Unlock()
+	assert.False(t, stillThere,
+		"BUG REGRESSION: an abandoned turn's streamer must be unregistered from liveStreamers, "+
+			"or every later attach gets a phantom catch-up token with no done frame ever following it")
+
+	// End-to-end proof: a LATER connection attaching now must get NO
+	// catch-up token — no phantom in-flight turn.
+	wc := &wsConn{sendCh: make(chan []byte, 16), doneCh: make(chan struct{})}
+	chatID := "chat-cr4-attach"
+	handler.mu.Lock()
+	handler.sessions[chatID] = wc
+	handler.mu.Unlock()
+	handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case raw := <-wc.sendCh:
+			var f struct {
+				Type    string `json:"type"`
+				Content string `json:"content"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &f))
+			if f.Type == "token" {
+				t.Fatalf("phantom catch-up token delivered after the streamer was abandoned: %q", f.Content)
+			}
+			if f.Type == "done" {
+				return // replay's own done — sequence complete for a fresh, empty session
+			}
+		case <-deadline:
+			return // no token arrived within the window — expected
+		}
+	}
+}

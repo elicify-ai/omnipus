@@ -164,6 +164,99 @@ func TestWSStreamer_DoneStatsPerConnection(t *testing.T) {
 	assert.Equal(t, float64(3), *droppedDone.Stats.TokensDropped)
 }
 
+// TestFix_CR9_F4_DeadConnectionDoesNotSlowLiveDelivery proves the ADR-082
+// review CR9/F4 fix: a dead-but-still-bound connection (its doneCh already
+// closed, simulating writePump having exited) must not force every OTHER,
+// live connection on the same session to wait out sendRawFrameBytes' full
+// 0/10/50ms backoff schedule on every single token. Before the fix, the
+// backoff loop had no <-wc.doneCh case, so 200 tokens at ~60ms worst case
+// per token for the dead connection alone would push total delivery time
+// into multiple seconds.
+func TestFix_CR9_F4_DeadConnectionDoesNotSlowLiveDelivery(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	const sessionID = "session-cr9-dead-live"
+
+	deadConn := &wsConn{
+		sendCh: make(chan []byte, 1),
+		doneCh: make(chan struct{}),
+	}
+	deadConn.sendCh <- []byte(`{"type":"filler"}`) // fill it so every send must retry
+	close(deadConn.doneCh)                         // simulate writePump having already exited
+	bindTestConnToSession(handler, "chat-cr9-dead", sessionID, deadConn)
+
+	liveConn := &wsConn{
+		sendCh: make(chan []byte, 300), // large enough to never itself backpressure
+		doneCh: make(chan struct{}),
+	}
+	bindTestConnToSession(handler, "chat-cr9-live", sessionID, liveConn)
+
+	s := &wsStreamer{
+		sessionID: sessionID,
+		chatID:    "chat-cr9-dead",
+		channel:   newWebchatChannel(handler),
+	}
+
+	const numTokens = 200
+	start := time.Now()
+	for i := 0; i < numTokens; i++ {
+		require.NoError(t, s.Update(context.Background(), "x"))
+	}
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, time.Duration(numTokens)*5*time.Millisecond,
+		"delivery must be bounded (<5ms/token amortised) even with a dead, still-bound peer "+
+			"connection sharing the session — got %s for %d tokens", elapsed, numTokens)
+
+	received := 0
+	deadline := time.After(2 * time.Second)
+drain:
+	for received < numTokens {
+		select {
+		case <-liveConn.sendCh:
+			received++
+		case <-deadline:
+			break drain
+		}
+	}
+	assert.Equal(t, numTokens, received, "the live connection must receive every token despite the dead peer")
+}
+
+// TestFix_F10_DroppedTokensReportsPerTurnDelta proves the ADR-082 review F10
+// fix: droppedTokens is a per-CONNECTION counter that outlives any single
+// turn — Finalize must report only the drops that accrued during THIS turn
+// (a delta), not re-report an earlier turn's drops on every later done frame
+// forever.
+func TestFix_F10_DroppedTokensReportsPerTurnDelta(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	const sessionID = "session-f10-drop-delta"
+	conn := makeTestConn()
+	bindTestConnToSession(handler, "chat-f10", sessionID, conn)
+
+	// Turn 1 drops 3 tokens (simulated directly, matching
+	// TestWSStreamer_DoneStatsPerConnection's style).
+	conn.droppedTokens.Store(3)
+
+	s1 := &wsStreamer{sessionID: sessionID, chatID: "chat-f10", channel: newWebchatChannel(handler)}
+	require.NoError(t, s1.Finalize(context.Background(), "turn one"))
+	done1 := readDoneFrameFromConn(t, conn.sendCh)
+	require.NotNil(t, done1.Stats)
+	require.NotNil(t, done1.Stats.TokensDropped)
+	assert.Equal(t, float64(3), *done1.Stats.TokensDropped)
+
+	// Turn 2 drops NOTHING of its own — before this fix, droppedTokens was
+	// never reset, so turn 1's 3 drops would be re-reported here forever.
+	s2 := &wsStreamer{sessionID: sessionID, chatID: "chat-f10", channel: newWebchatChannel(handler)}
+	require.NoError(t, s2.Finalize(context.Background(), "turn two"))
+	done2 := readDoneFrameFromConn(t, conn.sendCh)
+	require.NotNil(t, done2.Stats)
+	assert.Nil(t, done2.Stats.TokensDropped,
+		"BUG REGRESSION: a turn with zero drops of its own must not re-report a PRIOR turn's drops")
+}
+
 // readTokenFrame is defined in websocket_producer_agent_id_test.go (same
 // package) and reused here.
 

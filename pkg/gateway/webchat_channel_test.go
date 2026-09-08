@@ -172,6 +172,102 @@ func TestWebchatSend_ResolvesBySessionIDFirst(t *testing.T) {
 	}
 }
 
+// TestFix_CR7_SendMedia_ZeroConnsSucceeds proves the ADR-082 review CR7 fix:
+// SendMedia with zero bound connections must succeed (nil, not
+// channels.ErrSendFailed) — matching Send's ADR-082 D6 "zero bound
+// connections is not a failure" semantics exactly. The media itself is
+// durable via the caller's own toolResult.Media references; returning an
+// error here used to make pkg/agent/loop.go's tool-media-delivery block
+// REPLACE the tool result with a plain error, discarding the media
+// reference from the transcript entirely.
+func TestFix_CR7_SendMedia_ZeroConnsSucceeds(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	ch := newWebchatChannel(handler)
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID:    "chat-nobody-here",
+		SessionID: "session-nobody-here",
+		Parts:     []bus.MediaPart{{Ref: "media://abc123", Type: "image"}},
+	})
+	assert.NoError(t, err, "SendMedia with zero bound connections must succeed, not return ErrSendFailed")
+}
+
+// TestFix_CR7_SendMedia_ResolvesBySessionAfterReconnect proves SendMedia now
+// resolves via the SAME session-bound connection set Send uses: a stale
+// ChatID (the connection that originally triggered the tool call, since
+// reconnected under a different chatID per ADR-082 D2) must not prevent
+// delivery when the current session id resolves to a live connection.
+func TestFix_CR7_SendMedia_ResolvesBySessionAfterReconnect(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	liveConn := makeTestConn()
+	const (
+		staleChatID = "chat-stale-media-origin"
+		liveChatID  = "chat-live-media-after-reconnect"
+		sessionID   = "session-media-moved-connections"
+	)
+	handler.mu.Lock()
+	handler.sessions[liveChatID] = liveConn
+	handler.sessionIDs[liveChatID] = sessionID
+	handler.mu.Unlock()
+
+	ch := newWebchatChannel(handler)
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID:    staleChatID,
+		SessionID: sessionID,
+		Parts:     []bus.MediaPart{{Ref: "media://xyz", Type: "image", Filename: "shot.png"}},
+	})
+	require.NoError(t, err)
+
+	select {
+	case frame := <-liveConn.sendCh:
+		assert.True(t, bytesContains(frame, "\"type\":\"media\""))
+	case <-time.After(2 * time.Second):
+		t.Fatal("the live, session-bound connection must receive the media despite the stale chat id")
+	}
+}
+
+// TestFix_CR7_SendMedia_BroadcastsToEverySessionBoundConnection proves the
+// unification with Send's own fan-out: a second tab attached to the same
+// session must also receive the media frame.
+func TestFix_CR7_SendMedia_BroadcastsToEverySessionBoundConnection(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	originConn := makeTestConn()
+	secondConn := makeTestConn()
+	const (
+		originChat = "chat-media-origin"
+		secondChat = "chat-media-second"
+		sessionID  = "session-media-shared"
+	)
+	handler.mu.Lock()
+	handler.sessions[originChat] = originConn
+	handler.sessions[secondChat] = secondConn
+	handler.sessionIDs[originChat] = sessionID
+	handler.sessionIDs[secondChat] = sessionID
+	handler.mu.Unlock()
+
+	ch := newWebchatChannel(handler)
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID:    originChat,
+		SessionID: sessionID,
+		Parts:     []bus.MediaPart{{Ref: "media://shared", Type: "image"}},
+	})
+	require.NoError(t, err)
+
+	for _, conn := range []*wsConn{originConn, secondConn} {
+		select {
+		case frame := <-conn.sendCh:
+			assert.True(t, bytesContains(frame, "\"type\":\"media\""))
+		case <-time.After(2 * time.Second):
+			t.Fatal("every session-bound connection must receive the media frame")
+		}
+	}
+}
+
 func TestWebchatChannel_MediaRefURL(t *testing.T) {
 	assert.Equal(t, "/api/v1/media/workspace/ws-1/abc", mediaRefURL("media://workspace/ws-1/abc"))
 	assert.Equal(t, "/api/v1/media/uuid-1", mediaRefURL("media://uuid-1"))
