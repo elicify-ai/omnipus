@@ -44,12 +44,12 @@ does not imply runtime reproduction.
 | Idle and pressure eviction race with activity admission | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Legacy OpenTab startup survives Shutdown | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Popup adoption lacks proven opener ownership | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
-| Same-target document navigation lacks fresh frame fence | Capture API `9dcb178fb`, live integration `4d035c62c`; earlier race selection passed 122 entries. Later reverse-initialization race reproduced; local correction still awaits verification/integration; runtime pending |
+| Same-target document navigation lacks fresh frame fence | Capture API `9dcb178fb`, live integration `4d035c62c`, reverse-initialization fix `2259cd81f`; final focused race selection passed 123 entries, zero skips/races, in 5.422s; independent correction recheck clear; runtime acceptance pending |
 | First switch after attachment lacks original-tab baseline | Integrated `3b31c61e2`; affected race passed, independent source review complete |
 | Retired death watcher can stop replacement capture | Integrated `3b31c61e2`; affected race passed, independent source review complete |
 | Four live/tab/viewport fixture migration groups | Integrated `3b31c61e2`; affected race passed |
 | Manager locking/startup comments inaccurate | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
-| Retired gateway helpers, measured fixtures and bounded combined notice | Integrated `e2a3223c3` / `7bfcb05e4`; independent recheck and Linux-specific validation pending |
+| Retired gateway helpers, measured fixtures and bounded combined notice | Integrated `e2a3223c3` / `7bfcb05e4`; independent cleanup/notice recheck clear; Linux-specific execution remains pending |
 | Profile deletion can remove another process's active profile | Integrated `766f940d8`; 31 affected race entries passed; mixed-version/Unix-only limits recorded |
 | Previously installed ingest cleanup is unbounded | Integrated `8aece98b4`; seven focused race entries passed; authenticated capacity bound only |
 | Late registration republishes a retired pool instance | Integrated `57c25fa00`; 39 affected race records passed |
@@ -77,11 +77,25 @@ cleanup is not interruptible: authenticated unfinished preparation/retirement
 work is capped at four, and a healthy installed connection consumes no slot once
 preparation finishes. Legacy unbound ingest cleanup is outside this bound.
 
-The latest UI build passed and produced 669 embedded files. The combined
-browser/relay race batch is running, with no result claimed here. The later
-reverse-initialization document race has a reproduced failure and local fix;
-its final verification and integration are still open. No full CI has run for
-this checkpoint. The earlier 122-entry document result cannot close that finding.
+The initialization correction is integrated as `2259cd81f`; retained run `71487`
+passed 123 focused race entries with zero skips/races in 5.422s. Independent
+manager recheck found no high-confidence residual defect. The separate gateway
+cleanup/notice and pending-viewport (`5db25b399`) recheck also found no new
+high-confidence behavioral defect. Original attachment admission, actual combined
+notice/schema assertions and current contextual input callers were inspected;
+this read-only review did not execute Linux-only fixtures or prove visible input.
+
+Build `39294` passed, including 669 embedded SPA files; contract generation
+produced no changes. Binary source includes `2259cd81f`; later commits at this
+checkpoint changed only documentation/tests. Combined race run `84333` exited 1:
+the browser package reached its five-minute timeout after an actual-Chrome test
+spent about 280 seconds downloading Chrome and another download began. The
+complete relay package passed in 83.753s. Neither a passing whole-browser batch
+nor full CI is claimed.
+
+The rebuilt isolated instance is process 83139 on port 11094 (tool session
+38626). Installed process 64851 on port 10994 remains preserved. Soak `99078`
+has started but has no reported result at this checkpoint; it is not a pass.
 
 ## Release-base inventory and review limits
 
@@ -97,17 +111,17 @@ was subsequently integrated as `301b860ef`.
 Earlier validation plans retain historical red/green checkpoints. The current
 status here supersedes historical statements that implementation is pending.
 Canonical protocol pending-implementation statements and the spec's obsolete
-graph-tool requirement have been corrected. The separate document-transition
-plan describes its original old-picture defect in present tense; its owner will
-correct that with the initialization followup. These are documentation status
-corrections, not new source findings. Current checks use direct source/caller
+graph-tool requirement have been corrected. The document-transition plan now
+labels the original old-picture defect historically, alongside the initialization
+followup. These are documentation status corrections, not new source findings. Current checks use direct source/caller
 inspection and git diffs following the user's instruction to stop GitNexus.
 
 ## Intermediate runtime evidence
 
-Isolated port 11094 runs binary built from `b80287c49`; installed port 10994 is
-preserved. This intermediate build excludes subsequent annotation/encoder and
-review corrections, so final acceptance needs the final build.
+The earlier isolated instance on port 11094 ran build `b80287c49`, while
+installed port 10994 was preserved. These historical smoke results exclude
+subsequent annotation/encoder and review corrections. They do not establish
+acceptance for the newly rebuilt instance described above.
 
 - UAT-13: exit 0, one passed in 49.5s, no skips. Video appeared after 18.004s:
   **opening exceeds even the 10s cold target**. Cold versus warm

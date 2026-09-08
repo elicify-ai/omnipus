@@ -102,6 +102,8 @@ Latest integration and open findings are recorded in
 - Gateway scoped-route/fixture and combined-message correction integrated as
   `e2a3223c3`. Worker restored race selection passed 44 entries; final Linux-only
   fixture correction still needs compilation/execution on its supported build.
+  Independent cleanup/notice and pending-viewport recheck (`5db25b399`) found
+  no new high-confidence behavioral defect.
 - Independent review read all 78 relay/capture files and all 52 manager files.
   Those reviews produced the finite corrections recorded below and in the
   closeout ledger. This inventory is not proof that every latest correction
@@ -116,13 +118,14 @@ in 380ms. These are smoke results, not controlled cold/warm or 100-action latenc
 acceptance. Full-app long-error wrapping was visually verified. The production
 instance on 10994 remains preserved; the isolated test instance uses 11094.
 
-Latest correction checkpoint (integrated through `301b860ef`):
+Latest correction checkpoint (source fix `2259cd81f`; documentation/test
+checkpoint `b158ec58c`):
 
 | Correction | Integrated commit | Evidence and remaining qualification |
 |---|---|---|
 | Capture startup, cancellation, grace timer and bounded preparation | `cc027da56` | Focused race checks passed; independent lifecycle/document API review found no additional defect in that scope |
 | Launch trust, held locks, pool/session retirement and profile identity | `257d2b9b6`, `eed3f05a6`, `22116776e` | Reviewed with finite followups below; trusted-PATH race control remains unresolved |
-| Document capture and live paint fence | `9dcb178fb`, `4d035c62c` | Earlier integrated race selection passed 122 entries; subsequent reverse-initialization race reproduced and corrected locally, verification/integration still pending |
+| Document capture and live paint fence | `9dcb178fb`, `4d035c62c`, `2259cd81f` | Reverse-initialization race reproduced and corrected; final focused race selection passed 123 entries, zero skips/races, in 5.422s; independent correction recheck clear |
 | Live death cleanup and initial tab tracking | `3b31c61e2` | Affected race checks and independent source review completed |
 | Cross-process profile deletion coordination | `766f940d8` | 31 affected race entries passed; Unix and mixed-version limits remain explicit |
 | Popup lifetime ownership | `46ef9b117` | 39 affected race entries passed; independent correction review found no high-confidence defect |
@@ -130,10 +133,18 @@ Latest correction checkpoint (integrated through `301b860ef`):
 | Late pool registration publication | `57c25fa00` | 39 affected race records passed |
 | Reconciliation snapshot ownership | `301b860ef` | 47 affected race entries passed; independent correction review found no high-confidence defect |
 
-The latest UI build passed (669 embedded files). The combined browser/relay race
-batch was still running when this checkpoint was recorded; it is not recorded
-as green. The reverse-initialization correction remains open until its final
-result and integration are recorded. No full CI result is claimed.
+Build `39294` passed, including the SPA's 669 embedded files; contract generation
+produced no changes. The binary contains source fix `2259cd81f`; subsequent
+commits at this checkpoint changed only documentation/tests.
+
+The combined browser/relay race batch `84333` exited 1. The browser package hit
+its five-minute timeout after an actual-Chrome test spent about 280 seconds
+downloading Chrome and another download began. The complete relay package
+passed in 83.753s. This is not a passing whole-browser batch or full CI result.
+
+The new isolated runtime uses port 11094, process 83139 (tool session 38626).
+Installed port 10994, process 64851, remains preserved. Soak run `99078` has
+started; no passing result or runtime acceptance is claimed yet.
 
 Go test/build batches remain serial within this team; independent source work
 continues in isolated worktrees. No full CI is run for each fix. Other operators'

@@ -1,8 +1,11 @@
 # Displayed-frame identity protocol
 
 Status: protocol integrated; final-build runtime and CI acceptance remain unverified.
-The later document reverse-initialization correction still awaits its final
-verification and integration at this checkpoint.
+The document reverse-initialization correction is integrated as `2259cd81f`;
+its final focused race selection passed 123 entries with zero skips/races, and
+independent correction review found no high-confidence residual defect. The
+whole browser package has not passed its combined race batch; the new runtime
+soak has started but has no passing result at this checkpoint.
 
 A page or CSS viewport transition invalidates input before the mutation begins. The server allocates a positive generation number, scoped to the capture session, and tells every viewer that the picture is transitioning. A generation is limited to JavaScript's exact integer range. Capture-session replacement invalidates all prior generation claims even if numbering restarts.
 
