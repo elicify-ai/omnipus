@@ -28,12 +28,18 @@ func (cs *CaptureSession) BeginFrameTransition(targetID string, width, height in
 	}
 	before := cs.frames.snapshot().Generation
 	frame, err := cs.frames.begin(captureFrameGeometry{TargetID: targetID, Width: width, Height: height, Scale: scale})
+	var event VideoHealthEvent
 	if err == nil && frame.Generation != before {
 		cs.replaceFrameLifetimeLocked()
+		cs.resetCaptureHealthForFrameLocked()
+		event = cs.claimFramePublicationLocked()
 	}
 	state := cs.frameStateLocked()
 	fn := cs.onFrameState
 	cs.mu.Unlock()
+	if event.Version != 0 {
+		cs.emitVideoHealth(event)
+	}
 	if err == nil && frame.Generation != before && fn != nil {
 		fn(state)
 	}
@@ -64,7 +70,11 @@ func (cs *CaptureSession) CommitFrameBoundary(generation uint64, targetID string
 	}
 	state := cs.frameStateLocked()
 	fn := cs.onFrameState
+	event := cs.claimFramePublicationLocked()
 	cs.mu.Unlock()
+	if event.Version != 0 {
+		cs.emitVideoHealth(event)
+	}
 	if fn != nil {
 		fn(state)
 	}
