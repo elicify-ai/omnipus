@@ -477,7 +477,11 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 
 	switch {
 	case info.IsDir():
-		ancestor := filegrep.LoadAncestorIgnore(container.FS(), subPath)
+		// The unreadable-ancestor-ignore-file count is discarded here — this preload
+		// runs before a filegrep.state exists to fold it into Stats.IgnoreFilesUnreadable,
+		// and an ancestor ignore file failing to read degrades to "no additional rules
+		// from that file," same as filegrep's own within-walk handling (ignore.go).
+		ancestor, _ := filegrep.LoadAncestorIgnore(container.FS(), subPath)
 		sub, sErr := container.OpenRoot(subPath)
 		if sErr != nil {
 			return filegrep.Root{}, fmt.Errorf("path %q in %s could not be opened as a directory: %w", subPath, label, sErr)
@@ -511,7 +515,7 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		scopePrefix := ""
 		name := namePrefix
 		if parentRel != "." {
-			ancestor = filegrep.LoadAncestorIgnore(container.FS(), parentRel)
+			ancestor, _ = filegrep.LoadAncestorIgnore(container.FS(), parentRel)
 			scopePrefix = parentRel
 			if namePrefix != "" {
 				name = namePrefix + "/" + parentRel

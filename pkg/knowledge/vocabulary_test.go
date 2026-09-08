@@ -46,10 +46,19 @@ func vocabIndex(t *testing.T) *Index {
 func TestSearch_ZeroHitsReportsVocabularyNotExpansion(t *testing.T) {
 	ix := vocabIndex(t)
 
-	// A term the corpus does not hold, but whose neighbours it does.
-	const q = "prospectus"
+	// A term the corpus does not hold, but whose neighbours it does — chosen
+	// to share the "prosp" prefix NearMissVocabulary matches on (FR-115)
+	// while sitting far enough away in EDIT DISTANCE that KB-7a's
+	// SetFuzziness(1) typo-tolerance pass (added to the OR-fallback tier)
+	// does not turn it into a real hit. "prospectus" no longer works for
+	// this fixture as of KB-7a: it is genuinely one edit away from the
+	// corpus's stemmed "prospect", so the fuzzy pass now finds Pipeline.md
+	// for it — correctly, that is exactly the typo tolerance KB-7 asks for,
+	// and it is a DIFFERENT thing from this test's own question (whether a
+	// truly unrelated query gets vocabulary instead of silent expansion).
+	const q = "prosperity"
 
-	hits, _, err := ix.SearchFiltered(q, 10, nil)
+	hits, _, _, err := ix.SearchFiltered(q, 10, nil)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

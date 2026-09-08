@@ -284,6 +284,9 @@ func fileSearchOptionsFromRequest(req gen.FileSearchRequest) filegrep.Options {
 	if req.IncludeHidden != nil {
 		opts.IncludeHidden = *req.IncludeHidden
 	}
+	if req.MatchAllWords != nil {
+		opts.MatchAllWords = *req.MatchAllWords
+	}
 	if req.IncludeGlobs != nil {
 		opts.IncludeGlobs = *req.IncludeGlobs
 	}
@@ -334,6 +337,7 @@ type fileSearchHitWire = struct { // not-wire-format: type alias of the generate
 	Excerpt       *string                             `json:"excerpt,omitempty"`
 	IsDir         *bool                               `json:"is_dir,omitempty"`
 	Line          *int                                `json:"line,omitempty"`
+	MatchCount    *int                                `json:"match_count,omitempty"`
 	MatchKind     gen.FileSearchResponseHitsMatchKind `json:"match_kind"`
 	Path          string                              `json:"path"`
 }
@@ -349,6 +353,14 @@ func fileSearchResponseFromResult(result filegrep.Result) gen.FileSearchResponse
 	if result.Truncated {
 		reason := gen.FileSearchResponseTruncatedReason(string(result.TruncatedReason))
 		resp.TruncatedReason = &reason
+		// Finding F-C: TruncatedRoot names the FIRST root that died, when
+		// root_lost fired over more than one root — see filegrep.Result's
+		// own doc comment. Empty for every other reason and for a
+		// single-root search, so it stays omitted rather than sent as "".
+		if result.TruncatedReason == filegrep.ReasonRootLost && result.TruncatedRoot != "" {
+			truncatedRoot := result.TruncatedRoot
+			resp.TruncatedRoot = &truncatedRoot
+		}
 	}
 	for _, h := range result.Hits {
 		resp.Hits = append(resp.Hits, fileSearchHitFromEngine(h))
@@ -366,6 +378,12 @@ func fileSearchResponseFromResult(result filegrep.Result) gen.FileSearchResponse
 	resp.Stats.DirsVisited = &dirsVisited
 	filesFilteredGlob := result.Stats.FilesFilteredGlob
 	resp.Stats.FilesFilteredGlob = &filesFilteredGlob
+	// Findings F-A / F-E: surfaced the same optional, backward-compatible
+	// way as dirs_visited/files_filtered_glob above.
+	filesSkippedBinary := result.Stats.FilesSkippedBinary
+	resp.Stats.FilesSkippedBinary = &filesSkippedBinary
+	ignoreFilesUnreadable := result.Stats.IgnoreFilesUnreadable
+	resp.Stats.IgnoreFilesUnreadable = &ignoreFilesUnreadable
 
 	return resp
 }
@@ -399,6 +417,14 @@ func fileSearchHitFromEngine(h filegrep.Hit) fileSearchHitWire {
 	if len(h.ContextAfter) > 0 {
 		ca := append([]string(nil), h.ContextAfter...)
 		out.ContextAfter = &ca
+	}
+	// KB-7b/KB-6a: MatchCount is only ever set by the engine on a collapsed
+	// match_all_words hit (h.MatchCount > 0 exactly then — see filegrep's
+	// own Hit.MatchCount doc). Zero means "not applicable" on both sides of
+	// this boundary, so it stays omitted rather than sent as 0.
+	if h.MatchCount > 0 {
+		matchCount := h.MatchCount
+		out.MatchCount = &matchCount
 	}
 	return out
 }
@@ -544,7 +570,14 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		_, rest, _ := strings.Cut(rel, "/")
 		var ancestor []filegrep.AncestorIgnoreLayer
 		if rest != "" {
-			ancestor = filegrep.LoadAncestorIgnore(mfs, rest)
+			// The unreadable-ancestor-ignore-file count (finding F-E) is
+			// discarded here, same as pkg/tools/grep.go's own call sites: an
+			// ancestor .gitignore/.ignore that fails to read degrades to
+			// "no additional rules from that file", identical to a missing
+			// one, and filegrep's within-walk unreadable-ignore-file
+			// counting (Stats.IgnoreFilesUnreadable) already covers the
+			// common case for THIS request's own scope.
+			ancestor, _ = filegrep.LoadAncestorIgnore(mfs, rest)
 			sub, subErr := fs.Sub(mfs, rest)
 			if subErr != nil {
 				closeAll()
@@ -567,7 +600,7 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 	name := rel
 	var wsAncestor []filegrep.AncestorIgnoreLayer
 	if rel != "" {
-		wsAncestor = filegrep.LoadAncestorIgnore(wfs, rel)
+		wsAncestor, _ = filegrep.LoadAncestorIgnore(wfs, rel)
 		sub, subErr := fs.Sub(wfs, rel)
 		if subErr != nil {
 			closeAll()

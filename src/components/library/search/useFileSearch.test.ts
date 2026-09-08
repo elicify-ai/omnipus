@@ -107,7 +107,7 @@ describe('useFileSearch — debounce', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('useFileSearch — the request the human bar sends (FR-016, MV-11)', () => {
-  it('sends regex:false, case:smart, include_hidden:false and a 3s deadline, unconditionally', async () => {
+  it('sends regex:false, case:smart, include_hidden:false, match_all_words:true, context_lines:1 and a 3s deadline, unconditionally', async () => {
     const searchFn = vi.fn().mockResolvedValue(response())
     renderHook(() =>
       useFileSearch({ workspaceId: 'ws-1', folderPath: '', query: 'f(x)', debounceMs: 5, searchFn }),
@@ -122,7 +122,12 @@ describe('useFileSearch — the request the human bar sends (FR-016, MV-11)', ()
     expect(body.regex).toBe(false)
     expect(body.case).toBe('smart')
     expect(body.include_hidden).toBe(false)
-    expect(body.context_lines).toBe(0)
+    // KB-7b: the bar always asks for document-level AND, collapsing a
+    // matching file to one hit regardless of how many lines matched.
+    expect(body.match_all_words).toBe(true)
+    // KB-6c: one bare line is rarely enough to judge a hit (supersedes the
+    // earlier v1 decision, spec R2-MIN-005, to leave this at 0).
+    expect(body.context_lines).toBe(1)
     expect(body.limits).toEqual({ deadline_ms: FILE_SEARCH_DEADLINE_MS })
   })
 
@@ -280,6 +285,46 @@ describe('useFileSearch — 429 keeps prior results and retries exactly once (MV
     await waitFor(() => expect(result.current.error).not.toBeNull())
     await settle(FILE_SEARCH_RETRY_DELAY_MS + 50)
     expect(searchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('finding R-3: a NEW query clears the PREVIOUS query\'s error rather than carrying it forward', async () => {
+    const searchFn = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError(500, 'query A failed'))
+      // Deliberately delayed (not a same-tick microtask resolution): the
+      // point under test is that `error` clears the MOMENT query B's
+      // request starts, not only once it later resolves — a delay this
+      // small but real keeps that in-flight window observable to
+      // `waitFor`'s polling rather than the assertion racing a resolution
+      // that could otherwise land in the very same tick.
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) =>
+            // renderHook renders no DOM of its own, so waitFor's default
+            // MutationObserver path has nothing to observe here — it falls
+            // back to interval polling (default ~50ms), so the in-flight
+            // window must comfortably outlast one polling interval or the
+            // assertion below can race a resolution that lands between
+            // polls.
+            setTimeout(() => resolve(response({ hits: [{ path: 'b.md', match_kind: 'name' }] })), 150),
+          ),
+      )
+    const { result, rerender } = renderHook(
+      ({ query }: { query: string }) =>
+        useFileSearch({ workspaceId: 'ws-1', folderPath: '', query, debounceMs: 5, searchFn }),
+      { initialProps: { query: 'query-a' } },
+    )
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+
+    rerender({ query: 'query-b' })
+    // The error must be gone the moment the new request STARTS — not only
+    // once it resolves — so a still-in-flight query B never renders query
+    // A's stale failure while it is running.
+    await waitFor(() => expect(result.current.isFetching).toBe(true))
+    expect(result.current.error).toBeNull()
+
+    await waitFor(() => expect(result.current.response?.hits.map((h) => h.path)).toEqual(['b.md']))
+    expect(result.current.error).toBeNull()
   })
 })
 

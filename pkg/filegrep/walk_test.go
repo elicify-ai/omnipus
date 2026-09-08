@@ -620,7 +620,7 @@ func TestFileGrep_ScopedSearchHonorsAncestorIgnore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ancestor := LoadAncestorIgnore(trueRoot, "src")
+		ancestor, _ := LoadAncestorIgnore(trueRoot, "src")
 		root := Root{Name: "src", FS: sub, ScopePrefix: "src", AncestorIgnore: ancestor}
 		res := mustSearch(t, []Root{root}, Options{Query: "needle"})
 		got := map[string]bool{}

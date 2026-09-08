@@ -67,6 +67,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path"
@@ -102,6 +103,14 @@ const (
 	ReasonDeadline   TruncatedReason = "deadline"
 	ReasonMaxOutput  TruncatedReason = "max_output"
 	ReasonRootLost   TruncatedReason = "root_lost"
+	// ReasonCanceled is finding F-H: the caller's own context was
+	// CANCELED (client disconnected, an agent turn was stopped, …), not
+	// exceeded its DEADLINE. Before this, checkStop mapped any non-nil
+	// ctx.Err() to ReasonDeadline unconditionally, so a caller that
+	// genuinely reads the response — e.g. an agent whose search was
+	// interrupted by the user, as opposed to one that ran long — was told
+	// "this search timed out" for a request that never ran long at all.
+	ReasonCanceled TruncatedReason = "canceled"
 )
 
 // MatchKind distinguishes a name/path hit from a content-line hit.
@@ -207,6 +216,30 @@ type Options struct {
 	ExcludeGlobs  []string
 	ContextLines  int // 0..5
 	Limits        Limits
+	// MatchAllWords activates KB-7b's document-level AND: Query is split on
+	// whitespace into words and a FILE is a hit when every word is present
+	// SOMEWHERE in it — not, as the plain literal/regex match requires, all
+	// on one line. A file that matches is reported as ONE collapsed
+	// KindContent hit (Hit.MatchCount carries how many lines actually
+	// matched), redefining a hit from "one matching line" to "one matching
+	// document" for this mode only.
+	//
+	// It is OPT-IN and false by default deliberately: this package is also
+	// the agent `grep` tool's engine (this file's own package doc), whose
+	// literal-substring, line-scoped contract (DEFECT-G1/OBS-G1) is exactly
+	// what a caller relies on today. Splitting Query into words and
+	// collapsing hits to one-per-file is a different contract, not a
+	// strictly-better default — so it is reached only by a caller that asks
+	// for it (the human Library file search bar), never silently, and never
+	// for the agent tool.
+	//
+	// It is IGNORED when Regex is true: a regex pattern is already one
+	// expression a caller wrote on purpose, and splitting it on whitespace
+	// would mangle it (a pattern like "foo\s+bar" contains a literal space
+	// that is part of the expression, not a word boundary). Multi-term AND
+	// is a human-literal-query feature; regex mode keeps its existing
+	// single-pattern, line-scoped semantics unconditionally.
+	MatchAllWords bool
 }
 
 // Hit is one result row (MV-14: one matching line = one hit; a name match is
@@ -223,6 +256,15 @@ type Hit struct {
 	IsDir         bool
 	ContextBefore []string
 	ContextAfter  []string
+	// MatchCount is KB-7b/KB-6a's per-document collapse signal: how many
+	// lines in this file matched, when Options.MatchAllWords collapsed them
+	// into this one Hit. Zero (the default) means "not applicable" — every
+	// hit produced outside MatchAllWords mode (a KindName hit, or an
+	// ordinary one-line-one-hit KindContent hit) leaves it unset, and a
+	// reader should treat zero/absent as "this row already IS the one
+	// match" rather than as "zero matches". Only ever >1 on a collapsed
+	// MatchAllWords hit with more than one matching line.
+	MatchCount int
 }
 
 // Stats is the walk accounting (observable, never silent).
@@ -248,6 +290,29 @@ type Stats struct {
 	// hidden) — conflating the two would hide which one actually explains
 	// a given search's shape.
 	FilesFilteredGlob int
+	// FilesSkippedBinary counts a file whose content was never scanned
+	// because its first binarySniffBytes contained a NUL byte (FR-005:
+	// "binary files are name-matchable, never content-scanned"). Finding
+	// F-A: before this field existed, a binary skip incremented NOTHING —
+	// worse, the file was still counted in FilesVisited (asserting it was
+	// searched) and excluded from BytesScanned (so nothing could even be
+	// inferred from the discrepancy). A UTF-16 file, or any text file with
+	// a stray NUL in its first 8 KiB, was silently content-invisible with
+	// no observable trace anywhere in the response. This counter is that
+	// trace.
+	FilesSkippedBinary int
+	// IgnoreFilesUnreadable counts a .gitignore/.ignore file the walk found
+	// but could not read (finding F-E): permission-denied or an I/O error,
+	// as opposed to the file simply not existing (the ordinary, silent
+	// case — most directories have none). When this is nonzero, filtering
+	// for at least one directory did NOT apply the rules its ignore file
+	// would have added, so a caller reading zero results (or fewer than
+	// expected) has a place to look rather than a silent gap: an ignore
+	// file that failed to read is treated as "no additional rules from
+	// this file" and the walk continues, exactly like a missing one, but
+	// unlike a missing one this is NOT the routine case and is worth
+	// surfacing.
+	IgnoreFilesUnreadable int
 }
 
 // Result is one search answer.
@@ -257,6 +322,15 @@ type Result struct {
 	TruncatedReason TruncatedReason
 	LimitsApplied   Limits
 	Stats           Stats
+	// TruncatedRoot names the Root (Root.Name — "" for the workspace work
+	// tree, the mount name for a mount) that produced ReasonRootLost
+	// (finding F-C). It is the FIRST root that died, if more than one root
+	// was searched; every OTHER root is still searched to completion (see
+	// Search's loop) so a caller never loses hits from healthy mounts just
+	// because one mount was unplugged. Empty whenever TruncatedReason is
+	// not ReasonRootLost, or when the search never reached more than one
+	// root worth reporting.
+	TruncatedRoot string
 }
 
 // alwaysPruned are directory basenames never entered regardless of
@@ -266,19 +340,65 @@ var alwaysPruned = map[string]struct{}{
 }
 
 // excerpt cuts a <=ExcerptCapBytes window around pos, snapping to rune
-// boundaries so the result is always valid UTF-8 (MV-6).
+// boundaries so the result is always valid UTF-8 (MV-6), and marks
+// truncation on whichever side(s) actually lost content (finding F-G).
+//
+// capContextLine already marked ITS OWN truncation (review finding F5), but
+// only ever on the trailing side — a context line is windowed from byte 0,
+// so it can only ever lose its tail. excerpt's window is centered on the
+// MATCH position instead, so it can lose content on the left, the right, or
+// both, and before this fix none of those were marked at all: a 512-byte
+// window cut from a 10 KB minified line read to a reader — human or agent —
+// as the complete line, with no trace that anything was cut. The excerpt is
+// the one string a reader actually judges a hit by, which is exactly why
+// this was the sharpest of the two truncation-marking gaps.
 func excerpt(line []byte, pos int) string {
-	return excerptCapped(line, pos, ExcerptCapBytes)
+	result, truncLeft, truncRight := excerptCappedMarked(line, pos, ExcerptCapBytes)
+	if !truncLeft && !truncRight {
+		return result
+	}
+	// Re-cut with room reserved for whichever marker(s) are actually
+	// needed — the same reserve-only-when-confirmed approach
+	// capContextLine uses — so the FINAL string, markers included, still
+	// respects ExcerptCapBytes. A smaller window can shift which side(s)
+	// end up truncated (e.g. reserving room for a left marker can, in a
+	// short line, newly cut the right edge too), so the flags are read
+	// fresh from this second cut rather than reused from the first.
+	reserve := 0
+	if truncLeft {
+		reserve += len(contextTruncationMarker)
+	}
+	if truncRight {
+		reserve += len(contextTruncationMarker)
+	}
+	result, truncLeft, truncRight = excerptCappedMarked(line, pos, ExcerptCapBytes-reserve)
+	if truncLeft {
+		result = contextTruncationMarker + result
+	}
+	if truncRight {
+		result += contextTruncationMarker
+	}
+	return result
 }
 
-// excerptCapped is excerpt's shared implementation, parameterized on the cap
-// so capContextLine's truncation-marker path (review finding F5) can reserve
-// room for the marker without duplicating the rune-boundary/UTF-8-validity
-// logic. excerpt(line, pos) is exactly excerptCapped(line, pos,
-// ExcerptCapBytes) — behavior-identical to the pre-F5 excerpt().
+// excerptCapped is capContextLine's shared implementation: excerptCappedMarked
+// with the truncation flags discarded, parameterized on the cap so
+// capContextLine's OWN truncation-marker path (review finding F5) can
+// reserve room for its marker without duplicating the rune-boundary/UTF-8-
+// validity logic. Unchanged in behavior from before F-G.
 func excerptCapped(line []byte, pos, capBytes int) string {
+	result, _, _ := excerptCappedMarked(line, pos, capBytes)
+	return result
+}
+
+// excerptCappedMarked is excerpt's and excerptCapped's shared core. Besides
+// the windowed, UTF-8-safe result, it reports truncatedLeft (content existed
+// in `line` before the returned window's start) and truncatedRight (content
+// existed after its end) — finding F-G's signal for which side(s), if any,
+// a caller's own marker convention should mark.
+func excerptCappedMarked(line []byte, pos, capBytes int) (result string, truncatedLeft, truncatedRight bool) {
 	if len(line) == 0 {
-		return ""
+		return "", false, false
 	}
 	if pos < 0 {
 		pos = 0
@@ -301,15 +421,20 @@ func excerptCapped(line []byte, pos, capBytes int) string {
 	// Snapping INWARD (trimming a partial leading/trailing rune) rather than
 	// outward can only shrink [start, end), so the pre-snap size — already
 	// <=capBytes above — bounds the result unconditionally; no separate
-	// reclamp is needed.
+	// reclamp is needed. It can also only ever turn a false truncation flag
+	// TRUE (shrinking the window can newly expose a gap at an edge that
+	// exactly reached a boundary before the snap), never the reverse, so the
+	// flags are read AFTER snapping, from the final start/end.
 	for start < end && !utf8.RuneStart(line[start]) {
 		start++
 	}
 	for end > start && end < len(line) && !utf8.RuneStart(line[end]) {
 		end--
 	}
-	result := line[start:end]
-	if !utf8.Valid(result) {
+	truncatedLeft = start > 0
+	truncatedRight = end < len(line)
+	window := line[start:end]
+	if !utf8.Valid(window) {
 		// Landing both edges on a lead byte (utf8.RuneStart) guarantees the
 		// window doesn't SPLIT a rune, but not that every byte inside it
 		// forms a COMPLETE valid sequence — content that isn't valid UTF-8
@@ -318,10 +443,13 @@ func excerptCapped(line []byte, pos, capBytes int) string {
 		// invalid window. MV-6 requires excerpts to be valid UTF-8
 		// unconditionally, so drop whatever invalid bytes remain rather
 		// than ever return one that isn't (dropping only shrinks the
-		// result, so it never grows past the cap either).
-		return strings.ToValidUTF8(string(result), "")
+		// result, so it never grows past the cap either) — that further
+		// shrink cannot UNDO an already-true truncation flag, only
+		// potentially make a false one moot, so the flags computed above
+		// still hold.
+		return strings.ToValidUTF8(string(window), ""), truncatedLeft, truncatedRight
 	}
-	return string(result)
+	return string(window), truncatedLeft, truncatedRight
 }
 
 // contextTruncationMarker is appended to a ContextBefore/ContextAfter line
@@ -460,18 +588,41 @@ func (s *state) countHitsCappedPerFile() {
 	s.mu.Unlock()
 }
 
+// countSkippedBinary records finding F-A: a file's content was never
+// scanned because it sniffed as binary.
+func (s *state) countSkippedBinary() {
+	s.mu.Lock()
+	s.res.Stats.FilesSkippedBinary++
+	s.mu.Unlock()
+}
+
+// countIgnoreFileUnreadable records finding F-E: a .gitignore/.ignore file
+// existed but could not be read, so its rules did not apply.
+func (s *state) countIgnoreFileUnreadable(n int) {
+	if n == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.res.Stats.IgnoreFilesUnreadable += n
+	s.mu.Unlock()
+}
+
 // checkStop reports whether the walk should stop now. ctx is the original
-// request context (its own deadline is the only source of a genuine
-// "deadline" reason); scanCtx additionally trips when a worker in the
-// content-scan pool has already recorded a different budget breach — in
-// that case checkStop returns errStopped so the caller defers to
-// walkAbort.get() for the real reason, rather than misreporting it as a
-// deadline.
+// request context — its own stopping is the only source of a genuine
+// ReasonDeadline/ReasonCanceled distinction (ctxStopReason, finding F-H:
+// a caller disconnecting/cancelling is not the same event as a caller's
+// request genuinely running past its deadline, and conflating them told a
+// caller who reads its own response — an agent whose search was
+// interrupted, say — that a request which never ran long "timed out").
+// scanCtx additionally trips when a worker in the content-scan pool has
+// already recorded a different budget breach — in that case checkStop
+// returns errStopped so the caller defers to walkAbort.get() for the real
+// reason, rather than misreporting it as a deadline or cancellation.
 func (s *state) checkStop(ctx, scanCtx context.Context) error {
 	select {
 	case <-scanCtx.Done():
-		if ctx.Err() != nil {
-			return budgetError{ReasonDeadline}
+		if err := ctx.Err(); err != nil {
+			return budgetError{ctxStopReason(err)}
 		}
 		return errStopped
 	default:
@@ -479,8 +630,39 @@ func (s *state) checkStop(ctx, scanCtx context.Context) error {
 	}
 }
 
+// ctxStopReason is finding F-H: distinguishes the caller's context being
+// CANCELED from it having exceeded its DEADLINE, so the two are never
+// conflated into a single "deadline" reason again. Any other non-nil ctx.Err
+// (context.Context's own contract only ever produces these two) still falls
+// back to ReasonDeadline rather than panicking on an unrecognized case.
+func ctxStopReason(err error) TruncatedReason {
+	if errors.Is(err, context.Canceled) {
+		return ReasonCanceled
+	}
+	return ReasonDeadline
+}
+
+// validateGlobs refuses a request whose glob list contains a pattern
+// doublestar cannot parse (finding F-B), naming the offending pattern and
+// which list it came from. Called once, before any walking, so a malformed
+// pattern is never silently absorbed into "excludes nothing" or "matches
+// nothing" — see globAllowed, which can now trust every pattern it is
+// handed is syntactically valid.
+func validateGlobs(field string, patterns []string) error {
+	for _, g := range patterns {
+		if !doublestar.ValidatePattern(g) {
+			return fmt.Errorf("filegrep: %s contains an invalid pattern %q", field, g)
+		}
+	}
+	return nil
+}
+
 func (s *state) globAllowed(rel string) bool {
 	for _, g := range s.exclude {
+		// The error return is unreachable in practice here: every pattern
+		// in s.exclude/s.include was validated by validateGlobs before the
+		// walk started, and doublestar.Match's error path is the same
+		// parse failure ValidatePattern already screens for.
 		if ok, _ := doublestar.Match(g, rel); ok {
 			return false
 		}
@@ -521,6 +703,23 @@ func Search(ctx context.Context, roots []Root, opts Options) (Result, error) {
 	if err != nil {
 		return res, err
 	}
+	// Finding F-B: a malformed glob was previously discovered only as a
+	// SYMPTOM — doublestar.Match's error was dropped at every call site
+	// (globAllowed), so an invalid exclude pattern excluded NOTHING (fails
+	// OPEN: a user excluding a sensitive directory got it walked and
+	// excerpted back) and an invalid include pattern matched NOTHING
+	// (every path rejected, indistinguishable from "the term genuinely
+	// isn't present" — and OBS-G1's renderer would then blame the anchoring
+	// rule for a syntactically invalid pattern, a plausible but wrong
+	// diagnosis). Validating both lists up front, before any walking
+	// happens, turns a silent behavioral divergence into an explicit,
+	// named refusal.
+	if err := validateGlobs("include_globs", opts.IncludeGlobs); err != nil {
+		return res, err
+	}
+	if err := validateGlobs("exclude_globs", opts.ExcludeGlobs); err != nil {
+		return res, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, lim.Deadline)
 	defer cancel()
 
@@ -531,16 +730,31 @@ func Search(ctx context.Context, roots []Root, opts Options) (Result, error) {
 		if err := s.walkRoot(ctx, root); err != nil {
 			var b budgetError
 			if errors.As(err, &b) {
+				// A request-level BUDGET is exhausted (max_files,
+				// max_matches, deadline, …) — that bound is shared across
+				// every root via the one *state, so no later root would be
+				// answered honestly either. Stop entirely, as before.
 				res.Truncated = true
 				res.TruncatedReason = b.reason
 				sortHits(res.Hits)
 				return res, nil
 			}
-			// Root itself failed mid-walk (FR-021): visible, never quiet.
+			// Finding F-C: a lost root (FR-021) is root-SPECIFIC, unlike a
+			// budget breach — the walk-tree-plus-N-mounts shape (grep.go,
+			// rest_library_files_search.go) means one unplugged mount must
+			// not silence every OTHER, still-healthy root. Record which
+			// root died (the FIRST one, if more than one dies) and CONTINUE
+			// to the remaining roots, rather than returning immediately —
+			// before this fix, mount #1 dying meant mounts #2 and #3 were
+			// never even opened, and the caller had no way to tell "these
+			// hits are everything" from "these hits are what one dead mount
+			// away from everything looked like".
 			res.Truncated = true
 			res.TruncatedReason = ReasonRootLost
-			sortHits(res.Hits)
-			return res, nil
+			if res.TruncatedRoot == "" {
+				res.TruncatedRoot = root.Name
+			}
+			continue
 		}
 	}
 	sortHits(res.Hits)
@@ -602,7 +816,8 @@ func (s *state) walkRoot(ctx context.Context, root Root) error {
 	}
 	ancestor := ancestorContext{prefix: root.ScopePrefix, layers: ancestorLayers}
 
-	layers := loadIgnoreLayer(root.FS, "")
+	layers, unreadable := loadIgnoreLayer(root.FS, "")
+	s.countIgnoreFileUnreadable(unreadable)
 	walkErr := s.walkDir(ctx, scanCtx, root, "", 1, layers, ancestor, jobs)
 	walkerFoundGenuineStop := walkErr != nil && !errors.Is(walkErr, errStopped)
 
@@ -724,25 +939,38 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 			// aware mechanism — the .gitignore/.ignore layers just above
 			// (ignoredByFrom) — and this per-path filter does not take on a
 			// second, conflicting role.
+			// Review finding F3, and its own follow-up finding F-D: a
+			// directory the walk reaches counts toward the SAME Files
+			// budget files do (checked against the COMBINED
+			// FilesVisited+DirsVisited total, not either counter alone —
+			// checking them separately would let a tree split across both
+			// categories evade the budget entirely, e.g. 999 files + 999
+			// dirs, neither counter over a limit of 1000, yet 1998 entries
+			// actually visited), closing the gap where an unbounded-
+			// directory tree had no budget protection at all. DirsVisited
+			// keeps its own tally (rather than folding into FilesVisited)
+			// so a truncation's accounting stays honest either way: a
+			// directory-heavy search that hits ReasonMaxMatches no longer
+			// reports "0 files searched" while DirsVisited silently
+			// explains where the work actually went.
+			//
+			// F-D: this charge happens BEFORE the glob check below, not
+			// inside its true branch. The recursive walkDir call at the
+			// bottom of this block is UNCONDITIONAL — a directory whose own
+			// path fails include_globs is still descended into, because a
+			// descendant file can legitimately match where the directory
+			// itself does not (F2's own reasoning) — so gating the budget
+			// charge on the SAME glob check the traversal ignores meant an
+			// include-glob-heavy search (where most directory paths do NOT
+			// themselves match, e.g. "**/*.md") walked a directory-heavy
+			// tree with the Files budget never actually enforced, even
+			// though limits_applied.files echoed a bound that was silently
+			// not being counted against.
+			s.res.Stats.DirsVisited++
+			if s.res.Stats.FilesVisited+s.res.Stats.DirsVisited > s.lim.Files {
+				return budgetError{ReasonMaxFiles}
+			}
 			if s.globAllowed(reported) {
-				// Review finding F3: a directory the walk reaches counts
-				// toward the SAME Files budget files do (checked against
-				// the COMBINED FilesVisited+DirsVisited total, not either
-				// counter alone — checking them separately would let a
-				// tree split across both categories evade the budget
-				// entirely, e.g. 999 files + 999 dirs, neither counter
-				// over a limit of 1000, yet 1998 entries actually
-				// visited), closing the gap where an unbounded-directory
-				// tree had no budget protection at all. DirsVisited keeps
-				// its own tally (rather than folding into FilesVisited) so
-				// a truncation's accounting stays honest either way: a
-				// directory-heavy search that hits ReasonMaxMatches no
-				// longer reports "0 files searched" while DirsVisited
-				// silently explains where the work actually went.
-				s.res.Stats.DirsVisited++
-				if s.res.Stats.FilesVisited+s.res.Stats.DirsVisited > s.lim.Files {
-					return budgetError{ReasonMaxFiles}
-				}
 				// NAME match on the directory itself (one hit, KindName —
 				// F7), IsDir true so the wire can tell it apart from a file
 				// hit (review finding F1 — FileSearchHit.is_dir).
@@ -759,7 +987,9 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 				// are not conflated.
 				s.res.Stats.FilesFilteredGlob++
 			}
-			sub := append(layers, loadIgnoreLayer(root.FS, rel)...)
+			subLayers, subUnreadable := loadIgnoreLayer(root.FS, rel)
+			s.countIgnoreFileUnreadable(subUnreadable)
+			sub := append(layers, subLayers...)
 			if err := s.walkDir(ctx, scanCtx, root, rel, depth+1, sub, ancestor, jobs); err != nil {
 				return err
 			}
@@ -808,8 +1038,8 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 		select {
 		case jobs <- job:
 		case <-scanCtx.Done():
-			if ctx.Err() != nil {
-				return budgetError{ReasonDeadline}
+			if err := ctx.Err(); err != nil {
+				return budgetError{ctxStopReason(err)}
 			}
 			return errStopped
 		}
@@ -833,6 +1063,25 @@ func pathOrDot(p string) string {
 func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 	f, err := job.root.FS.Open(job.rel)
 	if err != nil {
+		// Finding F-F: walkDir already promotes an isolated per-directory
+		// ReadDir failure to root_lost when the ROOT itself no longer
+		// opens either (FR-021) — but only walkDir did that check.
+		// scanFile runs in the worker pool, on jobs the walker already
+		// dispatched from a directory listing that succeeded BEFORE the
+		// mount died, which is exactly the shape a shallow tree produces:
+		// ReadDir(".") succeeds, every file dispatches, then the mount
+		// goes away and every worker's Open starts failing. Before this
+		// fix that only incremented FilesSkippedProblems file after file
+		// while Truncated stayed false — the package doc's own promise
+		// ("a lost root is never a quiet empty result") held for the
+		// walker's OWN reads and not for the content scanner's, and the
+		// single-file-scope case (DEFECT-G1) made this the FIRST read a
+		// search could do: an agent that just confirmed a file exists
+		// could get "(no hits)" and truncated:false for a root that died
+		// between the Stat and the Open.
+		if _, rootErr := fs.Stat(job.root.FS, "."); rootErr != nil {
+			return rootErr
+		}
 		s.countSkippedProblem()
 		return nil
 	}
@@ -841,19 +1090,49 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 	br := bufio.NewReaderSize(f, 64<<10)
 	head, _ := br.Peek(binarySniffBytes)
 	if bytes.IndexByte(head, 0) >= 0 {
+		// Finding F-A: this file is still counted in FilesVisited (it WAS
+		// reached and name-checked) but its content is never scanned, so it
+		// must be observable as a deliberate skip rather than silently
+		// absent from BytesScanned with no trace anywhere in the response.
+		s.countSkippedBinary()
 		return nil // binary: name-matchable only (FR-005)
 	}
 
+	// collapsed is KB-7b's document-level AND: true when this search asked
+	// for MatchAllWords and the query actually split into two or more
+	// words (compile() only ever populates s.m.words in that case — see
+	// its own doc comment). One file produces AT MOST one Hit in this mode,
+	// gated on every word having matched SOMEWHERE in the file by EOF.
+	collapsed := len(s.m.words) >= 2
 	var (
-		fileBytes int64
-		lineNo    int
-		before    []string // ring of up to contextN previous lines, each pre-capped
-		fileHits  []Hit
-		pending   []int // indices into fileHits awaiting up to contextN after-lines
-		perFile   int   // this file's own match count (MatchesPerFile cap)
+		fileBytes   int64
+		lineNo      int
+		before      []string // ring of up to contextN previous lines, each pre-capped
+		fileHits    []Hit
+		pending     []int // indices into fileHits awaiting up to contextN after-lines
+		perFile     int   // this file's own match count (MatchesPerFile cap) — legacy mode only
+		wordFound   []bool
+		matchLines  int // collapsed mode: how many lines matched at least one word
+		linesCapped bool
 	)
+	if collapsed {
+		wordFound = make([]bool, len(s.m.words))
+	}
 
 	flush := func() error {
+		if collapsed {
+			// KB-7b's AND gate: a file that does not contain every query
+			// word SOMEWHERE is not a hit at all, no matter how many of the
+			// words it did match — this is what makes a hit mean "a
+			// matching document" rather than "a matching line" under
+			// MatchAllWords. fileHits holds at most the one representative
+			// hit built below; when the gate fails there is nothing to
+			// charge.
+			if len(fileHits) == 0 || !allWordsFound(wordFound) {
+				return nil
+			}
+			fileHits[0].MatchCount = matchLines
+		}
 		for _, h := range fileHits {
 			if err := s.chargeOutput(h); err != nil {
 				return err
@@ -907,7 +1186,40 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 			if s.m.contextN > 0 {
 				appendAfter(trimmed)
 			}
-			if pos, ok := s.m.lineMatch(trimmed); ok {
+			if collapsed {
+				// KB-7b: this line's contribution is "which words did it
+				// touch", not "is this line itself a hit" — a hit is
+				// decided once, at EOF, by flush()'s allWordsFound gate.
+				// The FIRST matching line becomes the one representative
+				// Hit (excerpt + context); every line after that only
+				// updates wordFound/matchLines, exactly like the reference
+				// engine folds repeated matches into one row (KB-6a).
+				if pos, ok := s.m.wordMatch(trimmed, wordFound); ok {
+					if !linesCapped {
+						if matchLines >= s.lim.MatchesPerFile {
+							linesCapped = true
+							s.countHitsCappedPerFile()
+						} else {
+							matchLines++
+						}
+					}
+					if len(fileHits) == 0 {
+						h := Hit{
+							Path:    job.reported,
+							Kind:    KindContent,
+							Line:    lineNo,
+							Excerpt: excerpt(trimmed, pos),
+						}
+						if s.m.contextN > 0 {
+							h.ContextBefore = append(h.ContextBefore, before...)
+						}
+						fileHits = append(fileHits, h)
+						if s.m.contextN > 0 {
+							pending = append(pending, 0)
+						}
+					}
+				}
+			} else if pos, ok := s.m.lineMatch(trimmed); ok {
 				if perFile >= s.lim.MatchesPerFile {
 					s.countHitsCappedPerFile()
 					// keep scanning for byte accounting? No: capped file is

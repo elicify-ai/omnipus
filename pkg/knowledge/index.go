@@ -245,6 +245,16 @@ type IndexHit struct {
 	// forbids opening one and hashing is opening. An empty hash is unknown
 	// freshness, which is flagged, never assumed fresh.
 	SourceHash string
+	// FallbackMode is true when this hit was produced by KB-7a's OR-ranked
+	// fallback tier (searchRaw) rather than the strict AND tier — i.e. the
+	// query's terms do not all appear in this note, and the result set as a
+	// whole is looser than an exact answer. It is a property of the QUERY
+	// this hit came from, not of the individual hit, so every hit returned
+	// by one search call carries the same value; it rides on IndexHit
+	// (rather than a call-level report only) so it survives every existing
+	// narrow caller — Index.Search included — without forcing a signature
+	// change on code outside this package.
+	FallbackMode bool
 }
 
 // SyncStats reports what one reconcile actually did. Every field is a count a
@@ -2435,8 +2445,14 @@ var indexSearchMaxFetch = 2048
 // itself has no report to carry it in, and it has no production caller of its
 // own — see index_test.go for its (many) direct callers, which do not read a
 // completeness signal today.
+//
+// It also discards the KB-7a AND/OR-fallback signal SearchFiltered now
+// reports, for the same reason: this method has no report to carry it in.
+// Every hit still carries its own IndexHit.FallbackMode, so a caller of this
+// narrower method is never left with no way to know — it just has to read
+// the flag off the hits themselves rather than off a call-level report.
 func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
-	hits, _, err := ix.SearchFiltered(query, limit, nil)
+	hits, _, _, err := ix.SearchFiltered(query, limit, nil)
 	return hits, err
 }
 
@@ -2470,7 +2486,16 @@ func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
 // there is nothing higher-ranked left unseen — see the two conditions ORed in
 // the loop's first check below, which return before truncated is ever
 // considered.
-func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath string) bool) ([]IndexHit, bool, error) {
+//
+// fellBack (KB-7a) reports whether searchRaw had to drop from the strict
+// AND tier to the OR-ranked fallback tier to answer this query at all — see
+// searchRaw's own doc comment. It is a property of the QUERY, not of the
+// fetch size, so every iteration of the escalating-fetch loop below agrees
+// on it for one call (searchRaw's own AND-then-OR decision does not depend
+// on `size`); it is threaded out of the loop rather than hardcoded to the
+// last iteration's value purely so a future change to that invariant fails
+// loudly here instead of silently reporting the wrong tier.
+func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath string) bool) ([]IndexHit, bool, bool, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -2484,9 +2509,12 @@ func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath strin
 		if fetch > indexSearchMaxFetch {
 			fetch = indexSearchMaxFetch
 		}
-		hits, total, err := ix.searchRaw(query, fetch)
+		hits, total, fellBack, err := ix.searchRaw(query, fetch)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
+		}
+		for i := range hits {
+			hits[i].FallbackMode = fellBack
 		}
 		if keep != nil {
 			kept := hits[:0]
@@ -2506,7 +2534,7 @@ func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath strin
 			if len(collapsed) > limit {
 				collapsed = collapsed[:limit]
 			}
-			return collapsed, false, nil
+			return collapsed, false, fellBack, nil
 		}
 		// Stop at the fetch ceiling WITHOUT either of the above being true
 		// (FIX F7): more raw hits exist beyond what was examined, and fewer
@@ -2517,7 +2545,7 @@ func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath strin
 			if len(collapsed) > limit {
 				collapsed = collapsed[:limit]
 			}
-			return collapsed, true, nil
+			return collapsed, true, fellBack, nil
 		}
 		fetch *= 4
 	}
@@ -2668,76 +2696,217 @@ func prefixSearchTokens(query string) []string {
 	return out
 }
 
-func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
-	var q bleveQuery.Query
-	if strings.TrimSpace(query) == "" {
-		q = bleve.NewMatchAllQuery()
-	} else {
-		// Explicit per-field match queries, for the reason pkg/memrooms/index
-		// documents: a plain match query targets the composite _all field,
-		// whose analyzer does not match the field-level mapping, and returns
-		// nothing even when the terms are present.
-		fields := []string{
-			fieldName, fieldPath, fieldBody,
-			// D21.2's fields. A term in a note's title, one of its headings or
-			// one of its property values is now a reason to return the note,
-			// where before the title and the headings were only findable
-			// because they happened to also be body text and the property
-			// values were findable as prose that had lost its key.
-			fieldTitle, fieldHeadings, fieldPropValue,
-			// prop_key is keyword-analysed, so a match query against it asks
-			// "is the whole query string the name of a property this note
-			// declares?". A search for `status` therefore finds every note
-			// that HAS a status, which is a question the index could not
-			// answer at all before.
-			fieldPropKey,
+// textSearchFields is every field a free-text query is matched against.
+// Declared once so the AND tier (buildAndQuery) and the OR tier
+// (buildOrQuery) can never drift apart on which fields a query reaches —
+// see fusionFieldWeights' own header in rank.go for what happened the last
+// time this project kept two field lists that were supposed to agree.
+var textSearchFields = []string{
+	fieldName, fieldPath, fieldBody,
+	// D21.2's fields. A term in a note's title, one of its headings or
+	// one of its property values is now a reason to return the note,
+	// where before the title and the headings were only findable
+	// because they happened to also be body text and the property
+	// values were findable as prose that had lost its key.
+	fieldTitle, fieldHeadings, fieldPropValue,
+	// prop_key is keyword-analysed, so a match query against it asks
+	// "is the whole query string the name of a property this note
+	// declares?". A search for `status` therefore finds every note
+	// that HAS a status, which is a question the index could not
+	// answer at all before.
+	fieldPropKey,
+}
+
+// textSearchProseFields is the subset of textSearchFields that carries real
+// prose through the "en" analyzer, as opposed to a keyword-analysed whole-
+// string field (path/prop_key/prop). Both the prefix pass and the fuzzy
+// pass are prose-only for the same reason: prefixing or fuzz-matching a
+// keyword field would silently change what an exact pair or key query
+// means, because that field stores its whole value as one term.
+var textSearchProseFields = []string{fieldName, fieldBody, fieldTitle, fieldHeadings, fieldPropValue}
+
+// fuzzyMatchBoost is the boost applied to every fuzzy clause in the
+// OR-fallback query (KB-7a). It is deliberately far below the exact
+// clauses' default boost of 1.0 (Boost.Value() — see bleve's query/boost.go
+// — treats an unset BoostVal as 1.0), so a document that matches ONLY on a
+// fuzzy (edit-distance) term cannot outrank a document that matches any
+// exact clause: BM25's per-clause contribution is always positive, so
+// scaling the fuzzy side down by 20x leaves an enormous margin against a
+// single weak exact match ever losing to a fuzzy one. This is what "fuzzy
+// matches must rank below exact ones" (KB-6/KB-7's ratified design) means
+// operationally — there is no separate sort key for it, only this boost
+// gap.
+const fuzzyMatchBoost = 0.05
+
+// buildOrQuery is the pre-KB-7 production query: a disjunction of per-field
+// match queries over the WHOLE query string (operator OR within each
+// field's own analysis), plus a prefix pass on the prose fields (F2 /
+// harness Issue 14). It is unchanged from the query searchRaw built before
+// KB-7 — every existing caller that only ever reaches this tier (a
+// single-term query that matches something) sees byte-identical results.
+//
+// When fuzzy is true, one additional MatchQuery per prose field is added
+// with SetFuzziness(1) and fuzzyMatchBoost — KB-7a's typo tolerance. It is
+// deliberately confined to THIS tier and never added to buildAndQuery's
+// conjunction: a fuzzy clause inside an AND would let a single mistyped
+// word silently loosen every OTHER term's match into an edit-distance
+// search too, which is precision the AND tier exists to guarantee. Typo
+// tolerance only ever earns a place in the looser, already-degraded
+// fallback pass.
+func buildOrQuery(query string, fuzzy bool) bleveQuery.Query {
+	qs := make([]bleveQuery.Query, 0, len(textSearchFields)+2*len(textSearchProseFields))
+	for _, field := range textSearchFields {
+		mq := bleveQuery.NewMatchQuery(query)
+		mq.SetField(field)
+		qs = append(qs, mq)
+	}
+	// PREFIX MATCHING (F2 / harness Issue 14). The match queries above are
+	// exact-term-after-analysis: they find a note for `composio` but not for
+	// `compos`, because `compos` analyses to the term "compos" and the body
+	// dictionary holds "composio" (or its stem), which is a different term.
+	// A caller typing a partial word expects the fuller term to be found —
+	// the same expectation NearMissVocabulary already serves when it offers
+	// `compos → composio` as a suggestion, so a `words` search must actually
+	// honour what the suggestion promises rather than only naming it.
+	//
+	// A bleve PrefixQuery matches the term DICTIONARY by raw byte prefix and
+	// performs no analysis of its own, so the prefix must arrive tokenized
+	// and folded the SAME way the prose analyzer built the dictionary —
+	// prefixSearchTokens does that (Unicode word tokenizer + lower-case, no
+	// stem). It deliberately does NOT stem: a stem would shorten the prefix
+	// past the very characters the caller typed. It also must not use
+	// foldTokens, which splits on the underscore the "en" analyzer keeps
+	// inside a token — see prefixSearchTokens for the over-match that caused
+	// (round-2 regression). These disjuncts only ever ADD matches to the
+	// exact ones above; they never remove one, so a query that already
+	// matched exactly is unaffected. Only the PROSE fields get a prefix pass
+	// — a keyword field (path/prop_key/prop) stores each value as one whole
+	// term where prefixing would silently change what an exact pair or key
+	// query means.
+	for _, token := range prefixSearchTokens(query) {
+		// vocabularyPrefixMin guards against a 1–2 character prefix matching
+		// a large fraction of the dictionary — the same floor the
+		// vocabulary suggester uses for the same reason.
+		if len([]rune(token)) < vocabularyPrefixMin {
+			continue
 		}
-		qs := make([]bleveQuery.Query, 0, len(fields))
-		for _, field := range fields {
+		for _, field := range textSearchProseFields {
+			pq := bleveQuery.NewPrefixQuery(token)
+			pq.SetField(field)
+			qs = append(qs, pq)
+		}
+	}
+	if fuzzy {
+		for _, field := range textSearchProseFields {
 			mq := bleveQuery.NewMatchQuery(query)
+			mq.SetField(field)
+			mq.SetFuzziness(1)
+			mq.SetBoost(fuzzyMatchBoost)
+			qs = append(qs, mq)
+		}
+	}
+	return bleve.NewDisjunctionQuery(qs...)
+}
+
+// buildAndQuery is KB-7a's primary tier: a note is a candidate only when
+// EVERY query term is present SOMEWHERE in the note, not merely when any one
+// term is present anywhere in the collection. This is the "notes containing
+// BOTH terms" test the founder's own measurement used (784-note vault,
+// query "investment report": 0 notes contain both, 12 contain "investment",
+// 212 contain "report", and the pre-fix OR search returned all 224).
+//
+// It is a document-level AND, not a per-field one: for each term, a
+// DISJUNCTION across every textSearchField (plus the same prefix pass
+// buildOrQuery uses, so "compos report" still partial-matches "composio"
+// under AND) decides whether that term is present ANYWHERE in the note —
+// term T in the title and term U only in the body both count. The per-term
+// disjunctions are then wrapped in one CONJUNCTION, so a document must
+// satisfy every term's own "present somewhere" test independently. A
+// simpler per-FIELD AND (SearchField's own MatchQueryOperatorAnd pattern,
+// requiring all terms in the SAME field) was considered and rejected: it
+// would miss a real match split across fields (e.g. the note's TITLE names
+// one term and its BODY discusses the other), which is not what "all query
+// terms must appear" promises.
+//
+// A single-term query degenerates to one term's own disjunction, i.e. the
+// same fields buildOrQuery(query, false) would search — so "a single word
+// searches fine" (KB-7's own framing) is preserved unchanged; the AND/OR
+// distinction only has teeth once there are two or more terms to relate.
+func buildAndQuery(terms []string) bleveQuery.Query {
+	perTerm := make([]bleveQuery.Query, 0, len(terms))
+	for _, term := range terms {
+		qs := make([]bleveQuery.Query, 0, len(textSearchFields)+len(textSearchProseFields))
+		for _, field := range textSearchFields {
+			mq := bleveQuery.NewMatchQuery(term)
 			mq.SetField(field)
 			qs = append(qs, mq)
 		}
-		// PREFIX MATCHING (F2 / harness Issue 14). The match queries above are
-		// exact-term-after-analysis: they find a note for `composio` but not for
-		// `compos`, because `compos` analyses to the term "compos" and the body
-		// dictionary holds "composio" (or its stem), which is a different term.
-		// A caller typing a partial word expects the fuller term to be found —
-		// the same expectation NearMissVocabulary already serves when it offers
-		// `compos → composio` as a suggestion, so a `words` search must actually
-		// honour what the suggestion promises rather than only naming it.
-		//
-		// A bleve PrefixQuery matches the term DICTIONARY by raw byte prefix and
-		// performs no analysis of its own, so the prefix must arrive tokenized
-		// and folded the SAME way the prose analyzer built the dictionary —
-		// prefixSearchTokens does that (Unicode word tokenizer + lower-case, no
-		// stem). It deliberately does NOT stem: a stem would shorten the prefix
-		// past the very characters the caller typed. It also must not use
-		// foldTokens, which splits on the underscore the "en" analyzer keeps
-		// inside a token — see prefixSearchTokens for the over-match that caused
-		// (round-2 regression). These disjuncts only ever ADD matches to the
-		// exact ones above; they never remove one, so a query that already
-		// matched exactly is unaffected. Only the PROSE fields get a prefix pass
-		// — a keyword field (path/prop_key/prop) stores each value as one whole
-		// term where prefixing would silently change what an exact pair or key
-		// query means.
-		prefixFields := []string{fieldName, fieldBody, fieldTitle, fieldHeadings, fieldPropValue}
-		for _, token := range prefixSearchTokens(query) {
-			// vocabularyPrefixMin guards against a 1–2 character prefix matching
-			// a large fraction of the dictionary — the same floor the
-			// vocabulary suggester uses for the same reason.
-			if len([]rune(token)) < vocabularyPrefixMin {
-				continue
-			}
-			for _, field := range prefixFields {
-				pq := bleveQuery.NewPrefixQuery(token)
+		if len([]rune(term)) >= vocabularyPrefixMin {
+			for _, field := range textSearchProseFields {
+				pq := bleveQuery.NewPrefixQuery(term)
 				pq.SetField(field)
 				qs = append(qs, pq)
 			}
 		}
-		q = bleve.NewDisjunctionQuery(qs...)
+		perTerm = append(perTerm, bleve.NewDisjunctionQuery(qs...))
 	}
-	return ix.runSearch(q, size, query)
+	if len(perTerm) == 1 {
+		return perTerm[0]
+	}
+	return bleve.NewConjunctionQuery(perTerm...)
+}
+
+// searchRaw executes one free-text query and returns the raw per-SEGMENT
+// hits, KB-7a's tier the fallback was used, and the total bleve reports.
+//
+// Two tiers, tried in order:
+//
+//  1. AND — buildAndQuery, every term required. This is the tier that
+//     answers "investment report" with the 12 notes that actually mention
+//     investment, instead of the 224 that mention either word.
+//  2. OR, WITH FUZZINESS — buildOrQuery(query, true), tried ONLY when tier 1
+//     found nothing, so a too-narrow query degrades to the pre-KB-7
+//     production behaviour (plus typo tolerance) instead of dead-ending on
+//     an empty answer. fellBack tells the caller which tier actually
+//     answered, so the honesty layer (search.go's SearchReport) can say so
+//     rather than presenting a loosened answer as if it were exact.
+//
+// An empty query keeps the pre-existing MatchAllQuery behaviour untouched —
+// there are no terms to relate, so neither tier's distinction applies.
+func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, bool, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		hits, total, err := ix.runSearch(bleve.NewMatchAllQuery(), size, query)
+		return hits, total, false, err
+	}
+
+	// Tier 1 needs at least one term to build a query from; a query that is
+	// non-empty after TrimSpace but tokenizes to nothing (e.g. pure
+	// punctuation) has no AND tier to try and goes straight to tier 2 with
+	// the ORIGINAL query text, exactly as searchRaw did before KB-7a.
+	//
+	// A SINGLE term also goes through buildAndQuery, not around it:
+	// buildAndQuery(terms) with one term degenerates to that term's own
+	// disjunction across fields — the same query buildOrQuery(query, false)
+	// would build for a one-word query — so this is not a second, different
+	// query for the single-word case. Routing it through tier 1 rather than
+	// straight to tier 2 is what keeps a successful single-word search
+	// reported as fellBack=false (an exact match, not a relaxed one) and
+	// keeps fuzzy clauses OUT of it entirely unless it genuinely finds
+	// nothing — "a single word searches fine" (KB-7's own framing) must not
+	// regress into every one-word query being marked as a loosened answer.
+	terms := prefixSearchTokens(query)
+	if len(terms) >= 1 {
+		hits, total, err := ix.runSearch(buildAndQuery(terms), size, query)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		if total > 0 {
+			return hits, total, false, nil
+		}
+	}
+	hits, total, err := ix.runSearch(buildOrQuery(query, true), size, query)
+	return hits, total, true, err
 }
 
 // runSearch executes one bleve query and decodes its hits.

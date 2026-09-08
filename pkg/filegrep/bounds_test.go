@@ -196,6 +196,10 @@ func TestFileGrep_DeadlineAndContextCancel(t *testing.T) {
 	})
 
 	t.Run("external cancel stops the walk", func(t *testing.T) {
+		// Finding F-H: an externally CANCELED context (client disconnect, a
+		// stopped agent turn, …) is a different event from a request that
+		// genuinely ran past its own DEADLINE, and must be reported as
+		// such rather than conflated into "deadline" — see ctxStopReason.
 		files := map[string]string{"a.txt": "hello\n", "b.txt": "hello\n"}
 		slow := slowFS{FS: buildFS(files), delay: 20 * time.Millisecond}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -207,8 +211,8 @@ func TestFileGrep_DeadlineAndContextCancel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
-		if !res.Truncated || res.TruncatedReason != ReasonDeadline {
-			t.Fatalf("want truncated deadline on external cancel, got truncated=%v reason=%v", res.Truncated, res.TruncatedReason)
+		if !res.Truncated || res.TruncatedReason != ReasonCanceled {
+			t.Fatalf("want truncated canceled on external cancel, got truncated=%v reason=%v", res.Truncated, res.TruncatedReason)
 		}
 	})
 }

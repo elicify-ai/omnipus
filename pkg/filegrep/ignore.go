@@ -5,6 +5,7 @@
 package filegrep
 
 import (
+	"errors"
 	"io/fs"
 	"strings"
 
@@ -64,9 +65,15 @@ func newIgnoreLayer(dir string, lines []string) ignoreLayer {
 }
 
 // readIgnoreFiles reads whichever of ignoreFileNames exist in dir, returning
-// each found file's raw lines (in ignoreFileNames order).
-func readIgnoreFiles(fsys fs.FS, dir string) [][]string {
-	var out [][]string
+// each found file's raw lines (in ignoreFileNames order). unreadable counts
+// a name that EXISTS but failed to read — finding F-E: the previous version
+// collapsed that case with the ordinary "no such file" case (which is most
+// directories, for either ignore filename, and is not worth counting), so a
+// permission-denied or I/O error on a real .gitignore/.ignore silently
+// dropped that file's rules with no trace anywhere in the response. A
+// missing file is still not counted — that remains the routine, silent
+// case; only "it exists and reading it failed" increments unreadable.
+func readIgnoreFiles(fsys fs.FS, dir string) (out [][]string, unreadable int) {
 	for _, name := range ignoreFileNames {
 		p := name
 		if dir != "" {
@@ -74,20 +81,23 @@ func readIgnoreFiles(fsys fs.FS, dir string) [][]string {
 		}
 		data, err := fs.ReadFile(fsys, p)
 		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				unreadable++
+			}
 			continue
 		}
 		out = append(out, strings.Split(string(data), "\n"))
 	}
-	return out
+	return out, unreadable
 }
 
-func loadIgnoreLayer(fsys fs.FS, dir string) []ignoreLayer {
-	files := readIgnoreFiles(fsys, dir)
-	out := make([]ignoreLayer, 0, len(files))
+func loadIgnoreLayer(fsys fs.FS, dir string) (out []ignoreLayer, unreadable int) {
+	files, unreadable := readIgnoreFiles(fsys, dir)
+	out = make([]ignoreLayer, 0, len(files))
 	for _, lines := range files {
 		out = append(out, newIgnoreLayer(dir, lines))
 	}
-	return out
+	return out, unreadable
 }
 
 // AncestorIgnoreLayer is the raw content of one .gitignore/.ignore file that
@@ -109,17 +119,27 @@ type AncestorIgnoreLayer struct {
 // otherwise have honored (F8/FR-007). Call it BEFORE narrowing: trueRoot
 // must still reach those ancestor directories. Pair the result with
 // Root.ScopePrefix set to the same scope.
-func LoadAncestorIgnore(trueRoot fs.FS, scope string) []AncestorIgnoreLayer {
+//
+// unreadable is finding F-E's signal: how many ancestor .gitignore/.ignore
+// files existed but could not be read. Before this, a caller had no way to
+// tell "ancestor layers loaded" from "ancestor layers failed to load" —
+// this function returned no error at all, so a permission-denied ancestor
+// ignore file silently applied none of its rules with nothing to show for
+// it. A caller that ignores this return keeps today's exact behavior
+// (rules from that file simply do not apply, same as if it never existed);
+// a caller that wants to surface it can count/log it.
+func LoadAncestorIgnore(trueRoot fs.FS, scope string) (out []AncestorIgnoreLayer, unreadable int) {
 	scope = strings.Trim(scope, "/")
 	if scope == "" {
-		return nil
+		return nil, 0
 	}
 	segments := strings.Split(scope, "/")
-	var out []AncestorIgnoreLayer
 	dir := ""
 	for i := 0; i < len(segments); i++ {
-		for _, lines := range readIgnoreFiles(trueRoot, dir) {
-			out = append(out, AncestorIgnoreLayer{Dir: dir, Lines: lines})
+		lines, u := readIgnoreFiles(trueRoot, dir)
+		unreadable += u
+		for _, l := range lines {
+			out = append(out, AncestorIgnoreLayer{Dir: dir, Lines: l})
 		}
 		if dir == "" {
 			dir = segments[i]
@@ -127,7 +147,7 @@ func LoadAncestorIgnore(trueRoot fs.FS, scope string) []AncestorIgnoreLayer {
 			dir = dir + "/" + segments[i]
 		}
 	}
-	return out
+	return out, unreadable
 }
 
 // ignoredByFrom reports whether rel is pruned by layers, processed shallow

@@ -114,6 +114,36 @@ describe('useVaultSearch — collection resolution', () => {
     expect(searchFn).not.toHaveBeenCalled()
   })
 
+  it('finding F-I: surfaces detection_error.message so the caller can show it, rather than dropping it', async () => {
+    const loadCollectionInfo = vi.fn().mockResolvedValue(
+      vaultInfo({ detection_error: { code: 'root_unreadable', message: 'cannot read vault: permission denied' } }),
+    )
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: 'landlock', loadCollectionInfo }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(result.current.detectionError).toBe('cannot read vault: permission denied'))
+  })
+
+  it('finding F-I: surfaces the collection-info REQUEST failing outright, not only detection_error', async () => {
+    const loadCollectionInfo = vi.fn().mockRejectedValue(new Error('network error'))
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: 'landlock', loadCollectionInfo }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(result.current.detectionError).toBe('network error'))
+  })
+
+  it('leaves detectionError undefined for an ordinary, successful detection', async () => {
+    const loadCollectionInfo = vi.fn().mockResolvedValue(vaultInfo())
+    const { result } = renderHook(
+      () => useVaultSearch({ workspaceId: 'ws-1', folderPath: 'vault', query: 'landlock', loadCollectionInfo }),
+      { wrapper: wrapper() },
+    )
+    await waitFor(() => expect(loadCollectionInfo).toHaveBeenCalled())
+    expect(result.current.detectionError).toBeUndefined()
+  })
+
   it('issues no lookup at all at the virtual root (workspaceId null)', async () => {
     const loadCollectionInfo = vi.fn().mockResolvedValue(vaultInfo())
     renderHook(

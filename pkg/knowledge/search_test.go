@@ -264,7 +264,7 @@ func TestProgress_ZeroTotalCannotBecomeAZeroOfZeroRatio(t *testing.T) {
 		t.Error("BannerVisible() = true with nothing to index; US-6 AS-6 requires a fast unchanged reconcile to show nothing")
 	}
 
-	report := buildSearchReport(p, 0, SearchDefaultTopN, false, false)
+	report := buildSearchReport(p, 0, SearchDefaultTopN, false, false, false)
 	if !report.Complete {
 		t.Error("a run with nothing to index left the report incomplete")
 	}
@@ -578,7 +578,7 @@ func TestProgress_FastReconcileShowsNoBannerButStillTellsTheTruth(t *testing.T) 
 			p.Elapsed, ReconcileBannerDelay)
 	}
 	// ... but the response still tells the truth.
-	report := buildSearchReport(p, 0, SearchDefaultTopN, false, false)
+	report := buildSearchReport(p, 0, SearchDefaultTopN, false, false, false)
 	if report.Complete {
 		t.Error("report.Complete = true during a reconcile; the banner threshold must not reach the response")
 	}
@@ -714,7 +714,7 @@ func TestSearch_SegmentedNoteConsumesOneResultSlot(t *testing.T) {
 	// Fixture check: the three highest-scoring INDEX DOCUMENTS must all be
 	// segments of dense.md. Without that, "three distinct notes" is true of the
 	// raw per-segment answer too, and the test proves nothing.
-	raw, _, err := ix.searchRaw(term, 10)
+	raw, _, _, err := ix.searchRaw(term, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

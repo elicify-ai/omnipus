@@ -29,11 +29,26 @@ properties:
     description: True whenever any request-level bound stopped the search early.
   truncated_reason:
     type: string
-    enum: [max_files, max_bytes, max_matches, max_depth, deadline, max_output, root_lost]
+    enum: [max_files, max_bytes, max_matches, max_depth, deadline, canceled, max_output, root_lost]
     description: >
       Which bound fired (present exactly when truncated is true). root_lost
       means the walk root or a mount root became unreadable mid-search — a
-      visible outcome, never a quiet empty result (FR-021).
+      visible outcome, never a quiet empty result (FR-021). canceled (finding
+      F-H) is distinct from deadline: the CALLER's own request context was
+      canceled (client disconnected, an interrupted agent turn) rather than
+      the search genuinely running past its deadline — the two used to be
+      conflated into "deadline" for every caller.
+  truncated_root:
+    type: string
+    description: >
+      Present only when truncated_reason is root_lost AND more than one root
+      was searched (a work tree plus mounts): names the FIRST root (the
+      empty string for the workspace work tree, the mount name otherwise)
+      that became unreadable (finding F-C). Every OTHER root is still
+      searched to completion — one dead mount does not silence hits from
+      healthy ones — so this exists to say WHICH root's coverage is missing
+      rather than leaving the caller to guess.
+    example: "research-drive"
   limits_applied:
     type: object
     additionalProperties: false
@@ -105,3 +120,23 @@ properties:
           conflating the two would hide which one actually explains a given
           search's shape. Left optional for the same backward-compatibility
           reason as dirs_visited above.
+      files_skipped_binary:
+        type: integer
+        description: >
+          Finding F-A: files whose content was never scanned because their
+          first 8 KiB contained a NUL byte (FR-005 — binary files are
+          name-matchable, never content-scanned). Such a file IS still
+          counted in files_visited (it was reached and name-checked); this
+          is what makes that count honest rather than silently implying
+          every visited file's content was searched. Left optional for the
+          same backward-compatibility reason as dirs_visited above.
+      ignore_files_unreadable:
+        type: integer
+        description: >
+          Finding F-E: a .gitignore/.ignore file the walk found but could
+          NOT read (permission denied, an I/O error) — as opposed to one
+          simply not existing, which is the routine, uncounted case. When
+          nonzero, at least one directory's filtering did not apply the
+          rules that file would have added (it degrades to "no additional
+          rules from this file", same as a missing one). Left optional for
+          the same backward-compatibility reason as dirs_visited above.

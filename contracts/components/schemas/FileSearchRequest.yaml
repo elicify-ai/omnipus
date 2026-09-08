@@ -42,6 +42,21 @@ properties:
     type: boolean
     default: false
     description: Treat query as an RE2 pattern. The SPA bar never sets this.
+  match_all_words:
+    type: boolean
+    default: false
+    description: >
+      KB-7b: split query on whitespace into words and require every word to
+      be present somewhere in the file — not necessarily on the same line —
+      collapsing a matching file to ONE hit (FileSearchHit.match_count
+      carries how many lines actually matched) instead of one hit per
+      matching line. The SPA bar always sets this true, so "quarterly
+      report" finds a file that discusses both words in different
+      paragraphs, matching how a person reads the query. Ignored when regex
+      is true — a regex pattern is one expression written on purpose, never
+      split on whitespace. Default false so an API caller that wants today's
+      literal-substring, one-hit-per-line behavior (e.g. the agent grep
+      tool's own semantics) gets it without asking.
   case:
     type: string
     enum: [smart, sensitive, insensitive]
@@ -80,9 +95,12 @@ properties:
     maximum: 5
     default: 0
     description: >
-      Lines of context to attach before and after each content hit. Carried on
-      REST for API parity with the agent grep tool; the SPA does not use it in
-      v1 (recorded decision, spec R2-MIN-005).
+      Lines of context to attach before and after each content hit. KB-6c
+      SUPERSEDES the earlier v1 decision (spec R2-MIN-005) to leave this at
+      0 from the SPA: one bare line is rarely enough to judge a hit, and
+      raising it to 1 needed no backend, contract or engine change — the
+      engine already fills context_before/context_after, the SPA simply was
+      not asking. The SPA bar now sends 1.
   limits:
     type: object
     additionalProperties: false
