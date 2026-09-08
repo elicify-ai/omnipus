@@ -459,38 +459,7 @@ func (r *LiveViewRegistry) Attach(
 	onControl ControlSink,
 	onTabs TabsSink,
 ) (bool, error) {
-	sessionID = r.resolveSessionID(sessionID)
-	if viewerID == "" {
-		return false, fmt.Errorf("browser live: viewer id is required")
-	}
-	tabCtx, err := r.mgr.Session(sessionID)
-	if err != nil {
-		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
-	}
-	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onStatus, onControl, onTabs)
-	if err != nil {
-		return false, err
-	}
-	// A watched browsing context is never idle — see ReapIdleSessions.
-	r.mgr.ViewerAttached(sessionID)
-
-	// ADR-041 D4: give the newly-attached viewer the CURRENT tab strip
-	// immediately — a session with only one tab may never emit another
-	// tabs-changed event during this viewer's whole attachment.
-	if onTabs != nil {
-		// FR-013: asks for the STATE, not just the tabs. The two states that
-		// do not push (TabStateNoContext — nothing has ever browsed here — and
-		// TabStateEmpty — a live context between CloseTab's last-tab removal
-		// and its replacement) are the pair the old `len(tabs) > 0` guard
-		// conflated. Both still skip the push, and deliberately so: pushing an
-		// empty strip would blank a panel that is about to receive a real
-		// tabs-changed event. What changes is that the two are now visibly
-		// distinct at the call site rather than indistinguishable.
-		if state, tabs, activeIdx, terr := r.mgr.ListTabsState(sessionID); terr == nil && state == TabStateOpen {
-			onTabs(tabs, activeIdx)
-		}
-	}
-	return controlledByOther, nil
+	return r.AttachContext(context.Background(), sessionID, viewerID, onStatus, onControl, onTabs)
 }
 
 // Detach unbinds viewerID from sessionID's live view. When this was the last

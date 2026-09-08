@@ -1369,6 +1369,9 @@ func (h *BrowserWSHandler) handleAttach(
 	if request.epoch != epoch || request.ctx == nil || request.ctx.Err() != nil {
 		return
 	}
+	workCtx, cancelWork := context.WithCancel(request.ctx)
+	defer cancelWork()
+
 	sendFailure := func(frame generated.BrowserStatusFrame, reason string) {
 		if state.finishAttachmentFailure(request) {
 			wc.sendCriticalScopedGen(frame, reason, request.ctx, nil)
@@ -1389,7 +1392,7 @@ func (h *BrowserWSHandler) handleAttach(
 	// session's own meta — the client sends a session id and nothing else, and
 	// never gets to name a workspace. See sessionWorkspaceID.
 	mgr, outcome := h.agentLoop.BrowserManagerForAgent(
-		context.Background(), frame.AgentId, h.sessionWorkspaceID(frame.SessionId))
+		workCtx, frame.AgentId, h.sessionWorkspaceID(frame.SessionId))
 	if outcome != agent.BrowserResolveOK {
 		sendFailure(
 			sessionErrorStatus(frame.SessionId, browserResolveReason(outcome, frame.AgentId)),
@@ -1401,61 +1404,8 @@ func (h *BrowserWSHandler) handleAttach(
 	// Issue #671: resolved ONCE, here, and used for every live-view call this
 	// connection makes from now on (pinned via bindAttachment below).
 	panelSessionID := mgr.PanelTabSetID(chatSessionID)
-	controlledByOther, err := mgr.Live().Attach(panelSessionID, viewerID, func(message string) {
-		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
-		// context died without an explicit browser_detach — e.g. this
-		// connection is still holding a reference to a BrowserManager that
-		// registerSharedTools has since Shutdown()'d on hot-reload. Tell the
-		// client so it can re-attach (which resolves the CURRENT manager via
-		// BrowserManagerForAgent) instead of silently watching a frozen frame
-		// forever.
-		wc.sendCriticalGen(
-			sessionErrorStatus(chatSessionID, message),
-			dropContext(chatSessionID, viewerID, "status-death"),
-		)
-	}, func(controlledByOther bool) {
-		// ADR-039 UAT BE-1: fan-out from LiveView.takeControl/releaseControl —
-		// some OTHER connection on this session just took or released
-		// control. state="idle" here (never "controlling"/"released", which
-		// describe THIS connection's own action) — see BrowserStatusFrame's
-		// enum and BrowserLiveView.tsx's pillConfig, where 'idle' already
-		// falls into the same "no human holds the lock" display bucket as
-		// 'attached'/'released' by default, so this is a safe no-op display
-		// change for a client that hasn't yet started reading
-		// controlled_by_other, and the correct signal for one that has.
-		cbo := controlledByOther
-		wc.sendCriticalGen(generated.BrowserStatusFrame{
-			Type:              string(generated.WsFrameTypeBrowserStatus),
-			State:             "idle",
-			SessionId:         &chatSessionID,
-			ControlledByOther: &cbo,
-			// ControlOnly (B1): this frame's SOLE purpose is to update
-			// control-ownership on this OTHER viewer — it carries no real
-			// lifecycle/error meaning. Without this flag it's
-			// indistinguishable on the wire from a genuine status
-			// transition, so the SPA was wiping any displayed error banner
-			// and resetting other state on every take/release/detach by a
-			// DIFFERENT viewer. Deliberately NOT set on the initial attach
-			// response below (state="attached") — that one is a real
-			// lifecycle frame that also happens to carry
-			// controlled_by_other.
-			ControlOnly: boolPtr(true),
-		}, dropContext(chatSessionID, viewerID, "control-broadcast"))
-	}, func(tabs []browser.Tab, activeIdx int) {
-		// ADR-041 D4: the tab set changed (open/close/switch/adopt, or a
-		// best-effort title/url update) — broadcast the current tab strip.
-		// Fired once immediately on attach (with the CURRENT tab set) and
-		// again on every subsequent change; delivered to every attached
-		// viewer, including the one that caused the change (unlike
-		// ControlSink, a tabs update carries no "who acted" distinction that
-		// needs excluding the actor).
-		wc.sendCriticalGen(generated.BrowserTabsFrame{
-			Type:        string(generated.WsFrameTypeBrowserTabs),
-			SessionId:   &chatSessionID,
-			ActiveIndex: activeIdx,
-			Tabs:        tabsToBrowserTabsWire(tabs),
-		}, dropContext(chatSessionID, viewerID, "tabs-broadcast"))
-	})
+	onStatus, onControl, onTabs := browserAttachCallbacks(wc, request.ctx, chatSessionID, viewerID)
+	controlledByOther, err := mgr.Live().AttachContext(workCtx, panelSessionID, viewerID, onStatus, onControl, onTabs)
 	if err != nil {
 		sendFailure(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
 			dropContext(chatSessionID, viewerID, "attach-failed"))
@@ -1478,12 +1428,12 @@ func (h *BrowserWSHandler) handleAttach(
 	}
 
 	cbo := controlledByOther
-	wc.sendCriticalGen(generated.BrowserStatusFrame{
+	wc.sendCriticalScopedGen(generated.BrowserStatusFrame{
 		Type:              string(generated.WsFrameTypeBrowserStatus),
 		State:             "attached",
 		SessionId:         &chatSessionID,
 		ControlledByOther: &cbo,
-	}, dropContext(chatSessionID, viewerID, "attach-ok"))
+	}, dropContext(chatSessionID, viewerID, "attach-ok"), request.ctx, nil)
 
 	// Issue #674: register the live-video health observer on the manager. Done
 	// here, at attach, because this is the earliest point the gateway knows
@@ -1500,7 +1450,7 @@ func (h *BrowserWSHandler) handleAttach(
 	// only sends its offer after an available:true state frame (see
 	// announceWebRTCAvailability's doc for why omitting this deadlocks the
 	// upgrade handshake).
-	h.announceWebRTCAvailability(wc, mgr, chatSessionID, viewerID, cfg)
+	h.announceWebRTCAvailabilityContext(request.ctx, wc, mgr, chatSessionID, viewerID, cfg)
 }
 
 // handleInput dispatches a viewer input event, gated by the LiveView's

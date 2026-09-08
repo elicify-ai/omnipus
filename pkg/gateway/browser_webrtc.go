@@ -768,14 +768,7 @@ func (h *BrowserWSHandler) announceWebRTCAvailability(
 	sessID, viewerID string,
 	cfg *config.Config,
 ) {
-	if reason := webrtcUnavailableReason(cfg, mgr); reason != "" {
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, reason)
-		return
-	}
-	// Hand the viewer its ICE servers HERE, with the "you may offer" frame:
-	// the SPA needs them before it builds its PeerConnection, and credentials
-	// are minted per viewer with a bounded lifetime (ADR-062 tier 3).
-	h.sendWebRTCStateWithICE(wc, sessID, viewerID, true, false, false, "", "", h.iceServersForViewer(cfg, viewerID))
+	h.announceWebRTCAvailabilityContext(context.Background(), wc, mgr, sessID, viewerID, cfg)
 }
 
 // sendWebRTCState builds and sends a browser_webrtc_state frame.
