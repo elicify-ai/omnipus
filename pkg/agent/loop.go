@@ -134,13 +134,6 @@ type AgentLoop struct {
 	// key: "session:"+sessionID (string), value: bool.
 	lastSwitchToDefault sync.Map
 
-	// orphanWatches holds the orphan-foreground-turn watchdog's pending grace
-	// timer per session (ADR-045): key sessionID (string), value *orphanWatch.
-	// Populated by ArmOrphanForegroundTurnWatch, removed by
-	// DisarmOrphanForegroundTurnWatch or once the grace timer fires. See
-	// pkg/agent/orphan_watch.go.
-	orphanWatches sync.Map
-
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
@@ -4343,18 +4336,6 @@ func (al *AgentLoop) Close() {
 			cancel()
 		}
 		al.idleTickers.Delete(k)
-		return true
-	})
-
-	// ADR-045: stop every pending orphan-foreground-turn watchdog timer so
-	// none of them fire against a torn-down AgentLoop after Close() returns
-	// (tests in particular construct/close many AgentLoops in quick
-	// succession; a leaked timer firing later would touch a stale al).
-	al.orphanWatches.Range(func(k, v any) bool {
-		if ow, ok := v.(*orphanWatch); ok {
-			ow.cancel()
-		}
-		al.orphanWatches.Delete(k)
 		return true
 	})
 

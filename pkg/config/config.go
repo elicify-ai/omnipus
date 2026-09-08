@@ -3300,37 +3300,6 @@ type GatewayConfig struct {
 	// force-kill already-running dev servers (they idle-TTL out).
 	PreviewEnabled *bool `json:"preview_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_ENABLED"`
 
-	// OrphanedTurnGraceSeconds bounds an orphaned FOREGROUND (webchat) turn —
-	// one whose last watching WebSocket connection has closed and never
-	// reconnected — to at most this many seconds before the orphan watchdog
-	// (ADR-045, pkg/agent/orphan_watch.go) reaps it. "Reaps" means: hands the
-	// session to al.RequestCancel — the SAME cancellation state machine every
-	// other cancel surface (web SPA Stop button, Tier A /cancel, Tier B
-	// channels, CLI) uses, with its full graceful->hard->detached escalation,
-	// approval auto-deny, background-session kill, and audit/transcript
-	// writes — but ONLY once the watchdog has confirmed (a) a genuine live
-	// ROOT turn still exists, (b) no Critical/background delegate sub-turn is
-	// still alive on the session, and (c) nobody has reconnected. Condition
-	// (b) is what protects a Critical/background delegate: RequestCancel's
-	// own PHASE-B/PHASE-C hard-abort escalation
-	// (InterruptSessionHard/sessionTurnsStillAlive) is SESSION-WIDE by
-	// construction — note PHASE-A's own graceful cascade (Interrupt; ADR-057
-	// FR-041 collapsed the retired InterruptSession into it) is
-	// ALSO session-wide, just harmless there because a Critical delegate is
-	// designed to ignore a mere graceful nudge — so rather than reuse it while
-	// a delegate is still working, the watchdog defers reaping entirely for
-	// that fire; see ADR-045 for the full mechanism.
-	//
-	// nil (unset) resolves to DefaultOrphanedTurnGraceSeconds (now 0 =
-	// DISABLED) via config.ResolveInt — an abandoned tab does NOT cancel its
-	// turn by default; the turn runs to completion (Omnipus is built for
-	// background turns) and only an explicit user Stop cancels. 0 or negative
-	// disables the watchdog entirely (matches the TimeoutSeconds: 0-disabled
-	// convention elsewhere in this file); a positive value opts back in. Read
-	// live (NOT restart-gated, matching GatewayPreviewEnabled's precedent) —
-	// each WS teardown reads the current config fresh when arming.
-	OrphanedTurnGraceSeconds *int `json:"orphaned_turn_grace_seconds,omitempty" env:"OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS"`
-
 	// AuthMismatchLogLevel controls the log level emitted when the gateway
 	// detects an authentication mismatch (e.g. token supplied but does not
 	// match, or user not found). Valid values: "debug", "info", "warn"
@@ -4826,37 +4795,6 @@ func (c *Config) IsPreviewEnabled() bool {
 		return false
 	}
 	return ResolveBool(c.Gateway.PreviewEnabled, true)
-}
-
-// DefaultOrphanedTurnGraceSeconds is the semantic default for
-// gateway.orphaned_turn_grace_seconds when unset (ADR-045). It is 0 —
-// meaning the orphaned-foreground-turn watchdog is DISABLED by default.
-//
-// Omnipus is built to run turns as background work: closing a chat tab (or
-// otherwise dropping the watching WebSocket) must NOT cancel an in-progress
-// turn — the turn keeps running and stops when it is done, and the user can
-// reconnect later to see the result. ONLY an explicit user Stop cancels a
-// turn. Auto-canceling on tab-close (the original ADR-045 5-minute default)
-// contradicted that model and was reversed per operator decision.
-//
-// The watchdog mechanism itself is retained but off unless an operator
-// explicitly opts in with a positive value via config.json
-// (gateway.orphaned_turn_grace_seconds) or
-// OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS. Any value <= 0 keeps it
-// disabled (ArmOrphanForegroundTurnWatch is a no-op).
-const DefaultOrphanedTurnGraceSeconds = 0
-
-// EffectiveOrphanedTurnGraceSeconds resolves gateway.orphaned_turn_grace_seconds
-// (ADR-045): nil resolves to DefaultOrphanedTurnGraceSeconds; 0 or negative is
-// returned as-is so callers (AgentLoop.ArmOrphanForegroundTurnWatch) can treat
-// it as "watchdog disabled". Read live on every call, matching
-// IsPreviewEnabled's precedent — a nil *Config returns 0 (disabled), the same
-// fail-closed posture as IsPreviewEnabled's fail-closed-false.
-func (c *Config) EffectiveOrphanedTurnGraceSeconds() int {
-	if c == nil {
-		return 0
-	}
-	return ResolveInt(c.Gateway.OrphanedTurnGraceSeconds, DefaultOrphanedTurnGraceSeconds)
 }
 
 // ApplyWarmupTimeoutDefault ensures the web_serve dev-mode warmup timeout

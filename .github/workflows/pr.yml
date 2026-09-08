@@ -856,6 +856,19 @@ jobs:
         # CLAUDE.md's "Retired surfaces — do NOT reintroduce" entry.
         run: bash scripts/check-no-goal-confirm-gate.sh
 
+      - name: Run orphan-foreground-turn watchdog removal guard
+        # ADR-082 D1 deleted the ADR-045 orphaned-foreground-turn watchdog in
+        # full (greenfield, superseding ADR-045): a turn never depends on a UI
+        # connection, so the mechanism that ended turns based on "no UI/user
+        # connection" is removed, not disabled. Branches cut before the
+        # removal still contain the whole mechanism, so a merge re-adds it as
+        # an ordinary, conflict-free addition. Mechanical half of CLAUDE.md's
+        # "Retired surfaces — do NOT reintroduce" entry. Self-test first — a
+        # guard that cannot fail is no guard (docs/internal/false-green-patterns.md).
+        run: |
+          bash scripts/check-no-orphan-turn-watchdog.test.sh
+          bash scripts/check-no-orphan-turn-watchdog.sh
+
       - name: Run E2E auth cross-talk guard
         # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
         # invalidating the shared storageState cookie for every spec that runs
@@ -2091,21 +2104,13 @@ jobs:
         # --allow-empty permits gateway boot without a fully configured provider,
         # which is needed in case the credential seed step is extended in future.
         #
-        # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): the orphan-
-        # foreground-turn watchdog only arms when the LAST WebSocket watcher on
-        # a session disconnects, so a short 20s grace here reaps a genuinely
-        # leaked (finished-tab) live turn quickly without ever touching an
-        # open-tab turn or a transcript-seeded replay test (those have no live
-        # turn to begin with). This is the fix for the "Group-A variance"
-        # family of load-dependent failures: a Playwright test that navigates
-        # away mid-turn without clicking Stop used to leave a real agent loop
-        # running indefinitely, queuing against the shared OpenRouter
-        # rate-limit window and starving later tests' tool calls. Production
-        # default (300s) is untouched — this override applies only to the e2e
-        # gateway process.
+        # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in
+        # full (the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override
+        # that used to reap a leaked, navigated-away-from turn quickly no
+        # longer exists — a turn now runs to completion regardless of whether
+        # any UI connection is watching it, by design).
         run: |
           OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
-            OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
             ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
           GATEWAY_PID=$!
           echo "${GATEWAY_PID}" > /tmp/omnipus.pid

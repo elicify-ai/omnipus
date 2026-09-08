@@ -184,11 +184,6 @@ func IsValidEventName(e EventName) bool {
 		// gate (see cancel.go's RequestCancel doc comment for the root-cause
 		// writeup this closes).
 		EventTurnCancelBackgroundKilled,
-		// Orphan-foreground-turn watchdog events (ADR-045). The escalation
-		// itself is RequestCancel's own turn_canceled event (cancel_method:
-		// "hard") — there is no separate turn.orphan_hard_aborted event since
-		// the 2026-07 reap-via-RequestCancel redesign.
-		EventTurnOrphanTimeout,
 		// Live interactive browser panel events (ADR-038 D6).
 		EventBrowserInstanceCreated,
 		EventBrowserAction,

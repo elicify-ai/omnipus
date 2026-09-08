@@ -1,6 +1,6 @@
 # ADR-045: Orphaned Foreground Turn Timeout
 
-**Status:** Accepted — **amended: DISABLED BY DEFAULT (see below)**
+**Status:** Superseded by [ADR-082](ADR-082-ui-independent-turns-and-session-bound-streaming.md) — the whole mechanism described below is deleted in full (not disabled), 2026-09-08.
 **Date:** 2026-07-16
 **Deciders:** architect (+ backend-lead, qa-lead for implementation/review)
 

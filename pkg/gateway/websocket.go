@@ -653,11 +653,6 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.agentLoop.UnsubscribeEvents(eventSub.ID)
 		<-eventDone // wait for forwarder goroutine to exit
 		h.mu.Lock()
-		// ADR-045: capture this connection's own session mapping BEFORE the
-		// deletes below — needed both to arm the watchdog for the right
-		// session and so the multi-tab-safety scan just after reflects state
-		// with THIS connection already removed.
-		sid := h.sessionIDs[chatID]
 		if tid, ok := h.taskChatIDs[chatID]; ok {
 			// sessions is never keyed by tid (only by chatID); clean up only sessionIDs.
 			delete(h.sessionIDs, tid)
@@ -665,31 +660,8 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(h.sessions, chatID)
 		delete(h.sessionIDs, chatID)
-		// ADR-045 multi-tab safety: only arm the orphan-foreground-turn
-		// watchdog when no OTHER connection is still watching this same
-		// session — a second open tab on the same chat must never have its
-		// live turn interrupted just because a sibling tab closed.
-		armOrphanWatch := false
-		if sid != "" {
-			armOrphanWatch = true
-			for _, otherSID := range h.sessionIDs {
-				if otherSID == sid {
-					armOrphanWatch = false
-					break
-				}
-			}
-		}
 		h.mu.Unlock()
 		wc.close()
-
-		if armOrphanWatch {
-			grace := h.agentLoop.GetConfig().EffectiveOrphanedTurnGraceSeconds()
-			sidCopy := sid
-			h.agentLoop.ArmOrphanForegroundTurnWatch(sidCopy, grace,
-				func(reason string) { h.reapOrphanForegroundTurn(sidCopy, reason) },
-				func() bool { return h.sessionStillOrphaned(sidCopy) },
-			)
-		}
 
 		// Emit observability counters at connection teardown so operators can
 		// act on them (e.g. alert when a client is sending many invalid refs).
@@ -1742,11 +1714,6 @@ func (h *WSHandler) handleChatMessage(
 				h.sessionIDs[chatID] = sessionID
 			}
 			h.mu.Unlock()
-
-			// ADR-045: this connection just confirmed itself live on an
-			// EXISTING session (continuation, not a brand-new one) — cancel
-			// any pending orphan-foreground-turn watchdog for it.
-			h.agentLoop.DisarmOrphanForegroundTurnWatch(sessionID)
 		}
 
 		// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
@@ -2189,13 +2156,12 @@ func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) [
 // web-SPA-originated cancel. wc is the live connection to notify via
 // cancel_stage frames — nil when there is no live connection to notify.
 //
-// The nil case is exactly the orphan-foreground-turn watchdog's reap path
-// (ADR-045, reapOrphanForegroundTurn below): it fires precisely because
-// nobody is watching the session anymore, so there is no wc to send a
-// cancel_stage frame to. sendCancelStageFrame already no-ops safely on a nil
-// wc, so the SAME hook set handleCancel builds for a real Stop-click also
-// works, unmodified, for the orphan-reap path — there is only one place in
-// this file that knows how to build a web-cancel's side effects.
+// A nil wc is a legitimate call shape whenever a cancel is triggered with no
+// live connection to acknowledge to. sendCancelStageFrame already no-ops
+// safely on a nil wc, so the SAME hook set handleCancel builds for a real
+// Stop-click also works, unmodified, for any connection-less caller — there
+// is only one place in this file that knows how to build a web-cancel's side
+// effects.
 func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 	return agent.CancelHooks{
 		SendStageFrame: func(sid, stage string) {
@@ -2280,15 +2246,13 @@ func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 		// extend and no contract change required.
 		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
 			if wc == nil {
-				// No live connection to notify — the orphan-foreground-turn
-				// reap path (reapOrphanForegroundTurn below, via
-				// buildCancelHooks(nil)) fires precisely because nobody is
-				// watching this session anymore. notifyLatchExpired
-				// (cancel_prearm.go) already logged the base "latch expired"
-				// Warn unconditionally; add site-specific context here so an
-				// operator sees not just THAT it expired but that this was a
-				// no-connection (reap/background) case with no user to have
-				// told anyway.
+				// No live connection to notify — buildCancelHooks(nil) is used
+				// whenever a cancel is triggered with nobody watching this
+				// session. notifyLatchExpired (cancel_prearm.go) already
+				// logged the base "latch expired" Warn unconditionally; add
+				// site-specific context here so an operator sees not just
+				// THAT it expired but that this was a no-connection case with
+				// no user to have told anyway.
 				slog.Warn("ws: cancel latch expired with no live connection to notify — the cancel it stood in for never took effect",
 					"session_id", scope.SessionID,
 					"channel", scope.Channel,
@@ -2405,66 +2369,6 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 			sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}
-}
-
-// reapOrphanForegroundTurn is the ADR-045 orphan-foreground-turn watchdog's
-// reap callback (wired at Arm time in ServeHTTP's teardown defer). It is
-// invoked by agent.AgentLoop.fireOrphanForegroundTurnWatch AT MOST ONCE per
-// arm, and only once that function has itself confirmed all three safety
-// conditions hold (a genuine live root turn, no surviving Critical/background
-// delegate, no reconnect) — see that function's doc comment for the full
-// gate. This performs the EXACT SAME cancellation every other cancel surface
-// gets: RequestCancel's audit/transcript writes, approval auto-deny,
-// background-session kill, and graceful->hard->detached escalation —
-// attributed to the system rather than a human canceller, since this is
-// precisely the WHOLE reason this fired: nobody is here to have clicked Stop.
-//
-// wc is nil here (see buildCancelHooks) — there is no live connection to
-// notify with cancel_stage frames.
-func (h *WSHandler) reapOrphanForegroundTurn(sessionID, reason string) {
-	scope := agent.CancelScope{SessionID: sessionID}
-	canceller := agent.CancelCanceller{
-		UserID:  "system",
-		Channel: "orphan-watchdog",
-	}
-	hooks := h.buildCancelHooks(nil)
-
-	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
-	if err != nil {
-		slog.Warn("ws: orphan watchdog: RequestCancel error",
-			"session_id", sessionID, "reason", reason, "error", err)
-		return
-	}
-	if !outcome.Fired {
-		// armed distinguishes "genuinely nothing to do" from "a pre-
-		// registration cancel latch now stands in for this reap and will
-		// fire on the next turn to register under this session, within
-		// cancelPreArmTTL" (CancelOutcome.Armed doc comment, pkg/agent/
-		// cancel.go). No frame is sent either way — wc is nil here (see
-		// buildCancelHooks above), because a reap fires precisely when
-		// nobody is watching this session anymore, so there is no live
-		// connection to acknowledge to regardless of which case this is.
-		slog.Debug("ws: orphan watchdog: RequestCancel no-op (turn already finished or already canceled)",
-			"session_id", sessionID, "reason", reason, "armed", outcome.Armed)
-	}
-}
-
-// sessionStillOrphaned reports whether sessionID currently has NO live WS
-// connection watching it — i.e. nobody has reconnected/reattached since the
-// orphan-foreground-turn watch was armed. Called by
-// agent.AgentLoop.fireOrphanForegroundTurnWatch immediately before reaping so
-// a reconnect that raced the grace timer — landing after
-// DisarmOrphanForegroundTurnWatch would have caught it, but before the fire
-// goroutine actually ran — still wins (MA-5).
-func (h *WSHandler) sessionStillOrphaned(sessionID string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, sid := range h.sessionIDs {
-		if sid == sessionID {
-			return false
-		}
-	}
-	return true
 }
 
 // applySinceCursor applies the since-cursor filter to a slice of transcript entries.
@@ -2677,11 +2581,6 @@ func (h *WSHandler) handleAttachSession(
 	h.sessionIDs[attachID] = attachID
 	h.sessionIDs[chatID] = attachID
 	h.mu.Unlock()
-
-	// ADR-045: a live connection just (re)confirmed itself on attachID — cancel
-	// any pending orphan-foreground-turn watchdog for this session. Covers the
-	// common browser-refresh/reconnect case with zero user-visible effect.
-	h.agentLoop.DisarmOrphanForegroundTurnWatch(attachID)
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
 	// frames into replayDivertCh instead of sendCh.

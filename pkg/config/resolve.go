@@ -26,14 +26,14 @@ func ResolveBool(v *bool, def bool) bool {
 // applying the caller-supplied default when the pointer is nil. Mirrors
 // ResolveBool's nil-means-unset contract.
 //
-// Usage example (GatewayConfig.OrphanedTurnGraceSeconds, ADR-045):
+// Usage example (a *int config field with a 0-means-disabled default):
 //
-//	grace := ResolveInt(cfg.Gateway.OrphanedTurnGraceSeconds, DefaultOrphanedTurnGraceSeconds)
+//	effective := ResolveInt(cfg.Section.SomeTimeoutSeconds, DefaultSomeTimeoutSeconds)
 //
 // Unlike ResolveBool, an explicit non-nil value of 0 (or negative) is
-// returned verbatim rather than treated as "unset" — callers that use 0 to
-// mean "disabled" (e.g. the orphan-turn watchdog) rely on this to
-// distinguish "operator explicitly disabled" from "operator never set it".
+// returned verbatim rather than treated as "unset" — a caller that uses 0 to
+// mean "disabled" relies on this to distinguish "operator explicitly
+// disabled" from "operator never set it".
 func ResolveInt(v *int, def int) int {
 	if v == nil {
 		return def

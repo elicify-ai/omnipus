@@ -1569,10 +1569,8 @@ func spawnSubTurn(
 	// hard, or detach) can ever find it again, and it runs unchecked until its
 	// own MaxIterations ceiling. clearActiveTurnStateEntry only removes the
 	// entry if it is STILL this exact childTS, so a since-registered newer
-	// generation is left untouched — mirrors the identical guard
-	// orphan_watch.go already uses for al.orphanWatches
-	// (fireOrphanForegroundTurnWatch's CompareAndDelete) and clearActiveTurn
-	// uses for the parent's own ts.sessionKey.
+	// generation is left untouched — the same compare-and-delete-by-identity
+	// pattern clearActiveTurn uses for the parent's own ts.sessionKey.
 	defer al.clearActiveTurnStateEntry(childID, childTS)
 
 	// The child is now real, discoverable evidence of its own (findable via
