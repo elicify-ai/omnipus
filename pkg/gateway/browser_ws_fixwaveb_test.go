@@ -161,7 +161,7 @@ func dialAuthedBrowserWS(t *testing.T) *websocket.Conn {
 // TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns is the
 // primary regression test for fix A on the viewport path.
 //
-// BDD: Given an authenticated browser socket,
+// BDD: Given an authenticated browser socket with its original attachment,
 // When a browser_viewport frame's handler is still running (simulated at the
 // browserConnWorkHook seam, standing in for the MEASURED 6.95s SetViewport),
 // Then the connection still reads and answers the NEXT client frame.
@@ -169,7 +169,23 @@ func dialAuthedBrowserWS(t *testing.T) *websocket.Conn {
 // If handleViewport is ever moved back inline onto readLoop, the probe frame
 // is never read and this fails by timeout.
 func TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns(t *testing.T) {
-	conn := dialAuthedBrowserWS(t)
+	// Viewport admission requires a committed attachment. Keep the socket,
+	// attach handler and work queue real; only Chrome's protocol is scripted.
+	handler, al := newMeasuredBrowserWSTestHandler(t, nil)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	conn := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent)
+	require.NoError(t, conn.WriteJSON(generated.BrowserAttachFrame{
+		Type:      string(generated.WsFrameTypeBrowserAttach),
+		AgentId:   agent.ID,
+		SessionId: "viewport-readloop-session",
+	}))
+	require.Equal(t, "attached", readBrowserStatusFrame(t, conn, 5*time.Second).State)
 	entered, release := blockSlowHandler(t, workKindViewport)
 
 	frame, err := json.Marshal(generated.BrowserViewportFrame{
