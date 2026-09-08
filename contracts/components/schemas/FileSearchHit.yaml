@@ -12,12 +12,24 @@ required:
 properties:
   path:
     type: string
-    description: Workspace-relative path of the matched file.
+    description: Workspace-relative path of the matched file or directory (see is_dir).
     example: "01-Areas/Finance/Q3 report.md"
   match_kind:
     type: string
     enum: [name, content]
     description: Whether the file matched by its name/path or by a content line.
+  is_dir:
+    type: boolean
+    description: >
+      True when this hit is a directory rather than a file — always true (never
+      omitted) for a directory hit; always false for a content hit (directories
+      are never content-scanned). Deliberately carries no `default` keyword
+      despite always being false-when-absent in practice: a `default` makes
+      openapi-typescript emit this as a non-optional field regardless of the
+      `required` list, which would force every existing FileSearchHit fixture
+      built before this field existed to add it just to keep compiling. Absent
+      (or false) means "this is a file" — an existing consumer keeps its
+      prior, file-only reading with no changes required.
   line:
     type: integer
     minimum: 1

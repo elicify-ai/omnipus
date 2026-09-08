@@ -875,11 +875,14 @@ type FileSearchResponse = {
     files_pruned_ignored: number;
     files_skipped_per_file_cap: number;
     hits_capped_per_file: number;
+    dirs_visited?: number | undefined;
+    files_filtered_glob?: number | undefined;
   };
 };
 type FileSearchHit = {
   path: string;
   match_kind: "name" | "content";
+  is_dir?: boolean | undefined;
   line?: number | undefined;
   excerpt?: string | undefined;
   context_before?: Array<string> | undefined;
@@ -4387,6 +4390,7 @@ export const FileSearchRequest = z.object({
 export const FileSearchHit: z.ZodType<FileSearchHit> = z.object({
   path: z.string(),
   match_kind: z.enum(["name", "content"]),
+  is_dir: z.boolean().optional(),
   line: z.number().int().gte(1).optional(),
   excerpt: z.string().max(2048).optional(),
   context_before: z.array(z.string().max(2048)).max(5).optional(),
@@ -4422,6 +4426,8 @@ export const FileSearchResponse: z.ZodType<FileSearchResponse> = z.object({
     files_pruned_ignored: z.number().int(),
     files_skipped_per_file_cap: z.number().int(),
     hits_capped_per_file: z.number().int(),
+    dirs_visited: z.number().int().optional(),
+    files_filtered_glob: z.number().int().optional(),
   }),
 });
 export const VaultSearchRequest = z.object({
