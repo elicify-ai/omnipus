@@ -210,7 +210,7 @@ func (a *restAPI) resolveScopedCollection(workspaceID, collectionID string) (kno
 			// appeared after the boot sweep — is attached here, at the moment
 			// the product first agrees it exists. Without this, every endpoint
 			// below answers `index_unavailable` indefinitely while telling the
-			// caller to "re-open the vault", which is not an action the
+			// caller to "re-open the knowledge base", which is not an action the
 			// product offers. It is a no-op (one map lookup) for the
 			// overwhelmingly common case of a collection attached at boot.
 			a.knowledgeLifecycle().EnsureCollectionAttached(workspaceID, c)

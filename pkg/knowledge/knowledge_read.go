@@ -204,7 +204,7 @@ func RenderRead(d ReadData) string {
 	case d.TypeRecognised:
 		fmt.Fprintf(&b, "TYPE: %s\n", d.TypeName)
 	default:
-		fmt.Fprintf(&b, "TYPE: %s (not a declared record type in this vault — read as an ordinary note)\n", d.TypeName)
+		fmt.Fprintf(&b, "TYPE: %s (not a declared record type in this knowledge base — read as an ordinary note)\n", d.TypeName)
 	}
 
 	if d.Included[ReadIncludeFrontmatter] {

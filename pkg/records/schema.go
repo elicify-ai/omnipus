@@ -1035,7 +1035,7 @@ var propertyDeclKeys = map[string]declKey{
 		"nowhere else. THE REMEDY: delete `formula:` from this property and declare the same expression in a saved " +
 		"view's `formulas:` map, where a query reaches it as `formula.` + this property's name — or, if the value " +
 		"belongs on the note itself, drop `formula:` and keep this as an ordinary stored property that notes write. " +
-		"Only this schema file is rejected; every other record type in the vault still loads and still answers",
+		"Only this schema file is rejected; every other record type in the knowledge base still loads and still answers",
 	},
 
 	// `scale` USED to live here as a declKeyRefused entry. It is now simply
@@ -1385,7 +1385,7 @@ func (p *Property) finalize() error {
 			// do not compare at all. A derived edge is therefore not a
 			// relation, and declaring a target would promise FR-034 target
 			// checking and D5's derived inverse over something that is neither.
-			return fmt.Errorf("a formula property cannot declare `to`/`inverse`; a derived link is a presentation value (R-16), not a relation the vault can check a target for or derive an inverse from")
+			return fmt.Errorf("a formula property cannot declare `to`/`inverse`; a derived link is a presentation value (R-16), not a relation the knowledge base can check a target for or derive an inverse from")
 		}
 		if p.Type == TypeRelation || p.Type == TypePerson {
 			return fmt.Errorf("a formula property cannot declare type %s; a derived link is a presentation value (R-16) — declare it `text`", p.Type)

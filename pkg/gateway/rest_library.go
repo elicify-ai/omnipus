@@ -831,7 +831,7 @@ func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Reques
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
-		jsonErr(w, http.StatusBadRequest, "invalid vault name")
+		jsonErr(w, http.StatusBadRequest, "invalid knowledge base name")
 		return
 	}
 
@@ -891,7 +891,7 @@ func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Reques
 		case errors.Is(err, knowledge.ErrAlreadyKnowledgeBase):
 			jsonErr(w, http.StatusConflict, "an entry already exists at that path")
 		case errors.Is(err, knowledge.ErrMarkerInvalid):
-			jsonErr(w, http.StatusBadRequest, "invalid vault name")
+			jsonErr(w, http.StatusBadRequest, "invalid knowledge base name")
 		case errors.Is(err, knowledge.ErrOutsideCollection):
 			jsonErr(w, http.StatusForbidden, "path resolves outside the workspace work tree")
 		default:

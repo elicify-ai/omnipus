@@ -449,7 +449,7 @@ export function LibrarySearchBar({
         : isVaultMode
           ? 'Search notes, records, views'
           : 'Search files and folders'
-  const ariaLabel = isVaultMode ? 'Search this vault' : isFilesMode ? 'Search this folder' : 'Search'
+  const ariaLabel = isVaultMode ? 'Search this knowledge base' : isFilesMode ? 'Search this folder' : 'Search'
 
   function openNote(path: string) {
     if (collectionRootPath === undefined) return
@@ -480,7 +480,7 @@ export function LibrarySearchBar({
   // server that has not been upgraded to send it yet keeps working exactly as
   // before (additive-compatible, MV-9).
   const bannerStatement =
-    response?.statement ?? notReadyReason ?? 'Partial results — the vault index is not fully caught up yet.'
+    response?.statement ?? notReadyReason ?? 'Partial results — the knowledge base index is not fully caught up yet.'
   const hasCompleteStatement = response?.complete === true && response.statement !== undefined
 
   return (

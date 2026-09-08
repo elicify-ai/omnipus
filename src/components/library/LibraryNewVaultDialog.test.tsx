@@ -135,7 +135,7 @@ describe('LibraryNewVaultDialog', () => {
     await userEvent.click(screen.getByTestId('library-new-vault-confirm'))
 
     expect(await screen.findByTestId('library-new-vault-error')).toHaveTextContent(
-      'A folder or vault with that name already exists here.',
+      'A folder or knowledge base with that name already exists here.',
     )
   })
 

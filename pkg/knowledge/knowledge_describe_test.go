@@ -145,7 +145,7 @@ func TestDescribe_RenderedArtifact(t *testing.T) {
 	flat := collapseSpaces(text)
 
 	must := []struct{ what, want string }{
-		{"the collection and its index state", "VAULT workbench"},
+		{"the collection and its index state", "KNOWLEDGE BASE workbench"},
 		{"the collections in scope, so the next call is never a guess", "COLLECTIONS in scope (1): workbench"},
 		{"both record types", "TYPES (2)"},
 		{"FR-036b: the id prefix, as SCHEMA DATA", "widget id WI-<n>"},
@@ -206,13 +206,13 @@ func TestDescribe_ResponseIsNeverAJSONDocument(t *testing.T) {
 func TestDescribe_SectionOrderIsTheSpecifiedOne(t *testing.T) {
 	root := describeFixtureVault(t)
 	d := describeFixtureData(t, root, &IntegrityReport{
-		ScopeLabel: "whole vault",
+		ScopeLabel: "whole knowledge base",
 		NotesSwept: 2,
 		Categories: newFindingSink(IntegrityFindingsPerCategory).results(),
 	})
 	text := RenderDescribe(d)
 
-	order := []string{"VAULT ", "COLLECTIONS in scope", "TYPES (", "VIEWS (", "TEMPLATES (", "INTEGRITY:"}
+	order := []string{"KNOWLEDGE BASE ", "COLLECTIONS in scope", "TYPES (", "VIEWS (", "TEMPLATES (", "INTEGRITY:"}
 	at := -1
 	for _, marker := range order {
 		i := strings.Index(text, marker)
@@ -236,7 +236,7 @@ func TestDescribe_IncludeTrimsSections(t *testing.T) {
 	if !strings.Contains(text, "VIEWS (") {
 		t.Errorf("the requested section is missing:\n%s", text)
 	}
-	for _, unwanted := range []string{"TYPES (", "TEMPLATES (", "VAULT "} {
+	for _, unwanted := range []string{"TYPES (", "TEMPLATES (", "KNOWLEDGE BASE "} {
 		if strings.Contains(text, unwanted) {
 			t.Errorf("include must TRIM the response; %q survived:\n%s", unwanted, text)
 		}
@@ -314,7 +314,7 @@ func TestDescribe_IndexFreshnessNeverInventsARatio(t *testing.T) {
 			want: "total not yet known",
 			// FR-036 forbids inventing a denominator. The pattern is a RATIO
 			// — digits, "of", digits — not the word "of", which appears
-			// legitimately in "a fraction of this vault".
+			// legitimately in "a fraction of this knowledge base".
 			noRatio: true,
 		},
 		{
@@ -453,7 +453,7 @@ func TestDescribeTool_DescriptionFitsTheBudgetAndNamesTheWidestOperation(t *test
 		t.Errorf("FR-079 budgets ~150 tokens (~%d chars) for a tool description; this one is %d chars:\n%s",
 			budgetChars, len(desc), desc)
 	}
-	for _, want := range []string{"check_integrity", "WHOLE vault", "SAVED VIEWS", "Call this first"} {
+	for _, want := range []string{"check_integrity", "WHOLE knowledge base", "SAVED VIEWS", "Call this first"} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("FR-079: the description must name its widest operation and why it is called first; "+
 				"%q missing from:\n%s", want, desc)

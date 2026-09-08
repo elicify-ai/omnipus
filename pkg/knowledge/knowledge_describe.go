@@ -247,7 +247,7 @@ func allDescribeSections() map[string]bool {
 }
 
 func renderIndexAndCollections(b *strings.Builder, d DescribeData) {
-	fmt.Fprintf(b, "VAULT %s — %s\n", nonEmpty(d.Collection, "(unnamed)"), indexFreshness(d))
+	fmt.Fprintf(b, "KNOWLEDGE BASE %s — %s\n", nonEmpty(d.Collection, "(unnamed)"), indexFreshness(d))
 	if len(d.CollectionsInScope) > 0 {
 		fmt.Fprintf(b, "COLLECTIONS in scope (%d): %s\n",
 			len(d.CollectionsInScope), strings.Join(d.CollectionsInScope, ", "))
@@ -269,10 +269,10 @@ func indexFreshness(d DescribeData) string {
 	// reads.
 	if p.Phase != "" && p.InFlight() {
 		if done, total, ok := p.Ratio(); ok {
-			return fmt.Sprintf("INDEXING, %s of %s notes — anything below is a fraction of this vault",
+			return fmt.Sprintf("INDEXING, %s of %s notes — anything below is a fraction of this knowledge base",
 				group(done), group(total))
 		}
-		return "INDEXING (total not yet known) — anything below is a fraction of this vault"
+		return "INDEXING (total not yet known) — anything below is a fraction of this knowledge base"
 	}
 	switch {
 	case !d.ManifestKnown:
@@ -335,7 +335,7 @@ func renderTypes(b *strings.Builder, d DescribeData, detail string) {
 		types = []string{d.OnlyType}
 	}
 	if len(types) == 0 {
-		b.WriteString("TYPES (0) — this vault declares no record types; every note in it is an ordinary note\n")
+		b.WriteString("TYPES (0) — this knowledge base declares no record types; every note in it is an ordinary note\n")
 	} else {
 		fmt.Fprintf(b, "TYPES (%d)\n", len(types))
 	}

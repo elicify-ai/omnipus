@@ -83,7 +83,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
         className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]"
       >
         <SpinnerGap size={12} aria-hidden="true" className="animate-spin" />
-        Checking whether this mount is a vault
+        Checking whether this mount is a knowledge base
       </p>
     )
   }
@@ -98,7 +98,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
         role="alert"
         className="mt-1.5 text-[11px] text-[var(--color-error)]"
       >
-        Could not check whether this mount is a vault.
+        Could not check whether this mount is a knowledge base.
       </p>
     )
   }

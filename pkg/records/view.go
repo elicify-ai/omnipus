@@ -1039,7 +1039,7 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		found, ok := schemas.Get(declaredType)
 		if !ok {
 			return reject(RejectViewUnknownType,
-				"view %q queries record type %q, which this vault does not declare; declared types: %s",
+				"view %q queries record type %q, which this knowledge base does not declare; declared types: %s",
 				v.Def.Name, declaredType, joinOrNone(schemas.Types()))
 		}
 		base = found

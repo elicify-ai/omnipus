@@ -301,7 +301,7 @@ func (t *ConfigureTool) Description() string {
 		"includes the rule that a number's total is computed per unit and never combined " +
 		"across units when the property declares one. Never touches a note's own content or path; use " +
 		"knowledge_edit or knowledge_restructure for those. There is no built-in vocabulary: " +
-		"this vault's record types, properties and enum values are entirely what this tool " +
+		"this knowledge base's record types, properties and enum values are entirely what this tool " +
 		"(or the operator) has declared."
 }
 
@@ -411,7 +411,7 @@ func (t *ConfigureTool) Parameters() map[string]any {
 					"{prefix}, and properties (a map of property name to {type, many, " +
 					"required, and per-type: label, values, to, inverse, unit}). " +
 					configurePropertyTypeSentence + " There is no built-in vocabulary; every " +
-					"type name, property name and enum value is this vault's own. " +
+					"type name, property name and enum value is this knowledge base's own. " +
 					"write_view: the raw escape hatch for the LEGACY view shape. " +
 					ConfigureWriteViewSteerLine + " It does NOT accept `kind` or `parts` — " +
 					"those are op=create_view's vocabulary and are refused here (design D6), " +
@@ -1079,7 +1079,7 @@ func recordsOfType(root, typeName string) ([]records.Record, error) {
 	notes := scan.Notes()
 	if len(notes) > IntegritySweepLimit {
 		return nil, fmt.Errorf(
-			"this vault has %d notes, above the %d-note bound a cascade computation can sweep",
+			"this knowledge base has %d notes, above the %d-note bound a cascade computation can sweep",
 			len(notes), IntegritySweepLimit)
 	}
 	var out []records.Record

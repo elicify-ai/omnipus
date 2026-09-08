@@ -651,7 +651,7 @@ func (b *viewResultBuilder) groupsFor(grouping []gen.ViewGroupBy) ([]gen.VaultFi
 		// them would put a count of N beside a subtotal over N-1 with nothing
 		// said. The groups are dropped, not reconciled: reconciling two
 		// snapshots is inventing a third.
-		fix := "re-request the view; the vault was re-indexed while this answer was being assembled"
+		fix := "re-request the view; the knowledge base was re-indexed while this answer was being assembled"
 		b.out.Problems = append(b.out.Problems, gen.RecordProblem{
 			Code:    gen.AggregateRefused,
 			Reason:  "this part's grouping was evaluated against a different index generation from the rows, so its groups and their subtotals are not shown — they would describe a row set this answer does not carry",

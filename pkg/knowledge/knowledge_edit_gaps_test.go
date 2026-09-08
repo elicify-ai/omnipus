@@ -213,7 +213,7 @@ func TestKnowledgeEdit_SetProperty_UnknownType_ReportsGovernanceNote(t *testing.
 	})
 	require.False(t, res.IsError, "an undeclared-type note's write must still be ALLOWED: %s", res.ForLLM)
 	if !strings.Contains(res.ForLLM, "NOTE:") || !strings.Contains(res.ForLLM, `"alien"`) ||
-		!strings.Contains(res.ForLLM, "no schema in this vault") {
+		!strings.Contains(res.ForLLM, "no schema in this knowledge base") {
 		t.Fatalf("result must name the undeclared type and say no schema governed this write: %s", res.ForLLM)
 	}
 	if strings.Contains(res.ForLLM, "no record type") {
@@ -243,7 +243,7 @@ func TestKnowledgeEditResolveSchema_UnparsableFrontmatter_ReasonIsDistinct(t *te
 	if !strings.Contains(note, "could not be parsed") {
 		t.Fatalf("unparsable-frontmatter note must name the reason distinctly: %q", note)
 	}
-	if strings.Contains(note, "no record type") || strings.Contains(note, "no schema in this vault") {
+	if strings.Contains(note, "no record type") || strings.Contains(note, "no schema in this knowledge base") {
 		t.Fatalf("unparsable-frontmatter note must not read like either of the other two cases: %q", note)
 	}
 }
@@ -258,7 +258,7 @@ func TestKnowledgeEditResolveSchema_UnparsableFrontmatter_ReasonIsDistinct(t *te
 // (schema_version omitted). The write must still be ALLOWED — refusing it
 // would block a note whose only fault is a vault-level schema bug the
 // caller cannot fix through knowledge_edit — but the result must say so
-// loudly and by name, distinctly from "no schema in this vault" (G3's
+// loudly and by name, distinctly from "no schema in this knowledge base" (G3's
 // unknown-type case), naming the actual load failure.
 func TestKnowledgeEdit_SetProperty_RejectedSchema_WarnsButAllowsWrite(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
@@ -289,7 +289,7 @@ func TestKnowledgeEdit_SetProperty_RejectedSchema_WarnsButAllowsWrite(t *testing
 		!strings.Contains(res.ForLLM, "schema_version") {
 		t.Fatalf("result must name the type and echo the real load failure reason: %s", res.ForLLM)
 	}
-	if strings.Contains(res.ForLLM, "no schema in this vault") {
+	if strings.Contains(res.ForLLM, "no schema in this knowledge base") {
 		t.Fatalf("a REJECTED schema must read distinctly from an UNKNOWN type: %s", res.ForLLM)
 	}
 	got := a4Read(t, root, "Deals/broken.md")
@@ -325,7 +325,7 @@ func TestKnowledgeEdit_Create_RejectedSchemaDistinctFromUnknownType(t *testing.T
 	if strings.Contains(resUnknown.ForLLM, "schema_version") {
 		t.Fatalf("a genuinely unknown type must not be reported as a load failure: %s", resUnknown.ForLLM)
 	}
-	if !strings.Contains(resUnknown.ForLLM, "no schema in this vault") {
+	if !strings.Contains(resUnknown.ForLLM, "no schema in this knowledge base") {
 		t.Fatalf("a genuinely unknown type's note must say so: %s", resUnknown.ForLLM)
 	}
 

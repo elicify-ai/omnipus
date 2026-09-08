@@ -98,7 +98,7 @@ export function LibraryCreateMenu({
             data-testid="library-create-menu-new-vault"
             className="flex items-center gap-2"
           >
-            <Books size={15} /> New vault
+            <Books size={15} /> New knowledge base
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => setNewWorkspaceOpen(true)}

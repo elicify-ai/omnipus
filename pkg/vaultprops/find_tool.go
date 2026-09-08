@@ -278,7 +278,7 @@ func findUnknownParameterRemedy(unknown []string) string {
 			return "use select"
 		}
 	}
-	return "drop the argument, or call knowledge_describe to see what this vault supports"
+	return "drop the argument, or call knowledge_describe to see what this knowledge base supports"
 }
 
 // strPtr is the pointer-taking helper the generated optional fields need,

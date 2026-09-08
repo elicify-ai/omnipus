@@ -184,7 +184,7 @@ func parse(req generated.VaultFindRequest, set *records.SchemaSet, formulas map[
 		case KindNote, KindRecord, KindTask, KindAttachment:
 		default:
 			return nil, refuse(problem(generated.UnsupportedParameter,
-				fmt.Sprintf("%q is not a kind of row this vault holds", q.kind),
+				fmt.Sprintf("%q is not a kind of row this knowledge base holds", q.kind),
 				"use one of: "+strings.Join([]string{KindNote, KindRecord, KindTask, KindAttachment}, ", ")), nil)
 		}
 	}
@@ -317,7 +317,7 @@ func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaS
 		declared := set.Types()
 		sort.Strings(declared)
 		p := problem(generated.UnknownRecordType,
-			fmt.Sprintf("no record type %q is declared in this vault", q.recordType),
+			fmt.Sprintf("no record type %q is declared in this knowledge base", q.recordType),
 			"call knowledge_describe to see the declared record types")
 		if len(declared) > 0 {
 			p.Permitted = &declared
@@ -325,7 +325,7 @@ func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaS
 		} else {
 			// An empty vault and a mistyped name must not read the same. Saying
 			// "declared: " with nothing after it would do exactly that.
-			p.Reason += "; this vault declares no record types at all"
+			p.Reason += "; this knowledge base declares no record types at all"
 			p.Fix = str("declare one with knowledge_configure, or search without a type")
 		}
 		return refuse(p, nil)
