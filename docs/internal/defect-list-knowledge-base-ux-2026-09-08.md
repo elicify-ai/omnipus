@@ -246,6 +246,36 @@ paragraphs does not match at all.
   line. That changes what a "hit" means — today one hit is one matching line —
   so it interacts with KB-6a's per-document collapse and should be designed with it.
 
+**MEASURED on the founder's real knowledge base (784 notes), query
+`investment report`:**
+
+| | |
+|---|---|
+| notes containing BOTH terms | **0** |
+| notes containing "investment" | 12 |
+| notes containing "report" | 212 |
+| OR result set | **~224 — 29% of the whole vault** |
+
+The founder's reported bad hit — an asset note about a narration voiceover —
+contains "investment" ZERO times and "report" twice ("Each one **reports** back
+with real evidence"), i.e. it matched on the common term alone, in a different
+sense of the word. The correct answer to that query is "no exact matches; here
+are the 12 mentioning investment".
+
+**Important nuance that changes the fix priority:** the ranking is probably NOT
+broken. `pkg/knowledge/rank.go` sorts `-_score` then `_id`, and BM25 weights
+rare terms higher — "investment" appears in 12/784 notes, "report" in 212/784 —
+so the genuinely relevant notes were most likely already ranked ABOVE the noise.
+What fails is that 224 results arrive as a flat list with no visible relevance
+signal and no cut-off, so scrolling reaches junk and the user concludes search
+is broken. The engine's judgment is real but invisible.
+
+Consequence: AND-first querying is the single highest-value change here (224 ->
+12 for this query), with surfacing the score (KB-6b) a close second. A
+"term coverage" signal — how many query terms a hit actually contains, weighted
+by term rarity — is the cheapest honest relevance indicator and would have made
+this bad hit self-evidently weak.
+
 **Interaction worth stating:** fixing this WITHOUT fixing KB-6b (surface the
 score) would make the knowledge base result set smaller but still unordered to
 the eye. The two belong in one piece of work.
