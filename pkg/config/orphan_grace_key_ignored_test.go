@@ -25,6 +25,72 @@ import (
 	"testing"
 )
 
+// TestConfig_OrphanGraceKeyLogsRetiredWarningOnce is F11: an operator's
+// pre-ADR-082 config.json carrying gateway.orphaned_turn_grace_seconds must
+// still load cleanly (TestConfig_OrphanGraceKeyIgnored, above) AND get a
+// one-time boot WARN telling them the key does nothing and can be removed —
+// silently ignoring it forever leaves an operator maintaining a line that
+// has no effect with no way to discover that short of reading source.
+func TestConfig_OrphanGraceKeyLogsRetiredWarningOnce(t *testing.T) {
+	resetLegacyOrphanGraceKeyWarnForTest()
+	t.Cleanup(resetLegacyOrphanGraceKeyWarnForTest)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 1,
+		"agents": {"defaults": {"workspace": "./workspace"}},
+		"gateway": {
+			"port": 5000,
+			"orphaned_turn_grace_seconds": 20
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	logs := captureWarnings(t)
+
+	if _, err := LoadConfig(configPath); err != nil {
+		t.Fatalf("LoadConfig() must still succeed with the retired key present: %v", err)
+	}
+	// A second load (mirrors the gateway's config-file-watcher re-reading
+	// config.json, and a manual /reload) must NOT log the notice again — the
+	// condition is static content of one file, so a repeated line is noise.
+	if _, err := LoadConfig(configPath); err != nil {
+		t.Fatalf("second LoadConfig() error: %v", err)
+	}
+
+	out := logs.String()
+	const wantSubstr = "orphaned_turn_grace_seconds is retired (ADR-082) and ignored"
+	got := strings.Count(out, wantSubstr)
+	if got != 1 {
+		t.Fatalf("2 loads of a config.json carrying the retired key produced %d matching warning(s), want exactly 1.\nCaptured log:\n%s", got, out)
+	}
+	if !strings.Contains(out, "gateway.orphaned_turn_grace_seconds") {
+		t.Errorf("the warning does not name the full dotted key (gateway.orphaned_turn_grace_seconds) — without it an operator has to go find which section it complains about.\nCaptured log:\n%s", out)
+	}
+
+	// A config.json WITHOUT the retired key must stay silent.
+	resetLegacyOrphanGraceKeyWarnForTest()
+	logs2 := captureWarnings(t)
+	cleanPath := filepath.Join(dir, "config-clean.json")
+	cleanRaw := `{
+		"version": 1,
+		"agents": {"defaults": {"workspace": "./workspace"}},
+		"gateway": {"port": 5000}
+	}`
+	if err := os.WriteFile(cleanPath, []byte(cleanRaw), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	if _, err := LoadConfig(cleanPath); err != nil {
+		t.Fatalf("LoadConfig() error on clean config: %v", err)
+	}
+	if strings.Contains(logs2.String(), wantSubstr) {
+		t.Errorf("a config.json with no retired key logged the retired-key warning anyway.\nCaptured log:\n%s", logs2.String())
+	}
+}
+
 // TestConfig_OrphanGraceKeyIgnored is T-14 (S-13): "Given a config.json
 // carrying gateway.orphaned_turn_grace_seconds, When the gateway loads,
 // Then it boots, the key has no effect, and no watchdog is armed on

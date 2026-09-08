@@ -17,6 +17,7 @@
         "tests/e2e/subagent.spec.ts",
         "tests/e2e/handoff.spec.ts",
         "tests/e2e/cancel-cross-channel.spec.ts",
+        "tests/e2e/reconnect-mid-turn.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
         "tests/e2e/recap-continuity.spec.ts"
       ]
@@ -56,7 +57,8 @@
       "key_slot": "a",
       "port": 6072,
       "specs": [
-        "tests/e2e/goal-work-first.spec.ts"
+        "tests/e2e/goal-work-first.spec.ts",
+        "tests/e2e/goal-card-position.spec.ts"
       ]
     },
     {

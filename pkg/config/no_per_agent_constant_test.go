@@ -56,16 +56,37 @@ func repoRoot(t *testing.T) string {
 func scanRepoGoFiles(t *testing.T, visit func(path string, content string)) {
 	t.Helper()
 	root := repoRoot(t)
+	// F12: agent worktrees under .claude/worktrees (this test's own execution
+	// environment — see /Users/.../.claude/worktrees/agent-*) and a transient
+	// test-results dir make this walker false-red on any dev machine: neither
+	// is source, both can legitimately contain stale/partial checkouts or
+	// build artifacts that happen to match a banned-symbol substring, and
+	// .claude/worktrees can even contain OTHER checkouts of this very
+	// repository at other revisions. .gitnexus is the (large, gitignored)
+	// code-intelligence index, never source.
 	skipDirs := map[string]bool{
 		"node_modules": true,
 		".git":         true,
 		"dist":         true,
 		"vendor":       true,
 		"spa":          true,
+		".claude":      true,
+		"test-results": true,
+		".gitnexus":    true,
 	}
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
+			// A directory that existed when filepath.Walk listed its parent
+			// but vanished before it could be lstat'd (a concurrent test run
+			// cleaning up its own temp/worktree dir, a build tearing down
+			// test-results mid-walk, etc.) must not fail this test — it is
+			// not this test's job to observe a stable repository, only to
+			// scan whatever exists. Skip just that entry; any OTHER walk
+			// error (permission denied, I/O error) still fails loudly.
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
 			return walkErr
 		}
 		if info.IsDir() {

@@ -55,14 +55,22 @@ test('S-15 goal card sits where the goal was set, live and after reload', async 
   await input.press('Enter')
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
 
+  // No `.catch(() => false)` here: if BOTH cards fail to appear within the
+  // timeout, both branches of the race reject and the race itself rejects —
+  // that must FAIL the test (goal card never rendered = regression), not be
+  // silently remapped onto the "model asked" branch, whose assertions would
+  // then pass vacuously (S5 fix — a double timeout used to read as "asked").
   const registered = await Promise.race([
     goalEchoCard(page).first().waitFor({ state: 'visible', timeout: 90_000 }).then(() => true),
     askCard(page).first().waitFor({ state: 'visible', timeout: 90_000 }).then(() => false),
-  ]).catch(() => false)
+  ])
   await endTurnDeterministically(page)
 
   if (!registered) {
-    // Model asked instead of registering (holdout H-2): nothing to anchor yet.
+    // Model asked instead of registering (holdout H-2): assert the
+    // AskUserQuestion card actually rendered (not merely that the goal card
+    // didn't), so a broken ask-card render can't hide behind this branch.
+    await expect(askCard(page).first()).toBeVisible()
     await expect(goalEchoCard(page)).toHaveCount(0)
     return
   }
