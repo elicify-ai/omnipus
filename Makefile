@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers lint-no-orphan-turn-watchdog spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -452,6 +452,11 @@ lint-no-fail-closed-backfill:
 ## Regression guard for ADR-081 — see scripts/check-no-goal-confirm-gate.sh's header comment.
 lint-no-goal-confirm-gate:
 	bash scripts/check-no-goal-confirm-gate.sh
+
+## lint-no-orphan-turn-watchdog: Fail if the deleted ADR-045 orphan-foreground-turn watchdog reappears
+## Regression guard for ADR-082 D1/D7 — see scripts/check-no-orphan-turn-watchdog.sh's header comment.
+lint-no-orphan-turn-watchdog:
+	bash scripts/check-no-orphan-turn-watchdog.sh
 
 ## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
 ## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the

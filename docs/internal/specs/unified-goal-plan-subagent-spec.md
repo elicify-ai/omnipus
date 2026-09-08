@@ -44,7 +44,7 @@
 | `pkg/tools/plan.go` — `create_plan` (dod required, L145/L175), `execute_plan` (member-criteria gate) | modifies | Gains `write_sets` + `rationale` schema; plan-lint gate at approve. |
 | `pkg/task/criterion.go` — `AcceptanceCriterion`, `CriterionKind{check/prose/behavior}` (L21-27), `CriterionCheck`, `CriterionBehavior` | calls (reuse) | S1's "one criteria model" — REUSE unchanged (`machine` = existing `check`). |
 | `pkg/security/ratelimit.go` — `IsPrivilegedAgent` (L30) | modifies (bypass) | D12: the app-level token budget deliberately does NOT honor `IsPrivilegedAgent` — core-agent turns debit. |
-| `pkg/agent/orphan_watch.go` — startup reaper | calls (pattern) | Precedent for the boot-sweep reconciliation of persisted non-terminal sessions. |
+| `pkg/agent/orphan_watch.go` — startup reaper [†ADR-082 deleted this file in full] | calls (pattern) | Precedent for the boot-sweep reconciliation of persisted non-terminal sessions. |
 | `go.mod` — go-git absent | adds | New dependency (spike GO, +3.04 MiB stripped, Apache-2.0 → NOTICE). |
 
 ### Impact Assessment

@@ -145,6 +145,11 @@ run_lint() {
   # / useGoalCompilingIndicator, …) must not return — goals activate instantly,
   # the agent authors the record via set_goal, steering replaces confirmation.
   bash scripts/check-no-goal-confirm-gate.sh || return 1
+  # ADR-082 D1 regression guard: the deleted ADR-045 orphan-foreground-turn
+  # watchdog must not return — a turn never depends on a UI connection.
+  # Self-test first (a guard that cannot fail is no guard).
+  bash scripts/check-no-orphan-turn-watchdog.test.sh || return 1
+  bash scripts/check-no-orphan-turn-watchdog.sh || return 1
   # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
   # single-slot session_token_hash and invalidates the shared storageState cookie
   # for every LATER spec — a failure that lands in an unrelated file). Self-test
@@ -598,9 +603,10 @@ EOF
 
   OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
 
-  # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): reap a genuinely leaked
-  # (finished-tab) live turn quickly without touching open-tab / transcript-seeded turns.
-  OMNIPUS_HOME="$home" OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
+  # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in full —
+  # the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override no longer
+  # exists (a turn now runs to completion regardless of UI connectivity).
+  OMNIPUS_HOME="$home" \
     /tmp/omnipus-ci start --allow-empty > "$logf" 2>&1 &
   GATEWAY_PID=$!
   echo "$GATEWAY_PID" > "$pidfile"

@@ -6,6 +6,8 @@
 - **Deciders:** Operator (Daniel Piatkowski)
 - **Evidence level:** 1 — direct codebase verification. Every claim below carries a `file:line` citation verified against `feature/plan-swimlane-board` on 2026-08-03 (v2 @ `e9517d1e`, v3 and v4 @ `edd3a112`). Claims that could not be verified by reading code are tagged **[INFERRED]**. The one claim in v4 that is **operator-reported rather than tool-verified** is CI's `go-test` result at `0ee87fbe` (§8); the *ancestry* of that commit relative to this branch was verified directly.
 
+> **ADR-082 note (2026-09-08):** every reference below to the "ADR-045 watchdog interlock" (`hasLiveCriticalDelegate`, `orphan_watch.go`) describes a mechanism [ADR-082](ADR-082-ui-independent-turns-and-session-bound-streaming.md) D1 has since deleted in full, not merely disabled. Read those passages as history of a defect that mattered at the time this ADR was written — the interlock, the file, and `hasLiveCriticalDelegate` no longer exist in the tree. Unrelated uses of "orphan" in this document (orphan session directories, orphan buffers, etc.) are untouched by ADR-082.
+
 > **v4 changelog — seven operator decisions, none of them a correction.**
 >
 > Every change below applies a decision the operator took **after** v3 was written. **None of them corrects an error in v3's reasoning** — where v4 reverses v3, it is because a constraint v3 correctly reasoned within has been lifted, or because a choice v3 correctly left open has been made. The one place this distinction matters most is called out inline (C-5).

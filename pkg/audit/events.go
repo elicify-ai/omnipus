@@ -161,29 +161,6 @@ const (
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
 
-	// EventTurnOrphanTimeout — INFO. The orphan-foreground-turn watchdog
-	// (ADR-045) fired: a webchat session's grace period elapsed with no
-	// client reattaching, no surviving Critical/background delegate was found
-	// on the session, and nobody had reconnected — so the watchdog handed the
-	// session's root turn to al.RequestCancel (the SAME cancellation state
-	// machine every other cancel surface uses), attributed to
-	// "system:orphan-watchdog" via CancelCanceller rather than a real
-	// user/channel canceller. Emitted immediately BEFORE the RequestCancel
-	// call, so the audit trail always records WHY a cancel was triggered even
-	// if RequestCancel itself no-ops (turn already finished) or errors.
-	// Distinct from — and normally followed by — RequestCancel's OWN
-	// EventTurnCancelAttempt (always) and EventTurnCancelled (unless the root
-	// turn finishes naturally in the narrow gap before RequestCancel claims it,
-	// in which case the reap is a logged no-op — see reapOrphanForegroundTurn),
-	// which carry the full
-	// graceful->hard->detached escalation, approval auto-deny,
-	// background-session kill, and transcript writes uniformly with every
-	// other cancel surface. There is no separate turn.orphan_hard_aborted
-	// event (retired 2026-07 redesign) — RequestCancel's own turn_canceled
-	// event (cancel_method: "hard") is the single source of truth for how a
-	// reaped orphan turn actually terminated.
-	EventTurnOrphanTimeout = "turn.orphan_timeout"
-
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
 	// BrowsingKey established it (ADR-075 FR-027). Fires exactly ONCE per

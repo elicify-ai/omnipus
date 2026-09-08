@@ -990,13 +990,11 @@ test(
     //     falsifiable.
     //  b) It keeps a neighbouring turn's cancel from being mistaken for ours.
     //     Playwright runs this shard with workers:1 (playwright.config.ts), so no
-    //     sibling TEST interleaves — but the gateway's own orphan watchdog can
-    //     fire an unattended cancel on a leaked turn from an EARLIER test at any
-    //     moment (runci.sh sets OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20,
-    //     and such a watchdog ClaimCancel was observed landing 22s into a run).
-    //     That writes a perfectly well-formed turn.cancel.attempt{was_fired:true}
-    //     for someone else's session, which an unscoped `.find()` would happily
-    //     accept as proof that OUR cancel fired.
+    //     sibling TEST interleaves — but a leaked turn from an EARLIER test that
+    //     gets canceled by some other means still writes a perfectly well-formed
+    //     turn.cancel.attempt{was_fired:true} for someone else's session, which
+    //     an unscoped `.find()` would happily accept as proof that OUR cancel
+    //     fired.
     //
     // POLLED rather than read once after a fixed sleep: the audit rows and the
     // transcript flush land a beat after the UI reports the cancel complete, and

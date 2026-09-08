@@ -349,13 +349,14 @@ type turnState struct {
 	// store key, transcript write target, ownership predicate, approval-grant
 	// key, uploads-directory key, tool-manifest bucket, lifecycle-record
 	// field, or audit session_id (those all keep using transcriptSessionID
-	// above). Within this file the reads are the three role-B predicates
-	// FR-015 names — GetActiveTurnHookForSession,
-	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession —
+	// above). Within this file the reads are the role-B predicates FR-015
+	// names — GetActiveTurnHookForSession and resolveSessionIDByChannelChat —
 	// plus claimAnyTurnForSession, the cancel descendant fallback added
 	// post-merge in the same role-B class (see the FR-014 allowlist test,
 	// routing_session_id_consumer_set_adr057_test.go, the authority on the
-	// exact reader census).
+	// exact reader census). ADR-082 D1 deleted this file's third role-B
+	// predicate, getActiveRootTurnStateForSession — it existed solely for
+	// the now-retired orphan-foreground-turn watchdog.
 	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
 	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
@@ -767,8 +768,8 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// runs unchecked until its own MaxIterations ceiling. CompareAndDelete
 	// only removes the entry if it is STILL this exact ts, so a
 	// since-registered newer turn sharing the same key is left untouched —
-	// mirrors the identical guard orphan_watch.go already uses for
-	// al.orphanWatches (fireOrphanForegroundTurnWatch's CompareAndDelete).
+	// the same compare-and-delete-by-identity pattern used everywhere else in
+	// this file a map entry can race a concurrent replace.
 	al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
 	// Design-flaw fix (cancel_prearm.go, turnImminentForIdentity): record
 	// that a turn JUST cleared for this identity so a still-true
@@ -800,9 +801,7 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 // parent's own ts.sessionKey plus the cancelPreArm bookkeeping that only
 // applies to a finished whole turn — use THIS helper when you only need the
 // bare map-entry guard (a deferred child cleanup) and clearActiveTurn when you
-// are retiring a turn that ran to completion. Mirrors the identical guard
-// orphan_watch.go uses for al.orphanWatches (fireOrphanForegroundTurnWatch's
-// CompareAndDelete).
+// are retiring a turn that ran to completion.
 func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState) {
 	al.activeTurnStates.CompareAndDelete(sessionKey, ts)
 }
@@ -1166,55 +1165,6 @@ func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
 		return nil
 	}
 	return claimed
-}
-
-// getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
-// parentTurnID=="") matching sessionID's ROUTING session ID, or nil when no
-// root turn is currently active for the session — INCLUDING when the only
-// resolvable match is a non-root descendant. Unlike
-// GetActiveTurnHookForSession (which falls back to ANY match, root-preferring
-// but not root-EXCLUSIVE, as a defensive last resort for other callers), this
-// NEVER returns a delegate sub-turn.
-//
-// ADR-057 FR-015 (role-B predicate, one of the seven): rebased from
-// transcriptSessionID onto routingSessionID for the same reason as
-// GetActiveTurnHookForSession's identical rebase — see that function's doc
-// comment. The depth==0/parentTurnID=="" filter below already excludes every
-// descendant regardless of which id field feeds it, so for THIS function the
-// rebase changes no currently-observable input/output pair; it exists so
-// this predicate stays keyed on the same closed-set field as its six
-// siblings (FR-014) rather than reintroducing a transcriptSessionID
-// comparison that would silently diverge the moment any of them depends on
-// this one matching a genuinely-distinct-id descendant in the future.
-//
-// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
-// pkg/agent/orphan_watch.go) to answer "is there still a genuine foreground
-// turn to reap" without ever mistaking a surviving Critical/background
-// delegate — whose parent root has already finished and been cleared from
-// activeTurnStates via clearActiveTurn (loop.go) — for one. Reusing
-// GetActiveTurnHookForSession's anyMatch fallback for that decision was the
-// root cause of MA-1: it would resolve the delegate as "the turn to reap",
-// and handing that to RequestCancel would trigger RequestCancel's
-// session-wide escalation against the exact turn ADR-045 exists to protect.
-func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnState {
-	var root *turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"got_type": fmt.Sprintf("%T", value)})
-			return true
-		}
-		if string(ts.routingSessionID) != sessionID {
-			return true
-		}
-		if ts.depth == 0 || ts.parentTurnID == "" {
-			root = ts
-			return false
-		}
-		return true
-	})
-	return root
 }
 
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
