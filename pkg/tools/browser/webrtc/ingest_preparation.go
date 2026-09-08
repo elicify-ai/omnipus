@@ -11,14 +11,23 @@ const ingestPreparationLimit = 4
 var errIngestPreparationBusy = errors.New("webrtc: ingest candidate preparation busy")
 
 // Native SDP preparation cannot be interrupted. Admission remains occupied
-// until negotiation and any private candidate cleanup finish. Installed media
-// has its own lifetime and is never owned by this resource budget.
+// until negotiation and candidate or retired connection cleanup finish. The
+// currently installed connection has its own lifetime and consumes no slot.
 type ingestPreparationPool struct {
 	mu     sync.Mutex
 	active int
 }
 
 func (p *ingestPreparationPool) run(ctx context.Context, work func() (string, error)) (string, error) {
+	return p.runWithCleanup(ctx, func() (string, error, func()) {
+		answer, err := work()
+		return answer, err, nil
+	})
+}
+
+// runWithCleanup publishes the answer before retiring the previous connection,
+// while retaining this worker's capacity until its native cleanup completes.
+func (p *ingestPreparationPool) runWithCleanup(ctx context.Context, work func() (string, error, func())) (string, error) {
 	p.mu.Lock()
 	if err := context.Cause(ctx); err != nil {
 		p.mu.Unlock()
@@ -45,8 +54,11 @@ func (p *ingestPreparationPool) run(ctx context.Context, work func() (string, er
 			completed <- result{err: err}
 			return
 		}
-		answer, err := work()
+		answer, err, cleanup := work()
 		completed <- result{answer, err}
+		if cleanup != nil {
+			cleanup()
+		}
 	}()
 	select {
 	case result := <-completed:

@@ -82,16 +82,20 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (string, error) {
 
 func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (string, error) {
 	if admission == nil {
-		return s.handleIngestOfferOnce(sdpOffer, generation, targetID, nil)
+		answer, err, cleanup := s.handleIngestOfferOnce(sdpOffer, generation, targetID, nil)
+		if cleanup != nil {
+			go cleanup()
+		}
+		return answer, err
 	}
-	return s.ingestPreparations.run(admission.ctx, func() (string, error) {
+	return s.ingestPreparations.runWithCleanup(admission.ctx, func() (string, error, func()) {
 		return s.handleIngestOfferOnce(sdpOffer, generation, targetID, admission)
 	})
 }
 
-func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (answer string, err error) {
+func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (answer string, err error, cleanup func()) {
 	if sdpOffer == "" {
-		return "", fmt.Errorf("webrtc: ingest offer: empty SDP")
+		return "", fmt.Errorf("webrtc: ingest offer: empty SDP"), nil
 	}
 
 	id := s.nextConnID()
@@ -107,10 +111,10 @@ func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targ
 	admissionErr := s.ingestAdmissionErrorLocked(admission)
 	s.mu.Unlock()
 	if closed {
-		return "", fmt.Errorf("webrtc: session closed")
+		return "", fmt.Errorf("webrtc: session closed"), nil
 	}
 	if admissionErr != nil {
-		return "", admissionErr
+		return "", admissionErr, nil
 	}
 
 	// ice-diag: full candidate/timing/selected-pair instrumentation, on the
@@ -153,12 +157,12 @@ func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targ
 	// recovery path -- so a genuinely unconfigurable environment retries with
 	// backoff and a NAMED reason instead of silently burning 30s per attempt.
 	if usableRemoteCandidateCount(sdpOffer) == 0 {
-		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, ErrOfferHasNoUsableCandidates)
+		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, ErrOfferHasNoUsableCandidates), nil
 	}
 
 	pc, err := s.buildPeerConnection(s.api, false) // loopback encoder leg: no public rewrite, no shared mux
 	if err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
+		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err), nil
 	}
 	// Fix-wave finding 2b: this new pc is NOT installed as s.ingestPC (and
 	// the OLD ingest connection is NOT closed) until negotiation below has
@@ -220,7 +224,7 @@ func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targ
 	// synchronous cleanup, even after the authenticated caller has canceled.
 	err = prepareIngestAnswer(pc, sdpOffer, prefix)
 	if err != nil {
-		return "", err
+		return "", err, nil
 	}
 
 	// gatherStart is deliberately taken AFTER SetLocalDescription (which is
@@ -233,7 +237,7 @@ func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targ
 	gatherStart := time.Now()
 	select {
 	case <-ctx.Done():
-		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, context.Cause(ctx))
+		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, context.Cause(ctx)), nil
 	case <-gatherComplete:
 		s.logf("%s server gathering complete in %dms, sending answer", prefix, time.Since(gatherStart).Milliseconds())
 	case <-time.After(gatherTimeout):
@@ -243,7 +247,7 @@ func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targ
 
 	local := pc.LocalDescription()
 	if local == nil {
-		return "", fmt.Errorf("webrtc: ingest %s: no local description after SetLocalDescription", prefix)
+		return "", fmt.Errorf("webrtc: ingest %s: no local description after SetLocalDescription", prefix), nil
 	}
 
 	// Negotiation fully succeeded -- NOW swap the new connection in and
@@ -252,21 +256,21 @@ func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targ
 	// previously-healthy ingest connection.
 	old, err := s.installIngestCandidate(ctx, pc, admission, generation, targetID)
 	if err != nil {
-		return "", err
+		return "", err, nil
 	}
 	installed = true
 
 	if old != nil {
 		s.logf("%s replacing previous ingest connection", prefix)
-		go func() {
+		cleanup = func() {
 			if cerr := old.Close(); cerr != nil {
 				s.logf("%s closing previous ingest connection: %v", prefix, cerr)
 			}
-		}()
+		}
 	}
 
 	s.logf("%s answer sent to encoder", prefix)
-	return local.SDP, nil
+	return local.SDP, nil, cleanup
 }
 
 // HandleIngestOfferForGeneration binds an ingest to the server's display lineage.
