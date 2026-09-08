@@ -201,6 +201,42 @@ Notes/Records/Views/Attachments view — so they should not be mixing. If the
 founder is seeing an ambiguous mixed list, that is a distinct defect and should
 be reproduced before this is treated as presentation-only.
 
+
+**RATIFIED DESIGN (founder, 2026-09-08) — term coverage is both the explanation
+and the ranking signal.** Every knowledge base result must show WHY it appeared,
+using the query's own words rather than an invented number:
+
+```
+Q3 Investment Report.md        investment · report     <- 2 of 2
+Portfolio review 2026.md       investment              <- 1 of 2
+Asset — narration voiceover    report                  <- 1 of 2, common term only
+```
+
+Four parts, in priority order:
+
+1. **AND-first querying.** All query terms must appear. Fall back to OR-ranked
+   only when AND yields nothing, so a too-narrow query degrades instead of
+   dead-ending. On the measured example this is 224 results -> 12.
+2. **Coverage chips per result** — which of the query's terms this hit actually
+   contains. This is the "why did this appear" indicator AND the relevance
+   signal; one mechanism serves both.
+3. **Weight by term rarity.** "investment" appears in 12/784 notes, "report" in
+   212/784. A hit matching only the common term is near-noise and the display
+   should make that visible (BM25 already computes this internally — the UI is
+   simply blind to it).
+4. **Indicate which field matched** — title / path / body. A title match on one
+   term often beats a body match on two.
+
+**Explicitly NOT wanted:** a raw BM25 number. `pkg/knowledge/index.go:223-224`
+states the scores are "comparable only within one result set — not normalised
+across queries or across indexes", so a figure like `0.83` would look
+authoritative and carry no meaning between two searches. Ordering plus coverage
+chips is honest; a number is not.
+
+**If fuzziness lands (KB-7):** fuzzy matches must rank BELOW exact ones, and a
+fuzzy hit should be marked as such in its coverage chip — otherwise precision
+collapses invisibly.
+
 **Suggested bundle (not a decision):** (c) context_lines -> 1, (d) client-side
 highlight, (e) source marker, (a) collapse per document, (b) order by the score
 that already exists. Together they address both halves of the complaint — too
