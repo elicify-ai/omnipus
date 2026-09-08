@@ -366,24 +366,38 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 	// W was 50,000 (B ≈ 44k) until the feat/library-improvements merge
 	// (integrate/library-improvements-v0.1.1) unconditionally registered the
 	// knowledge tool family for EVERY agent (registerKnowledgeTools,
-	// instance.go — ADR-067 D7), growing this fixture's full tool surface
-	// (decideRecallInjection's sentToolSurfaceTokens-based check, which
-	// charges FULL schemas for every ManifestFull/Infra-tier tool regardless
-	// of allow/deny policy) from the ~20k this comment used to describe to
-	// ~45.2k measured — more than the whole 50,000-token window, so the span
-	// could never fit and the precondition ("the span WAS injected into
-	// request 2") failed outright. This is the same tool-catalog-growth
-	// class both merge parents independently hit and fixed in
-	// eventbus_test.go's own DefaultContextWindow pin (ADR-066 D2 rung 3).
+	// instance.go — ADR-067 D7). At the time this was misdiagnosed as a
+	// tool-CATALOG-growth problem and "fixed" by raising W to 55,000 (B ≈
+	// 48.6k) — see recallInjectionFixture's Compressed=true comment for the
+	// real cause: decideRecallInjection's sentToolSurfaceTokens-based check
+	// was silently taking its "compressed manifest OFF" fallback (because
+	// this fixture's bare cfg literal never set
+	// cfg.Tools.Manifest.Compressed), charging a full JSON schema for EVERY
+	// registered tool regardless of manifest tier or allow/deny policy — an
+	// order-of-magnitude over-count no real install produces, since
+	// config.DefaultConfig() always ships Compressed=true. Raising W papered
+	// over the symptom without fixing that; it only bought headroom until
+	// the next unconditional tool registration used it up.
 	//
-	// 55,000 (B ≈ 48.6k) restores the original two-sided margin: large
-	// enough that the ~45.2k tool surface + the small seeded window + the
-	// 410-token span fit at injection time, but still small enough that the
-	// mid-turn D6 check's OWN (much smaller — compressed-manifest-only, no
-	// full-schema charge) overhead plus two door-capped 60,000-char results
-	// pushes the D6 total over B, so the injected span is still the first
-	// thing dropped under pressure. Confirmed empirically against this
-	// fixture's live budget: the passing window is roughly [53,000, 57,000].
+	// That next registration was dd3c26832 (merge fix/kb12, 2026-09-08):
+	// knowledge_base_create and knowledge_list joined the family (still
+	// unconditional for every agent, still charged as full schemas under
+	// the same off-by-default fallback), pushing the measured tool surface
+	// from ~45.2k to ~47.4k — past B again and failing this same
+	// precondition a second time, by the same mechanism, one merge later.
+	//
+	// recallInjectionFixture now sets Compressed=true (the shipped
+	// default), so this check takes its REAL path: knowledge_base_create,
+	// knowledge_list and every sibling knowledge/grep tool are
+	// ManifestLazy+SearchOnly (pkg/tools/manifest.go), costing one compact
+	// manifest-note line each — not a full schema — until an agent actually
+	// loads one via ToolSearch. Catalog growth no longer perturbs this
+	// fixture's margin, so 55,000 is not a razor-edge number chasing a
+	// moving uncompressed total: it only needs the small seeded window plus
+	// the 410-token span to fit the REAL (now much smaller) tool surface at
+	// injection time, while staying tight enough that two door-capped
+	// 60,000-char big_tool results still push the D6 total over B, so the
+	// injected span is still the first thing dropped under pressure.
 	al, agent := recallInjectionFixture(t, provider, 55_000, 1_000, turns)
 	al.RegisterTool(&bigResultTool{size: 60_000})
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
@@ -401,8 +415,9 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 	req2 := provider.request(2)
 	if !requestContains(req2, nonce) {
 		// Surface the captured agent log on precondition failure — the
-		// usual cause is the fixture's ~20k-token tool surface squeezing
-		// the injection budget (see the sizing note above).
+		// usual cause is the recall-span-vs-tool-surface budget squeeze
+		// this test has hit twice before (see the sizing note above); the
+		// log's "recall span refused" line names the exact byte counts.
 		t.Log(readLog())
 	}
 	require.True(t, requestContains(req2, nonce), "precondition: the span WAS injected into request 2")
