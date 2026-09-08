@@ -236,6 +236,56 @@ func TestGrepTool_ScopeSingleFile_AncestorIgnoreStillApplies(t *testing.T) {
 	}
 }
 
+// TestGrepTool_ScopeSingleFile_OwnDirectoryIgnoreStillApplies is F1 (review
+// finding): the test above only covers a .gitignore that lives ABOVE the
+// scoped file's parent directory (the workspace root, read via
+// LoadAncestorIgnore, which deliberately reads only files STRICTLY ABOVE the
+// parent). It never exercised the parent directory's OWN .gitignore — the
+// file singleEntryFS wraps the parent in specifically to narrow a directory
+// listing to one entry. resolveScopedRoot's own doc comment claims that
+// wrapper still lets "every other engine rule ... run against that one
+// entry exactly as it would during an ordinary walk", but singleEntryFS
+// refused Open(".gitignore") for any name other than the target, so the
+// engine's own loadIgnoreLayer(root.FS, "") read for the parent's rules came
+// back ErrNotExist and that layer was silently empty: a directory-scoped
+// search of the parent honors its .gitignore, but a file-scoped search
+// naming the ignored file directly did not.
+func TestGrepTool_ScopeSingleFile_OwnDirectoryIgnoreStillApplies(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src", "build"), 0o700); err != nil {
+		t.Fatalf("seed dirs: %v", err)
+	}
+	// The ignore file lives IN "src/build" — the scoped file's own parent,
+	// not an ancestor above it.
+	mustWriteFile(t, filepath.Join(dir, "src", "build", ".gitignore"), "generated.go\n")
+	mustWriteFile(t, filepath.Join(dir, "src", "build", "generated.go"), "needle in generated output\n")
+	tool := newTestGrepTool(t, dir)
+
+	dirScoped := tool.Execute(context.Background(), map[string]any{
+		"pattern": "needle",
+		"path":    "src",
+	})
+	if dirScoped.IsError {
+		t.Fatalf("unexpected error scoping to the directory: %s", dirScoped.ForLLM)
+	}
+	if !strings.Contains(dirScoped.ForLLM, "0 match(es)") {
+		t.Fatalf("precondition failed: a directory-scoped search must honor build/.gitignore and prune "+
+			"generated.go, got:\n%s", dirScoped.ForLLM)
+	}
+
+	fileScoped := tool.Execute(context.Background(), map[string]any{
+		"pattern": "needle",
+		"path":    "src/build/generated.go",
+	})
+	if fileScoped.IsError {
+		t.Fatalf("unexpected error scoping to the file: %s", fileScoped.ForLLM)
+	}
+	if !strings.Contains(fileScoped.ForLLM, "0 match(es)") {
+		t.Fatalf("a file scope must honor its OWN parent directory's .gitignore exactly like the equivalent "+
+			"directory-scoped search does (F1) — the two must never disagree, got:\n%s", fileScoped.ForLLM)
+	}
+}
+
 // --- (b) honest errors for what remains unsupported -------------------------
 
 func TestGrepTool_ScopeSingleFile_NonExistentPathIsHonest(t *testing.T) {

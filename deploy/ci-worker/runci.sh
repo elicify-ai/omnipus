@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
 # Usage: runci.sh <git-ref> <gate>
-#   gate ∈ { all | go-build | go-vet | lint | go-test | go-race | contracts | spa | gofmt | quick | embed-build | e2e }
+#   gate ∈ { all | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e }
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 #   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
 #   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
@@ -429,6 +429,42 @@ run_gotest() {
   done
   return $rc
 }
+
+# Review finding F7: pkg/gateway/rest_knowledge_find_propindexless_test.go is
+# gated `records_no_sqlite || mipsle || netbsd || (freebsd && arm)` — the
+# platform/feature carve-out for a build with no SQLite-backed properties
+# index (ADR-081 / MV-9). That tag combination appeared in NEITHER this
+# script NOR .github/workflows/pr.yml: run_gotest above (and every other gate
+# here) builds/tests with $TAGS ("goolm,stdjson") only, so this build-tag
+# branch — and the honesty contract the file exists to pin (a properties-
+# index-only request group must refuse HONESTLY, complete:false plus the
+# engine's own reason, never a silently bare empty group) — was never
+# exercised. Deleting the file's whole attachment carve-out would have left
+# every other gate in this script green too.
+#
+# -run scoped to the file's own two tests (mirrors the exact command in that
+# file's own doc comment); -p 1 because both tests flip package-level state
+# to simulate the carve-out and must not race a concurrent package binary in
+# the same run.
+#
+# Pass-floor mirrors pr.yml's Landlock step (docs/internal/false-green-
+# patterns.md: "ok with zero --- PASS lines" is a build-tag miscompile or a
+# silently-skipped suite, not a real pass) — 2 is exact (grep the test file
+# for `^func Test` before changing it).
+run_records_no_sqlite() {
+  ensure_spa_stub
+  local out; out=$(CGO_ENABLED=0 go test -v -tags "$TAGS,records_no_sqlite" -count=1 -timeout 300s \
+    -run '^TestVaultSearch_Propindexless' -p 1 ./pkg/gateway/ 2>&1)
+  local code=$?
+  echo "$out"
+  local passes; passes=$(echo "$out" | grep -c -- '--- PASS' || true)
+  echo "records_no_sqlite propindexless passing tests: $passes"
+  if [ "$passes" -lt 2 ]; then
+    echo "only $passes of the 2 known records_no_sqlite propindexless tests passed — coverage silently lost (or a test was added/renamed without updating this gate)" >&2
+    return 1
+  fi
+  return $code
+}
 # CLI removed-verb guard (US-11 AC4 / FR-013).
 # Scanned: docker/ .github/ deploy/ scripts/ cmd/omnipus-launcher-tui/
 # NOT scanned: docs/ (may discuss history) or the spec file itself.
@@ -782,6 +818,7 @@ case "$GATE" in
   lint)            step golangci-lint run_lint ;;
   go-test)         step go-build run_gobuild; step go-test run_gotest ;;
   go-race)         step go-race run_gorace ;;
+  records-no-sqlite) step records-no-sqlite run_records_no_sqlite ;;
   contracts)       step npm-ci run_npm; step verify-contracts run_contracts ;;
   spa)             step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
   quick)           step gofmt run_gofmt; step go-build run_gobuild ;;
@@ -800,6 +837,7 @@ case "$GATE" in
     step vitest run_vitest
     step go-test run_gotest
     step go-race run_gorace
+    step records-no-sqlite run_records_no_sqlite
     step e2e run_e2e
     ;;
   *) echo "unknown gate: $GATE"; exit 64 ;;
