@@ -24,6 +24,7 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -687,7 +688,7 @@ func TestHealthCheck_HasNoManualTrigger(t *testing.T) {
 func TestHealthCheck_RefusesToBeBuiltWithoutANotifier(t *testing.T) {
 	if _, err := NewHealthChecker(HealthCheckerOptions{}); err == nil {
 		t.Error("NewHealthChecker succeeded with no notifier; the results would go nowhere and look like health")
-	} else if err != ErrNoDriftNotifier {
+	} else if !errors.Is(err, ErrNoDriftNotifier) {
 		t.Errorf("err = %v, want ErrNoDriftNotifier", err)
 	}
 }

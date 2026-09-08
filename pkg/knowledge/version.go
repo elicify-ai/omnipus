@@ -299,7 +299,7 @@ func ReadNoteVersion(c *Collection, rel string) (NoteVersion, error) {
 	}
 	cleaned, err := library.CleanRelPath(rel)
 	if err != nil {
-		return NoteVersion{}, fmt.Errorf("%w: %q: %v", ErrOutsideCollection, rel, err)
+		return NoteVersion{}, fmt.Errorf("%w: %q: %w", ErrOutsideCollection, rel, err)
 	}
 	abs, err := c.ResolveInside(cleaned)
 	if err != nil {

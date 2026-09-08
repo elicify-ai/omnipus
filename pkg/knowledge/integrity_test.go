@@ -6,6 +6,7 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -237,11 +238,7 @@ func TestIntegrity_SweepLimitIsCheckedBeforeTheGraphIsBuilt(t *testing.T) {
 }
 
 func asSweepTooLarge(err error, out **SweepTooLargeError) bool {
-	if e, ok := err.(*SweepTooLargeError); ok {
-		*out = e
-		return true
-	}
-	return false
+	return errors.As(err, out)
 }
 
 // TestIntegrity_PerCategoryClampReportsWhatItHid — FR-075a, over a corpus

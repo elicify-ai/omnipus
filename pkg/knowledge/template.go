@@ -292,7 +292,7 @@ func templatePath(fsys LinkFS, c *Collection, name string) (string, error) {
 	}
 	cleaned, err := library.CleanRelPath(name)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrTemplateNameRefused, name, err)
+		return "", fmt.Errorf("%w: %q: %w", ErrTemplateNameRefused, name, err)
 	}
 	if cleaned == "" {
 		return "", fmt.Errorf("%w: %q names the templates directory, not a template", ErrTemplateNameRefused, name)
@@ -317,7 +317,7 @@ func templatePath(fsys LinkFS, c *Collection, name string) (string, error) {
 
 	abs, err := root.ResolveContained(fsys, rel)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrTemplateNameRefused, name, err)
+		return "", fmt.Errorf("%w: %q: %w", ErrTemplateNameRefused, name, err)
 	}
 	fi, err := fsys.Lstat(abs)
 	if err != nil {

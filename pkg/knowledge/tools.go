@@ -519,8 +519,8 @@ func (t *SearchTool) Execute(ctx context.Context, args map[string]any) *tools.To
 			Kind:  string(h.Kind),
 			Score: h.Score,
 		}
-		switch {
-		case h.Kind == ScanKindAttachment:
+		switch h.Kind {
+		case ScanKindAttachment:
 			// FR-039a: an attachment's contents are never opened, for ANY
 			// reason — and deriving a title counts. It matched by name, so
 			// the name is the whole of what is reported. An earlier revision

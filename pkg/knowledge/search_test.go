@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -428,12 +429,12 @@ func TestSearcher_RefusesToBeBuiltWithoutAProgressSource(t *testing.T) {
 
 	if _, err := NewSearcher(ix, nil); err == nil {
 		t.Error("NewSearcher(ix, nil) succeeded; a searcher with no progress source silently claims completeness")
-	} else if err != ErrNoProgressSource {
+	} else if !errors.Is(err, ErrNoProgressSource) {
 		t.Errorf("NewSearcher(ix, nil) = %v, want ErrNoProgressSource", err)
 	}
 	if _, err := NewSearcher(nil, NewProgressTracker()); err == nil {
 		t.Error("NewSearcher(nil, tracker) succeeded")
-	} else if err != ErrNoIndex {
+	} else if !errors.Is(err, ErrNoIndex) {
 		t.Errorf("NewSearcher(nil, tracker) = %v, want ErrNoIndex", err)
 	}
 }

@@ -262,7 +262,7 @@ func (c *Collection) AttachRoot(root string) error {
 func (c *Collection) ResolveInside(rel string) (string, error) {
 	cleaned, err := library.CleanRelPath(rel)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrOutsideCollection, rel, err)
+		return "", fmt.Errorf("%w: %q: %w", ErrOutsideCollection, rel, err)
 	}
 	if cleaned == "" {
 		return "", fmt.Errorf("%w: %q names the collection root, not a file within it", ErrOutsideCollection, rel)
@@ -333,7 +333,7 @@ func CreateInWorkspace(home, workspaceID, relPath string, m Marker) (*Collection
 	}
 	cleaned, err := library.CleanRelPath(relPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q: %v", ErrOutsideCollection, relPath, err)
+		return nil, fmt.Errorf("%w: %q: %w", ErrOutsideCollection, relPath, err)
 	}
 	if cleaned == "" {
 		return nil, fmt.Errorf("%w: %q does not name a folder inside the workspace work tree", ErrOutsideCollection, relPath)

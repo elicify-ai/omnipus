@@ -124,7 +124,7 @@ func (m Marker) Validate() error {
 	if m.TemplatesDir != "" {
 		cleaned, err := library.CleanRelPath(m.TemplatesDir)
 		if err != nil {
-			return fmt.Errorf("%w: templates_dir %q: %v", ErrMarkerInvalid, m.TemplatesDir, err)
+			return fmt.Errorf("%w: templates_dir %q: %w", ErrMarkerInvalid, m.TemplatesDir, err)
 		}
 		if cleaned == "" {
 			return fmt.Errorf("%w: templates_dir %q resolves to the marker directory itself", ErrMarkerInvalid, m.TemplatesDir)
@@ -179,7 +179,7 @@ func ReadMarker(root string) (Marker, error) {
 		// Loud, not defaulted. A corrupt marker that silently became
 		// {DisplayName: ""} would rename the operator's collection to nothing
 		// and report success.
-		return Marker{}, fmt.Errorf("%w: parse %s: %v", ErrMarkerInvalid, MarkerPath(root), err)
+		return Marker{}, fmt.Errorf("%w: parse %s: %w", ErrMarkerInvalid, MarkerPath(root), err)
 	}
 	if err := m.Validate(); err != nil {
 		return Marker{}, err

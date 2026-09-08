@@ -365,7 +365,7 @@ func buildEvalCorpus() []evalNote {
 // boring is the property an eval wants.
 func reduceToQuery(sentence string) string {
 	fields := strings.FieldsFunc(strings.ToLower(sentence), func(r rune) bool {
-		return !('a' <= r && r <= 'z') && !('0' <= r && r <= '9')
+		return ('a' > r || r > 'z') && ('0' > r || r > '9')
 	})
 	terms := make([]string, 0, len(fields))
 	for _, f := range fields {

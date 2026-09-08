@@ -503,7 +503,7 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 func authorCleanNotePath(raw string) (string, error) {
 	cleaned, err := library.CleanRelPath(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrOutsideCollection, raw, err)
+		return "", fmt.Errorf("%w: %q: %w", ErrOutsideCollection, raw, err)
 	}
 	if cleaned == "" {
 		return "", fmt.Errorf("%w: %q names the collection root, not a note", ErrOutsideCollection, raw)
@@ -1164,10 +1164,7 @@ func authorNeedsQuoting(value string) bool {
 	case '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`':
 		return true
 	}
-	if authorLooksNumeric(value) {
-		return true
-	}
-	return false
+	return authorLooksNumeric(value)
 }
 
 // authorLooksNumeric reports whether a plain scalar would be read back as a
