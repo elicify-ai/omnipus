@@ -529,23 +529,36 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// getting back the (fanout+1)-th hit proves the corpus held more
 		// matches than the fanout could carry, and the typed filter below
 		// never got a chance to see them.
+		//
+		// When the query is narrowed to KindNote or KindAttachment, that
+		// fanout+1 ask is not enough by itself: Search has no kind argument
+		// (see TextSearcher), so its ranking is one undifferentiated list
+		// across every indexed kind, and taking its top fanout+1 rows
+		// crowds out whichever kind is scarcer whenever the other kind
+		// dominates the top of that ranking. fetchWordHits pushes the kind
+		// constraint down into the search itself — asking it for a DEEPER
+		// ranking, not just filtering what fanout+1 happened to return — and
+		// reports truncated=true whenever it cannot prove the kind's own
+		// population is fully accounted for, exactly the way the plain
+		// fanout+1 check below already does for the unkinded case.
 		fanout := textFanout(q.limit)
-		hits, err := d.Text.Search(ctx, q.words, fanout+1)
+		hits, truncated, err := fetchWordHits(ctx, d.Text, q, fanout)
 		if err != nil {
 			ref := refuse(problem(generated.IndexUnavailable,
 				fmt.Sprintf("the text index could not answer %q: %v", q.words, err),
 				"re-run, or run knowledge_describe check_integrity to see the index state"), err)
 			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 		}
-		if len(hits) > fanout {
-			// The corpus held more than the fanout. wordPaths — the set the
-			// typed filter intersects against — is being built from a PREFIX
-			// of the real match set, never the whole of it, so this answer
-			// can no longer claim to be complete no matter what the typed
-			// filter and the evaluation below find. Reported below (see
-			// ev.recordProblems), never assumed away.
+		if truncated {
+			// The corpus held more than the fanout — or, for a kind-narrowed
+			// query, fetchWordHits could not rule that out within its own
+			// search ceiling. wordPaths — the set the typed filter intersects
+			// against — is being built from a PREFIX of the real match set,
+			// never the whole of it, so this answer can no longer claim to be
+			// complete no matter what the typed filter and the evaluation
+			// below find. Reported below (see ev.recordProblems), never
+			// assumed away.
 			wordsTruncated = true
-			hits = hits[:fanout]
 		}
 		wordHits = hits
 		wordPaths = make(map[string]TextHit, len(hits))
@@ -842,6 +855,116 @@ func textFanout(limit int) int {
 	return n
 }
 
+// wordKindKeepsHit is the same "blank Kind reads as KindNote" rule
+// textOnlyResponse applies (see TextHit.Kind's own doc comment), pulled out
+// so fetchWordHits can apply it before textOnlyResponse ever sees the hits.
+func wordKindKeepsHit(h TextHit, kind string) bool {
+	hitKind := h.Kind
+	if hitKind == "" {
+		hitKind = KindNote
+	}
+	return hitKind == kind
+}
+
+// wordKindFilterActive reports whether q.kind narrows the word search at all.
+// Only KindNote and KindAttachment do: KindRecord and KindTask are answered
+// exclusively through the properties-index path (textOnlyServable refuses
+// them outright when the index is absent), and the general path's own
+// candidate stream already narrows them to the propindex "note" bucket via
+// the selector, independently of anything the word half returns — so
+// narrowing the word search for them is neither required by this fix nor
+// exercised by anything that depends on it.
+func wordKindFilterActive(kind string) bool {
+	return kind == KindNote || kind == KindAttachment
+}
+
+// fetchWordHits runs the plain-word half of the query and, for a query
+// narrowed to KindNote or KindAttachment, pushes that narrowing INTO the
+// search rather than applying it to whatever the first fanout+1 ranked hits
+// happened to contain.
+//
+// Search has no kind argument (TextSearcher's contract is words-and-limit
+// only), so its ranking is one undifferentiated list across every indexed
+// kind. Taking its top fanout+1 rows and filtering THOSE by kind — the
+// previous shape of this code — silently drops whichever kind is scarcer
+// whenever the other kind crowds the top of that ranking: the candidates
+// were never wrong, they were discarded before the kind filter ever got to
+// see them, and the caller was told the (already-filtered) remainder was the
+// whole answer.
+//
+// The fix is to keep asking Search for a DEEPER ranking — the same query, a
+// larger limit — until either enough kind-matching hits have been collected
+// to satisfy the fanout, or the index itself proves there is nothing deeper
+// to find (it returns fewer hits than asked for), or the ask has reached
+// propindex.BoundSurvivors, this package's own existing ceiling on how much
+// of a ranking it will ever pull into memory (textFanout already clamps to
+// it). Reaching that ceiling without either of the other two outcomes means
+// completeness genuinely cannot be proven within the bound this package
+// already accepts elsewhere — truncated is reported true in that case, same
+// as an ordinary unkinded fanout truncation.
+//
+// This costs at most one extra Search call, and only for a query kind- and
+// word-narrowed in the first place: an unfiltered kind (record, task, or no
+// words at all) never reaches the loop below.
+func fetchWordHits(ctx context.Context, text TextSearcher, q *query, fanout int) ([]TextHit, bool, error) {
+	want := fanout + 1
+	raw, err := text.Search(ctx, q.words, want)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if !wordKindFilterActive(q.kind) {
+		truncated := len(raw) > fanout
+		if truncated {
+			raw = raw[:fanout]
+		}
+		return raw, truncated, nil
+	}
+
+	filtered := make([]TextHit, 0, len(raw))
+	for _, h := range raw {
+		if wordKindKeepsHit(h, q.kind) {
+			filtered = append(filtered, h)
+		}
+	}
+	exhausted := len(raw) < want
+
+	if len(filtered) < want && !exhausted && want < propindex.BoundSurvivors {
+		// The first window was crowded out by the other kind and the index is
+		// not exhausted — broaden the ask to this package's own ceiling and
+		// filter again, once.
+		raw, err = text.Search(ctx, q.words, propindex.BoundSurvivors)
+		if err != nil {
+			return nil, false, err
+		}
+		filtered = filtered[:0]
+		for _, h := range raw {
+			if wordKindKeepsHit(h, q.kind) {
+				filtered = append(filtered, h)
+			}
+		}
+		exhausted = len(raw) < propindex.BoundSurvivors
+	}
+
+	switch {
+	case len(filtered) > fanout:
+		// Proof: more than fanout real matches of this kind exist. Same
+		// evidence shape as the unkinded case above.
+		return filtered[:fanout], true, nil
+	case exhausted:
+		// The index ran out before the last ask — every match of this kind
+		// for this word is accounted for in filtered.
+		return filtered, false, nil
+	default:
+		// Neither proof of more, nor proof of exhaustion: the search stopped
+		// at its own ceiling with fanout or fewer kind-matching hits in hand.
+		// There may be more of this kind ranked below where it stopped
+		// looking — an honest answer says so rather than asserting a
+		// completeness it cannot back up.
+		return filtered, true, nil
+	}
+}
+
 // evaluation accumulates survivors. It holds ONE candidate at a time from the
 // store's perspective — what it retains per survivor is the rendered row and the
 // sort keys, not the decoded candidate.
@@ -1136,6 +1259,13 @@ func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated b
 	// (a TextSearcher stub predating this field) is treated as KindNote —
 	// every text-only caller before attachment support was note-only, so
 	// that is the one backward-compatible reading.
+	//
+	// By the time `hits` reaches here, fetchWordHits has already narrowed the
+	// SAME hit list to q.kind (see its own doc comment) — this loop's kind
+	// check is therefore a second, defense-in-depth pass, not the only place
+	// the narrowing happens; the PathPrefix check right below is the one
+	// piece of work this loop still does that fetchWordHits cannot, since
+	// scope is a caller property Search knows nothing about.
 	scoped := make([]TextHit, 0, len(hits))
 	for _, h := range hits {
 		if d.PathPrefix != "" && !strings.HasPrefix(h.Path, d.PathPrefix) {
