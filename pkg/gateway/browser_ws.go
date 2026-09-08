@@ -1365,13 +1365,22 @@ func (h *BrowserWSHandler) handleAttach(
 	if prev != nil && prevSession != "" {
 		h.detach(prev, prevSession, prevPanel, viewerID, userID)
 	}
+	request := state.attachmentRequest()
+	if request.epoch != epoch || request.ctx == nil || request.ctx.Err() != nil {
+		return
+	}
+	sendFailure := func(frame generated.BrowserStatusFrame, reason string) {
+		if state.finishAttachmentFailure(request) {
+			wc.sendCriticalScopedGen(frame, reason, request.ctx, nil)
+		}
+	}
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_attach: invalid frame"), dropContext("", viewerID, "attach-invalid"))
+		sendFailure(errorStatus("browser_attach: invalid frame"), dropContext("", viewerID, "attach-invalid"))
 		return
 	}
 	if frame.AgentId == "" || frame.SessionId == "" {
-		wc.sendCriticalGen(errorStatus("browser_attach: agent_id and session_id are required"),
+		sendFailure(errorStatus("browser_attach: agent_id and session_id are required"),
 			dropContext(frame.SessionId, viewerID, "attach-missing-fields"))
 		return
 	}
@@ -1382,7 +1391,7 @@ func (h *BrowserWSHandler) handleAttach(
 	mgr, outcome := h.agentLoop.BrowserManagerForAgent(
 		context.Background(), frame.AgentId, h.sessionWorkspaceID(frame.SessionId))
 	if outcome != agent.BrowserResolveOK {
-		wc.sendCriticalGen(
+		sendFailure(
 			sessionErrorStatus(frame.SessionId, browserResolveReason(outcome, frame.AgentId)),
 			dropContext(frame.SessionId, viewerID, "attach-no-manager"))
 		return
@@ -1448,7 +1457,7 @@ func (h *BrowserWSHandler) handleAttach(
 		}, dropContext(chatSessionID, viewerID, "tabs-broadcast"))
 	})
 	if err != nil {
-		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
+		sendFailure(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
 			dropContext(chatSessionID, viewerID, "attach-failed"))
 		return
 	}

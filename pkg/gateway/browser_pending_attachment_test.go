@@ -209,7 +209,7 @@ func TestPendingAttachmentStaleWorkCannotTakeReplacementRoute(t *testing.T) {
 	}
 }
 
-func TestPendingAttachmentInvalidFrameCancelsRequest(t *testing.T) {
+func TestPendingAttachmentInvalidFrameCompletesWithoutRoute(t *testing.T) {
 	wc, state := newTabActionTestFixtures(t)
 	epoch := state.beginAttach()
 	request := state.attachmentRequest()
@@ -219,8 +219,13 @@ func TestPendingAttachmentInvalidFrameCancelsRequest(t *testing.T) {
 	if mgr, chat, panel := state.attachment(); mgr != nil || chat != "" || panel != "" {
 		t.Errorf("failed replacement retained previous route: manager=%p chat=%q panel=%q", mgr, chat, panel)
 	}
-	if !errors.Is(request.ctx.Err(), context.Canceled) {
-		t.Fatalf("failed attach handler left request alive: %v", request.ctx.Err())
+	if err := request.ctx.Err(); err != nil {
+		t.Fatalf("failed attach retired its undelivered error: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := state.awaitAttachment(waitCtx, request); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("failed attach did not promptly reject its waiting offer: %v", err)
 	}
 	if state.bindAttachment(epoch, &browser.BrowserManager{}, "late", "late-panel") {
 		t.Fatal("failed handler's request could still commit")
