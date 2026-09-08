@@ -64,8 +64,8 @@ func (cs *CaptureSession) ReportCaptureFailureForObservation(sample CaptureHealt
 	return cs.reportIngestLoss(&sample)
 }
 
-// RecordVideoProgress completes a recovery when a reused ingest connection
-// resumes forwarding without producing another track-arrival callback.
+// RecordVideoProgress rechecks actual matching ingress receipt, including a
+// finite packet observed before the watchdog clears an earlier stage failure.
 func (cs *CaptureSession) RecordVideoProgress() {
 	cs.recordIngestVideoLive(true)
 }
@@ -73,11 +73,11 @@ func (cs *CaptureSession) RecordVideoProgress() {
 // Caller holds cs.mu. Legacy unbound test adapters have no frame identity;
 // authenticated context-bound encoders must name their actual sampled frame.
 func (cs *CaptureSession) healthMatchesFrameLocked(sample CaptureHealthObservation) bool {
-	if cs.ingestBindingCtx == nil {
+	if !cs.ingestContextBound {
 		return true
 	}
 	frame := cs.frames.snapshot()
-	return sample.CaptureGeneration != 0 && sample.CaptureGeneration == frame.Generation &&
+	return cs.ingestBindingCtx != nil && cs.ingestBindingCtx.Err() == nil && sample.CaptureGeneration != 0 && sample.CaptureGeneration == frame.Generation &&
 		sample.TargetID != "" && sample.TargetID == frame.Geometry.TargetID &&
 		frame.Geometry.Width > 0 && frame.Geometry.Height > 0
 }
@@ -86,7 +86,7 @@ func (cs *CaptureSession) healthMatchesFrameLocked(sample CaptureHealthObservati
 // binding and heartbeat are still current. Shutdown I/O occurs outside cs.mu.
 func (cs *CaptureSession) StopIfIngestHeartbeatStale(epoch uint64, sampled, now time.Time, staleAfter time.Duration) bool {
 	return cs.stopWhen(func() bool {
-		return epoch != 0 && epoch == cs.ingestEpoch && !sampled.IsZero() &&
+		return epoch == cs.ingestEpoch && (!cs.ingestContextBound || epoch != 0) && !sampled.IsZero() &&
 			cs.lastPingAt.Equal(sampled) && now.Sub(sampled) > staleAfter
 	})
 }

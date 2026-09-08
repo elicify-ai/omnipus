@@ -874,77 +874,59 @@ const encoderLivenessVideoStallTicks = 6
 func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agentID string, checkInterval, staleAfter time.Duration) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
-
-	var (
-		lastVideoPackets int64
-		haveBaseline     bool
-		stallTicks       int
-		healthTracker    captureHealthTracker
-	)
-
+	var tracker captureHealthTracker
+	var lastReceipt, receiptAtHealthSample uint64
+	var lastHealthObserved time.Time
+	haveBaseline := false
+	stallTicks := 0
 	for {
 		select {
 		case <-cs.Done():
 			return
-		case <-ticker.C:
-			stats := cs.Stats()
-			health := cs.CaptureHealth()
-			stageFailure := healthTracker.observe(health, time.Now(), staleAfter)
-			if haveBaseline && stats.VideoPackets > lastVideoPackets {
-				stageFailure = healthTracker.noteRelayProgress()
+		case now := <-ticker.C:
+			snapshot := cs.WatchdogSnapshot()
+			health := snapshot.Health
+			previous := tracker.previous
+			if previous.BindingEpoch != health.BindingEpoch || previous.CaptureGeneration != health.CaptureGeneration || previous.TargetID != health.TargetID || previous.Generation != health.Generation {
+				stallTicks = 0
 			}
-			if cs.ViewerCount() > 0 {
-				if haveBaseline && stats.VideoPackets == lastVideoPackets && stageFailure != "" {
+			stageFailure := tracker.observe(health, now, staleAfter)
+			serial := snapshot.VideoReceipt.Serial
+			// A finite packet can arrive before its next encoder stats sample.
+			// Retain the previous sample's receipt baseline until that sample is
+			// processed, so later counter catch-up does not invent a relay stall.
+			receiptAdvanced := serial > lastReceipt || serial > receiptAtHealthSample
+			if haveBaseline && snapshot.ReceiptCurrent && receiptAdvanced {
+				stageFailure = tracker.noteRelayProgress()
+			}
+			if health.ObservedAt != lastHealthObserved {
+				lastHealthObserved = health.ObservedAt
+				receiptAtHealthSample = serial
+			}
+			if snapshot.ViewerCount > 0 {
+				if haveBaseline && stageFailure != "" {
 					stallTicks++
 				} else {
 					stallTicks = 0
-					if haveBaseline && stats.VideoPackets > lastVideoPackets {
+					if haveBaseline && snapshot.ReceiptCurrent {
+						// Reconsider retained finite evidence after another stage
+						// clears. CaptureSession consumes each serial only once.
 						cs.RecordVideoProgress()
 					}
 				}
-				lastVideoPackets = stats.VideoPackets
 				haveBaseline = true
 			} else {
-				// No viewer attached — VideoPackets naturally not
-				// progressing tells us nothing about encoder health; reset
-				// so a viewer that (re)attaches later gets a fresh baseline
-				// instead of an immediate false-positive stale verdict.
-				stallTicks = 0
-				haveBaseline = false
+				stallTicks, haveBaseline = 0, false
 			}
+			lastReceipt = serial
 			if stallTicks >= encoderLivenessVideoStallTicks {
 				if cs.ReportCaptureFailureForObservation(health) {
-					slog.Warn(
-						"browser-webrtc: capture stage failed; requesting bounded recovery",
-						"stage", stageFailure,
-						"agent_id",
-						agentID,
-						"video_packets",
-						stats.VideoPackets,
-						"stall_ticks",
-						stallTicks,
-						"check_interval",
-						checkInterval,
-					)
+					slog.Warn("browser-webrtc: capture stage failed; requesting bounded recovery", "stage", stageFailure, "agent_id", agentID, "receipt_serial", serial, "stall_ticks", stallTicks, "check_interval", checkInterval)
 				}
 				stallTicks = 0
 			}
-
-			last := cs.LastPingAt()
-			if last.IsZero() {
-				continue // encoder hasn't bound the ingest connection yet
-			}
-			if time.Since(last) > staleAfter {
-				slog.Warn(
-					"browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session",
-					"agent_id",
-					agentID,
-					"last_ping_at",
-					last,
-					"stale_after",
-					staleAfter,
-				)
-				cs.Stop()
+			if cs.StopIfIngestHeartbeatStale(snapshot.BindingEpoch, snapshot.LastPingAt, now, staleAfter) {
+				slog.Warn("browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session", "agent_id", agentID, "last_ping_at", snapshot.LastPingAt, "stale_after", staleAfter)
 				return
 			}
 		}

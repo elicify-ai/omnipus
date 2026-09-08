@@ -370,6 +370,7 @@ type CaptureSession struct {
 	ingestEpoch uint64
 	// Authenticated socket, pending offer, and frame lifetimes are independent
 	// of the media token installed in the relay. Guarded by mu.
+	ingestContextBound  bool // Retained after Unbind; production must never regain legacy proof semantics.
 	ingestBindingToken  uint64
 	ingestBindingCtx    context.Context
 	ingestBindingCancel context.CancelFunc
@@ -424,8 +425,14 @@ type CaptureSession struct {
 	// ingestRecoveryAttempts counts automatic recaptures issued since video
 	// was last confirmed live. Reset to 0 by onIngestVideoLive.
 	ingestRecoveryAttempts int
+	videoHealthVersion     uint64
+	videoHealthExhausted   bool
+	ingestRecoveryEpoch    uint64
+	ingestRecoveryCtx      context.Context
+	ingestRecoveryCancel   context.CancelFunc
 	// Progress at the latest loss; only later packets may complete recovery.
-	ingestRecoveryProgressBaseline int64
+	ingestRecoveryProgressBaseline uint64
+	ingestConsumedReceiptSerial    uint64
 	// ingestRecoveryTimer is the single armed evaluation of the recovery state
 	// machine; nil when none is pending. Exactly one may exist at a time —
 	// that is what stops a burst of loss notifications becoming a burst of
@@ -577,7 +584,9 @@ func newCaptureSessionWithDeps(
 	if oh, ok := relay.(viewerOfferHandler); ok {
 		cs.offerHandler = oh
 	}
-	if il, ok := relay.(ingestLossNotifier); ok {
+	if il, ok := relay.(captureOfferLossNotifier); ok {
+		il.SetOnIngestLostForOffer(cs.onIngestLostForOffer)
+	} else if il, ok := relay.(ingestLossNotifier); ok {
 		// A dead ingest means the encoder is gone; ask it to re-capture so the
 		// stream recovers on its own. Without this the session sits with no
 		// ingest at all and nothing ever asks for a new one, which is
@@ -1069,6 +1078,7 @@ func (cs *CaptureSession) BindIngest(
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	previousClose = cs.ingestClose
+	cs.ingestContextBound = false
 	cs.cancelIngestBindingLocked()
 	cs.ingestEpoch++
 	cs.ingestSend = send
@@ -1572,7 +1582,7 @@ func (cs *CaptureSession) RecaptureForTabChangeAt(expectedW, expectedH int) {
 	cs.tabChangeRecaptureRunning = true
 	// Same reason as RecaptureAt: a tab-change recapture is a real teardown,
 	// and the loss it produces must not be read as a death (#674).
-	cs.recapturePendingUntil = time.Now().Add(ingestRecoverySettle)
+	cs.noteRecaptureIssuedLocked(ingestRecoverySettle)
 	cs.mu.Unlock()
 
 	// Prime attached viewers for the coming gap NOW, on the caller's own
@@ -1805,6 +1815,7 @@ func (cs *CaptureSession) stopWhen(allowed func() bool) bool {
 		return false
 	}
 	cs.stopped = true
+	cs.retireIngestRecoveryEpisodeLocked()
 	cs.cancelIngestBindingLocked()
 	if cs.frameCancel != nil {
 		cs.frameCancel()

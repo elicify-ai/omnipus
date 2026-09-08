@@ -47,6 +47,7 @@ func (cs *CaptureSession) BindIngestContext(ctx context.Context, send func(strin
 	previous := cs.ingestClose
 	cs.cancelIngestBindingLocked()
 	cs.ingestEpoch++
+	cs.ingestContextBound = true
 	cs.ingestBindingToken = token
 	cs.ingestBindingCtx, cs.ingestBindingCancel = binding, cancel
 	cs.ingestSend, cs.ingestClose = send, closeConn
