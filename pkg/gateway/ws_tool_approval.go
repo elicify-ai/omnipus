@@ -124,6 +124,16 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
+	// ADR-082 review CR3: stamp the session this snapshot describes so a
+	// client juggling several attached sessions (or a re-attach mid-flight)
+	// can tell which session_state a frame belongs to instead of guessing
+	// from arrival order. Absent (nil) at the raw connection-open emit, where
+	// sessionID is "" because no session has been bound yet.
+	if sessionID != "" {
+		sid := sessionID
+		frame.SessionId = &sid
+	}
+
 	// ADR-082 D4/FR-008: announce the in-flight foreground turn (if any) for
 	// the session this connection is bound to, so a reconnecting SPA
 	// immediately knows to render the streaming bubble + Stop control

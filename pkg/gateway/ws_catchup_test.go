@@ -166,3 +166,303 @@ func TestAttach_CatchUpSnapshotOrdering(t *testing.T) {
 				"no duplicate, no gap", i)
 	}
 }
+
+// TestFix_CR5_F1_NoCatchUpForAlreadyPersistedRoundText proves the ADR-082
+// review CR5/F1 fix: liveStreamers is per LLM ROUND, not per turn — a
+// round whose narration was already written to the transcript via
+// appendIntermediateAssistantTranscript (Bug #416) BEFORE its tool calls run
+// stays registered as the session's live streamer for the entire tool-call
+// window that follows (GetStreamer only overwrites the entry on the NEXT
+// round). Before this fix, a connection binding during that window received
+// the round's text TWICE: once from replay (already on disk) and again as a
+// "catch-up" token — a duplicate bubble.
+func TestFix_CR5_F1_NoCatchUpForAlreadyPersistedRoundText(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+
+	// Round 1: stream narration, then simulate the agent loop's Bug #416
+	// persistence path — appendIntermediateAssistantTranscript writes the
+	// entry BEFORE this round's tool calls run, and
+	// markLastStreamerTranscriptPersisted marks the streamer via
+	// SuppressTranscriptWrite. This is the exact state a connection sees
+	// while round 1's tool calls are executing: the streamer is still
+	// registered (GetStreamer for round 2 has not run yet).
+	round1Any, ok := handler.GetStreamer(context.Background(), "webchat", "chat-cr5", meta.ID)
+	require.True(t, ok)
+	round1, ok := round1Any.(*wsStreamer)
+	require.True(t, ok)
+	round1.SetTurnID("turn-cr5")
+	require.NoError(t, round1.Update(context.Background(), "round one narration"))
+
+	require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+		ID:        "entry-round1-cr5",
+		Role:      "assistant",
+		AgentID:   "mia",
+		TurnID:    "turn-cr5",
+		Content:   "round one narration",
+		Timestamp: time.Now().UTC(),
+	}))
+	round1.SuppressTranscriptWrite()
+
+	// Bind DURING the tool-call window: NO catch-up token; replay alone
+	// carries round 1's text.
+	wcDuringTools := &wsConn{sendCh: make(chan []byte, 16), doneCh: make(chan struct{})}
+	handler.mu.Lock()
+	handler.sessions["chat-cr5-attach1"] = wcDuringTools
+	handler.mu.Unlock()
+	handler.handleAttachSession(context.Background(), "chat-cr5-attach1", meta.ID, nil, wcDuringTools)
+
+	var sawReplayText bool
+	deadline := time.After(2 * time.Second)
+collectTools:
+	for {
+		select {
+		case raw := <-wcDuringTools.sendCh:
+			var f struct {
+				Type    string `json:"type"`
+				Content string `json:"content"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &f))
+			if f.Type == "token" {
+				t.Fatalf("BUG REGRESSION: catch-up token delivered for text already persisted "+
+					"to the transcript: %q", f.Content)
+			}
+			if f.Type == "replay_message" && f.Content == "round one narration" {
+				sawReplayText = true
+			}
+			if f.Type == "done" {
+				break collectTools
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for replay to finish during the tool-call window")
+		}
+	}
+	assert.True(t, sawReplayText, "replay must carry round 1's already-persisted text")
+
+	// Round 2: GetStreamer overwrites liveStreamers[sid] with a fresh
+	// streamer (transcriptPersisted=false). Binding DURING round 2's own
+	// streaming must carry ONLY round 2's partial text as catch-up.
+	round2Any, ok := handler.GetStreamer(context.Background(), "webchat", "chat-cr5", meta.ID)
+	require.True(t, ok)
+	round2, ok := round2Any.(*wsStreamer)
+	require.True(t, ok)
+	round2.SetTurnID("turn-cr5-round2")
+	require.NoError(t, round2.Update(context.Background(), "round two partial"))
+
+	wcDuringRound2 := &wsConn{sendCh: make(chan []byte, 16), doneCh: make(chan struct{})}
+	handler.mu.Lock()
+	handler.sessions["chat-cr5-attach2"] = wcDuringRound2
+	handler.mu.Unlock()
+	handler.handleAttachSession(context.Background(), "chat-cr5-attach2", meta.ID, nil, wcDuringRound2)
+
+	// round2 is never Finalize()d in this test (it is still "streaming" at
+	// the moment attach2 binds), so the ONLY "done" frame in this stream is
+	// the REPLAY's own terminating done — which, per the CR1 wire order,
+	// arrives BEFORE the catch-up token (replay* → done{frames_emitted} →
+	// token{catch-up}). Breaking on the first "done" would therefore stop
+	// collection before the catch-up token even arrives; drain for the full
+	// window instead.
+	var catchUpTexts []string
+	deadline2 := time.After(1 * time.Second)
+collectRound2:
+	for {
+		select {
+		case raw := <-wcDuringRound2.sendCh:
+			var f struct {
+				Type    string `json:"type"`
+				Content string `json:"content"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &f))
+			if f.Type == "token" {
+				catchUpTexts = append(catchUpTexts, f.Content)
+			}
+		case <-deadline2:
+			break collectRound2
+		}
+	}
+	require.Len(t, catchUpTexts, 1, "exactly one catch-up token, for round 2's own partial text only")
+	assert.Equal(t, "round two partial", catchUpTexts[0])
+}
+
+// TestFix_CR6_DoneDivertedWhileConnectionIsReplaying proves the ADR-082
+// review CR6 fix: sendRawFrameBytes must not let a TURN's "done" frame
+// bypass the replay divert — a turn finalizing while a re-attaching
+// connection is still mid-replay must not put "done" ahead of that
+// connection's still-pending replay/catch-up frames (which would orphan the
+// bubble on the client and leave Stop looking stuck).
+func TestFix_CR6_DoneDivertedWhileConnectionIsReplaying(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+	// Seed one transcript entry so streamReplay actually emits at least one
+	// replay_message frame — the controllable blocking point below.
+	require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+		ID: "seed-entry-cr6", Role: "user", Content: "hello", Timestamp: time.Now().UTC(),
+	}))
+
+	// Register an in-flight streamer for a turn on the SAME session that
+	// will race its own Finalize against this attach's replay.
+	streamerAny, ok := handler.GetStreamer(context.Background(), "webchat", "chat-cr6-origin", meta.ID)
+	require.True(t, ok)
+	streamer, ok := streamerAny.(*wsStreamer)
+	require.True(t, ok)
+	streamer.SetTurnID("turn-cr6")
+
+	wc := &wsConn{
+		// Capacity 1: the FIRST write (session_state, non-blocking, sent
+		// while still holding h.mu) fills it; streamReplay's own first
+		// content frame (the seeded entry) then BLOCKS until drained,
+		// giving Finalize below a guaranteed window to race in while
+		// wc.isReplayingLive is still true.
+		sendCh: make(chan []byte, 1),
+		doneCh: make(chan struct{}),
+	}
+	chatID := "chat-cr6-attach"
+	handler.mu.Lock()
+	handler.sessions[chatID] = wc
+	handler.mu.Unlock()
+
+	attachDone := make(chan struct{})
+	go func() {
+		defer close(attachDone)
+		handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
+	}()
+
+	// Let handleAttachSession bind + arm the divert + block on the seeded
+	// entry's replay_message frame.
+	time.Sleep(50 * time.Millisecond)
+
+	finalizeDone := make(chan struct{})
+	go func() {
+		defer close(finalizeDone)
+		require.NoError(t, streamer.Finalize(context.Background(), ""))
+	}()
+	// Give Finalize a moment to actually reach sendRawFrameBytes before we
+	// start draining — otherwise the race isn't guaranteed to be exercised.
+	time.Sleep(50 * time.Millisecond)
+
+	var types []string
+	turnDoneSeen := false
+	deadline := time.After(5 * time.Second)
+	for !turnDoneSeen {
+		select {
+		case raw := <-wc.sendCh:
+			var f struct {
+				Type  string `json:"type"`
+				Stats *struct {
+					Tokens *float64 `json:"tokens"`
+				} `json:"stats"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &f))
+			types = append(types, f.Type)
+			if f.Type == "done" && f.Stats != nil && f.Stats.Tokens != nil {
+				turnDoneSeen = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out; frames so far: %v", types)
+		}
+	}
+
+	<-attachDone
+	<-finalizeDone
+
+	require.NotEmpty(t, types)
+	assert.Equal(t, "done", types[len(types)-1],
+		"BUG REGRESSION: the turn's own done must never jump ahead of a still-replaying "+
+			"connection's queued frames — it must arrive last")
+	doneCount := 0
+	for _, ty := range types {
+		if ty == "done" {
+			doneCount++
+		}
+	}
+	assert.GreaterOrEqual(t, doneCount, 2,
+		"expect both the replay's own terminating done and the turn's own final done")
+}
+
+// TestFix_CR10_ReplayErrorStillEmitsSessionStateAndDrainsDivert proves the
+// ADR-082 review CR10 fix: on a replay error, handleAttachSession must not
+// leave the connection bound with an undrained wc.replayDivertCh (which is
+// allocated once and reused across every later attach on the same
+// connection — an undrained buffer here would leak into the NEXT
+// attach_session as stale duplicates), and session_state must already have
+// been delivered (CR1's early emit, ahead of replay).
+func TestFix_CR10_ReplayErrorStillEmitsSessionStateAndDrainsDivert(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+
+	wc := &wsConn{sendCh: make(chan []byte, 32), doneCh: make(chan struct{})}
+	chatID := "chat-cr10"
+	handler.mu.Lock()
+	handler.sessions[chatID] = wc
+	handler.mu.Unlock()
+
+	// A pre-canceled context forces streamReplay's own ctx.Err() check
+	// (reached even for a zero-entry transcript, right before its final
+	// done emit) to fail — deterministic, no timing dependency.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handler.handleAttachSession(ctx, chatID, meta.ID, nil, wc)
+
+	var sawSessionState, sawError, sawReplayErrorDone bool
+	deadline := time.After(2 * time.Second)
+collect:
+	for {
+		select {
+		case raw := <-wc.sendCh:
+			var f struct {
+				Type      string  `json:"type"`
+				SessionID *string `json:"session_id"`
+				Stats     *struct {
+					ReplayError *bool `json:"replay_error"`
+				} `json:"stats"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &f))
+			switch f.Type {
+			case "session_state":
+				sawSessionState = true
+				require.NotNil(t, f.SessionID)
+				assert.Equal(t, meta.ID, *f.SessionID)
+			case "error":
+				sawError = true
+			case "done":
+				if f.Stats != nil && f.Stats.ReplayError != nil && *f.Stats.ReplayError {
+					sawReplayErrorDone = true
+					break collect
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out; session_state=%v error=%v replayErrorDone=%v",
+				sawSessionState, sawError, sawReplayErrorDone)
+		}
+	}
+
+	assert.True(t, sawSessionState, "session_state must still be delivered even though replay aborted")
+	assert.True(t, sawError, "an error frame must be delivered on replay failure")
+	assert.True(t, sawReplayErrorDone, "a done{replay_error:true} frame must follow")
+
+	// The divert must have been disarmed AND drained — nothing left over to
+	// leak into a later attach on this same connection.
+	assert.False(t, wc.isReplayingLive.Load(), "isReplayingLive must be disarmed after a replay error")
+	select {
+	case leftover := <-wc.replayDivertCh:
+		t.Fatalf("BUG REGRESSION: replayDivertCh must be drained after a replay error, found: %s", string(leftover))
+	default:
+		// expected — empty
+	}
+}

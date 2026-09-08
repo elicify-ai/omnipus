@@ -32,12 +32,35 @@ import (
 // including when the only resolvable match is a non-root descendant (a
 // delegated sub-turn never counts as "the session's foreground turn" here,
 // matching the same root-exclusive semantics the retired watchdog helper
-// used).
+// used) or a root turnState that is still in activeTurnStates but has
+// already finished (see the IsAlive() check below).
+//
+// [ADR-082 review F5/S2] Two fixes over the original version:
+//
+//  1. IsAlive() gate: a turnState is removed from al.activeTurnStates by
+//     clearActiveTurn, which — because Go runs defers LIFO and clearActiveTurn
+//     is registered AFTER finalizeStreamer in runTurn — fires BEFORE
+//     finalizeStreamer, but is not the ONLY way a finished turnState could
+//     transiently still be observed here (a caller racing the removal itself
+//     could, in principle, observe a just-finished-but-not-yet-cleared
+//     entry). Without this check, a finished-but-not-yet-cleared root would be
+//     reported as "in flight", so the SPA re-arms its Stop control for a turn
+//     that has already ended.
+//  2. Deterministic selection: sync.Map.Range's iteration order is randomized
+//     per call, so the original "first match wins, stop iterating" pick was
+//     non-deterministic for the (rare, but possible) case of two live root
+//     turns sharing a transcriptSessionID — the same session_state.active_turn
+//     query could report a DIFFERENT turn on different calls with no state
+//     change in between. This now scans every candidate and deterministically
+//     prefers the earliest-started turn, breaking any remaining tie by turnID
+//     so the result never depends on map iteration order.
 func (al *AgentLoop) ActiveForegroundTurnInfo(transcriptSessionID string) (turnID, agentID string, startedAt time.Time, ok bool) {
 	if transcriptSessionID == "" {
 		return "", "", time.Time{}, false
 	}
 	var found *turnState
+	var foundStarted time.Time
+	var foundTurnID string
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts, tok := value.(*turnState)
 		if !tok {
@@ -48,9 +71,21 @@ func (al *AgentLoop) ActiveForegroundTurnInfo(transcriptSessionID string) (turnI
 		if ts.transcriptSessionID != transcriptSessionID {
 			return true
 		}
-		if ts.depth == 0 || ts.parentTurnID == "" {
+		if ts.depth != 0 && ts.parentTurnID != "" {
+			return true // not a root turn
+		}
+		if !ts.IsAlive() {
+			return true // already finished — do not report it as in flight
+		}
+		ts.mu.RLock()
+		tsStarted := ts.startedAt
+		tsTurnID := ts.turnID
+		ts.mu.RUnlock()
+		if found == nil || tsStarted.Before(foundStarted) ||
+			(tsStarted.Equal(foundStarted) && tsTurnID < foundTurnID) {
 			found = ts
-			return false
+			foundStarted = tsStarted
+			foundTurnID = tsTurnID
 		}
 		return true
 	})
