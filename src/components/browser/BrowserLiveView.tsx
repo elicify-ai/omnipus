@@ -2577,11 +2577,11 @@ export function BrowserLiveView({
           Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
         </p>
         {!attached && (
-          <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
+          <div className="flex min-w-0 max-w-full flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
             {displayError ? (
               <>
                 <WarningCircle size={22} className="text-[var(--color-error)]" />
-                <p className="text-[var(--color-error)]">{displayError}</p>
+                <p className="max-w-full [overflow-wrap:anywhere] text-[var(--color-error)]">{displayError}</p>
                 <button
                   type="button"
                   tabIndex={0}
@@ -2684,7 +2684,7 @@ export function BrowserLiveView({
                 {displayError ? (
                   <>
                     <WarningCircle size={22} className="text-[var(--color-error)]" />
-                    <p className="text-[var(--color-error)]">{displayError}</p>
+                    <p className="max-w-full [overflow-wrap:anywhere] text-[var(--color-error)]">{displayError}</p>
                     <button
                       type="button"
                       tabIndex={0}
@@ -2851,7 +2851,7 @@ export function BrowserLiveView({
         </div>
       )}
       {attached && videoReady && displayError && (
-        <div role="alert" className="shrink-0 border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
+        <div role="alert" className="min-w-0 shrink-0 [overflow-wrap:anywhere] border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
           {displayError}
         </div>
       )}
