@@ -101,10 +101,10 @@ type handlerContextFixture struct {
 	observeViewport func(int, int, float64)
 }
 
-func newHandlerContextFixture(t *testing.T, pending bool) handlerContextFixture {
+func newHandlerContextFixture(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) handlerContextFixture {
 	t.Helper()
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
-	cdpURL, observeViewport := newViewportCDPEndpoint(t, pending)
+	cdpURL, observeViewport := newViewportCDPEndpoint(t, pending, metricsHooks...)
 	dir := t.TempDir()
 	h, al := newBrowserWSTestHandler(t, func(c *config.Config) {
 		c.Tools.Browser.WebRTCEnabled = true

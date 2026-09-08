@@ -15,7 +15,7 @@ import (
 
 // newViewportCDPEndpoint supplies browser-protocol observations, leaving the
 // manager, live view, measured refresh and capture frame machinery real.
-func newViewportCDPEndpoint(t *testing.T, pending bool) (string, func(int, int, float64)) {
+func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) (string, func(int, int, float64)) {
 	t.Helper()
 	lifetime, cancel := context.WithCancel(context.Background())
 	var observationMu sync.Mutex
@@ -70,6 +70,41 @@ func newViewportCDPEndpoint(t *testing.T, pending bool) (string, func(int, int, 
 				result["frameTree"] = map[string]any{"frame": map[string]any{"id": "fixture-frame", "loaderId": "fixture-loader", "url": "about:blank", "securityOrigin": "://", "mimeType": "text/html"}}
 			case "DOM.getDocument":
 				result["root"] = map[string]any{"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document", "localName": "", "nodeValue": ""}
+			case "Browser.getWindowForTarget":
+				result["windowId"] = 1
+				result["bounds"] = map[string]any{"windowState": "normal"}
+			case "Browser.setWindowBounds":
+				if len(metricsHooks) > 0 {
+					var bounds struct{ Width, Height int }
+					_ = json.Unmarshal(command.Params["bounds"], &bounds)
+					observationMu.Lock()
+					width, height = bounds.Width, bounds.Height
+					observationMu.Unlock()
+				}
+			case "Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride":
+				if len(metricsHooks) > 0 {
+					var w, h int
+					dpr := 1.0
+					if command.Method == "Emulation.setDeviceMetricsOverride" {
+						_ = json.Unmarshal(command.Params["width"], &w)
+						_ = json.Unmarshal(command.Params["height"], &h)
+						_ = json.Unmarshal(command.Params["deviceScaleFactor"], &dpr)
+					}
+					observationMu.Lock()
+					// CDP zero dimensions disable the size override; they do not resize the page to zero.
+					if w > 0 {
+						width = w
+					}
+					if h > 0 {
+						height = h
+					}
+					scale = dpr
+					actualW, actualH := width, height
+					observationMu.Unlock()
+					for _, hook := range metricsHooks {
+						hook(actualW, actualH, dpr)
+					}
+				}
 			case "Page.getLayoutMetrics":
 				select {
 				case <-ready:

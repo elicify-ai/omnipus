@@ -36,7 +36,11 @@ func registerPublicationViewer(t *testing.T, h *BrowserWSHandler, cs *browser.Ca
 	t.Cleanup(func() { state.clearAttachment() })
 	original := state.commandAttachment()
 	epoch := state.beginWebRTCOffer()
-	if !state.commitWebRTCAttachment(epoch, &webrtcAttachment{capture: cs}) || !h.registerWebRTCViewerConnForCapture(state, epoch, original.ctx, viewerID, wc, original.sessionID, cs) {
+	request, ok := state.webRTCOfferRequest(epoch)
+	if !ok {
+		t.Fatal("fixture offer request missing")
+	}
+	if !state.commitWebRTCAttachmentForRequest(request, &webrtcAttachment{capture: cs}) || !h.registerWebRTCViewerConnForCapture(state, epoch, original.ctx, viewerID, wc, original.sessionID, cs) {
 		t.Fatal("fixture could not register original attachment")
 	}
 	return wc, state, original.ctx

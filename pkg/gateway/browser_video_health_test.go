@@ -44,7 +44,11 @@ func TestOnVideoHealth_ReachesEveryAttachedViewer(t *testing.T) {
 	t.Cleanup(func() { stateB.clearAttachment() })
 	originB := stateB.commandAttachment()
 	epochB := stateB.beginWebRTCOffer()
-	require.True(t, stateB.commitWebRTCAttachment(epochB, &webrtcAttachment{capture: f.cs}))
+	request, ok := stateB.webRTCOfferRequest(epochB)
+	if !ok {
+		t.Fatal("fixture offer request missing")
+	}
+	require.True(t, stateB.commitWebRTCAttachmentForRequest(request, &webrtcAttachment{capture: f.cs}))
 	require.True(t, f.h.registerWebRTCViewerConnForCapture(stateB, epochB, originB.ctx, "viewer-b", wcB, "panel-b", f.cs))
 	event := f.event
 	event.ViewerIDs = []string{"viewer", "viewer-b"}

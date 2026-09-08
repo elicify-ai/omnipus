@@ -267,26 +267,6 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// viewer state this connection no longer wants.
 	webrtcEpoch   uint64
 	webrtcRequest *browserWebRTCOfferRequest
-
-	// pendingCaptureScale remembers the device_scale_factor the most recent
-	// browser_viewport frame carried, even when no WebRTC attachment yet
-	// exists to receive it directly (F2, external review 2026-08-13, see
-	// commitWebRTCAttachment's caller in browser_webrtc.go): a viewport
-	// frame routinely arrives before a slow-negotiating browser_webrtc_offer
-	// commits — cs.Start's own doc comment says that can take up to
-	// captureStartTimeout (20s) — and the SPA's lastSentViewportRef dedup
-	// means that first frame is often the ONLY one a cold-opened panel ever
-	// sends. Without remembering it here, handleViewport's SetCaptureScale
-	// call (gated on peekWebRTCAttachment() != nil) silently no-ops and the
-	// Retina-blur fix stays inert until the user manually resizes the panel.
-	// 0 is the sentinel for "nothing remembered yet", distinct from a
-	// legitimately-sent 1 (see rememberViewportScale/pendingViewportScale).
-	// Guarded by webrtcMu (not a new mutex) since it is written from
-	// readLoop's goroutine (handleViewport) and read from a background offer
-	// goroutine (handleWebRTCOffer's cold-start recapture) — the same
-	// cross-goroutine timing webrtc/webrtcEpoch above already have to
-	// account for.
-	pendingCaptureScale float64
 }
 
 // beginAttach bumps this connection's attachEpoch and returns the new value.
@@ -367,32 +347,6 @@ func (s *browserConnState) attachment() (mgr *browser.BrowserManager, sessionID,
 	s.attachMu.Lock()
 	defer s.attachMu.Unlock()
 	return s.mgr, s.sessionID, s.panelSessionID
-}
-
-// resolvePanelTabSet answers "which tab set should this connection's live video
-// bind to" for a path that runs OUTSIDE the attach handler — today, the
-// WebRTC offer (issue #671).
-//
-// It prefers the id handleAttach already resolved and pinned, so the video and
-// the control plane are provably the same tab set rather than two independent
-// resolutions that agree by luck. The pinned value is only trusted when it
-// belongs to the SAME manager this caller resolved: an offer whose agent (and
-// therefore whose workspace browser) differs from the attachment's would
-// otherwise be handed a session key minted for another browser entirely.
-//
-// The fallback re-runs the identical resolution against the same chat session
-// id, for the real case where an offer's background goroutine reaches here
-// before an attach has committed. mgr must not be nil — every caller has
-// already failed the request otherwise.
-func resolvePanelTabSet(
-	state *browserConnState, mgr *browser.BrowserManager, chatSessionID string,
-) string {
-	if state != nil {
-		if attached, _, pinned := state.attachment(); attached == mgr && pinned != "" {
-			return pinned
-		}
-	}
-	return mgr.PanelTabSetID(chatSessionID)
 }
 
 // clearAttachment atomically reads and clears the attachment, so teardown is
@@ -646,21 +600,6 @@ func (s *browserConnState) invalidateWebRTCOffer() {
 	}
 }
 
-// commitWebRTCAttachment installs att as this connection's WebRTC attachment
-// iff epoch still matches the CURRENT webrtcEpoch — returns false (does not
-// install) if a newer offer, an explicit detach, or the connection closing
-// already invalidated this generation while handleWebRTCOffer was
-// negotiating in the background.
-func (s *browserConnState) commitWebRTCAttachment(epoch uint64, att *webrtcAttachment) bool {
-	s.webrtcMu.Lock()
-	defer s.webrtcMu.Unlock()
-	if s.webrtcEpoch != epoch {
-		return false
-	}
-	s.webrtc = att
-	return true
-}
-
 // takeWebRTCAttachment atomically reads and clears this connection's WebRTC
 // attachment (used by detachWebRTCViewer) — safe to call whether or not an
 // offer goroutine is concurrently trying to commit one, since both go
@@ -682,28 +621,6 @@ func (s *browserConnState) peekWebRTCAttachment() *webrtcAttachment {
 	s.webrtcMu.Lock()
 	defer s.webrtcMu.Unlock()
 	return s.webrtc
-}
-
-// rememberViewportScale records dsf as this connection's pendingCaptureScale
-// (F2 fix) — called unconditionally from handleViewport on every accepted
-// browser_viewport frame, regardless of whether a WebRTC attachment exists
-// yet to apply it to directly. See pendingCaptureScale's doc comment for why
-// this exists and pendingViewportScale for the read side.
-func (s *browserConnState) rememberViewportScale(dsf float64) {
-	s.webrtcMu.Lock()
-	s.pendingCaptureScale = dsf
-	s.webrtcMu.Unlock()
-}
-
-// pendingViewportScale returns the last device_scale_factor remembered via
-// rememberViewportScale, or 0 if no browser_viewport frame has arrived on
-// this connection yet. Consulted by handleWebRTCOffer's cold-start recapture
-// (browser_webrtc.go) the moment a WebRTC attachment actually commits, so a
-// scale that arrived too early to apply directly is not lost.
-func (s *browserConnState) pendingViewportScale() float64 {
-	s.webrtcMu.Lock()
-	defer s.webrtcMu.Unlock()
-	return s.pendingCaptureScale
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -1570,7 +1487,7 @@ func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWS
 // the engine-level browser.LiveInput dispatchInput expects. Extracted from
 // handleInput (ADR-047 / wave-plan W2-A item 4) so the WS input path
 // (handleInput, above) and the WebRTC data-channel input path
-// (browser_webrtc.go's webrtcInputSink) convert EXACTLY the same way and can
+// (browser_webrtc_input_context.go's contextual sink) convert EXACTLY the same way and can
 // never drift — both funnel into the SAME
 // mgr.Live().Input(<the tab set this connection resolved at attach>, viewerID,
 // in) call this function's result feeds (issue #671).

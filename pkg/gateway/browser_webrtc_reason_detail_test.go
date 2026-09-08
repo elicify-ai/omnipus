@@ -111,7 +111,7 @@ func newHandleWebRTCOfferWithFailingStart(
 // carried reason="error" and nothing else, so the panel's only possible copy
 // was the generic sentence.
 func TestHandleWebRTCOffer_StartFailure_CarriesRealCauseToTheOperator(t *testing.T) {
-	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, _ := newMeasuredFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
@@ -131,7 +131,7 @@ func TestHandleWebRTCOffer_StartFailure_CarriesRealCauseToTheOperator(t *testing
 // the same requirement one branch over: HandleViewerOffer failures were
 // equally mute on the wire.
 func TestHandleWebRTCOffer_ViewerOfferFailure_CarriesRealCauseToTheOperator(t *testing.T) {
-	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, _ := newMeasuredFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)

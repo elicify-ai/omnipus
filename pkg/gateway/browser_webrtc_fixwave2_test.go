@@ -36,7 +36,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
@@ -73,7 +72,7 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	// exec_resolver.go's execPathCaches.resolve doc comment.
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 	})
@@ -163,7 +162,7 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	// identical Setenv for why.
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
+	handler, al, auditDir := newMeasuredFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 	})
@@ -448,67 +447,25 @@ func TestCaptureIngestConn_SendJSON_WriteDeadlineBoundsWedgedWrite(t *testing.T)
 // Fix 7: DC input schema-validation parity with the WS input path.
 // ---------------------------------------------------------------------------
 
-// TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField proves fix 7:
-// with cfg.Gateway.ValidateInbound enabled, webrtcInputSink now
-// schema-validates every inbound data-channel frame BEFORE dispatch — an
-// oversized "text" field (contracts/components/schemas/BrowserInputFrame.yaml
-// caps it at 8192) is dropped silently (no browser_status frame at all,
-// proven by the absence of ANY frame on the viewer's connection), never
-// reaching mgr.Live().Input(). The control case (a valid-size frame through
-// the SAME sink) DOES reach dispatch — proven by the "no active live view"
-// non-benign error surfacing as a browser_status frame, exactly like
-// TestWebrtcInputSink_NonBenignError_SurfacedToViewer — showing validation
-// isn't just blackholing everything.
+// An oversized text field is rejected before dispatch. The same navigation with a valid text length reaches the real URL refusal and publishes its error.
 func TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField(t *testing.T) {
-	browserCfg, err := browser.DefaultConfig()
+	f := newHandlerContextFixture(t, false)
+	source, _ := admittedInputRoute(t, f, "viewer-oversized-text")
+	sink := newWebRTCContextInputSink(true)
+	oversized, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)"), Text: strPtr(strings.Repeat("a", 8193))})
 	require.NoError(t, err)
-	browserCfg.ProfileDir = t.TempDir()
-	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
-	require.NoError(t, err)
-
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
-		cfg.Gateway.ValidateInbound = true
-	})
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-oversized-text", wc, "sess-oversized-text")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-oversized-text") })
-
-	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
-
-	oversized := generated.BrowserInputFrame{
-		Type: "browser_input",
-		Kind: "text",
-		Text: strPtr(strings.Repeat("a", 8193)), // schema maxLength is 8192
-	}
-	rawOversized, err := json.Marshal(oversized)
-	require.NoError(t, err)
-
-	sink("viewer-oversized-text", rawOversized)
-
+	sink(source, "viewer-oversized-text", oversized)
 	select {
-	case queued := <-wc.sendCh:
-		frame := queued.data
-		t.Fatalf("an oversized text field must be dropped at schema validation, not dispatched (got frame: %s)", frame)
+	case queued := <-f.conn.sendCh:
+		t.Fatalf("oversized text reached dispatch: %s", queued.data)
 	case <-time.After(200 * time.Millisecond):
 	}
-
-	// Control: a valid-size frame through the SAME sink must still reach
-	// dispatch.
-	valid := generated.BrowserInputFrame{Type: "browser_input", Kind: "text", Text: strPtr("ok")}
-	rawValid, err := json.Marshal(valid)
+	valid, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)"), Text: strPtr("ok")})
 	require.NoError(t, err)
-	sink("viewer-oversized-text", rawValid)
-
-	frame := drainOneFrame(t, wc)
-	var f struct {
-		Type    string `json:"type"`
-		State   string `json:"state"`
-		Message string `json:"message"`
-	}
-	require.NoError(t, json.Unmarshal(frame, &f))
-	require.Equal(t, "browser_status", f.Type)
-	require.Equal(t, "error", f.State)
-	require.Contains(t, f.Message, "browser input failed")
+	sink(source, "viewer-oversized-text", valid)
+	var status generated.BrowserStatusFrame
+	require.NoError(t, json.Unmarshal(drainOneFrame(t, f.conn), &status))
+	require.Equal(t, "error", status.State)
+	require.NotNil(t, status.Message)
+	require.Contains(t, *status.Message, "browser input failed")
 }

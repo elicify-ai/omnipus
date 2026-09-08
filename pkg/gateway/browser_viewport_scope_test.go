@@ -59,7 +59,9 @@ func TestViewportCurrentRefusalRetainsOperationScope(t *testing.T) {
 
 func TestViewportColdRefreshUsesMeasuredScale(t *testing.T) {
 	f := newHandlerContextFixture(t, false)
-	f.state.rememberViewportScale(2)
+	requested, err := json.Marshal(map[string]any{"type": "browser_viewport", "width": 900, "height": 700, "device_scale_factor": 2})
+	require.NoError(t, err)
+	f.handler.handleViewport(f.conn, f.state, "fixture-viewer", requested)
 	f.observeViewport(800, 600, 1.25)
 	before := f.capture.FrameState()
 	require.NoError(t, f.handler.applyColdStartRecapture(context.Background(), f.state.commandAttachment(), f.capture))

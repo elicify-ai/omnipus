@@ -157,7 +157,7 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 	}
 	tmpDir := t.TempDir()
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
@@ -284,7 +284,7 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 	// $PATH.
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 	})

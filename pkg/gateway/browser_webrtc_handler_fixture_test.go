@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
@@ -30,13 +32,22 @@ func prepareWebRTCHandlerFixture(t *testing.T, h *BrowserWSHandler, al *agent.Ag
 		sessionID = "invalid-offer-fixture"
 	}
 	panel := "handler-fixture:" + sessionID
+	if al.GetConfig().Tools.Browser.CDPURL != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := mgr.Live().AttachContext(ctx, panel, "handler-fixture-viewer", nil, nil, nil)
+		cancel()
+		if err != nil {
+			t.Fatalf("attach handler CDP fixture: %v", err)
+		}
+		t.Cleanup(func() { mgr.Live().Detach(panel, "handler-fixture-viewer") })
+	}
 	if cs := mgr.CaptureSession(); cs != nil {
 		if _, err := mgr.EnsureCaptureSessionForPanel(panel, func() (*browser.CaptureSession, error) { return cs, nil }); err != nil {
 			t.Fatal(err)
 		}
 		current := cs.FrameState()
 		if current.Width <= 0 || current.Height <= 0 {
-			if _, err := cs.BeginFrameTransition("fixture-target", 800, 600, 1); err != nil {
+			if _, err := cs.BeginFrameTransition("verified-target", 800, 600, 1); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -124,4 +135,31 @@ func (r *requestFixtureRelay) pendingCount() int {
 	r.requestMu.Lock()
 	defer r.requestMu.Unlock()
 	return len(r.handles)
+}
+
+// The external CDP endpoint is the only browser double. Handler attachment,
+// manager/live-view state and measured capture refresh remain real.
+func newMeasuredBrowserWSTestHandler(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop) {
+	t.Helper()
+	endpoint, _ := newViewportCDPEndpoint(t, false)
+	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
+	return newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		if mutate != nil {
+			mutate(cfg)
+		}
+		cfg.Tools.Browser.CDPURL = endpoint
+		cfg.Tools.Browser.StartPageURL = "about:blank"
+	})
+}
+func newMeasuredFixWaveHandlerWithAudit(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop, string) {
+	t.Helper()
+	endpoint, _ := newViewportCDPEndpoint(t, false)
+	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
+	return newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
+		if mutate != nil {
+			mutate(cfg)
+		}
+		cfg.Tools.Browser.CDPURL = endpoint
+		cfg.Tools.Browser.StartPageURL = "about:blank"
+	})
 }

@@ -181,27 +181,15 @@ type webrtcAttachment struct {
 	handle  *browser.ViewerAttachHandle
 }
 
-// webrtcViewerConn is the per-viewer entry in BrowserWSHandler.viewerConns
-// (fix-wave findings 3 and 7): a concurrent-safe registry the gateway uses
-// to reach a WebRTC-attached viewer's main /api/v1/browser/ws connection
-// from a goroutine that is NOT that connection's own readLoop — the
-// encoder-liveness watchdog (pushing a browser_webrtc_state frame the
-// instant the gateway itself detects the stream died, rather than making
-// the viewer wait ~5s for its own ICE connection state to notice) and the
-// data-channel input sink (surfacing a real input-dispatch error back to
-// the driving viewer, mirroring handleInput's sessionErrorStatus) both need
-// this. Registered on a successful browser_webrtc_offer (the SAME moment
-// browserConnState.webrtc is set), unregistered by detachWebRTCViewer.
+// webrtcViewerConn retains the original attachment and capture for scoped
+// frame and video-health publication. Input errors retain their own immutable
+// contextual route. Successful offers register entries; detach removes them.
 type webrtcViewerConn struct {
 	wc            *browserWSConn
 	sessionID     string
 	attachmentCtx context.Context
 	capture       *browser.CaptureSession
 	captureID     string
-
-	mu         sync.Mutex
-	lastErrAt  time.Time
-	lastErrMsg string
 }
 
 // dispatchWebRTCOffer launches handleWebRTCOffer on its own goroutine so a
@@ -452,7 +440,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		active.HasAudio = boolPtr(true)
 	}
 	wc.sendCriticalScopedGen(active, dropContext(sessID, viewerID, "webrtc-state"), snapshot.ctx, answerCurrent)
-	if notice := strings.TrimSpace(h.mediaPortFallbackNotice() + " " + h.iceTCPUnavailableNotice() + " " + h.turnUnavailableNotice()); notice != "" {
+	if notice := h.mediaTransportNotice(); notice != "" {
 		wc.sendCriticalScopedGen(sessionErrorStatus(sessID, notice), dropContext(sessID, viewerID, "media-port-fallback"), snapshot.ctx, answerCurrent)
 	}
 }
@@ -550,14 +538,6 @@ func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID 
 	att.capture.CleanupViewerOffer(att.handle)
 }
 
-// registerWebRTCViewerConn / unregisterWebRTCViewerConn maintain
-// h.viewerConns (see webrtcViewerConn's doc comment) — the SAME lifecycle
-// as browserConnState.webrtc: registered once handleWebRTCOffer succeeds,
-// unregistered by detachWebRTCViewer.
-func (h *BrowserWSHandler) registerWebRTCViewerConn(viewerID string, wc *browserWSConn, sessionID string) {
-	h.viewerConns.Store(viewerID, &webrtcViewerConn{wc: wc, sessionID: sessionID})
-}
-
 func (h *BrowserWSHandler) unregisterWebRTCViewerConn(viewerID string) {
 	h.viewerConns.Delete(viewerID)
 }
@@ -602,93 +582,6 @@ func (h *BrowserWSHandler) notifyViewersStreamStopped(cs *browser.CaptureSession
 		}
 		vc.wc.sendCriticalScopedGen(frame, dropContext(vc.sessionID, viewerID, "capture-stopped"), origin, current)
 	}
-}
-
-// announceWebRTCAvailability sends the initial post-attach
-// browser_webrtc_state frame (ADR-047 D4 / wave-plan W2-B: "sent after attach
-// and again on any availability change"). The SPA's state machine only sends
-// its browser_webrtc_offer after receiving available:true, and
-// handleWebRTCOffer only replies with a state frame — so without this
-// announcement neither side ever moves and the panel silently never offers
-// WebRTC at all (W3 e2e finding). This is an announcement, not an authorization:
-// the offer-side gate ladder in handleWebRTCOffer re-validates every gate
-// when the offer actually arrives.
-func (h *BrowserWSHandler) announceWebRTCAvailability(
-	wc *browserWSConn,
-	mgr *browser.BrowserManager,
-	sessID, viewerID string,
-	cfg *config.Config,
-) {
-	h.announceWebRTCAvailabilityContext(context.Background(), wc, mgr, sessID, viewerID, cfg)
-}
-
-// sendWebRTCState builds and sends a browser_webrtc_state frame.
-func (h *BrowserWSHandler) sendWebRTCState(
-	wc *browserWSConn,
-	sessID, viewerID string,
-	available, active, hasAudio bool,
-	reason string,
-) {
-	h.sendWebRTCStateWithICE(wc, sessID, viewerID, available, active, hasAudio, reason, "", nil)
-}
-
-// sendWebRTCStateFailure is sendWebRTCState for a failure that HAS a cause:
-// it carries the classified enum AND the free-text reason the operator needs
-// in order to do anything about it (UAT case 16).
-//
-// Split from sendWebRTCState rather than added as a parameter to it because
-// only the three genuine-runtime-failure call sites have an error to report.
-// The capability gates (disabled / lite_build / not_capable /
-// multi_agent_capture_denied) are fully explained by the enum alone and have
-// no error chain; passing them a nil error through a widened signature would
-// have made every one of those call sites read as if it were withholding
-// something.
-//
-// Nil cause is safe and means "no detail" — webrtcReasonDetail returns "",
-// which sendWebRTCStateWithICE omits from the frame.
-func (h *BrowserWSHandler) sendWebRTCStateFailure(
-	wc *browserWSConn,
-	sessID, viewerID string,
-	available bool,
-	reason string,
-	cause error,
-) {
-	h.sendWebRTCStateWithICE(
-		wc, sessID, viewerID, available, false, false, reason, webrtcReasonDetail(cause), nil)
-}
-
-// sendWebRTCStateWithICE is sendWebRTCState plus the viewer's ICE servers
-// (ADR-062 tier 3). Split rather than adding a parameter to every call site
-// because only the availability announcement carries them: they are what the
-// SPA needs BEFORE it builds its PeerConnection, and a failure frame sent
-// afterwards has nothing useful to attach.
-func (h *BrowserWSHandler) sendWebRTCStateWithICE(
-	wc *browserWSConn,
-	sessID, viewerID string,
-	available, active, hasAudio bool,
-	reason string,
-	reasonDetail string,
-	iceServers []iceServerEntry,
-) {
-	f := generated.BrowserWebRTCStateFrame{
-		Type:       string(generated.WsFrameTypeBrowserWebrtcState),
-		Available:  available,
-		SessionId:  &sessID,
-		IceServers: iceServers,
-	}
-	if reasonDetail != "" {
-		f.ReasonDetail = &reasonDetail
-	}
-	if active {
-		f.Active = boolPtr(true)
-	}
-	if hasAudio {
-		f.HasAudio = boolPtr(true)
-	}
-	if reason != "" {
-		f.Reason = &reason
-	}
-	wc.sendCriticalGen(f, dropContext(sessID, viewerID, "webrtc-state:"+reason))
 }
 
 // encoderLivenessCheckInterval / encoderLivenessStaleAfter (fix 3):
@@ -867,114 +760,6 @@ func webrtcRelayLogf(agentID string) func(string, ...any) {
 func webrtcRelayLineLooksErrorish(msg string) bool {
 	lower := strings.ToLower(msg)
 	return strings.Contains(lower, "failed") || strings.Contains(lower, "warning") || strings.Contains(lower, "error")
-}
-
-// webrtcInputSink builds the webrtc.InputSink for one agent's CaptureSession:
-// schema-validates when enabled (fix-wave HIGH: parity with the WS input
-// path, see below), parses as generated.BrowserInputFrame (drop+log
-// invalid), convert via the SAME browserInputFrameToLiveInput helper
-// handleInput uses (wave-plan W2-A item 4 — "convert EXACTLY like
-// browser_ws.go handleInput does"), then dispatch through the identical
-// controller-lock/SSRF/rate-limit gate (browser.LiveViewRegistry.Input) the
-// WS input path uses. A method on h (fix 7 — was a package-level func) so a
-// real dispatch error can be surfaced back to the driving viewer's main WS
-// connection, mirroring handleInput's sessionErrorStatus — see
-// surfaceWebRTCInputError. cfg is captured once at CaptureSession-creation
-// time (ensureCaptureSession's closure), the same lifetime as webrtcRelayLogf's
-// captured agentID — matching existing precedent in this file.
-//
-// Fix-wave HIGH (security F1 / contracts N1): the main /api/v1/browser/ws
-// path schema-validates every inbound browser_input frame BEFORE dispatch
-// (browser_ws.go's readLoop, gated on cfg.Gateway.ValidateInbound) — this
-// data-channel path previously had no equivalent, relying on bare
-// json.Unmarshal alone, which enforces no enum/maxLength/modifiers
-// constraints at all. ValidateInboundFrameJSON("BrowserInputFrame", raw)
-// closes that parity gap using the exact same schema the WS path validates
-// against.
-func (h *BrowserWSHandler) webrtcInputSink(
-	mgr *browser.BrowserManager,
-	panelSessionID string,
-	cfg *config.Config,
-) webrtc.InputSink {
-	return func(viewerID string, raw []byte) {
-		if cfg.Gateway.ValidateInbound {
-			if errMsg, serverErr := ValidateInboundFrameJSON("BrowserInputFrame", raw); errMsg != "" {
-				if serverErr {
-					slog.Debug(
-						"browser-webrtc: inbound schema unavailable, dropping input data-channel frame",
-						"viewer_id",
-						viewerID,
-					)
-				} else {
-					slog.Debug("browser-webrtc: input data-channel frame schema validation failed, dropping",
-						"error", errMsg, "viewer_id", viewerID)
-				}
-				return
-			}
-		}
-		var frame generated.BrowserInputFrame
-		if err := json.Unmarshal(raw, &frame); err != nil {
-			slog.Warn("browser-webrtc: dropping invalid input data-channel frame", "error", err, "viewer_id", viewerID)
-			return
-		}
-		in := browserInputFrameToLiveInput(frame)
-		if err := mgr.Live().Input(panelSessionID, viewerID, in); err != nil {
-			if browser.IsBenignLiveInputError(err) {
-				slog.Debug("browser-webrtc: input rejected (benign)", "error", err, "viewer_id", viewerID)
-				// 2026-07-30 UAT: "benign" must not mean "invisible" for the
-				// not-controller case. Every other benign rejection is
-				// self-correcting; this one is not — the client keeps
-				// believing it is driving and keeps sending input the server
-				// keeps discarding. The operator's panel read "You're
-				// driving" through 448 consecutive rejected inputs, so
-				// clicks and keystrokes did nothing at all with no error
-				// anywhere the user could see. Push the AUTHORITATIVE
-				// control state back to this viewer so its UI corrects
-				// itself and the next click re-takes the wheel properly.
-				// The not-controller rejection this branch used to repair no
-				// longer exists: input is never gated on holding a control
-				// lock (see dispatchInput). The previous repair — acquire the
-				// lock, then retry the same event — still refused a human's
-				// click whenever ANOTHER viewer was attached and holding
-				// control, which is exactly how a second panel or a stale
-				// automation session left the real user with a dead mouse and
-				// keyboard. What remains here is the rate limit, which is
-				// self-correcting.
-				return
-			}
-			slog.Warn("browser-webrtc: input dispatch failed", "error", err, "viewer_id", viewerID)
-			h.surfaceWebRTCInputError(viewerID, frame.Kind, err)
-		}
-	}
-}
-
-func (h *BrowserWSHandler) surfaceWebRTCInputError(viewerID, kind string, dispatchErr error) {
-	v, ok := h.viewerConns.Load(viewerID)
-	if !ok {
-		return
-	}
-	vc, ok := v.(*webrtcViewerConn)
-	if !ok {
-		return
-	}
-	message := fmt.Sprintf("browser input failed: %s", dispatchErr)
-
-	vc.mu.Lock()
-	now := time.Now()
-	throttled := !inputKindIsDiscrete(kind) &&
-		message == vc.lastErrMsg &&
-		now.Sub(vc.lastErrAt) < minInputErrorInterval
-	if !throttled {
-		vc.lastErrAt = now
-		vc.lastErrMsg = message
-	}
-	vc.mu.Unlock()
-
-	if throttled {
-		return
-	}
-	vc.wc.sendCriticalGen(sessionErrorStatus(vc.sessionID, message),
-		dropContext(vc.sessionID, viewerID, "webrtc-input-error"))
 }
 
 // auditStream emits a WebRTC stream lifecycle audit entry.
@@ -1318,42 +1103,6 @@ func (h *BrowserWSHandler) mediaPortFallbackNotice() string {
 		return ""
 	}
 	return h.mediaPortFallback.notice()
-}
-
-// notifyMediaPortDegraded tells THIS viewer, in the panel, that live video is
-// not on the port the operator declared — ADR-061's rule that a degradation
-// must name its cause to the user, not only in a log.
-//
-// Sent as browser_status(error) rather than browser_webrtc_state, and that is
-// deliberate on both counts:
-//   - browser_webrtc_state.reason is a CLOSED enum (disabled / not_capable /
-//     lite_build / error) with additionalProperties:false, and its `reason`
-//     is meaningful only alongside available:false. Reporting this as
-//     available:false would be a lie — media IS available, and on a laptop it
-//     works perfectly — and it would stop the SPA from ever sending an offer,
-//     breaking the local dev experience this fallback exists to preserve.
-//   - browser_status(error) carries free-text the SPA already renders as a
-//     persistent strip UNDER a playing video (BrowserLiveView's "Persistent
-//     error strip"), which is exactly the semantics wanted: video keeps
-//     working where it can, and the reason it will not work remotely is on
-//     screen the whole time.
-//
-// Called on the offer SUCCESS path (not at attach) because that is the
-// earliest point at which the answer is true: sharedMediaConn is bound lazily
-// by ensureCaptureSession, so on the very first viewer the degradation is not
-// yet known when browser_attach is answered. Sending it after the answer also
-// keeps a laptop's ordinary "Connecting…" empty state honest instead of
-// replacing it with an error before any video attempt has been made.
-//
-// No-op — no frame at all — when nothing degraded, so the ordinary install
-// (fixed port bound exactly, or not configured) is completely unaffected.
-func (h *BrowserWSHandler) notifyMediaPortDegraded(wc *browserWSConn, sessID, viewerID string) {
-	notice := strings.TrimSpace(h.mediaPortFallbackNotice() + " " + h.iceTCPUnavailableNotice() + " " + h.turnUnavailableNotice())
-	if notice == "" {
-		return
-	}
-	wc.sendCriticalGen(sessionErrorStatus(sessID, notice),
-		dropContext(sessID, viewerID, "media-port-fallback"))
 }
 
 // iceTCPUnavailableNotice is the operator-facing sentence for a configured

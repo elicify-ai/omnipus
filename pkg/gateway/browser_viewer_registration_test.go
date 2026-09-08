@@ -17,7 +17,11 @@ func TestBrowserViewerRegistrationRetainsOriginalAttachmentAndCapture(t *testing
 	}
 	t.Cleanup(cs.Stop)
 	epoch := state.beginWebRTCOffer()
-	if !state.commitWebRTCAttachment(epoch, &webrtcAttachment{capture: cs}) {
+	request, ok := state.webRTCOfferRequest(epoch)
+	if !ok {
+		t.Fatal("fixture offer request missing")
+	}
+	if !state.commitWebRTCAttachmentForRequest(request, &webrtcAttachment{capture: cs}) {
 		t.Fatal("fixture failed to commit capture")
 	}
 	h := &BrowserWSHandler{}
@@ -50,7 +54,11 @@ func TestBrowserViewerRegistrationRejectsRetiredOrMismatchedOrigin(t *testing.T)
 			}
 			t.Cleanup(cs.Stop)
 			epoch := state.beginWebRTCOffer()
-			if !state.commitWebRTCAttachment(epoch, &webrtcAttachment{capture: cs}) {
+			request, ok := state.webRTCOfferRequest(epoch)
+			if !ok {
+				t.Fatal("fixture offer request missing")
+			}
+			if !state.commitWebRTCAttachmentForRequest(request, &webrtcAttachment{capture: cs}) {
 				t.Fatal("fixture failed to commit capture")
 			}
 			ctx, sessionID := attachment.ctx, attachment.sessionID
@@ -64,7 +72,7 @@ func TestBrowserViewerRegistrationRejectsRetiredOrMismatchedOrigin(t *testing.T)
 				ctx, cancel = context.WithCancel(context.Background())
 				t.Cleanup(cancel)
 			case "wrong_capture":
-				state.commitWebRTCAttachment(epoch, &webrtcAttachment{capture: &browser.CaptureSession{}})
+				state.commitWebRTCAttachmentForRequest(request, &webrtcAttachment{capture: &browser.CaptureSession{}})
 			case "no_committed_capture":
 				state.takeWebRTCAttachment()
 			case "wrong_session":
