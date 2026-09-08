@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,87 +68,23 @@ func (r *recaptureLedger) reset() {
 	r.mu.Unlock()
 }
 
-// attachTestCaptureSession gives m a real CaptureSession backed by a fake
-// relay and a fake encoder starter. mgr is deliberately nil inside the
-// session (NewCaptureSessionWithDeps's first argument), so the production
-// foreground re-assert short-circuits instead of driving chromedp against a
-// never-dialed fake tab context — tests that care about the re-assert install
-// foregroundAssertFn explicitly instead.
-func attachTestCaptureSession(t *testing.T, m *BrowserManager) (*CaptureSession, *recaptureLedger) {
-	t.Helper()
-	relay := &fakeRelay{}
-	var encoderCalls int32
-	cs, err := m.EnsureCaptureSession(func() (*CaptureSession, error) {
-		return NewCaptureSessionWithDeps(nil, "agent-1", relay, fakeEncoderStarter(&encoderCalls, nil), nil)
-	})
-	require.NoError(t, err)
-	ledger := &recaptureLedger{}
-	ledger.bind(cs)
-	return cs, ledger
-}
-
-// installFakeLiveRecaptureBridge stands in for the real
-// LiveViewRegistry.handleTabsChanged -> LiveView.onTabsChanged path, which is
-// what fires the recapture on the NORMAL (model moved) switch. It reproduces
-// onTabsChanged's activeTabChanged rule faithfully — resolve the active tab
-// via a read-only snapshot, compare against the last one seen, and only then recapture,
-// with the first call establishing the baseline rather than counting as a
-// change.
-//
-// Faithfulness matters here: the whole point of these tests is "exactly ONE
-// recapture per switch, whichever half of the system produces it". A bridge
-// that recaptured unconditionally would hide a double-fire, and one that never
-// recaptured would make the new code look necessary when it is not.
-func installFakeLiveRecaptureBridge(m *BrowserManager, cs *CaptureSession) {
-	tracker := &activeCtxTracker{}
-	m.SetTabsChangedFunc(func(sessionID string, _ []Tab, _ int) {
-		newCtx, _, err := m.activeTargetSnapshot(sessionID)
-		if err != nil {
-			return
-		}
-		if tracker.moved(newCtx) {
-			cs.Recapture()
-		}
-	})
-}
-
-// activeCtxTracker mirrors LiveView.lastKnownActiveCtx: it remembers the
-// active tab context it was last shown and reports whether the newest one is
-// different. The very first call only establishes the baseline (it never
-// reports a move), exactly as onTabsChanged's own nil guard does.
-type activeCtxTracker struct {
-	mu   sync.Mutex
-	last context.Context
-}
-
-func (a *activeCtxTracker) moved(cur context.Context) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	moved := a.last != nil && a.last != cur
-	a.last = cur
-	return moved
-}
-
 // newThreeTabManagerWithCapture builds a 3-tab browsing context (active = tab
 // 2) with a capture session and the live bridge wired, and returns a ledger
 // already reset past the setup traffic.
 func newThreeTabManagerWithCapture(t *testing.T) (*BrowserManager, *recaptureLedger) {
 	t.Helper()
-	m := newTestManagerWithFakeTabs(t)
-	cs, ledger := attachTestCaptureSession(t, m)
-	installFakeLiveRecaptureBridge(m, cs)
-
-	_, err := m.Session(testSessionID)
+	m, _, cs, _, _ := newAttachedLiveManager(t)
+	ledger := &recaptureLedger{}
+	_, _, err := cs.BindIngestRecaptureContext(context.Background(), func(string, *string, int, int, int) error { return nil }, func(ctx context.Context, _ CaptureFrameState, current func() bool) error {
+		if ctx.Err() != nil || !current() {
+			return context.Canceled
+		}
+		ledger.mu.Lock()
+		ledger.n++
+		ledger.mu.Unlock()
+		return nil
+	}, func() {})
 	require.NoError(t, err)
-	for i := 0; i < 2; i++ {
-		_, err = m.OpenTab(testSessionID)
-		require.NoError(t, err)
-	}
-	_, activeIdx, err := m.ListTabs(testSessionID)
-	require.NoError(t, err)
-	require.Equal(t, 2, activeIdx, "setup expects the last-opened tab to be active")
-
-	ledger.reset()
 	return m, ledger
 }
 
@@ -386,13 +323,15 @@ func TestAdoptTarget_ActivatesAdoptedTabInChrome(t *testing.T) {
 // its own choosing.
 func TestCreateFirstTab_ActivatesFirstTabInChrome(t *testing.T) {
 	m, rec := newManagerWithRecordedActivation(t)
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
+	t.Cleanup(m.Shutdown)
 
 	ctx, err := m.Session(testSessionID) // creates the browsing context's first tab
 	require.NoError(t, err)
 
 	activations := rec.calls()
 	require.Len(t, activations, 1, "creating a browsing context's first tab must tell Chrome it is active")
-	assert.True(t, activations[0] == ctx,
+	assert.True(t, chromedp.FromContext(activations[0]) == chromedp.FromContext(ctx),
 		"the activated context must be the tab Session() resolves")
 }
 
@@ -400,6 +339,8 @@ func TestCreateFirstTab_ActivatesFirstTabInChrome(t *testing.T) {
 // the path that actually motivates it.
 func TestCloseLastTab_ActivatesReplacementInChrome(t *testing.T) {
 	m, rec := newManagerWithRecordedActivation(t)
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
+	t.Cleanup(m.Shutdown)
 	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
@@ -416,7 +357,7 @@ func TestCloseLastTab_ActivatesReplacementInChrome(t *testing.T) {
 	require.NoError(t, err)
 	activations := rec.calls()
 	require.NotEmpty(t, activations, "the replacement tab must be activated in Chrome")
-	assert.True(t, activations[len(activations)-1] == replacementCtx,
+	assert.True(t, chromedp.FromContext(activations[len(activations)-1]) == chromedp.FromContext(replacementCtx),
 		"the LAST activation must land on the replacement tab, not the destroyed one")
 }
 

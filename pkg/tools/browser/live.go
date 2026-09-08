@@ -1352,14 +1352,17 @@ type LiveView struct {
 	tabCtx     context.Context
 	listenCtx  context.Context // child of tabCtx; canceling it stops the death watch without touching the tab
 	stopListen context.CancelFunc
+	// Watch ownership survives source death and is retired by detach or replacement.
+	watchOwnerCtx  context.Context
+	stopWatchOwner context.CancelFunc
 	// lastKnownActiveCtx (ADR-047, wave-plan W2-A item 5) tracks the most
 	// recently observed active-tab context INDEPENDENTLY of tabCtx — tabCtx
 	// only reflects the current watch's binding and stays nil until a watch
 	// is ever installed (isActiveLocked/hasEpochLocked gate on it), so a
 	// session with no viewer ever attached would otherwise never have a
 	// reliable "did the active tab actually change" signal for WebRTC
-	// recapture. Set unconditionally at the end of every onTabsChanged call;
-	// nil only before the first call.
+	// recapture. Seeded at attachment and updated on every tab notification;
+	// nil only before either establishes the active target.
 	lastKnownActiveCtx context.Context
 	viewers            map[string]struct{}
 	// statusSinks parallels viewers (ADR-038 finding #2): one optional
@@ -1605,6 +1608,8 @@ func (lv *LiveView) attach(
 	}
 
 	lv.tabCtx = tabCtx
+	lv.lastKnownActiveCtx = tabCtx
+	lv.replaceWatchOwnerLocked()
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
@@ -1851,6 +1856,7 @@ func (lv *LiveView) rebindWatch(newCtx context.Context) {
 		return
 	}
 	oldStopListen := lv.stopListen
+	lv.replaceWatchOwnerLocked()
 	lv.tabCtx = newCtx
 	listenCtx, cancel := context.WithCancel(newCtx)
 	lv.listenCtx = listenCtx
@@ -1909,37 +1915,66 @@ func (lv *LiveView) rebindWatch(newCtx context.Context) {
 //     viewers know to re-attach.
 func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	<-watchedListenCtx.Done()
-
 	lv.mu.Lock()
 	if lv.listenCtx != watchedListenCtx {
-		// A clean detach, or a rebind already triggered elsewhere (e.g.
-		// onTabsChanged, possibly racing this very watcher), already
-		// superseded this epoch — nothing left for this watcher to do.
 		lv.mu.Unlock()
 		return
 	}
-	sessionID := lv.sessionID
-	mgr := lv.mgr
+	// Hand-built views may install a listen context directly. They still need
+	// the same retirement fence as a view created through Attach.
+	if lv.watchOwnerCtx == nil {
+		lv.replaceWatchOwnerLocked()
+	}
+	owner := lv.watchOwnerCtx
+	sessionID, mgr := lv.sessionID, lv.mgr
 	lv.mu.Unlock()
 
-	if mgr != nil && mgr.browserAlive(sessionID) {
-		// Not a death — a tab close/switch. See the doc comment above for
-		// why leaving lv.listenCtx exactly as-is (and returning without
-		// broadcasting) is what lets the real rebind proceed correctly.
-		return
-	}
-
-	// The panel browsing context ended. Stop only its capture; manager
-	// Shutdown/invalidateConnection owns cleanup across the whole browser.
+	// Retain the original picture before observing browser death. Looking it
+	// up only afterward can select a recovery capture installed during the check.
+	var original *CaptureSession
+	var frame CaptureFrameState
 	if mgr != nil {
-		if cs := mgr.CaptureSessionForPanel(sessionID); cs != nil {
-			cs.Stop()
+		original = mgr.CaptureSessionForPanel(sessionID)
+		if original != nil {
+			frame = original.FrameState()
+		}
+		if mgr.browserAlive(sessionID) {
+			return
 		}
 	}
-
+	if owner.Err() != nil {
+		return
+	}
+	if mgr != nil && mgr.CaptureSessionForPanel(sessionID) != original {
+		return
+	}
+	if original != nil {
+		// An unmeasured capture has not claimed this source yet. In particular,
+		// a recovery capture waiting for its first frame is not the dead picture.
+		if frame.Generation == 0 || frame.TargetID == "" || frame.Width <= 0 || frame.Height <= 0 {
+			return
+		}
+		sameFrame := func(current CaptureFrameState) bool {
+			return current.Generation == frame.Generation && current.TargetID == frame.TargetID
+		}
+		original.stopWhen(func() bool {
+			return owner.Err() == nil && sameFrame(original.frameStateLocked())
+		})
+		// Stop may drain transport work. A rebind or newer frame during that
+		// drain must not inherit the old watcher's death notification.
+		if owner.Err() != nil || !sameFrame(original.FrameState()) {
+			return
+		}
+	}
+	if mgr != nil {
+		current := mgr.CaptureSessionForPanel(sessionID)
+		// Stopping our own capture normally removes it from the manager.
+		if current != nil && current != original {
+			return
+		}
+	}
 	lv.mu.Lock()
-	if lv.listenCtx != watchedListenCtx {
-		// Superseded while this goroutine was checking mgr.browserAlive.
+	if lv.listenCtx != watchedListenCtx || lv.watchOwnerCtx != owner || owner.Err() != nil {
 		lv.mu.Unlock()
 		return
 	}
@@ -1947,10 +1982,21 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	lv.stopListen = nil
 	sinks := lv.snapshotStatusSinksLocked()
 	lv.mu.Unlock()
-
-	for _, s := range sinks {
-		s("browser session ended unexpectedly (the browser was restarted or shut down) — re-attach to resume watching")
+	for _, sink := range sinks {
+		if owner.Err() != nil {
+			return
+		}
+		sink("browser session ended unexpectedly (the browser was restarted or shut down) — re-attach to resume watching")
 	}
+}
+
+// replaceWatchOwnerLocked retires cleanup belonging to the previous watch.
+// This context is deliberately independent of the source tab's lifetime.
+func (lv *LiveView) replaceWatchOwnerLocked() {
+	if lv.stopWatchOwner != nil {
+		lv.stopWatchOwner()
+	}
+	lv.watchOwnerCtx, lv.stopWatchOwner = context.WithCancel(context.Background())
 }
 
 // detach removes viewerID and, if it was the last viewer, stops watching
@@ -1975,7 +2021,11 @@ func (lv *LiveView) detach(viewerID string) {
 	}
 
 	var stopListen context.CancelFunc
-	if len(lv.viewers) == 0 && lv.isActiveLocked() {
+	if len(lv.viewers) == 0 {
+		if lv.stopWatchOwner != nil {
+			lv.stopWatchOwner()
+		}
+		lv.watchOwnerCtx, lv.stopWatchOwner = nil, nil
 		stopListen = lv.stopListen
 		lv.listenCtx = nil
 		lv.stopListen = nil
