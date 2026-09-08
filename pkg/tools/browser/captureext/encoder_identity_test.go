@@ -124,9 +124,9 @@ func TestEncoderCoalescedCaptureCannotOfferOldGenerationOrMixGeometry(t *testing
   sandbox.newCommand={target_id:'new',capture_generation:2,expected_width:888,expected_height:456,capture_scale:1};
   const first=run('runCaptureAndOffer(oldCommand)');await started;
   await run('runCaptureAndOffer(newCommand)');release(targets);await first;run('clearOfferAnswerTimeout()');
-  assert.deepEqual(selections,[7,99],'each attempt keeps its own requested target');
-  assert.deepEqual(dimensions,[[624,720],[888,456]],'old target cannot acquire new target geometry');
-  assert.deepEqual(tracks.map(t=>t.stopped),[true,false],'retired late capture stops before replacement remains live');
+  assert.deepEqual(selections,[99],'retired lookup cannot acquire old-target media');
+  assert.deepEqual(dimensions,[[888,456]],'only replacement target acquires its own geometry');
+  assert.deepEqual(tracks.map(t=>t.stopped),[false],'only the replacement capture is created and remains live');
   assert.equal(offers.length,1,'canceled generation cannot publish an offer');
   assert.equal(offers[0].capture_generation,2,'only latest generation is offered');
   assert.equal(offers[0].target_id,'new','only actual replacement target is offered');

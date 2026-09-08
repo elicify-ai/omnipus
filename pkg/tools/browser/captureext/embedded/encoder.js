@@ -3,14 +3,15 @@
 // This page is opened directly by the gateway (via CDP,
 // chrome-extension://<pinned-id>/encoder.html) once the extension has been
 // loaded into a managed, headless Chrome instance. It self-consumes
-// chrome.tabCapture on the ACTIVE tab (no separate consumer tab — the
-// spike-proven simplest pattern, see docs/internal/design/wv1-spike-results.md
-// Q2/Q3), negotiates a non-trickle WebRTC offer/answer with the gateway's
+// chrome.tabCapture on the exact server-assigned CDP page target, resolved
+// read-only through chrome.debugger.getTargets (never by focus or URL). It
+// negotiates a non-trickle WebRTC offer/answer with the gateway's
 // loopback capture-ingest WS endpoint, and streams both audio+video tracks.
 //
 // Config is injected by the gateway BEFORE this script runs, via
 // Page.addScriptToEvaluateOnNewDocument setting
-// `window.__omnipusCapture = {token, ingestUrl}`. This is intentionally
+// `window.__omnipusCapture = {token, ingestUrl, capture_generation, target_id,
+// expected_width, expected_height, capture_scale}`. This is intentionally
 // NEVER read from URL params or any other lower-trust channel — the
 // loopback WS is not a trust boundary by itself, so the token is the only
 // thing that authorizes this page to mint a capture session server-side.
@@ -19,10 +20,10 @@
 // (contracts/components/schemas/BrowserCapture{Hello,Offer,Answer,Control}Frame.yaml,
 // ADR-047 D1/D2/D6):
 //   -> {type: 'browser_capture_hello',   token, ext_version}
-//   -> {type: 'browser_capture_offer',   sdp}
-//   <- {type: 'browser_capture_answer',  sdp}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate, reason?, expected_width?, expected_height?}  (server -> client)
-//   ->  {type: 'browser_capture_control', action: ping}                        (client -> server)
+//   -> {type: 'browser_capture_offer',   sdp, capture_generation, target_id, offer_id}
+//   <- {type: 'browser_capture_answer',  sdp, capture_generation, target_id, offer_id}
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate, reason?, capture_generation?, target_id?, expected_width?, expected_height?, capture_scale?, max_bitrate?}  (server -> client)
+//   ->  {type: 'browser_capture_control', action: ping, capture_generation?, target_id?, capture_health?}                        (client -> server)
 //
 // expected_width/expected_height (2026-07-31 follow-up,
 // docs/internal/browser-viewport-input-rootcause-2026-07-31.md): on a
@@ -32,7 +33,8 @@
 // it through here so captureActiveTabStream can converge on a KNOWN target
 // instead of merely polling chrome.tabs.get until two reads agree with each
 // other (which two STALE reads can also satisfy). Absent on a recapture with
-// no such measurement to offer (e.g. an active-tab switch).
+// no such measurement to offer. Capture generation and exact target identity
+// remain mandatory on every initial capture and recapture command.
 //
 // browser_capture_hello is CLIENT -> SERVER ONLY — the gateway never sends
 // one back. Per the schema doc: "the gateway audits any hello with a
@@ -46,7 +48,8 @@
 //
 // browser_capture_control's `ping` is likewise CLIENT -> SERVER ONLY (this
 // page's own periodic health/reconnect-watchdog beacon); the server-issued
-// control actions are exactly `recapture` and `shutdown` — there is no
+// control actions are `recapture`, `shutdown`, `adapt_reset`, and
+// `set_bitrate` — there is no
 // `pong` action in the schema's enum.
 'use strict';
 
@@ -80,12 +83,6 @@ window.__omnipusState = {
   // constraints genuinely stuck on a settled sender, not just that this file
   // attempted to set them. Stays null until the first such success.
   senderConstraints: null,
-  // lastRecaptureSkipAt is stamped whenever a server-initiated recapture was
-  // answered by KEEPING the running stream instead of rebuilding it (see
-  // recaptureGeometryChangeReason). A live check that the panel-open path has
-  // stopped renegotiating a healthy connection reads this back over CDP; the
-  // reason for every rebuild that DID happen is in history.
-  lastRecaptureSkipAt: null,
   history: [],
 };
 
@@ -267,142 +264,6 @@ let lastPinnedCapDims = null;
 // (and the initial capture) grants 3 post-connect checks; self-heal
 // recaptures spend from the same budget — bounded convergence, no churn.
 let selfHealBudget = 3;
-
-// ---- "only rebuild if the size really changed" --------------------------------
-//
-// Every panel open used to destroy a working stream. The gateway answers a
-// viewer's offer and then, unconditionally, issues a corrective recapture
-// carrying the panel's CDP-verified viewport (browser_webrtc.go's
-// applyColdStartRecapture) — because on a cold start the capture really can
-// be running at launch geometry and nothing else will ever correct it. But
-// the SAME frame arrives on the ordinary warm case, where the capture is
-// already exactly right, and handleControlFrame's answer to it was to tear
-// the PeerConnection down and renegotiate from scratch at the precise moment
-// somebody started watching. Every rebuild is a fresh chance for the
-// connection to fail, and the comment above this one concedes that several
-// of them overlap during a panel spin-up.
-//
-// So: compare first, and rebuild only when the capture geometry genuinely
-// differs from what is already running.
-//
-// RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX is deliberately the SAME 8 CSS px this
-// file already uses in its two other "is this the same size?" judgements —
-// captureActiveTabStream's convergence poll (TOLERANCE_PX) and the
-// post-connect self-heal's drift check. Reusing it means the encoder holds
-// exactly one definition of "really changed": a difference the self-heal
-// would call drift is a difference a recapture rebuilds for, and a
-// difference it tolerates is one a recapture keeps. 8 px is far below any
-// resize a person can produce by dragging a panel edge, and comfortably
-// above the sub-pixel/scrollbar rounding that makes a re-reported viewport
-// jitter by a pixel without anything having moved.
-const RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX = 8;
-// Device scale is a float carried over JSON, so it needs an epsilon rather
-// than ===. 0.01 is two orders of magnitude below the smallest real step a
-// viewer can produce (Chrome's zoom ladder and every DPR a display reports
-// move in quarters at finest), so it separates "the same monitor" from "a
-// different one" without ever mistaking float noise for a change.
-const RECAPTURE_SAME_SCALE_EPSILON = 0.01;
-
-// appliedCaptureGeometry reports what the RUNNING capture actually is, or
-// null when there is nothing running to compare against (a genuinely cold
-// start, a torn-down or failed capture, a rebuild already in flight).
-//
-// The distinction that matters here: physW/physH come from the live
-// MediaStreamTrack's own getSettings(), i.e. what Chrome REPORTS IT
-// PRODUCED, not what we asked it for. cssW/cssH/scale are the pin
-// captureActiveTabStream converged on for that same capture. Returning both
-// lets the decision below refuse to skip on the strength of a value that was
-// merely requested: if the pin and the track disagree, the pin is not
-// trustworthy evidence about the picture on screen and we rebuild.
-function appliedCaptureGeometry() {
-  if (captureInFlight || !currentPC || !currentStream || !lastPinnedCapDims) return null;
-  // A PC that is not connected is not a stream worth protecting — rebuilding
-  // is the recovery path, and the recapture frame may well BE the recovery.
-  if (currentPC.connectionState !== 'connected') return null;
-  let track = null;
-  let settings = null;
-  try {
-    track = currentStream.getVideoTracks()[0] || null;
-    if (!track || track.readyState !== 'live') return null;
-    settings = typeof track.getSettings === 'function' ? track.getSettings() : null;
-  } catch (e) {
-    warn('appliedCaptureGeometry: could not read the running track, treating the capture as unknown', e);
-    return null;
-  }
-  if (!settings || !(settings.width > 0) || !(settings.height > 0)) return null;
-  return {
-    tabId: capturedTabId,
-    cssW: lastPinnedCapDims.w,
-    cssH: lastPinnedCapDims.h,
-    scale: lastPinnedCapDims.scale > 0 ? lastPinnedCapDims.scale : 1,
-    physW: settings.width,
-    physH: settings.height,
-  };
-}
-
-// recaptureGeometryChangeReason answers "would this recapture actually change
-// the picture?" — returning '' when it would not (so the running stream can
-// be kept) and a human-readable reason when it would.
-//
-// want is {cssW, cssH, scale} from the incoming control frame, or null when
-// the frame carried no CDP-verified hint. applied is appliedCaptureGeometry().
-// Every unknown is a rebuild: correctness (a right-sized picture) always wins
-// over stability (an undisturbed connection), so this only ever skips on
-// positive, applied evidence that the two agree. Pure — no globals, no
-// clock, no browser — so it is unit-testable off-browser.
-function recaptureGeometryChangeReason(want, applied) {
-  if (!applied) return 'no healthy capture is running';
-  if (!want || !(want.cssW > 0) || !(want.cssH > 0)) {
-    // A recapture with no geometry hint (an active-tab switch, live.go's
-    // plain Recapture()) carries nothing to compare against, so there is no
-    // evidence on which to keep the stream. Rebuild, exactly as before.
-    return 'the recapture carried no verified target geometry';
-  }
-  const wantScale = want.scale > 0 ? want.scale : 1;
-  if (Math.abs(wantScale - applied.scale) >= RECAPTURE_SAME_SCALE_EPSILON) {
-    return 'device scale ' + applied.scale + ' -> ' + wantScale;
-  }
-  if (
-    Math.abs(want.cssW - applied.cssW) > RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX ||
-    Math.abs(want.cssH - applied.cssH) > RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX
-  ) {
-    return (
-      'capture size ' + applied.cssW + 'x' + applied.cssH + ' -> ' + want.cssW + 'x' + want.cssH + ' css'
-    );
-  }
-  // The applied-vs-requested guard. Everything above compared the incoming
-  // request against the size we PINNED; this checks that the running track is
-  // in fact at that size. If Chrome delivered something else — a constraint
-  // it could not honour, a tab that resized under a stale pin — the pin is
-  // not evidence and the stream is not the one the viewer asked for.
-  // Expressed in physical pixels because that is the space getSettings()
-  // speaks, using the same 8 CSS px threshold scaled into it, so there is
-  // still only one tolerance in this file.
-  const implied = budgetedCaptureDims(applied.cssW, applied.cssH, applied.scale);
-  const physTolerance = RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX * Math.max(1, applied.scale);
-  if (
-    Math.abs(applied.physW - implied.w) > physTolerance ||
-    Math.abs(applied.physH - implied.h) > physTolerance
-  ) {
-    return (
-      'the running track is ' + applied.physW + 'x' + applied.physH +
-      ' physical, not the ' + implied.w + 'x' + implied.h + ' its pinned size implies'
-    );
-  }
-  return '';
-}
-
-// Debug/verification surface only -- never part of the wire protocol, same
-// contract as window.__omnipusState and window.__omnipusQualityAdapt. The
-// off-browser harness drives the rebuild decision through this.
-window.__omnipusRecapture = {
-  changeReason: recaptureGeometryChangeReason,
-  appliedGeometry: appliedCaptureGeometry,
-  constants: {
-    sizeToleranceCssPx: RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX,
-    scaleEpsilon: RECAPTURE_SAME_SCALE_EPSILON,
-  },
-};
 
 // DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
 // per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
@@ -828,6 +689,8 @@ function adaptInitialState() {
 // experiencing. adaptCarryOverIndex is the rule; see its doc comment.
 let adaptState = adaptInitialState();
 let adaptTimer = null;
+let adaptEpoch = 0;
+let adaptTickInFlight = false;
 
 // adaptCycleCount counts CAPTURES THAT ACTUALLY RAN -- incremented where the
 // adaptation loop starts (the PeerConnection's first 'connected' transition),
@@ -1019,10 +882,11 @@ function adaptCarryOverIndex(prev, cycleCount, now) {
 // to its source so a naturally idle capture is not mistaken for slow encoding.
 const previousSenderSamples = new WeakMap();
 
-async function readVideoSenderSample(pc) {
+async function readVideoSenderSample(pc, current = () => true) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender || typeof sender.getStats !== 'function') return null;
   const report = await sender.getStats();
+  if (!current()) return null;
   if (!report || typeof report.forEach !== 'function') return null;
   let out = null;
   const sources = new Map();
@@ -1060,13 +924,14 @@ async function readVideoSenderSample(pc) {
   };
 }
 
-async function applyAdaptScale(pc, scale) {
+async function applyAdaptScale(pc, scale, current = () => true) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) throw new Error('no video sender');
   // Queued for the same reason as applyVideoSenderConstraints: this loop runs
   // every 2s and would otherwise interleave with the post-answer /
   // post-connected applies and invalidate their transaction (or theirs, ours).
   return queueSenderParams(async function () {
+    if (!current()) return;
     const params = sender.getParameters();
     if (!encodingsNegotiated(params)) {
       throw new Error('encodings not negotiated');
@@ -1116,61 +981,79 @@ function reportAdaptFailure(msg) {
 // off-browser harness can drive a fake PeerConnection through the REAL wiring
 // (stats -> decision -> setParameters), not just the pure policy above.
 async function adaptTick(pcOverride, nowOverride) {
-  if (shuttingDown) return null;
+  if (shuttingDown || adaptTickInFlight) return null;
   const pc = pcOverride || currentPC;
   if (!pc) return null;
   if (!pcOverride && pc.connectionState !== 'connected') return null;
 
-  const sample = await readVideoSenderSample(pc);
-  if (!sample) return null;
-
-  const before = adaptState.index;
-  const decision = qualityAdaptDecide(sample, adaptState, nowOverride);
-  adaptState = decision.state;
-
-  if (decision.action === 'down' || decision.action === 'up') {
-    const scale = ADAPT_SCALE_STEPS[adaptState.index];
-    record('qualityAdapt: step ' + decision.action + ' -> scaleResolutionDownBy ' + scale + ' (' + decision.note + ')');
+  const ownerPC = currentPC;
+  const generation = captureGeneration;
+  const epoch = adaptEpoch;
+  const current = () => !shuttingDown && currentPC === ownerPC &&
+    captureGeneration === generation && adaptEpoch === epoch;
+  adaptTickInFlight = true;
+  try {
+    let sample;
     try {
-      await applyAdaptScale(pc, scale);
-      record('qualityAdapt: scaleResolutionDownBy ' + scale + ' applied');
+      sample = await readVideoSenderSample(pc, current);
     } catch (e) {
-      // Keep the recorded index honest: if setParameters did not take, the
-      // stream is still at the OLD scale and the loop must not believe
-      // otherwise (or it would never retry, and would later "restore" to a
-      // scale that was never applied).
-      adaptState.index = before;
-      const msg = 'qualityAdapt: setParameters failed, staying at scale ' + ADAPT_SCALE_STEPS[before] + ': ' + String(e);
-      warn(msg, e);
-      window.__omnipusState.lastError = msg;
-      // Round-2 finding F7: an adaptation that does not APPLY is the one
-      // failure of this loop nobody outside this page could ever learn
-      // about. record()/warn() reach console.log, and nothing forwards the
-      // extension page's console anywhere -- so on a hosted box the picture
-      // would stay collapsed at 1 fps while every layer reported success,
-      // the exact "green but broken" shape this whole file's other fixes
-      // exist to close. Push it to the gateway over the ingest socket.
-      reportAdaptFailure(msg);
+      if (!current()) return null;
+      throw e;
     }
-  }
+    if (!current() || !sample) return null;
 
-  window.__omnipusState.qualityAdapt = {
-    scale: ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)],
-    index: adaptState.index,
-    action: decision.action,
-    note: decision.note,
-    // How long ago the encoder last reported CPU as the limiting factor, and
-    // how many capture rebuilds this page has been through -- the two inputs
-    // to "is the current scale still justified" (adaptCarryOverIndex).
-    pressureAgeMs: adaptState.lastPressureAt ? Date.now() - adaptState.lastPressureAt : null,
-    cycle: adaptCycleCount,
-    fps: sample.framesPerSecond,
-    qualityLimitationReason: sample.qualityLimitationReason,
-    frameWidth: sample.frameWidth,
-    frameHeight: sample.frameHeight,
-    at: Date.now(),
-  };
-  return decision.action;
+    const before = adaptState.index;
+    const decision = qualityAdaptDecide(sample, adaptState, nowOverride);
+    adaptState = decision.state;
+
+    if (decision.action === 'down' || decision.action === 'up') {
+      const scale = ADAPT_SCALE_STEPS[adaptState.index];
+      record('qualityAdapt: step ' + decision.action + ' -> scaleResolutionDownBy ' + scale + ' (' + decision.note + ')');
+      try {
+        await applyAdaptScale(pc, scale, current);
+        if (!current()) return null;
+        record('qualityAdapt: scaleResolutionDownBy ' + scale + ' applied');
+      } catch (e) {
+        if (!current()) return null;
+        // Keep the recorded index honest: if setParameters did not take, the
+        // stream is still at the OLD scale and the loop must not believe
+        // otherwise (or it would never retry, and would later "restore" to a
+        // scale that was never applied).
+        adaptState.index = before;
+        const msg = 'qualityAdapt: setParameters failed, staying at scale ' + ADAPT_SCALE_STEPS[before] + ': ' + String(e);
+        warn(msg, e);
+        window.__omnipusState.lastError = msg;
+        // Round-2 finding F7: an adaptation that does not APPLY is the one
+        // failure of this loop nobody outside this page could ever learn
+        // about. record()/warn() reach console.log, and nothing forwards the
+        // extension page's console anywhere -- so on a hosted box the picture
+        // would stay collapsed at 1 fps while every layer reported success,
+        // the exact "green but broken" shape this whole file's other fixes
+        // exist to close. Push it to the gateway over the ingest socket.
+        reportAdaptFailure(msg);
+      }
+    }
+
+    window.__omnipusState.qualityAdapt = {
+      scale: ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)],
+      index: adaptState.index,
+      action: decision.action,
+      note: decision.note,
+      // How long ago the encoder last reported CPU as the limiting factor, and
+      // how many capture rebuilds this page has been through -- the two inputs
+      // to "is the current scale still justified" (adaptCarryOverIndex).
+      pressureAgeMs: adaptState.lastPressureAt ? Date.now() - adaptState.lastPressureAt : null,
+      cycle: adaptCycleCount,
+      fps: sample.framesPerSecond,
+      qualityLimitationReason: sample.qualityLimitationReason,
+      frameWidth: sample.frameWidth,
+      frameHeight: sample.frameHeight,
+      at: Date.now(),
+    };
+    return decision.action;
+  } finally {
+    adaptTickInFlight = false;
+  }
 }
 
 function startQualityAdaptLoop() {
@@ -1183,6 +1066,7 @@ function startQualityAdaptLoop() {
 }
 
 function stopQualityAdaptLoop() {
+  adaptEpoch += 1;
   if (adaptTimer) {
     clearInterval(adaptTimer);
     adaptTimer = null;
@@ -1246,6 +1130,7 @@ window.__omnipusQualityAdapt = {
     return adaptState;
   },
   reset: function () {
+    adaptEpoch += 1;
     adaptState = adaptInitialState();
     adaptCycleCount = 0;
     lastAdaptReportAt = 0;
@@ -1447,11 +1332,16 @@ function waitIceGatheringComplete(pc) {
 }
 
 async function captureActiveTabStream(command) {
+  const generation = captureGeneration;
+  const current = () => !shuttingDown && captureGeneration === generation;
+  if (!current()) return null;
   const tabId = await findActiveTargetTab(command.target_id);
+  if (!current()) return null;
   const commandScale = command.capture_scale;
   record('captureActiveTabStream: targetTabId=' + tabId);
 
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  if (!current()) return null;
   record('captureActiveTabStream: got streamId');
 
   // W3 e2e finding: WITHOUT explicit size constraints, tabCapture delivers
@@ -1511,6 +1401,7 @@ async function captureActiveTabStream(command) {
   }
   // Keep the scale from this immutable command with its captured geometry;
   // later control frames cannot change what this capture was built at.
+  if (!current()) return null;
   lastPinnedCapDims = { w: capW, h: capH, scale: commandScale };
   const capDims = budgetedCaptureDims(capW, capH, commandScale);
   record(
@@ -1543,6 +1434,18 @@ async function captureActiveTabStream(command) {
   } catch (e) {
     warn('captureActiveTabStream: tab unmute failed (tab may already be closed)', e);
   }
+  if (!current()) {
+    // Shutdown may have muted before Chrome finished the pending unmute.
+    // Restore local silence after that operation, on the same exact tab.
+    if (shuttingDown) {
+      try {
+        await chrome.tabs.update(tabId, { muted: true });
+      } catch (e) {
+        warn('captureActiveTabStream: shutdown mute compensation failed', e);
+      }
+    }
+    return null;
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
     video: {
@@ -1572,6 +1475,10 @@ async function captureActiveTabStream(command) {
     },
   });
 
+  if (!current()) {
+    stream.getTracks().forEach((track) => track.stop());
+    return null;
+  }
   window.__omnipusState.videoTracks = stream.getVideoTracks().map((t) => ({ label: t.label, settings: t.getSettings() }));
   window.__omnipusState.audioTracks = stream.getAudioTracks().map((t) => ({ label: t.label, settings: t.getSettings() }));
   record(
@@ -1726,6 +1633,7 @@ async function runCaptureAndOfferOnce(command) {
     currentStream = null;
     try {
       const replacement = await captureActiveTabStream(command);
+      if (!replacement) return;
       if (shuttingDown || currentPC !== existing || captureGeneration !== generation) {
         replacement.getTracks().forEach((track) => track.stop());
         return;
@@ -1754,6 +1662,7 @@ async function runCaptureAndOfferOnce(command) {
   setStatus('capturing');
 
   const stream = await captureActiveTabStream(command);
+  if (!stream) return;
   if (shuttingDown || captureGeneration !== generation) {
     stream.getTracks().forEach((track) => track.stop());
     return;
@@ -1850,6 +1759,7 @@ async function handleControlFrame(msg) {
   }
 
   if (action === 'adapt_reset') {
+    adaptEpoch += 1;
     // A boot-warmed capture is being handed to its FIRST real viewer. The
     // resolution the adaptation loop settled on while nobody was watching is
     // not evidence about this viewer, so start them at full quality.
