@@ -15,13 +15,15 @@ import (
 
 // newViewportCDPEndpoint supplies browser-protocol observations, leaving the
 // manager, live view, measured refresh and capture frame machinery real.
-func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) (string, func(int, int, float64)) {
+func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) (string, func(int, int, float64), <-chan struct{}) {
 	t.Helper()
 	lifetime, cancel := context.WithCancel(context.Background())
 	var observationMu sync.Mutex
 	width, height, scale := 800, 600, 1.0
 	ready := make(chan struct{})
 	var readyOnce sync.Once
+	discovered := make(chan struct{})
+	var discoveryOnce sync.Once
 	if !pending {
 		readyOnce.Do(func() { close(ready) })
 	}
@@ -67,6 +69,9 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 			case "Page.addScriptToEvaluateOnNewDocument":
 				result["identifier"] = "fixture-script"
 			case "Page.getFrameTree":
+				// Fresh fixture targets need no attach-time frame query. This query
+				// comes from the live watcher after it has checked for a capture.
+				discoveryOnce.Do(func() { close(discovered) })
 				result["frameTree"] = map[string]any{"frame": map[string]any{"id": "fixture-frame", "loaderId": "fixture-loader", "url": "about:blank", "securityOrigin": "://", "mimeType": "text/html"}}
 			case "DOM.getDocument":
 				result["root"] = map[string]any{"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document", "localName": "", "nodeValue": ""}
@@ -75,7 +80,10 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 				result["bounds"] = map[string]any{"windowState": "normal"}
 			case "Browser.setWindowBounds":
 				if len(metricsHooks) > 0 {
-					var bounds struct{ Width, Height int }
+					var bounds struct {
+						Width  int `json:"width"`
+						Height int `json:"height"`
+					}
 					_ = json.Unmarshal(command.Params["bounds"], &bounds)
 					observationMu.Lock()
 					width, height = bounds.Width, bounds.Height
@@ -155,5 +163,5 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 		mu.Unlock()
 		server.Close()
 	})
-	return "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/viewport-fixture", observe
+	return "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/viewport-fixture", observe, discovered
 }

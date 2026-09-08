@@ -59,7 +59,7 @@ func TestBrowserPanelCaptureFactoryUsesResolvedPanel(t *testing.T) {
 
 func TestBrowserPanelCaptureRegistryRetainsIndependentTokens(t *testing.T) {
 	r := newCaptureRegistry()
-	var captures []*browser.CaptureSession
+	captures := make([]*browser.CaptureSession, 0, 2)
 	for range 2 {
 		cs, err := browser.NewCaptureSessionWithDeps(nil, "registry-test", &fakeRelay{}, nil, nil)
 		if err != nil {

@@ -157,7 +157,10 @@ func TestBrowserLatestStateWriterDeliversAndKeepsCriticalTransitions(t *testing.
 		(&BrowserWSHandler{}).writePump(wc)
 	}))
 	t.Cleanup(srv.Close)
-	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	client, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if response != nil {
+		response.Body.Close()
+	}
 	require.NoError(t, err)
 	t.Cleanup(func() { client.Close() })
 	wc := <-ready

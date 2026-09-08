@@ -113,7 +113,10 @@ func TestBrowserVideoPublicationRejectsRetiredClaim(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f := newVideoPublicationFixture(t)
 			raw, _ := f.h.viewerConns.Load("viewer")
-			vc := raw.(*webrtcViewerConn)
+			vc, ok := raw.(*webrtcViewerConn)
+			if !ok {
+				t.Fatalf("unexpected viewer registration type %T", raw)
+			}
 			switch kind {
 			case "foreign capture":
 				other, err := browser.NewCaptureSessionWithDeps(nil, "replacement", &fakeRelay{}, nil, nil)
@@ -210,7 +213,11 @@ func TestBrowserVideoStoppedPublication(t *testing.T) {
 			f.h.notifyViewersStreamStopped(f.cs, []string{"viewer"})
 			if kind == "foreign capture" {
 				value, _ := f.h.viewerConns.Load("viewer")
-				assertNoVideoPublicationQueued(t, value.(*webrtcViewerConn).wc)
+				viewer, ok := value.(*webrtcViewerConn)
+				if !ok {
+					t.Fatalf("unexpected viewer registration type %T", value)
+				}
+				assertNoVideoPublicationQueued(t, viewer.wc)
 				return
 			}
 			if kind == "canceled origin" {

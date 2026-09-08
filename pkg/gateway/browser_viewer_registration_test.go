@@ -32,7 +32,10 @@ func TestBrowserViewerRegistrationRetainsOriginalAttachmentAndCapture(t *testing
 	if !ok {
 		t.Fatal("accepted viewer has no route")
 	}
-	got := value.(*webrtcViewerConn)
+	got, valid := value.(*webrtcViewerConn)
+	if !valid {
+		t.Fatalf("unexpected viewer registration type %T", value)
+	}
 	if got.wc != wc || got.sessionID != attachment.sessionID || got.attachmentCtx != attachment.ctx || got.capture != cs || got.captureID == "" || got.captureID != cs.FrameState().CaptureID {
 		t.Fatalf("registry lost the original attachment/capture: %+v", got)
 	}

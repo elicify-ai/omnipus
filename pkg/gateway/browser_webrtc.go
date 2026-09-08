@@ -363,9 +363,9 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	if justStarted {
 		h.auditStream(userID, frame.AgentId, audit.SeverityInfo, audit.EventBrowserWebRTCStreamStarted, map[string]any{"session_id": sessID})
 	}
-	if err := h.applyColdStartRecapture(negotiation, snapshot, cs); err != nil {
+	if refreshErr := h.applyColdStartRecapture(negotiation, snapshot, cs); refreshErr != nil {
 		if negotiation.Err() == nil {
-			sendState(true, false, false, "error", err)
+			sendState(true, false, false, "error", refreshErr)
 		}
 		return
 	}

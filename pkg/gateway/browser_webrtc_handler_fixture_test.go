@@ -15,7 +15,7 @@ import (
 
 // Existing handler regression fixtures must dispatch a real request attached
 // to the exact panel and use the production offer contract.
-func prepareWebRTCHandlerFixture(t *testing.T, h *BrowserWSHandler, al *agent.AgentLoop, state *browserConnState, data []byte) ([]byte, uint64) {
+func prepareWebRTCHandlerFixture(t *testing.T, h *BrowserWSHandler, al *agent.AgentLoop, state *browserConnState, data []byte, discovery ...<-chan struct{}) ([]byte, uint64) {
 	t.Helper()
 	var frame generated.BrowserWebRTCOfferFrame
 	parsed := json.Unmarshal(data, &frame) == nil
@@ -40,6 +40,9 @@ func prepareWebRTCHandlerFixture(t *testing.T, h *BrowserWSHandler, al *agent.Ag
 			t.Fatalf("attach handler CDP fixture: %v", err)
 		}
 		t.Cleanup(func() { mgr.Live().Detach(panel, "handler-fixture-viewer") })
+	}
+	for _, discovered := range discovery {
+		awaitViewportDocumentDiscovery(t, discovered)
 	}
 	if cs := mgr.CaptureSession(); cs != nil {
 		if _, err := mgr.EnsureCaptureSessionForPanel(panel, func() (*browser.CaptureSession, error) { return cs, nil }); err != nil {
@@ -141,7 +144,7 @@ func (r *requestFixtureRelay) pendingCount() int {
 // manager/live-view state and measured capture refresh remain real.
 func newMeasuredBrowserWSTestHandler(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop) {
 	t.Helper()
-	endpoint, _ := newViewportCDPEndpoint(t, false)
+	endpoint, _, _ := newViewportCDPEndpoint(t, false)
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
 	return newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		if mutate != nil {
@@ -153,13 +156,31 @@ func newMeasuredBrowserWSTestHandler(t *testing.T, mutate func(*config.Config)) 
 }
 func newMeasuredFixWaveHandlerWithAudit(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop, string) {
 	t.Helper()
-	endpoint, _ := newViewportCDPEndpoint(t, false)
+	handler, loop, auditDir, _ := newMeasuredFixWaveHandlerWithDiscovery(t, mutate)
+	return handler, loop, auditDir
+}
+
+func newMeasuredFixWaveHandlerWithDiscovery(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop, string, <-chan struct{}) {
+	t.Helper()
+	endpoint, _, discovered := newViewportCDPEndpoint(t, false)
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
-	return newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
+	handler, loop, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		if mutate != nil {
 			mutate(cfg)
 		}
 		cfg.Tools.Browser.CDPURL = endpoint
 		cfg.Tools.Browser.StartPageURL = "about:blank"
 	})
+	return handler, loop, auditDir, discovered
+}
+
+// Wait for the real watcher's initial frame query while no panel capture exists.
+// The later manually seeded frame then cannot be retired by late initialization.
+func awaitViewportDocumentDiscovery(t *testing.T, discovered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-discovered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("live document watcher did not discover the fixture target")
+	}
 }

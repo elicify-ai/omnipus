@@ -37,9 +37,9 @@ func TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait(t *testing.T) {
 			defer cancel()
 			bind := func(ctx context.Context) uint64 {
 				t.Helper()
-				_, epoch, err := cs.BindIngestContext(ctx, func(string, *string, int, int, int) error { return nil }, func() {})
-				if err != nil {
-					t.Fatal(err)
+				_, epoch, bindErr := cs.BindIngestContext(ctx, func(string, *string, int, int, int) error { return nil }, func() {})
+				if bindErr != nil {
+					t.Fatal(bindErr)
 				}
 				return epoch
 			}
@@ -72,12 +72,12 @@ func TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait(t *testing.T) {
 			case "binding":
 				bind(context.Background())
 			case "frame":
-				if _, err := cs.BeginFrameTransition("page-b", 640, 480, 1); err != nil {
-					t.Fatal(err)
+				if _, transitionErr := cs.BeginFrameTransition("page-b", 640, 480, 1); transitionErr != nil {
+					t.Fatal(transitionErr)
 				}
 			case "newer offer":
-				if _, err := cs.HandleIngestOfferForBinding(source, epoch, 10, "new-sdp", 1, "page-a"); err != nil {
-					t.Fatal(err)
+				if _, offerErr := cs.HandleIngestOfferForBinding(source, epoch, 10, "new-sdp", 1, "page-a"); offerErr != nil {
+					t.Fatal(offerErr)
 				}
 			case "socket canceled", "retired error":
 				cancel()
@@ -111,8 +111,8 @@ func TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait(t *testing.T) {
 			if kind != "current" && responseErr == nil {
 				t.Error("retired or failed offer returned success")
 			}
-			if err := writer.sendJSONContext(context.Background(), map[string]string{"type": "marker"}, nil); err != nil {
-				t.Fatal(err)
+			if writeErr := writer.sendJSONContext(context.Background(), map[string]string{"type": "marker"}, nil); writeErr != nil {
+				t.Fatal(writeErr)
 			}
 			client.SetReadDeadline(time.Now().Add(time.Second))
 			_, raw, err := client.ReadMessage()

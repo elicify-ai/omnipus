@@ -104,7 +104,7 @@ type handlerContextFixture struct {
 func newHandlerContextFixture(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) handlerContextFixture {
 	t.Helper()
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
-	cdpURL, observeViewport := newViewportCDPEndpoint(t, pending, metricsHooks...)
+	cdpURL, observeViewport, discovered := newViewportCDPEndpoint(t, pending, metricsHooks...)
 	dir := t.TempDir()
 	h, al := newBrowserWSTestHandler(t, func(c *config.Config) {
 		c.Tools.Browser.WebRTCEnabled = true
@@ -125,6 +125,7 @@ func newHandlerContextFixture(t *testing.T, pending bool, metricsHooks ...func(i
 		t.Fatalf("attach measured CDP fixture: %v", attachErr)
 	}
 	t.Cleanup(func() { mgr.Live().Detach("panel", "fixture-viewer"); mgr.Shutdown() })
+	awaitViewportDocumentDiscovery(t, discovered)
 	relay := &handlerContextRelay{}
 	var starts int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&starts, nil), nil)

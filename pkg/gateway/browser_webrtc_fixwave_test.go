@@ -252,14 +252,16 @@ func TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate(t *testing.T) 
 // handleWebRTCOffer's own ensureCaptureSession call finds it already
 // populated and never constructs a REAL browser.NewCaptureSession) and then
 // drives handleWebRTCOffer's full path — Start() (fake, instant) ->
-// AddViewer -> HandleViewerOffer (fake, returns viewerOfferErr) — without
-// ever touching real chromedp/Pion. Returns the decoded wire state frame.
+// AddViewer -> HandleViewerOffer (fake, returns viewerOfferErr). The measured
+// variant keeps chromedp admission and refresh real against a protocol fixture;
+// media negotiation remains fake. Returns the decoded wire state frame.
 func newHandleWebRTCOfferWithFakeCapture(
 	t *testing.T,
 	handler *BrowserWSHandler,
 	al *agent.AgentLoop,
 	agentID string,
 	relay *fakeRelay,
+	discovery ...<-chan struct{},
 ) webrtcStateFrameDecoder {
 	t.Helper()
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
@@ -283,7 +285,7 @@ func newHandleWebRTCOfferWithFakeCapture(
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data, discovery...)
 
 	handler.handleWebRTCOffer(wc, &state, "viewer-offer-fail", "user-1", data, al.GetConfig(), offerEpoch)
 	return decodeWebRTCState(t, drainOneFrame(t, wc))
@@ -311,10 +313,10 @@ func newHandleWebRTCOfferWithFakeCapture(
 // requires a NON-ingest failure to report "error" on the wire, so a
 // regression that made every failure report ingest_timeout would fail there.
 func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("video capability is supported on Linux and macOS")
 	}
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, auditDir, discovered := newMeasuredFixWaveHandlerWithDiscovery(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
@@ -322,7 +324,7 @@ func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *t
 	relay := &fakeRelay{viewerOfferErr: fmt.Errorf(
 		"webrtc: viewer [viewer-1/x]: %w after waiting 15s", webrtc.ErrNoIngestVideoTrack,
 	)}
-	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay)
+	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay, discovered)
 
 	require.True(t, got.Available, "an ingest-timeout must still allow a future offer (available stays true)")
 	require.Equal(t, "ingest_timeout", got.Reason,
@@ -345,16 +347,16 @@ func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *t
 // DISTINGUISHES rather than always reporting "ingest_timeout" for any
 // HandleViewerOffer failure.
 func TestHandleWebRTCOffer_GenericViewerOfferFailure_StillClassifiedAsError(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("video capability is supported on Linux and macOS")
 	}
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, auditDir, discovered := newMeasuredFixWaveHandlerWithDiscovery(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
 
 	relay := &fakeRelay{viewerOfferErr: errors.New("webrtc: viewer offer: set remote description failed")}
-	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay)
+	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay, discovered)
 
 	require.True(t, got.Available)
 	require.Equal(t, "error", got.Reason)

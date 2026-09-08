@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,11 @@ type captureFailingHijacker struct {
 }
 
 func (w captureFailingHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	conn, rw, err := w.ResponseWriter.(http.Hijacker).Hijack()
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("fixture response writer does not support hijacking")
+	}
+	conn, rw, err := hijacker.Hijack()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -65,8 +70,8 @@ func captureTransportFixture(t *testing.T) (*browser.CaptureSession, *websocket.
 	handler := &captureIngestWSHandler{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(done)
-		conn, err := (&websocket.Upgrader{}).Upgrade(captureFailingHijacker{w, accepted}, r, nil)
-		if err != nil {
+		conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(captureFailingHijacker{w, accepted}, r, nil)
+		if upgradeErr != nil {
 			return
 		}
 		handler.serveBoundIngest(conn, cs, "writer-retirement", false)
@@ -80,7 +85,7 @@ func captureTransportFixture(t *testing.T) (*browser.CaptureSession, *websocket.
 	controlled := <-accepted
 	t.Cleanup(func() {
 		client.Close()
-		controlled.Conn.Close()
+		controlled.Close()
 		select {
 		case <-done:
 		case <-time.After(time.Second):

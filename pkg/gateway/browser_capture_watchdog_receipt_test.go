@@ -41,12 +41,6 @@ func TestBrowserWatchdogQualifiesReceiptProgressByStageAndFrame(t *testing.T) {
 			t.Cleanup(h.Wait)
 			r := &watchdogReceiptRelay{wireIngestRelay: wireIngestRelay{token: 60, entered: make(chan wireIngestOffer, 1)}, reads: make(chan struct{}, 128), advanceForwarded: scenario != "failed viewer writes do not erase ingress"}
 			receipt := webrtc.VideoReceipt{BindingToken: 71, Generation: 1, TargetID: "page-a", Serial: 10}
-			if scenario == "old binding receipt is not current progress" {
-				receipt.BindingToken = 60
-			}
-			if scenario == "old generation receipt is not current progress" {
-				receipt.Generation = 2
-			}
 			r.setStats(webrtc.Stats{HasVideo: true, VideoGeneration: 1, VideoTargetID: "page-a", VideoPackets: 100, VideoReceipt: receipt})
 			var starts int32
 			cs, err := browser.NewCaptureSessionWithDeps(nil, "receipt-watchdog", r, fakeEncoderStarter(&starts, nil), nil)
@@ -55,8 +49,27 @@ func TestBrowserWatchdogQualifiesReceiptProgressByStageAndFrame(t *testing.T) {
 			_, err = cs.BeginFrameTransition("page-a", 800, 600, 1)
 			require.NoError(t, err)
 			controls := make(chan string, 32)
-			_, epoch, err := cs.BindIngestContext(context.Background(), func(action string, _ *string, _, _, _ int) error { controls <- action; return nil }, func() {})
+			_, epoch, err := cs.BindIngestRecaptureContext(context.Background(), func(action string, _ *string, _, _, _ int) error { controls <- action; return nil }, func(ctx context.Context, frame browser.CaptureFrameState, current func() bool) error {
+				if ctx.Err() != nil || !current() {
+					return context.Canceled
+				}
+				if frame.Generation != 1 || frame.TargetID != "page-a" || frame.Width != 800 || frame.Height != 600 {
+					t.Errorf("recovery changed original measured frame: %+v", frame)
+				}
+				controls <- "recapture"
+				return nil
+			}, func() {})
 			require.NoError(t, err)
+			// Establish healthy current media before testing a later failure. This
+			// retires the initial frame's legitimate recapture settle window.
+			cs.RecordVideoProgress()
+			if scenario == "old binding receipt is not current progress" {
+				receipt.BindingToken = 60
+			}
+			if scenario == "old generation receipt is not current progress" {
+				receipt.Generation = 2
+			}
+			r.setStats(webrtc.Stats{HasVideo: true, VideoGeneration: 1, VideoTargetID: "page-a", VideoPackets: 100, VideoReceipt: receipt})
 			cs.AddViewer("retained-viewer")
 			sample := browser.CaptureHealthObservation{CaptureGeneration: 1, TargetID: "page-a", Generation: 47, TrackState: "live", PeerState: "connected", SourceFrames: 20, HasSourceFrames: true, EncodedFrames: 20, HasEncodedFrames: true, PacketsSent: 30, HasPacketsSent: true, SampleTimestampMS: 1}
 			require.True(t, cs.RecordIngestHeartbeat(epoch, &sample))

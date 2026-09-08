@@ -23,7 +23,7 @@ func TestBrowserScopedCriticalRejectsInvalidOrigin(t *testing.T) {
 			t.Cleanup(wc.close)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			var source context.Context = ctx
+			var source = ctx
 			current := func() bool { return true }
 			switch kind {
 			case "missing":
@@ -138,7 +138,10 @@ func TestBrowserScopedWriterRejectsRetiredQueuedMessages(t *testing.T) {
 				(&BrowserWSHandler{}).writePump(wc)
 			}))
 			t.Cleanup(srv.Close)
-			client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+			client, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+			if response != nil {
+				response.Body.Close()
+			}
 			require.NoError(t, err)
 			t.Cleanup(func() { client.Close() })
 			wc := <-ready

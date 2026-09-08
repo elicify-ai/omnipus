@@ -69,20 +69,23 @@ func TestWebRTCContextSinkKeepsOriginalRouteAndExactSource(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.Background())
 	defer cancelParent()
 	var replies [2]int
-	var sources [2]context.Context
+	sources := make([]context.Context, 0, 2)
+	newSource := func(route context.Context) context.Context {
+		source, cancel := context.WithCancel(route)
+		t.Cleanup(cancel)
+		return source
+	}
 	for index, mgr := range []*browser.BrowserManager{first, second} {
 		route, err := withWebRTCInputRoute(parent, mgr, []string{"panel-A", "panel-B"}[index], func(ctx context.Context, kind string, err error) {
 			replies[index]++
-			if ctx != sources[index] || kind != "mouse_down" || err != failure {
+			if ctx != sources[index] || kind != "mouse_down" || !errors.Is(err, failure) {
 				t.Errorf("reply changed source/kind/error: ctx%v kind%s err%v", ctx, kind, err)
 			}
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		source, cancel := context.WithCancel(route)
-		defer cancel()
-		sources[index] = source
+		sources = append(sources, newSource(route))
 	}
 	raw := []byte(`{"type":"browser_input","kind":"mouse_down","x":0,"y":27.5,"button":"left","modifiers":3,"capture_width":640,"capture_height":480,"capture_generation":9,"capture_id":"capture-A"}`)
 	// Creating a second route for the same viewer must not replace the first.
@@ -187,7 +190,7 @@ func TestWebRTCContextSinkSchemaAndParsingBoundaries(t *testing.T) {
 		}
 		if len(texts) != want || len(texts[0]) != 8192 || (!validate && len(texts[1]) != 8193) {
 			t.Fatalf("validate%v dispatched text lengths%v want count%d with8192/8193 boundaries", validate, func() []int {
-				var lengths []int
+				lengths := make([]int, 0, len(texts))
 				for _, text := range texts {
 					lengths = append(lengths, len(text))
 				}
@@ -199,24 +202,36 @@ func TestWebRTCContextSinkSchemaAndParsingBoundaries(t *testing.T) {
 
 func TestWebRTCContextSinkProductionWrapperUsesRealManagerErrors(t *testing.T) {
 	mgr := webRTCInputRouteManager(t)
-	var gotCtx context.Context
-	var gotKind string
-	var gotError error
-	route, err := withWebRTCInputRoute(context.Background(), mgr, "original-panel", func(ctx context.Context, kind string, err error) { gotCtx, gotKind, gotError = ctx, kind, err })
+	type observation struct {
+		ctx  context.Context
+		kind string
+		err  error
+	}
+	observations := make(chan observation, 1)
+	route, err := withWebRTCInputRoute(context.Background(), mgr, "original-panel", func(ctx context.Context, kind string, err error) {
+		observations <- observation{ctx: ctx, kind: kind, err: err}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sink := newWebRTCContextInputSink(true)
 	sink(route, "viewer", []byte(`{"type":"browser_input","kind":"text","text":"probe"}`))
-	if gotCtx != route || gotKind != "text" || gotError == nil || !strings.Contains(gotError.Error(), `session "original-panel"`) {
-		t.Fatalf("real manager error route: ctx%v kind%s err%v", gotCtx, gotKind, gotError)
+	var observed observation
+	select {
+	case observed = <-observations:
+	default:
+		t.Fatal("real manager error did not reach its original reply")
+	}
+	if observed.ctx != route || observed.kind != "text" || observed.err == nil || !strings.Contains(observed.err.Error(), `session "original-panel"`) {
+		t.Fatalf("real manager error route: ctx%v kind%s err%v", observed.ctx, observed.kind, observed.err)
 	}
 	// This creates a live-view record without attaching the viewer. Its real
 	// benign rejection must remain silent, unlike a missing live view above.
 	mgr.Live().TakeControl("original-panel", "another-viewer")
-	gotCtx, gotKind, gotError = nil, "", nil
 	sink(route, "viewer", []byte(`{"type":"browser_input","kind":"text","text":"probe"}`))
-	if gotCtx != nil || gotKind != "" || gotError != nil {
-		t.Fatalf("benign real-manager rejection surfaced: %v", gotError)
+	select {
+	case observed = <-observations:
+		t.Fatalf("benign real-manager rejection surfaced: %v", observed.err)
+	default:
 	}
 }

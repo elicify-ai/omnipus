@@ -90,7 +90,10 @@ func TestBrowserConnectionCloseUnblocksReaderWithoutPeerCooperation(t *testing.T
 		readResult <- err
 	}))
 	t.Cleanup(srv.Close)
-	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	client, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if response != nil {
+		response.Body.Close()
+	}
 	require.NoError(t, err)
 	t.Cleanup(func() { client.Close() })
 	wc := &browserWSConn{conn: <-ready, doneCh: make(chan struct{})}
