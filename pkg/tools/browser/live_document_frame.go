@@ -43,7 +43,6 @@ type liveDocumentEvent struct {
 
 type liveDocumentInitial struct {
 	work     *liveDocumentWork
-	frameID  cdp.FrameID
 	loaderID cdp.LoaderID
 }
 
@@ -56,7 +55,7 @@ type liveDocumentWork struct {
 }
 
 // Called under lv.mu. Listener registration does no browser I/O; initial
-// frame discovery runs after this method returns.
+// frame discovery runs asynchronously.
 func (lv *LiveView) installDocumentWatchLocked(listenCtx, targetCtx context.Context) {
 	lv.documentWatch = nil
 	if lv.mgr == nil || chromedp.FromContext(targetCtx) == nil {
@@ -128,7 +127,11 @@ func (w *liveDocumentWatch) initialize() {
 	ctx, cancel := context.WithTimeout(w.ctx, documentPaintTimeout)
 	defer cancel()
 	w.mu.Lock()
-	work, beginErr := w.beginLocked("")
+	var work *liveDocumentWork
+	var beginErr error
+	if w.work == nil {
+		work, beginErr = w.beginLocked("")
+	}
 	w.mu.Unlock()
 	if beginErr != nil {
 		w.reportFailure(work, beginErr)
@@ -157,7 +160,7 @@ func (w *liveDocumentWatch) initialize() {
 	// Discover the main frame before consuming queued events, so subframes
 	// can be ignored correctly. Complete this exact initial work only after
 	// preceding browser events; a newer UI command also invalidates its token.
-	w.enqueue(&liveDocumentInitial{work: work, frameID: tree.Frame.ID, loaderID: tree.Frame.LoaderID})
+	w.enqueue(&liveDocumentInitial{work: work, loaderID: tree.Frame.LoaderID})
 }
 
 func (w *liveDocumentWatch) beginLocked(loader cdp.LoaderID) (*liveDocumentWork, error) {

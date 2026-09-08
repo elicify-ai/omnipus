@@ -373,3 +373,24 @@ func TestLiveDocumentBeginRechecksWatchAtPublication(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveDocumentLateInitializationCannotReplaceEarlierNavigation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newDocumentEventFixture(t)
+		f.watch.frameID, f.watch.loaderID = "", ""
+		f.watch.events = make(chan liveDocumentEvent, 16)
+		_, work, err := f.lv.beginInputDocument(f.lv.tabCtx)
+		require.NoError(t, err)
+		require.NotNil(t, work)
+		pending := f.cs.FrameState()
+		f.watch.initialize()
+		go f.watch.processEvents()
+		close(f.paint)
+		synctest.Wait()
+		require.Equal(t, pending, f.cs.FrameState(), "late initialization replaced an already admitted navigation")
+		require.True(t, f.cs.documentTransitionCurrent(work.token))
+		f.viewportFrameFixture.mu.Lock()
+		defer f.viewportFrameFixture.mu.Unlock()
+		require.Empty(t, f.commands, "discovery of the old page issued a recapture for pending navigation")
+	})
+}

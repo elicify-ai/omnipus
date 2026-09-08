@@ -1367,8 +1367,8 @@ type LiveView struct {
 	lastKnownActiveCtx context.Context
 	viewers            map[string]struct{}
 	// statusSinks parallels viewers (ADR-038 finding #2): one optional
-	// StatusSink per attached viewerID, notified only on an unexpected
-	// session death (watchForUnexpectedDeath), never on a clean Detach.
+	// StatusSink per attached viewerID, notified on unexpected session death
+	// or failed document refresh, never on a clean Detach.
 	statusSinks map[string]StatusSink
 	// controlSinks parallels viewers (ADR-039 UAT BE-1): one optional
 	// ControlSink per attached viewerID, notified whenever some OTHER
@@ -1571,10 +1571,10 @@ func (lv *LiveView) hasEpochLocked() bool {
 // ADR-061: this used to also start (or piggyback on) a CDP JPEG screencast
 // here, which required releasing lv.mu before a blocking chromedp.Run call
 // (see the ADR-038 deadlock postmortem this file's other CDP call sites
-// still document — runCDPWithTimeout's doc comment). Attaching a viewer is
-// now pure in-memory bookkeeping with no CDP round trip at all, so that
-// unlock/relock dance is gone: this method runs start-to-finish under one
-// lv.mu acquisition and cannot fail.
+// still document — runCDPWithTimeout's doc comment). Attaching a viewer
+// now registers its watches under one lv.mu acquisition without waiting for
+// CDP. The document watch discovers the current page asynchronously after
+// registration and reports failures through the viewer's status sink.
 //
 // Returns controlledByOther (ADR-039 UAT BE-1): true when sessionID is
 // already controlled by a viewer other than viewerID at the moment of this
@@ -1850,7 +1850,8 @@ func (lv *LiveView) cssViewportSnapshot() (int, int, bool) {
 // in-memory bookkeeping, so the whole operation now runs under one lv.mu
 // acquisition with no unlock in between — the interleaving windows those
 // fixes existed to close no longer exist, and the fixes (along with the
-// self-correcting retry loop) are gone with them.
+// self-correcting retry loop) are gone with them. The replacement document
+// watch schedules asynchronous discovery; no CDP call runs under lv.mu.
 func (lv *LiveView) rebindWatch(newCtx context.Context) {
 	lv.mu.Lock()
 	if !lv.hasEpochLocked() || lv.tabCtx == newCtx {

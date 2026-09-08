@@ -3,7 +3,7 @@
 Status: old-picture acceptance reproduced and corrected; integrated focused
 race verification passed. Not yet verified in the running browser.
 
-Same-tab navigation currently leaves the old capture generation ready. A
+Before this correction, same-tab navigation left the old capture generation ready. A
 successful navigation command only means Chrome accepted the request. It does
 not prove the replacement document has painted or reached the viewer.
 
@@ -105,3 +105,22 @@ Independent review identified and drove corrections for retained initialization
 errors/snapshots, subframe discovery, overflow recovery, producer ordering, and
 atomic original-watch qualification at capture publication. Actual Chrome paint,
 viewer decoding, sustained interaction and final-commit CI remain required.
+
+## Reverse initialization verification
+
+A final independent review found the reverse ordering: explicit navigation can
+start before initial document discovery. The regression failed on the old code
+(session 98915), which replaced the pending generation and measured the old page.
+Initialization now retains existing navigation work while discovering metadata.
+An independent read-only recheck found no remaining behavior issue in this fix.
+
+The restored focused race run (session 71487) passed 123 test entries with no
+skips or race reports in 5.422 seconds. Its log is
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/live-document-final-race.log`.
+
+The attempted whole browser/relay race run (84333) was not green: the browser
+package exhausted its five-minute limit after an older real-browser test spent
+280 seconds downloading and starting Chrome, followed by another download.
+The relay package passed in 83.753 seconds. This does not close whole-package
+or runtime acceptance. The complete log is
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-improvements-integrated-race.log`.
