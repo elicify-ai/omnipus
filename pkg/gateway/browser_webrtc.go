@@ -375,7 +375,12 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	if justStarted {
 		h.auditStream(userID, frame.AgentId, audit.SeverityInfo, audit.EventBrowserWebRTCStreamStarted, map[string]any{"session_id": sessID})
 	}
-	h.applyColdStartRecapture(state, cs)
+	if err := h.applyColdStartRecapture(negotiation, snapshot, cs); err != nil {
+		if negotiation.Err() == nil {
+			sendState(true, false, false, "error", err)
+		}
+		return
+	}
 	captureID, generation := "", uint64(0)
 	if frame.CaptureId != nil {
 		captureID, generation = *frame.CaptureId, uint64(*frame.CaptureGeneration)
@@ -452,76 +457,15 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	}
 }
 
-// applyColdStartRecapture corrects a just-committed WebRTC attachment's
-// capture geometry AND scale against whatever a browser_viewport frame
-// already told this connection, for whichever of the two (or both) arrived
-// before there was an attachment to receive them directly.
-//
-// Geometry (live UAT 2026-07-31): the panel's viewport frame routinely
-// applies BEFORE this attachment exists — handleViewport's recapture is
-// gated on peekWebRTCAttachment and silently skips — so the capture spins up
-// at launch geometry and nothing ever corrects it (the SPA won't re-send an
-// unchanged size). If a CDP-verified viewport is already cached for the live
-// tab, issue the corrective recapture with those dims, so the stream the
-// viewer is about to receive is built at the panel's real shape.
-//
-// This fires on EVERY panel open, not only the cold ones, because nothing
-// here can tell the two apart: the gateway has no record of the geometry the
-// running capture actually has. That record exists only in the encoder page,
-// which holds both the size it pinned the capture to and the live
-// MediaStreamTrack's own getSettings() — what Chrome reports it PRODUCED, as
-// opposed to what anyone asked for. So the "warm path cost" this comment
-// used to accept (one extra rebuild whenever the capture was already correct)
-// is no longer paid here and is no longer paid at all: encoder.js's recapture
-// handler compares the requested geometry against the running one and keeps
-// the connected stream when they agree (recaptureGeometryChangeReason,
-// pkg/tools/browser/captureext/embedded/encoder.js). That mattered because
-// the cost was never really "one extra rebuild" — it was tearing a working
-// PeerConnection down and renegotiating it at the exact moment the operator
-// opened the panel to watch, and every renegotiation is a fresh chance to
-// fail.
-//
-// Do NOT try to re-take that decision on this side by remembering what was
-// last requested: a gateway-side record would be a second, parallel source of
-// truth that handleViewport's own RecaptureAt calls (browser_ws.go) would
-// silently desynchronise, and it would still only ever describe a request,
-// never an applied capture. If this side is ever to skip the frame entirely,
-// the encoder has to REPORT its applied geometry over the ingest socket
-// first — a contracts change, not a local one.
-//
-// Scale (F2 fix, external review 2026-08-13): the SAME timing gap drops
-// device_scale_factor, not just geometry — handleViewport's direct
-// att.capture.SetCaptureScale call is gated on the identical
-// peekWebRTCAttachment() check, so a cold panel's first viewport frame
-// (often the ONLY one it ever sends, per the SPA's lastSentViewportRef
-// dedup) left the Retina-blur fix permanently inert until a manual resize.
-// pendingViewportScale() carries whatever handleViewport remembered
-// regardless of attachment timing (browser_ws.go); applied here the instant
-// an attachment exists to receive it. Deliberately independent of the
-// geometry branch below — a scale-only correction (no CDP-verified viewport
-// cached yet) still forces a recapture so the encoder picks up the new
-// capture_scale, mirroring handleViewport's own "push a recapture so the
-// scale takes effect even when the CDP resize handle is not" fallback
-// (browser_ws.go's SetViewport-failure branch).
-func (h *BrowserWSHandler) applyColdStartRecapture(state *browserConnState, cs *browser.CaptureSession) {
-	scale := state.pendingViewportScale()
-	if scale > 0 {
-		cs.SetCaptureScale(scale)
+// applyColdStartRecapture verifies the original panel's current measured
+// geometry before negotiation. An unchanged source needs no recapture.
+func (h *BrowserWSHandler) applyColdStartRecapture(ctx context.Context, original browserAttachmentSnapshot, cs *browser.CaptureSession) error {
+	if original.ctx == nil || original.mgr == nil || original.panelSessionID == "" {
+		return fmt.Errorf("browser capture: original attachment unavailable")
 	}
-	// Snapshot under attachMu (FIX WAVE B finding A): this runs on the offer's
-	// own background goroutine while handleAttach may be committing
-	// state.mgr from the connection's worker. It was ALREADY a data race
-	// before that change — offers moved off readLoop first, so this read
-	// raced handleAttach's inline write — and the accessor closes it.
-	mgr, _, panelSessionID := state.attachment()
-	if mgr == nil {
-		return
-	}
-	if w, hgt, ok := mgr.Live().CSSViewport(panelSessionID); ok {
-		cs.RecaptureAt(w, hgt)
-	} else if scale > 0 {
-		cs.Recapture()
-	}
+	operation, cancel := original.bindContext(ctx)
+	defer cancel()
+	return original.mgr.Live().RefreshCaptureFrameContext(operation, original.panelSessionID, cs)
 }
 
 // webrtcUnavailableReason evaluates the ADR-047 D3 / ADR-048 condition-3

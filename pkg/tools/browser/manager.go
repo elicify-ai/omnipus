@@ -2262,16 +2262,8 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	// branch has already issued exactly one recapture from the
 	// notifyTabsChanged call immediately above.
 	//
-	// Round-2 finding F3: that branch now goes through the SAME entry point
-	// this one does (CaptureSession.RecaptureForTabChangeAt, via
-	// LiveView.signalRecaptureForTabChange), so the independent foreground
-	// re-assert — the second attempt that exists because activateTabInChrome
-	// above is best-effort and its failure is a WARN log and nothing more —
-	// is on the path every ordinary tab click takes, not only on this rare
-	// recovery one. It used to be reachable ONLY from here, which had the
-	// hardening exactly backwards.
 	if !modelMoved {
-		m.recaptureForTabChange()
+		m.recaptureForTabChange(sessionID)
 	}
 	return tabs[index], nil
 }
@@ -2281,11 +2273,10 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 // capture session exists (WebRTC never used, or the panel is closed), which
 // is why every call site can invoke it unconditionally.
 //
-// Must be called with NO BrowserManager lock held: CaptureSession() takes
-// m.captureMu, and the work RecaptureForTabChange schedules calls back into
-// m.Session(), which takes m.mu.
-func (m *BrowserManager) recaptureForTabChange() {
-	if cs := m.CaptureSession(); cs != nil {
+// Called after releasing the manager state lock. The capture lookup uses
+// captureMu; foreground recapture work acquires tab admission asynchronously.
+func (m *BrowserManager) recaptureForTabChange(sessionID string) {
+	if cs := m.CaptureSessionForPanel(sessionID); cs != nil {
 		cs.RecaptureForTabChange()
 	}
 }

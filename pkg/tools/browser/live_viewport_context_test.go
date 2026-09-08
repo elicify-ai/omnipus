@@ -15,6 +15,7 @@ type viewportTargetTestKey struct{}
 func viewportContextFixture(t *testing.T) (*BrowserManager, *LiveViewRegistry, *LiveView, *atomic.Int32) {
 	t.Helper()
 	m := newTestManagerWithFakeTabs(t)
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	t.Cleanup(m.Shutdown)
 	tabCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)

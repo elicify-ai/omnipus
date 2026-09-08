@@ -163,7 +163,7 @@ func (m *BrowserManager) SwitchTabContext(caller context.Context, sessionID stri
 	err = m.liveTabFocus(ctx, sessionID, current, previous)
 	m.notifyTabsChanged(sessionID, tabs, index)
 	if !moved {
-		m.recaptureForTabChange()
+		m.recaptureForTabChange(sessionID)
 	}
 	return tabs[index], err
 }

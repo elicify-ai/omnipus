@@ -1326,8 +1326,9 @@ func (h *BrowserWSHandler) dispatchViewport(
 		return
 	}
 	state.lastViewportAt = now
+	attachment := state.commandAttachment()
 	state.work.submit(&h.activeConns, workKindViewport, func() {
-		h.handleViewport(wc, state, viewerID, data)
+		h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, data)
 	})
 }
 
@@ -1995,141 +1996,44 @@ func sessionErrorStatus(sessionID, message string) generated.BrowserStatusFrame 
 // browserConnWorkQueue). The minViewportInterval floor lives in
 // dispatchViewport, not here.
 func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
-	runBrowserConnWorkHook(workKindViewport) // test-only seam; nil in production
+	attachment := state.commandAttachment()
+	h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, data)
+}
+
+func (h *BrowserWSHandler) handleViewportContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte) {
+	runBrowserConnWorkHook(workKindViewport)
+	if ctx.Err() != nil || attachment.ctx.Err() != nil {
+		return
+	}
 	var frame generated.BrowserViewportFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
 		slog.Warn("browser-ws: dropping invalid browser_viewport frame", "error", err, "viewer_id", viewerID)
 		return
 	}
-	// One snapshot under attachMu for the whole handler — see handleInput.
-	// This ALSO makes a viewport job that was queued before an intervening
-	// browser_detach (or a connection close) a no-op rather than a resize of
-	// a tab this connection no longer watches.
-	mgr, sessionID, panelSessionID := state.attachment()
+	mgr, sessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
 	if mgr == nil || sessionID == "" {
 		return
 	}
-
-	// Control gate, mirroring handleTabAction's F3 check in this same file.
-	// The resolved tab set (issue #671) is ONE tab shared by every attached
-	// viewer on it AND by the agent's own browser_* tools. Without this, any merely-attached
-	// viewer — a second panel, a pop-out — could resize the tab out from under
-	// whoever holds control, or under an agent tool call mid-flight. A resize
-	// is if anything more disruptive than the tab switch that gate already
-	// covers: it reflows responsive layout and shifts coordinate-based element
-	// targeting for whoever IS driving. Uncontrolled (controller == "") stays
-	// permitted, so a lone viewer sizing the panel before taking the wheel
-	// still works.
-	//
-	// FIX WAVE B finding B — the refusal is now VISIBLE. This branch used to
-	// be slog.Debug and nothing else, so the second viewer sat watching a
-	// mis-shaped picture (measured: the tab stayed at the FIRST viewer's
-	// size) with no explanation anywhere in the product. That silence is
-	// especially indefensible next to the deliberate policy split beside it:
-	// LiveView.dispatchInput has NO control gate at all (operator directive
-	// 2026-08-03, "a browser that refuses input is not a browser"), so the
-	// very same viewer's clicks and keystrokes DO land — only their resize is
-	// refused, and until now refused invisibly. Telling them why, and what to
-	// do about it, is the whole fix; the gate itself is unchanged and
-	// deliberately kept.
-	//
-	// Throttled on identical content (shouldSendViewportRefusal) because a
-	// resize drag emits one frame per debounce interval for as long as the
-	// drag lasts and every one of them is refused the same way — the same
-	// flood handleInput's cooldown exists to prevent.
+	sendFailure := func(message, reason string) {
+		wc.sendCriticalScopedGen(operationErrorStatus(sessionID, message), dropContext(sessionID, viewerID, reason), attachment.ctx, nil)
+	}
 	if controller := mgr.Live().Controller(panelSessionID); controller != "" && controller != viewerID {
-		slog.Debug("browser-ws: refusing viewport from a non-controlling viewer",
-			"viewer_id", viewerID, "controller", controller)
 		const message = "another viewer is driving this browser, so the shared tab keeps their window size — " +
 			"your clicks and typing still work, and the picture will fit your panel once they release control"
 		if state.shouldSendViewportRefusal(message, time.Now()) {
-			wc.sendCriticalGen(
-				sessionErrorStatus(sessionID, message),
-				dropContext(sessionID, viewerID, "viewport-not-controller"),
-			)
+			sendFailure(message, "viewport-not-controller")
 		}
 		return
 	}
-
 	dsf := 1.0
 	if frame.DeviceScaleFactor != nil {
 		dsf = float64(*frame.DeviceScaleFactor)
 	}
-	// F10 fix: clamp to the contract range BEFORE dsf is used for ANYTHING
-	// below — recorded on the capture session, remembered on the connection,
-	// or handed to SetViewport. See maxDeviceScaleFactor's doc comment for
-	// why this has to live here rather than relying on SetViewport's own
-	// (later, CDP-call-shaped) range check alone.
-	if dsf < 1 {
-		dsf = 1
-	} else if dsf > maxDeviceScaleFactor {
-		dsf = maxDeviceScaleFactor
-	}
-
-	// Record the viewer's deviceScaleFactor on the capture session BEFORE the
-	// CDP resize attempt. The two are independent: the encoder captures via
-	// the extension's tabs API and needs no gateway-side CDP handle, so a
-	// failed resize (e.g. "get window for target: context canceled" after a
-	// managed-Chrome relaunch under a still-attached panel — observed live
-	// 2026-08-12) must not swallow the scale. Before this ordering the blur
-	// fix's trigger sat unreachable behind exactly that failure, and Retina
-	// viewers stayed on 1x capture whenever the resize path was broken.
-	//
-	// F2 fix: remembered on the connection UNCONDITIONALLY, not only when an
-	// attachment already exists — a cold-opened panel's first (and often
-	// only) viewport frame routinely arrives before browser_webrtc_offer has
-	// finished negotiating, so peekWebRTCAttachment() is nil here and the
-	// direct SetCaptureScale call below would otherwise be the only chance
-	// this scale ever gets applied. See pendingCaptureScale's doc comment.
-	state.rememberViewportScale(dsf)
-	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
-		att.capture.SetCaptureScale(dsf)
-	}
-
-	applied, err := mgr.Live().SetViewport(panelSessionID, frame.Width, frame.Height, dsf)
-	if err != nil {
-		slog.Warn("browser-ws: viewport resize failed",
-			"error", err, "viewer_id", viewerID, "width", frame.Width, "height", frame.Height)
-		// Still push a recapture so the scale (and the encoder's own
-		// tabs.get-derived size) take effect — the capture pipeline is
-		// healthy even when the CDP resize handle is not.
-		if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
-			att.capture.Recapture()
-		}
-		wc.sendCriticalGen(
-			errorStatus("could not resize the browser viewport"),
-			dropContext(sessionID, viewerID, "viewport-failed"),
-		)
-		return
-	}
-	if !applied {
-		// No live view bound yet (panel opened before the capture exists).
-		// Not an error: the next attach starts the tab at whatever size the
-		// browser was launched with, and the SPA re-sends on attach.
-		slog.Debug("browser-ws: viewport frame with no live view bound — ignoring", "viewer_id", viewerID)
-		return
-	}
-
-	slog.Debug("browser-ws: viewport applied",
-		"viewer_id", viewerID, "width", frame.Width, "height", frame.Height, "device_scale_factor", dsf)
-
-	// Rebuild the WebRTC capture at the new geometry. peek (not take) — this
-	// must not detach the viewer as a side effect of a resize. Thread the
-	// CDP-verified CSS viewport SetViewport just cached through to
-	// RecaptureAt (follow-up to
-	// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
-	// 2026-07-31: a recapture racing this very resize otherwise pins the
-	// WebRTC stream to a stale tab size, because the encoder's own
-	// chrome.tabs.get-based resolution lags the OS window reflow). Falls
-	// back to the no-hint Recapture() if the cache came back empty (e.g.
-	// SetViewport's own read-back was invalidated).
-	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
-		if w, h, ok := mgr.Live().CSSViewport(panelSessionID); ok {
-			// scale already recorded above, before the resize attempt
-			att.capture.RecaptureAt(w, h)
-		} else {
-			att.capture.Recapture()
-		}
+	dsf = max(1, min(dsf, maxDeviceScaleFactor))
+	_, err := mgr.Live().SetViewportContext(ctx, panelSessionID, frame.Width, frame.Height, dsf)
+	if err != nil && !commandWasSuperseded(ctx, attachment) {
+		slog.Warn("browser-ws: viewport resize failed", "error", err, "viewer_id", viewerID)
+		sendFailure("could not resize the browser viewport", "viewport-failed")
 	}
 }
 

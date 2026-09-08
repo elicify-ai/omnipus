@@ -36,10 +36,10 @@ func viewportContextError(caller, operation context.Context) error {
 	return operation.Err()
 }
 
-// applyViewportContext admits all viewport entry paths in the same order as
+// withViewportAdmission admits all viewport entry paths in the same order as
 // input: manager tab command, live input, then viewport mutex. Async target
 // reapplication enters here after its source callback has released admission.
-func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, height int, scale float64) (applied bool, err error) {
+func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work func(context.Context) (bool, error), after func(context.Context) error) (applied bool, err error) {
 	if err := caller.Err(); err != nil {
 		return false, err
 	}
@@ -61,38 +61,45 @@ func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, 
 			err = ended
 		}
 	}()
-	if lv.mgr != nil {
-		release, err := lv.mgr.acquireLiveTabCommand(operation, lv.sessionID)
-		if err != nil {
+	apply := func() (bool, error) {
+		if lv.mgr != nil {
+			release, err := lv.mgr.acquireLiveTabCommand(operation, lv.sessionID)
+			if err != nil {
+				return false, err
+			}
+			defer release()
+		}
+		lv.mu.Lock()
+		state := lv.inputStateLocked()
+		lv.mu.Unlock()
+		if err := acquireInputGate(operation, state.gate); err != nil {
 			return false, err
 		}
-		defer release()
-	}
-	lv.mu.Lock()
-	state := lv.inputStateLocked()
-	lv.mu.Unlock()
-	if err := acquireInputGate(operation, state.gate); err != nil {
-		return false, err
-	}
-	defer func() { <-state.gate }()
-	if err := viewportContextError(caller, operation); err != nil {
-		return false, err
-	}
-	if lv.mgr != nil {
-		active, _, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
-		if err != nil {
+		defer func() { <-state.gate }()
+		if err := viewportContextError(caller, operation); err != nil {
 			return false, err
 		}
-		if active != tabCtx {
-			return false, fmt.Errorf("browser live: viewport target changed before resize")
+		if lv.mgr != nil {
+			active, _, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+			if err != nil {
+				return false, err
+			}
+			if active != tabCtx {
+				return false, fmt.Errorf("browser live: viewport target changed before resize")
+			}
 		}
+		// Invalidate only once browser work is admitted, while both gates are
+		// still held. A canceled waiter must not erase another command's cache.
+		defer func() {
+			if viewportContextError(caller, operation) != nil {
+				lv.invalidateCSSViewportCache()
+			}
+		}()
+		return work(operation)
 	}
-	// Invalidate only once browser work is admitted, while both gates are
-	// still held. A canceled waiter must not erase another command's cache.
-	defer func() {
-		if viewportContextError(caller, operation) != nil {
-			lv.invalidateCSSViewportCache()
-		}
-	}()
-	return lv.applyViewportAdmitted(caller, tabCtx, operation, width, height, scale)
+	applied, err = apply()
+	if err == nil && after != nil {
+		err = after(operation)
+	}
+	return applied, err
 }

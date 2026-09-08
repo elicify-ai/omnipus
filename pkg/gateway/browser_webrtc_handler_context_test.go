@@ -89,22 +89,27 @@ func (r *handlerContextRelay) CloseViewerIfCurrent(handle any) {
 }
 
 type handlerContextFixture struct {
-	handler  *BrowserWSHandler
-	cfg      *config.Config
-	manager  *browser.BrowserManager
-	capture  *browser.CaptureSession
-	relay    *handlerContextRelay
-	state    *browserConnState
-	conn     *browserWSConn
-	agentID  string
-	original context.Context
+	handler         *BrowserWSHandler
+	cfg             *config.Config
+	manager         *browser.BrowserManager
+	capture         *browser.CaptureSession
+	relay           *handlerContextRelay
+	state           *browserConnState
+	conn            *browserWSConn
+	agentID         string
+	original        context.Context
+	observeViewport func(int, int, float64)
 }
 
 func newHandlerContextFixture(t *testing.T, pending bool) handlerContextFixture {
 	t.Helper()
+	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
+	cdpURL, observeViewport := newViewportCDPEndpoint(t, pending)
 	dir := t.TempDir()
 	h, al := newBrowserWSTestHandler(t, func(c *config.Config) {
 		c.Tools.Browser.WebRTCEnabled = true
+		c.Tools.Browser.CDPURL = cdpURL
+		c.Tools.Browser.StartPageURL = "about:blank"
 		c.Tools.Browser.ExecPath = filepath.Join(dir, "no-such-chrome-binary")
 		c.Tools.Browser.ProfileDir = filepath.Join(dir, "profile")
 	})
@@ -113,6 +118,13 @@ func newHandlerContextFixture(t *testing.T, pending bool) handlerContextFixture 
 	if outcome != agent.BrowserResolveOK || !mgr.CaptureVideoCapability().Capable {
 		t.Fatal("fixture browser manager is not capture capable")
 	}
+	attachContext, cancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
+	_, attachErr := mgr.Live().AttachContext(attachContext, "panel", "fixture-viewer", nil, nil, nil)
+	cancelAttach()
+	if attachErr != nil {
+		t.Fatalf("attach measured CDP fixture: %v", attachErr)
+	}
+	t.Cleanup(func() { mgr.Live().Detach("panel", "fixture-viewer"); mgr.Shutdown() })
 	relay := &handlerContextRelay{}
 	var starts int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&starts, nil), nil)
@@ -136,7 +148,7 @@ func newHandlerContextFixture(t *testing.T, pending bool) handlerContextFixture 
 		t.Fatal("fixture attachment failed")
 	}
 	t.Cleanup(func() { state.invalidateWebRTCOffer(); state.clearAttachment(); cs.Stop(); h.Wait() })
-	return handlerContextFixture{h, al.GetConfig(), mgr, cs, relay, state, newTestBrowserWSConn(), agentID, state.attachmentRequest().ctx}
+	return handlerContextFixture{h, al.GetConfig(), mgr, cs, relay, state, newTestBrowserWSConn(), agentID, state.attachmentRequest().ctx, observeViewport}
 }
 func (f handlerContextFixture) offer(t *testing.T, claim *browser.CaptureFrameState) []byte {
 	t.Helper()
@@ -288,6 +300,7 @@ func TestWebRTCHandlerInitialOfferWaitsForMeasuredGeometry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.observeViewport(641, 479, 1.25)
 	select {
 	case <-done:
 	case <-time.After(time.Second):

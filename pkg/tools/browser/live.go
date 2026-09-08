@@ -115,20 +115,6 @@ const (
 	viewportSettlePollInterval = 20 * time.Millisecond
 )
 
-// viewportReapplyRecaptureGrace bounds how long the tab-change viewport
-// re-apply may hold the recapture back before the picture is allowed to follow
-// the tab WITHOUT a verified geometry (round-2 finding F3).
-//
-// The tab-change path issues ONE recapture, after the re-apply, because a
-// recapture taken before the new target has been given the panel's size and
-// per-target sharpness is stale by construction. The re-apply is normally
-// fast — sibling tabs share the OS window, so the bounds call is usually a
-// no-op resize and the settle poll converges on its first read — but
-// applyViewport's worst case runs to tens of seconds, and a frozen picture is
-// not an acceptable outcome of a slow resize. Sized just above
-// viewportSettleBudget so a healthy settle never trips it.
-const viewportReapplyRecaptureGrace = 900 * time.Millisecond
-
 // scaleDegradedNoticeInterval floors how often the user-facing "the picture
 // may look soft" notice is pushed to attached viewers (round-2 finding F5).
 // The deviceScaleFactor override is renderer-bound, and the SPA re-sends a
@@ -682,6 +668,17 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	// session" — tabCtx IS that session) and Browser.setWindowBounds into one
 	// chromedp.Action. Routed through lv.runCDP, not the package-level
 	// runCDPWithTimeout, like every other CDP call site in this file.
+	if lv.mgr != nil {
+		if cs := lv.mgr.CaptureSessionForPanel(lv.sessionID); cs != nil {
+			_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+			if err != nil {
+				return false, err
+			}
+			if _, err := cs.BeginFrameTransition(string(target), 0, 0, deviceScaleFactor); err != nil {
+				return false, err
+			}
+		}
+	}
 	boundsAction := windowBoundsAction{width: width, height: height}
 	if err := run(viewportSetTimeout, boundsAction); err != nil {
 		// One retry, and ONLY for a deadline timeout (2026-08-13 UAT: "could
@@ -1677,35 +1674,17 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 		// worse than an empty one (see invalidateCSSViewportCache).
 		lv.invalidateCSSViewportCache()
 
-		// Re-apply the panel's last requested viewport to the NEW target, and
-		// let THAT path own the recapture. Chrome's deviceScaleFactor override
-		// is per TARGET, not per window — measured 2026-08-16: tab A reports
-		// devicePixelRatio 2 while a tab opened afterwards in the same window
-		// reports 1, with identical innerWidth/innerHeight. So without this
-		// replay every newly-opened tab renders at 1x while the encoder is
-		// still told to capture it at 2x, which is a visibly soft picture on
-		// every single tab open. Runs asynchronously (it is several CDP round
-		// trips plus a settle poll) so the tab-set broadcast above is never
-		// held up behind it.
-		//
-		// Why the recapture moved INTO the re-apply (round-2 finding F3): this
-		// used to fire an immediate, geometry-less Recapture() here AND the
-		// re-apply fired its own RecaptureAt(verified size) a few hundred ms
-		// later — two full encoder rebuilds and two PLI bursts for one tab
-		// click, worst exactly where it hurts most (the 2-CPU hosted box). The
-		// first of the two could not be the right one anyway: it re-binds the
-		// stream BEFORE the new target has been given the panel's size and
-		// sharpness, so its geometry is stale by construction. One recapture,
-		// after the re-apply, carrying the CDP-verified viewport — with a
-		// watchdog inside the worker so a wedged resize can still never leave
-		// the picture stranded on the old tab (see reapplyViewportToNewTarget).
+		// Browser callbacks run under tab admission, so the measured update
+		// must enter asynchronously after this callback returns.
 		if !lv.reapplyViewportToNewTarget(newCtx) {
-			// Nothing to replay (no viewport has ever been requested for this
-			// session), so nobody downstream will recapture — the picture must
-			// still follow the tab. Same entry point either way, so the
-			// foreground re-assert is on EVERY tab-change path, not just the
-			// rare model-did-not-move recovery one.
-			lv.signalRecaptureForTabChange(0, 0)
+			cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
+			if cs != nil {
+				go func() {
+					if err := lv.mgr.Live().RefreshCaptureFrameContext(newCtx, lv.sessionID, cs); err != nil {
+						logger.WarnCF("browser", "live view: could not measure the newly active tab", map[string]any{"session_id": lv.sessionID, "error": err.Error()})
+					}
+				}()
+			}
 		}
 	}
 
@@ -1822,65 +1801,15 @@ func (lv *LiveView) reapplyViewportToNewTarget(tabCtx context.Context) bool {
 	return true
 }
 
-// reapplyViewportPass is one pass of the re-apply worker: resize the target
-// tab, then hand the encoder the size that tab VERIFIABLY reached so its own
-// chrome.tabs.get poll converges on a known target instead of trusting two
-// reads that may agree only because both are stale.
-//
-// The watchdog is what makes "one recapture, after the re-apply" safe to do at
-// all. applyViewport's own budgets (two 5s bounds attempts, a 5s scale
-// override, a 600ms settle poll, and an at-most-one compensation re-apply) sum
-// to tens of seconds in the pathological case, and the picture must not sit on
-// the old tab for that long. So if the resize has not finished within
-// viewportReapplyRecaptureGrace, the recapture is issued immediately WITHOUT a
-// verified geometry (the encoder then falls back to its own stability poll),
-// and the post-resize one still follows with the measurement. That second
-// recapture is the price of a wedged resize, paid only there — the normal path
-// issues exactly one.
+// reapplyViewportPass applies and measures the new target once. Failed browser
+// work leaves the old picture locked; it cannot authorize guessed geometry.
 func (lv *LiveView) reapplyViewportPass(tabCtx context.Context, w, h int, scale float64) {
 	if tabCtx == nil {
 		return
 	}
-	watchdog := time.AfterFunc(viewportReapplyRecaptureGrace, func() {
-		logger.WarnCF(
-			"browser",
-			"live view: re-applying the panel's viewport to the newly-active tab is taking too long — "+
-				"recapturing now so the picture follows the tab, it will re-sharpen when the resize lands",
-			map[string]any{
-				"session_id":      lv.sessionID,
-				"requested_width": w, "requested_height": h,
-			},
-		)
-		lv.signalRecaptureForTabChange(0, 0)
-	})
-
-	_, applyErr := lv.applyViewport(tabCtx, w, h, scale)
-	watchdog.Stop()
-
-	if applyErr != nil {
-		logger.WarnCF(
-			"browser",
-			"live view: could not re-apply the panel's viewport to the newly-active tab — it may render at the wrong size or look soft until the next resize",
-			map[string]any{
-				"error":               applyErr.Error(),
-				"session_id":          lv.sessionID,
-				"requested_width":     w,
-				"requested_height":    h,
-				"device_scale_factor": scale,
-			},
-		)
-		// The resize failed, but the tab still MOVED — the picture has to
-		// follow it regardless, at whatever size the encoder can work out for
-		// itself.
-		lv.signalRecaptureForTabChange(0, 0)
-		return
+	if _, err := lv.applyViewport(tabCtx, w, h, scale); err != nil {
+		logger.WarnCF("browser", "live view: could not re-apply the panel viewport", map[string]any{"session_id": lv.sessionID, "error": err.Error()})
 	}
-	vw, vh, ok := lv.cssViewportSnapshot()
-	if !ok {
-		lv.signalRecaptureForTabChange(0, 0)
-		return
-	}
-	lv.signalRecaptureForTabChange(vw, vh)
 }
 
 // cssViewportSnapshot returns the cached CSS layout viewport, or ok=false when
