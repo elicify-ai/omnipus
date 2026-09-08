@@ -1,8 +1,11 @@
-// LibraryNewVaultDialog.test.tsx — the New vault dialog (feature C2).
+// LibraryNewVaultDialog.test.tsx — the New knowledge base dialog (feature C2;
+// KB-3 fix, 2026-09-08).
 //
-// Covers: client-side name validation, calling createVault with the right
-// (workspaceId, {name, parent_rel_path}) shape, landing the user in the new
-// vault on success (onCreated), and the honest 409-collision message.
+// Covers: client-side name validation, calling createVault with the
+// CONTEXTUAL (workspaceId, parentPath) — never a user-editable workspace
+// picker or folder textbox — a visible read-only destination line, landing
+// the user in the new vault on success (onCreated), and the honest
+// 409-collision message.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -28,11 +31,6 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-const workspaces = [
-  { id: 'ws-1', name: 'Research' },
-  { id: 'ws-2', name: 'Ops' },
-]
-
 function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     name: 'Field notes',
@@ -46,7 +44,12 @@ function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
   } as LibraryEntry
 }
 
-function renderDialog(over: { defaultWorkspaceId?: string | null; onCreated?: (w: string, e: LibraryEntry) => void } = {}) {
+function renderDialog(over: {
+  workspaceId?: string
+  workspaceName?: string
+  parentPath?: string
+  onCreated?: (e: LibraryEntry) => void
+} = {}) {
   const onOpenChange = vi.fn()
   const onCreated = over.onCreated ?? vi.fn()
   render(
@@ -54,8 +57,9 @@ function renderDialog(over: { defaultWorkspaceId?: string | null; onCreated?: (w
       <LibraryNewVaultDialog
         open
         onOpenChange={onOpenChange}
-        workspaces={workspaces}
-        defaultWorkspaceId={over.defaultWorkspaceId ?? 'ws-1'}
+        workspaceId={over.workspaceId ?? 'ws-1'}
+        workspaceName={over.workspaceName ?? 'Research'}
+        parentPath={over.parentPath ?? ''}
         onCreated={onCreated}
       />
     </QueryClientProvider>,
@@ -84,39 +88,45 @@ describe('LibraryNewVaultDialog', () => {
     expect(screen.getByTestId('library-new-vault-confirm')).toBeDisabled()
   })
 
-  it('rejects a folder path containing ".."', async () => {
+  it('shows no workspace picker and no free-text folder field — the location comes from context, not user input', () => {
     renderDialog()
-    await userEvent.type(screen.getByTestId('library-new-vault-name-input'), 'Field notes')
-    await userEvent.type(screen.getByTestId('library-new-vault-folder-input'), '../escape')
-    expect(screen.getByTestId('library-new-vault-folder-traversal')).toBeInTheDocument()
-    expect(screen.getByTestId('library-new-vault-confirm')).toBeDisabled()
+    expect(screen.queryByTestId('library-new-vault-workspace-select')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-new-vault-folder-input')).not.toBeInTheDocument()
   })
 
-  it('defaults Location to the current workspace', () => {
-    renderDialog({ defaultWorkspaceId: 'ws-2' })
-    expect(screen.getByTestId('library-new-vault-workspace-select')).toHaveTextContent('Ops')
+  it('shows the workspace root as the destination when parentPath is empty', () => {
+    renderDialog({ workspaceName: 'Research', parentPath: '' })
+    expect(screen.getByTestId('library-new-vault-destination')).toHaveTextContent(
+      'Research (workspace root)',
+    )
   })
 
-  it('calls createVault with the workspace, name, and folder, then lands in the new vault', async () => {
+  it('shows the current folder as the destination when parentPath is set', () => {
+    renderDialog({ workspaceName: 'Research', parentPath: 'projects/q3' })
+    expect(screen.getByTestId('library-new-vault-destination')).toHaveTextContent(
+      'Research / projects / q3',
+    )
+  })
+
+  it('calls createVault with the contextual workspace and parent path, then lands in the new vault', async () => {
     const created = makeEntry({ path: 'projects/Field notes' })
     mockedCreateVault.mockResolvedValue(created)
-    const { onOpenChange, onCreated } = renderDialog()
+    const { onOpenChange, onCreated } = renderDialog({ workspaceId: 'ws-1', parentPath: 'projects' })
 
     await userEvent.type(screen.getByTestId('library-new-vault-name-input'), 'Field notes')
-    await userEvent.type(screen.getByTestId('library-new-vault-folder-input'), 'projects')
     await userEvent.click(screen.getByTestId('library-new-vault-confirm'))
 
     await waitFor(() => expect(mockedCreateVault).toHaveBeenCalledWith('ws-1', {
       name: 'Field notes',
       parent_rel_path: 'projects',
     }))
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('ws-1', created))
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created))
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
-  it('omits parent_rel_path when the folder field is left blank', async () => {
+  it('omits parent_rel_path when parentPath is the workspace root', async () => {
     mockedCreateVault.mockResolvedValue(makeEntry())
-    renderDialog()
+    renderDialog({ parentPath: '' })
 
     await userEvent.type(screen.getByTestId('library-new-vault-name-input'), 'Field notes')
     await userEvent.click(screen.getByTestId('library-new-vault-confirm'))
