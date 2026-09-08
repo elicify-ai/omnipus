@@ -1,0 +1,198 @@
+# Defect list — knowledge base & grep UX (2026-09-08)
+
+Findings from founder review and an agent field-test of the `grep` tool, on
+`integrate/library-improvements-v0.1.1`. **This file documents; it does not
+fix.** Every claim below was checked against the code — the "Evidence" line
+says what was actually observed, and where a reported finding turned out not
+to be a defect, that is recorded too rather than quietly dropped.
+
+Naming follows ADR-082: the product concept is a **knowledge base**. Phase 1
+of that rename (user-visible copy) has landed; identifiers, wire types and the
+on-disk `.omnipus-vault` marker are still the old name and are Phase 2/3 work.
+
+---
+
+## Agent-facing capability gaps
+
+### KB-1 — no way for an agent to create a knowledge base
+**Severity:** high · **Area:** knowledge tools · **Reported by:** founder
+
+An agent has sixteen `knowledge_*` tools and not one of them creates a
+knowledge base. `knowledge_create` creates a **note inside an existing**
+knowledge base, which makes the name actively misleading — an agent reaching
+for the obvious verb gets the wrong object.
+
+Creating one is currently possible only through the SPA (`POST
+/library/{workspace_id}/vaults`, reached from the Library "+" menu), so an
+agent asked to "set up a knowledge base for this project" cannot complete the
+task at all.
+
+**Evidence:** tool names enumerated from `pkg/knowledge`,
+`pkg/records/knowledgefind`, `pkg/vaultprops` — `knowledge_append_section`,
+`knowledge_configure`, `knowledge_create`, `knowledge_describe`,
+`knowledge_edit`, `knowledge_find`, `knowledge_graph`, `knowledge_link`,
+`knowledge_move`, `knowledge_read`, `knowledge_rename`,
+`knowledge_restructure`, `knowledge_search`, `knowledge_set_property`,
+`knowledge_tasks`, `knowledge_version_conflict`. No create-collection entry
+point exists in `pkg/knowledge` or `pkg/vaultprops`. The REST route is at
+`pkg/gateway/rest_library.go:133` (`case "vaults"`).
+
+**Note for whoever fixes this:** the tool name will collide conceptually with
+`knowledge_create`. Renaming that one to say it makes a *note* is the honest
+fix, but it is a breaking change to a tool agents already use — weigh it
+against adding a distinctly-named creation tool.
+
+---
+
+### KB-2 — no intuitive way for an agent to list the knowledge bases it can reach
+**Severity:** high · **Area:** knowledge tools / filesystem tools · **Reported by:** founder
+
+There is no `knowledge_list`. The only existing route to the answer is
+`knowledge_describe`, which renders a `COLLECTIONS in scope (n): …` line — but
+that is a side effect of describing **one** knowledge base, so an agent has to
+already know about a knowledge base to discover the others. That is backwards.
+
+The founder's suggested alternative is at least as good and possibly better:
+have `list_directory` **mark the type** of each entry, so a knowledge base is
+visibly distinct from an ordinary folder while browsing. The SPA already gets
+this — `LibraryEntry.is_knowledge_base` was added for the icon work — so the
+detection exists and simply is not exposed to agents.
+
+**Evidence:** `pkg/knowledge/knowledge_describe.go:249`
+(`renderIndexAndCollections`) emits `COLLECTIONS in scope`. `list_directory`
+(`pkg/tools/filesystem.go`) contains no knowledge/marker handling — it cannot
+distinguish a knowledge base from a folder. The REST listing does, via
+`is_knowledge_base`.
+
+**Options, not a decision:** (a) add a `knowledge_list` tool; (b) mark types in
+`list_directory` output; (c) both — (b) helps an agent that is browsing, (a)
+helps one that is not. Whichever is chosen, mounts must be covered: a
+knowledge base reached through a mount is detected today and must stay so.
+
+---
+
+## Library UI
+
+### KB-3 — the New knowledge base dialog asks for a location it should already know
+**Severity:** medium · **Area:** Library SPA · **Reported by:** founder
+
+The dialog has three fields: **Name** (correct), a **workspace** dropdown, and
+a free-text **"Folder within the workspace (optional)"** path box. Two of the
+three are wrong:
+
+- The workspace picker duplicates state the user has already expressed by
+  being *in* a workspace.
+- A free-text path field asks the user to type a location they are already
+  standing in, and invites typos the dialog then has to reject.
+
+It should behave like the **New folder** dialog: create the knowledge base
+**where the user currently is** in the Library, taking workspace and parent
+path from context, with only a name to fill in.
+
+**Evidence:** observed in the running product — dialog renders `Name`,
+`Location` (combobox, "My Workspace"), and a textbox placeholder "Leave blank
+for the workspace root". Component: `LibraryNewVaultDialog.tsx`.
+
+---
+
+### KB-4 — "New workspace" should not appear in the Library create menu
+**Severity:** low · **Area:** Library SPA · **Reported by:** founder
+
+Workspaces are created from the **sidebar**. Offering "New workspace" in the
+Library "+" menu is a second, redundant entry point for an object that is not
+a Library item, and it sits directly above "New knowledge base" where it
+invites mis-clicks between two very different outcomes.
+
+**Evidence:** observed in the running product — the Library "+" menu lists
+`New vault` / `New workspace` / `New folder` / `Upload files` / `Add a folder
+from your Mac` / `Manage mounted folders`. Component:
+`LibraryCreateMenu.tsx`. The sidebar's own inline create-workspace row is the
+sanctioned path.
+
+---
+
+## `grep` tool — agent field test
+
+### DEFECT-G1 — a path pointing at a file produces a false "not found" error
+**Severity:** medium (reported low; raised — the message misleads rather than
+merely refusing) · **Area:** `pkg/tools/grep.go` · **Reported by:** agent field test
+**Status: fix in progress**
+
+Pointing `path` at a single file rather than a directory returns:
+
+```
+path "uat-grep/sample.txt" not found in your workspace
+```
+
+with an underlying errno of *not a directory* — for a file confirmed to exist
+seconds earlier. The message is false, and it contradicts the errno embedded in
+the same sentence. The tester hit it three times before deducing the
+constraint.
+
+**Evidence:** `pkg/tools/grep.go` workspace-scoped branch wraps **every**
+`wr.OpenRoot(scope)` failure as `path %q not found in your workspace: %w`.
+`os.Root.OpenRoot` on a regular file fails with `ENOTDIR`, so an existing file
+is reported as missing.
+
+**Direction taken:** scoping to a single file will be **supported** — it is the
+natural action, attempted three times — and any remaining refusal must
+distinguish *does not exist* / *wrong kind* / *permission denied* / *escapes the
+workspace*. A file scope must not bypass the secret carve-out.
+
+---
+
+### OBS-G1 — a glob that matches nothing fails silently
+**Severity:** medium (reported as an observation; raised to defect — see below)
+· **Area:** `pkg/tools/grep.go` · **Reported by:** agent field test
+**Status: fix in progress**
+
+`include_globs: ["spike.txt"]` matches nothing; only `**/spike.txt` works. The
+result is a silent zero — indistinguishable from "the term genuinely is not
+present".
+
+Raised above the reporter's own scoring because this engine's stated contract
+is that **every skip is observable, never silent**. A filter that discards the
+entire corpus without saying so is precisely what that contract exists to
+prevent.
+
+**Evidence:** doublestar patterns match the whole relative path, so a bare
+filename only matches at the root. `Stats.FilesFilteredGlob` already counts
+glob-rejected entries; `renderGrepResult` in `pkg/tools/grep.go` does not
+surface it.
+
+**Direction taken:** make the filtering visible rather than auto-anchoring bare
+filenames — implicit pattern rewriting would surprise a different user later.
+
+---
+
+### DOC-1 — concurrency doc reported inaccurate — **NOT A DEFECT**
+**Severity:** none · **Reported by:** agent field test · **Status: closed, no change**
+
+Reported as the documentation being wrong because four concurrent searches all
+succeeded where the doc promises a busy rejection at the third.
+
+Checked: the tool genuinely acquires the shared two-slot walk semaphore with a
+two-second wait and releases it (`pkg/tools/grep.go`, `filegrep.TryAcquire` /
+`filegrep.Release`). A third search is refused only if two others are **still
+running** when it starts; over a small corpus each search completes in
+milliseconds, so the four calls never overlapped. The documented behaviour is
+accurate and the cap is covered by a passing test that creates real contention
+(`TestLibraryFilesSearch_SemaphoreIsSharedWithTheAgentTool`).
+
+Recorded rather than dropped, because "the tool behaved better than documented"
+is a conclusion worth correcting: it behaved exactly as documented, under a
+test that did not reproduce the documented condition.
+
+---
+
+## Summary
+
+| ID | Title | Severity | Status |
+|---|---|---|---|
+| KB-1 | No agent-facing knowledge base creation | High | Open |
+| KB-2 | No intuitive way to list reachable knowledge bases | High | Open |
+| KB-3 | New knowledge base dialog asks for known context | Medium | Open |
+| KB-4 | "New workspace" shown in Library create menu | Low | Open |
+| DEFECT-G1 | `path` at a file gives a false "not found" | Medium | Fix in progress |
+| OBS-G1 | Glob matching nothing fails silently | Medium | Fix in progress |
+| DOC-1 | Concurrency doc claim | — | Closed — not a defect |
