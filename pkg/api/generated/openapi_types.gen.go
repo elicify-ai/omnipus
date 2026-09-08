@@ -2008,6 +2008,7 @@ func (e FileSearchResponseHitsMatchKind) Valid() bool {
 
 // Defines values for FileSearchResponseTruncatedReason.
 const (
+	Canceled   FileSearchResponseTruncatedReason = "canceled"
 	Deadline   FileSearchResponseTruncatedReason = "deadline"
 	MaxBytes   FileSearchResponseTruncatedReason = "max_bytes"
 	MaxDepth   FileSearchResponseTruncatedReason = "max_depth"
@@ -2020,6 +2021,8 @@ const (
 // Valid indicates whether the value is a known member of the FileSearchResponseTruncatedReason enum.
 func (e FileSearchResponseTruncatedReason) Valid() bool {
 	switch e {
+	case Canceled:
+		return true
 	case Deadline:
 		return true
 	case MaxBytes:
@@ -11321,6 +11324,7 @@ type FallbackModel struct {
 }
 
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
+// KB-7b exception: when the request set match_all_words, a hit is instead ONE matching DOCUMENT — every query word must be present somewhere in the file (not necessarily on the same line), and every matching file collapses to this ONE row regardless of how many lines actually matched. match_count carries how many lines that was; line/excerpt/context describe the FIRST (file-order) matching line as the representative one.
 type FileSearchHit struct {
 	// ContextAfter Up to context_lines lines following the match, in file order.
 	ContextAfter *[]string `json:"context_after,omitempty"`
@@ -11336,6 +11340,9 @@ type FileSearchHit struct {
 
 	// Line 1-based line number of the matching line (content hits only).
 	Line *int `json:"line,omitempty"`
+
+	// MatchCount Present only on a match_all_words collapsed hit (KB-7b/KB-6a): how many lines in the file matched at least one query word. Absent on every ordinary (one-line-one-hit) content hit and on every name hit — absence means "this row already IS the one match", never "zero matches".
+	MatchCount *int `json:"match_count,omitempty"`
 
 	// MatchKind Whether the file matched by its name/path or by a content line.
 	MatchKind FileSearchHitMatchKind `json:"match_kind"`
@@ -11354,7 +11361,7 @@ type FileSearchRequest struct {
 	// Case Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
 	Case *FileSearchRequestCase `json:"case,omitempty"`
 
-	// ContextLines Lines of context to attach before and after each content hit. Carried on REST for API parity with the agent grep tool; the SPA does not use it in v1 (recorded decision, spec R2-MIN-005).
+	// ContextLines Lines of context to attach before and after each content hit. KB-6c SUPERSEDES the earlier v1 decision (spec R2-MIN-005) to leave this at 0 from the SPA: one bare line is rarely enough to judge a hit, and raising it to 1 needed no backend, contract or engine change — the engine already fills context_before/context_after, the SPA simply was not asking. The SPA bar now sends 1.
 	ContextLines *int `json:"context_lines,omitempty"`
 
 	// ExcludeGlobs doublestar patterns removed from consideration.
@@ -11390,6 +11397,9 @@ type FileSearchRequest struct {
 		OutputBytes *int `json:"output_bytes,omitempty"`
 	} `json:"limits,omitempty"`
 
+	// MatchAllWords KB-7b: split query on whitespace into words and require every word to be present somewhere in the file — not necessarily on the same line — collapsing a matching file to ONE hit (FileSearchHit.match_count carries how many lines actually matched) instead of one hit per matching line. The SPA bar always sets this true, so "quarterly report" finds a file that discusses both words in different paragraphs, matching how a person reads the query. Ignored when regex is true — a regex pattern is one expression written on purpose, never split on whitespace. Default false so an API caller that wants today's literal-substring, one-hit-per-line behavior (e.g. the agent grep tool's own semantics) gets it without asking.
+	MatchAllWords *bool `json:"match_all_words,omitempty"`
+
 	// Path Workspace-relative folder to scope the search to. Omitted or empty means the workspace root. Must resolve inside the confined root; a path outside it is refused with the Library's standard taxonomy.
 	Path *string `json:"path,omitempty"`
 
@@ -11424,6 +11434,9 @@ type FileSearchResponse struct {
 		// Line 1-based line number of the matching line (content hits only).
 		Line *int `json:"line,omitempty"`
 
+		// MatchCount Present only on a match_all_words collapsed hit (KB-7b/KB-6a): how many lines in the file matched at least one query word. Absent on every ordinary (one-line-one-hit) content hit and on every name hit — absence means "this row already IS the one match", never "zero matches".
+		MatchCount *int `json:"match_count,omitempty"`
+
 		// MatchKind Whether the file matched by its name/path or by a content line.
 		MatchKind FileSearchResponseHitsMatchKind `json:"match_kind"`
 
@@ -11456,6 +11469,9 @@ type FileSearchResponse struct {
 		// FilesPrunedIgnored Entries pruned by .gitignore/.ignore or the always-pruned set — hidden-by-ignore is observable.
 		FilesPrunedIgnored int `json:"files_pruned_ignored"`
 
+		// FilesSkippedBinary Finding F-A: files whose content was never scanned because their first 8 KiB contained a NUL byte (FR-005 — binary files are name-matchable, never content-scanned). Such a file IS still counted in files_visited (it was reached and name-checked); this is what makes that count honest rather than silently implying every visited file's content was searched. Left optional for the same backward-compatibility reason as dirs_visited above.
+		FilesSkippedBinary *int `json:"files_skipped_binary,omitempty"`
+
 		// FilesSkippedPerFileCap Files whose content remainder was skipped at the per-file byte cap.
 		FilesSkippedPerFileCap int `json:"files_skipped_per_file_cap"`
 
@@ -11467,19 +11483,25 @@ type FileSearchResponse struct {
 
 		// HitsCappedPerFile Files whose hits were cut at the per-file match cap.
 		HitsCappedPerFile int `json:"hits_capped_per_file"`
+
+		// IgnoreFilesUnreadable Finding F-E: a .gitignore/.ignore file the walk found but could NOT read (permission denied, an I/O error) — as opposed to one simply not existing, which is the routine, uncounted case. When nonzero, at least one directory's filtering did not apply the rules that file would have added (it degrades to "no additional rules from this file", same as a missing one). Left optional for the same backward-compatibility reason as dirs_visited above.
+		IgnoreFilesUnreadable *int `json:"ignore_files_unreadable,omitempty"`
 	} `json:"stats"`
 
 	// Truncated True whenever any request-level bound stopped the search early.
 	Truncated bool `json:"truncated"`
 
-	// TruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021).
+	// TruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021). canceled (finding F-H) is distinct from deadline: the CALLER's own request context was canceled (client disconnected, an interrupted agent turn) rather than the search genuinely running past its deadline — the two used to be conflated into "deadline" for every caller.
 	TruncatedReason *FileSearchResponseTruncatedReason `json:"truncated_reason,omitempty"`
+
+	// TruncatedRoot Present only when truncated_reason is root_lost AND more than one root was searched (a work tree plus mounts): names the FIRST root (the empty string for the workspace work tree, the mount name otherwise) that became unreadable (finding F-C). Every OTHER root is still searched to completion — one dead mount does not silence hits from healthy ones — so this exists to say WHICH root's coverage is missing rather than leaving the caller to guess.
+	TruncatedRoot *string `json:"truncated_root,omitempty"`
 }
 
 // FileSearchResponseHitsMatchKind Whether the file matched by its name/path or by a content line.
 type FileSearchResponseHitsMatchKind string
 
-// FileSearchResponseTruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021).
+// FileSearchResponseTruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021). canceled (finding F-H) is distinct from deadline: the CALLER's own request context was canceled (client disconnected, an interrupted agent turn) rather than the search genuinely running past its deadline — the two used to be conflated into "deadline" for every caller.
 type FileSearchResponseTruncatedReason string
 
 // GatewayRestartResponse Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts the request, replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). The SPA uses this response to start polling /health (and the WS reconnect path) to detect the gateway going down and coming back up.

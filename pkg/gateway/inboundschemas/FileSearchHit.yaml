@@ -4,6 +4,13 @@ description: >
   first match position on that line is what `line` reports; two matches on one
   line are still one hit. A name/path match is one hit with match_kind "name"
   and no line.
+
+  KB-7b exception: when the request set match_all_words, a hit is instead ONE
+  matching DOCUMENT — every query word must be present somewhere in the file
+  (not necessarily on the same line), and every matching file collapses to
+  this ONE row regardless of how many lines actually matched. match_count
+  carries how many lines that was; line/excerpt/context describe the FIRST
+  (file-order) matching line as the representative one.
 type: object
 additionalProperties: false
 required:
@@ -18,6 +25,15 @@ properties:
     type: string
     enum: [name, content]
     description: Whether the file matched by its name/path or by a content line.
+  match_count:
+    type: integer
+    minimum: 1
+    description: >
+      Present only on a match_all_words collapsed hit (KB-7b/KB-6a): how many
+      lines in the file matched at least one query word. Absent on every
+      ordinary (one-line-one-hit) content hit and on every name hit — absence
+      means "this row already IS the one match", never "zero matches".
+    example: 4
   is_dir:
     type: boolean
     description: >

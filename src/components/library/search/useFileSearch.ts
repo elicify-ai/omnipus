@@ -154,7 +154,21 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchResul
       const controller = new AbortController()
       controllerRef.current = controller
       setIsFetching(true)
-      if (attempt > 0) setIsRetrying(true)
+      if (attempt > 0) {
+        setIsRetrying(true)
+      } else {
+        // R-3: a NEW logical request (attempt 0) must not carry a PREVIOUS
+        // query's error forward. Before this, `error` was only ever cleared
+        // in the success branch below, so a query that failed left its
+        // error on screen through every subsequent query's own fetch —
+        // LibrarySearchBar renders the banner unconditionally and its
+        // `!error &&` guards suppress every result block, so a working
+        // query B rendered query A's stale failure (and no results) for B's
+        // entire in-flight duration. `response` is deliberately NOT reset
+        // here — the 429 grace path (below) needs whatever is already on
+        // screen to stay put while it retries.
+        setError(null)
+      }
 
       void searchFnRef
         .current(
@@ -168,7 +182,18 @@ export function useFileSearch(options: UseFileSearchOptions): UseFileSearchResul
             regex: false,
             case: 'smart',
             include_hidden: false,
-            context_lines: 0,
+            // KB-7b: the bar always asks for document-level AND (every
+            // query word present somewhere in the file, collapsed to one
+            // hit per file) — "quarterly report" now finds a file that
+            // discusses both words in different paragraphs, matching how a
+            // person actually reads the query, instead of only a file with
+            // that literal phrase on one line.
+            match_all_words: true,
+            // KB-6c: one bare line is rarely enough to judge a hit — this
+            // supersedes the earlier v1 decision (spec R2-MIN-005) to leave
+            // context at 0. The engine already fills context_before/after;
+            // asking for 1 needs no backend or contract change beyond this.
+            context_lines: 1,
             limits: { deadline_ms: FILE_SEARCH_DEADLINE_MS },
           },
           controller.signal,

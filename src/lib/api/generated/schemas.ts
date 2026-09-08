@@ -855,10 +855,12 @@ type FileSearchResponse = {
         | "max_matches"
         | "max_depth"
         | "deadline"
+        | "canceled"
         | "max_output"
         | "root_lost"
       )
     | undefined;
+  truncated_root?: string | undefined;
   limits_applied: {
     files: number;
     bytes: number;
@@ -877,11 +879,14 @@ type FileSearchResponse = {
     hits_capped_per_file: number;
     dirs_visited?: number | undefined;
     files_filtered_glob?: number | undefined;
+    files_skipped_binary?: number | undefined;
+    ignore_files_unreadable?: number | undefined;
   };
 };
 type FileSearchHit = {
   path: string;
   match_kind: "name" | "content";
+  match_count?: number | undefined;
   is_dir?: boolean | undefined;
   line?: number | undefined;
   excerpt?: string | undefined;
@@ -4366,6 +4371,7 @@ export const FileSearchRequest = z.object({
   query: z.string().min(1).max(1024),
   path: z.string().optional(),
   regex: z.boolean().optional().default(false),
+  match_all_words: z.boolean().optional().default(false),
   case: z
     .enum(["smart", "sensitive", "insensitive"])
     .optional()
@@ -4390,6 +4396,7 @@ export const FileSearchRequest = z.object({
 export const FileSearchHit: z.ZodType<FileSearchHit> = z.object({
   path: z.string(),
   match_kind: z.enum(["name", "content"]),
+  match_count: z.number().int().gte(1).optional(),
   is_dir: z.boolean().optional(),
   line: z.number().int().gte(1).optional(),
   excerpt: z.string().max(2048).optional(),
@@ -4406,10 +4413,12 @@ export const FileSearchResponse: z.ZodType<FileSearchResponse> = z.object({
       "max_matches",
       "max_depth",
       "deadline",
+      "canceled",
       "max_output",
       "root_lost",
     ])
     .optional(),
+  truncated_root: z.string().optional(),
   limits_applied: z.object({
     files: z.number().int(),
     bytes: z.number().int(),
@@ -4428,6 +4437,8 @@ export const FileSearchResponse: z.ZodType<FileSearchResponse> = z.object({
     hits_capped_per_file: z.number().int(),
     dirs_visited: z.number().int().optional(),
     files_filtered_glob: z.number().int().optional(),
+    files_skipped_binary: z.number().int().optional(),
+    ignore_files_unreadable: z.number().int().optional(),
   }),
 });
 export const VaultSearchRequest = z.object({

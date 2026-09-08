@@ -214,6 +214,18 @@ export interface UseVaultSearchResult {
    *  server truth (`notes_capped_at_limit`) when stated, else the same
    *  length-vs-limit heuristic the bar uses for the other kinds. */
   notesCappedAtLimit: boolean
+  /** Finding F-I: KnowledgeBaseInfo.detection_error's message when
+   *  detection could not complete (a marker exists but could not be read,
+   *  or the root itself could not be stat-ed — E-9), OR the collection-info
+   *  request itself failing outright (infoQuery.error). Either way,
+   *  collectionId is already undefined (below) — this is what tells the
+   *  caller WHY, so it can surface the failure instead of silently
+   *  concluding "not a knowledge base" and falling through to a plain file
+   *  walk over a folder whose detection genuinely never completed.
+   *  KnowledgeBaseInfo.yaml's own contract requires the caller to surface
+   *  this rather than downgrade it — KnowledgePanel already does; this bar
+   *  was the gap. */
+  detectionError: string | undefined
 }
 
 export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchResult {
@@ -259,6 +271,16 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
     info && info.is_knowledge_base && info.detection_error === undefined ? info.collection_id : undefined
   const collectionRootPath = collectionId !== undefined ? info?.root_path : undefined
   const isResolvingCollection = workspaceId !== null && infoQuery.isPending
+
+  // Finding F-I: detection can fail two different ways — the info REQUEST
+  // itself errors (infoQuery.error), or the request succeeds but detection
+  // could not complete for this folder (info.detection_error, E-9). Both
+  // must surface; neither did before this fix, which is exactly how a
+  // knowledge base with a genuine detection failure silently became "just
+  // an ordinary folder" to this bar.
+  const detectionError =
+    info?.detection_error?.message ??
+    (infoQuery.error instanceof Error ? infoQuery.error.message : undefined)
 
   const active = collectionId !== undefined && debouncedQuery !== ''
 
@@ -320,5 +342,6 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
     coverage: response ? classifyVaultCoverage(response) : undefined,
     clamp: response ? vaultClampOf(response) : null,
     notesCappedAtLimit: response ? isNotesCappedAtLimit(response, limit) : false,
+    detectionError,
   }
 }

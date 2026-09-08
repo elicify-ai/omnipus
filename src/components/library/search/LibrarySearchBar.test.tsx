@@ -104,6 +104,7 @@ function renderBar(opts: {
   info?: KnowledgeBaseInfo | LoadCollectionInfoFn
   filesRes?: FileSearchResponse | FileSearchFn
   onOpenNote?: (p: string) => void
+  onOpenFolder?: (p: string) => void
   loadViewResult?: LoadViewResultFn
 } = {}) {
   const searchFn: VaultSearchFn =
@@ -124,6 +125,7 @@ function renderBar(opts: {
         searchFn={searchFn}
         searchFilesFn={searchFilesFn}
         loadCollectionInfo={loadCollectionInfo}
+        {...(opts.onOpenFolder ? { onOpenFolder: opts.onOpenFolder } : {})}
         {...(opts.loadViewResult ? { loadViewResult: opts.loadViewResult } : {})}
       >
         <div data-testid="file-tree">The file tree</div>
@@ -135,6 +137,21 @@ function renderBar(opts: {
 
 function type(text: string) {
   fireEvent.change(screen.getByTestId('library-search-input'), { target: { value: text } })
+}
+
+/** KB-6d's client-side highlight can split a hit's text (title/snippet)
+ *  across multiple elements — a `<span>` around the matched word, plain
+ *  text around it — which defeats getByText's default single-text-node
+ *  matching. This is react-testing-library's own documented workaround:
+ *  match by the FULL, normalized textContent of the element whose own
+ *  children do not individually contain it (so it matches the row's
+ *  wrapping element, not the highlighted fragment alone). */
+function getByFullText(text: string): HTMLElement {
+  return screen.getByText((_, element) => {
+    if (!element) return false
+    const hasText = (el: Element) => el.textContent === text
+    return hasText(element) && Array.from(element.children).every((child) => !hasText(child))
+  })
 }
 
 /** Radix's TabsTrigger activates on `mousedown` (pointer path), not `click` —
@@ -192,7 +209,7 @@ describe('LibrarySearchBar — query replaces the tree, clearing restores it', (
   it('restores the tree the instant the query is cleared', async () => {
     renderBar({ res: response({ notes: [{ path: 'a.md', title: 'Note A' }] }) })
     type('note')
-    await waitFor(() => expect(screen.getByText('Note A')).toBeInTheDocument())
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
 
     type('')
 
@@ -209,8 +226,8 @@ describe('LibrarySearchBar — query replaces the tree, clearing restores it', (
     })
     type('note')
 
-    await waitFor(() => expect(screen.getByText('Note A')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Note A'))
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
+    fireEvent.click(getByFullText('Note A'))
     expect(onOpenNote).toHaveBeenCalledWith('vault/sub/a.md')
   })
 
@@ -242,19 +259,19 @@ describe('LibrarySearchBar — filter tabs', () => {
       }),
     })
     type('a')
-    await waitFor(() => expect(screen.getByText('Note A')).toBeInTheDocument())
-    expect(screen.getByText('Acme Co')).toBeInTheDocument()
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
+    expect(getByFullText('Acme Co')).toBeInTheDocument()
 
     selectTab('library-search-filter-notes')
 
     await waitFor(() => expect(screen.queryByText('Acme Co')).toBeNull())
-    expect(screen.getByText('Note A')).toBeInTheDocument()
+    expect(getByFullText('Note A')).toBeInTheDocument()
   })
 
   it('says plainly when the selected kind has nothing, rather than an empty panel', async () => {
     renderBar({ res: response({ notes: [{ path: 'a.md', title: 'Note A' }] }) })
     type('a')
-    await waitFor(() => expect(screen.getByText('Note A')).toBeInTheDocument())
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
 
     selectTab('library-search-filter-records')
 
@@ -311,7 +328,7 @@ describe('LibrarySearchBar — not-ready index', () => {
     expect(banner).toHaveAttribute('role', 'status')
     expect(banner).toHaveTextContent('the vault index has never finished indexing this vault')
     // Results are still shown alongside the honesty banner.
-    expect(screen.getByText('Note A')).toBeInTheDocument()
+    expect(getByFullText('Note A')).toBeInTheDocument()
   })
 
   it('falls back to a generic sentence when the server sent no reason', async () => {
@@ -471,7 +488,7 @@ describe('LibrarySearchBar — excerpt-unavailable note hits (US-1 AS-4)', () =>
     })
     type('a')
 
-    await waitFor(() => expect(screen.getByText('kernel sandbox')).toBeInTheDocument())
+    await waitFor(() => expect(getByFullText('kernel sandbox')).toBeInTheDocument())
     expect(screen.queryByTestId('vault-search-excerpt-unavailable')).toBeNull()
   })
 })
@@ -781,5 +798,196 @@ describe('LibrarySearchBar — files kind: at most one search in flight (MV-11)'
     await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(3))
     await waitFor(() => expect(screen.getByTestId('file-search-name-hit')).toHaveTextContent('new.md'))
     expect(screen.queryByTestId('library-search-error')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-L: a failed FILE search must surface as an error, exactly like a
+// failed vault search already does — the discriminating test the audit found
+// missing (a mutation to `isVaultMode ? vaultError : null` left every
+// existing test green).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind search failure (finding F-L)', () => {
+  it('surfaces a failed FILE search as a visible error, never as an empty result list', async () => {
+    const searchFilesFn = vi.fn().mockRejectedValue(new Error('walk failed'))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('walk failed')
+    // The failure must not ALSO render as a silent "No results" — that is
+    // precisely the false-negative the missing wiring would produce.
+    expect(screen.queryByTestId('library-search-empty')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding R-3: a stale error from a PREVIOUS query must not survive into the
+// next one's own in-flight or successful request.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: a new query clears the previous one\'s error (finding R-3)', () => {
+  it('drops query A\'s error once query B starts, and shows B\'s real results', async () => {
+    const searchFilesFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('query A failed'))
+      .mockResolvedValueOnce(filesResponse({ hits: [{ path: 'b.md', match_kind: 'name' }] }))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+
+    type('a-query')
+    await screen.findByTestId('library-search-error')
+
+    type('b-query')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByTestId('file-search-name-hit')).toHaveTextContent('b.md'))
+    expect(screen.queryByTestId('library-search-error')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-J: `truncated: true` with no `truncated_reason` must still
+// render a banner — the schema does not enforce the reason's presence on the
+// wire, so the client must not silently drop it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: truncated with no reason (finding F-J)', () => {
+  it('renders a generic stopped-early banner rather than none at all', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        hits: [{ path: 'a.md', match_kind: 'name' }],
+        stats: {
+          files_visited: 5,
+          bytes_scanned: 0,
+          files_skipped_problems: 0,
+          files_pruned_ignored: 0,
+          files_skipped_per_file_cap: 0,
+          hits_capped_per_file: 0,
+        },
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner).toHaveTextContent(/stopped early/i)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-K: the walk-accounting stats were almost entirely discarded —
+// the sharpest case is a file visible in the listing, pruned from search,
+// with "No results" and nothing else on screen.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: skip stats are surfaced (finding F-K)', () => {
+  it('says WHY nothing matched when files were pruned, even on a zero-hit answer', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        hits: [],
+        stats: {
+          files_visited: 4,
+          bytes_scanned: 0,
+          files_skipped_problems: 0,
+          files_pruned_ignored: 3,
+          files_skipped_per_file_cap: 0,
+          hits_capped_per_file: 0,
+        },
+      }),
+    })
+
+    type('report')
+    await screen.findByTestId('library-search-empty')
+    const stats = await screen.findByTestId('library-search-files-stats')
+    expect(stats).toHaveTextContent(/3.*gitignore/i)
+  })
+
+  it('renders nothing extra when every stat is zero', async () => {
+    renderBar({ info: plainFolderInfo(), filesRes: filesResponse({ hits: [] }) })
+    type('report')
+    await screen.findByTestId('library-search-empty')
+    expect(screen.queryByTestId('library-search-files-stats')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-I: a knowledge base whose detection FAILED must surface the
+// failure, never silently fall through to a plain file walk.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — knowledge base detection failure (finding F-I)', () => {
+  it('surfaces detection_error as a visible error, and does not run a file search instead', async () => {
+    const searchFilesFn = vi.fn().mockResolvedValue(filesResponse())
+    renderBar({
+      info: vaultInfo({
+        is_knowledge_base: true,
+        collection_id: undefined,
+        detection_error: { code: 'root_unreadable', message: 'cannot read vault: permission denied' },
+      }),
+      filesRes: searchFilesFn,
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('permission denied')
+    expect(searchFilesFn).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the collection-info request itself failing outright', async () => {
+    const loadCollectionInfo = vi.fn().mockRejectedValue(new Error('network error'))
+    renderBar({ info: loadCollectionInfo })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('network error')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Findings R-1/R-2: a directory hit must open as a FOLDER (and clear the
+// search), and must be inert — never fall back to opening it as a file —
+// when the caller wired no onOpenFolder handler.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — directory hits (findings R-1/R-2)', () => {
+  it('clicking a directory hit clears the search and calls onOpenFolder, never onOpenNote', async () => {
+    const onOpenFolder = vi.fn()
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenFolder,
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    expect(onOpenFolder).toHaveBeenCalledWith('sub-dir')
+    expect(onOpenNote).not.toHaveBeenCalled()
+    // R-1: the query itself must be cleared as part of navigating — the
+    // search input reverts to empty, which is what un-replaces `children`.
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).toHaveValue(''))
+    await waitFor(() => expect(screen.getByTestId('file-tree')).toBeInTheDocument())
+  })
+
+  it('a directory hit is inert — not openFile — when no onOpenFolder handler is wired', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    // R-2: no handler means the row does nothing — it must NOT degrade into
+    // opening the directory path as though it were a note/file.
+    expect(onOpenNote).not.toHaveBeenCalled()
   })
 })

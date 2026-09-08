@@ -124,6 +124,7 @@ const FILE_SEARCH_TRUNCATED_REASON: Record<
   max_matches: 'Stopped early — reached the maximum number of matches.',
   max_depth: "Stopped early — this folder tree is deeper than the search follows.",
   deadline: 'Stopped early — the search ran out of time.',
+  canceled: 'Search canceled.',
   max_output: 'Stopped early — the results were too large to return in full.',
   root_lost:
     'Stopped early — the folder became unreadable while searching (it may have been moved, unmounted, or deleted).',
@@ -171,7 +172,57 @@ function countBadge(n: number, more = false) {
   )
 }
 
-function NoteRow({ hit, onOpen }: { hit: VaultSearchNoteHit; onOpen: () => void }) {
+/** KB-6 coverage chips: which of the query's own words this hit actually
+ *  contains — the "why did this appear" explanation AND the relevance
+ *  signal in one mechanism (ratified design, 2026-09-08). Only shown for a
+ *  2+-word query; a single word has nothing to "cover" differently from
+ *  simply matching or not.
+ *
+ *  APPROXIMATION, disclosed rather than hidden: VaultSearchNoteHit carries
+ *  title, path and a SNIPPET (an excerpt around the first matched term) —
+ *  not the full note body — so a word present elsewhere in the note but
+ *  outside the snippet window reads here as "not covered" even though the
+ *  engine's own ranking already credited it. This is the same class of
+ *  tradeoff KB-6d's client-side highlighting already accepts (cheap, no
+ *  wire change, works today) rather than waiting on a contract change to
+ *  carry true per-term coverage from the engine. Explicitly NOT a raw BM25
+ *  number — KB-6/index.go's own stated rule — ordering plus which words
+ *  matched is honest; a score is not. */
+function vaultCoverage(query: string, hit: VaultSearchNoteHit): { term: string; found: boolean }[] {
+  const words = Array.from(new Set(query.split(/\s+/).filter((w) => w.length > 0)))
+  if (words.length < 2) return []
+  const haystack = `${hit.title ?? ''} ${hit.path} ${hit.snippet ?? ''}`.toLowerCase()
+  return words.map((term) => ({ term, found: haystack.includes(term.toLowerCase()) }))
+}
+
+function CoverageChips({ coverage }: { coverage: { term: string; found: boolean }[] }) {
+  if (coverage.length === 0) return null
+  const foundCount = coverage.filter((c) => c.found).length
+  return (
+    <span data-testid="vault-search-coverage" className="flex flex-wrap items-center gap-1">
+      {coverage.map((c) => (
+        <span
+          key={c.term}
+          data-testid={c.found ? 'vault-search-coverage-hit' : 'vault-search-coverage-miss'}
+          className={cn(
+            'rounded-sm px-1 py-0 text-[10px] leading-4',
+            c.found
+              ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
+              : 'text-[var(--color-muted)] line-through opacity-60',
+          )}
+        >
+          {c.term}
+        </span>
+      ))}
+      <span className="text-[10px] text-[var(--color-muted)]">
+        {foundCount} of {coverage.length}
+      </span>
+    </span>
+  )
+}
+
+function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: string; onOpen: () => void }) {
+  const coverage = vaultCoverage(query, hit)
   return (
     <li>
       <button
@@ -183,9 +234,10 @@ function NoteRow({ hit, onOpen }: { hit: VaultSearchNoteHit; onOpen: () => void 
       >
         <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
           <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
-          {hit.title || hit.path}
+          {highlightQuery(hit.title || hit.path, query)}
         </span>
         <span className="text-[11px] text-[var(--color-muted)]">{hit.path}</span>
+        <CoverageChips coverage={coverage} />
         {/* US-1 AS-4 (honesty port): a hit whose excerpt cannot be produced is
             still rendered — title and path, plus an explicit marker — never
             dropped, and never a fabricated excerpt. VaultSearchNoteHit reduces
@@ -193,7 +245,9 @@ function NoteRow({ hit, onOpen }: { hit: VaultSearchNoteHit; onOpen: () => void 
             (MV-9, recorded R2-MIN-010): the find path cannot attribute the old
             re-read reasons, so this says only what it knows. */}
         {hit.snippet !== undefined ? (
-          <span className="text-xs leading-snug text-[var(--color-muted)]">{hit.snippet}</span>
+          <span className="text-xs leading-snug text-[var(--color-muted)]">
+            {highlightQuery(hit.snippet, query)}
+          </span>
         ) : hit.excerpt_unavailable === true ? (
           <span
             data-testid="vault-search-excerpt-unavailable"
@@ -294,23 +348,79 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
   )
 }
 
+/** KB-6d: client-side match highlighting. No match offsets exist on the
+ *  wire, so this is a query-aware, case-insensitive substring split —
+ *  approximate under smart/insensitive case and blind to which OCCURRENCE
+ *  the engine actually matched (the ratified design's own accepted
+ *  tradeoff: cheap and works for both search kinds today, versus a
+ *  contract change to carry exact offsets). Colour is the Forge Gold
+ *  accent (`--color-accent`), not yellow — the founder asked for yellow,
+ *  but yellow reads as "warning" elsewhere in this palette; flagged in the
+ *  defect writeup as reversible. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function highlightQuery(text: string, query: string): ReactNode {
+  const words = query.split(/\s+/).filter((w) => w.length > 0)
+  if (words.length === 0) return text
+  const pattern = new RegExp(`(${words.map(escapeRegExp).join('|')})`, 'gi')
+  const parts = text.split(pattern)
+  if (parts.length <= 1) return text
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <span key={i} className="rounded-sm bg-[var(--color-accent)]/25 text-[var(--color-accent)]">
+        {part}
+      </span>
+    ) : (
+      part
+    ),
+  )
+}
+
 /** One FileSearchHit — a NAME match (path only) or a CONTENT match (path,
  *  line number, excerpt, and up to 5 lines of optional context on each side —
  *  unified-search-and-grep-spec.md US-2 AS-1/AS-2, wire contract sketch §6).
  *  `onOpen` receives the hit's own workspace-relative path (FileSearchHit.path
  *  is already scoped to the workspace's confined Library root, unlike a vault
- *  hit's collection-relative path — no translation is needed here). */
-function FileHitRow({ hit, onOpen }: { hit: FileSearchHit; onOpen: () => void }) {
+ *  hit's collection-relative path — no translation is needed here). `query`
+ *  drives KB-6d's client-side highlight. */
+function FileHitRow({
+  hit,
+  query,
+  onOpen,
+  interactive = true,
+}: {
+  hit: FileSearchHit
+  query: string
+  onOpen: () => void
+  /** Finding R-2: false makes the row visibly inert (no click handler, no
+   *  hover affordance) — used for a directory hit when the caller wired no
+   *  onOpenFolder. FileHitRow cannot infer this from `onOpen` alone (the
+   *  parent always passes SOME function); the parent computes it because it
+   *  is the one holding onOpenFolder. */
+  interactive?: boolean
+}) {
   const isContent = hit.match_kind === 'content'
   const isDir = hit.is_dir === true
+  // KB-7b/KB-6a: match_count is present only on a match_all_words
+  // collapsed hit — one row now stands in for every matching line in the
+  // file, so the count IS the "why did this file surface" and "how much is
+  // here" signal a reader used to get for free from seeing 30 separate rows.
+  const matchCount = hit.match_count
   return (
     <li>
       <button
         type="button"
-        tabIndex={0}
-        onClick={onOpen}
+        tabIndex={interactive ? 0 : -1}
+        onClick={interactive ? onOpen : undefined}
+        disabled={!interactive}
+        aria-disabled={!interactive || undefined}
         data-testid={isContent ? 'file-search-content-hit' : 'file-search-name-hit'}
-        className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className={cn(
+          'flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors',
+          interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default opacity-70',
+        )}
       >
         <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
           {isDir ? (
@@ -320,30 +430,79 @@ function FileHitRow({ hit, onOpen }: { hit: FileSearchHit; onOpen: () => void })
           ) : (
             <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           )}
-          {hit.path}
+          {highlightQuery(hit.path, query)}
           {isContent && hit.line !== undefined && (
             <span className="font-mono text-[10px] text-[var(--color-muted)]">:{hit.line}</span>
+          )}
+          {matchCount !== undefined && matchCount > 1 && (
+            <Badge
+              variant="secondary"
+              data-testid="file-search-match-count"
+              className="px-1.5 py-0 text-[10px] leading-4"
+            >
+              {matchCount} matches
+            </Badge>
           )}
         </span>
         {isContent && (
           <div className="w-full font-mono text-xs leading-snug text-[var(--color-muted)]">
             {hit.context_before?.map((line, i) => (
               <p key={`before-${i}`} className="truncate opacity-60">
-                {line}
+                {highlightQuery(line, query)}
               </p>
             ))}
             {hit.excerpt !== undefined && (
-              <p className="truncate text-[var(--color-secondary)]">{hit.excerpt}</p>
+              <p className="truncate text-[var(--color-secondary)]">{highlightQuery(hit.excerpt, query)}</p>
             )}
             {hit.context_after?.map((line, i) => (
               <p key={`after-${i}`} className="truncate opacity-60">
-                {line}
+                {highlightQuery(line, query)}
               </p>
             ))}
           </div>
         )}
       </button>
     </li>
+  )
+}
+
+/** Finding F-K: the walk-accounting stats were almost entirely discarded —
+ *  only files_visited rendered, and only inside the truncation banner, so a
+ *  file pruned by .gitignore, filtered by a glob, or unreadable had no way
+ *  to reach the reader at all. This renders every NONZERO skip reason as a
+ *  compact, always-available line (not gated on truncation) — the sharpest
+ *  case named in the finding is a file visible in the listing, invisible to
+ *  search, with the search reporting "No results" and nothing else. */
+function FileSearchStatsFooter({ stats }: { stats: FileSearchResponse['stats'] }) {
+  const parts: string[] = []
+  if (stats.files_pruned_ignored > 0) {
+    parts.push(`${stats.files_pruned_ignored.toLocaleString('en-US')} skipped by .gitignore/.ignore`)
+  }
+  if (stats.files_filtered_glob !== undefined && stats.files_filtered_glob > 0) {
+    parts.push(`${stats.files_filtered_glob.toLocaleString('en-US')} excluded by filters`)
+  }
+  if (stats.files_skipped_problems > 0) {
+    parts.push(`${stats.files_skipped_problems.toLocaleString('en-US')} unreadable`)
+  }
+  if (stats.files_skipped_per_file_cap > 0) {
+    parts.push(`${stats.files_skipped_per_file_cap.toLocaleString('en-US')} cut off at the per-file size cap`)
+  }
+  if (stats.hits_capped_per_file > 0) {
+    parts.push(`${stats.hits_capped_per_file.toLocaleString('en-US')} files had matches capped`)
+  }
+  if (stats.files_skipped_binary !== undefined && stats.files_skipped_binary > 0) {
+    parts.push(`${stats.files_skipped_binary.toLocaleString('en-US')} binary (name only)`)
+  }
+  if (stats.ignore_files_unreadable !== undefined && stats.ignore_files_unreadable > 0) {
+    parts.push(
+      `${stats.ignore_files_unreadable.toLocaleString('en-US')} .gitignore/.ignore file${stats.ignore_files_unreadable === 1 ? '' : 's'} could not be read`,
+    )
+  }
+  if (parts.length === 0) return null
+  return (
+    <p data-testid="library-search-files-stats" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+      {parts.join(' · ')}.
+    </p>
   )
 }
 
@@ -379,6 +538,7 @@ export function LibrarySearchBar({
     coverage,
     clamp,
     notesCappedAtLimit,
+    detectionError,
   } = useVaultSearch({
     workspaceId,
     folderPath,
@@ -397,7 +557,16 @@ export function LibrarySearchBar({
   // kind, which today's `disabled` used to fold into "not searchable" —
   // that was the exact gap US-2 exists to close.
   const isVaultMode = collectionId !== undefined
-  const isFilesMode = workspaceId !== null && !isResolvingCollection && !isVaultMode
+  // Finding F-I: a folder whose knowledge-base DETECTION failed (E-9 — a
+  // marker exists but could not be read, or the info request itself
+  // errored) must not silently fall through to a plain file walk just
+  // because collectionId ended up undefined the same way "not a knowledge
+  // base" does. detectionError distinguishes the two so this bar can
+  // surface the failure instead of quietly answering a different, wrong
+  // question (filename hits only, no notes/records/views, read by the user
+  // as "this vault is empty").
+  const isFilesMode =
+    workspaceId !== null && !isResolvingCollection && !isVaultMode && detectionError === undefined
 
   const {
     isActive: filesIsActive,
@@ -415,7 +584,13 @@ export function LibrarySearchBar({
 
   const isActive = isVaultMode ? vaultIsActive : filesIsActive
   const isBusy = isVaultMode ? vaultIsBusy : filesIsBusy
-  const error = isVaultMode ? vaultError : filesError
+  // Finding F-I: detectionError always implies !isVaultMode (collectionId
+  // is undefined whenever it is set — see useVaultSearch), so it slots into
+  // the SAME branch filesError would otherwise occupy, and outranks it: a
+  // folder whose detection genuinely failed has nothing useful to say via
+  // a file-search error (isFilesMode is false there, so filesError is
+  // always null anyway) — the detection failure IS the error to show.
+  const error = isVaultMode ? vaultError : detectionError !== undefined ? new Error(detectionError) : filesError
 
   // Back to "All" whenever a fresh query starts — a filter chosen for a
   // previous query carrying over silently could hide every hit of a new one.
@@ -470,6 +645,21 @@ export function LibrarySearchBar({
   // hit's collection-relative path) — no translation needed.
   function openFile(path: string) {
     onOpenNote(path)
+  }
+
+  // Finding R-1: navigating INTO a directory hit must leave the search
+  // state behind — the caller's own onOpenFolder doc says the point is to
+  // browse into it, but `text` lives here, entirely inside this component,
+  // so a parent's onOpenFolder (LibraryExplorer's setBrowsedDir + goTo) has
+  // no way to clear it. Before this fix, isActive stayed true after the
+  // navigation, LibrarySearchBar kept `children` (the folder listing)
+  // unmounted per `{(!isActive || disabled) && children}`, and
+  // useFileSearch simply re-ran the SAME query scoped to the new
+  // folderPath — a click on a folder produced ANOTHER result list, never
+  // the folder itself.
+  function openFolder(path: string) {
+    setText('')
+    onOpenFolder?.(path)
   }
 
   const viewResultQuery = useQuery({
@@ -634,7 +824,7 @@ export function LibrarySearchBar({
                   )}
                   <ul className="flex flex-col gap-1">
                     {response.notes.map((hit) => (
-                      <NoteRow key={hit.path} hit={hit} onOpen={() => openNote(hit.path)} />
+                      <NoteRow key={hit.path} hit={hit} query={text.trim()} onOpen={() => openNote(hit.path)} />
                     ))}
                   </ul>
                 </div>
@@ -708,7 +898,7 @@ export function LibrarySearchBar({
               — never re-sorted client-side. */}
           {!error && !isVaultMode && filesResponse && (
             <>
-              {filesResponse.truncated && filesResponse.truncated_reason !== undefined && (
+              {filesResponse.truncated && (
                 <div
                   role="status"
                   data-testid="library-search-truncated"
@@ -721,7 +911,18 @@ export function LibrarySearchBar({
                     className="mt-0.5 shrink-0 text-[var(--color-warning)]"
                   />
                   <p className="flex-1 text-xs leading-snug text-[var(--color-warning)]">
-                    {FILE_SEARCH_TRUNCATED_REASON[filesResponse.truncated_reason]}{' '}
+                    {/* Finding F-J: the schema states truncated_reason
+                        "present exactly when truncated is true" but does
+                        not enforce it on the wire (no `required`, no
+                        dependentRequired), so `{truncated: true}` alone
+                        validates. Before this fix the whole banner was
+                        gated on the reason ALSO being present, so that
+                        shape rendered nothing at all — a bounded result
+                        presented, in effect, as complete. A generic
+                        sentence now covers the reason-less case. */}
+                    {filesResponse.truncated_reason !== undefined
+                      ? FILE_SEARCH_TRUNCATED_REASON[filesResponse.truncated_reason]
+                      : 'Stopped early — this search did not finish.'}{' '}
                     {filesResponse.stats.files_visited.toLocaleString('en-US')} file
                     {filesResponse.stats.files_visited === 1 ? '' : 's'} searched.
                   </p>
@@ -729,23 +930,49 @@ export function LibrarySearchBar({
               )}
 
               {filesResponse.hits.length === 0 && (
-                <p role="status" data-testid="library-search-empty" className="text-xs leading-snug text-[var(--color-muted)]">
-                  No results for “{text.trim()}”.
-                </p>
+                <div className="flex flex-col gap-1">
+                  <p role="status" data-testid="library-search-empty" className="text-xs leading-snug text-[var(--color-muted)]">
+                    No results for “{text.trim()}”.
+                  </p>
+                  {/* Finding F-K, sharpest case: a file can be visible in
+                      the listing, pruned from search by .gitignore, and
+                      "No results" alone reads as "the term is not in this
+                      folder" — when the truth is "a file that could have
+                      matched was never searched". Surface that here since
+                      it is exactly where a reader needs it most. */}
+                  <FileSearchStatsFooter stats={filesResponse.stats} />
+                </div>
               )}
 
               {filesResponse.hits.length > 0 && (
-                <ul data-testid="library-search-results" className="flex flex-col gap-1 overflow-y-auto">
-                  {filesResponse.hits.map((hit, i) => (
-                    <FileHitRow
-                      key={`${hit.path}:${hit.line ?? 0}:${i}`}
-                      hit={hit}
-                      onOpen={() =>
-                        hit.is_dir === true && onOpenFolder ? onOpenFolder(hit.path) : openFile(hit.path)
-                      }
-                    />
-                  ))}
-                </ul>
+                <>
+                  <ul data-testid="library-search-results" className="flex flex-col gap-1 overflow-y-auto">
+                    {filesResponse.hits.map((hit, i) => (
+                      <FileHitRow
+                        key={`${hit.path}:${hit.line ?? 0}:${i}`}
+                        hit={hit}
+                        query={text.trim()}
+                        // Finding R-2: a directory hit must be opened as a
+                        // FOLDER or not at all — falling through to openFile
+                        // (which addresses a NOTE/file, not a container)
+                        // when no onOpenFolder handler is wired would
+                        // select a directory in the preview pane, the exact
+                        // failure this prop's own doc comment says must not
+                        // happen. interactive is false in exactly that
+                        // case, so the row renders visibly inert instead.
+                        interactive={hit.is_dir !== true || onOpenFolder !== undefined}
+                        onOpen={() => {
+                          if (hit.is_dir === true) {
+                            openFolder(hit.path)
+                            return
+                          }
+                          openFile(hit.path)
+                        }}
+                      />
+                    ))}
+                  </ul>
+                  <FileSearchStatsFooter stats={filesResponse.stats} />
+                </>
               )}
             </>
           )}

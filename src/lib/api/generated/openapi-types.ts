@@ -6990,6 +6990,11 @@ export interface components {
              */
             regex: boolean;
             /**
+             * @description KB-7b: split query on whitespace into words and require every word to be present somewhere in the file — not necessarily on the same line — collapsing a matching file to ONE hit (FileSearchHit.match_count carries how many lines actually matched) instead of one hit per matching line. The SPA bar always sets this true, so "quarterly report" finds a file that discusses both words in different paragraphs, matching how a person reads the query. Ignored when regex is true — a regex pattern is one expression written on purpose, never split on whitespace. Default false so an API caller that wants today's literal-substring, one-hit-per-line behavior (e.g. the agent grep tool's own semantics) gets it without asking.
+             * @default false
+             */
+            match_all_words: boolean;
+            /**
              * @description Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
              * @default smart
              * @enum {string}
@@ -7005,7 +7010,7 @@ export interface components {
             /** @description doublestar patterns removed from consideration. */
             exclude_globs?: string[];
             /**
-             * @description Lines of context to attach before and after each content hit. Carried on REST for API parity with the agent grep tool; the SPA does not use it in v1 (recorded decision, spec R2-MIN-005).
+             * @description Lines of context to attach before and after each content hit. KB-6c SUPERSEDES the earlier v1 decision (spec R2-MIN-005) to leave this at 0 from the SPA: one bare line is rarely enough to judge a hit, and raising it to 1 needed no backend, contract or engine change — the engine already fills context_before/context_after, the SPA simply was not asking. The SPA bar now sends 1.
              * @default 0
              */
             context_lines: number;
@@ -7030,6 +7035,7 @@ export interface components {
         /**
          * FileSearchHit
          * @description One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
+         *     KB-7b exception: when the request set match_all_words, a hit is instead ONE matching DOCUMENT — every query word must be present somewhere in the file (not necessarily on the same line), and every matching file collapses to this ONE row regardless of how many lines actually matched. match_count carries how many lines that was; line/excerpt/context describe the FIRST (file-order) matching line as the representative one.
          */
         FileSearchHit: {
             /**
@@ -7042,6 +7048,11 @@ export interface components {
              * @enum {string}
              */
             match_kind: "name" | "content";
+            /**
+             * @description Present only on a match_all_words collapsed hit (KB-7b/KB-6a): how many lines in the file matched at least one query word. Absent on every ordinary (one-line-one-hit) content hit and on every name hit — absence means "this row already IS the one match", never "zero matches".
+             * @example 4
+             */
+            match_count?: number;
             /** @description True when this hit is a directory rather than a file — always true (never omitted) for a directory hit; always false for a content hit (directories are never content-scanned). Deliberately carries no `default` keyword despite always being false-when-absent in practice: a `default` makes openapi-typescript emit this as a non-optional field regardless of the `required` list, which would force every existing FileSearchHit fixture built before this field existed to add it just to keep compiling. Absent (or false) means "this is a file" — an existing consumer keeps its prior, file-only reading with no changes required. */
             is_dir?: boolean;
             /** @description 1-based line number of the matching line (content hits only). */
@@ -7065,10 +7076,15 @@ export interface components {
             /** @description True whenever any request-level bound stopped the search early. */
             truncated: boolean;
             /**
-             * @description Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021).
+             * @description Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021). canceled (finding F-H) is distinct from deadline: the CALLER's own request context was canceled (client disconnected, an interrupted agent turn) rather than the search genuinely running past its deadline — the two used to be conflated into "deadline" for every caller.
              * @enum {string}
              */
-            truncated_reason?: "max_files" | "max_bytes" | "max_matches" | "max_depth" | "deadline" | "max_output" | "root_lost";
+            truncated_reason?: "max_files" | "max_bytes" | "max_matches" | "max_depth" | "deadline" | "canceled" | "max_output" | "root_lost";
+            /**
+             * @description Present only when truncated_reason is root_lost AND more than one root was searched (a work tree plus mounts): names the FIRST root (the empty string for the workspace work tree, the mount name otherwise) that became unreadable (finding F-C). Every OTHER root is still searched to completion — one dead mount does not silence hits from healthy ones — so this exists to say WHICH root's coverage is missing rather than leaving the caller to guess.
+             * @example research-drive
+             */
+            truncated_root?: string;
             /** @description Echo of the EFFECTIVE limits after clamping (R2-MIN-007) — the clamp disclosure that keeps this surface as honest as the vault search's limit_clamped. Compare against what you requested to detect a clamp. */
             limits_applied: {
                 files: number;
@@ -7097,6 +7113,10 @@ export interface components {
                 dirs_visited?: number;
                 /** @description Files or directories the walk reached but rejected via include_globs/exclude_globs. Distinct from files_pruned_ignored: a request-scoped glob filter is a different reason than a repository-level .gitignore/.ignore/always-pruned/hidden rule, and conflating the two would hide which one actually explains a given search's shape. Left optional for the same backward-compatibility reason as dirs_visited above. */
                 files_filtered_glob?: number;
+                /** @description Finding F-A: files whose content was never scanned because their first 8 KiB contained a NUL byte (FR-005 — binary files are name-matchable, never content-scanned). Such a file IS still counted in files_visited (it was reached and name-checked); this is what makes that count honest rather than silently implying every visited file's content was searched. Left optional for the same backward-compatibility reason as dirs_visited above. */
+                files_skipped_binary?: number;
+                /** @description Finding F-E: a .gitignore/.ignore file the walk found but could NOT read (permission denied, an I/O error) — as opposed to one simply not existing, which is the routine, uncounted case. When nonzero, at least one directory's filtering did not apply the rules that file would have added (it degrades to "no additional rules from this file", same as a missing one). Left optional for the same backward-compatibility reason as dirs_visited above. */
+                ignore_files_unreadable?: number;
             };
         };
         /**
