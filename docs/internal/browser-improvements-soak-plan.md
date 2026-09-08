@@ -3,8 +3,9 @@
 Prepared harness:
 `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/browser-improvements-soak.spec.ts`
 
-**Preparation only. The harness has not been run.** Root coordinates the actual
-run after integrating and building the final application. Never run against the
+**The first full run failed latency acceptance** (details below). Root
+coordinates further runs after integration. The new evidence/diagnostic
+correction has been typechecked but has not been executed. Never run against the
 installed gateway on port 10994. This spec refuses any gateway except localhost
 or 127.0.0.1 port 11094 and requires an explicit isolated runtime home beneath the
 Omnipus project workspace.
@@ -70,3 +71,56 @@ TURN path are **unverified** by this local Chromium harness. No preparation,
 TypeScript check or fixture screenshot counts as a successful 20-minute run.
 Before reporting acceptance, retain the actual terminal result and evidence;
 if p95 exceeds 200ms, report the measured value without widening the threshold.
+
+
+## Evidence persistence correction
+
+The first actual 20.7-minute run completed all 550 event/order/held-state and
+continuity assertions, then failed the unchanged 200ms threshold with
+p95=247.199999928ms. The line reporter did not persist attachment bodies, so
+its detailed in-memory JSON and phase screenshots were unavailable afterward.
+This is an evidence defect, not a passing latency result.
+
+The harness now writes each PNG and JSON to `testInfo.outputPath` before
+attaching its file path. A line-only reporter therefore retains the files.
+Phase start/completion and the final measured count/p95 are also printed.
+The full acceptance durations, 100-click sample and 200ms threshold are unchanged.
+
+## Short latency diagnostic (not soak acceptance)
+
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/browser-improvements-latency.spec.ts`
+uses the same authored fixture, decoder and UI setup through
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/fixtures/browser-input-probe.ts`.
+It performs 100 clicks, paced over at least 50 seconds, with 300 exact mouse events
+and no ten-minute idle or mixed-key phase. Its 200ms p95 check is unchanged; a
+short diagnostic pass does not establish the soak acceptance criteria. Select
+one spec explicitly so both do not run accidentally.
+
+Only this diagnostic installs browser-side observation before application code:
+
+- Retain real viewer `RTCPeerConnection` instances without changing their
+  configuration. Record actual receiver `jitterBufferTarget` and legacy
+  `playoutDelayHint` values; absence is null, not an assumed setting.
+- Observe WebSocket/data-channel mouse sends around the original native send
+  method. Record route, pointerdown time, attempted/returned send times and
+  success. No payload, SDP or coordinates are saved, and send exceptions retain
+  their original behavior. A successful send means local enqueue, not delivery.
+- Record the matching decoded-frame callback time, pixel-sampling duration and
+  browser-provided presentation/expected-display, processing, capture/receive
+  and RTP timestamps when available. All viewer timestamps share its monotonic
+  clock; browser-provided capture/receive metadata remains raw diagnostic data,
+  not a claimed synchronized measurement of the remote browser.
+- Snapshot video receiver statistics before input, after every 20 clicks, and at
+  completion/failure. Persist raw counters for jitter-buffer delay/target/emitted
+  count, decoding/processing time, decoded/dropped frames, frame rate, packet
+  loss, jitter, candidate-pair/remote RTT and feedback counters when supported.
+  Printed derived means use counter deltas divided by their corresponding
+  emitted/decoded counts. Missing/reset counters produce null, never fabricated
+  zero latency. RTT remains available in the raw candidate/remote reports.
+
+The diagnostic writes `latency-evidence.json` and real PNG files beneath the
+runner's configured output directory before attaching paths. It prints progress
+at 20-click milestones, final p95/count and receiver means. Instrumentation cost
+is visible in the per-click sampling duration; the diagnostic neither tunes
+production settings nor bypasses the UI input route. No runtime measurement of
+this correction is claimed yet.
