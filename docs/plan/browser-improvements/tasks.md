@@ -124,7 +124,7 @@ checkpoint `b158ec58c`):
 | Correction | Integrated commit | Evidence and remaining qualification |
 |---|---|---|
 | Capture startup, cancellation, grace timer and bounded preparation | `cc027da56` | Focused race checks passed; independent lifecycle/document API review found no additional defect in that scope |
-| Launch trust, held locks, pool/session retirement and profile identity | `257d2b9b6`, `eed3f05a6`, `22116776e` | Reviewed with finite followups below; trusted-PATH race control remains unresolved |
+| Launch trust, held locks, pool/session retirement and profile identity | `257d2b9b6`, `eed3f05a6`, `22116776e` | Reviewed with finite followups below; unchanged trusted-PATH focused race control now passes; older failures remain recorded |
 | Document capture and live paint fence | `9dcb178fb`, `4d035c62c`, `2259cd81f` | Reverse-initialization race reproduced and corrected; final focused race selection passed 123 entries, zero skips/races, in 5.422s; independent correction recheck clear |
 | Live death cleanup and initial tab tracking | `3b31c61e2` | Affected race checks and independent source review completed |
 | Cross-process profile deletion coordination | `766f940d8` | 31 affected race entries passed; Unix and mixed-version limits remain explicit |
@@ -143,17 +143,25 @@ downloading Chrome and another download began. The complete relay package
 passed in 83.753s. This is not a passing whole-browser batch or full CI result.
 
 The new isolated runtime uses port 11094, process 83139 (tool session 38626).
-Installed port 10994, process 64851, remains preserved. Soak run `99078` has
-started; no passing result or runtime acceptance is claimed yet.
+Installed port 10994, process 64851, remains preserved. Soak run `99078` exited 1
+after 20.7 minutes: its sole failure was 100-click decoded-video p95 latency of
+247.19999992847443ms against the unchanged 200ms target. Both preceding phases
+lasted at least 600,000ms; exact ordered delivery of 550 trusted native events,
+held-input/release checks, capture continuity, no renegotiation and no viewer
+error assertions passed. This is partial acceptance evidence, not a passing soak.
+Detailed latency samples, JSON and phase images were not persisted by the line
+reporter; the terminal log and final failure screenshot are retained. Artifact
+persistence correction and a short latency diagnostic are pending, with no
+production change made for this result. See the closeout ledger for exact paths.
 
 Go test/build batches remain serial within this team; independent source work
 continues in isolated worktrees. No full CI is run for each fix. Other operators'
 processes are not controlled or terminated by this work.
 
-## Release evidence (all pending)
+## Release evidence (incomplete)
 
 - [ ] Independent intensive `/review` of complete release-base diff; seven review lenses, every finding resolved and rechecked.
-- [ ] Exact branch build and direct browser fixture testing, including ten-minute idle and mixed-input runs and measured latency.
+- [ ] Complete direct-browser acceptance: exact build and both ten-minute phases now have evidence, but the 100-click latency target failed and detailed soak artifacts were not retained.
 - [ ] Native installed macOS web-app focus/sleep/wake verification; preserve user profile and production data.
 - [ ] Local and remote connection behavior, audio playback/synchronization and failure recovery.
 - [ ] Push `browser-improvements`, run applicable CI on that exact commit, fix failures without suppressions or bypasses.
@@ -163,4 +171,4 @@ processes are not controlled or terminated by this work.
 
 Mach rendezvous errors occurred after successful isolated Chrome launches during teardown; they are not independently the startup root cause. Initial UI/data-channel probes were characterizations, not reproductions of the user's exact stall. New real socket tests do reproduce reader blocking. H264 track replacement and Opus packets are measured, but audible synchronization is not yet demonstrated. Earlier graph/index results describe historical checks only. The user subsequently instructed the team to stop GitNexus; current reviews and change-scope checks use direct source/caller inspection and git diffs. No graph result establishes complete review coverage.
 
-The trusted-PATH positive control repeatedly exceeded its real five-second shell-probe deadline under host contention; its unresolved race-run failure is not a pass. Profile deletion uses sibling locks on the exercised Unix path and refuses already-held legacy locks, but cannot serialize against an older binary that starts without honoring the sibling lock. No cross-platform runtime guarantee follows from those tests. Native ingest cleanup cannot be forcibly interrupted; authenticated unfinished work is bounded, while legacy unbound cleanup remains outside that capacity bound.
+The earlier trusted-PATH race runs exceeded the real five-second shell-probe deadline; their cause is not established by the later pass. Unchanged focused race control run `58637` now passed (test 1.05s, package 6.140s, exit 0), closing that current control gap without converting earlier failed runs or the inconclusive mutation into passing evidence. Profile deletion uses sibling locks on the exercised Unix path and refuses already-held legacy locks, but cannot serialize against an older binary that starts without honoring the sibling lock. No cross-platform runtime guarantee follows from those tests. Native ingest cleanup cannot be forcibly interrupted; authenticated unfinished work is bounded, while legacy unbound cleanup remains outside that capacity bound.

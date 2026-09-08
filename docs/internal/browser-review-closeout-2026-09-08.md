@@ -58,7 +58,13 @@ does not imply runtime reproduction.
 
 The independent recheck of root wheel/Back and annotation corrections found no new high-confidence defect. Same-generation DOM movement remains best-effort for annotation enrichment.
 
-Manager validation: 11 new groups passed; five fault families were detected. Across the original and corrected-fixture race runs, 62/63 affected groups passed without race reports or skips. The unchanged trusted-PATH positive control repeatedly timed out in its real five-second shell probe under host contention; it is unresolved, not a pass. The initial PATH trust defect was reproduced, but its later mutation run was inconclusive.
+Manager validation: 11 new groups passed; five fault families were detected. Across the original and corrected-fixture race runs, 62/63 affected groups passed without race reports or skips. The unchanged trusted-PATH positive control repeatedly timed out in its real five-second shell probe in the earlier runs; their cause remains unproven. The initial PATH trust defect was reproduced, but its later mutation run was inconclusive.
+
+The unchanged focused trusted-PATH race control subsequently passed in run
+`58637` (exit 0; test 1.05s, package 6.140s). This closes the current focused
+control gap. It neither retroactively passes the earlier failed batches nor
+establishes contention as their cause. Retained log:
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/trusted-path-final-race.log`.
 
 Independent capture review found no additional document API or lifecycle defect
 in its assigned scope. Its installed-ingest cleanup finding is now corrected by
@@ -94,8 +100,36 @@ complete relay package passed in 83.753s. Neither a passing whole-browser batch
 nor full CI is claimed.
 
 The rebuilt isolated instance is process 83139 on port 11094 (tool session
-38626). Installed process 64851 on port 10994 remains preserved. Soak `99078`
-has started but has no reported result at this checkpoint; it is not a pass.
+38626). Installed process 64851 on port 10994 remains preserved. The completed
+soak result follows; the tested binary source remains `2259cd81f` with 669
+embedded SPA files.
+
+## Completed soak: latency acceptance failed
+
+Run `99078` exited 1 after 20.7 minutes. The sole failure was the final 100-click
+decoded-video latency assertion: p95 was **247.19999992847443ms**, above the
+unchanged **200ms** target. A short diagnostic is pending; no production change
+or cause attribution follows from this result.
+
+Before that assertion, both idle and mixed-input phases met their independent
+600,000ms minimums. Assertions passed for 550 exact ordered trusted native
+events, visible held inputs and exactly-once releases, no held state at the end,
+continuous original capture/connection identity, no renegotiation or lifecycle
+failure, and no uncaught viewer errors. The final screenshot shows count 550
+and first mismatch 0; the integration owner visually checked it. These preceding
+passes provide duration and correctness evidence, but the overall soak failed.
+
+Evidence retention is incomplete: the line reporter did not persist body
+attachments, including all 100 latency samples, detailed JSON and phase images.
+Their absence prevents independent reconstruction of the latency distribution
+from retained artifacts. The recorded p95 failure and final screenshot survive;
+artifact persistence is being corrected before the diagnostic. Retained files:
+
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/final-soak.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/final-soak/browser-improvements-soak--73306-exact-mixed-input-for-10min/test-failed-1.png`
+
+This result does not prove audio, remote network/TURN behavior, the native macOS
+app, startup/resize targets or final CI. Those acceptance requirements remain open.
 
 ## Release-base inventory and review limits
 
@@ -140,8 +174,10 @@ Logs and images are under
 `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/`:
 `review-smoke-memory-uat.log`, `review-smoke-memory.jsonl`,
 `review-smoke-click.log`, `review-smoke-click-frames/`, and `review-smoke-uat/`.
-Long duration, 100-action, audio, remote network, native Mac app and final CI
-acceptance remain pending.
+These intermediate smoke runs alone do not establish long-duration or
+100-action acceptance. The later completed soak above supplies duration and
+ordered-input evidence but fails latency acceptance; audio, remote network,
+native Mac app and final CI remain pending.
 
 ## Input correction evidence
 
