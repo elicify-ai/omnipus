@@ -20,7 +20,17 @@ function isoDay(value: string): string | undefined {
   return m ? m[0].slice(0, 10) : undefined
 }
 
-export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: VaultFindRow[] }) {
+export function CalendarPart({
+  part,
+  rows,
+  onOpenPath,
+}: {
+  part: ViewResultPart
+  rows: VaultFindRow[]
+  /** Opens an event's own row (KB-8a). Absent renders every event exactly as
+   *  before — inert markup, no button. */
+  onOpenPath?: (path: string) => void
+}) {
   const dateProperty = part.source.date
   const groups = part.groups
 
@@ -153,16 +163,31 @@ export function CalendarPart({ part, rows }: { part: ViewResultPart; rows: Vault
             data-testid={cell.inMonth ? 'viewpart-calendar-day' : 'viewpart-calendar-day-outside'}
           >
             <span className="text-[var(--color-muted)]">{cell.day}</span>
-            {(rowsByDay.get(cell.iso) ?? []).map((row) => (
-              <div
-                key={row.path}
-                className="mt-0.5 truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-[10px] text-[var(--color-secondary)]"
-                title={row.title}
-                data-testid="viewpart-calendar-event"
-              >
-                {row.title}
-              </div>
-            ))}
+            {(rowsByDay.get(cell.iso) ?? []).map((row) =>
+              onOpenPath ? (
+                <button
+                  key={row.path}
+                  type="button"
+                  tabIndex={0}
+                  onClick={() => onOpenPath(row.path)}
+                  title={row.title}
+                  aria-label={`Open ${row.title}`}
+                  data-testid="viewpart-calendar-event"
+                  className="mt-0.5 block w-full truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-left text-[10px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                >
+                  {row.title}
+                </button>
+              ) : (
+                <div
+                  key={row.path}
+                  className="mt-0.5 truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                  title={row.title}
+                  data-testid="viewpart-calendar-event"
+                >
+                  {row.title}
+                </div>
+              ),
+            )}
           </div>
         ))}
       </div>

@@ -28,23 +28,52 @@ import { CalendarPart } from './CalendarPart'
 import { FiguresPart } from './FiguresPart'
 import { ChartPart } from './ChartPart'
 import { CrosstabPart } from './CrosstabPart'
+import type { ViewCellLinkResolver } from './ViewCellLink'
 
+/** KB-8a — every part that draws individual records gets a row-open action.
+ *  `figures`, `chart` and `crosstab` deliberately do NOT: each one draws a
+ *  precomputed AGGREGATE (a sum/avg/count, a date-bucketed series point, a
+ *  cross-tabulated cell) that already stands for many rows folded into one
+ *  number — there is no single row.path a click on one of those could open. */
 function renderPart(
   part: ViewResultPart,
   rows: VaultFindRow[],
   resolveImageUrl?: (vaultPath: string) => string | undefined,
+  onOpenPath?: (path: string) => void,
+  cellLinks?: ViewCellLinkResolver,
 ) {
   switch (part.part) {
     case 'table':
-      return <TablePart part={part} rows={rows} />
+      return (
+        <TablePart
+          part={part}
+          rows={rows}
+          {...(onOpenPath ? { onOpenPath } : {})}
+          {...(cellLinks ? { cellLinks } : {})}
+        />
+      )
     case 'list':
-      return <ListPart part={part} rows={rows} />
+      return (
+        <ListPart
+          part={part}
+          rows={rows}
+          {...(onOpenPath ? { onOpenPath } : {})}
+          {...(cellLinks ? { cellLinks } : {})}
+        />
+      )
     case 'tiles':
-      return <TilesPart part={part} rows={rows} {...(resolveImageUrl ? { resolveImageUrl } : {})} />
+      return (
+        <TilesPart
+          part={part}
+          rows={rows}
+          {...(resolveImageUrl ? { resolveImageUrl } : {})}
+          {...(onOpenPath ? { onOpenPath } : {})}
+        />
+      )
     case 'columns':
-      return <ColumnsPart part={part} rows={rows} />
+      return <ColumnsPart part={part} rows={rows} {...(onOpenPath ? { onOpenPath } : {})} />
     case 'calendar':
-      return <CalendarPart part={part} rows={rows} />
+      return <CalendarPart part={part} rows={rows} {...(onOpenPath ? { onOpenPath } : {})} />
     case 'figures':
       return <FiguresPart part={part} />
     case 'chart':
@@ -111,11 +140,26 @@ function EmptyState({ result }: { result: ViewResult }) {
 export function ViewPartsRenderer({
   result,
   resolveImageUrl,
+  onOpenPath,
+  resolveWikilink,
+  linkHref,
 }: {
   result: ViewResult
   /** Vault-relative image path → servable URL, for the tiles part. */
   resolveImageUrl?: (vaultPath: string) => string | undefined
+  /** Opens a record's own note (KB-8a). Absent renders every part exactly as
+   *  before — no row is a click target. */
+  onOpenPath?: (path: string) => void
+  /** Resolves a relation cell's `[[wikilink]]` target against this view's own
+   *  rows (KB-8b) — see BasePreview.tsx for how it is built. */
+  resolveWikilink?: ViewCellLinkResolver['resolveWikilink']
+  linkHref?: ViewCellLinkResolver['linkHref']
 }) {
+  const cellLinks: ViewCellLinkResolver | undefined =
+    resolveWikilink !== undefined || linkHref !== undefined || onOpenPath !== undefined
+      ? { resolveWikilink, linkHref, onOpenPath }
+      : undefined
+
   if (result.refusal !== undefined) return <RefusalState refusal={result.refusal} />
   if (result.rows.length === 0) return <EmptyState result={result} />
 
@@ -139,7 +183,7 @@ export function ViewPartsRenderer({
           className="border-b border-[var(--color-border)] last:border-b-0"
           data-testid={`view-part-${part.part}`}
         >
-          {renderPart(part, result.rows, resolveImageUrl)}
+          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks)}
         </div>
       ))}
       {result.problems.length > 0 && (

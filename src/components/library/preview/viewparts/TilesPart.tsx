@@ -17,12 +17,16 @@ export function TilesPart({
   part,
   rows,
   resolveImageUrl,
+  onOpenPath,
 }: {
   part: ViewResultPart
   rows: VaultFindRow[]
   /** Optional: vault-relative image path → servable URL. BasePreview passes
    *  one when it knows the collection root; absent, the slot is a placeholder. */
   resolveImageUrl?: (vaultPath: string) => string | undefined
+  /** Opens a tile's own row (KB-8a). Absent renders every tile exactly as
+   *  before — inert markup, no button. */
+  onOpenPath?: (path: string) => void
 }) {
   const imageProperty = part.source.image
   return (
@@ -31,12 +35,8 @@ export function TilesPart({
         {rows.map((row) => {
           const imagePath = imageProperty === undefined ? '' : cellValue(row, imageProperty)
           const url = imagePath === '' ? undefined : resolveImageUrl?.(imagePath)
-          return (
-            <div
-              key={row.path}
-              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2"
-              data-testid="viewpart-tile"
-            >
+          const content = (
+            <>
               {url !== undefined ? (
                 <img src={url} alt="" className="h-20 w-full rounded object-cover" loading="lazy" />
               ) : (
@@ -51,6 +51,27 @@ export function TilesPart({
                 {row.title}
                 {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
               </span>
+            </>
+          )
+          return onOpenPath ? (
+            <button
+              key={row.path}
+              type="button"
+              tabIndex={0}
+              onClick={() => onOpenPath(row.path)}
+              aria-label={`Open ${row.title}`}
+              data-testid="viewpart-tile"
+              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+            >
+              {content}
+            </button>
+          ) : (
+            <div
+              key={row.path}
+              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2"
+              data-testid="viewpart-tile"
+            >
+              {content}
             </div>
           )
         })}

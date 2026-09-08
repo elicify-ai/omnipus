@@ -16,7 +16,7 @@
 // Fixture values mirror the wireframe's accounting view so a human can
 // cross-check the numbers against the visual spec.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within, fireEvent } from '@testing-library/react'
 import type {
   VaultFindRow,
@@ -33,6 +33,7 @@ import { FiguresPart } from './FiguresPart'
 import { ChartPart } from './ChartPart'
 import { CrosstabPart } from './CrosstabPart'
 import { ViewPartsRenderer } from './ViewPartsRenderer'
+import type { KbLinkResolution } from '../knowledgeMarkdown'
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -209,6 +210,88 @@ describe('TablePart', () => {
   })
 })
 
+// ── KB-8: records in a base are clickable, relation cells are real links ────
+//
+// (a) a row has an open action, reachable by mouse (whole-row convenience)
+//     and by keyboard (one real <button> per row, the ONLY tab stop it adds —
+//     the same pattern workspaces/ListView.tsx's TaskRow already establishes
+//     in this codebase for the identical "clickable <tr>" problem).
+// (b) a relation cell's raw `[[wikilink]]` renders as a real link.
+// (c) precedence: a click on the link follows the link; a click elsewhere on
+//     the row opens the row's own note. They must never both fire.
+//
+// Every case is gated on the caller actually passing `onOpenPath` — every
+// test ABOVE this point renders with no such prop and must keep passing
+// unchanged (KB-8's inert-by-default contract).
+
+describe('TablePart — row open action (KB-8a/8b/8c)', () => {
+  it('renders no row-open affordance at all when onOpenPath is not supplied (unchanged default)', () => {
+    render(<TablePart part={tablePart()} rows={ROWS} />)
+    expect(screen.queryByTestId('viewpart-row-open')).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('clicking anywhere on a row opens THAT row, by mouse', () => {
+    const onOpenPath = vi.fn()
+    render(<TablePart part={tablePart()} rows={ROWS} onOpenPath={onOpenPath} />)
+    const rows = screen.getAllByTestId('viewpart-table-row')
+    // Click a non-link, non-button cell (the due_date cell of the 2nd row).
+    fireEvent.click(within(rows[1] as HTMLElement).getByText('2026-05-12'))
+    expect(onOpenPath).toHaveBeenCalledTimes(1)
+    expect(onOpenPath).toHaveBeenCalledWith('inv-038.md')
+  })
+
+  it('gives each row one real, keyboard-reachable, announced open button', () => {
+    const onOpenPath = vi.fn()
+    render(<TablePart part={tablePart()} rows={ROWS} onOpenPath={onOpenPath} />)
+    const openButtons = screen.getAllByTestId('viewpart-row-open')
+    expect(openButtons).toHaveLength(4)
+    expect(openButtons[0]).toHaveAttribute('tabIndex', '0')
+    expect(openButtons[0]).toHaveAccessibleName(/INV-2026-041/)
+    fireEvent.click(openButtons[0] as HTMLElement)
+    expect(onOpenPath).toHaveBeenCalledWith('inv-041.md')
+    // The row's own onClick must not ALSO fire from the same click.
+    expect(onOpenPath).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders a relation cell´s raw [[wikilink]] as a real link instead of literal brackets (KB-8b)', () => {
+    const partWithRelation = tablePart({ columns: ['file.name', 'client'] })
+    const rowsWithRelation: VaultFindRow[] = [
+      row('inv-041.md', 'INV-2026-041', { client: '[[Korn Ferry]]' }),
+    ]
+    const resolveWikilink = (): KbLinkResolution => ({ state: 'resolved', path: 'Companies/korn-ferry.md' })
+    render(
+      <TablePart
+        part={partWithRelation}
+        rows={rowsWithRelation}
+        cellLinks={{ resolveWikilink }}
+      />,
+    )
+    expect(screen.queryByText('[[Korn Ferry]]')).not.toBeInTheDocument()
+    expect(screen.getByTestId('viewpart-cell-link').textContent).toBe('Korn Ferry')
+  })
+
+  it('a click on a relation-cell link follows the LINK, not the row — and does not double-fire (KB-8c)', () => {
+    const partWithRelation = tablePart({ columns: ['file.name', 'client'] })
+    const rowsWithRelation: VaultFindRow[] = [
+      row('inv-041.md', 'INV-2026-041', { client: '[[Korn Ferry]]' }),
+    ]
+    const resolveWikilink = (): KbLinkResolution => ({ state: 'resolved', path: 'Companies/korn-ferry.md' })
+    const onOpenPath = vi.fn()
+    render(
+      <TablePart
+        part={partWithRelation}
+        rows={rowsWithRelation}
+        onOpenPath={onOpenPath}
+        cellLinks={{ resolveWikilink, onOpenPath }}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('viewpart-cell-link'))
+    expect(onOpenPath).toHaveBeenCalledTimes(1)
+    expect(onOpenPath).toHaveBeenCalledWith('Companies/korn-ferry.md') // the LINK target, not the row's own path (inv-041.md)
+  })
+})
+
 // ── G3 marking: the server names the rows, the SPA marks them ───────────────
 //
 // The exclusion a row suffers is decided from the RECORD TYPE (design §5:
@@ -312,6 +395,51 @@ describe('ListPart', () => {
   })
 })
 
+describe('ListPart — row open action (KB-8a/8b/8c)', () => {
+  const part: ViewResultPart = {
+    part: 'list',
+    source: { part: 'list' },
+    columns: ['file.name', 'client'],
+  }
+
+  it('renders no row-open affordance when onOpenPath is not supplied', () => {
+    render(<ListPart part={part} rows={ROWS} />)
+    expect(screen.queryByTestId('viewpart-row-open')).not.toBeInTheDocument()
+  })
+
+  it('opens the clicked row by mouse, and gives it one keyboard-reachable, announced button', () => {
+    const onOpenPath = vi.fn()
+    render(<ListPart part={part} rows={ROWS} onOpenPath={onOpenPath} />)
+    const items = screen.getAllByTestId('viewpart-list-row')
+    fireEvent.click(items[2] as HTMLElement)
+    expect(onOpenPath).toHaveBeenCalledWith('inv-039.md')
+
+    const openButtons = screen.getAllByTestId('viewpart-row-open')
+    expect(openButtons[0]).toHaveAttribute('tabIndex', '0')
+    fireEvent.click(openButtons[0] as HTMLElement)
+    expect(onOpenPath).toHaveBeenCalledWith('inv-041.md')
+    expect(onOpenPath).toHaveBeenCalledTimes(2) // one per click, never doubled
+  })
+
+  it('renders a relation cell as a real link, and a click on it follows the link, not the row (KB-8b/8c)', () => {
+    const relationRows: VaultFindRow[] = [row('inv-041.md', 'INV-2026-041', { client: '[[Korn Ferry]]' })]
+    const resolveWikilink = (): KbLinkResolution => ({ state: 'resolved', path: 'Companies/korn-ferry.md' })
+    const onOpenPath = vi.fn()
+    render(
+      <ListPart
+        part={part}
+        rows={relationRows}
+        onOpenPath={onOpenPath}
+        cellLinks={{ resolveWikilink, onOpenPath }}
+      />,
+    )
+    expect(screen.queryByText('[[Korn Ferry]]')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('viewpart-cell-link'))
+    expect(onOpenPath).toHaveBeenCalledTimes(1)
+    expect(onOpenPath).toHaveBeenCalledWith('Companies/korn-ferry.md')
+  })
+})
+
 // ── tiles ───────────────────────────────────────────────────────────────────
 
 describe('TilesPart', () => {
@@ -342,6 +470,28 @@ describe('TilesPart', () => {
   })
 })
 
+describe('TilesPart — row open action (KB-8a)', () => {
+  const part: ViewResultPart = { part: 'tiles', source: { part: 'tiles' } }
+  const rows = [row('havi.md', 'HAVI', {}), row('kestrel.md', 'Kestrel Partners', {})]
+
+  it('renders a plain, non-interactive tile when onOpenPath is not supplied (unchanged default)', () => {
+    render(<TilesPart part={part} rows={rows} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('renders each tile as one keyboard-reachable button that opens its own row', () => {
+    const onOpenPath = vi.fn()
+    render(<TilesPart part={part} rows={rows} onOpenPath={onOpenPath} />)
+    const tiles = screen.getAllByTestId('viewpart-tile')
+    expect(tiles).toHaveLength(2)
+    tiles.forEach((t) => expect(t.tagName).toBe('BUTTON'))
+    expect(tiles[1]).toHaveAttribute('tabIndex', '0')
+    fireEvent.click(tiles[1] as HTMLElement)
+    expect(onOpenPath).toHaveBeenCalledWith('kestrel.md')
+    expect(onOpenPath).toHaveBeenCalledTimes(1)
+  })
+})
+
 // ── columns (board) ─────────────────────────────────────────────────────────
 
 describe('ColumnsPart', () => {
@@ -364,6 +514,27 @@ describe('ColumnsPart', () => {
     expect(cols[2]?.textContent).toContain('Not set')
     // Read-only: no draggable attribute, no button role on cards.
     expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+})
+
+describe('ColumnsPart — row open action (KB-8a)', () => {
+  const part: ViewResultPart = {
+    part: 'columns',
+    source: { part: 'columns', choice: 'status' },
+  }
+  const rows = [
+    row('a.md', 'INV-A', { status: 'Sent' }),
+    row('b.md', 'INV-B', { status: 'Overdue' }),
+  ]
+
+  it('gives each card a keyboard-reachable open button when onOpenPath is supplied', () => {
+    const onOpenPath = vi.fn()
+    render(<ColumnsPart part={part} rows={rows} onOpenPath={onOpenPath} />)
+    const cards = screen.getAllByTestId('viewpart-board-card')
+    expect(cards).toHaveLength(2)
+    cards.forEach((c) => expect(c.tagName).toBe('BUTTON'))
+    fireEvent.click(screen.getByText('INV-B'))
+    expect(onOpenPath).toHaveBeenCalledWith('b.md')
   })
 })
 
@@ -434,6 +605,26 @@ describe('CalendarPart', () => {
     render(<CalendarPart part={partWithGroups} rows={sameDayRows} />)
     const events = screen.getAllByTestId('viewpart-calendar-event')
     expect(events.map((e) => e.textContent)).toEqual(['EVENT-A'])
+  })
+})
+
+describe('CalendarPart — row open action (KB-8a)', () => {
+  it('renders each event as a keyboard-reachable button that opens its own row', () => {
+    const part: ViewResultPart = { part: 'calendar', source: { part: 'calendar', date: 'due_date' } }
+    const onOpenPath = vi.fn()
+    render(<CalendarPart part={part} rows={ROWS} onOpenPath={onOpenPath} />)
+    const events = screen.getAllByTestId('viewpart-calendar-event')
+    events.forEach((e) => expect(e.tagName).toBe('BUTTON'))
+    const first = events.find((e) => e.textContent === 'INV-2026-041')
+    fireEvent.click(first as HTMLElement)
+    expect(onOpenPath).toHaveBeenCalledWith('inv-041.md')
+  })
+
+  it('renders plain, non-interactive events when onOpenPath is not supplied (unchanged default)', () => {
+    const part: ViewResultPart = { part: 'calendar', source: { part: 'calendar', date: 'due_date' } }
+    render(<CalendarPart part={part} rows={ROWS} />)
+    expect(screen.queryAllByRole('button', { name: /Next month|Previous month/ })).toHaveLength(2)
+    expect(screen.getAllByTestId('viewpart-calendar-event').every((e) => e.tagName === 'DIV')).toBe(true)
   })
 })
 

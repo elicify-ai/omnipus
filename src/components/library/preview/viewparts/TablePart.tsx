@@ -14,6 +14,7 @@
 // SGD", design §5), and the unit property loses its own column when both are
 // listed.
 
+import type { ReactNode } from 'react'
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import {
   cellValue,
@@ -24,6 +25,42 @@ import {
   FILE_NAME_PROPERTY,
 } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter, UnitValue } from './PartChrome'
+import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
+
+/** The row-level click target every openable part shares: mouse convenience
+ *  on the row/card itself, plus one real, keyboard-reachable button that is
+ *  the row's own identity — same pattern as workspaces/ListView.tsx's
+ *  TaskRow, for the same reason (KB-8a): a <tr> cannot itself be a <button>,
+ *  so the row stays mouse-clickable while ONE inner button is the real
+ *  keyboard/AT entry point, and it stops its own click from bubbling so the
+ *  row's onClick never fires twice for one click. */
+function RowOpenButton({
+  children,
+  rowTitle,
+  onOpen,
+  className,
+}: {
+  children: ReactNode
+  rowTitle: string
+  onOpen: () => void
+  className: string
+}) {
+  return (
+    <button
+      type="button"
+      tabIndex={0}
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpen()
+      }}
+      aria-label={`Open ${rowTitle}`}
+      data-testid="viewpart-row-open"
+      className={className}
+    >
+      {children}
+    </button>
+  )
+}
 
 /** Column header text: 'file.name' reads as "Name", the rest as declared. */
 function columnLabel(property: string): string {
@@ -46,31 +83,55 @@ function Cell({
   part,
   numeric,
   excluded,
+  primary,
+  onOpenPath,
+  cellLinks,
 }: {
   row: VaultFindRow
   property: string
   part: ViewResultPart
   numeric: boolean
   excluded: boolean
+  /** True for the row's identity column (KB-8a) — the ONE cell that hosts
+   *  the real keyboard/AT open button, when `onOpenPath` is supplied. */
+  primary: boolean
+  onOpenPath?: ((path: string) => void) | undefined
+  cellLinks?: ViewCellLinkResolver | undefined
 }) {
   const value = cellValue(row, property)
   if (!numeric) {
     return (
       <td className="max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">
-        {value}
+        {primary && onOpenPath ? (
+          <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="block w-full truncate text-left">
+            {value}
+          </RowOpenButton>
+        ) : cellLinks ? (
+          <CellText value={value} resolver={cellLinks} />
+        ) : (
+          value
+        )}
       </td>
     )
   }
   const unitProperty = partUnitProperty(part)
   const unit = unitProperty === undefined ? undefined : cellValue(row, unitProperty)
+  const numberBody =
+    value === '' ? (
+      <span className="text-[var(--color-muted)]">—</span>
+    ) : (
+      <span className={excluded ? 'text-[var(--color-muted)]' : undefined}>
+        <UnitValue value={value} unit={unit === '' ? undefined : unit} />
+      </span>
+    )
   return (
     <td className="whitespace-nowrap border-b border-[var(--color-border)] px-3 py-1.5 text-right">
-      {value === '' ? (
-        <span className="text-[var(--color-muted)]">—</span>
+      {primary && onOpenPath ? (
+        <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="inline-block text-right">
+          {numberBody}
+        </RowOpenButton>
       ) : (
-        <span className={excluded ? 'text-[var(--color-muted)]' : undefined}>
-          <UnitValue value={value} unit={unit === '' ? undefined : unit} />
-        </span>
+        numberBody
       )}
       {excluded && <ExcludedRowMark />}
     </td>
@@ -82,19 +143,28 @@ function BodyRows({
   columns,
   part,
   numeric,
+  onOpenPath,
+  cellLinks,
 }: {
   rows: VaultFindRow[]
   columns: string[]
   part: ViewResultPart
   numeric: Set<string>
+  onOpenPath?: ((path: string) => void) | undefined
+  cellLinks?: ViewCellLinkResolver | undefined
 }) {
   return (
     <>
       {rows.map((row) => {
         const excluded = rowExcludedFromTotals(row, part)
         return (
-          <tr key={row.path} data-testid="viewpart-table-row">
-            {columns.map((property) => (
+          <tr
+            key={row.path}
+            data-testid="viewpart-table-row"
+            className={onOpenPath ? 'cursor-pointer hover:bg-[var(--color-surface-2)]/40' : undefined}
+            {...(onOpenPath ? { onClick: () => onOpenPath(row.path) } : {})}
+          >
+            {columns.map((property, i) => (
               <Cell
                 key={property}
                 row={row}
@@ -102,6 +172,9 @@ function BodyRows({
                 part={part}
                 numeric={numeric.has(property)}
                 excluded={excluded && numeric.has(property)}
+                primary={i === 0}
+                onOpenPath={onOpenPath}
+                cellLinks={cellLinks}
               />
             ))}
           </tr>
@@ -111,7 +184,20 @@ function BodyRows({
   )
 }
 
-export function TablePart({ part, rows }: { part: ViewResultPart; rows: VaultFindRow[] }) {
+export function TablePart({
+  part,
+  rows,
+  onOpenPath,
+  cellLinks,
+}: {
+  part: ViewResultPart
+  rows: VaultFindRow[]
+  /** Opens a row's own note (KB-8a). Absent renders every row exactly as
+   *  before — inert markup, no button, no cursor change. */
+  onOpenPath?: (path: string) => void
+  /** Renders a relation cell's raw `[[wikilink]]` as a real link (KB-8b). */
+  cellLinks?: ViewCellLinkResolver
+}) {
   // code-review finding #3(b): `part.columns ?? [FILE_NAME_PROPERTY]` only
   // caught `undefined` — a part that "declares no properties" as the EMPTY
   // ARRAY sailed through with zero columns, which made the group-header
@@ -156,7 +242,14 @@ export function TablePart({ part, rows }: { part: ViewResultPart; rows: VaultFin
           </thead>
           <tbody>
             {groups === undefined ? (
-              <BodyRows rows={rows} columns={columns} part={part} numeric={numeric} />
+              <BodyRows
+                rows={rows}
+                columns={columns}
+                part={part}
+                numeric={numeric}
+                onOpenPath={onOpenPath}
+                cellLinks={cellLinks}
+              />
             ) : (
               groups.map((group) => {
                 const memberRows = group.paths
@@ -170,6 +263,8 @@ export function TablePart({ part, rows }: { part: ViewResultPart; rows: VaultFin
                     columns={columns}
                     part={part}
                     numeric={numeric}
+                    onOpenPath={onOpenPath}
+                    cellLinks={cellLinks}
                   />
                 )
               })
@@ -192,12 +287,16 @@ function FragmentRows({
   columns,
   part,
   numeric,
+  onOpenPath,
+  cellLinks,
 }: {
   group: NonNullable<ViewResultPart['groups']>[number]
   memberRows: VaultFindRow[]
   columns: string[]
   part: ViewResultPart
   numeric: Set<string>
+  onOpenPath?: ((path: string) => void) | undefined
+  cellLinks?: ViewCellLinkResolver | undefined
 }) {
   return (
     <>
@@ -210,7 +309,14 @@ function FragmentRows({
           <GroupHeaderLabel label={group.key} count={group.count} absent={group.absent} />
         </td>
       </tr>
-      <BodyRows rows={memberRows} columns={columns} part={part} numeric={numeric} />
+      <BodyRows
+        rows={memberRows}
+        columns={columns}
+        part={part}
+        numeric={numeric}
+        onOpenPath={onOpenPath}
+        cellLinks={cellLinks}
+      />
       {/* Per-group, per-unit subtotal rows — the wireframe's `tr.sub`. ONE ROW
           PER UNIT VALUE (G2): the list shape upstream makes a combined figure
           inexpressible, and this renderer keeps it that way. */}
