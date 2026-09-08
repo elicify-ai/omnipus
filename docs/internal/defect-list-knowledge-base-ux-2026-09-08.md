@@ -134,6 +134,78 @@ whether a manual collapse of the active workspace must survive a reload — a
 naive "always expand the active one" would fight a user who deliberately
 collapsed it.
 
+---
+
+### KB-6 — search results give no signal about what is relevant, and show too little to judge
+**Severity:** medium · **Area:** Library SPA (+ contract for part of it) · **Reported by:** founder (UAT run)
+
+Searching a real knowledge base returns a long flat list of title-plus-one-line
+rows. Nothing indicates which document actually matters, the matched term is
+not visually marked, one line is rarely enough to judge a hit, and a row does
+not say whether it came from the filesystem or a knowledge base.
+
+Four distinct causes sit behind the one complaint, and they are NOT equally
+expensive:
+
+**(a) One hit = one matching line.** A note with 30 matching lines becomes 30
+rows. This is most of the perceived volume. Collapsing to one row per
+document, with a match count and the best excerpt (expandable), is the single
+biggest reduction available and needs no ranking work. The match count is
+itself a relevance signal people read instinctively.
+
+**(b) Relevance is computed and then thrown away — for knowledge bases.**
+`IndexHit.Score` is a real BM25 score (`pkg/knowledge/index.go:221`) but it is
+NOT on the wire: neither `VaultSearchNoteHit` nor `FileSearchHit` carries a
+score. The UI cannot order by relevance or show it, even though the engine
+knows.
+
+**File search has no ranking at all, by design.** `Result.Hits` is sorted
+path-lexicographic-then-line for determinism (spec A3, `pkg/filegrep/filegrep.go`),
+so the most relevant file can legitimately be last. Ranking it is a SPEC
+DECISION, not a tweak: the deterministic order is what makes truncation honest
+and results reproducible. If relevance ordering is introduced, keep the
+path-lexicographic order as the tiebreak so equal-relevance results stay stable.
+
+**Do not display a raw BM25 number.** The code states it directly: scores are
+"comparable only within one result set — BM25 is not normalised across queries
+or across indexes" (`pkg/knowledge/index.go:223-224`). A number like `0.83`
+would look authoritative and mean nothing between two searches. Ordering, or at
+most a coarse strong/weak marker, is honest; a number is not.
+
+**(c) Too little context — and for FILE search this is a one-line fix.**
+`FileSearchHit` already carries `context_before` and `context_after` (maxItems 5
+each) and the engine populates them. The SPA asks for
+`context_lines: 0` (`src/components/library/search/useFileSearch.ts:171`).
+Setting it to 1 yields the match plus a line either side with NO backend,
+contract or engine change.
+`VaultSearchNoteHit` is different: it has only a single `snippet` and no context
+fields, so multi-line for knowledge base hits is real work — widen what the
+indexer produces, or add context fields to the contract.
+
+**(d) The matched term is not highlighted, and no offsets exist on the wire.**
+Two options: highlight CLIENT-SIDE (the SPA knows the query — cheap, works for
+both search kinds today, but approximate under smart/insensitive case and
+cannot know which occurrence the engine actually matched), or carry match
+OFFSETS from the engine (exact and honest, but a contract change plus engine
+work). Client-side first is the sensible order.
+Colour note: the founder asked for yellow; yellow reads as "warning" elsewhere
+in this UI. The Forge Gold accent is the established emphasis colour — confirm
+which is wanted before implementing.
+
+**(e) No per-row source marker.** A row does not say whether it is a filesystem
+result or a knowledge base result. The row already knows which shape it
+rendered from, so a marker is cheap.
+**Worth verifying first:** today these are separate MODES — a plain folder
+renders file results, a knowledge base renders the tabbed
+Notes/Records/Views/Attachments view — so they should not be mixing. If the
+founder is seeing an ambiguous mixed list, that is a distinct defect and should
+be reproduced before this is treated as presentation-only.
+
+**Suggested bundle (not a decision):** (c) context_lines -> 1, (d) client-side
+highlight, (e) source marker, (a) collapse per document, (b) order by the score
+that already exists. Together they address both halves of the complaint — too
+many results, and no signal about which matter.
+
 ## `grep` tool — agent field test
 
 ### DEFECT-G1 — a path pointing at a file produces a false "not found" error
@@ -231,6 +303,7 @@ test that did not reproduce the documented condition.
 | KB-3 | New knowledge base dialog asks for known context | Medium | Open |
 | KB-4 | "New workspace" shown in Library create menu | Low | Open |
 | KB-5 | Active workspace collapsed in the sidebar | Low | Open |
+| KB-6 | Search results: no relevance signal, too little context, no source marker | Medium | Open |
 | DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
 | OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
 | DOC-1 | Concurrency doc claim | — | Closed — not a defect |
