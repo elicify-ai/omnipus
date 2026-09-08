@@ -73,8 +73,8 @@ func (m *BrowserManager) runLocalStartup(flight *startupCohort, cfg BrowserConfi
 			return fmt.Errorf("browser: cannot locate chromium: %w", err)
 		}
 		cmdline := managedExecAllocatorOpts(cfg, chromeMajorVersion(flight.ctx, execPath))
-		if err := flight.ctx.Err(); err != nil {
-			return err
+		if canceledErr := flight.ctx.Err(); canceledErr != nil {
+			return canceledErr
 		}
 		if launcher == nil {
 			launcher = launchManagedPipe

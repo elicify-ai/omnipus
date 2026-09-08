@@ -73,8 +73,8 @@ func TestCaptureContextConstructorRoutesRealInput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := encoder.AddTrack(video); err != nil {
-				t.Fatal(err)
+			if _, addTrackErr := encoder.AddTrack(video); addTrackErr != nil {
+				t.Fatal(addTrackErr)
 			}
 			answer, err := server.HandleIngestOffer(captureConstructorOffer(t, encoder))
 			if err != nil {
@@ -99,8 +99,8 @@ func TestCaptureContextConstructorRoutesRealInput(t *testing.T) {
 			}()
 			defer func() { close(stop); <-stopped }()
 			viewer := captureConstructorPeer(t)
-			if _, err := viewer.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
-				t.Fatal(err)
+			if _, transceiverErr := viewer.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); transceiverErr != nil {
+				t.Fatal(transceiverErr)
 			}
 			dc, err := viewer.CreateDataChannel("input", nil)
 			if err != nil {

@@ -75,7 +75,7 @@ func TestEncoderStartupSuccessfulTargetOutlivesCaller(t *testing.T) {
 	defer cancelCaller()
 	var lifetime context.Context
 	ctx, closeTarget, err := runEncoderStartup(caller, context.Background(), func(parent context.Context) (*tabEntry, error) {
-		lifetime = parent
+		lifetime = parent //nolint:fatcontext // Retains an original context for ownership or observation; it does not derive a context from an earlier iteration.
 		target, cancel := context.WithCancel(parent)
 		return &tabEntry{ctx: target, cancel: cancel}, nil
 	}, func(ctx context.Context) error { return ctx.Err() })
@@ -101,7 +101,7 @@ func TestEncoderStartupCancellationClosesTarget(t *testing.T) {
 			go func() {
 				_, _, err := runEncoderStartup(caller, context.Background(), func(parent context.Context) (*tabEntry, error) {
 					var closeTarget context.CancelFunc
-					target, closeTarget = context.WithCancel(parent)
+					target, closeTarget = context.WithCancel(parent) //nolint:fatcontext // Creates one child for this invocation and retains it to verify cancellation; not a context chain.
 					if stage == "create" {
 						close(entered)
 						<-parent.Done()
@@ -134,7 +134,7 @@ func TestEncoderStartupNavigationFailureClosesTarget(t *testing.T) {
 	var target context.Context
 	_, closeTarget, err := runEncoderStartup(context.Background(), context.Background(), func(parent context.Context) (*tabEntry, error) {
 		var cancel context.CancelFunc
-		target, cancel = context.WithCancel(parent)
+		target, cancel = context.WithCancel(parent) //nolint:fatcontext // Creates one child for this invocation and retains it to verify cancellation; not a context chain.
 		return &tabEntry{ctx: target, cancel: cancel}, nil
 	}, func(context.Context) error { return failure })
 	require.ErrorIs(t, err, failure)

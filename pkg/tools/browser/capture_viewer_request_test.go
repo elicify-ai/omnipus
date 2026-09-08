@@ -11,6 +11,8 @@ import (
 	relay "github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
+type captureRequestRouteKey struct{}
+
 type requestOfferProbe struct {
 	fakeOfferRelay
 	calls       atomic.Int64
@@ -55,7 +57,7 @@ func TestCaptureViewerRequestRejectsDelayedOldAdmission(t *testing.T) {
 	cs := captureRequestFixture(t, r)
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a, newest, err := cs.HandleViewerOfferRequest(context.Background(), context.WithValue(parent, "route", "new"), 2, "viewer", "new")
+	a, newest, err := cs.HandleViewerOfferRequest(context.Background(), context.WithValue(parent, captureRequestRouteKey{}, "new"), 2, "viewer", "new")
 	if err != nil || a != "answer-new" || newest == nil {
 		t.Fatalf("new result %q %v %v", a, newest, err)
 	}
@@ -63,13 +65,13 @@ func TestCaptureViewerRequestRejectsDelayedOldAdmission(t *testing.T) {
 	if count != 1 || winner.relayHandle != newest.relay {
 		t.Fatal("new viewer was not registered exactly once")
 	}
-	a, old, err := cs.HandleViewerOfferRequest(context.Background(), context.WithValue(parent, "route", "old"), 1, "viewer", "old")
+	a, old, err := cs.HandleViewerOfferRequest(context.Background(), context.WithValue(parent, captureRequestRouteKey{}, "old"), 1, "viewer", "old")
 	if err == nil || a != "" || old != nil {
 		t.Errorf("delayed old admitted: answer=%q handle=%v err=%v", a, old, err)
 	}
 	cs.CleanupViewerOffer(old)
 	got, count, _ := captureRequestRegistration(cs)
-	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", winner.relayHandle.(*fakeOfferHandle)) {
+	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", fixtureValue[*fakeOfferHandle](winner.relayHandle)) {
 		t.Fatal("delayed old request/cleanup displaced winning registration or peer")
 	}
 	if r.calls.Load() != 1 || r.legacyCalls.Load() != 0 {
@@ -128,7 +130,7 @@ func TestCaptureViewerRequestRetainsActiveDuringCanceledReplacement(t *testing.T
 	}
 	cs.CleanupViewerOffer(out.handle)
 	got, count, _ = captureRequestRegistration(cs)
-	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", winner.relayHandle.(*fakeOfferHandle)) {
+	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", fixtureValue[*fakeOfferHandle](winner.relayHandle)) {
 		t.Fatal("canceled pre-install replacement lost the active viewer")
 	}
 	if parent.Err() != nil {
@@ -190,7 +192,7 @@ func TestCaptureViewerRequestRejectsLateSuccessAndKeepsExactCleanup(t *testing.T
 	}
 	cs.CleanupViewerOffer(old.handle)
 	got, count, _ := captureRequestRegistration(cs)
-	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", winner.relayHandle.(*fakeOfferHandle)) {
+	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", fixtureValue[*fakeOfferHandle](winner.relayHandle)) {
 		t.Fatal("late completion cleanup removed winning registration or peer")
 	}
 }
@@ -262,7 +264,7 @@ func TestCaptureViewerRequestCohortReplacement(t *testing.T) {
 	}
 	cs.CleanupViewerOffer(first)
 	got, count, _ := captureRequestRegistration(cs)
-	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", winner.relayHandle.(*fakeOfferHandle)) {
+	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", fixtureValue[*fakeOfferHandle](winner.relayHandle)) {
 		t.Fatal("old cohort cleanup removed replacement")
 	}
 }
@@ -432,7 +434,7 @@ func TestCaptureViewerRequestDecoratedCohortKeepsEpochOrdering(t *testing.T) {
 	cs.CleanupViewerOffer(duplicate)
 	cs.CleanupViewerOffer(first)
 	got, count, _ := captureRequestRegistration(cs)
-	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", winner.relayHandle.(*fakeOfferHandle)) {
+	if got != winner || count != 1 || !r.isCurrentlyRegistered("viewer", fixtureValue[*fakeOfferHandle](winner.relayHandle)) {
 		t.Error("wrapper/replay cleanup replaced current viewer")
 	}
 	if r.calls.Load() != 2 || r.legacyCalls.Load() != 0 {

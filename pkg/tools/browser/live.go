@@ -1819,18 +1819,6 @@ func (lv *LiveView) reapplyViewportPass(tabCtx context.Context, w, h int, scale 
 	}
 }
 
-// cssViewportSnapshot returns the cached CSS layout viewport, or ok=false when
-// it is unset/invalidated. The LiveView-level counterpart of the registry's
-// CSSViewport, for callers that already hold the LiveView.
-func (lv *LiveView) cssViewportSnapshot() (int, int, bool) {
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	if lv.cssViewportW <= 0 || lv.cssViewportH <= 0 {
-		return 0, 0, false
-	}
-	return lv.cssViewportW, lv.cssViewportH, true
-}
-
 // rebindWatch re-targets an ALREADY-ACTIVE death watch to newCtx (ADR-041
 // D4 — the tab-strip switch), without touching the browsing context (a
 // chromedp target's lifetime is independent of this) and without dropping

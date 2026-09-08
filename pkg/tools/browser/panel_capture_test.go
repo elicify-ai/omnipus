@@ -2,6 +2,7 @@ package browser
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -28,8 +29,8 @@ func TestPanelCaptureLifecycleRejectsAdmissionDuringOverlappingTeardown(t *testi
 				t.Fatal(err)
 			}
 			cs.SetOnStopped(func() { m.ClearCaptureSession(cs) })
-			if _, err := m.EnsureCaptureSessionForPanel("old", func() (*CaptureSession, error) { return cs, nil }); err != nil {
-				t.Fatal(err)
+			if _, installErr := m.EnsureCaptureSessionForPanel("old", func() (*CaptureSession, error) { return cs, nil }); installErr != nil {
+				t.Fatal(installErr)
 			}
 			finished := make(chan struct{})
 			go func() {
@@ -81,11 +82,11 @@ func TestPanelCaptureLifecycleRejectsAdmissionDuringOverlappingTeardown(t *testi
 				admission := make(chan admissionResult, 1)
 				go func() {
 					factoryCalled := false
-					got, err := m.EnsureCaptureSessionForPanel("new", func() (*CaptureSession, error) {
+					got, replacementErr := m.EnsureCaptureSessionForPanel("new", func() (*CaptureSession, error) {
 						factoryCalled = true
 						return NewCaptureSessionWithDeps(m, "new", &fakeRelay{}, nil, nil)
 					})
-					admission <- admissionResult{got, err, factoryCalled}
+					admission <- admissionResult{got, replacementErr, factoryCalled}
 				}()
 				select {
 				case got := <-admission:
@@ -129,7 +130,7 @@ func TestPanelCaptureKeepsIndependentRoutes(t *testing.T) {
 	}
 	got, err := m.EnsureCaptureSessionForPanel("panel-a", func() (*CaptureSession, error) {
 		t.Fatal("same-panel reuse unexpectedly invoked factory")
-		return nil, nil
+		return nil, fmt.Errorf("same-panel reuse unexpectedly invoked factory")
 	})
 	if err != nil || got != a {
 		t.Fatalf("same panel did not reuse its capture: got=%p err=%v", got, err)

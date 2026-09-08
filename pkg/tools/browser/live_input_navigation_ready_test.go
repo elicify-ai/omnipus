@@ -21,11 +21,11 @@ func TestLiveInputBackWorksWithoutReadyPicture(t *testing.T) {
 				methods = append(methods, method)
 				switch method {
 				case "Page.getNavigationHistory":
-					r := result.(*page.GetNavigationHistoryReturns)
+					r := fixtureValue[*page.GetNavigationHistoryReturns](result)
 					r.CurrentIndex = 1
 					r.Entries = []*page.NavigationEntry{{ID: 17}, {ID: 23}}
 				case "Page.navigateToHistoryEntry":
-					if id := params.(*page.NavigateToHistoryEntryParams).EntryID; id != 17 {
+					if id := fixtureValue[*page.NavigateToHistoryEntryParams](params).EntryID; id != 17 {
 						t.Fatalf("Back chose entry %d, want 17", id)
 					}
 				default:

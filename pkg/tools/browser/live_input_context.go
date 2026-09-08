@@ -149,7 +149,7 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	// Ordinary interaction must describe the committed picture. Navigation
 	// controls and an already-owned release do not depend on that picture.
 	var frameLifetime context.Context
-	if !(tracked && releasing) && !navigationInputKind(in.Kind) {
+	if (!tracked || !releasing) && !navigationInputKind(in.Kind) {
 		lv.mu.Lock()
 		document := lv.documentWatch
 		lv.mu.Unlock()
@@ -232,12 +232,12 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 		return realInputError("%w", err)
 	}
 	if in.Kind == "navigate" {
-		if err := lv.mgr.ValidateURL(ctx, in.URL); err != nil {
-			return realInputError("browser live: navigate blocked: %w", err)
+		if validationErr := lv.mgr.ValidateURL(ctx, in.URL); validationErr != nil {
+			return realInputError("browser live: navigate blocked: %w", validationErr)
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return realInputError("browser live: input canceled: %w", err)
+	if canceledErr := ctx.Err(); canceledErr != nil {
+		return realInputError("browser live: input canceled: %w", canceledErr)
 	}
 	skip, buttons, modifiers, err := lv.prepareHeldInput(targetCtx, viewerID, in)
 	if err != nil {
@@ -582,7 +582,10 @@ func (lv *LiveView) reportInputCleanup(err error) {
 type navigationInputAction struct{ url string }
 
 func (a navigationInputAction) Do(ctx context.Context) error {
-	_, _, destinationError, _, err := page.Navigate(a.url).Do(ctx)
+	frameID, loaderID, destinationError, download, err := page.Navigate(a.url).Do(ctx)
+	_ = frameID
+	_ = loaderID
+	_ = download
 	if err != nil {
 		return err
 	}

@@ -88,7 +88,7 @@ func TestCaptureViewerContextPreservesPersistentIdentity(t *testing.T) {
 	var got context.Context
 	var relayHandle any
 	r.offer = func(ctx context.Context, id, sdp string) (string, any, error) {
-		got = ctx
+		got = ctx //nolint:fatcontext // Retains an original context for ownership or observation; it does not derive a context from an earlier iteration.
 		if id != "viewer" || sdp != "exact-offer" {
 			t.Errorf("relay arguments=(%q,%q)", id, sdp)
 		}

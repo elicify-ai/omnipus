@@ -26,15 +26,15 @@ func TestDocumentPaintChecksOriginalDocumentAroundIsolatedPaint(t *testing.T) {
 					if scenario == "changed before" || scenario == "changed during" && reads == 2 {
 						loader = "document-b"
 					}
-					result.(*page.GetFrameTreeReturns).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: loader}}
+					fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: loader}}
 				case "Page.createIsolatedWorld":
-					p := params.(*page.CreateIsolatedWorldParams)
+					p := fixtureValue[*page.CreateIsolatedWorldParams](params)
 					if p.FrameID != "main" || p.WorldName == "" || p.GrantUniveralAccess {
 						t.Fatalf("paint world is not restricted to original main frame: %+v", p)
 					}
-					result.(*page.CreateIsolatedWorldReturns).ExecutionContextID = 71
+					fixtureValue[*page.CreateIsolatedWorldReturns](result).ExecutionContextID = 71
 				case "Runtime.evaluate":
-					p := params.(*runtime.EvaluateParams)
+					p := fixtureValue[*runtime.EvaluateParams](params)
 					if p.ContextID != 71 || !p.AwaitPromise {
 						t.Fatalf("paint did not await isolated execution context: %+v", p)
 					}
@@ -42,7 +42,7 @@ func TestDocumentPaintChecksOriginalDocumentAroundIsolatedPaint(t *testing.T) {
 						return transportFailure
 					}
 					if scenario == "paint exception" {
-						result.(*runtime.EvaluateReturns).ExceptionDetails = &runtime.ExceptionDetails{Text: "document gone"}
+						fixtureValue[*runtime.EvaluateReturns](result).ExceptionDetails = &runtime.ExceptionDetails{Text: "document gone"}
 					}
 				default:
 					t.Fatalf("unexpected protocol operation: %s", method)

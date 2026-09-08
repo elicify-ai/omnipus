@@ -9,8 +9,8 @@ import (
 )
 
 type captureIngestRelay interface {
-	BeginIngestBinding(context.Context) (uint64, error)
-	HandleIngestOfferForBinding(context.Context, uint64, uint64, string, uint64, string) (string, error)
+	BeginIngestBinding(ctx context.Context) (uint64, error)
+	HandleIngestOfferForBinding(ctx context.Context, binding, offer uint64, sdp string, generation uint64, target string) (string, error)
 }
 
 // BindIngestContext publishes one authenticated socket and its independent relay

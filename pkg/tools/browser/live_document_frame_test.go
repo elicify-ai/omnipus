@@ -55,9 +55,9 @@ func TestLiveNavigationRetiresPictureBeforeBrowserCommand(t *testing.T) {
 func TestLiveRejectedNavigationPreservesHealthyPicture(t *testing.T) {
 	calls := 0
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
-	original := installInputTestPicture(t, lv)
+	installInputTestPicture(t, lv)
 	cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
-	original = cs.FrameState()
+	original := cs.FrameState()
 	if !original.Ready {
 		t.Fatal("fixture picture not committed")
 	}

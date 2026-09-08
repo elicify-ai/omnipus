@@ -1,7 +1,7 @@
 package browser
 
 type captureOfferLossNotifier interface {
-	SetOnIngestLostForOffer(func(uint64, uint64, uint64, string))
+	SetOnIngestLostForOffer(callback func(binding, offer, generation uint64, target string))
 	InstalledIngestOffer() (uint64, uint64, uint64, string, uint64)
 }
 

@@ -490,7 +490,7 @@ func (l *launch) startupError(stage string, err, parentErr error) error {
 	}
 	select {
 	case <-l.waitDone:
-		err = fmt.Errorf("Chrome exited before readiness: %w", l.exitError())
+		err = fmt.Errorf("chrome exited before readiness: %w", l.exitError())
 	default:
 	}
 	if hint := l.stderr.hint(); hint != "" {

@@ -130,11 +130,12 @@ func TestPassivePopupLateAttachDisposesRetiredCandidate(t *testing.T) {
 					TargetID: "late-popup", OpenerID: opener, Type: "page",
 				}})
 				<-entered
-				if retirement == "session" {
+				switch retirement {
+				case "session":
 					m.CloseSession(testSessionID)
-				} else if retirement == "session_context" {
+				case "session_context":
 					owner.browserCancel()
-				} else {
+				default:
 					// Chrome can close an opener while another target is attaching. Its
 					// context ends before manager bookkeeping removes the old tab.
 					openerTab.cancel()
@@ -142,16 +143,17 @@ func TestPassivePopupLateAttachDisposesRetiredCandidate(t *testing.T) {
 				close(release)
 				synctest.Wait()
 				require.Equal(t, int32(1), attempts.Load())
-				if retirement == "session" {
+				switch retirement {
+				case "session":
 					require.Equal(t, int32(1), disposed.Load(), "late native target must be discarded exactly once")
 					require.False(t, m.sessionExists(testSessionID), "late popup must not recreate closed session")
-				} else if retirement == "session_context" {
+				case "session_context":
 					require.Equal(t, int32(1), disposed.Load(), "candidate cannot survive the original browser lifetime")
 					m.mu.Lock()
 					popup := m.sessions[testSessionID].indexOfTarget("late-popup")
 					m.mu.Unlock()
 					require.Equal(t, -1, popup)
-				} else {
+				default:
 					m.mu.Lock()
 					popup := m.sessions[testSessionID].indexOfTarget("late-popup")
 					m.mu.Unlock()

@@ -20,11 +20,13 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
@@ -63,12 +65,6 @@ func (l *ingestLedger) lastDims() (int, int) {
 	}
 	d := l.dims[len(l.dims)-1]
 	return d[0], d[1]
-}
-
-func (l *ingestLedger) reset() {
-	l.mu.Lock()
-	l.actions, l.dims = nil, nil
-	l.mu.Unlock()
 }
 
 // orderLog records foreground selection, measurement, and the qualified
@@ -266,10 +262,7 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 		_, err = m.OpenTab(testSessionID)
 		require.NoError(t, err)
 	}
-	_, err = m.live.AttachContext(context.Background(), testSessionID, "viewer-1", nil, nil, nil)
-	require.NoError(t, err)
-	lv, ok := m.live.lookup(testSessionID)
-	require.True(t, ok)
+	lv := m.live.view(testSessionID)
 	order := &orderLog{}
 	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
 		for _, action := range actions {
@@ -279,7 +272,19 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 		}
 		return nil
 	}
-	lv.runCDP = func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+	executor := liveInputExecutor(func(_ context.Context, method string, _, result any) error {
+		switch method {
+		case "Page.getFrameTree":
+			fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: "loaded"}}
+		case "Page.createIsolatedWorld":
+			fixtureValue[*page.CreateIsolatedWorldReturns](result).ExecutionContextID = 71
+		case "Runtime.evaluate":
+		default:
+			return fmt.Errorf("unexpected tab fixture protocol command %s", method)
+		}
+		return nil
+	})
+	lv.runCDP = func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
 		for _, action := range actions {
 			switch a := action.(type) {
 			case viewportFrameGeometryAction:
@@ -287,10 +292,29 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 				order.add("measure")
 			case layoutMetricsAction:
 				*a.w, *a.h = 800, 600
+			case documentPaintAction, chromedp.ActionFunc:
+				if runErr := action.Do(cdp.WithExecutor(ctx, executor)); runErr != nil {
+					return runErr
+				}
 			}
 		}
 		return nil
 	}
+	_, err = m.live.AttachContext(context.Background(), testSessionID, "viewer-1", nil, nil, nil)
+	require.NoError(t, err)
+	// Discovery belongs to the already-loaded fake page, before capture starts.
+	// Do not leave an asynchronous initial query holding an empty response.
+	require.Eventually(t, func() bool {
+		lv.mu.Lock()
+		watch := lv.documentWatch
+		lv.mu.Unlock()
+		if watch == nil {
+			return false
+		}
+		watch.mu.Lock()
+		defer watch.mu.Unlock()
+		return watch.frameID == "main" && watch.processed.Load() >= 1
+	}, time.Second, time.Millisecond)
 	cs, err := NewCaptureSessionWithDeps(m, "agent-e2e", &adapterRelay{nextToken: 40}, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)
 	cs.panelSessionID = testSessionID
@@ -347,12 +371,15 @@ func TestSwitchTab_WithAViewportAppliedRecapturesOnceWithTheVerifiedSize(t *test
 
 	lv.mu.Lock()
 	lv.lastRequestedW, lv.lastRequestedH, lv.lastRequestedScale = 633, 686, 2
-	lv.runCDP = func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+	previous := lv.runCDP
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
 		switch a := actions[0].(type) {
 		case layoutMetricsAction:
 			*a.w, *a.h = 633, 686
 		case viewportFrameGeometryAction:
 			*a.width, *a.height, *a.scale = 633, 686, 2
+		case documentPaintAction, chromedp.ActionFunc:
+			return previous(ctx, timeout, actions...)
 		}
 		return nil
 	}

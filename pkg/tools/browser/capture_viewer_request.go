@@ -8,8 +8,8 @@ import (
 
 type requestViewerOfferHandler interface {
 	viewerOfferHandler
-	HandleViewerOfferHandleRequest(context.Context, context.Context, uint64, string, string) (string, any, error)
-	IsViewerCurrent(any) bool
+	HandleViewerOfferHandleRequest(negotiation, parent context.Context, epoch uint64, viewerID, sdp string) (string, any, error)
+	IsViewerCurrent(handle any) bool
 }
 
 type captureViewerRequest struct {

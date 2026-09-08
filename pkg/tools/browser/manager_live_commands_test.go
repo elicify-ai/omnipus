@@ -84,13 +84,13 @@ func TestLiveTabCommandCanceledLastCloseKeepsOldTarget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { _, _, err := m.CloseTabContext(ctx, testSessionID, 0); result <- err }()
+	go func() { _, _, closeErr := m.CloseTabContext(ctx, testSessionID, 0); result <- closeErr }()
 	<-entered
 	oldErr := old.Err()
 	cancel()
 	select {
-	case err := <-result:
-		require.ErrorIs(t, err, context.Canceled)
+	case resultErr := <-result:
+		require.ErrorIs(t, resultErr, context.Canceled)
 		close(release)
 	case <-time.After(500 * time.Millisecond):
 		close(release)
@@ -126,7 +126,7 @@ func TestLiveTabCommandSuccessfulNewTargetOutlivesCaller(t *testing.T) {
 	var created context.Context
 	m.createTabFn = func(parent context.Context, _ target.ID) (*tabEntry, error) {
 		ctx, cancel := chromedp.NewContext(parent)
-		created = ctx
+		created = ctx //nolint:fatcontext // Retains an original context for ownership or observation; it does not derive a context from an earlier iteration.
 		return &tabEntry{ctx: ctx, cancel: cancel, targetID: "successful-context-target"}, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -165,17 +165,17 @@ func TestLiveTabCommandSerializesConcurrentSwitches(t *testing.T) {
 		}
 	}
 	first := make(chan error, 1)
-	go func() { _, err := m.SwitchTabContext(context.Background(), testSessionID, 0); first <- err }()
+	go func() { _, firstErr := m.SwitchTabContext(context.Background(), testSessionID, 0); first <- firstErr }()
 	<-entered
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	second := make(chan error, 1)
-	go func() { _, err := m.SwitchTabContext(ctx, testSessionID, 1); second <- err }()
+	go func() { _, secondErr := m.SwitchTabContext(ctx, testSessionID, 1); second <- secondErr }()
 	received := false
 	select {
-	case err := <-second:
+	case resultErr := <-second:
 		received = true
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, resultErr, context.DeadlineExceeded)
 	case <-time.After(500 * time.Millisecond):
 		t.Error("queued tab command did not honor its deadline")
 	}

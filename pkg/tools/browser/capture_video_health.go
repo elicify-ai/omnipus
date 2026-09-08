@@ -141,17 +141,6 @@ func (cs *CaptureSession) emitVideoHealth(event VideoHealthEvent) {
 	}
 }
 
-// noteRecaptureIssued records that a recapture has just been asked for, from
-// any source. It opens the window inside which an ingest loss is read as that
-// recapture's own teardown rather than a fresh death — without it, every
-// viewport resize and tab change on a slow box would look like a failure and
-// spend an attempt from the recovery budget.
-func (cs *CaptureSession) noteRecaptureIssued() {
-	cs.mu.Lock()
-	cs.noteRecaptureIssuedLocked(ingestRecoverySettle)
-	cs.mu.Unlock()
-}
-
 // onIngestLost is the relay's SetOnIngestLost callback: the ingest connection
 // died and nothing is feeding the shared local tracks any more.
 //

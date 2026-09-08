@@ -234,7 +234,7 @@ type viewerOfferHandler interface {
 // relay that also supports the existing exact-handle cleanup contract.
 type contextViewerOfferHandler interface {
 	viewerOfferHandler
-	HandleViewerOfferHandleContext(context.Context, string, string) (string, any, error)
+	HandleViewerOfferHandleContext(ctx context.Context, viewerID, sdp string) (string, any, error)
 }
 
 // viewerRegistration is the value CaptureSession.viewers stores per attached
@@ -657,9 +657,9 @@ func runEncoderStartup(caller, root context.Context, create func(context.Context
 		return nil, nil, err
 	}
 	closeTarget := func() { closeLifetime(); tab.cancel() }
-	if err := startup.Err(); err != nil {
+	if startupErr := startup.Err(); startupErr != nil {
 		closeTarget()
-		return nil, nil, err
+		return nil, nil, startupErr
 	}
 	deadline, _ := startup.Deadline()
 	runCtx, cancelRun := context.WithDeadline(tab.ctx, deadline)

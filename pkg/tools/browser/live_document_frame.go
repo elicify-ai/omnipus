@@ -169,7 +169,7 @@ func (w *liveDocumentWatch) beginLocked(loader cdp.LoaderID) (*liveDocumentWork,
 	}
 	cs := w.lv.mgr.CaptureSessionForPanel(w.lv.sessionID)
 	if cs == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // No active capture means no document work, not an operation failure.
 	}
 	active, target, err := w.lv.mgr.activeTargetSnapshot(w.lv.sessionID)
 	if err != nil {
@@ -183,7 +183,7 @@ func (w *liveDocumentWatch) beginLocked(loader cdp.LoaderID) (*liveDocumentWork,
 		return w.ctx.Err() == nil && (currentTarget == "" || currentTarget == string(target))
 	})
 	if errors.Is(err, context.Canceled) {
-		return nil, nil // A stopped capture cannot authorize old input.
+		return nil, nil //nolint:nilnil // No active capture means no document work, not an operation failure.
 	}
 	if err != nil {
 		return nil, err
@@ -382,20 +382,20 @@ func (w *liveDocumentWatch) settle(work *liveDocumentWork, frame cdp.FrameID, lo
 		if !w.owns(work) {
 			return false, ErrStaleCaptureFrame
 		}
-		geometry, err := w.lv.measureCaptureFrame(operation, work.cs)
-		if err != nil {
-			return false, err
+		geometry, measureErr := w.lv.measureCaptureFrame(operation, work.cs)
+		if measureErr != nil {
+			return false, measureErr
 		}
-		if err := w.lv.runCDP(operation, viewportScaleTimeout, chromedp.ActionFunc(paint.checkDocument)); err != nil {
-			return false, err
+		if verifyErr := w.lv.runCDP(operation, viewportScaleTimeout, chromedp.ActionFunc(paint.checkDocument)); verifyErr != nil {
+			return false, verifyErr
 		}
 		// Completion retires the token itself. Detach its cancellation hook
 		// first; the capture's atomic token check still rejects supersession.
 		if !stopToken() || ctx.Err() != nil || !w.owns(work) {
 			return false, ErrStaleCaptureFrame
 		}
-		measured, err = work.cs.completeDocumentTransition(work.token, geometry.Width, geometry.Height, geometry.Scale)
-		return err == nil, err
+		measured, measureErr = work.cs.completeDocumentTransition(work.token, geometry.Width, geometry.Height, geometry.Scale)
+		return measureErr == nil, measureErr
 	}, func(operation context.Context) error {
 		if !work.cs.RecaptureFrameContext(operation, measured) {
 			return fmt.Errorf("browser live: document recapture was not admitted")

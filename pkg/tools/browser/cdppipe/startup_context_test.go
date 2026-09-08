@@ -50,7 +50,7 @@ func TestStartupContextCancellationReapsBlockedProcess(t *testing.T) {
 		err    error
 	}
 	done := make(chan result, 1)
-	started := time.Now()
+	var started time.Time
 	go func() {
 		_, cancel, err := NewPipeAllocatorWithStartupContext(context.Background(), caller, os.Args[0], opts)
 		done <- result{cancel, err}

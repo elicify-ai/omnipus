@@ -76,11 +76,11 @@ func TestLifecycleLateAppendOrAdoptionCannotRecreateClosedSession(t *testing.T) 
 			done := make(chan error, 1)
 			go func() {
 				if adopt {
-					_, err := m.adoptTarget(testSessionID, "late-popup")
-					done <- err
+					_, adoptErr := m.adoptTarget(testSessionID, "late-popup")
+					done <- adoptErr
 				} else {
-					_, err := m.OpenTab(testSessionID)
-					done <- err
+					_, openErr := m.OpenTab(testSessionID)
+					done <- openErr
 				}
 			}()
 			<-entered

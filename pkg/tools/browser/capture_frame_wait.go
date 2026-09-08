@@ -37,7 +37,7 @@ func (cs *CaptureSession) WaitConfirmedFrame(ctx context.Context, captureID stri
 			return frame, nil
 		}
 		if cs.frameCtx == nil {
-			cs.frameCtx, cs.frameCancel = context.WithCancel(context.Background())
+			cs.frameCtx, cs.frameCancel = context.WithCancel(context.Background()) //nolint:fatcontext // Creates a root lifetime once while absent; no context chain grows across waits.
 		}
 		changed, stopped := cs.frameCtx.Done(), cs.done
 		cs.mu.Unlock()

@@ -3,15 +3,16 @@ package browser
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
-	"reflect"
-	"strings"
-	"testing"
-	"time"
 )
 
 // Expectations derive from FR-004/FR-011: cancellation bounds input, and a
@@ -119,7 +120,7 @@ func TestLiveInputViewportReadUsesRemainingSettleBudget(t *testing.T) {
 	var requested time.Duration
 	lv := newNavigateTestLiveView(t, func(_ context.Context, timeout time.Duration, actions ...chromedp.Action) error {
 		requested = timeout
-		a := actions[0].(layoutMetricsAction)
+		a := fixtureValue[layoutMetricsAction](actions[0])
 		*a.w = 800
 		*a.h = 600
 		return nil
@@ -161,7 +162,7 @@ func TestLiveInputMouseDragCarriesHeldButtons(t *testing.T) {
 func TestLiveInputUncertainPressIsReleasedOnDetach(t *testing.T) {
 	var keys []*input.DispatchKeyEventParams
 	lv := newNavigateTestLiveView(t, func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		keys = append(keys, actions[0].(*input.DispatchKeyEventParams))
+		keys = append(keys, fixtureValue[*input.DispatchKeyEventParams](actions[0]))
 		if len(keys) == 1 {
 			return context.DeadlineExceeded
 		}
@@ -249,7 +250,7 @@ func TestLiveInputTransportFailurePressIsReleased(t *testing.T) {
 	var sequence []input.KeyType
 	disconnected := errors.New("CDP connection closed after send")
 	lv := newNavigateTestLiveView(t, func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		sequence = append(sequence, actions[0].(*input.DispatchKeyEventParams).Type)
+		sequence = append(sequence, fixtureValue[*input.DispatchKeyEventParams](actions[0]).Type)
 		if len(sequence) == 1 {
 			return disconnected
 		}
@@ -307,10 +308,10 @@ func TestLiveInputNavigationAcknowledgesWithoutLoadEvent(t *testing.T) {
 				if method != "Page.navigate" {
 					t.Fatalf("unexpected protocol command %s", method)
 				}
-				if params.(*page.NavigateParams).URL != "https://example.com/destination" {
+				if fixtureValue[*page.NavigateParams](params).URL != "https://example.com/destination" {
 					t.Fatalf("wrong destination: %+v", params)
 				}
-				result.(*page.NavigateReturns).ErrorText = destinationError
+				fixtureValue[*page.NavigateReturns](result).ErrorText = destinationError
 				return nil
 			}))
 			action, err := buildInputAction(LiveInput{Kind: "navigate", URL: "https://example.com/destination"})
@@ -378,7 +379,7 @@ func TestLiveInputDetachCancelsInFlightPressThenReleases(t *testing.T) {
 	entered := make(chan struct{})
 	var sequence []input.KeyType
 	lv := newNavigateTestLiveView(t, func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		sequence = append(sequence, actions[0].(*input.DispatchKeyEventParams).Type)
+		sequence = append(sequence, fixtureValue[*input.DispatchKeyEventParams](actions[0]).Type)
 		if len(sequence) == 1 {
 			close(entered)
 			<-ctx.Done()
@@ -408,7 +409,7 @@ func TestLiveInputTabRetirementReleasesOriginalTarget(t *testing.T) {
 	released := make(chan string, 1)
 	lv := newNavigateTestLiveView(t, func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
 		if key, ok := actions[0].(*input.DispatchKeyEventParams); ok && key.Type == input.KeyUp {
-			released <- ctx.Value(targetKey{}).(string)
+			released <- fixtureValue[string](ctx.Value(targetKey{}))
 		}
 		return nil
 	})
@@ -498,7 +499,7 @@ func TestLiveInputUnownedReleaseNeverReachesBrowser(t *testing.T) {
 func TestLiveInputRepeatedDetachDoesNotRepeatSuccessfulRelease(t *testing.T) {
 	var sequence []input.MouseType
 	lv := newNavigateTestLiveView(t, func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		sequence = append(sequence, actions[0].(*input.DispatchMouseEventParams).Type)
+		sequence = append(sequence, fixtureValue[*input.DispatchMouseEventParams](actions[0]).Type)
 		return nil
 	})
 	picture := installInputTestPicture(t, lv)

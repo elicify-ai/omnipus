@@ -22,7 +22,7 @@ func TestCaptureStartWaiterCancellationPreservesOwner(t *testing.T) {
 		calls.Add(1)
 		return runEncoderStartup(ctx, context.Background(), func(parent context.Context) (*tabEntry, error) {
 			var cancel context.CancelFunc
-			target, cancel = context.WithCancel(parent)
+			target, cancel = context.WithCancel(parent) //nolint:fatcontext // Creates one child for this invocation and retains it to verify cancellation; not a context chain.
 			return &tabEntry{ctx: target, cancel: cancel}, nil
 		}, func(runCtx context.Context) error {
 			close(entered)
@@ -82,7 +82,7 @@ func TestCaptureStopCancelsWholeEncoderStartup(t *testing.T) {
 				defer close(nativeDone)
 				return runEncoderStartup(ctx, context.Background(), func(parent context.Context) (*tabEntry, error) {
 					var cancel context.CancelFunc
-					target, cancel = context.WithCancel(parent)
+					target, cancel = context.WithCancel(parent) //nolint:fatcontext // Creates one child for this invocation and retains it to verify cancellation; not a context chain.
 					if stage == "create" {
 						close(entered)
 						<-parent.Done()

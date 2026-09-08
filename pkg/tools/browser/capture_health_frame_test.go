@@ -17,7 +17,7 @@ func TestCaptureHealthFrameKeepsSocketLivenessSeparateFromEvidence(t *testing.T)
 			require.True(t, cs.RecordIngestHeartbeat(epoch, &original))
 			before := cs.CaptureHealth()
 			late := CaptureHealthObservation{CaptureGeneration: 1, TargetID: "page-a", Generation: 48, TrackState: "ended", SampleTimestampMS: 200}
-			var sample *CaptureHealthObservation = &late
+			sample := &late
 			switch scenario {
 			case "missing generation":
 				late.CaptureGeneration = 0

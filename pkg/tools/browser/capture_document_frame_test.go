@@ -94,12 +94,12 @@ func TestDocumentTransitionRejectsRetainedCompletion(t *testing.T) {
 			defer old.cancel()
 			switch event {
 			case "new document":
-				next, err := cs.beginDocumentTransition("page-a")
-				require.NoError(t, err)
+				next, documentErr := cs.beginDocumentTransition("page-a")
+				require.NoError(t, documentErr)
 				defer next.cancel()
 			case "target switch":
-				_, err := cs.BeginFrameTransition("page-b", 900, 700, 1)
-				require.NoError(t, err)
+				_, transitionErr := cs.BeginFrameTransition("page-b", 900, 700, 1)
+				require.NoError(t, transitionErr)
 			case "stop":
 				cs.Stop()
 			}

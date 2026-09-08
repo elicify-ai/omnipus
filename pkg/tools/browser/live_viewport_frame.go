@@ -36,11 +36,11 @@ func (lv *LiveView) measureCaptureFrame(ctx context.Context, cs *CaptureSession)
 	}
 	var w, h int
 	var scale float64
-	if err := lv.runCDP(ctx, viewportScaleTimeout, viewportFrameGeometryAction{&w, &h, &scale}); err != nil {
-		return CaptureFrameState{}, err
+	if measureErr := lv.runCDP(ctx, viewportScaleTimeout, viewportFrameGeometryAction{&w, &h, &scale}); measureErr != nil {
+		return CaptureFrameState{}, measureErr
 	}
-	if err := ctx.Err(); err != nil {
-		return CaptureFrameState{}, err
+	if canceledErr := ctx.Err(); canceledErr != nil {
+		return CaptureFrameState{}, canceledErr
 	}
 	current, currentTarget, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
 	if err != nil {
@@ -122,25 +122,25 @@ func (r *LiveViewRegistry) RefreshCaptureFrameContext(caller context.Context, se
 		if lv.mgr.CaptureSessionForPanel(sessionID) != expected {
 			return false, fmt.Errorf("browser live: original panel capture replaced")
 		}
-		_, target, err := lv.mgr.activeTargetSnapshot(sessionID)
-		if err != nil {
-			return false, err
+		_, target, snapshotErr := lv.mgr.activeTargetSnapshot(sessionID)
+		if snapshotErr != nil {
+			return false, snapshotErr
 		}
 		before := expected.FrameState()
 		if before.TargetID != string(target) {
-			if _, err := expected.BeginFrameTransition(string(target), 0, 0, before.Scale); err != nil {
-				return false, err
+			if _, transitionErr := expected.BeginFrameTransition(string(target), 0, 0, before.Scale); transitionErr != nil {
+				return false, transitionErr
 			}
 		}
-		measured, err := lv.measureCaptureFrame(operation, expected)
-		if err != nil {
-			return false, err
+		measured, snapshotErr := lv.measureCaptureFrame(operation, expected)
+		if snapshotErr != nil {
+			return false, snapshotErr
 		}
 		if sameViewportGeometry(before, measured) {
 			return true, nil
 		}
-		ready, err = expected.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
-		return true, err
+		ready, snapshotErr = expected.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
+		return true, snapshotErr
 	}, func(operation context.Context) error {
 		if ready.Generation != 0 && ready.Width > 0 && ready.Height > 0 && !expected.RecaptureFrameContext(operation, ready) {
 			current := expected.FrameState()

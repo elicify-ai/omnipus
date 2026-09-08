@@ -42,9 +42,9 @@ func newDocumentEventFixture(t *testing.T) *documentEventFixture {
 			f.mu.Lock()
 			loader := f.loader
 			f.mu.Unlock()
-			result.(*page.GetFrameTreeReturns).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: loader}}
+			fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: loader}}
 		case "Page.createIsolatedWorld":
-			result.(*page.CreateIsolatedWorldReturns).ExecutionContextID = 71
+			fixtureValue[*page.CreateIsolatedWorldReturns](result).ExecutionContextID = 71
 		case "Runtime.evaluate":
 			f.paintOnce.Do(func() { close(f.paintEntered) })
 			select {
@@ -53,7 +53,7 @@ func newDocumentEventFixture(t *testing.T) *documentEventFixture {
 			case <-f.paint:
 			}
 		case "Page.getNavigationHistory":
-			result.(*page.GetNavigationHistoryReturns).CurrentIndex = 0
+			fixtureValue[*page.GetNavigationHistoryReturns](result).CurrentIndex = 0
 		default:
 			return fmt.Errorf("unexpected document protocol command %s", method)
 		}
@@ -246,7 +246,7 @@ func TestLiveDocumentInitializationRetainsItsOriginalWork(t *testing.T) {
 								if method != "Page.getFrameTree" {
 									return fmt.Errorf("unexpected initial command %s", method)
 								}
-								result.(*page.GetFrameTreeReturns).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: "original"}}
+								fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: "original"}}
 								return nil
 							})))
 						}

@@ -50,7 +50,7 @@ func (f *startupCohort) join(ctx context.Context) (func(), bool) {
 	}
 	f.next++
 	id := f.next
-	f.waiters[id] = ctx
+	f.waiters[id] = ctx //nolint:fatcontext // Retains an original context for ownership or observation; it does not derive a context from an earlier iteration.
 	f.joined = true
 	f.mu.Unlock()
 	stop := context.AfterFunc(ctx, func() { f.remove(id) })

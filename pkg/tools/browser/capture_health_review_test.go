@@ -75,7 +75,9 @@ func TestCaptureHealthCurrentFailureStartsOneRecovery(t *testing.T) {
 	}
 	current := cs.CaptureHealth()
 	before := relay.recaptureCount()
-	if !cs.ReportCaptureFailureForObservation(current) || !cs.ReportCaptureFailureForObservation(current) {
+	firstAccepted := cs.ReportCaptureFailureForObservation(current)
+	secondAccepted := cs.ReportCaptureFailureForObservation(current)
+	if !firstAccepted || !secondAccepted {
 		t.Fatal("current failure report rejected")
 	}
 	if got := relay.recaptureCount(); got != before+1 {

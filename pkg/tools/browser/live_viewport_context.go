@@ -40,8 +40,8 @@ func viewportContextError(caller, operation context.Context) error {
 // input: manager tab command, live input, then viewport mutex. Async target
 // reapplication enters here after its source callback has released admission.
 func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work func(context.Context) (bool, error), after func(context.Context) error) (applied bool, err error) {
-	if err := caller.Err(); err != nil {
-		return false, err
+	if callerErr := caller.Err(); callerErr != nil {
+		return false, callerErr
 	}
 	if tabCtx == nil {
 		return false, nil
@@ -63,26 +63,26 @@ func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work f
 	}()
 	apply := func() (bool, error) {
 		if lv.mgr != nil {
-			release, err := lv.mgr.acquireLiveTabCommand(operation, lv.sessionID)
-			if err != nil {
-				return false, err
+			release, admissionErr := lv.mgr.acquireLiveTabCommand(operation, lv.sessionID)
+			if admissionErr != nil {
+				return false, admissionErr
 			}
 			defer release()
 		}
 		lv.mu.Lock()
 		state := lv.inputStateLocked()
 		lv.mu.Unlock()
-		if err := acquireInputGate(operation, state.gate); err != nil {
-			return false, err
+		if inputErr := acquireInputGate(operation, state.gate); inputErr != nil {
+			return false, inputErr
 		}
 		defer func() { <-state.gate }()
-		if err := viewportContextError(caller, operation); err != nil {
-			return false, err
+		if operationErr := viewportContextError(caller, operation); operationErr != nil {
+			return false, operationErr
 		}
 		if lv.mgr != nil {
-			active, _, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
-			if err != nil {
-				return false, err
+			active, _, snapshotErr := lv.mgr.activeTargetSnapshot(lv.sessionID)
+			if snapshotErr != nil {
+				return false, snapshotErr
 			}
 			if active != tabCtx {
 				return false, fmt.Errorf("browser live: viewport target changed before resize")

@@ -62,18 +62,15 @@ func (r *recaptureLedger) count() int {
 	return r.n
 }
 
-func (r *recaptureLedger) reset() {
-	r.mu.Lock()
-	r.n = 0
-	r.mu.Unlock()
-}
-
 // newThreeTabManagerWithCapture builds a 3-tab browsing context (active = tab
 // 2) with a capture session and the live bridge wired, and returns a ledger
 // already reset past the setup traffic.
 func newThreeTabManagerWithCapture(t *testing.T) (*BrowserManager, *recaptureLedger) {
 	t.Helper()
-	m, _, cs, _, _ := newAttachedLiveManager(t)
+	m, view, cs, ingest, order := newAttachedLiveManager(t)
+	_ = view
+	_ = ingest
+	_ = order
 	ledger := &recaptureLedger{}
 	_, _, err := cs.BindIngestRecaptureContext(context.Background(), func(string, *string, int, int, int) error { return nil }, func(ctx context.Context, _ CaptureFrameState, current func() bool) error {
 		if ctx.Err() != nil || !current() {
