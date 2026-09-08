@@ -1,10 +1,11 @@
 /** Real decoded-video acceptance. Preparation alone is not runtime evidence.
- * Run only against the isolated gateway on 11094 with a runtime-owned config;
+ * Run only against the designated local or Amsterdam UAT gateway;
  * the repository's global E2E setup is deliberately not required by this spec.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomInt } from 'node:crypto';
+import { browserRuntimeTarget } from '../../browser-runtime-target';
 import { expect, type Page, type TestInfo } from '@playwright/test';
 import { assistantMessages, browserLiveFrame, browserLivePanel, browserLiveVideo, chatInput, selectAgent, watchLiveButton } from './selectors';
 
@@ -353,8 +354,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
   const diagnostic = mode !== 'soak';
   const videoOnly = mode === 'latency-video-only';
   const label = mode === 'soak' ? 'browser-soak' : videoOnly ? 'browser-latency-video-only' : 'browser-latency';
-  const origin = new URL(process.env.OMNIPUS_URL || '');
-  if (!['localhost', '127.0.0.1'].includes(origin.hostname) || origin.port !== '11094') throw new Error('This acceptance test requires the isolated gateway on port11094');
+  const origin = browserRuntimeTarget(process.env.OMNIPUS_URL);
   const runtimeHome = fs.realpathSync(process.env.SOAK_RUNTIME_HOME || '');
   if (!path.isAbsolute(process.env.SOAK_RUNTIME_HOME || '') || !fs.statSync(runtimeHome).isDirectory()) throw new Error('SOAK_RUNTIME_HOME must name an absolute isolated runtime directory');
   const nonce = randomInt(1, 65_536);
@@ -408,7 +408,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     const address = page.getByRole('textbox', { name: 'Address bar' });
     await expect(address).toHaveValue(/\/preview\//, { timeout: 30_000 });
     const previewURL = new URL(await address.inputValue());
-    if (previewURL.port !== '11094' || !['localhost', '127.0.0.1'].includes(previewURL.hostname) || !previewURL.pathname.startsWith('/preview/')) throw new Error('Fixture did not use the allowed isolated preview origin');
+    if (previewURL.origin !== origin.origin || !previewURL.pathname.startsWith('/preview/')) throw new Error('Fixture did not use the designated runtime preview origin');
     // Exercise the real panel's navigation path too, then start the soak only
     // after the authored zero-event picture has actually reached its video.
     await address.fill(previewURL.href);

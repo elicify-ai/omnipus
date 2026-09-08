@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { browserRuntimeTarget } from './browser-runtime-target';
 
 // Operator-owned isolated runtime only. No CI/global setup, server launch, or
 // machine-specific fallback: missing prerequisites must fail before collection.
@@ -16,16 +17,14 @@ function absolutePath(name: string): string {
   return value;
 }
 
-const baseURL = required('OMNIPUS_URL');
-const origin = new URL(baseURL);
-if (origin.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(origin.hostname) || origin.port !== '11094' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
-  throw new Error('OMNIPUS_URL must be the isolated http://localhost:11094 or http://127.0.0.1:11094 origin');
-}
+const baseURL = browserRuntimeTarget(process.env.OMNIPUS_URL).origin;
 const runtimeHome = fs.realpathSync(absolutePath('SOAK_RUNTIME_HOME'));
 if (!fs.statSync(runtimeHome).isDirectory()) throw new Error('SOAK_RUNTIME_HOME must be an existing directory');
 const storageState = fs.realpathSync(absolutePath('OMNIPUS_AUTH_FILE'));
 if (!fs.statSync(storageState).isFile()) throw new Error('OMNIPUS_AUTH_FILE must be an existing authentication state file');
 const outputDir = absolutePath('BROWSER_PROBE_OUTPUT_DIR');
+const executablePath = process.env.BROWSER_PROBE_EXECUTABLE
+  ? fs.realpathSync(absolutePath('BROWSER_PROBE_EXECUTABLE')) : undefined;
 
 export default defineConfig({
   testDir: '.',
@@ -40,10 +39,10 @@ export default defineConfig({
   use: {
     baseURL,
     storageState,
-    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    viewport: { width: 1280, height: 900 },
     launchOptions: {
+      executablePath,
       args: [
         '--autoplay-policy=no-user-gesture-required',
         '--disable-renderer-backgrounding',

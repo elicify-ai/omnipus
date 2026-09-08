@@ -1,13 +1,14 @@
 # Isolated browser soak acceptance
 
 Prepared harness:
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-acceptance/browser-improvements-soak.spec.ts`
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/browser-acceptance/browser-improvements-soak.spec.ts`
 
 **The first full run failed latency acceptance** (details below). Root
 coordinates further runs after integration. The new evidence/diagnostic
 correction has been typechecked but has not been executed. Never run against the
-installed gateway on port 10994. This spec refuses any gateway except localhost
-or 127.0.0.1 port 11094 and requires an explicit absolute isolated runtime home.
+installed gateway on port 10994. This spec permits only localhost/127.0.0.1 port 11094 or the explicitly
+authorized Amsterdam UAT origin https://uat-omnipus.fly.dev, and requires an
+explicit absolute runtime home on the machine running the test.
 It no longer assumes a particular machine username or workspace location.
 
 ## Acceptance and independent oracle
@@ -51,9 +52,9 @@ count, checksum, held state and first-error text accompany the binary grid.
 ## Runtime setup and evidence
 
 The tracked manual runner is
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-manual.config.ts`.
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/browser-manual.config.ts`.
 The coordinator must supply all four variables: `OMNIPUS_URL` (the isolated
-HTTP origin on port 11094), `SOAK_RUNTIME_HOME` (absolute existing isolated
+HTTP origin on port 11094 or the Amsterdam HTTPS UAT origin), `SOAK_RUNTIME_HOME` (absolute existing isolated
 runtime directory), `OMNIPUS_AUTH_FILE` (absolute existing runtime-owned
 Playwright authentication file), and `BROWSER_PROBE_OUTPUT_DIR` (absolute,
 dedicated disposable results directory). No value has a machine-specific or
@@ -61,14 +62,17 @@ production default. Playwright replaces its output directory, so this must be a
 separate results directory, never the runtime or authentication directory.
 
 The runner uses one worker, zero retries and the existing Chromium viewer
-flags. It neither starts a gateway nor executes repository-wide global setup
+flags and a 1280-by-900 viewport. `BROWSER_PROBE_EXECUTABLE` optionally selects
+an absolute installed Chrome path, allowing the Linux UAT image to use its
+bundled browser. The runner retains the probe JSON and screenshots without
+adding continuous Playwright video recording to the timed measurement. It neither starts a gateway nor executes repository-wide global setup
 (which can seed gateway configuration). Authentication/setup failure is a failed
 or blocked run, never a skipped pass. No short-duration override exists.
 
 With those variables supplied, select exactly one spec. For the full acceptance:
 
 ```sh
-npx playwright test --config /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-manual.config.ts /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-acceptance/browser-improvements-soak.spec.ts
+npx playwright test --config /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/browser-manual.config.ts /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/browser-acceptance/browser-improvements-soak.spec.ts
 ```
 
 For either short diagnostic, replace the final argument with its absolute spec
@@ -104,9 +108,9 @@ The full acceptance durations, 100-click sample and 200ms threshold are unchange
 
 ## Short latency diagnostic (not soak acceptance)
 
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-diagnostics/browser-improvements-latency.spec.ts`
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/browser-diagnostics/browser-improvements-latency.spec.ts`
 uses the same authored fixture, decoder and UI setup through
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/fixtures/browser-input-probe.ts`.
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/e2e/fixtures/browser-input-probe.ts`.
 It performs 100 clicks, paced over at least 50 seconds, with 300 exact mouse events
 and no ten-minute idle or mixed-key phase. Its 200ms p95 check is unchanged; a
 short diagnostic pass does not establish the soak acceptance criteria. Select
@@ -170,7 +174,7 @@ buffering was substantially above the reported network-minimum delay. Audio/
 video synchronization is a hypothesis to test, not an established cause.
 
 The separate spec
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-diagnostics/browser-improvements-video-only-latency.spec.ts`
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/tests/browser-diagnostics/browser-improvements-video-only-latency.spec.ts`
 selects only the explicit `latency-video-only` mode. Its harness-owned peer
 constructor overrides an actual `addTransceiver('audio', ...)` request to use
 `direction: 'inactive'`. Video negotiation, input routing, the exact 300-event
@@ -227,3 +231,13 @@ three tests in three files. Missing-configuration list session 37765 exited 1
 with the explicit required `OMNIPUS_URL` error. Strict test-project TypeScript
 session 25023 exited 0. No Go, build, global setup or browser execution occurred
 in this correction; these results do not change the recorded soak outcome.
+
+## Amsterdam runner verification
+
+The previous runner rejected the authorized Amsterdam URL before collection
+(observed exit 1). After sharing an explicit target validator, collection passed
+with exactly the same three tests. Local port 10994, insecure UAT HTTP, foreign
+hostnames, credentialed URLs, paths and query strings remained rejected.
+Preview URLs must match the chosen runtime origin. Event sequences, durations,
+pixel decoding and the 200ms threshold are unchanged. These setup checks do not
+establish a Linux runtime or latency pass.
