@@ -489,32 +489,47 @@ export interface SessionChatState {
    * or null/undefined when no turn is known to be in flight. Paired with
    * `activeTurnAgentId`. Set by the `session_state` handler when the frame
    * carries `active_turn` (a reconnecting/attaching connection learning a
-   * turn is already running); cleared the moment the turn's OWN
-   * (non-replay) `done` frame finalizes it, or by `clearStreamingState` on
-   * a hard WS disconnect so a dead server can never leave this wedged. The
-   * `done` case uses this field, together with `activeTurnBubbleOpened`, to
-   * tell the replay-terminating `done` — which merely marks the end of
-   * transcript replay and carries `stats.frames_emitted`, not turn stats —
-   * apart from the turn's own completion `done`, so it finalizes the
-   * streaming bubble exactly once. Optional for the same fixture-compat
-   * reason as `toolCallOwnerMessageId` above.
+   * turn is already running, or a bare re-broadcast confirming one is still
+   * running — see the 'session_state' case's own S2 finished-turn guard);
+   * cleared the moment the turn's OWN (non-replay) terminal frame —
+   * `done` OR `error`, review S1/S7 — resolves it, or by
+   * `clearStreamingState`/`cancelStream`/`markLastMessageInterrupted` on a
+   * hard disconnect or explicit user cancel so a dead/abandoned turn can
+   * never leave this wedged. Also cleared by a session_state snapshot that
+   * carries NO `active_turn` for this session (review CR3/S2). Review
+   * finding S1/CR1: the `done`/`error` cases classify their OWN frame
+   * shape to decide whether they are the thing that finalizes a turn — they
+   * never read `activeTurnId`/`activeTurnBubbleOpened` to make that call,
+   * only to know WHICH bubble/turn to finalize once they've already decided
+   * to. Optional for the same fixture-compat reason as
+   * `toolCallOwnerMessageId` above.
    */
   activeTurnId?: string | null
   /** Agent id paired with `activeTurnId` — see its doc comment. */
   activeTurnAgentId?: string | null
   /**
-   * ADR-082 D4: whether the empty streaming placeholder for `activeTurnId`
-   * has already been opened. Deliberately NOT keyed off `isReplaying`: the
-   * MIN_REPLAY_DISPLAY_MS debounce (see `setReplaying`/the `done` case) can
-   * leave `isReplaying` true for up to 750ms after the replay-terminating
-   * `done` has already run, and a genuinely fast turn's own `done` can
-   * arrive inside that window — using `isReplaying` alone as the "is this
-   * the replay-terminator" test would then wrongly re-open a second, empty
-   * bubble on the turn's REAL `done`. This flag instead tracks the one fact
-   * that actually matters: has the placeholder for `activeTurnId` been
-   * created yet. False/unset while a turn is announced but no catch-up has
-   * landed; set true the moment the placeholder opens; irrelevant once
-   * `activeTurnId` is cleared (finalization or disconnect clear it too).
+   * ADR-082 D4, review S1/CR1: whether the empty streaming placeholder for
+   * `activeTurnId` has already been opened. Deliberately NOT keyed off
+   * `isReplaying`: the MIN_REPLAY_DISPLAY_MS debounce (see
+   * `setReplaying`/the `done` case) can leave `isReplaying` true for up to
+   * 750ms after the replay-terminating `done` has already run, and a
+   * genuinely fast turn's own `done` can arrive inside that window — using
+   * `isReplaying` alone as the "is this the replay-terminator" test would
+   * then wrongly re-open a second, empty bubble on the turn's REAL `done`.
+   * This flag instead tracks the one fact that actually matters: has the
+   * placeholder/bubble for `activeTurnId` been created yet. Set true by
+   * THREE independent writers, because the wire order between
+   * session_state/replay-terminator-done/tokens is not guaranteed (an older
+   * gateway sends session_state LAST; even the fixed contract can race a
+   * fast concurrent turn): (1) the 'done' case, opening the placeholder
+   * itself once replay has landed; (2) the 'token' case, the instant ANY
+   * token arrives for an announced turn — a token proves a bubble exists
+   * even if this store never got to open one itself; (3) the 'session_state'
+   * case, when it finds a bubble already streaming for this session at
+   * announcement time. False/unset while a turn is announced but neither a
+   * placeholder nor any content has appeared yet; irrelevant once
+   * `activeTurnId` is cleared (finalization, disconnect, or explicit cancel
+   * all clear it too).
    */
   activeTurnBubbleOpened?: boolean
 }
@@ -1469,6 +1484,52 @@ function schedulePlanStatusInvalidate(planId: string): void {
 // misattribute to whatever session happens to be foreground — see F-S3 below.
 const pendingCancelAckSids = new Set<string>()
 
+// ADR-082 review S2: turn ids whose OWN (non-replay-terminator) `done` has
+// already been processed, keyed by session id. A `session_state.active_turn`
+// announcement racing a reconnect can name a turn that this client already
+// finalized on an earlier connection cycle (the announcement was snapshotted
+// server-side before the done landed, or simply arrives late) — without this
+// guard, re-applying that stale announcement would set isStreaming:true /
+// activeTurnId again with no `done` ever coming to clear it a second time,
+// wedging the Stop button and composer lock permanently. Bounded per-session
+// FIFO: a session only ever has one turn "in flight" at a time from this
+// client's perspective, so a handful of recently-finished ids per session is
+// more than enough to catch any plausible race window; unbounded growth
+// across a long-lived session is the failure mode this cap exists to avoid.
+const FINISHED_TURN_IDS_CAP = 8
+const finishedTurnIdsBySession: Record<string, string[]> = {}
+
+function markTurnFinished(sessionId: string, turnId: string | null | undefined): void {
+  if (!turnId) return
+  const ids = finishedTurnIdsBySession[sessionId] ?? (finishedTurnIdsBySession[sessionId] = [])
+  if (ids.includes(turnId)) return
+  ids.push(turnId)
+  if (ids.length > FINISHED_TURN_IDS_CAP) ids.shift()
+}
+
+function isTurnFinished(sessionId: string, turnId: string): boolean {
+  return finishedTurnIdsBySession[sessionId]?.includes(turnId) ?? false
+}
+
+/**
+ * Test-only escape hatch: clears `finishedTurnIdsBySession`. This tracker is
+ * deliberately module-scoped (it must survive a `resetStores()`-style
+ * `sessionsById` wipe in production — that's the whole point of S2, so a
+ * reconnect that rebuilds the bucket from scratch still remembers a turn id
+ * it already finalized), which means it also survives across `it()` blocks
+ * within one test FILE. Test suites that reuse the same session id + turn id
+ * constant across multiple independent scenarios (as chat.reconnect.test.ts
+ * and chat.session-state-routing.test.ts both do, deliberately, for
+ * readability) must call this from their `resetStores()`/`beforeEach` or a
+ * turn finalized in one `it()` block will be wrongly treated as
+ * already-finished in a later, unrelated one.
+ */
+export function __resetFinishedTurnIdsForTests(): void {
+  for (const sid of Object.keys(finishedTurnIdsBySession)) {
+    delete finishedTurnIdsBySession[sid]
+  }
+}
+
 // ── Frame-routing helpers ─────────────────────────────────────────────────────
 
 /** O(1) span check using the spanByParentCallId index. */
@@ -2056,7 +2117,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
             isStreaming: false,
           }
           const msgs = [...getMessages(b), placeholder]
-          return { ...applyMessageArray(msgs, b), isStreaming: false }
+          // S7: clear any ADR-082 active-turn announcement alongside
+          // isStreaming — see the produce() branch below for why.
+          return {
+            ...applyMessageArray(msgs, b),
+            isStreaming: false,
+            activeTurnId: null,
+            activeTurnAgentId: null,
+            activeTurnBubbleOpened: false,
+          }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
         // Setting isStreaming:false is necessary so that buildMessageStatus() in
@@ -2084,6 +2153,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // all have one), this branch — not the placeholder one — is the one
           // that actually runs, so it must carry the same immediate clear.
           draft.isStreaming = false
+          // S7: an explicit user cancel ends streaming here, synchronously —
+          // clear any ADR-082 active-turn announcement in the same write.
+          // The invariant elsewhere in this file ("activeTurnId is never set
+          // while isStreaming is false") is written by every path that
+          // stops streaming, not just the 'session_state'/'done' cases —
+          // this is one of them. Leaving activeTurnId set here would let a
+          // later, unrelated done for this session misread it as "replay
+          // still awaiting catch-up" and open a stray empty placeholder.
+          draft.activeTurnId = null
+          draft.activeTurnAgentId = null
+          draft.activeTurnBubbleOpened = false
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)
@@ -3110,8 +3190,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       if (!connection) return
       if (!targetSid) {
-        // No server-side session established yet — just clear local streaming state.
-        withBucket(getActiveSid(), () => ({ isStreaming: false }))
+        // No server-side session established yet — just clear local streaming
+        // state. S7: activeTurn* travels with isStreaming everywhere else in
+        // this file, so clear it here too even though this specific bucket
+        // is very unlikely to carry an ADR-082 announcement yet.
+        withBucket(getActiveSid(), () => ({
+          isStreaming: false,
+          activeTurnId: null,
+          activeTurnAgentId: null,
+          activeTurnBubbleOpened: false,
+        }))
         maybeDrainNext()
         return
       }
@@ -3173,6 +3261,27 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
+      // S6: a socket drop means no more frames — done, error, or otherwise —
+      // are coming on THIS connection for any outstanding replay either. A
+      // bucket that is mid-replay (isReplaying:true) but not yet
+      // isStreaming:true (session_state hasn't announced a turn, or hasn't
+      // been reached in the reducer yet) would otherwise pass through the
+      // per-bucket gate below untouched — nothing else ever clears
+      // isReplaying for it, since the only two writers are this function and
+      // setReplaying's own done/error-driven clear (immediate or via the
+      // deferred timers below), neither of which fires on a hard
+      // disconnect. Left alone, the composer stays permanently locked
+      // behind "Loading session history…" even after reconnect regenerates
+      // a fresh attach (a fresh setReplaying(true) does reset the timer, but
+      // only once the user is looking at that session again — a background
+      // bucket the user never revisits stays wedged for the life of the
+      // tab). Cancel every pending replay-clear timer up front — the
+      // connection they were waiting on is already gone, so let them fire
+      // is both pointless and racy against the synchronous clear below.
+      for (const timerSid of Object.keys(replayingClearTimers)) {
+        clearTimeout(replayingClearTimers[timerSid])
+        delete replayingClearTimers[timerSid]
+      }
       // Sweep every bucket — not just the active one — because a background
       // session can be mid-stream when the socket drops. Any bucket left with
       // isStreaming=true would wedge if the user switches to it later.
@@ -3203,8 +3312,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // Defense-in-depth: activeTurnId should never be set while isStreaming
           // is false (both are always written together — see the 'session_state'/
           // 'done' cases above), but guard the skip on it too so a bucket never
-          // slips through this sweep carrying a stale ADR-082 activeTurnId.
-          if (!bucket.isStreaming && !needsMsgFix && !hasPendingTools && bucket.cancelStage === null && !bucket.activeTurnId) {
+          // slips through this sweep carrying a stale ADR-082 activeTurnId. S6:
+          // also guard on isReplaying — see the doc comment above this sweep.
+          if (!bucket.isStreaming && !needsMsgFix && !hasPendingTools && bucket.cancelStage === null && !bucket.activeTurnId && !bucket.isReplaying) {
             sessionsById[sid] = bucket
             continue
           }
@@ -3219,9 +3329,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // turn still open" — the existing WS-close handling already prevents
           // the hang (isStreaming flips false, any bubble that did exist is
           // swept below); this just keeps the two fields' invariant intact.
+          // S6: isReplaying is cleared here too, for the same reason — a hard
+          // disconnect mid-replay is exactly as terminal as a done/error would
+          // have been, and nothing else is coming to clear it.
           const next: SessionChatState = {
             ...bucket,
             isStreaming: false,
+            isReplaying: false,
             cancelStage: null,
             activeTurnId: null,
             activeTurnAgentId: null,
@@ -3704,6 +3818,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 msg.isStreaming = true
                 msg.status = 'streaming'
                 draft.isStreaming = true
+                // ADR-082 review S1/CR1: a token proves the announced turn's
+                // bubble now exists, regardless of which frame order got us
+                // here (fixed-contract session_state-first, an older
+                // gateway's session_state-last, or anything racing in
+                // between). Without this, an out-of-order attach where a
+                // token arrives before the replay-terminating `done` ever
+                // gets a chance to open the placeholder (see the 'done' case
+                // below) would leave `activeTurnBubbleOpened` false while a
+                // real, content-bearing bubble is already streaming — and
+                // the turn's OWN done would then misclassify itself as
+                // "still awaiting catch-up" and open a second, empty
+                // placeholder instead of finalizing this one.
+                if (draft.activeTurnId) {
+                  draft.activeTurnBubbleOpened = true
+                }
               }) as Partial<SessionChatState>
             })
           }
@@ -3792,54 +3921,76 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }, MIN_REPLAY_DISPLAY_MS - elapsed)
               }
             }
-            // ADR-082 D3/D4 (FR-007/FR-009): a `done` frame arrives TWICE for
-            // a mid-turn attach — once here, marking the end of transcript
-            // replay (carries `stats.frames_emitted`, no token/cost stats;
-            // pre-existing gateway behaviour, see D3), and again later when
-            // the announced turn itself actually finishes. Tell them apart
-            // using activeTurnId + activeTurnBubbleOpened (NOT `wasReplaying`
-            // alone — see activeTurnBubbleOpened's doc comment for why: the
-            // MIN_REPLAY_DISPLAY_MS debounce can leave `isReplaying` true
-            // well past the actual replay-terminating done, and a fast
-            // turn's own done can land inside that window). This is the
-            // replay-ending done iff session_state announced an active turn
-            // for this session AND its placeholder has not been opened yet.
-            // Finalizing on this done would close a bubble that has not even
-            // opened — no catch-up token has arrived. Instead, open the
-            // empty streaming placeholder now: this IS the correct position
-            // for it, because every replay_message for this attach has
-            // already landed (pushed onto messageOrder in arrival order,
-            // strictly before this done — see case 'replay_message' above)
-            // — and let the catch-up token (case 'token' above) append into
-            // it exactly like the first token of any ordinary turn. The
-            // turn's OWN done, which finalizes it, arrives later once
-            // activeTurnBubbleOpened is already true, so it falls through to
-            // the normal finalization path below unchanged — finalizing
-            // exactly once (FR-009), regardless of where isReplaying's own
-            // debounce timer happens to be.
-            const activeTurnAwaitingCatchUp =
-              !!priorBucket.activeTurnId && !priorBucket.activeTurnBubbleOpened
-            if (activeTurnAwaitingCatchUp) {
-              withBucket(sid, (b) => {
-                return produce(b, (draft) => {
-                  const placeholder: ChatMessage = {
-                    id: generateId(),
-                    role: 'assistant',
-                    content: '',
-                    timestamp: new Date().toISOString(),
-                    status: 'streaming',
-                    isStreaming: true,
-                    agentId: draft.activeTurnAgentId ?? undefined,
-                  }
-                  draft.messagesById[placeholder.id] = placeholder
-                  draft.messageOrder.push(placeholder.id)
-                  draft.activeTurnBubbleOpened = true
-                  draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
-                  if (clearReplayingNow) {
-                    draft.isReplaying = false
-                  }
-                }) as Partial<SessionChatState>
-              })
+            // ADR-082 D3/D4 (FR-007/FR-009), review S1/CR1: a `done` frame
+            // arrives TWICE for a mid-turn attach — once marking the end of
+            // transcript replay (carries `stats.frames_emitted`, never
+            // `stats.tokens`/`stats.cost` — pkg/gateway/replay.go's
+            // terminator emit), and again later when the announced turn
+            // itself actually finishes (`stats.tokens`/`stats.cost` always
+            // stamped, even a zero-token turn — pkg/gateway/websocket.go's
+            // Finalize). Tell them apart PURELY by this stats shape — never
+            // by activeTurnId/activeTurnBubbleOpened/isReplaying state. The
+            // gateway contract fixes the wire order (session_state →
+            // replay_message* → replay-terminator done → catch-up token →
+            // live token* → the turn's own done), but this store must not
+            // assume any particular order arrived: an older gateway sent
+            // session_state LAST, and even under the fixed contract a fast
+            // concurrent turn can race its own done ahead of the replay
+            // terminator. Classifying by activeTurn* state alone (the
+            // pre-review version of this code) broke under both: with
+            // session_state arriving late, the turn's REAL done would find
+            // activeTurnId set && activeTurnBubbleOpened still false (no
+            // frame had ever flipped it — see the 'token' case's own fix)
+            // and wrongly treat itself as the replay terminator, opening a
+            // second empty placeholder and `break`ing without ever
+            // finalizing the real, content-bearing bubble — permanent Stop,
+            // locked composer.
+            const doneStats = frame.stats
+            const isReplayTerminatorDone =
+              doneStats?.frames_emitted !== undefined &&
+              doneStats?.tokens === undefined &&
+              doneStats?.cost === undefined
+            if (isReplayTerminatorDone) {
+              // This done marks the end of transcript replay only — it is
+              // NEVER the signal to finalize a bubble. If session_state
+              // already announced a turn for this session and no bubble has
+              // opened for it yet (the ordinary, in-order case), open the
+              // empty streaming placeholder now: this IS the correct
+              // position for it, because every replay_message for this
+              // attach has already landed (pushed onto messageOrder in
+              // arrival order, strictly before this done — see case
+              // 'replay_message' above) — and let the catch-up token (case
+              // 'token' above) append into it exactly like the first token
+              // of any ordinary turn. If a bubble is already open (an
+              // out-of-order token beat this terminator here) or no turn
+              // was announced at all, there is nothing to open — just let
+              // the isReplaying clear/defer above stand.
+              const awaitingCatchUp =
+                !!priorBucket.activeTurnId && !priorBucket.activeTurnBubbleOpened
+              if (awaitingCatchUp) {
+                withBucket(sid, (b) => {
+                  return produce(b, (draft) => {
+                    const placeholder: ChatMessage = {
+                      id: generateId(),
+                      role: 'assistant',
+                      content: '',
+                      timestamp: new Date().toISOString(),
+                      status: 'streaming',
+                      isStreaming: true,
+                      agentId: draft.activeTurnAgentId ?? undefined,
+                    }
+                    draft.messagesById[placeholder.id] = placeholder
+                    draft.messageOrder.push(placeholder.id)
+                    draft.activeTurnBubbleOpened = true
+                    draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
+                    if (clearReplayingNow) {
+                      draft.isReplaying = false
+                    }
+                  }) as Partial<SessionChatState>
+                })
+              } else if (clearReplayingNow) {
+                withBucket(sid, () => ({ isReplaying: false }))
+              }
               // Mirrors the normal finalization path's own drain call below —
               // harmless here too (maybeDrainNext no-ops while isStreaming).
               maybeDrainNext()
@@ -3934,12 +4085,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 draft.sessionCost = draft.sessionCost + costDelta
                 draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
                 draft.cancelStage = null
-                // ADR-082 D4 (FR-009 "finalize once"): this is the turn's
-                // OWN done (the activeTurnAwaitingCatchUp branch above always
-                // `break`s before reaching here) — the announced turn, if
-                // any, is now finalized. Clear it so a later, unrelated
-                // replay-terminating done for this session never mistakes a
-                // stale id for a still-open turn.
+                // ADR-082 D4 (FR-009 "finalize once"), review S1/S2: this is
+                // the turn's OWN done — the isReplayTerminatorDone branch
+                // above always `break`s before reaching here, so every path
+                // that gets here carries real turn stats (or is the
+                // stats-less outbound-publish fallback done, which is also
+                // always a real turn's own completion — see
+                // pkg/gateway/webchat_channel.go). The announced turn, if
+                // any, is now finalized: record its id as finished BEFORE
+                // clearing so a stale/racing session_state.active_turn that
+                // re-announces this same turn_id later (S2) is recognized
+                // and ignored rather than re-opening streaming state with no
+                // second done ever coming to close it. Then clear
+                // activeTurnId/activeTurnAgentId/activeTurnBubbleOpened so a
+                // later, unrelated replay-terminating done for this session
+                // never mistakes a stale id for a still-open turn.
+                markTurnFinished(sid, draft.activeTurnId)
                 draft.activeTurnId = null
                 draft.activeTurnAgentId = null
                 draft.activeTurnBubbleOpened = false
@@ -4146,6 +4307,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   return produce(b, (draft) => {
                     draft.isStreaming = false
                     if (clearReplayingNow) draft.isReplaying = false
+                    // S7/S1: an error frame terminates a turn exactly like a
+                    // done would — see the matching comment on the C8 sweep
+                    // branch below for why every branch here clears this.
+                    markTurnFinished(targetSid, draft.activeTurnId)
+                    draft.activeTurnId = null
+                    draft.activeTurnAgentId = null
+                    draft.activeTurnBubbleOpened = false
                   }) as Partial<SessionChatState>
                 }
               }
@@ -4265,6 +4433,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (clearReplayingNow) {
                     draft.isReplaying = false
                   }
+                  // S7/S1: a terminal error frame ends the turn exactly like
+                  // a `done` would — clear the ADR-082 active-turn
+                  // announcement (and record it finished, S2) here too, or a
+                  // later, unrelated done for this session could misread a
+                  // stale activeTurnId as "replay still awaiting catch-up"
+                  // and open a stray empty placeholder.
+                  markTurnFinished(targetSid, draft.activeTurnId)
+                  draft.activeTurnId = null
+                  draft.activeTurnAgentId = null
+                  draft.activeTurnBubbleOpened = false
                 }) as Partial<SessionChatState>
               }
               // Same catalogue already on the last bubble (replay drew it,
@@ -4273,6 +4451,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 return produce(b, (draft) => {
                   draft.isStreaming = false
                   if (clearReplayingNow) draft.isReplaying = false
+                  markTurnFinished(targetSid, draft.activeTurnId)
+                  draft.activeTurnId = null
+                  draft.activeTurnAgentId = null
+                  draft.activeTurnBubbleOpened = false
                 }) as Partial<SessionChatState>
               }
               // No this-turn assistant to coalesce into — last is a prior
@@ -4303,10 +4485,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   : {}),
               }
               const msgs = [...getMessages(b), errMsg]
+              markTurnFinished(targetSid, b.activeTurnId)
               return {
                 ...applyMessageArray(msgs, b),
                 isStreaming: false,
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
+                activeTurnId: null,
+                activeTurnAgentId: null,
+                activeTurnBubbleOpened: false,
               }
             })
             // The failed turn may have been one we sent from the offline-queue
@@ -5590,31 +5776,100 @@ export const useChatStore = create<ChatStore>((set, get) => {
           for (const [sid, card] of Object.entries(askChanges)) {
             withBucket(sid, () => ({ pendingAsk: card }))
           }
-          // ADR-082 D4/D5 (FR-008/FR-009): a connection that just bound to a
-          // session (fresh mount, reconnect, or second tab) learns here
-          // whether a turn is already running for it. `targetSid` resolves
-          // to `activeSid` for this frame type (session_state carries no
-          // session_id of its own — it is routed as a global frame, see the
-          // SESSION_SCOPED_FRAME_TYPES branch above), i.e. the session this
-          // connection is now bound to. Mirror exactly the state a live turn
-          // THIS client had started would already be in — isStreaming:true
-          // so the Stop control and composer lock render immediately —
-          // without creating the assistant bubble yet: replay history for
-          // this attach has not arrived on the wire at this point (case
-          // 'replay_message' below pushes messages in arrival order onto
-          // messageOrder), so opening the bubble here would insert it BEFORE
-          // messages that are chronologically earlier, corrupting order. The
-          // bubble opens instead at the replay-terminating `done` (see case
-          // 'done' below), which is guaranteed to fire only after every
-          // replay_message for this attach has already landed.
-          if (targetSid && stateFrame.active_turn) {
+          // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
+          // just bound to a session (fresh mount, reconnect, or second tab)
+          // learns here whether a turn is already running for it. `targetSid`
+          // resolves to `frame.session_id` when the frame carries one (the
+          // generated `SessionStateFrame` type carries an optional
+          // `session_id` — CR3), falling back to `activeSid` only when it is
+          // absent (an older gateway, or any other reason the field is
+          // missing) — see the generic `frameSessionId` resolution above.
+          // This matters because a client can be attached/foreground on one
+          // session while a session_state snapshot for a DIFFERENT session
+          // (e.g. a background tab's own reconnect, or a stale broadcast)
+          // arrives — routing it to whatever happens to be foreground would
+          // wrongly stamp an unrelated session's turn onto the active one.
+          //
+          // Mirror exactly the state a live turn THIS client had started
+          // would already be in — isStreaming:true so the Stop control and
+          // composer lock render immediately — without creating the
+          // assistant bubble yet: replay history for this attach has not
+          // arrived on the wire at this point (case 'replay_message' below
+          // pushes messages in arrival order onto messageOrder), so opening
+          // the bubble here would insert it BEFORE messages that are
+          // chronologically earlier, corrupting order. The bubble opens
+          // instead at the replay-terminating `done` (see case 'done'
+          // above), which is guaranteed to fire only after every
+          // replay_message for this attach has already landed — UNLESS a
+          // token for this turn beats that done here (out-of-order gateway,
+          // or a fast concurrent turn), in which case the 'token' case's own
+          // ADR-082 review fix opens/marks the bubble first and this done
+          // becomes a no-op for placeholder purposes.
+          if (targetSid) {
             const activeTurn = stateFrame.active_turn
-            withBucket(targetSid, () => ({
-              isStreaming: true,
-              activeTurnId: activeTurn.turn_id,
-              activeTurnAgentId: activeTurn.agent_id,
-              activeTurnBubbleOpened: false,
-            }))
+            if (activeTurn) {
+              // S2: a stale/racing announcement for a turn this client
+              // already finalized (its own done already processed — see
+              // markTurnFinished in the 'done' case) must be ignored
+              // outright. Re-applying it would set isStreaming:true /
+              // activeTurnId again with no second done ever coming to close
+              // it a second time — a permanent Stop button and locked
+              // composer.
+              if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
+                withBucket(targetSid, (b) => {
+                  // If a bubble for this session is already streaming (e.g.
+                  // an older gateway that sends session_state LAST, after
+                  // tokens have already started flowing for this very
+                  // turn), do not reset the "bubble opened" flag to false —
+                  // the 'token' case's own fix already flipped it true the
+                  // instant the first token landed, and stomping it back to
+                  // false here would make a later replay-terminator-shaped
+                  // done wrongly think it still needs to open a placeholder.
+                  const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+                  const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
+                  const alreadyStreaming =
+                    !!lastMsg && (lastMsg.isStreaming === true || lastMsg.status === 'streaming')
+                  return {
+                    isStreaming: true,
+                    activeTurnId: activeTurn.turn_id,
+                    activeTurnAgentId: activeTurn.agent_id,
+                    activeTurnBubbleOpened: b.activeTurnBubbleOpened || alreadyStreaming,
+                  }
+                })
+              }
+            } else {
+              // CR3: this snapshot says NO turn is in flight for this
+              // session. If a PRIOR snapshot (or the token case) had
+              // announced one and it is still unresolved, clear it so a
+              // stale announcement can never wedge the composer — but only
+              // force isStreaming:false when no bubble is actually open;
+              // a genuinely open, mid-stream bubble keeps streaming exactly
+              // as before (its own done will finalize it normally).
+              //
+              // Check bucket existence BEFORE calling withBucket: withBucket
+              // always creates (`?? emptySessionState()`) and writes back the
+              // bucket it's given, even for a no-op `{}` patch. A session
+              // this client has never otherwise heard of (no bucket yet) has
+              // nothing to clear — calling withBucket unconditionally here
+              // would materialize a brand-new empty bucket for it, which is
+              // an observable regression: a bare "no turn in flight" snapshot
+              // for a session with no other activity must stay a true no-op,
+              // exactly like it was before this fix (chat.reconnect.test.ts's
+              // "session_state WITHOUT active_turn leaves current behaviour
+              // unchanged").
+              const existing = get().sessionsById[targetSid]
+              if (existing?.activeTurnId) {
+                withBucket(targetSid, (b) => {
+                  const bubbleOpen = !!b.activeTurnBubbleOpened
+                  return {
+                    activeTurnId: null,
+                    activeTurnAgentId: null,
+                    activeTurnBubbleOpened: false,
+                    ...(bubbleOpen ? {} : { isStreaming: false }),
+                  }
+                })
+              }
+            }
           }
           break
         }
