@@ -519,6 +519,26 @@ defects (issue #682).
    t3b judge-backoff investigation), so a shard-level failure here is not
    necessarily new.
 
+**NEW EVIDENCE — CI run on `94bb13e61` (2026-09-08, this session).** The same test
+now **passes on retry** rather than failing outright: attempt 1 failed, retry #1
+passed (10.9m). Playwright reports the shard as `9 passed, 1 flaky`.
+
+- The attempt-1 failure was a DIFFERENT mode again: a 300s timeout waiting for
+  `plan_phase=awaiting_supervision`, not the "zero `plan_correct` calls committed"
+  mode seen on `031e7a583`. That is now FOUR distinct failure modes across two refs.
+- `grep` is present in the static catalog on BOTH refs. If its presence
+  deterministically suppressed `plan_correct` selection, this run should have
+  failed the same way again. It did not, and the sibling `t3b` targeted-retry
+  test passed on the first attempt.
+- This WEAKENS hypothesis 1 and STRENGTHENS hypothesis 2 (LLM non-determinism).
+  It does NOT eliminate hypothesis 1 — a probabilistic effect on tool selection
+  would look exactly like this.
+
+**Status unchanged: OPEN.** A retry-pass is the weakest possible form of green,
+and this project's own `false-green-patterns.md` names flake-absorbed failures as
+a trap. Do not read `1 flaky` as evidence that the enlarged tool surface is
+innocent.
+
 **Cheapest discriminator, not yet run:** temporarily set `grep: deny` for
 PlanSupervisor only and re-run the `llm-conformance-replan` shard. If it passes
 reliably, hypothesis 1 is confirmed and the founder ruling ("PlanSupervisor can
