@@ -376,16 +376,12 @@ export function BrowserLiveView({
   fillContainer = false,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
+  const browserAttachedRef = useRef(false)
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   // WebRTC build (W2-B) — the viewer-side PC state machine (browserWebRTC.ts),
   // one instance per WS-connection effect lifecycle (see that effect further
   // down), mirroring wsRef's own per-mount lifetime.
   const webrtcRef = useRef<BrowserWebRTCSession | null>(null)
-  // Mirrors whether the machine's "input" data channel is currently OPEN —
-  // read (never as a dependency) by the stable `dispatchInput` callback
-  // below to decide DC-vs-WS routing without needing to be in anyone's
-  // dependency array, same rationale as every other *Ref mirror in this
-  // file (attachedRef, connectedRef, ...).
-  const inputChannelOpenRef = useRef(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   // Bound to the `<video>` sink's srcObject via the effect below whenever
   // `mediaStream` is set. The `<video>` element is only ever mounted once a
@@ -424,22 +420,9 @@ export function BrowserLiveView({
   // `driveMode` needs for the chip/glow to update immediately) never drifts
   // out of sync with it.
   const pendingTakeRef = useRef(false)
-  // True for the span of a single pointer gesture that implicitly acquired
-  // the lock (click-to-drive) — lets pointermove/pointerup for THAT SAME
-  // gesture keep dispatching input even though the server's 'controlling'
-  // ack (which flips controllingRef) may not have landed yet. Cleared on
-  // pointerup (end of the gesture) and whenever the agent starts working.
-  // UAT finding FE-6, carried into the ADR-040 model: mirrors
-  // `controlledByOther` state so the click-to-drive / Take-over paths can
-  // avoid racing a control lock a DIFFERENT connection of this same session
-  // already holds (previously enforced by disabling the explicit Take
-  // control button; there is no such button anymore, so the guard moves
-  // into takeWheelIfNeeded itself).
+  // Control ownership only guides the explicit Take over action.
   const controlledByOtherRef = useRef(false)
-  // Mirrors `connected` — click-to-drive must never attempt to acquire the
-  // lock (or dispatch input) against a dead/reconnecting transport, matching
-  // the pre-ADR-040 regression coverage ("pointer/keyboard handlers must
-  // no-op while disconnected, not silently attempt and drop a send").
+  // Synchronous transport state for event handlers.
   const connectedRef = useRef(false)
   // ADR-040 D2 refactor — mirrors `driveMode` (computed below from
   // annotateMode/agentWorking/isControlling/connected/controlledByOther) so
@@ -951,15 +934,12 @@ export function BrowserLiveView({
   // immediately reverted the annotate-mode toggle the user just clicked,
   // making "Annotate" a silent no-op on the first click while driving.
 
-  // ── WS lifecycle — one connection per mount (host keys this component by
-  // `${sessionId}:${agentId}` so a new target always gets a fresh mount). ──
-  // WebRTC build (W2-B): the PC state machine shares this SAME lifecycle —
-  // one `BrowserWebRTCSession` per mount, created/torn down alongside the WS
-  // connection so a fresh (sessionId, agentId) mount (or a WS-level
-  // reconnect within an existing mount, handled by onConnected/onDisconnected
-  // below) always starts from a clean signaling slate.
+  // The socket and media session share a lifetime. A new target or an
+  // explicit attachment retry replaces both; socket reconnects reset media
+  // negotiation through onDisconnected and the availability announcement.
   useEffect(() => {
     captureRef.current = { id: null, generation: 0, marker: null, css: null, gate: new BrowserFrameGate(), retired: new Set() }
+    browserAttachedRef.current = false
     streamIdentityRef.current = null
     freshViewerRef.current = null
     captureViewerNeededRef.current = false
@@ -971,6 +951,7 @@ export function BrowserLiveView({
     webrtcRef.current = machine
     machine.onStream((stream, identity) => {
       if (!identity) return
+      browserAttachedRef.current = true
       if (captureRef.current.id !== identity.captureId && !acceptCapture(identity.captureId, identity.generation)) return
       const current = captureRef.current
       if (requiresFreshViewerRef.current && identity.generation !== current.generation) return
@@ -987,17 +968,11 @@ export function BrowserLiveView({
       setWebrtcError(null) // recovered
       setWebrtcErrorDetail(null)
     })
-    machine.onInputChannelOpen(() => {
-      inputChannelOpenRef.current = true
-    })
-    machine.onInputChannelClose(() => {
-      inputChannelOpenRef.current = false
-    })
     // Operator directive (JPEG-fallback removal) — WebRTC is the ONLY live-
     // video path left; there is nothing to silently swap to any more. Every
     // reason lands here, unconditionally: drops the stream, resets
-    // `videoReady` (a fresh attempt must decode its own first frame), clears
-    // the legacy DC-open flag, and records `reason` as a persistent error
+    // `videoReady` (a fresh attempt must decode its own first frame), and
+    // records `reason` as a persistent error
     // (`webrtcError` → `displayError`/`webrtcErrorMessage` above) — never a
     // toast that could auto-dismiss unnoticed. `console.warn` always fires
     // too, for a support engineer reading the console. The machine itself
@@ -1016,6 +991,7 @@ export function BrowserLiveView({
       } else {
         console.warn('[browser-live] WebRTC failed:', reason, detail)
       }
+      releaseInputsRef.current()
       captureRef.current.gate.bindStream(null)
       refreshFrameGate()
       setWebrtcStream(null)
@@ -1026,7 +1002,6 @@ export function BrowserLiveView({
       // detail must CLEAR the previous one's, or the panel would attribute an
       // old cause to a new failure.
       setWebrtcErrorDetail(detail ?? null)
-      inputChannelOpenRef.current = false
     }
     machine.onFallback(applyWebrtcFailure)
     requestFreshViewerRef.current = () => {
@@ -1096,6 +1071,8 @@ export function BrowserLiveView({
           }
           return
         }
+        if (f.state === 'attached') browserAttachedRef.current = true
+        if (f.state === 'detached') browserAttachedRef.current = false
         // FE-7: only error-state messages get the raw-Go-string treatment —
         // other states' messages (if ever present) are left alone.
         setStatusMessage(f.state === 'error' && f.message ? translateBrowserErrorMessage(f.message) : f.message ?? null)
@@ -1147,14 +1124,14 @@ export function BrowserLiveView({
         }
         machine.applyState(f)
         if (f.available) {
-          // fix-wave B (MED): `sendWebRTCOffer` returns false when the socket
-          // was closed mid-ICE-gathering (a genuinely-async gap between when
-          // gathering started and when it completes). Propagating that
-          // boolean lets the machine (`_beginOffer`, browserWebRTC.ts) fall
-          // back immediately with reason 'offer-send-failed' instead of
-          // burning the full 5s answer timeout waiting for an answer that was
-          // never going to arrive because the offer itself never left.
-          machine.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+          browserAttachedRef.current = true
+          // Failure reports leave retry timing and budget with the session.
+          // Only an availability announcement may initiate a fresh attempt.
+          if (!f.reason && f.active !== false) {
+            const current = captureRef.current
+            machine.start((offer) => wsRef.current?.sendWebRTCOffer(offer) ?? false,
+              current.id ? { captureId: current.id, generation: current.generation } : undefined)
+          }
           return
         }
         // Bugfix (HIGH, external review F1, 2026-08-13): `applyState` above
@@ -1215,6 +1192,7 @@ export function BrowserLiveView({
         setConnError(null)
       },
       onDisconnected: () => {
+        browserAttachedRef.current = false
         captureRef.current = { id: null, generation: 0, marker: null, css: null, gate: new BrowserFrameGate(), retired: new Set() }
         streamIdentityRef.current = null
         captureViewerNeededRef.current = false
@@ -1237,7 +1215,6 @@ export function BrowserLiveView({
         // A capture-health verdict is only trustworthy up to the drop; the
         // fresh browser_attach round-trip after reconnect re-establishes it.
         setVideoHealth(null)
-        inputChannelOpenRef.current = false
         // The control-lock is server-side and per-connection — once the
         // transport drops, whatever control state we last knew is stale (the
         // human is no longer "driving" anything). Move to the local
@@ -1275,7 +1252,7 @@ export function BrowserLiveView({
       requestFreshViewerRef.current = () => {}
       if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     }
-  }, [sessionId, agentId, acceptCapture, refreshFrameGate])
+  }, [sessionId, agentId, connectionAttempt, acceptCapture, refreshFrameGate])
 
   // ── Bind the <video> sink's srcObject imperatively. React has no
   // `srcObject` JSX prop (it's a DOM property, not an attribute) — this is
@@ -1380,7 +1357,7 @@ export function BrowserLiveView({
   const inputFailureAtRef = useRef(-Infinity)
   const dispatchInput = useCallback(
     (input: Omit<BrowserInputFrame, 'type'>, cleanup = false): boolean => {
-      const initiating = ['navigate', 'back', 'forward', 'reload'].includes(input.kind)
+      const initiating = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
       const current = captureRef.current
       const proof = current.gate.read(performance.now())
       if (!initiating && !cleanup && proof.status !== 'ready') return false
@@ -2084,10 +2061,7 @@ export function BrowserLiveView({
       }
       return
     }
-    // The implicit-drive gesture window (if any) ends with this pointerup
-    // regardless of what happens below — captured BEFORE clearing so
-    // canDispatchInput sees the value that was true for this gesture's
-    // duration, not the just-cleared one.
+    // Release only a button whose press was sent by this viewer.
     if (!canDispatchInput() || !attachedRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     const release = pressedInputsRef.current.get(`button:${mapMouseButton(e.button)}`)
@@ -2216,7 +2190,7 @@ export function BrowserLiveView({
     e.preventDefault()
     // 'text' input is a one-shot insert (no matching key_up — mirrors
     // Input.insertText on the backend, which has no down/up phase).
-    if (!isPrintableKey(e) && pressedInputsRef.current.has(`key:${e.code || e.key}`)) {
+    if (pressedInputsRef.current.has(`key:${e.code || e.key}`)) {
       dispatchInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }
   }, [canDispatchInput, dispatchInput])
@@ -2300,6 +2274,9 @@ export function BrowserLiveView({
   const retryWebRTC = () => {
     setWebrtcError(null)
     setWebrtcErrorDetail(null)
+    setConnError(null)
+    setStatusMessage(null)
+    setStatusIsError(false)
     // #674: Retry must clear EVERY source displayError can come from, or the
     // click looks ignored — the same defect F7 fixed for firstFrameTimedOut.
     setVideoHealth(null)
@@ -2310,11 +2287,18 @@ export function BrowserLiveView({
     freshViewerRef.current = null
     refreshFrameGate()
     webrtcRef.current?.stop()
-    webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+    if (!connectedRef.current || !browserAttachedRef.current) {
+      setStatusState('connecting')
+      setConnectionAttempt((attempt) => attempt + 1)
+      return
+    }
+    const current = captureRef.current
+    webrtcRef.current?.start((offer) => wsRef.current?.sendWebRTCOffer(offer) ?? false,
+      current.id ? { captureId: current.id, generation: current.generation } : undefined)
   }
 
   return (
-    <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
+    <div className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {/* == Row A: tabs + window controls =============================
           Header consolidation (operator direction, 2026-08-04): the panel used
           to spend FOUR rows on chrome -- identity/controls, handback hint,
@@ -2828,7 +2812,9 @@ export function BrowserLiveView({
         )}
       </div>
 
-      {/* Persistent error strip — shown once the video is ATTACHED AND READY
+      {/* Notices overlay the picture so their appearance cannot resize the
+          measured viewport and trigger another capture transition.
+          Persistent error strip — shown once the video is ATTACHED AND READY
           (the empty-state branch and the "waiting for first frame" overlay
           above already surface displayError before then, each with its own
           Retry). Covers a transport error (connError) or a terminal
@@ -2840,7 +2826,7 @@ export function BrowserLiveView({
           clears `mediaStream`, which flips `attached` false and routes the
           user to the top-level empty-state error instead. */}
       {attached && videoReady && !displayError && (frameGateState.status !== 'ready' || !frameGeometryReady) && (
-        <div role="status" className="shrink-0 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-4 py-2 text-xs text-[var(--color-text-secondary)]">
           {frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
             ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
             : frameGateState.status === 'ready' && !frameGeometryReady
@@ -2851,7 +2837,7 @@ export function BrowserLiveView({
         </div>
       )}
       {attached && videoReady && displayError && (
-        <div role="alert" className="min-w-0 shrink-0 [overflow-wrap:anywhere] border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
+        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-black/80 px-4 py-2 text-xs text-[var(--color-error)]">
           {displayError}
         </div>
       )}
