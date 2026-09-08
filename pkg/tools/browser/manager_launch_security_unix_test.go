@@ -50,7 +50,8 @@ func TestLaunchSecurityPATHProbeRequiresTrust(t *testing.T) {
 
 // A live Unix flock is authoritative even before Chrome writes its PID marker.
 func TestLaunchSecurityMarkerlessHeldLockRemainsExclusive(t *testing.T) {
-	cfg, home := newCoordinatorTestConfig(t)
+	// Only filesystem locking is exercised; resolving Chrome could download it.
+	cfg, home := budgetTestConfig(t)
 	c := NewBrowserCoordinator(home, cfg)
 	require.NoError(t, os.MkdirAll(cfg.ProfileDir, 0o700))
 	held, acquired, err := acquireLaunchLock(c.lockPath())
