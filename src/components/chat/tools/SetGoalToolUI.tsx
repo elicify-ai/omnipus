@@ -394,6 +394,7 @@ export function SetGoalCardBlock({
       return (
         <details data-testid="set-goal-failed" className="my-1 text-xs font-mono">
           <summary
+            tabIndex={0}
             className="flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[var(--color-muted)]"
             title={detail || 'Goal registration failed'}
           >

@@ -3965,6 +3965,31 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // out-of-order token beat this terminator here) or no turn
               // was announced at all, there is nothing to open — just let
               // the isReplaying clear/defer above stand.
+              // FX-E (ADR-082 D9): bake any tool calls still left over from
+              // replay reconstruction before this replay-terminator done —
+              // closes the remaining gap the 'replay_message' case's own
+              // fix (see its bake immediately before constructing a new
+              // NON-assistant-role message) doesn't cover: a tool call that
+              // is the LITERAL LAST transcript entry, with no further
+              // message of ANY role replayed after it. Without this, that
+              // call stays stranded in toolCallOrder forever whenever the
+              // session has no live turn to continue (the ordinary
+              // completed-session reload case) — never reaching
+              // message.tool_calls, so its dedicated renderer (e.g.
+              // SetGoalCardBlock) never sees it on reload.
+              if (priorBucket.toolCallOrder.length > 0) {
+                withBucket(sid, (b) => {
+                  if (b.toolCallOrder.length === 0) return {}
+                  return produce(b, (draft) => {
+                    const fallbackMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                    bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, fallbackMsgId, draft.textAtToolCallStart)
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                    draft.toolCallOwnerMessageId = {}
+                  }) as Partial<SessionChatState>
+                })
+              }
               const awaitingCatchUp =
                 !!priorBucket.activeTurnId && !priorBucket.activeTurnBubbleOpened
               if (awaitingCatchUp) {
@@ -5472,7 +5497,43 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   draft.toolCalls = {}
                   draft.toolCallOrder = []
                   draft.textAtToolCallStart = {}
+                  draft.toolCallOwnerMessageId = {}
                 }
+              }
+              // FX-E (ADR-082 D9): bake any STILL-pending tool calls before
+              // opening a message of a NON-assistant role (user/system) —
+              // every branch above only bakes for `role === 'assistant'`
+              // (the empty-placeholder coalesce and same-turn-merge
+              // sub-paths bake-then-`return`; the T1.10 fallback
+              // immediately above bakes-then-falls-through), so a
+              // `role === 'assistant'` frame always leaves toolCallOrder
+              // empty by the time it reaches here. A user/system
+              // replay_message skips that whole `if` block, so without
+              // this, a tool call whose owner is a PRIOR assistant bubble —
+              // e.g. `set_goal` as the LAST thing in a turn, immediately
+              // followed by the transcript's next USER message with no
+              // further assistant narration replayed afterward — is left
+              // stranded in `toolCallOrder` forever: the only other bake
+              // site, the terminal `done` frame, is a no-op replay
+              // terminator (`isReplayTerminatorDone`, this file's `done`
+              // case) whenever the session has no live turn in flight — the
+              // ordinary case of reloading an already-completed session.
+              // The call then never reaches `message.tool_calls`, so
+              // SetGoalCardBlock (and any other tool-call renderer keyed off
+              // `message.tool_calls`) never sees it: the card renders live
+              // but silently vanishes on reload (e2e
+              // goal-card-position.spec.ts's post-reload assertion).
+              // Routed through the owner map (bakeToolCallsByOwner, same as
+              // the `done` case) rather than a flat "last assistant
+              // message" bake — correct even when more than one assistant
+              // bubble is currently open/pending an owner.
+              if (role !== 'assistant' && draft.toolCallOrder.length > 0) {
+                const fallbackMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, fallbackMsgId, draft.textAtToolCallStart)
+                draft.toolCalls = {}
+                draft.toolCallOrder = []
+                draft.textAtToolCallStart = {}
+                draft.toolCallOwnerMessageId = {}
               }
               const newMsg: ChatMessage = {
                 id: messageId ?? generateId(),
