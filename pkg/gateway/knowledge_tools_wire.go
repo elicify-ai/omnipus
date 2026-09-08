@@ -45,29 +45,38 @@ import (
 // registered from gateway.go rather than from pkg/tools.
 //
 // NOT registered here: policy COVERAGE. buildKnownBuiltinToolNames
-// (gateway.go) unions all six knowledge tool names in explicitly and is the
-// authority for Constraint #6's (agent × tool) universe. It deliberately does
-// not derive that list from this file, so that a tool dropped from the
+// (gateway.go) unions all eight knowledge tool names in explicitly and is
+// the authority for Constraint #6's (agent × tool) universe. It deliberately
+// does not derive that list from this file, so that a tool dropped from the
 // catalog still carries an explicit seeded posture rather than silently
 // vanishing from the coverage universe as well.
 //
 // ADR-067's nine (knowledge_search, knowledge_graph, knowledge_create,
 // knowledge_link, knowledge_set_property, knowledge_append_section,
 // knowledge_tasks, knowledge_move, knowledge_rename) are RETIRED from both
-// registries below — ADR-068's six supersede them by blast radius rather
-// than by read/write. Their Go implementations (pkg/knowledge/tools.go,
-// authoring_tools.go) are NOT deleted: pkg/gateway/rest_knowledge.go still
-// calls knowledge.RetrievalTools directly for the Library UI's own search/
-// graph REST endpoints, which are independent of the agent tool-calling
-// surface this file wires. Deleting them would break that surface for no
-// reason connected to this retirement.
+// registries below — ADR-068's family supersedes them by blast radius
+// rather than by read/write. Their Go implementations (pkg/knowledge/tools.go,
+// authoring_tools.go) are NOT deleted, but — correcting this paragraph's own
+// earlier claim, found stale while wiring KB-1/KB-2
+// (defect-list-knowledge-base-ux-2026-09-08.md) — pkg/gateway/rest_knowledge.go
+// does NOT call knowledge.RetrievalTools any more: US-5/ADR-081 retired the
+// REST search endpoint that was its last caller here (see
+// rest_knowledge.go's own knowledgeRESTLimiter comment), and the graph
+// endpoint reimplements its walk directly via knowledge.BuildLinkGraph
+// rather than going through GraphTool. The nine ADR-067 tools' Go code
+// survives purely as tested, unreachable-in-production history — grepped
+// confirmed zero non-comment callers anywhere in the tree — kept for the
+// same reason any retired-but-documented implementation is: deleting it
+// would cost the record of what ADR-068 replaced for no operational gain.
 // ---------------------------------------------------------------------------
 
-// knowledgeBuiltinMetadata returns metadata-only instances of ADR-068's six
-// knowledge tools: the three READ-tier tools (knowledge_describe,
-// knowledge_find, knowledge_read), knowledge_edit (one named file),
-// knowledge_restructure (cascading rename/move/trash) and
-// knowledge_configure (the schema/view control plane).
+// knowledgeBuiltinMetadata returns metadata-only instances of ADR-068's
+// knowledge tool family plus KB-1/KB-2's two additions
+// (defect-list-knowledge-base-ux-2026-09-08.md): the four READ-tier tools
+// (knowledge_describe, knowledge_find, knowledge_read, knowledge_list),
+// knowledge_edit (one named file), knowledge_restructure (cascading
+// rename/move/trash), knowledge_configure (the schema/view control plane)
+// and knowledge_base_create (makes a new knowledge base).
 //
 // The instances are constructed with ZERO deps — an empty ToolDeps.Home /
 // AuthoringDeps.Home resolves to an EMPTY knowledge scope (see
@@ -83,9 +92,11 @@ func knowledgeBuiltinMetadata() []tools.Tool {
 		knowledge.NewDescribeTool(knowledge.ToolDeps{}, nil),
 		vaultprops.NewFindTool(""),
 		knowledge.NewReadTool(knowledge.ToolDeps{}),
+		knowledge.NewListTool(knowledge.ToolDeps{}),
 		knowledge.NewEditTool(knowledge.AuthoringDeps{}),
 		knowledge.NewRestructureTool(knowledge.AuthoringDeps{}),
 		knowledge.NewConfigureTool(knowledge.AuthoringDeps{}),
+		knowledge.NewCreateBaseTool(knowledge.AuthoringDeps{}),
 	}
 }
 

@@ -423,7 +423,18 @@ func expectVersionParam() map[string]any {
 }
 
 // ---------------------------------------------------------------------------
-// knowledge_create (US-12, FR-100..FR-102)
+// knowledge_create_note (US-12, FR-100..FR-102)
+//
+// Renamed from "knowledge_create" (KB-1, defect-list-knowledge-base-ux-
+// 2026-09-08.md, founder-ratified 2026-09-08): the old name read as "make a
+// knowledge base" to an agent reaching for the obvious verb, when what it
+// actually does is add a NOTE inside one that already exists. This tool is
+// ADR-067 stage-3 code superseded by knowledge_edit's op=create (see
+// knowledge_edit.go's own header) — AuthoringTools/CreateTool has had no
+// non-test caller anywhere in the tree since that consolidation, so the
+// rename is confined to this package and costs nothing live. It is kept
+// (not deleted) as a record of the ADR-067 shape; do not resurrect it as a
+// second, competing "create" surface — knowledge_edit is authoritative.
 // ---------------------------------------------------------------------------
 
 // CreateTool creates a note from the collection's own templates.
@@ -432,9 +443,10 @@ type CreateTool struct {
 	deps AuthoringDeps
 }
 
-// Name is the registered tool name, seeded explicitly in
-// pkg/config/defaults.go and pkg/coreagent/core.go (D17).
-func (t *CreateTool) Name() string { return "knowledge_create" }
+// Name is the registered tool name. It is UNREGISTERED anywhere live (see
+// the header above) — no seed entry in pkg/config/defaults.go or
+// pkg/coreagent/core.go names it, by design.
+func (t *CreateTool) Name() string { return "knowledge_create_note" }
 
 // Description is what the model reads.
 func (t *CreateTool) Description() string {

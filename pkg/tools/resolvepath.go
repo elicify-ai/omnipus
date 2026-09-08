@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -706,6 +707,40 @@ func (h *PathHandle) Stat() (os.FileInfo, error) {
 		return nil, fmt.Errorf("failed to stat: %w", err)
 	}
 	return info, nil
+}
+
+// hasSubdir reports whether childRel — a slash-separated path relative to
+// this handle's OWN target directory, e.g. "MyNotes/.omnipus-vault" for a
+// listed entry named "MyNotes" — exists and is a directory, using the same
+// confinement every other PathHandle method uses: a confined os.Root.Stat
+// when root != nil (which already covers a workspace mount transparently,
+// since a mount is resolved to its own anchored os.Root by ResolvePath
+// before list_directory ever calls ReadDir — see newMountRootHandle above),
+// or a re-checked host os.Stat when root == nil (host/unrestricted mode).
+//
+// It is used by list_directory (filesystem.go) to mark a knowledge base in
+// its output without a second path-resolution pass per entry: ResolvePath's
+// own cost (realpath resolution, carve-out checks, symlink guards) is paid
+// once for the LISTED directory, not once per child, matching
+// pkg/gateway/rest_library.go's detectKnowledgeBaseInRoot's reasoning for
+// why a targeted stat beats re-walking or re-resolving per row.
+//
+// Any error (permission denied, an escaping symlink, nothing there) reports
+// false — "could not establish" and "definitively absent" collapse to the
+// same answer here, because list_directory's plain-text output has no way to
+// mark the difference. That is a narrower guarantee than
+// detectKnowledgeBaseInRoot's own per-entry established/not-established
+// split, and is stated as such where it is used.
+func (h *PathHandle) hasSubdir(childRel string) bool {
+	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return false
+		}
+		info, err := os.Stat(filepath.Join(h.abs, filepath.FromSlash(childRel)))
+		return err == nil && info.IsDir()
+	}
+	info, err := h.root.Stat(path.Join(h.rel, childRel))
+	return err == nil && info.IsDir()
 }
 
 // RealPath returns the resolved absolute path ResolvePath computed. This is

@@ -625,10 +625,24 @@ func DefaultConfig() *Config {
 				"knowledge_describe": "allow",
 				"knowledge_find":     "allow",
 				"knowledge_read":     "allow",
+				// knowledge_list (KB-2a, defect-list-knowledge-base-ux-
+				// 2026-09-08.md, founder-ratified 2026-09-08) — also read
+				// tier: which knowledge bases this agent can reach. Same
+				// ceiling posture as the other three read tools, for the
+				// same reason (touches nothing outside what it reports).
+				"knowledge_list": "allow",
 				// Writes.
 				"knowledge_edit":        "allow",
 				"knowledge_restructure": "allow",
 				"knowledge_configure":   "allow",
+				// knowledge_base_create (KB-1, same defect list) — makes a
+				// NEW knowledge base in the workspace's own Library. Ceiling
+				// "allow" for the same reason as the write three above: the
+				// real containment is the per-agent seed (Ava/Mia/Ray "ask",
+				// Jim "allow" — his bash exception applies here too, since
+				// bash can already create arbitrary folders+files unprompted)
+				// plus the FR-090 audit record, not the ceiling.
+				"knowledge_base_create": "allow",
 
 				// --- grep (ADR-081 D11, FR-009 — founder ruling) ---
 				// Ceiling "allow": grep is a read-only, no-write, recursive

@@ -158,7 +158,7 @@ func a4ResolveOnly(t *testing.T, root, noteRel string) string {
 func TestAuthoringTools_RegistersExactlyTheSevenSeededNames(t *testing.T) {
 	want := []string{
 		"knowledge_append_section",
-		"knowledge_create",
+		"knowledge_create_note",
 		"knowledge_link",
 		"knowledge_move",
 		"knowledge_rename",
@@ -205,7 +205,7 @@ func TestAuthoringTools_CrossWorkspaceWriteIsRefusedAuditedAndWritesNothing(t *t
 		tool string
 		args map[string]any
 	}{
-		{"knowledge_create", map[string]any{"collection": "PrivateKB", "path": "sneaked.md", "body": "x"}},
+		{"knowledge_create_note", map[string]any{"collection": "PrivateKB", "path": "sneaked.md", "body": "x"}},
 		{"knowledge_link", map[string]any{"collection": "PrivateKB", "path": "a.md", "target": "b"}},
 		{"knowledge_set_property", map[string]any{"collection": "PrivateKB", "path": "a.md", "name": "status", "value": "done"}},
 		{"knowledge_append_section", map[string]any{"collection": "PrivateKB", "path": "a.md", "heading": "H", "content": "c"}},
@@ -243,7 +243,7 @@ func TestAuthoringTools_CrossWorkspaceWriteIsRefusedAuditedAndWritesNothing(t *t
 	// Positive control: the SAME call from the workspace that does hold the
 	// mount succeeds. Without it, a tool that refused everything would pass
 	// every assertion above.
-	ok := a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("agent-a", wsA),
+	ok := a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("agent-a", wsA),
 		map[string]any{"collection": "PrivateKB", "path": "allowed.md", "body": "hello"})
 	require.False(t, ok.IsError, "the owning workspace must be able to write: %s", ok.ForLLM)
 	assert.FileExists(t, filepath.Join(root, "allowed.md"))
@@ -293,7 +293,7 @@ func TestCreateTool_StartsFromTheCollectionTemplate(t *testing.T) {
 		"---\ntitle: {{title}}\ndate: {{date}}\nstatus: draft\n---\n\n## Attendees\n\n## Notes\n"), 0o600))
 
 	deps, rec := a4Deps(home)
-	res := a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws), map[string]any{
+	res := a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws), map[string]any{
 		"collection": "KB",
 		"path":       "meetings/2026-08-23 Kickoff",
 		"title":      "Kickoff",
@@ -324,7 +324,7 @@ func TestCreateTool_NeverOverwritesAnExistingNote(t *testing.T) {
 	a4Note(t, root, "existing.md", "the operator's own words\n")
 
 	deps, rec := a4Deps(home)
-	res := a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws), map[string]any{
+	res := a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws), map[string]any{
 		"collection": "KB", "path": "existing.md", "body": "the agent's words",
 	})
 	require.True(t, res.IsError, "creating over an existing note must be refused")
@@ -343,7 +343,7 @@ func TestAuthoringTools_StaleVersionTokenIsRefusedAsTypedConflict(t *testing.T) 
 	home, ws, root := a4Fixture(t, "KB")
 	deps, rec := a4Deps(home)
 
-	created := a4Payload(t, a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws),
+	created := a4Payload(t, a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws),
 		map[string]any{"collection": "KB", "path": "note.md", "body": "# Note\n\noriginal\n"}))
 	stale, _ := created["version"].(string)
 	require.NotEmpty(t, stale)
@@ -385,7 +385,7 @@ func TestAuthoringTools_ChangeWithPreservedMtimeIsStillRefused(t *testing.T) {
 	home, ws, root := a4Fixture(t, "KB")
 	deps, _ := a4Deps(home)
 
-	created := a4Payload(t, a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws),
+	created := a4Payload(t, a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws),
 		map[string]any{"collection": "KB", "path": "note.md", "body": "aaaaaaaa\n"}))
 	stale, _ := created["version"].(string)
 	require.NotEmpty(t, stale)

@@ -18,13 +18,15 @@
 //
 // # The oracle
 //
-// ADR-068 D15.3, transcribed as data below: the read tier (knowledge_describe,
-// knowledge_find, knowledge_read) `allow` for all four base agents; the three
-// write tools (knowledge_edit, knowledge_restructure, knowledge_configure)
-// `allow` for Jim, `ask` for Ava/Mia/Ray. It is NOT read back from
-// pkg/config/defaults.go or pkg/coreagent/core.go — those are the things
-// under test, and a test that asks the seed what the seed says passes for
-// any seed.
+// ADR-068 D15.3 plus KB-1/KB-2's two additions
+// (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08), transcribed as data below: the read tier (knowledge_describe,
+// knowledge_find, knowledge_read, knowledge_list) `allow` for all four base
+// agents; the write tools (knowledge_edit, knowledge_restructure,
+// knowledge_configure, knowledge_base_create) `allow` for Jim, `ask` for
+// Ava/Mia/Ray. It is NOT read back from pkg/config/defaults.go or
+// pkg/coreagent/core.go — those are the things under test, and a test that
+// asks the seed what the seed says passes for any seed.
 
 package gateway
 
@@ -68,6 +70,7 @@ func TestKnowledgeTools_D15PostureIsWhatTheTurnActuallyResolves(t *testing.T) {
 
 	read := map[string]bool{
 		"knowledge_describe": true, "knowledge_find": true, "knowledge_read": true,
+		"knowledge_list": true,
 	}
 
 	for agentID, want := range d15Posture {
@@ -112,7 +115,7 @@ func TestKnowledgeTools_D15PostureIsWhatTheTurnActuallyResolves(t *testing.T) {
 	}
 }
 
-// TestKnowledgeTools_EveryAgentResolvesAnExplicitVerdictForAllSix covers the
+// TestKnowledgeTools_EveryAgentResolvesAnExplicitVerdictForAllEight covers the
 // agents D15.3 does not name — the Worker, Planner, Explorer, Researcher,
 // Judge and Plan Supervisor.
 //
@@ -121,7 +124,7 @@ func TestKnowledgeTools_D15PostureIsWhatTheTurnActuallyResolves(t *testing.T) {
 // wildcard-free entry rather than from a gap. It is the coverage claim,
 // checked from the registry side and for ALL agents rather than the four the
 // effective-posture test above happened to reach.
-func TestKnowledgeTools_EveryAgentResolvesAnExplicitVerdictForAllSix(t *testing.T) {
+func TestKnowledgeTools_EveryAgentResolvesAnExplicitVerdictForAllEight(t *testing.T) {
 	al, _, cfg := kwLoop(t)
 
 	agentIDs := al.GetRegistry().ListAgentIDs()

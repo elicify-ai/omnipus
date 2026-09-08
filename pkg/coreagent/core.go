@@ -538,9 +538,20 @@ var allStaticToolNames = []string{
 	//     knowledge_edit's one file, which is why it carries its own policy
 	//     line rather than sharing knowledge_edit's.
 	"knowledge_describe", "knowledge_find", "knowledge_read",
+	// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+	// founder-ratified 2026-09-08) — also read tier, listed here for the
+	// SAME two reasons this whole block states: validateOverrideKeys panics
+	// on an unknown name, and the coverage universe (buildKnownBuiltinToolNames)
+	// must contain it or a gap in it is invisible to the boot-time check.
+	"knowledge_list",
 	"knowledge_edit",
 	"knowledge_restructure",
 	"knowledge_configure",
+	// knowledge_base_create (KB-1, same defect list) — makes a NEW knowledge
+	// base in the workspace's own Library, distinct from knowledge_edit's
+	// create op (which adds a note to one that already exists). Listed here
+	// for the same two reasons.
+	"knowledge_base_create",
 
 	// ADR-081 D11 (unified-search-and-grep-spec.md FR-008/FR-009) — the
 	// file-search/grep agent tool. Listed here ahead of / independent of its
@@ -894,12 +905,22 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// all of them. An operator who wants a delegated worker reading
 			// a knowledge base changes this on their own install
 			// (Constraint #6 — this is seeded data, not a branch).
-			"knowledge_describe":    deny,
-			"knowledge_find":        deny,
-			"knowledge_read":        deny,
+			"knowledge_describe": deny,
+			"knowledge_find":     deny,
+			"knowledge_read":     deny,
+			// knowledge_list (KB-2a) — the same Worker-id-is-shared reason as
+			// the three read tools directly above.
+			"knowledge_list":        deny,
 			"knowledge_edit":        deny,
 			"knowledge_restructure": deny,
 			"knowledge_configure":   deny,
+			// knowledge_base_create (KB-1) — the Worker cannot own a plan or
+			// be addressed individually (see list_jobs/roster-visibility
+			// reasoning above); a knowledge base "created by the Worker"
+			// would be indistinguishable from one created by any other
+			// delegated session sharing that id, so this stays denied for
+			// the same reason every other Worker write above does.
+			"knowledge_base_create": deny,
 			// --- ADR-081 D11 (FR-009, founder ruling) ---
 			// grep: EXPLICIT allow — the one entry in this map that MATCHES
 			// the ceiling rather than tightening below it. See the EXCEPTION
@@ -1211,12 +1232,22 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// (Constraint #6), not a default this seed grants on Ava's
 			// behalf for an operation whose full effect she cannot bound
 			// from her own call.
-			"knowledge_describe":    allow,
-			"knowledge_find":        allow,
-			"knowledge_read":        allow,
+			"knowledge_describe": allow,
+			"knowledge_find":     allow,
+			"knowledge_read":     allow,
+			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+			// three read tools above: it reports what already exists, touching
+			// nothing.
+			"knowledge_list":        allow,
 			"knowledge_edit":        ask,
 			"knowledge_restructure": ask,
 			"knowledge_configure":   ask,
+			// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
+			// it creates a new folder+marker in the operator's own Library, an
+			// effect this agent's own call cannot bound, matching the write-three's
+			// own "ask" reasoning immediately above.
+			"knowledge_base_create": ask,
 			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
 			// for every agent tier, including Ava — unlike the knowledge
 			// writes just above, it mutates nothing (a read-only recursive
@@ -1309,12 +1340,22 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// that already warranted asking (see coreAgentSeed's IDAva case
 			// for the cascade/control-plane argument, which applies
 			// identically here).
-			"knowledge_describe":    allow,
-			"knowledge_find":        allow,
-			"knowledge_read":        allow,
+			"knowledge_describe": allow,
+			"knowledge_find":     allow,
+			"knowledge_read":     allow,
+			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+			// three read tools above: it reports what already exists, touching
+			// nothing.
+			"knowledge_list":        allow,
 			"knowledge_edit":        ask,
 			"knowledge_restructure": ask,
 			"knowledge_configure":   ask,
+			// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
+			// it creates a new folder+marker in the operator's own Library, an
+			// effect this agent's own call cannot bound, matching the write-three's
+			// own "ask" reasoning immediately above.
+			"knowledge_base_create": ask,
 			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
 			// for every agent tier, including Mia — unlike the knowledge
 			// writes just above, it mutates nothing (a read-only recursive
@@ -1450,12 +1491,22 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// cascade/control-plane argument), so there is no case for
 			// loosening either past "ask" for a role whose job was never to
 			// write there at all.
-			"knowledge_describe":    allow,
-			"knowledge_find":        allow,
-			"knowledge_read":        allow,
+			"knowledge_describe": allow,
+			"knowledge_find":     allow,
+			"knowledge_read":     allow,
+			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+			// three read tools above: it reports what already exists, touching
+			// nothing.
+			"knowledge_list":        allow,
 			"knowledge_edit":        ask,
 			"knowledge_restructure": ask,
 			"knowledge_configure":   ask,
+			// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
+			// it creates a new folder+marker in the operator's own Library, an
+			// effect this agent's own call cannot bound, matching the write-three's
+			// own "ask" reasoning immediately above.
+			"knowledge_base_create": ask,
 			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
 			// for every agent tier, including Ray — and squarely his job: a
 			// read-only recursive name/content search over local sources,
@@ -1652,12 +1703,23 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// knowledge_tasks-vs-knowledge_search reasoning this file
 			// carried before ADR-068, now superseded but the same warning
 			// still holds for Jim's case here).
-			"knowledge_describe":    allow,
-			"knowledge_find":        allow,
-			"knowledge_read":        allow,
+			"knowledge_describe": allow,
+			"knowledge_find":     allow,
+			"knowledge_read":     allow,
+			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+			// three read tools above: it reports what already exists, touching
+			// nothing.
+			"knowledge_list":        allow,
 			"knowledge_edit":        allow,
 			"knowledge_restructure": allow,
 			"knowledge_configure":   allow,
+			// knowledge_base_create (KB-1, same defect list) — allow, the same
+			// deliberate exception this case already argues for the write three
+			// above: unprompted bash can already create arbitrary folders and
+			// files, so gating the audited equivalent behind "ask" would protect
+			// nothing real here either.
+			"knowledge_base_create": allow,
 			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
 			// for every agent tier, Jim included — consistent with his
 			// existing unprompted bash and knowledge-write grants above: a

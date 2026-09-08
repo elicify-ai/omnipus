@@ -847,13 +847,29 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 	// part B's file allow-list, exactly like knowledge_configure.go's own
 	// entry above.
 	//
+	// knowledge_base_create.go and knowledge_list.go (KB-1/KB-2,
+	// defect-list-knowledge-base-ux-2026-09-08.md) are the seventh and
+	// eighth adapters. Neither does byte-level rewriting itself:
+	// knowledge_base_create.go's Execute delegates the actual "make a
+	// knowledge base" act to CreateInWorkspace (detect.go, already outside
+	// this file's closure — the same primitive the REST vault-create
+	// handler calls) and knowledge_list.go's Execute is read-only, resolving
+	// scope and rendering via indexFreshness (knowledge_describe.go). Their
+	// only reasons to import pkg/tools are BaseTool/ToolScope/ScopeGeneral/
+	// ToolCategory/CategoryMemory/ErrorResult/ToolResult/NewToolResult/
+	// ToolAgentID for their own tool-adapter shape and response — every one
+	// already on allowedToolsSelectors below before either file was added,
+	// so part C's pin needed no new entries for these two either; this
+	// addition is purely part B's file allow-list.
+	//
 	// This stays an EXPLICIT literal rather than a "*_tools.go" pattern: the
 	// point of the guard is that adding pkg/tools to a new file is a decision
 	// somebody has to make on purpose, and a pattern would silently admit the
 	// next file that happened to be named to fit.
 	want := []string{
-		"authoring_tools.go", "knowledge_configure.go", "knowledge_configure_create_view.go",
-		"knowledge_edit.go", "knowledge_restructure.go", "scope_turn.go", "tools.go",
+		"authoring_tools.go", "knowledge_base_create.go", "knowledge_configure.go",
+		"knowledge_configure_create_view.go", "knowledge_edit.go", "knowledge_list.go",
+		"knowledge_restructure.go", "scope_turn.go", "tools.go",
 	}
 	if strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
 		t.Fatalf("pkg/tools is imported by %v, want exactly %v. It is the only import here whose own "+

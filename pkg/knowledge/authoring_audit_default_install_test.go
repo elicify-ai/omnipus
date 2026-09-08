@@ -62,14 +62,14 @@ func TestAuthoringTools_WorkOnADefaultInstallWithNoAuditLogger(t *testing.T) {
 	home, ws, root := a4Fixture(t, "KB")
 	deps := a4DefaultInstallDeps(home)
 
-	res := a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws), map[string]any{
+	res := a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws), map[string]any{
 		"collection": "KB",
 		"path":       "notes/default-install.md",
 		"body":       "written on a gateway with sandbox.audit_log unset",
 	})
 
 	require.Falsef(t, res.IsError,
-		"knowledge_create must succeed on a DEFAULT install (sandbox.audit_log unset, so "+
+		"knowledge_create_note must succeed on a DEFAULT install (sandbox.audit_log unset, so "+
 			"al.auditLogger is nil and SetAuditLogger is never called). It refused with %q. "+
 			"A nil Audit is a fail-closed refusal by design; the fix is that a sink always "+
 			"exists, never that the gate is removed", res.ForLLM)
@@ -98,7 +98,7 @@ func TestAuthoringTools_DefaultInstallStillRecordsEveryMutationAndRefusal(t *tes
 	t.Cleanup(func() { slog.SetDefault(restore) })
 
 	// 1. An APPLIED mutation.
-	applied := a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws), map[string]any{
+	applied := a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws), map[string]any{
 		"collection": "KB",
 		"path":       "notes/recorded.md",
 		"body":       "hello",
@@ -109,7 +109,7 @@ func TestAuthoringTools_DefaultInstallStillRecordsEveryMutationAndRefusal(t *tes
 	//    caller's workspace. FR-090's "and every refusal" half, and the one an
 	//    operator most needs: an agent reaching for a knowledge base it may not
 	//    address.
-	refused := a4Tool(t, deps, "knowledge_create").Execute(a4Ctx("ava", ws), map[string]any{
+	refused := a4Tool(t, deps, "knowledge_create_note").Execute(a4Ctx("ava", ws), map[string]any{
 		"collection": "SomeOtherWorkspacesVault",
 		"path":       "notes/nope.md",
 		"body":       "hello",

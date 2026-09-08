@@ -838,12 +838,14 @@ func TestVisibility_SearchOnlyToolsRemainInSearchIndex(t *testing.T) {
 // mentions these names; folding them in would misrepresent the transcription
 // as covering an ADR it does not.
 var knowledgeManifestToolNames = []string{
-	"knowledge_describe", "knowledge_find", "knowledge_read",
-	"knowledge_edit", "knowledge_restructure", "knowledge_configure",
+	"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
+	"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create",
 }
 
 // TestVisibility_KnowledgeToolsAreSearchOnly pins the ADR-068 knowledge
-// family's manifest exposure: all six resolve to ManifestLazy +
+// family's manifest exposure (widened by KB-1/KB-2's knowledge_list and
+// knowledge_base_create, defect-list-knowledge-base-ux-2026-09-08.md,
+// founder-ratified 2026-09-08): all eight resolve to ManifestLazy +
 // ManifestSearchOnly, deliberately (per ADR-071 §4.4's default — "search-only
 // by default... itself deliberate, not a silent fallthrough"), never
 // ManifestFull and never previewed.
@@ -861,14 +863,15 @@ var knowledgeManifestToolNames = []string{
 // across every agent; this test exists so that move can only ever be
 // deliberate.
 //
-// All SIX resolve the same way, not just the three read tools: retrieval
-// (describe/find/read) and write (edit/restructure/configure) are equally
-// niche — meaningful only in a workspace with a knowledge base mounted — and
-// none of the six has the "no natural discovery moment" property that
-// justifies a Tier 2 preview line (contrast bash, list_mounts,
-// recall_conversation in fullManifestToolNames's own doc comment). Maximal
-// payload cut for the whole family, consistent with ADR-071 D3's design
-// intent for a niche, workspace-gated tool surface.
+// All EIGHT resolve the same way, not just the four read tools: retrieval
+// (describe/find/read/list) and write (edit/restructure/configure/
+// base_create) are equally niche — meaningful only in a workspace with a
+// knowledge base mounted or one about to be created — and none of the eight
+// has the "no natural discovery moment" property that justifies a Tier 2
+// preview line (contrast bash, list_mounts, recall_conversation in
+// fullManifestToolNames's own doc comment). Maximal payload cut for the
+// whole family, consistent with ADR-071 D3's design intent for a niche,
+// workspace-gated tool surface.
 func TestVisibility_KnowledgeToolsAreSearchOnly(t *testing.T) {
 	previewed := make(map[string]bool)
 	for _, n := range PreviewedLazyToolNames() {

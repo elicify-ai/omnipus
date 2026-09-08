@@ -18,12 +18,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// knowledgeToolNames is ADR-068 D15.3's six-tool enumeration, stated here
-// independently of both catalogs so this file can assert the REGISTRY
-// contains them rather than asking the registry what it contains.
+// knowledgeToolNames is ADR-068 D15.3's six-tool enumeration plus KB-1/KB-2's
+// two additions (defect-list-knowledge-base-ux-2026-09-08.md,
+// founder-ratified 2026-09-08: knowledge_list, knowledge_base_create),
+// stated here independently of both catalogs so this file can assert the
+// REGISTRY contains them rather than asking the registry what it contains.
 var knowledgeToolNames = []string{
-	"knowledge_describe", "knowledge_find", "knowledge_read",
-	"knowledge_edit", "knowledge_restructure", "knowledge_configure",
+	"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
+	"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create",
 }
 
 // seededBootConfig reproduces the boot composition pkg/gateway's

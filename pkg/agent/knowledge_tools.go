@@ -12,23 +12,34 @@ package agent
 // This used to register ADR-067's nine-tool family (knowledge_search,
 // knowledge_graph, knowledge_create, knowledge_link, knowledge_set_property,
 // knowledge_append_section, knowledge_tasks, knowledge_move,
-// knowledge_rename). ADR-068 supersedes that family with SIX tools split by
-// blast radius rather than by read/write:
+// knowledge_rename). ADR-068 superseded that family with SIX tools split by
+// blast radius rather than by read/write, and KB-1/KB-2
+// (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08) add two more — an agent could reach knowledge_describe,
+// knowledge_find, knowledge_read, knowledge_edit, knowledge_restructure and
+// knowledge_configure but had no verb that MADE a knowledge base and no way
+// to discover which ones it could reach without already knowing one:
 //
-//	knowledge_describe    — read: orientation, schema, saved views, index state
-//	knowledge_find        — read: the one retrieval surface (words, typed
-//	                         filter, saved views, relations, tasks)
-//	knowledge_read        — read: one note in full or one section
-//	knowledge_edit        — write: ONE named file (create/set_property/
-//	                         append_section/link/replace_body)
-//	knowledge_restructure — write: rename/move/trash/restore — CASCADES,
-//	                         rewriting files the caller never named
+//	knowledge_describe     — read: orientation, schema, saved views, index state
+//	knowledge_find         — read: the one retrieval surface (words, typed
+//	                          filter, saved views, relations, tasks)
+//	knowledge_read         — read: one note in full or one section
+//	knowledge_list         — read: which knowledge bases this agent can reach,
+//	                          with per-collection index freshness (KB-2a)
+//	knowledge_edit         — write: ONE named file (create/set_property/
+//	                          append_section/link/replace_body)
+//	knowledge_restructure  — write: rename/move/trash/restore — CASCADES,
+//	                          rewriting files the caller never named
 //	knowledge_configure    — write: record-type schema and saved-view
 //	                          control plane — changes what existing notes MEAN
+//	knowledge_base_create  — write: makes a NEW knowledge base in the
+//	                          workspace's own Library (KB-1) — distinct from
+//	                          knowledge_edit's create op, which adds a NOTE
+//	                          inside one that already exists
 //
-// The nine old tools were fully implemented, unit-tested, and reachable
-// through this registry — but they are retired now that ADR-068's six
-// supersede them; leaving both registered would let an agent silently keep
+// The nine ADR-067 tools were fully implemented, unit-tested, and reachable
+// through this registry — but they are retired now that ADR-068's family
+// supersedes them; leaving both registered would let an agent silently keep
 // using the superseded surface after the seeded policy stopped naming it
 // (Constraint #6 requires an explicit posture per agent per tool, and the
 // nine old names have none any more — see pkg/config/defaults.go and
@@ -59,24 +70,25 @@ package agent
 //
 // FR-090 requires an audit record for every knowledge-base mutation AND
 // every refusal. The sink that satisfies it is knowledge.AuthoringDeps.Audit,
-// and the adapter onto the process audit logger lives in pkg/knowledge
-// (authoring_audit_bridge.go) rather than in this package: the tools belong
-// to pkg/knowledge, so their audit contract belongs beside them, and
-// pkg/agent should not have to know how a knowledge tool audits. Each tool
-// implements SetAuditLogger there, which is pkg/tools' auditLoggerAware
-// contract, so the propagation the rest of the tree already performs
-// (AgentLoop.wireMemoryAuditLoggerOn -> ToolRegistry.SetAuditLogger) reaches
-// them with no decorator and no change here.
+// constructed HERE and passed to each mutating tool directly (NewEditTool,
+// NewRestructureTool, NewConfigureTool, and now NewCreateBaseTool below) —
+// unlike the retired ADR-067 authoring tools (authoring_audit_bridge.go),
+// none of ADR-068's four implements pkg/tools' auditLoggerAware
+// (SetAuditLogger), so a later call to ToolRegistry.SetAuditLogger (e.g. once
+// `sandbox.audit_log` is turned on) does NOT reach them — they keep the sink
+// built at construction for the lifetime of the agent instance. That is the
+// live behaviour, not the aspiration: correct it here if it is ever changed,
+// rather than leaving this comment newly wrong for a fourth tool.
 //
 // The sink installed at construction is NewAuthorAuditLogger(nil) — the
 // structured-log fallback — and it is not a placeholder. `sandbox.audit_log`
 // is false on a default install (nothing in pkg/config/defaults.go seeds
-// it), so al.auditLogger is nil, SetAuditLogger is never called, and the
-// sink set HERE is the one that runs on most gateways. Leaving the field nil
-// instead would register three authoring tools that refuse every call,
-// because a nil Audit is a fail-closed refusal (knowledge/authoring_tools.go's
-// begin — the same preamble knowledge_edit.go/knowledge_restructure.go/
-// knowledge_configure.go share).
+// it), so this fallback sink is the one that runs on most gateways. Leaving
+// the field nil instead would register every mutating knowledge tool
+// refusing EVERY call, because a nil Audit is a fail-closed refusal
+// (knowledge/authoring_tools.go's begin, and knowledge_base_create.go's own
+// mirror of that same precondition — the preamble knowledge_edit.go/
+// knowledge_restructure.go/knowledge_configure.go share).
 //
 // # Manifest tier — unconditional registration does NOT mean unconditional
 // # per-turn cost
@@ -85,12 +97,12 @@ package agent
 // #6): it says nothing about what ends up on the wire on a turn that never
 // touches these tools. That is governed separately, by ADR-071's manifest
 // tier (pkg/tools/manifest.go, ToolManifestTier/ToolManifestVisibility): none
-// of the six names is listed in fullManifestToolNames or
-// previewedLazyToolNames, so all six resolve to the deliberate default —
+// of the eight names is listed in fullManifestToolNames or
+// previewedLazyToolNames, so all eight resolve to the deliberate default —
 // ManifestLazy + ManifestSearchOnly — meaning they cost ZERO tokens on any
 // turn until an agent calls ToolSearch for one by name or query (pinned by
 // pkg/tools/manifest_test.go's TestVisibility_KnowledgeToolsAreSearchOnly).
-// If a future change ever needs one of these six to be always-visible
+// If a future change ever needs one of these eight to be always-visible
 // (Full) or previewed (Tier 2), that is a deliberate manifest-tier decision
 // belonging in pkg/tools/manifest.go, updating that same pinning test — not
 // something to infer from this file's registration call.
@@ -122,6 +134,9 @@ func registerKnowledgeTools(reg *tools.ToolRegistry) {
 	reg.Register(knowledge.NewDescribeTool(knowledge.ToolDeps{Home: home}, vaultprops.Open))
 	reg.Register(vaultprops.NewFindTool(home))
 	reg.Register(knowledge.NewReadTool(knowledge.ToolDeps{Home: home}))
+	// knowledge_list (KB-2a): which knowledge bases this agent can reach —
+	// also read tier, touches nothing.
+	reg.Register(knowledge.NewListTool(knowledge.ToolDeps{Home: home}))
 
 	// EDIT — mutates exactly the ONE file the caller named.
 	reg.Register(knowledge.NewEditTool(knowledge.AuthoringDeps{Home: home, Audit: audit}))
@@ -135,4 +150,11 @@ func registerKnowledgeTools(reg *tools.ToolRegistry) {
 	// mean (a record-type schema edit reclassifies every record already on
 	// disk) or what a saved view returns.
 	reg.Register(knowledge.NewConfigureTool(knowledge.AuthoringDeps{Home: home, Audit: audit}))
+
+	// knowledge_base_create (KB-1): makes a NEW knowledge base in the
+	// workspace's own Library. Distinct blast radius from the others above —
+	// it creates a folder+marker rather than touching an existing
+	// collection's contents — but it is FR-090 audit-covered the same way,
+	// so it shares the same Audit sink.
+	reg.Register(knowledge.NewCreateBaseTool(knowledge.AuthoringDeps{Home: home, Audit: audit}))
 }
