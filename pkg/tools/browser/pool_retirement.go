@@ -63,6 +63,7 @@ func (p *BrowserPool) claimInstanceLocked(inst *chromeInstance, mode poolCloseMo
 	}
 	delete(p.instances, id)
 	for _, m := range managers {
+		m.poolRegistrationGeneration++
 		m.started = false
 	}
 	return r

@@ -177,3 +177,32 @@ The sibling guard is derived from the fixed profile configuration. Existing
 directory/marker filters exclude it from cache sweeps and reconciliation scans.
 Unix locking is exercised here; no cross-platform runtime or full mixed-version
 serialization claim is made.
+
+## Separate late-registration publication follow-up
+
+Independent re-review found that `pool.Register` can finish successfully,
+then retirement can mark the manager unstarted, and the still-returning
+manager call can overwrite that state with the old allocator. A manager-local
+pool registration generation will fence this publication under the existing
+manager mutex. Retirement advances it while making the atomic claim; the
+consumer checks its pre-registration snapshot before publishing. Caller/gate
+cancellation retains priority over this retryable retirement error.
+
+The scheduling-only hook runs after the real `pool.Register` returns. Tests
+use real `SessionContext`, registration and retirement with existing fake
+process/tab boundaries. Two timing cases require rejection during teardown
+and after teardown; a canceled caller must still receive `context.Canceled`.
+Each accepted retry must join a different instance/coordinator with a second
+launch, and an undisturbed registration must succeed. This plan precedes the
+generation behavior change.
+
+The baseline exited 1 (8.893s): both during/after-teardown cases returned
+success instead of refusing the retired registration. Caller cancellation
+and its fresh-instance retry passed, as did the undisturbed control. No race
+report was emitted. The generation fence was applied afterward. The restored
+affected race batch passed all 19 top-level groups (39 records), exit 0 in
+48.137s, with no skips or race reports. Besides the new cases, this covered
+existing mid-registration retirement, ordinary registration, final retirement
+eligibility, session cancellation and local/shared startup lifetime checks.
+The baseline demonstrated failure without the generation protection; no
+additional synthetic fault was needed for this follow-up.

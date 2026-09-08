@@ -507,6 +507,10 @@ type BrowserManager struct {
 	started      bool
 	localStartup *startupCohort
 
+	// Pool retirement advances this under m.mu. A registration that releases
+	// m.mu must still match before publishing its returned connection.
+	poolRegistrationGeneration uint64
+
 	// execPath holds the Chromium-binary resolution caches (success + negative),
 	// refactored into a reusable struct shared with the BrowserCoordinator
 	// (exec_resolver.go). A dedicated lock (execPath.mu), deliberately separate
@@ -1282,6 +1286,7 @@ func (m *BrowserManager) ensureStartedContext(ctx context.Context) error {
 		pool := m.pool
 		coord := m.coordinator
 		key := m.key
+		registrationGeneration := m.poolRegistrationGeneration
 		m.mu.Unlock()
 		var (
 			rootCtx context.Context
@@ -1289,6 +1294,9 @@ func (m *BrowserManager) ensureStartedContext(ctx context.Context) error {
 		)
 		if pool != nil {
 			coord, rootCtx, regErr = pool.Register(ctx, key, m)
+			if regErr == nil && pool.afterRegisterHook != nil {
+				pool.afterRegisterHook()
+			}
 		} else {
 			rootCtx, regErr = coord.Register(ctx, agentID, m)
 		}
@@ -1298,6 +1306,9 @@ func (m *BrowserManager) ensureStartedContext(ctx context.Context) error {
 		}
 		if regErr != nil {
 			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
+		}
+		if pool != nil && m.poolRegistrationGeneration != registrationGeneration {
+			return ErrBrowserRestarting
 		}
 		if m.started {
 			// A concurrent ensureStarted won while m.mu was released. Discard

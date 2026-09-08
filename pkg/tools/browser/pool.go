@@ -128,9 +128,9 @@ var ErrBrowserMemoryRefused = errors.New("browser: refused to start another brow
 var errPoolClosed = errors.New("browser: the browser pool is shut down")
 
 // ErrBrowserRestarting is what Register returns when this key's browser was
-// torn down in the window between the acquire and the registration — an idle
-// close, an eviction or a workspace deletion landing on exactly the instance
-// the caller was in the middle of attaching to.
+// retired during registration or before the manager publishes its connection —
+// an idle close, eviction or workspace deletion landing on the instance the
+// caller was in the middle of attaching to.
 //
 // It exists because the alternative that used to ship here was silent and
 // permanent. Register noticed the instance was no longer live, skipped its
@@ -275,6 +275,10 @@ type BrowserPool struct {
 	// racing goroutines would be proving its own timing, not the guard; with
 	// the seam the close lands inside the window every single run.
 	registerRaceHook func()
+
+	// afterRegisterHook pauses tests after real successful pool bookkeeping,
+	// before the manager can publish that result. It is nil in production.
+	afterRegisterHook func()
 }
 
 // NewBrowserPool constructs the pool. homeDir is $OMNIPUS_HOME (per-key
