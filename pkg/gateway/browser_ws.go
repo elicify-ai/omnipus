@@ -1577,8 +1577,8 @@ func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWS
 		// therefore always emit; every other kind keeps the content-aware
 		// cooldown.
 		if state.shouldSendInputFailure(attachment, frame.Kind, message, now) {
-			wc.sendCriticalGen(operationErrorStatus(sessionID, message),
-				dropContext(sessionID, viewerID, "input-error"))
+			wc.sendCriticalScopedGen(operationErrorStatus(sessionID, message),
+				dropContext(sessionID, viewerID, "input-error"), attachment.ctx, nil)
 		}
 	}
 }
@@ -1697,15 +1697,18 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 	if ctx.Err() != nil || attachment.ctx.Err() != nil {
 		return
 	}
+	sendResult := func(frame any, reason string) {
+		wc.sendCriticalScopedGen(frame, reason, attachment.ctx, nil)
+	}
 	mgr, chatSessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
 	if mgr == nil || chatSessionID == "" {
-		wc.sendCriticalGen(operationErrorStatus("", "browser_control: attach before requesting control"),
+		sendResult(operationErrorStatus("", "browser_control: attach before requesting control"),
 			dropContext("", viewerID, "control-not-attached"))
 		return
 	}
 	var frame generated.BrowserControlFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(operationErrorStatus("", "browser_control: invalid frame"),
+		sendResult(operationErrorStatus("", "browser_control: invalid frame"),
 			dropContext(chatSessionID, viewerID, "control-invalid"))
 		return
 	}
@@ -1714,7 +1717,7 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 	case "take":
 		if !cfg.Tools.Browser.TakeControlEnabled {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "take_control_disabled")
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "take-control is disabled by the operator"),
+			sendResult(operationErrorStatus(chatSessionID, "take-control is disabled by the operator"),
 				dropContext(chatSessionID, viewerID, "control-take-disabled"))
 			return
 		}
@@ -1724,13 +1727,13 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 		}
 		if !granted {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "another viewer already controls this browser"),
+			sendResult(operationErrorStatus(chatSessionID, "another viewer already controls this browser"),
 				dropContext(chatSessionID, viewerID, "control-take-denied"))
 			return
 		}
 		h.auditControl(userID, chatSessionID, viewerID, audit.SeverityInfo, "take")
 		controller := userID
-		wc.sendCriticalGen(generated.BrowserStatusFrame{
+		sendResult(generated.BrowserStatusFrame{
 			Type:       string(generated.WsFrameTypeBrowserStatus),
 			State:      "controlling",
 			SessionId:  &chatSessionID,
@@ -1741,13 +1744,13 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 			return
 		}
 		h.auditRelease(userID, chatSessionID, viewerID)
-		wc.sendCriticalGen(generated.BrowserStatusFrame{
+		sendResult(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
 			State:     "released",
 			SessionId: &chatSessionID,
 		}, dropContext(chatSessionID, viewerID, "control-release-ok"))
 	default:
-		wc.sendCriticalGen(operationErrorStatus("", fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
+		sendResult(operationErrorStatus("", fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
 			dropContext(chatSessionID, viewerID, "control-unknown-action"))
 	}
 }
@@ -1789,15 +1792,18 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 	if ctx.Err() != nil || attachment.ctx.Err() != nil {
 		return
 	}
+	sendResult := func(frame any, reason string) {
+		wc.sendCriticalScopedGen(frame, reason, attachment.ctx, nil)
+	}
 	mgr, chatSessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
 	if mgr == nil || chatSessionID == "" {
-		wc.sendCriticalGen(operationErrorStatus("", "browser_tab_action: attach before managing tabs"),
+		sendResult(operationErrorStatus("", "browser_tab_action: attach before managing tabs"),
 			dropContext("", viewerID, "tab-action-not-attached"))
 		return
 	}
 	var frame generated.BrowserTabActionFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(operationErrorStatus("", "browser_tab_action: invalid frame"),
+		sendResult(operationErrorStatus("", "browser_tab_action: invalid frame"),
 			dropContext(chatSessionID, viewerID, "tab-action-invalid"))
 		return
 	}
@@ -1808,7 +1814,7 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 	// handleAttach's doc comment.
 
 	if controller := mgr.Live().Controller(panelSessionID); controller != "" && controller != viewerID {
-		wc.sendCriticalGen(
+		sendResult(
 			operationErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
 			dropContext(chatSessionID, viewerID, "tab-action-not-controller"),
 		)
@@ -1818,7 +1824,7 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 	switch frame.Action {
 	case "switch":
 		if frame.Index == nil {
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "browser_tab_action: index is required for switch"),
+			sendResult(operationErrorStatus(chatSessionID, "browser_tab_action: index is required for switch"),
 				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"))
 			return
 		}
@@ -1826,12 +1832,12 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 			if commandWasSuperseded(ctx, attachment) {
 				return
 			}
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+			sendResult(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
 		}
 	case "close":
 		if frame.Index == nil {
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, "browser_tab_action: index is required for close"),
+			sendResult(operationErrorStatus(chatSessionID, "browser_tab_action: index is required for close"),
 				dropContext(chatSessionID, viewerID, "tab-close-missing-index"))
 			return
 		}
@@ -1839,7 +1845,7 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 			if commandWasSuperseded(ctx, attachment) {
 				return
 			}
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+			sendResult(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-close-failed"))
 		}
 	case "open":
@@ -1847,11 +1853,11 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 			if commandWasSuperseded(ctx, attachment) {
 				return
 			}
-			wc.sendCriticalGen(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+			sendResult(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-open-failed"))
 		}
 	default:
-		wc.sendCriticalGen(operationErrorStatus("", fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
+		sendResult(operationErrorStatus("", fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
 			dropContext(chatSessionID, viewerID, "tab-action-unknown"))
 	}
 }

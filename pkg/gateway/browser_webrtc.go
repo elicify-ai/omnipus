@@ -193,8 +193,11 @@ type webrtcAttachment struct {
 // this. Registered on a successful browser_webrtc_offer (the SAME moment
 // browserConnState.webrtc is set), unregistered by detachWebRTCViewer.
 type webrtcViewerConn struct {
-	wc        *browserWSConn
-	sessionID string
+	wc            *browserWSConn
+	sessionID     string
+	attachmentCtx context.Context
+	capture       *browser.CaptureSession
+	captureID     string
 
 	mu         sync.Mutex
 	lastErrAt  time.Time

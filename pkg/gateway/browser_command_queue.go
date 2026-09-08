@@ -105,7 +105,7 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 	var in generated.BrowserInputFrame
 	if typ == string(generated.WsFrameTypeBrowserInput) {
 		if err := json.Unmarshal(data, &in); err != nil {
-			wc.sendCriticalGen(operationErrorStatus(attachment.sessionID, "invalid browser input"), dropContext("", viewerID, "input-invalid"))
+			wc.sendCriticalScopedGen(operationErrorStatus(attachment.sessionID, "invalid browser input"), dropContext("", viewerID, "input-invalid"), attachment.ctx, nil)
 			return
 		}
 	}
