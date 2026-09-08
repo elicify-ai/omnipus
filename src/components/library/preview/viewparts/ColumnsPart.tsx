@@ -49,22 +49,59 @@ function columnsFromChoiceCells(part: ViewResultPart, rows: VaultFindRow[]): Col
   return out
 }
 
-function Card({ row, part }: { row: VaultFindRow; part: ViewResultPart }) {
+function Card({
+  row,
+  part,
+  onOpenPath,
+}: {
+  row: VaultFindRow
+  part: ViewResultPart
+  onOpenPath?: (path: string) => void
+}) {
   const numberProperty = part.source.number
   const amount = numberProperty === undefined ? '' : cellValue(row, numberProperty)
+  const content = (
+    <>
+      <span className="truncate">{row.title}</span>
+      {amount !== '' && <span className="ml-1 text-[var(--color-muted)]">· {amount}</span>}
+      {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
+    </>
+  )
+  if (onOpenPath) {
+    return (
+      <button
+        type="button"
+        tabIndex={0}
+        onClick={() => onOpenPath(row.path)}
+        aria-label={`Open ${row.title}`}
+        data-testid="viewpart-board-card"
+        className="block w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-left text-[12px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-3)]"
+      >
+        {content}
+      </button>
+    )
+  }
   return (
     <div
       className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[12px] text-[var(--color-secondary)]"
       data-testid="viewpart-board-card"
     >
-      <span className="truncate">{row.title}</span>
-      {amount !== '' && <span className="ml-1 text-[var(--color-muted)]">· {amount}</span>}
-      {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
+      {content}
     </div>
   )
 }
 
-export function ColumnsPart({ part, rows }: { part: ViewResultPart; rows: VaultFindRow[] }) {
+export function ColumnsPart({
+  part,
+  rows,
+  onOpenPath,
+}: {
+  part: ViewResultPart
+  rows: VaultFindRow[]
+  /** Opens a card's own row (KB-8a). Absent renders every card exactly as
+   *  before — inert markup, no button role (read-only by design). */
+  onOpenPath?: (path: string) => void
+}) {
   const columns = columnsFromGroups(part, rows) ?? columnsFromChoiceCells(part, rows)
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-columns">
@@ -78,7 +115,7 @@ export function ColumnsPart({ part, rows }: { part: ViewResultPart; rows: VaultF
             >
               <GroupHeaderLabel label={col.key} count={col.rows.length} absent={col.absent} />
               {col.rows.map((row) => (
-                <Card key={row.path} row={row} part={part} />
+                <Card key={row.path} row={row} part={part} onOpenPath={onOpenPath} />
               ))}
             </div>
           ))}

@@ -55,6 +55,8 @@ import type { KnowledgeBaseViews, ViewResult } from '@/lib/api/generated/openapi
 
 import { LibraryCodePreview } from './LibraryCodePreview'
 import { ViewPartsRenderer } from './viewparts/ViewPartsRenderer'
+import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
+import type { KbLinkResolution } from './knowledgeMarkdown'
 
 /** Test seams; production passes nothing and gets the shared clients. */
 export interface BasePreviewLoaders {
@@ -66,6 +68,27 @@ export interface BasePreviewLoaders {
 export interface BasePreviewProps extends BasePreviewLoaders {
   workspaceId: string
   entry: LibraryEntry
+  /**
+   * Open another file in place, WORKSPACE-relative (KB-8a — mirrors
+   * LibraryPreviewPane's own `onOpenNote` contract exactly, the same address
+   * model `LibrarySearchBar`'s vault hits already use). A row's own note and a
+   * relation cell's resolved link both funnel through this one callback.
+   * Absent renders every part exactly as before — no row or cell link is a
+   * click target.
+   */
+  onOpenNote?: (workspacePath: string) => void
+}
+
+/** The record identifier a relation cell's `[[wikilink]]` token most often
+ *  names, checked against the rows THIS view actually loaded (KB-8b). A view
+ *  never has the whole collection's link graph, only its own row set, so this
+ *  can honestly answer `resolved` (found here) or `unknown` (not found in
+ *  what it has) — never `unresolved`, which would claim knowledge of the
+ *  whole collection this view does not have. */
+function basenameNoExt(path: string): string {
+  const base = path.split('/').pop() ?? path
+  const dot = base.lastIndexOf('.')
+  return dot <= 0 ? base : base.slice(0, dot)
 }
 
 /**
@@ -115,6 +138,7 @@ export function BasePreview({
   loadContent = fetchLibraryContent,
   loadBaseViews = fetchKnowledgeBaseViews,
   loadViewResult = fetchKnowledgeViewResult,
+  onOpenNote,
 }: BasePreviewProps) {
   // ── 1. Which views this .base owns, and where they run ────────────────────
   const viewsQuery = useQuery({
@@ -175,6 +199,42 @@ export function BasePreview({
       ),
     [workspaceId, collectionRoot],
   )
+
+  // ── KB-8: row-open + relation-cell-link wiring ─────────────────────────────
+  // Mirrors resolveImageUrl's own collection-root guard (undefined / '' / '.'
+  // all mean "the collection IS the workspace root") rather than a second,
+  // differently-shaped check.
+  const toWorkspacePath = useMemo(
+    () => (collectionRelativePath: string) =>
+      collectionRoot === undefined || collectionRoot === '' || collectionRoot === '.'
+        ? collectionRelativePath
+        : collectionPathToWorkspacePath(collectionRoot, collectionRelativePath),
+    [collectionRoot],
+  )
+
+  const linkHref = useMemo(
+    () => (collectionRelativePath: string) => libraryNoteHref(workspaceId, toWorkspacePath(collectionRelativePath)),
+    [workspaceId, toWorkspacePath],
+  )
+
+  const onOpenPath = useMemo(
+    () => (onOpenNote ? (collectionRelativePath: string) => onOpenNote(toWorkspacePath(collectionRelativePath)) : undefined),
+    [onOpenNote, toWorkspacePath],
+  )
+
+  // See basenameNoExt's doc comment above: resolved-or-unknown only, from THIS
+  // view's own rows — never `unresolved`, which this view cannot honestly
+  // claim about the whole collection.
+  const result = resultQuery.data
+  const resolveWikilink = useMemo(() => {
+    if (!result) return undefined
+    return (target: string): KbLinkResolution => {
+      const match = result.rows.find(
+        (r) => r.title === target || r.id === target || basenameNoExt(r.path) === target,
+      )
+      return match ? { state: 'resolved', path: match.path } : { state: 'unknown' }
+    }
+  }, [result])
 
   // ── States before a result can render ─────────────────────────────────────
   // Every one renders inside the SAME `base-preview` container, so "the base
@@ -281,8 +341,6 @@ export function BasePreview({
     )
   }
 
-  const result = resultQuery.data
-
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="base-preview">
       {answer !== undefined && answer.unloadable_count > 0 && (
@@ -345,7 +403,13 @@ export function BasePreview({
             testId="base-preview-result-error"
           />
         ) : result !== undefined ? (
-          <ViewPartsRenderer result={result} resolveImageUrl={resolveImageUrl} />
+          <ViewPartsRenderer
+            result={result}
+            resolveImageUrl={resolveImageUrl}
+            {...(onOpenPath ? { onOpenPath } : {})}
+            {...(resolveWikilink ? { resolveWikilink } : {})}
+            linkHref={linkHref}
+          />
         ) : null}
       </div>
     </div>

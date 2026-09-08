@@ -7,28 +7,75 @@
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import { cellValue, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPERTY } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter } from './PartChrome'
+import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
 
 function detailProperty(part: ViewResultPart): string | undefined {
   return (part.columns ?? []).find((c) => c !== FILE_NAME_PROPERTY)
 }
 
-function ListRow({ row, part, detail }: { row: VaultFindRow; part: ViewResultPart; detail: string | undefined }) {
+function ListRow({
+  row,
+  part,
+  detail,
+  onOpenPath,
+  cellLinks,
+}: {
+  row: VaultFindRow
+  part: ViewResultPart
+  detail: string | undefined
+  onOpenPath?: ((path: string) => void) | undefined
+  cellLinks?: ViewCellLinkResolver | undefined
+}) {
   const detailValue = detail === undefined ? '' : cellValue(row, detail)
   return (
     <li
-      className="flex items-baseline gap-2 border-b border-[var(--color-border)] px-3 py-1.5 text-[13px] last:border-b-0"
+      className={`flex items-baseline gap-2 border-b border-[var(--color-border)] px-3 py-1.5 text-[13px] last:border-b-0 ${
+        onOpenPath ? 'cursor-pointer hover:bg-[var(--color-surface-2)]/40' : ''
+      }`}
       data-testid="viewpart-list-row"
+      {...(onOpenPath ? { onClick: () => onOpenPath(row.path) } : {})}
     >
-      <span className="min-w-0 truncate text-[var(--color-secondary)]">{row.title}</span>
+      {onOpenPath ? (
+        <button
+          type="button"
+          tabIndex={0}
+          onClick={(event) => {
+            event.stopPropagation()
+            onOpenPath(row.path)
+          }}
+          aria-label={`Open ${row.title}`}
+          data-testid="viewpart-row-open"
+          className="min-w-0 truncate text-left text-[var(--color-secondary)]"
+        >
+          {row.title}
+        </button>
+      ) : (
+        <span className="min-w-0 truncate text-[var(--color-secondary)]">{row.title}</span>
+      )}
       {detailValue !== '' && (
-        <span className="min-w-0 truncate text-[12px] text-[var(--color-muted)]">· {detailValue}</span>
+        <span className="min-w-0 truncate text-[12px] text-[var(--color-muted)]">
+          · {cellLinks ? <CellText value={detailValue} resolver={cellLinks} /> : detailValue}
+        </span>
       )}
       {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
     </li>
   )
 }
 
-export function ListPart({ part, rows }: { part: ViewResultPart; rows: VaultFindRow[] }) {
+export function ListPart({
+  part,
+  rows,
+  onOpenPath,
+  cellLinks,
+}: {
+  part: ViewResultPart
+  rows: VaultFindRow[]
+  /** Opens a row's own note (KB-8a). Absent renders every row exactly as
+   *  before — inert markup, no button, no cursor change. */
+  onOpenPath?: (path: string) => void
+  /** Renders the detail cell's raw `[[wikilink]]` as a real link (KB-8b). */
+  cellLinks?: ViewCellLinkResolver
+}) {
   const detail = detailProperty(part)
   const byPath = rowsByPath(rows)
   const groups = part.groups
@@ -38,7 +85,7 @@ export function ListPart({ part, rows }: { part: ViewResultPart; rows: VaultFind
       {groups === undefined ? (
         <ul>
           {rows.map((row) => (
-            <ListRow key={row.path} row={row} part={part} detail={detail} />
+            <ListRow key={row.path} row={row} part={part} detail={detail} onOpenPath={onOpenPath} cellLinks={cellLinks} />
           ))}
         </ul>
       ) : (
@@ -52,7 +99,14 @@ export function ListPart({ part, rows }: { part: ViewResultPart; rows: VaultFind
                 .map((p) => byPath.get(p))
                 .filter((r): r is VaultFindRow => r !== undefined)
                 .map((row) => (
-                  <ListRow key={row.path} row={row} part={part} detail={detail} />
+                  <ListRow
+                    key={row.path}
+                    row={row}
+                    part={part}
+                    detail={detail}
+                    onOpenPath={onOpenPath}
+                    cellLinks={cellLinks}
+                  />
                 ))}
             </ul>
           </div>

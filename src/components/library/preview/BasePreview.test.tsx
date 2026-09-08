@@ -95,7 +95,7 @@ interface Loaders {
   loadViewResult?: (ws: string, collectionId: string, view: string) => Promise<ViewResult>
 }
 
-function renderBase(loaders: Loaders = {}, e = entry()) {
+function renderBase(loaders: Loaders = {}, e = entry(), onOpenNote?: (workspacePath: string) => void) {
   const loadContent =
     loaders.loadContent ?? vi.fn().mockResolvedValue({ content: BASE_CONTENT, is_text: true, too_large: false })
   const loadBaseViews = loaders.loadBaseViews ?? vi.fn().mockResolvedValue(baseViews())
@@ -108,6 +108,7 @@ function renderBase(loaders: Loaders = {}, e = entry()) {
         loadContent={loadContent}
         loadBaseViews={loadBaseViews}
         loadViewResult={loadViewResult}
+        {...(onOpenNote ? { onOpenNote } : {})}
       />
     </QueryClientProvider>,
   )
@@ -335,6 +336,68 @@ describe('BasePreview — tabs over the views the server says this base owns', (
       fireEvent.click(screen.getByTestId('base-preview-view-raw'))
       const shiki = await screen.findByTestId('shiki')
       expect(shiki.textContent).toContain('views: [{name: All}]')
+    })
+
+    describe('KB-8 — rows open in place, relation cells render as real links', () => {
+      it('wires no row-open button when onOpenNote is not supplied (unchanged default)', async () => {
+        renderBase()
+        await screen.findByTestId('viewpart-table')
+        expect(screen.queryByTestId('viewpart-row-open')).not.toBeInTheDocument()
+      })
+
+      it('opens the WORKSPACE-relative path of the clicked row (translated from the collection-relative row.path)', async () => {
+        const onOpenNote = vi.fn()
+        renderBase({}, entry(), onOpenNote)
+        const openButton = await screen.findByTestId('viewpart-row-open')
+        fireEvent.click(openButton)
+        // baseViews().collection_root = 'vault'; result().rows[0].path = 'a.md'.
+        expect(onOpenNote).toHaveBeenCalledWith('vault/a.md')
+        expect(onOpenNote).toHaveBeenCalledTimes(1)
+      })
+
+      it('renders a relation cell whose [[wikilink]] target matches another row in this view as a real, resolved link — and opens THAT row on click', async () => {
+        const onOpenNote = vi.fn()
+        renderBase(
+          {
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                  { path: 'companies/korn-ferry.md', title: 'Korn Ferry', cells: [], joins: [] },
+                ],
+              }),
+            ),
+          },
+          entry(),
+          onOpenNote,
+        )
+        await screen.findByTestId('viewpart-table')
+        expect(screen.queryByText('[[Korn Ferry]]')).not.toBeInTheDocument()
+        const link = screen.getByTestId('viewpart-cell-link')
+        expect(link).toHaveAttribute('data-kb-state', 'resolved')
+        fireEvent.click(link)
+        expect(onOpenNote).toHaveBeenCalledWith('vault/companies/korn-ferry.md')
+        // The row's own open action must not ALSO have fired from the link click.
+        expect(onOpenNote).toHaveBeenCalledTimes(1)
+      })
+
+      it('renders a relation cell whose target matches nothing in this view as honestly UNKNOWN, never a confident broken or working link', async () => {
+        renderBase({
+          loadViewResult: vi.fn().mockResolvedValue(
+            result({
+              parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+              rows: [
+                { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Nobody Here]]' }], joins: [] },
+              ],
+            }),
+          ),
+        })
+        await screen.findByTestId('viewpart-table')
+        const link = screen.getByTestId('viewpart-cell-link')
+        expect(link).toHaveAttribute('data-kb-state', 'unknown')
+        expect(link.textContent).toContain('Nobody Here')
+      })
     })
 
     it('offers a working Download action', async () => {

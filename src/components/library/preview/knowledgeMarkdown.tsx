@@ -299,7 +299,7 @@ export function remarkKbHighlights() {
 // Divergence 2d — wikilinks and embeds (FR-060, US-7 AS-1, AS-2)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const WIKILINK_RE = /(!?)\[\[([^[\]\n]+)\]\]/g
+export const WIKILINK_RE = /(!?)\[\[([^[\]\n]+)\]\]/g
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico'])
 
@@ -455,8 +455,11 @@ export const KnowledgeLinkProvider = KnowledgeLinkContext.Provider
  *  scheme allow-list and the struck-through unsafe treatment cannot drift. */
 const InheritedLink = kbMarkdownComponents.a as (props: ComponentPropsWithoutRef<'a'>) => ReactNode
 
-/** A link whose target the reader has verified. */
-const LINK_CLASS =
+/** A link whose target the reader has verified. Exported so any OTHER surface
+ *  that resolves a wikilink against its own data (e.g. a base view's cells,
+ *  KB-8b) draws the identical treatment instead of a second color choice that
+ *  can drift from this one. */
+export const LINK_CLASS =
   'text-[var(--color-accent)] underline underline-offset-2 hover:opacity-80 transition-opacity'
 
 /**
@@ -475,7 +478,7 @@ const LINK_CLASS =
  * has checked it yet" without claiming either verdict. The sr-only sentence
  * says it in words for anyone not reading the border.
  */
-const UNVERIFIED_LINK_CLASS =
+export const UNVERIFIED_LINK_CLASS =
   'text-[var(--color-secondary)] border-b border-dashed border-[var(--color-muted)] hover:opacity-80 transition-opacity'
 
 /** Resolves a collection-relative href against the open note's directory.
@@ -514,7 +517,11 @@ function hasOwnScheme(href: string): boolean {
   }
 }
 
-function UnresolvedLink({ children, detail }: { children?: ReactNode; detail: string }) {
+/** The inert "not verified as existing" treatment — no href, no click handler,
+ *  same reasoning as the file header's UNVERIFIED_LINK_CLASS note. Exported for
+ *  the same reason: reused as-is by any other surface honestly rendering the
+ *  `unresolved` KbLinkState, rather than redrawn from a second copy. */
+export function UnresolvedLink({ children, detail }: { children?: ReactNode; detail: string }) {
   return (
     <span
       data-testid="markdown-link"
