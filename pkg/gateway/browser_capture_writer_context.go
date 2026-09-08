@@ -3,10 +3,24 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/gorilla/websocket"
 )
+
+// captureIngestTransportError distinguishes an attempted socket operation from
+// canceled admission. Gorilla retains write failures, so this socket must be
+// retired even when the originating frame or request has since been canceled.
+type captureIngestTransportError struct{ cause error }
+
+func (e *captureIngestTransportError) Error() string { return e.cause.Error() }
+func (e *captureIngestTransportError) Unwrap() error { return e.cause }
+
+func isCaptureIngestTransportError(err error) bool {
+	var transport *captureIngestTransportError
+	return errors.As(err, &transport)
+}
 
 func (c *captureIngestConn) acquireWrite(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
@@ -54,13 +68,13 @@ func (c *captureIngestConn) sendJSONContext(ctx context.Context, value any, curr
 	defer release()
 	deadline, _ := writeCtx.Deadline()
 	if err := c.conn.SetWriteDeadline(deadline); err != nil {
-		return fmt.Errorf("capture-ingest: set write deadline: %w", err)
+		return &captureIngestTransportError{cause: fmt.Errorf("capture-ingest: set write deadline: %w", err)}
 	}
 	if err := admissible(); err != nil {
 		return err
 	}
 	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		return fmt.Errorf("capture-ingest: write frame: %w", err)
+		return &captureIngestTransportError{cause: fmt.Errorf("capture-ingest: write frame: %w", err)}
 	}
 	return nil
 }

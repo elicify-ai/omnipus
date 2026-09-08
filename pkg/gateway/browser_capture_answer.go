@@ -21,7 +21,7 @@ func (ic *captureIngestConn) answerCaptureOffer(socket context.Context, cs *brow
 	}
 	send := func(response any) error {
 		err := ic.sendJSONContext(request, response, current)
-		if err != nil && !current() {
+		if err != nil && !isCaptureIngestTransportError(err) && !current() {
 			return webrtc.ErrStaleIngestOffer
 		}
 		return err

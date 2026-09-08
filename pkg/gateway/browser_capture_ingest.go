@@ -49,9 +49,10 @@ func (h *captureIngestWSHandler) serveBoundIngest(conn *websocket.Conn, cs *brow
 			ExpectedWidth: &state.Width, ExpectedHeight: &state.Height, CaptureScale: &state.Scale,
 		}
 		err := ic.sendJSONContext(ctx, frame, current)
-		if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if isCaptureIngestTransportError(err) {
 			// A transport failure retires this socket so the encoder can reconnect.
-			// Retired requests and writer-admission timeouts leave it available.
+			// Only canceled admission leaves it available; a failed write is
+			// fatal even if its originating request has already retired.
 			cancelSocket(err)
 		}
 		return err
