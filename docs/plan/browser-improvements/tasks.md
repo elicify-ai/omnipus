@@ -2,6 +2,13 @@
 
 Integration branch: `browser-improvements`. Base: `fbcbc5edc9845f1fbecb01b423f15d09fe405f5c`. `main` is explicitly out of bounds; no checkout, merge, commit or push to it.
 
+## Historical implementation checkpoints
+
+The two waves below preserve their status when recorded. Statements that wiring
+or review was pending are historical; the current checkpoint and release
+evidence below govern outstanding work. Checked component work does not mean
+its complete acceptance scenario passed.
+
 ## Wave 1
 
 - [x] Fetch current release and fast-forward the new integration branch to the installed revision.
@@ -32,8 +39,9 @@ Integration branch: `browser-improvements`. Base: `fbcbc5edc9845f1fbecb01b423f15
 
 ## Current integration checkpoint — 2026-09-08
 
-The unchecked wave-level items remain open until their complete production
-behavior is verified. Component tests are not end-to-end acceptance.
+Production wiring has advanced beyond the historical waves. Runtime acceptance
+remains open even where implementation, focused tests and independent source
+review are complete. Component tests are not end-to-end acceptance.
 
 Integrated on `browser-improvements`:
 
@@ -53,9 +61,9 @@ Integrated on `browser-improvements`:
   (`0c5a8d256`). Seven behavioral failures were reproduced; three faults were
   caught/restored; 13 focused race cases passed.
 - Long error text has bounded wrapping (`6cfb6cca0`). The SPA build passed.
-  Isolated rendering with built CSS fits 320/560-pixel containers, but did not
-  reproduce the original whole-app clipping; full-app visual verification
-  remains pending.
+  Isolated rendering did not reproduce the original whole-app clipping.
+  Later intermediate-build full-app verification passed, as recorded below;
+  the final integrated build still needs runtime verification.
 
 - Viewer offer/input lifetime and immutable ingest response integration
   (`f9f019de6`): two browser identity cases and 24 collected gateway cases/
@@ -73,11 +81,12 @@ Integrated on `browser-improvements`:
   retries and attachment-aware Retry are integrated (`77a6c6fc1`). Fifty
   affected tests passed after all seven selected old-fault cases failed.
   Notices no longer change picture geometry in actual compiled-CSS measurement
-  at widths 320/560/900. Independent review confirmed wiring; full-app remains open.
+  at widths 320/560/900. Independent review confirmed wiring; final-build
+  runtime acceptance remains open.
 - Encoder shutdown success paths and adaptation lifetime/overlap guards are
   integrated (`8c70a0b98`), with 13 focused tests and two caught faults. Review
   subsequently reproduced a retired capture rejection aborting its queued
-  replacement; media owns that additional negative outcome and documentation.
+  replacement; `b9820ca97` corrected that failure and passed independent recheck.
 
 Latest integration and open findings are recorded in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-review-closeout-2026-09-08.md`.
@@ -87,13 +96,16 @@ Latest integration and open findings are recorded in
 - UI/server wheel semantics and actual Back recovery integrated as `27a5e68ad`.
   Eight wheel and three Back behavioral regressions were reproduced; restored
   affected Go race checks passed. Eighty affected UI/annotation tests, integrated
-  typecheck and focused lint passed. Independent correction recheck pending.
+  typecheck and focused lint passed. Independent wheel/Back and annotation
+  rechecks found no new high-confidence defect; annotation enrichment during
+  same-generation DOM movement remains best-effort.
 - Gateway scoped-route/fixture and combined-message correction integrated as
   `e2a3223c3`. Worker restored race selection passed 44 entries; final Linux-only
   fixture correction still needs compilation/execution on its supported build.
 - Independent review read all 78 relay/capture files and all 52 manager files.
-  New findings are assigned to capture, manager and startup workers; fixes and
-  independent rechecks remain open. Root owns document navigation fencing.
+  Those reviews produced the finite corrections recorded below and in the
+  closeout ledger. This inventory is not proof that every latest correction
+  or every acceptance requirement has passed independent review.
 - New document transition design and reproduction preparation are recorded in
   `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-document-transition-plan.md`.
 
@@ -103,6 +115,25 @@ click-to-destination 904ms included external loading, and typed content appeared
 in 380ms. These are smoke results, not controlled cold/warm or 100-action latency
 acceptance. Full-app long-error wrapping was visually verified. The production
 instance on 10994 remains preserved; the isolated test instance uses 11094.
+
+Latest correction checkpoint (integrated through `301b860ef`):
+
+| Correction | Integrated commit | Evidence and remaining qualification |
+|---|---|---|
+| Capture startup, cancellation, grace timer and bounded preparation | `cc027da56` | Focused race checks passed; independent lifecycle/document API review found no additional defect in that scope |
+| Launch trust, held locks, pool/session retirement and profile identity | `257d2b9b6`, `eed3f05a6`, `22116776e` | Reviewed with finite followups below; trusted-PATH race control remains unresolved |
+| Document capture and live paint fence | `9dcb178fb`, `4d035c62c` | Earlier integrated race selection passed 122 entries; subsequent reverse-initialization race reproduced and corrected locally, verification/integration still pending |
+| Live death cleanup and initial tab tracking | `3b31c61e2` | Affected race checks and independent source review completed |
+| Cross-process profile deletion coordination | `766f940d8` | 31 affected race entries passed; Unix and mixed-version limits remain explicit |
+| Popup lifetime ownership | `46ef9b117` | 39 affected race entries passed; independent correction review found no high-confidence defect |
+| Installed ingest cleanup capacity | `8aece98b4` | Seven focused race entries passed; bound applies to authenticated preparation/retirement, not legacy unbound cleanup |
+| Late pool registration publication | `57c25fa00` | 39 affected race records passed |
+| Reconciliation snapshot ownership | `301b860ef` | 47 affected race entries passed; independent correction review found no high-confidence defect |
+
+The latest UI build passed (669 embedded files). The combined browser/relay race
+batch was still running when this checkpoint was recorded; it is not recorded
+as green. The reverse-initialization correction remains open until its final
+result and integration are recorded. No full CI result is claimed.
 
 Go test/build batches remain serial within this team; independent source work
 continues in isolated worktrees. No full CI is run for each fix. Other operators'
@@ -119,4 +150,6 @@ processes are not controlled or terminated by this work.
 
 ## Evidence qualifications
 
-Mach rendezvous errors occurred after successful isolated Chrome launches during teardown; they are not independently the startup root cause. Initial UI/data-channel probes were characterizations, not reproductions of the user's exact stall. New real socket tests do reproduce reader blocking. H264 track replacement and Opus packets are measured, but audible synchronization is not yet demonstrated. The root graph refresh completed successfully; it indexed a changing worktree, so new helpers can still be absent. Impact results are supplemented with current source callsites and do not imply complete coverage. Missing index registration is recorded explicitly when `detect_changes` cannot inspect a worker worktree.
+Mach rendezvous errors occurred after successful isolated Chrome launches during teardown; they are not independently the startup root cause. Initial UI/data-channel probes were characterizations, not reproductions of the user's exact stall. New real socket tests do reproduce reader blocking. H264 track replacement and Opus packets are measured, but audible synchronization is not yet demonstrated. Earlier graph/index results describe historical checks only. The user subsequently instructed the team to stop GitNexus; current reviews and change-scope checks use direct source/caller inspection and git diffs. No graph result establishes complete review coverage.
+
+The trusted-PATH positive control repeatedly exceeded its real five-second shell-probe deadline under host contention; its unresolved race-run failure is not a pass. Profile deletion uses sibling locks on the exercised Unix path and refuses already-held legacy locks, but cannot serialize against an older binary that starts without honoring the sibling lock. No cross-platform runtime guarantee follows from those tests. Native ingest cleanup cannot be forcibly interrupted; authenticated unfinished work is bounded, while legacy unbound cleanup remains outside that capacity bound.

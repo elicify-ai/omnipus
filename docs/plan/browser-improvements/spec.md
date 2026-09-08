@@ -118,7 +118,11 @@ Boundary datasets: dimensions 0/1/2/11/12/13 and odd/even values below/at/above 
 
 Go backend and React/TypeScript frontend; focused Go tests use `goolm,stdjson` tags and `-p 1`, frontend uses Vitest. Canonical contract generation and CI workflow coverage remain mandatory. The optional reference-pattern directory is absent in this release; reuse actual neighboring browser patterns instead.
 
-GitNexus exact-base indexing is running under alias `omnipus-browser-improvements`. Every existing symbol change requires impact analysis before editing; missing index coverage requires recorded callsite analysis rather than invented zero risk. Browser component changes and shared relay ownership are semantically high risk even where graph counts are small. Record exact results and callers in the implementation evidence as indexing completes.
+The user instructed the team to stop GitNexus after earlier indexing checks.
+Current reviews and change-scope verification use direct source/caller inspection
+and git diffs against the exact release base. Browser component changes and
+shared relay ownership remain semantically high risk; historical graph counts
+do not establish complete review coverage.
 
 ## Holdout evaluation — post-implementation only
 

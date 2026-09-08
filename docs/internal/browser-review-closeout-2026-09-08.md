@@ -16,50 +16,92 @@ combined only when their original picture, coordinates and modifiers agree.
 | Queued scrolling | Capture ID, generation, modifiers, x/y, dimensions or future basis changes: retain both original events and their 100/1 deltas | Real queue and contextual drain; outgoing sink observes complete frames |
 | UI scrolling | Position or Control modifier changes: send original 100 delta before new 1 delta; unchanged burst still sums | Real component handlers/pacer; transport boundary observed |
 
-Fault checks will remove picture/gesture boundaries and navigation exemption,
-then restore code and run the affected selections. Existing malformed-delta,
+The planned fault checks removed picture/gesture boundaries and the navigation
+exemption, then restored code and ran the affected selections (results below). Existing malformed-delta,
 discrete-order and identical-gesture cases remain controls. This does not prove
 sustained real-user timing or every browser platform.
 
 ## Fresh independent findings
 
 The relay/capture review read 78 complete changed files; manager review read 52
-(22 production and 30 tests). Source findings still require reproductions and
-corrections; severity does not imply runtime reproduction.
+(22 production and 30 tests). The table records correction status, not end-to-end acceptance. Severity alone
+does not imply runtime reproduction.
 
 | Finding | Owner / state |
 |---|---|
 | Old wheel increments relabeled as current picture | Root; corrected, affected race checks passed |
 | Wrong Back wire classifier | Root; corrected, affected race checks passed |
-| Unbounded native ingest preparation after cancellation | Integrated `cc027da56`; affected race passed, independent recheck pending |
-| Startup waiter ignores its own cancellation | Integrated `cc027da56`; affected race passed, independent recheck pending |
-| Stop does not cancel complete encoder startup | Integrated `cc027da56`; affected race passed, independent recheck pending |
-| Fired grace timer stops replacement viewer | Integrated `cc027da56`; affected race passed, independent recheck pending |
-| Recovery fixtures lack qualified sender; health oracle/wiring tests obsolete | Integrated `cc027da56`; affected race passed, independent recheck pending |
-| Dead capture foreground retry and lifecycle comments | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Unbounded native ingest preparation after cancellation | Integrated `cc027da56`; affected race passed; independent capture lifecycle recheck completed |
+| Startup waiter ignores its own cancellation | Integrated `cc027da56`; affected race passed; independent capture lifecycle recheck completed |
+| Stop does not cancel complete encoder startup | Integrated `cc027da56`; affected race passed; independent capture lifecycle recheck completed |
+| Fired grace timer stops replacement viewer | Integrated `cc027da56`; affected race passed; independent capture lifecycle recheck completed |
+| Recovery fixtures lack qualified sender; health oracle/wiring tests obsolete | Integrated `cc027da56`; affected race passed; independent capture lifecycle recheck completed |
+| Dead capture foreground retry and lifecycle comments | Integrated `cc027da56`; affected race passed; independent capture lifecycle recheck completed |
 | Untrusted PATH candidate executes before trust gate | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Markerless held Unix launch lock can be bypassed | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Configuration reload overwrites per-workspace profile identity | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Deletion does not retire pending startup / drain teardown | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Idle and pressure eviction race with activity admission | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Legacy OpenTab startup survives Shutdown | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
-| Popup adoption lacks opener membership check | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
-| Same-target document navigation lacks fresh frame fence | Capture API `9dcb178fb`; root live integration corrected, affected race122entries passed; runtime pending |
+| Popup adoption lacks proven opener ownership | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Same-target document navigation lacks fresh frame fence | Capture API `9dcb178fb`, live integration `4d035c62c`; earlier race selection passed 122 entries. Later reverse-initialization race reproduced; local correction still awaits verification/integration; runtime pending |
 | First switch after attachment lacks original-tab baseline | Integrated `3b31c61e2`; affected race passed, independent source review complete |
 | Retired death watcher can stop replacement capture | Integrated `3b31c61e2`; affected race passed, independent source review complete |
 | Four live/tab/viewport fixture migration groups | Integrated `3b31c61e2`; affected race passed |
 | Manager locking/startup comments inaccurate | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
 | Retired gateway helpers, measured fixtures and bounded combined notice | Integrated `e2a3223c3` / `7bfcb05e4`; independent recheck and Linux-specific validation pending |
 | Profile deletion can remove another process's active profile | Integrated `766f940d8`; 31 affected race entries passed; mixed-version/Unix-only limits recorded |
+| Previously installed ingest cleanup is unbounded | Integrated `8aece98b4`; seven focused race entries passed; authenticated capacity bound only |
+| Late registration republishes a retired pool instance | Integrated `57c25fa00`; 39 affected race records passed |
+| Popup retry/attachment changes original session ownership | Integrated `46ef9b117`; 39 affected race entries passed; independent correction review completed |
+| Reconciliation snapshot adopts into another session lifetime | Integrated `301b860ef`; 47 affected race entries passed; independent correction review completed |
 
 The independent recheck of root wheel/Back and annotation corrections found no new high-confidence defect. Same-generation DOM movement remains best-effort for annotation enrichment.
 
 Manager validation: 11 new groups passed; five fault families were detected. Across the original and corrected-fixture race runs, 62/63 affected groups passed without race reports or skips. The unchanged trusted-PATH positive control repeatedly timed out in its real five-second shell probe under host contention; it is unresolved, not a pass. The initial PATH trust defect was reproduced, but its later mutation run was inconclusive.
 
-Independent capture review found no additional document API or lifecycle defect, but identified unbounded cleanup of previously installed ingest connections; its focused correction is underway. Independent manager review identified late registration publication and stale popup/reconciliation ownership; these are separate bounded corrections, not closed by the earlier manager batch.
+Independent capture review found no additional document API or lifecycle defect
+in its assigned scope. Its installed-ingest cleanup finding is now corrected by
+`8aece98b4`. The separate manager findings have finite corrections above;
+independent popup/reconciliation recheck found no high-confidence defect.
+Historical opener ownership is sufficient while the original session survives:
+a legitimate popup may outlive its opener. Same-ID replacement interleaving in
+the reconciliation followup is source-proven, not directly scheduler-forced;
+tests force original-owner retirement while its old browser cleanup remains held.
 
-Remaining corrections still require separate independent rechecks. Source review of
-these slices does not cover every remaining file in the release-base diff.
+Profile deletion retains an external sibling lock through removal and refuses
+already-held legacy in-profile locks. An older binary starting without honoring
+the sibling lock can still race; full mixed-version serialization is not claimed.
+The executed lock tests cover Unix, not every supported platform. Native ingest
+cleanup is not interruptible: authenticated unfinished preparation/retirement
+work is capped at four, and a healthy installed connection consumes no slot once
+preparation finishes. Legacy unbound ingest cleanup is outside this bound.
+
+The latest UI build passed and produced 669 embedded files. The combined
+browser/relay race batch is running, with no result claimed here. The later
+reverse-initialization document race has a reproduced failure and local fix;
+its final verification and integration are still open. No full CI has run for
+this checkpoint. The earlier 122-entry document result cannot close that finding.
+
+## Release-base inventory and review limits
+
+Inventory at `57c25fa00`, compared with
+`fbcbc5edc9845f1fbecb01b423f15d09fe405f5c`: 335 changed files, comprising nine
+canonical contract files, one generated Go API file, 76 gateway files, 171
+browser files (including the pipe allocator), 28 frontend files and 50 docs.
+No changed file falls outside those known source/contract/document areas. This
+is an exact snapshot inventory, not a claim that every later correction has
+independent review or that all release requirements are verified. Reconciliation
+was subsequently integrated as `301b860ef`.
+
+Earlier validation plans retain historical red/green checkpoints. The current
+status here supersedes historical statements that implementation is pending.
+Canonical protocol pending-implementation statements and the spec's obsolete
+graph-tool requirement have been corrected. The separate document-transition
+plan describes its original old-picture defect in present tense; its owner will
+correct that with the initialization followup. These are documentation status
+corrections, not new source findings. Current checks use direct source/caller
+inspection and git diffs following the user's instruction to stop GitNexus.
 
 ## Intermediate runtime evidence
 
