@@ -1355,6 +1355,7 @@ type LiveView struct {
 	// Watch ownership survives source death and is retired by detach or replacement.
 	watchOwnerCtx  context.Context
 	stopWatchOwner context.CancelFunc
+	documentWatch  *liveDocumentWatch
 	// lastKnownActiveCtx (ADR-047, wave-plan W2-A item 5) tracks the most
 	// recently observed active-tab context INDEPENDENTLY of tabCtx — tabCtx
 	// only reflects the current watch's binding and stays nil until a watch
@@ -1613,6 +1614,7 @@ func (lv *LiveView) attach(
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
+	lv.installDocumentWatchLocked(listenCtx, tabCtx)
 
 	// ADR-038 finding #2: watch for this tab context dying WITHOUT going
 	// through detach() first — e.g. BrowserManager.Shutdown() canceling
@@ -1861,6 +1863,7 @@ func (lv *LiveView) rebindWatch(newCtx context.Context) {
 	listenCtx, cancel := context.WithCancel(newCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
+	lv.installDocumentWatchLocked(listenCtx, newCtx)
 	lv.mu.Unlock()
 
 	// Cancel the OLD watch after installing the new one, under no lock — the

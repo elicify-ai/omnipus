@@ -14,10 +14,20 @@ type captureDocumentTransition struct { // not-wire-format: capture-local docume
 }
 
 func (cs *CaptureSession) beginDocumentTransition(targetID string) (*captureDocumentTransition, error) {
+	return cs.beginDocumentTransitionWhen(targetID, nil)
+}
+
+// allowed executes under cs.mu and must only inspect immutable identity or
+// cancellation state. It must never acquire manager/view locks or perform I/O.
+func (cs *CaptureSession) beginDocumentTransitionWhen(targetID string, allowed func() bool) (*captureDocumentTransition, error) {
 	cs.mu.Lock()
 	if cs.stopped {
 		cs.mu.Unlock()
 		return nil, context.Canceled
+	}
+	if allowed != nil && !allowed() {
+		cs.mu.Unlock()
+		return nil, ErrStaleCaptureFrame
 	}
 	scale := cs.frames.snapshot().Geometry.Scale
 	if scale == 0 {

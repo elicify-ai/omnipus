@@ -31,27 +31,34 @@ corrections; severity does not imply runtime reproduction.
 |---|---|
 | Old wheel increments relabeled as current picture | Root; corrected, affected race checks passed |
 | Wrong Back wire classifier | Root; corrected, affected race checks passed |
-| Unbounded native ingest preparation after cancellation | Capture worker |
-| Startup waiter ignores its own cancellation | Capture worker |
-| Stop does not cancel complete encoder startup | Capture worker |
-| Fired grace timer stops replacement viewer | Capture worker |
-| Recovery fixtures lack qualified sender; health oracle/wiring tests obsolete | Capture worker |
-| Dead capture foreground retry and lifecycle comments | Capture worker |
-| Untrusted PATH candidate executes before trust gate | Manager worker |
-| Markerless held Unix launch lock can be bypassed | Manager worker |
-| Configuration reload overwrites per-workspace profile identity | Manager worker |
-| Deletion does not retire pending startup / drain teardown | Manager worker |
-| Idle and pressure eviction race with activity admission | Manager worker |
-| Legacy OpenTab startup survives Shutdown | Manager worker |
-| Popup adoption lacks opener membership check | Manager worker |
-| Same-target document navigation lacks fresh frame fence | Pending implementation assignment |
-| First switch after attachment lacks original-tab baseline | Pending implementation assignment |
-| Retired death watcher can stop replacement capture | Pending implementation assignment |
-| Four live/tab/viewport fixture migration groups | Pending implementation assignment |
-| Manager locking/startup comments inaccurate | Manager worker |
-| Retired gateway helpers, measured fixtures and bounded combined notice | Startup worker closeout |
+| Unbounded native ingest preparation after cancellation | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Startup waiter ignores its own cancellation | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Stop does not cancel complete encoder startup | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Fired grace timer stops replacement viewer | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Recovery fixtures lack qualified sender; health oracle/wiring tests obsolete | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Dead capture foreground retry and lifecycle comments | Integrated `cc027da56`; affected race passed, independent recheck pending |
+| Untrusted PATH candidate executes before trust gate | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Markerless held Unix launch lock can be bypassed | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Configuration reload overwrites per-workspace profile identity | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Deletion does not retire pending startup / drain teardown | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Idle and pressure eviction race with activity admission | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Legacy OpenTab startup survives Shutdown | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Popup adoption lacks opener membership check | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Same-target document navigation lacks fresh frame fence | Capture API `9dcb178fb`; root live integration corrected, affected race122entries passed; runtime pending |
+| First switch after attachment lacks original-tab baseline | Integrated `3b31c61e2`; affected race passed, independent source review complete |
+| Retired death watcher can stop replacement capture | Integrated `3b31c61e2`; affected race passed, independent source review complete |
+| Four live/tab/viewport fixture migration groups | Integrated `3b31c61e2`; affected race passed |
+| Manager locking/startup comments inaccurate | Integrated `257d2b9b6` / `eed3f05a6` / `22116776e`; see validation limit below |
+| Retired gateway helpers, measured fixtures and bounded combined notice | Integrated `e2a3223c3` / `7bfcb05e4`; independent recheck and Linux-specific validation pending |
+| Profile deletion can remove another process's active profile | Integrated `766f940d8`; 31 affected race entries passed; mixed-version/Unix-only limits recorded |
 
-Each implementation requires a separate independent recheck. Source review of
+The independent recheck of root wheel/Back and annotation corrections found no new high-confidence defect. Same-generation DOM movement remains best-effort for annotation enrichment.
+
+Manager validation: 11 new groups passed; five fault families were detected. Across the original and corrected-fixture race runs, 62/63 affected groups passed without race reports or skips. The unchanged trusted-PATH positive control repeatedly timed out in its real five-second shell probe under host contention; it is unresolved, not a pass. The initial PATH trust defect was reproduced, but its later mutation run was inconclusive.
+
+Independent capture review found no additional document API or lifecycle defect, but identified unbounded cleanup of previously installed ingest connections; its focused correction is underway. Independent manager review identified late registration publication and stale popup/reconciliation ownership; these are separate bounded corrections, not closed by the earlier manager batch.
+
+Remaining corrections still require separate independent rechecks. Source review of
 these slices does not cover every remaining file in the release-base diff.
 
 ## Intermediate runtime evidence
@@ -92,7 +99,7 @@ acceptance remain pending.
   into independent x/y cases and removing the gesture guard failed all three
   selected cases. Restored affected input and annotation files: 80 passed,
   no skips. Integrated annotation typecheck passed before the wheel change;
-  updated typecheck remains part of integration validation.
+  updated typecheck and focused lint also passed.
 
 Raw logs are under
 `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/`:

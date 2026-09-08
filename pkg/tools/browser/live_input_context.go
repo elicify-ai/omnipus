@@ -148,7 +148,14 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	lv.mu.Unlock()
 	// Ordinary interaction must describe the committed picture. Navigation
 	// controls and an already-owned release do not depend on that picture.
+	var frameLifetime context.Context
 	if !(tracked && releasing) && !navigationInputKind(in.Kind) {
+		lv.mu.Lock()
+		document := lv.documentWatch
+		lv.mu.Unlock()
+		if document.inputPending() {
+			return benignInputError("browser live: page change pending; wait for the current picture")
+		}
 		if lv.mgr == nil {
 			return benignInputError("browser live: no capture for this panel; wait for the current picture")
 		}
@@ -164,6 +171,16 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 		if !frame.Ready || in.CaptureID == "" || in.CaptureID != frame.CaptureID || in.CaptureGeneration == 0 || in.CaptureGeneration != frame.Generation {
 			return benignInputError("browser live: displayed frame changed; wait for the current picture")
 		}
+		var current bool
+		frameLifetime, current = cs.inputFrameLifetime(in.CaptureID, in.CaptureGeneration)
+		if !current {
+			return benignInputError("browser live: displayed frame retired before input admission")
+		}
+		stopFrame := context.AfterFunc(frameLifetime, cancel)
+		defer stopFrame()
+		if frameLifetime.Err() != nil {
+			cancel()
+		}
 	}
 	lv.mu.Lock()
 	allowed := tracked && releasing || lv.allowInputLocked(in.Kind)
@@ -176,6 +193,9 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 		// A release rejected before command delivery (for example, unavailable
 		// coordinate mapping) still owes cleanup of any previously accepted hold.
 		lv.recordHeldInput(targetCtx, viewerID, in, false)
+	}
+	if errors.Is(err, context.Canceled) && frameLifetime != nil && frameLifetime.Err() != nil && caller.Err() == nil && targetCtx.Err() == nil && !inputSourceEnded(in.SourceContext) {
+		return benignInputError("browser live: displayed picture retired during input: %w", context.Canceled)
 	}
 	return err
 }
@@ -226,6 +246,18 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 	if skip {
 		return nil
 	}
+	var documentWatch *liveDocumentWatch
+	var documentWork *liveDocumentWork
+	var historyMoved bool
+	if navigationInputKind(in.Kind) {
+		documentWatch, documentWork, err = lv.beginInputDocument(targetCtx)
+		if err != nil {
+			return realInputError("browser live: cannot retire previous page picture: %w", err)
+		}
+		if in.Kind == "navigate_back" {
+			action = historyBackInputAction{didNavigate: &historyMoved}
+		}
+	}
 	switch a := action.(type) {
 	case *input.DispatchMouseEventParams:
 		a.Buttons = buttons
@@ -238,6 +270,9 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 	// Other transport failures have uncertain delivery; remember the possible
 	// hold for cleanup without replaying the press or typed content.
 	var rejection *cdproto.Error
+	if errors.As(err, &rejection) || err == nil && in.Kind == "navigate_back" && !historyMoved {
+		documentWatch.resumeUnchanged(documentWork)
+	}
 	if err == nil || !errors.As(err, &rejection) || in.Kind == "key_up" || in.Kind == "mouse_up" {
 		lv.recordHeldInput(targetCtx, viewerID, in, err == nil)
 	}
@@ -557,15 +592,18 @@ func (a navigationInputAction) Do(ctx context.Context) error {
 	return nil
 }
 
-type historyBackInputAction struct{}
+type historyBackInputAction struct{ didNavigate *bool }
 
-func (historyBackInputAction) Do(ctx context.Context) error {
+func (a historyBackInputAction) Do(ctx context.Context) error {
 	index, entries, err := page.GetNavigationHistory().Do(ctx)
 	if err != nil {
 		return err
 	}
 	if index <= 0 || index > int64(len(entries)) {
 		return nil
+	}
+	if a.didNavigate != nil {
+		*a.didNavigate = true
 	}
 	return page.NavigateToHistoryEntry(entries[index-1].ID).Do(ctx)
 }

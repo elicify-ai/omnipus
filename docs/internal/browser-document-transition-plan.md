@@ -1,6 +1,7 @@
 # Document transition correction
 
-Status: design and reproduction preparation; implementation pending.
+Status: old-picture acceptance reproduced and corrected; integrated focused
+race verification passed. Not yet verified in the running browser.
 
 Same-tab navigation currently leaves the old capture generation ready. A
 successful navigation command only means Chrome accepted the request. It does
@@ -60,7 +61,47 @@ Real browser tests must additionally prove page content and input follow the
 presented document. Deliberate faults will remove pre-command invalidation,
 pending-capture admission, and obsolete-document completion checks.
 
-The newer capture helpers are absent from the GitNexus index. Manual callsite
-inspection covers preparation, viewport, ingest boundary, input and recapture
-paths. This is semantically high risk because it changes shared capture
-authorization; graph counts alone do not establish its safety.
+Manual callsite inspection covers preparation, viewport, ingest boundary, input
+and recapture paths. This is a high-risk change because it changes shared
+capture authorization; focused protocol tests and actual browser verification
+are both required.
+
+The live integration identifies canceled provisional documents through their
+exact network request and loader. A generic frame-stopped event has no loader
+identity and is insufficient to reopen an unchanged picture. Back with no
+history and explicit protocol refusal can also recover the unchanged document,
+after the same paint and measurement checks. Uncertain transport failure is
+never treated as proof that navigation did not happen. A bounded failure is
+reported with reload/reconnect recovery if no current document can be proven.
+
+## Integrated evidence
+
+- Original command-boundary reproduction failed all three navigation kinds
+  because the previous picture remained accepted. The refused-URL control's
+  initial fixture compared a pre-commit snapshot; that fixture was corrected
+  to retain the actual ready picture, without changing its refusal oracle.
+- First integrated selection exited 1 with exactly one new behavioral failure:
+  an admitted input remained alive after its frame retired. All other selected
+  navigation, paint, initialization, event, input and viewport cases passed.
+- The correction binds ordinary admitted commands to their exact frame lifetime.
+  A frame-only cancellation is a benign retirement, not a connection failure;
+  uncertain press delivery still retains the existing held-input cleanup.
+- Four combined production faults removed pre-command retirement, frame-bound
+  cancellation, final watch qualification and the post-paint document check.
+  Each corresponding test failed. A separate fault made initialization use
+  newer work instead of its retained token; the delayed-snapshot case failed.
+- Exact source restoration followed by the affected race/shuffle selection:
+  **122 passing test/subtest entries, zero skips, zero race warnings**, 8.393s.
+
+Evidence and reproducible driver:
+
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/live-document-first.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/live-document-faults.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/live-document-initial-fault.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/live-document-restored-race.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/live-document-milestone.py`
+
+Independent review identified and drove corrections for retained initialization
+errors/snapshots, subframe discovery, overflow recovery, producer ordering, and
+atomic original-watch qualification at capture publication. Actual Chrome paint,
+viewer decoding, sustained interaction and final-commit CI remain required.

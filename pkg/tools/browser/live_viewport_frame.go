@@ -92,7 +92,11 @@ func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, 
 		ready, err = cs.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
 		return applied, err
 	}, func(operation context.Context) error {
-		if cs != nil && ready.Generation != 0 && !cs.RecaptureFrameContext(operation, ready) {
+		if cs != nil && ready.Generation != 0 && ready.Width > 0 && ready.Height > 0 && !cs.RecaptureFrameContext(operation, ready) {
+			current := cs.FrameState()
+			if current.CaptureID == ready.CaptureID && current.TargetID == ready.TargetID && current.Width == 0 && current.Height == 0 {
+				return nil // A newer document owns completion of the measured resize.
+			}
 			return fmt.Errorf("browser live: measured recapture was not admitted")
 		}
 		return nil
@@ -138,7 +142,11 @@ func (r *LiveViewRegistry) RefreshCaptureFrameContext(caller context.Context, se
 		ready, err = expected.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
 		return true, err
 	}, func(operation context.Context) error {
-		if ready.Generation != 0 && !expected.RecaptureFrameContext(operation, ready) {
+		if ready.Generation != 0 && ready.Width > 0 && ready.Height > 0 && !expected.RecaptureFrameContext(operation, ready) {
+			current := expected.FrameState()
+			if current.CaptureID == ready.CaptureID && current.TargetID == ready.TargetID && current.Width == 0 && current.Height == 0 {
+				return nil
+			}
 			return fmt.Errorf("browser live: measured refresh was not admitted")
 		}
 		return nil
