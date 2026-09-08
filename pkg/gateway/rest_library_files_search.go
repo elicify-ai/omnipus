@@ -57,9 +57,20 @@ const filesSearchWalkSlotWait = 150 * time.Millisecond
 // Options.Limits.Normalize enforces them — see validateFileSearchGlobs — so
 // the handler is the only place these are checked; they must stay in sync
 // with the contract by hand (not generated).
+//
+// fileSearchMaxQueryLength / fileSearchMaxPathLength are the contract's
+// query/path maxLength bounds (F4, 2026-09-08 code review). Same story as the
+// globs above: decodeAndValidate's schema pass is opt-in
+// (gateway.validate_inbound defaults false), and neither filegrep nor
+// Options.Limits.Normalize bounds the length of the query string or the scope
+// path — an over-long query goes straight into a regex compile and a
+// per-line scan, burning a shared MV-11 walk slot for its full deadline.
 const (
 	fileSearchMaxGlobItems  = 32
 	fileSearchMaxGlobLength = 512
+
+	fileSearchMaxQueryLength = 1024
+	fileSearchMaxPathLength  = 4096
 )
 
 // filegrepSearchFn is a swappable seam over filegrep.Search, mirroring this
@@ -87,6 +98,20 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusBadRequest, "query is required")
 		return
 	}
+	// F4 (2026-09-08 code review): the contract's query maxLength:1024
+	// (contracts/components/schemas/FileSearchRequest.yaml) is enforced HERE,
+	// unconditionally — decodeAndValidate's schema pass above only runs when
+	// gateway.validate_inbound is true (default false), and neither
+	// fileSearchOptionsFromRequest nor filegrep.Limits.Normalize bounds the
+	// query's length. Left unenforced, an over-long query — especially with
+	// regex:true — goes straight into a regex compile and a per-line scan,
+	// burning a shared MV-11 walk slot for its full deadline on a request the
+	// contract already says to reject.
+	if len(query) > fileSearchMaxQueryLength {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("query must not exceed %d characters", fileSearchMaxQueryLength))
+		return
+	}
 	req.Query = query
 
 	// The contract's include_globs/exclude_globs maxItems/maxLength bounds
@@ -101,6 +126,16 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 	// its full deadline.
 	if err := validateFileSearchGlobs(req.IncludeGlobs, req.ExcludeGlobs); err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// F4: path had no length bound in the contract or the handler at all — the
+	// same unenforced-length gap through a second field. maxLength:4096 is now
+	// declared on the contract's path property; enforced here for the same
+	// reason as query and the globs above.
+	if req.Path != nil && len(*req.Path) > fileSearchMaxPathLength {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("path must not exceed %d characters", fileSearchMaxPathLength))
 		return
 	}
 
@@ -152,7 +187,7 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	roots, closeRoots, buildErr := buildFileSearchRoots(a.homePath, workspaceID, libRoot, rel)
+	roots, closeRoots, rootLost, buildErr := buildFileSearchRoots(a.homePath, workspaceID, libRoot, rel)
 	defer closeRoots()
 	if buildErr != nil {
 		// StatDir just confirmed rel resolves inside the confined root; a
@@ -175,7 +210,23 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	jsonOK(w, fileSearchResponseFromResult(result))
+	resp := fileSearchResponseFromResult(result)
+	// F2/F3 (2026-09-08 code review): a mount that could not even be OPENED —
+	// its store was unreadable/malformed, or its target volume detached — was
+	// silently dropped from roots above; the search then ran to completion
+	// over whatever WAS opened and reported truncated:false, indistinguishable
+	// from "nothing matched". root_lost's own contract
+	// (FileSearchResponse.yaml) already covers exactly this: "the walk root OR
+	// A MOUNT ROOT became unreadable". The engine's own reason wins when it set
+	// one (MV-3a's established layering: an outer signal only fills in when
+	// the inner one is silent) — a real budget stop is still the more specific
+	// and more useful thing to report.
+	if rootLost && !resp.Truncated {
+		reason := gen.RootLost
+		resp.Truncated = true
+		resp.TruncatedReason = &reason
+	}
+	jsonOK(w, resp)
 }
 
 // validateFileSearchGlobs enforces the contract's include_globs/
@@ -441,7 +492,19 @@ func emptyFileSearchResponse(opts filegrep.Options) gen.FileSearchResponse {
 // own-tree exception keeps the workspace's own files searchable while every
 // OTHER workspace's work tree stays denied — the same posture a re-rooted
 // workspace turn gets from pkg/tools.
-func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, rel string) ([]filegrep.Root, func(), error) {
+// The bool return (rootLost) is F2/F3's honesty signal (2026-09-08 code
+// review): true when the FULL set of roots this workspace should have
+// searched could not be built — the mount store was unreadable/malformed
+// (F2), or an individual mount's target could not be opened (F3) — even
+// though the function itself still succeeds with whatever roots it COULD
+// open, so a broken mount never takes a whole-workspace search offline
+// (see the doc above). Without this signal the caller's response reported
+// truncated:false — indistinguishable from "nothing matched" — while up to
+// two thirds of the corpus was silently never opened. root_lost's own
+// documented meaning already covers exactly this ("the walk root or a
+// mount root became unreadable"); the caller decides how to fold it into
+// the wire response.
+func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, rel string) ([]filegrep.Root, func(), bool, error) {
 	var opened []*os.Root
 	closeAll := func() {
 		for _, r := range opened {
@@ -454,7 +517,7 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 
 	workDirPath, err := workspace.SafeWorkDir(homePath, workspaceID)
 	if err != nil {
-		return nil, closeAll, fmt.Errorf("resolve work dir: %w", err)
+		return nil, closeAll, false, fmt.Errorf("resolve work dir: %w", err)
 	}
 
 	// Built once, before any root, and shared by every one of them — a policy
@@ -464,13 +527,13 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 	policy, err := fspolicy.EffectiveFSPolicy(
 		context.Background(), workDirPath, "", true, homePath, "", workspaceID)
 	if err != nil {
-		return nil, closeAll, fmt.Errorf("resolve filesystem policy: %w", err)
+		return nil, closeAll, false, fmt.Errorf("resolve filesystem policy: %w", err)
 	}
 
 	if _, target, _, ok := libRoot.MountAt(rel); ok {
 		mr, mErr := os.OpenRoot(target)
 		if mErr != nil {
-			return nil, closeAll, fmt.Errorf("open mount root: %w", mErr)
+			return nil, closeAll, false, fmt.Errorf("open mount root: %w", mErr)
 		}
 		opened = append(opened, mr)
 		// Guarded at the mount's own root, then narrowed: fs.Sub prefixes
@@ -485,19 +548,19 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 			sub, subErr := fs.Sub(mfs, rest)
 			if subErr != nil {
 				closeAll()
-				return nil, func() {}, fmt.Errorf("scope mount to %q: %w", rest, subErr)
+				return nil, func() {}, false, fmt.Errorf("scope mount to %q: %w", rest, subErr)
 			}
 			mfs = sub
 		}
 		return []filegrep.Root{{
 			Name: rel, FS: mfs,
 			ScopePrefix: rest, AncestorIgnore: ancestor,
-		}}, closeAll, nil
+		}}, closeAll, false, nil
 	}
 
 	wr, err := os.OpenRoot(workDirPath)
 	if err != nil {
-		return nil, closeAll, fmt.Errorf("open work root: %w", err)
+		return nil, closeAll, false, fmt.Errorf("open work root: %w", err)
 	}
 	opened = append(opened, wr)
 	wfs := tools.GuardCarveOuts(workDirPath, wr.FS(), policy)
@@ -508,7 +571,7 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		sub, subErr := fs.Sub(wfs, rel)
 		if subErr != nil {
 			closeAll()
-			return nil, func() {}, fmt.Errorf("scope work tree to %q: %w", rel, subErr)
+			return nil, func() {}, false, fmt.Errorf("scope work tree to %q: %w", rel, subErr)
 		}
 		wfs = sub
 	}
@@ -517,27 +580,40 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		ScopePrefix: rel, AncestorIgnore: wsAncestor,
 	}}
 
+	rootLost := false
 	if rel == "" {
 		mounts, ok := workspace.LoadMounts(homePath, workspaceID)
-		if ok {
-			for _, m := range mounts {
-				if m.Name == "" || m.HostPath == "" {
-					continue
-				}
-				mr, mErr := os.OpenRoot(m.HostPath)
-				if mErr != nil {
-					logger.WarnCF("rest", "files search: mount unreachable, skipping",
-						map[string]any{"workspace_id": workspaceID, "mount": m.Name, "error": mErr.Error()})
-					continue
-				}
-				opened = append(opened, mr)
-				roots = append(roots, filegrep.Root{
-					Name: m.Name,
-					FS:   tools.GuardCarveOuts(m.HostPath, mr.FS(), policy),
-				})
+		if !ok {
+			// F2: the mount store exists but could not be read/parsed, or its
+			// workspace_id disagreed with the filename — loadMountStore
+			// already WARNs for the specific reason (pkg/workspace/
+			// mountstore.go). Every mount this workspace has is therefore
+			// invisible to this search: the work tree alone is not the whole
+			// scope a caller asked for.
+			rootLost = true
+		}
+		for _, m := range mounts {
+			if m.Name == "" || m.HostPath == "" {
+				continue
 			}
+			mr, mErr := os.OpenRoot(m.HostPath)
+			if mErr != nil {
+				// F3: a mount whose target cannot currently be opened (detached
+				// volume, renamed folder) is skipped rather than failing the
+				// whole search — but skipped is not the same as searched, so
+				// the caller must still learn some of the scope was lost.
+				logger.WarnCF("rest", "files search: mount unreachable, skipping",
+					map[string]any{"workspace_id": workspaceID, "mount": m.Name, "error": mErr.Error()})
+				rootLost = true
+				continue
+			}
+			opened = append(opened, mr)
+			roots = append(roots, filegrep.Root{
+				Name: m.Name,
+				FS:   tools.GuardCarveOuts(m.HostPath, mr.FS(), policy),
+			})
 		}
 	}
 
-	return roots, closeAll, nil
+	return roots, closeAll, rootLost, nil
 }

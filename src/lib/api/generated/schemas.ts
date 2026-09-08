@@ -4364,7 +4364,7 @@ export const KnowledgeBaseInfo = z.object({
 });
 export const FileSearchRequest = z.object({
   query: z.string().min(1).max(1024),
-  path: z.string().optional(),
+  path: z.string().max(4096).optional(),
   regex: z.boolean().optional().default(false),
   case: z
     .enum(["smart", "sensitive", "insensitive"])

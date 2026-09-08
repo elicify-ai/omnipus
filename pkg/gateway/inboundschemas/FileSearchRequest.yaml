@@ -32,6 +32,7 @@ properties:
     example: "quarterly report"
   path:
     type: string
+    maxLength: 4096
     description: >
       Workspace-relative folder to scope the search to. Omitted or empty means
       the workspace root. Must resolve inside the confined root; a path outside

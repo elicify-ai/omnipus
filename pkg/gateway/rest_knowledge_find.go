@@ -7,7 +7,9 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -15,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -100,16 +103,29 @@ func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Requ
 		limitClamped = true
 	}
 
-	// US-9/FR-053: an out-of-scope collection is an EMPTY, complete answer, and
-	// it is resolved BEFORE the rate limiter so probing for another workspace's
-	// collections cannot be distinguished by timing a 429 either.
-	col, inScope := a.resolveScopedCollection(workspaceID, req.CollectionId)
-	if !inScope {
-		jsonOK(w, outOfScopeVaultSearchResponse(req.CollectionId, requestedLimit, limitClamped))
+	// F6 (2026-09-08 code review): the rate limiter is consulted BEFORE scope
+	// is resolved, and for EVERY request regardless of outcome — an
+	// out-of-scope collection_id must consume/observe the SAME
+	// workspace-keyed limiter an in-scope one does. The limiter used to sit
+	// AFTER the out-of-scope short-circuit below, which created exactly the
+	// probe oracle FR-053 exists to close: drain the limiter, then probe a
+	// candidate collection_id — a 429 meant "in scope" (it reached the
+	// limiter), a 200 with the empty-but-complete body meant "out of scope"
+	// (it never touched the limiter at all). FR-053's body invariant alone
+	// cannot fix this — the STATUS CODE was the leak. Now both cases pass
+	// through allowKnowledgeRetrieval first, so a drained limiter answers 429
+	// for either, and an available one lets both continue to their
+	// respective (body-indistinguishable-when-empty) responses.
+	if !a.allowKnowledgeRetrieval(w, workspaceID) {
 		return
 	}
 
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	// US-9/FR-053: an out-of-scope collection is an EMPTY, complete answer —
+	// never a permission error, so the error channel cannot be used to probe
+	// for another workspace's collections either.
+	col, inScope := a.resolveScopedCollection(workspaceID, req.CollectionId)
+	if !inScope {
+		jsonOK(w, outOfScopeVaultSearchResponse(req.CollectionId, requestedLimit, limitClamped))
 		return
 	}
 
@@ -251,7 +267,15 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 
 	// VIEWS — name/label match over the loaded view set. No index needed, so it
 	// is answered whatever the text index's state.
-	out.Views = append(out.Views, vaultSearchViewHits(env, query, limit)...)
+	viewHits, viewsComplete := vaultSearchViewHits(env, query, limit)
+	out.Views = append(out.Views, viewHits...)
+	if !viewsComplete {
+		out.Complete = false
+		if out.CompleteReason == nil {
+			reason := "views: the result limit was reached before every saved view could be checked"
+			out.CompleteReason = &reason
+		}
+	}
 
 	// ATTACHMENTS (ADR-081 CRIT-001 parity) — words over kind=attachment,
 	// matched by filename. This is the kind textOnlyServable never covers
@@ -291,7 +315,33 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 	// matched" — at that point the coverage numbers add honesty without
 	// opening a new channel, so they are disclosed as before.
 	if fr, ok := env.Deps.Text.(knowledgefind.TextFreshnessReporter); ok {
-		if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
+		fresh, ferr := fr.IndexFreshness(ctx)
+		if ferr != nil {
+			// F5 (2026-09-08 code review): a failed freshness probe must never
+			// yield a MORE confident answer than a successful one. Before this
+			// fix, ferr was discarded and unlogged, and — because nothing here
+			// touched out.Complete — vaultSearchStatement fell straight to its
+			// `case out.Complete:` branch and rendered the fully-confident
+			// "Searched the whole of this knowledge base; its index was
+			// complete at query time." A SUCCESSFUL probe that instead found
+			// the index behind only ever produces the hedged "Searched X of Y"
+			// sentence below — failure must be at least as cautious as that,
+			// never more confident. complete's own contract
+			// (VaultSearchResponse.yaml) says true means "the index was
+			// built, CURRENT, and no kind's result was clamped or refused";
+			// a probe failure means currency could not be verified at all, so
+			// asserting complete here would assert something never checked.
+			logger.WarnCF("rest", "knowledge: vault search freshness probe failed",
+				map[string]any{"collection_id": collectionID, "error": ferr.Error()})
+			if hasHits := vaultSearchHasAnyHit(out); hasHits || !out.Complete {
+				out.Complete = false
+				if out.CompleteReason == nil {
+					reason := "the index's freshness could not be verified for this search, " +
+						"so it may not reflect the very latest changes"
+					out.CompleteReason = &reason
+				}
+			}
+		} else if fresh.ScannedFiles > 0 {
 			if hasHits := vaultSearchHasAnyHit(out); hasHits || !out.Complete {
 				searched := fresh.IndexedFiles
 				total := fresh.ScannedFiles
@@ -415,7 +465,23 @@ func runVaultSearchFind(ctx context.Context, env vaultprops.FindEnv, query, reco
 	deps.RenderRows = limit
 
 	resp, err := knowledgefind.Find(ctx, deps, req)
-	if err != nil || resp.Refused {
+	if err != nil {
+		// F10 (2026-09-08 code review): the CALLER already gets an honest
+		// answer via the ready=false → CompleteReason path
+		// (vaultSearchIncompleteReason), but a genuine engine error used to be
+		// discarded here with no log line at all — collapsed onto the exact
+		// same ready=false outcome as resp.Refused's ordinary, expected
+		// "index not ready yet" state. An OPERATOR watching for a recurring
+		// index fault (a corrupted index, a read failure) would see nothing
+		// distinguishing a real error from routine "still indexing", request
+		// after request. resp.Refused alone is not logged here — it is the
+		// engine's own deliberate, self-explanatory signal, already visible
+		// in the response; err != nil is the case with no other trail.
+		logger.WarnCF("rest", "knowledge: vault search find failed",
+			map[string]any{"kind": string(kind), "record_type": recordType, "error": err.Error()})
+		return resp, false
+	}
+	if resp.Refused {
 		return resp, false
 	}
 	return resp, true
@@ -437,8 +503,23 @@ func vaultSearchRecords(ctx context.Context, env vaultprops.FindEnv, query strin
 	complete := true
 	reason := ""
 	seen := map[string]bool{}
-	for _, rt := range types {
+	for idx, rt := range types {
 		if len(out) >= limit {
+			// F1 (2026-09-08 code review): the merge cap was reached before
+			// every declared record type could even be QUERIED — types[idx:]
+			// were never asked about at all, which is a real coverage gap, not
+			// merely a page boundary (contrast NOTES: one single Find call
+			// covers the whole note corpus and only PAGINATES its own already-
+			// complete answer via NextCursor/notes_capped_at_limit). Nothing
+			// below this point in the loop ever ran, so `complete` must not
+			// stay true — the caller was about to render "its index was
+			// complete at query time" over record types it never searched.
+			complete = false
+			if reason == "" {
+				reason = fmt.Sprintf(
+					"records: the result limit was reached before every declared record type "+
+						"could be searched (%d of %d types)", idx, len(types))
+			}
 			break
 		}
 		resp, ready := runVaultSearchFind(ctx, env, query, rt, gen.VaultFindRequestKindRecord, limit)
@@ -453,6 +534,15 @@ func vaultSearchRecords(ctx context.Context, env vaultprops.FindEnv, query strin
 		}
 		for i := range resp.Rows {
 			if len(out) >= limit {
+				// The cap was hit partway through THIS type's own (otherwise
+				// complete) result set — some of its matching rows are
+				// dropped from the merged answer, so the verdict cannot claim
+				// completeness either, for the same reason as above.
+				complete = false
+				if reason == "" {
+					reason = fmt.Sprintf(
+						"records: more %q record hits exist beyond the result limit", rt)
+				}
 				break
 			}
 			row := &resp.Rows[i]
@@ -544,21 +634,30 @@ func vaultSearchRecordHit(recordType string, row *gen.VaultFindRow) gen.VaultSea
 }
 
 // vaultSearchViewHits returns the saved views whose name or label matches the
-// query, case-insensitively, ordered by name and capped at limit.
-func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) []gen.VaultSearchViewHit {
+// query, case-insensitively, ordered by name and capped at limit, plus
+// whether every view in scope was actually CHECKED against the query.
+//
+// F1 (2026-09-08 code review): the scan used to break at `limit` with no
+// completeness signal at all — views sorted after the cap point were never
+// even compared against the query, yet the caller rendered "its index was
+// complete at query time" regardless. Unlike NOTES (one Find call whose own
+// NextCursor already means "the corpus was fully covered, just paginated"),
+// this is a local, unpaginated scan: stopping partway through it is a real
+// coverage gap over the view set, not a page boundary.
+func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) ([]gen.VaultSearchViewHit, bool) {
 	out := []gen.VaultSearchViewHit{}
 	if env.Views == nil {
-		return out
+		return out, true
 	}
 	needle := strings.ToLower(strings.TrimSpace(query))
 	if needle == "" {
-		return out
+		return out, true
 	}
 	views := env.Views.Views()
 	sort.Slice(views, func(i, j int) bool { return views[i].Name() < views[j].Name() })
 	for _, v := range views {
 		if len(out) >= limit {
-			break
+			return out, false
 		}
 		name := v.Name()
 		label := v.DisplayLabel()
@@ -576,7 +675,7 @@ func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) []gen.
 		}
 		out = append(out, hit)
 	}
-	return out
+	return out, true
 }
 
 // ---------------------------------------------------------------------------
@@ -633,11 +732,23 @@ func vaultSearchReadNoteHead(collectionRoot, relPath string) (string, bool) {
 	}
 	defer func() { _ = f.Close() }()
 	buf := make([]byte, vaultSearchSnippetScanBytes)
-	n, err := f.Read(buf)
+	// F8 (2026-09-08 code review): a single f.Read may legally return fewer
+	// bytes than len(buf) WITHOUT io.EOF — a network/FUSE-backed root can
+	// return a short read mid-stream. The old single-Read call trusted
+	// whatever n it got back as "the whole scan window", so a term sitting
+	// past that short read was invisible to vaultSearchSnippet, which then
+	// reported excerpt_unavailable: true — telling the reader the excerpt
+	// could not be produced when the file was simply never fully read.
+	// io.ReadFull loops until the buffer is full or a genuine EOF/error is
+	// reached, tolerating io.EOF (file smaller than the scan window, read
+	// nothing more) and io.ErrUnexpectedEOF (file smaller than the scan
+	// window, read something) — both legitimate "that is the whole file"
+	// outcomes, not failures.
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", false
+	}
 	if n <= 0 {
-		if err != nil {
-			return "", false
-		}
 		return "", false
 	}
 	return string(buf[:n]), true
@@ -671,6 +782,17 @@ func vaultSearchQueryTerms(query string) []string {
 // accumulating each rune's folded length until it reaches lowerPos. The result
 // is always a valid index into body (≤ len(body)), so the caller's window can
 // never slice out of range.
+//
+// F9 (2026-09-08 code review, performance): strings.ToLower can only ever
+// change a rune's BYTE LENGTH for a non-ASCII rune — every ASCII byte folds
+// to exactly one ASCII byte (upper or not; ASCII case folding is always
+// 1-byte-to-1-byte). Before this fix every rune, ASCII included, paid for a
+// fresh string(r) allocation plus a strings.ToLower(...) call just to learn
+// what is already known for free — up to ~256k allocations walking one 128
+// KiB note, times up to `limit` hits per interactive search. The non-ASCII
+// path is UNCHANGED — same strings.ToLower(string(r)) computation as before,
+// so U+0130's documented 2-byte→3-byte expansion (the reason this function
+// exists at all) is still handled exactly as it was.
 func vaultSearchOrigOffset(body string, lowerPos int) int {
 	if lowerPos <= 0 {
 		return 0
@@ -679,6 +801,10 @@ func vaultSearchOrigOffset(body string, lowerPos int) int {
 	for i, r := range body {
 		if lo >= lowerPos {
 			return i
+		}
+		if r < utf8.RuneSelf {
+			lo++
+			continue
 		}
 		lo += len(strings.ToLower(string(r)))
 	}

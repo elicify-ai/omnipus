@@ -76,6 +76,23 @@ func TestAnnotateKnowledgeBaseEntries_CannotEscapeTheConfinedRoot(t *testing.T) 
 		t.Errorf("annotation followed a symlink out of the Library root and read %q — "+
 			"the escape os.Root exists to prevent", outside)
 	}
+	// F7 (2026-09-08 code review): the check above passes whether
+	// IsKnowledgeBase is nil OR false — it only pins "must not be true", not
+	// which of the tri-state's other two outcomes actually happened. An
+	// escaping symlink is a DETECTION FAILURE (established=false,
+	// detectKnowledgeBaseInRoot's default branch on ErrOutsideRoot), which
+	// LibraryEntry.yaml's documented tri-state says must leave the field
+	// ABSENT — a confidently-determined "false" would be a DIFFERENT, wrong
+	// answer (it would claim the row was successfully checked and is
+	// definitely not a knowledge base, when the confined read never even
+	// completed). Mutation proof: changing detectKnowledgeBaseInRoot's
+	// default-branch return from (false, false) to (false, true) makes
+	// annotateKnowledgeBaseEntries stamp IsKnowledgeBase=false instead of
+	// leaving it nil — the bare non-true check above stays green, but this
+	// assertion catches it.
+	require.Nil(t, entries[0].IsKnowledgeBase,
+		"an escaping symlink is a detection FAILURE, not a confidently-determined false — "+
+			"the field must be absent per LibraryEntry.yaml's tri-state contract")
 	require.NotNil(t, entries[1].IsKnowledgeBase,
 		"a real knowledge base inside the root must still be detected")
 	require.True(t, *entries[1].IsKnowledgeBase,

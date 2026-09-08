@@ -234,6 +234,74 @@ func TestLibraryFilesSearch_GlobBoundsEnforcedRegardlessOfValidateInbound(t *tes
 	})
 }
 
+// TestLibraryFilesSearch_QueryAndPathBoundsEnforcedRegardlessOfValidateInbound
+// is a code-review finding (F4, 2026-09-08): the contract's query
+// maxLength:1024 (contracts/components/schemas/FileSearchRequest.yaml) was
+// declared but never enforced by the handler — decodeAndValidate's schema
+// pass is entirely opt-in (gateway.validate_inbound defaults false,
+// buildLibraryTestAPI leaves it at that zero value), and the handler itself
+// only ever checked query for emptiness. A caller could post a
+// multi-megabyte query with regex:true straight into filegrep's compile-and-
+// scan path, burning a shared MV-11 walk slot for its full deadline — on a
+// request the contract says to reject outright. path had no length bound in
+// the contract at all, the same unenforced-length gap through a second
+// field; this test also pins the same cap now declared for it.
+func TestLibraryFilesSearch_QueryAndPathBoundsEnforcedRegardlessOfValidateInbound(t *testing.T) {
+	t.Run("a query at the 1024-char cap is accepted", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		require.False(t, api.agentLoop.GetConfig().Gateway.ValidateInbound,
+			"this test must exercise the unvalidated default, not the schema-validated path")
+
+		body, err := json.Marshal(map[string]any{"query": strings.Repeat("a", fileSearchMaxQueryLength)})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	})
+
+	t.Run("a query over the 1024-char cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		body, err := json.Marshal(map[string]any{"query": strings.Repeat("a", fileSearchMaxQueryLength+1)})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("a regex query over the cap never reaches the engine", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		orig := filegrepSearchFn
+		t.Cleanup(func() { filegrepSearchFn = orig })
+		called := false
+		filegrepSearchFn = func(ctx context.Context, roots []filegrep.Root, opts filegrep.Options) (filegrep.Result, error) {
+			called = true
+			return orig(ctx, roots, opts)
+		}
+
+		body, err := json.Marshal(map[string]any{
+			"query": strings.Repeat("a", fileSearchMaxQueryLength+1), "regex": true,
+		})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.False(t, called, "an over-cap query must be rejected before the engine is ever invoked")
+	})
+
+	t.Run("a path over the contract's cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		overCap := strings.Repeat("a/", fileSearchMaxPathLength)
+		body, err := json.Marshal(map[string]any{"query": "x", "path": overCap})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+}
+
 // TestLibraryFilesSearch_ConcurrencyCapAndCancel — MV-11 / R2-MAJ-003: the
 // ONE shared 2-slot walk semaphore answers a 3rd concurrent request with 429
 // + Retry-After, and a disconnected client's r.Context() cancellation stops
@@ -395,4 +463,105 @@ func TestLibraryFilesSearch_SemaphoreIsSharedWithTheAgentTool(t *testing.T) {
 			"against its OWN private semaphore and MV-11's cross-surface cap is not real. "+
 			"body=%s", w.Body.String())
 	assert.Equal(t, "1", w.Header().Get("Retry-After"))
+}
+
+// TestLibraryFilesSearch_MalformedMountStoreReportsRootLost is F2 (2026-09-08
+// code review): rest_library_files_search.go's buildFileSearchRoots called
+// workspace.LoadMounts and, on !ok (an unreadable or malformed mount record —
+// I/O failure, bad JSON, a workspace_id mismatch), simply skipped every mount
+// with no log, no counter, and no wire signal. A whole-workspace search
+// (path omitted) then silently covered the work tree alone: a 200 with
+// truncated:false — indistinguishable from "nothing matched" — even though
+// two of the workspace's three mounted folders were never opened.
+// root_lost's own documented meaning already covers exactly this case ("the
+// walk root OR A MOUNT ROOT became unreadable"); this proves the handler
+// actually raises it, AND that the work tree it COULD still search is not
+// abandoned in the process (a broken mount store must not fail the whole
+// request FR-021's own "visible, never quiet" principle applies just as much
+// to what the search DID cover as to what it could not).
+func TestLibraryFilesSearch_MalformedMountStoreReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	storePath, err := workspace.MountStorePath(api.homePath, ws)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o700))
+	require.NoError(t, os.WriteFile(storePath, []byte("{not valid json"), 0o600))
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	require.True(t, resp.Truncated,
+		"a malformed mount store must be surfaced as root_lost, never a quiet empty result")
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.RootLost, *resp.TruncatedReason)
+
+	require.Len(t, resp.Hits, 1,
+		"a broken mount store must not take the whole-workspace search offline — the work tree is still searched")
+	assert.Equal(t, "report.md", resp.Hits[0].Path)
+}
+
+// TestLibraryFilesSearch_UnreachableMountReportsRootLost is F3 (2026-09-08
+// code review): buildFileSearchRoots' loop over LoadMounts' entries already
+// logged a WARN when os.OpenRoot(m.HostPath) failed (a detached volume, a
+// renamed folder) but then just `continue`d — no stat, no truncated_reason,
+// no wire signal at all, even though root_lost's own contract names this
+// exact case. This proves an unreachable mount now surfaces the same
+// root_lost signal as F2's broken store, while the work tree and any OTHER,
+// still-reachable mount stay fully searched.
+func TestLibraryFilesSearch_UnreachableMountReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	// A mount whose target volume has since detached: CreateMount validates
+	// the target exists at creation time, so the only way to reach an
+	// unopenable target later is to remove it out from under an already
+	// granted mount — exactly the "detached volume, renamed folder" scenario
+	// buildFileSearchRoots' own doc comment names.
+	vanished := filepath.Join(t.TempDir(), "vanished-mount")
+	require.NoError(t, os.MkdirAll(vanished, 0o700))
+	_, _, err := workspace.CreateMount(api.homePath, ws, "gonemount", vanished)
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(vanished))
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	require.True(t, resp.Truncated,
+		"a mount whose target cannot be opened must be surfaced as root_lost, never a quiet empty result")
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.RootLost, *resp.TruncatedReason)
+
+	require.Len(t, resp.Hits, 1,
+		"an unreachable mount must not take the whole-workspace search offline — the work tree is still searched")
+	assert.Equal(t, "report.md", resp.Hits[0].Path)
+}
+
+// TestLibraryFilesSearch_MountScopedSearchStillHonestlyTruncatesOnBudget is
+// the F2/F3 fix's discriminating negative control: an ordinary budget-capped
+// truncation (a real engine reason) must still win over root_lost, and a
+// healthy multi-mount search with nothing broken must NOT report root_lost at
+// all — proving the new signal fires only for an actually-lost root, not on
+// every truncated response.
+func TestLibraryFilesSearch_HealthyMultiMountSearchNeverReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	mountDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mountDir, "report-2.md"), []byte("x"), 0o600))
+	_, _, err := workspace.CreateMount(api.homePath, ws, "healthy", mountDir)
+	require.NoError(t, err)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	assert.False(t, resp.Truncated,
+		"a fully healthy work tree + mount search must not be flagged root_lost")
+	require.Len(t, resp.Hits, 2, "both the work tree and the mount must be searched")
 }

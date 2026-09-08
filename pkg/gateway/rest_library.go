@@ -437,7 +437,23 @@ func detectKnowledgeBaseInRoot(root *library.Root, rel string) (isKB, establishe
 			// question IS answered.
 		default:
 			// Escapes the root, unreadable, a broken mount: the question could
-			// not be answered for this row, so the listing states nothing.
+			// not be answered for this row, so the listing states nothing —
+			// annotateKnowledgeBaseEntries leaves IsKnowledgeBase absent for
+			// established=false, exactly LibraryEntry.yaml's documented
+			// tri-state ("file, OR detection could not complete for this
+			// row"). F7 (2026-09-08 code review): that silent omission had NO
+			// observability at all — unlike KnowledgeBaseInfo's single-entity
+			// endpoint, which carries a companion detection_error field for
+			// this exact failure and fails LOUDLY, a listing row's detection
+			// failure left no trail anywhere, for either the caller or the
+			// operator. A real knowledge base whose marker became unreadable
+			// would render as a plain folder with zero record of why. Logged
+			// here rather than surfaced on the wire (a per-entry
+			// detection_error would be a contract change affecting every
+			// listing row) so an operator can at least see the failure
+			// happening.
+			logger.WarnCF("rest", "library: knowledge-base marker detection could not complete",
+				map[string]any{"path": markerRel, "marker": marker.name, "error": err.Error()})
 			return false, false
 		}
 	}
