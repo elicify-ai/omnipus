@@ -339,7 +339,13 @@ func (s *findTextSearcher) Search(_ context.Context, words string, limit int) ([
 // below propindex.BoundSurvivors) can make true by coincidence regardless
 // of the real corpus size.
 func (s *findTextSearcher) SearchDeep(_ context.Context, words string, limit int) ([]knowledgefind.TextHit, bool, error) {
-	hits, truncated, err := s.ix.SearchFiltered(words, limit, nil)
+	// SearchFiltered's third result is KB-7a's AND->OR fallback flag. It is
+	// deliberately not propagated here: SearchDeep answers only "was the
+	// corpus exhausted", and the fallback signal already reaches callers on
+	// every hit (IndexHit.FallbackMode) and through SearchReport's own
+	// relaxed-match disclosure, so re-deriving it from this one call site
+	// would give the same fact two owners that can disagree.
+	hits, truncated, _, err := s.ix.SearchFiltered(words, limit, nil)
 	if err != nil {
 		return nil, false, err
 	}
