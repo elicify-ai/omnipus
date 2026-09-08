@@ -2749,11 +2749,21 @@ type pendingAdoptEntry struct {
 // a racing caller's in-flight attempt, both run with NO BrowserManager lock
 // held.
 func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabAdoptResult, error) {
+	return m.adoptTargetForSession(sessionID, targetID, nil)
+}
+
+// Passive events retain the original session across dispatch and retries. A nil
+// owner preserves direct reconciliation, whose caller already found the target.
+func (m *BrowserManager) adoptTargetForSession(sessionID string, targetID target.ID, owner *sessionEntry) (tabAdoptResult, error) {
 	if targetID == "" {
 		return tabAdoptResult{}, nil
 	}
 
 	m.mu.Lock()
+	if !m.adoptionSessionCurrentLocked(sessionID, owner) {
+		m.mu.Unlock()
+		return tabAdoptResult{}, errBrowserSessionChanged
+	}
 	se, ok := m.sessions[sessionID]
 	if !ok {
 		m.mu.Unlock()
@@ -2776,6 +2786,12 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		defer timer.Stop()
 		select {
 		case <-entry.done:
+			m.mu.Lock()
+			current := m.adoptionSessionCurrentLocked(sessionID, owner)
+			m.mu.Unlock()
+			if !current {
+				return tabAdoptResult{}, errBrowserSessionChanged
+			}
 			return entry.result, entry.err
 		case <-timer.C:
 			return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed},
@@ -2818,7 +2834,7 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	}
 	defer release()
 	m.mu.Lock()
-	if m.sessions[sessionID] != se {
+	if m.sessions[sessionID] != se || !m.adoptionSessionCurrentLocked(sessionID, owner) {
 		delete(m.pendingAdopt, targetID)
 		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
 		entry.err = errBrowserSessionChanged
@@ -2831,7 +2847,7 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	newTab, err := m.createTab(browserCtx, targetID)
 
 	m.mu.Lock()
-	if m.sessions[sessionID] != se {
+	if m.sessions[sessionID] != se || !m.adoptionSessionCurrentLocked(sessionID, owner) {
 		delete(m.pendingAdopt, targetID)
 		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
 		entry.err = errBrowserSessionChanged
@@ -2978,10 +2994,8 @@ func (m *BrowserManager) adoptRetrySchedule() []time.Duration {
 	return sched
 }
 
-// sessionExists reports whether sessionID still has a browsing context. Used
-// by adoptTargetWithRetry to abandon a pending retry promptly when the
-// context is torn down (Shutdown/CloseSession) rather than sleeping out the
-// rest of its schedule against a session that no longer exists.
+// sessionExists reports whether sessionID currently has a browsing context.
+// Presence alone must not authorize retained asynchronous work.
 func (m *BrowserManager) sessionExists(sessionID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -3004,8 +3018,20 @@ func (m *BrowserManager) sessionExists(sessionID string) bool {
 // (handleTargetEvent must never block the CDP event-dispatch goroutine —
 // see its doc comment).
 func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.ID) {
-	_, err := m.adoptTarget(sessionID, targetID)
-	if err == nil {
+	m.mu.Lock()
+	owner := m.sessions[sessionID]
+	m.mu.Unlock()
+	m.adoptTargetWithRetryForSession(sessionID, targetID, owner)
+}
+
+// Opener membership is historical provenance, checked at event admission. The
+// popup may survive its opener, but it cannot migrate to a replacement session.
+func (m *BrowserManager) adoptTargetWithRetryForSession(sessionID string, targetID target.ID, owner *sessionEntry) {
+	if owner == nil {
+		return
+	}
+	_, err := m.adoptTargetForSession(sessionID, targetID, owner)
+	if err == nil || errors.Is(err, errBrowserSessionChanged) {
 		return
 	}
 
@@ -3020,16 +3046,15 @@ func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.
 			"retry_in_ms":  delay.Milliseconds(),
 			"consequences": "tab stays stranded (not in the tab strip, and Chrome may show it) until a retry succeeds",
 		})
-		if !m.sessionExists(sessionID) {
-			return // browsing context torn down under us — nothing left to adopt into
-		}
 		timer := time.NewTimer(delay)
-		<-timer.C
-		timer.Stop()
-		if !m.sessionExists(sessionID) {
+		select {
+		case <-owner.browserCtx.Done():
+			timer.Stop()
 			return
+		case <-timer.C:
 		}
-		if _, err = m.adoptTarget(sessionID, targetID); err == nil {
+		timer.Stop()
+		if _, err = m.adoptTargetForSession(sessionID, targetID, owner); err == nil || errors.Is(err, errBrowserSessionChanged) {
 			return
 		}
 	}
@@ -3040,6 +3065,11 @@ func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.
 		"error":      err.Error(),
 		"attempts":   len(sched) + 1,
 	})
+}
+
+// Caller holds m.mu. The nil owner belongs only to direct reconciliation.
+func (m *BrowserManager) adoptionSessionCurrentLocked(sessionID string, owner *sessionEntry) bool {
+	return owner == nil || m.sessions[sessionID] == owner && owner.browserCtx != nil && owner.browserCtx.Err() == nil
 }
 
 // reconcileTargetListTimeout bounds the chromedp.Targets CDP round trip
@@ -3227,7 +3257,7 @@ func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
 	// fires exactly once per target, so a single transient failure here used
 	// to strand the tab permanently — see defaultAdoptRetryBackoff's doc
 	// comment for the measurement.
-	go m.adoptTargetWithRetry(sessionID, info.TargetID)
+	go m.adoptTargetWithRetryForSession(sessionID, info.TargetID, se)
 }
 
 // targetInfoFromEvent extracts *target.Info from the two CDP event types
