@@ -163,7 +163,13 @@ export function LibraryPreviewPane({
         // results, view-kinds-design-2026-09-03 §7). BasePreview fetches the
         // file's own content itself (same query key, so react-query dedupes)
         // because it also needs the collection walk and per-view results.
-        return <BasePreview workspaceId={workspaceId} entry={liveEntry} />
+        return (
+          <BasePreview
+            workspaceId={workspaceId}
+            entry={liveEntry}
+            {...(onOpenNote ? { onOpenNote } : {})}
+          />
+        )
       case 'pdf':
         return <LibraryPdfPreview workspaceId={workspaceId} entry={liveEntry} />
       case 'html': {
