@@ -56,11 +56,22 @@ function hasPath(container: HTMLElement, d: string): boolean {
   return Array.from(container.querySelectorAll('path')).some((p) => p.getAttribute('d') === d)
 }
 
+// MountFolderIcon is COMPOSED from FolderSimple's own path data, so
+// hasPath(FOLDER_SIMPLE_REGULAR_D) is true for a mount row as well as a plain
+// folder — on its own it cannot tell the two apart, and a regression that
+// picked the mount icon for an ordinary directory would keep every
+// plain-folder assertion green. The badge's accessible name is what actually
+// discriminates, so the plain-folder cases assert its ABSENCE.
+function isMountIcon(container: HTMLElement): boolean {
+  return container.querySelector('[aria-label="Mounted folder"]') !== null
+}
+
 describe('LibraryEntryRow icon selection', () => {
   it('a directory with no is_knowledge_base field renders the plain FolderSimple icon', () => {
     const { container } = renderRow(entry({ path: 'drafts' }))
     expect(hasPath(container, FOLDER_SIMPLE_REGULAR_D)).toBe(true)
     expect(hasPath(container, BOOKS_REGULAR_D)).toBe(false)
+    expect(isMountIcon(container)).toBe(false)
   })
 
   // THE REPRO CASE (Decision 2): is_knowledge_base=true on the wire payload
@@ -84,6 +95,7 @@ describe('LibraryEntryRow icon selection', () => {
     )
     expect(hasPath(container, FOLDER_SIMPLE_REGULAR_D)).toBe(true)
     expect(hasPath(container, BOOKS_REGULAR_D)).toBe(false)
+    expect(isMountIcon(container)).toBe(false)
   })
 
   it('a mounted directory renders MountFolderIcon regardless of is_knowledge_base', () => {

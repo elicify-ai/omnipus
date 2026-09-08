@@ -321,7 +321,15 @@ describe('useFileSearch — a superseded/unmounted hook never fires its pending 
     }
   })
 
-  it('issues no further request for the abandoned folder when folderPath changes before the retry delay elapses', async () => {
+  // NOT an oracle for the cleanup's clearTimeout — verified by mutation: with
+  // that clearTimeout removed, this test still passes and only the unmount
+  // test above fails. A folderPath change re-runs the effect, which bumps
+  // requestTokenRef, so the pending retry's own isCurrent() check already
+  // suppresses the request before the timer matters. This case guards THAT
+  // token guard, which is a real path that could regress independently; the
+  // unmount case is the one that pins the timer being cleared (unmount runs
+  // no new effect, so the token is never bumped and the timer would fire).
+  it('issues no further request for the abandoned folder when folderPath changes before the retry delay elapses (guards the request-token check, not the timer clear)', async () => {
     vi.useFakeTimers()
     try {
       const searchFn = vi
