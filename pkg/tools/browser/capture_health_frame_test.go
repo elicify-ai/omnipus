@@ -33,6 +33,8 @@ func TestCaptureHealthFrameKeepsSocketLivenessSeparateFromEvidence(t *testing.T)
 				pending, err := cs.BeginFrameTransition("page-a", 0, 0, 1)
 				require.NoError(t, err)
 				late.CaptureGeneration = pending.Generation
+				before = CaptureHealthObservation{}
+				require.Equal(t, before, cs.CaptureHealth(), "new frame retires old evidence before any later heartbeat")
 			}
 			cs.mu.Lock()
 			cs.lastPingAt = time.Unix(100, 0)

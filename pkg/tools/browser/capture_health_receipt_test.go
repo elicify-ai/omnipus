@@ -14,12 +14,14 @@ import (
 func receiptHealthFixture(t *testing.T) (*CaptureSession, *adapterRelay, *healthRecorder, uint64) {
 	t.Helper()
 	cs, r := adapterFixture(t)
-	epoch := adapterBind(t, cs, context.Background())
+	epoch := recoveryBind(t, cs, r)
 	rec := &healthRecorder{}
-	cs.SetOnVideoHealth(rec.observe)
 	r.mu.Lock()
 	r.stats = webrtc.Stats{HasVideo: true, VideoGeneration: 1, VideoTargetID: "page-a", VideoPackets: 99, VideoReceipt: webrtc.VideoReceipt{BindingToken: 47, Generation: 1, TargetID: "page-a", Serial: 10}}
 	r.mu.Unlock()
+	cs.CommitFrameBoundary(1, "page-a", 100)
+	cs.RecordVideoProgress()
+	cs.SetOnVideoHealth(rec.observe)
 	return cs, r, rec, epoch
 }
 
@@ -28,8 +30,9 @@ func TestCaptureHealthReceiptRequiresCurrentPostLossPacket(t *testing.T) {
 	for _, scenario := range []string{"finite packet with failed viewer write", "pre-loss packet", "old binding", "old generation", "wrong target", "canceled socket", "unbound socket", "replacement socket", "track arrival without packet"} {
 		t.Run(scenario, func(t *testing.T) {
 			cs, r, rec, epoch := receiptHealthFixture(t)
+			claimedFrame := cs.FrameState()
 			cs.ReportCaptureFailure()
-			require.Equal(t, 1, r.recaptureCount())
+			require.Equal(t, []CaptureFrameState{claimedFrame}, r.recoveryFrames())
 			r.mu.Lock()
 			r.stats.VideoReceipt.Serial = 11
 			r.stats.VideoPackets = 100 // tempting unrelated successful-forward total
@@ -80,6 +83,9 @@ func TestCaptureHealthReceiptCannotReuseConsumedOrPreRecapturePacket(t *testing.
 	for _, consumed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unobserved old packet", true: "already consumed packet"}[consumed], func(t *testing.T) {
 			cs, r, _, _ := receiptHealthFixture(t)
+			r.mu.Lock()
+			r.stats.VideoReceipt.Serial = 11
+			r.mu.Unlock()
 			if consumed {
 				cs.RecordVideoProgress()
 			}
@@ -90,7 +96,7 @@ func TestCaptureHealthReceiptCannotReuseConsumedOrPreRecapturePacket(t *testing.
 			cs.mu.Unlock()
 			require.False(t, pending.IsZero(), "OnTrack before a new packet cannot clear recapture settle window")
 			r.mu.Lock()
-			r.stats.VideoReceipt.Serial = 11
+			r.stats.VideoReceipt.Serial = 12
 			r.mu.Unlock()
 			cs.RecordVideoProgress()
 			cs.mu.Lock()
@@ -169,8 +175,6 @@ func TestCaptureHealthEventPreservesClaimedFrameThroughDelayedDelivery(t *testin
 	require.True(t, found)
 }
 
-// This explicitly exercises the supplied reset helper. Root owns wiring it into
-// BeginFrameTransition; a direct call here does not claim that integration.
 func TestCaptureHealthFrameResetRetiresRecoveryButKeepsSocket(t *testing.T) {
 	shrinkRecoveryTiming(t, time.Hour, time.Hour)
 	cs, _, _, epoch := receiptHealthFixture(t)
@@ -184,7 +188,6 @@ func TestCaptureHealthFrameResetRetiresRecoveryButKeepsSocket(t *testing.T) {
 	_, err := cs.BeginFrameTransition("page-b", 800, 600, 1)
 	require.NoError(t, err)
 	cs.mu.Lock()
-	cs.resetCaptureHealthForFrameLocked()
 	attempts, pending, nextEpoch := cs.ingestRecoveryAttempts, cs.ingestRecoveryTimer != nil, cs.ingestRecoveryEpoch
 	cs.mu.Unlock()
 	require.Zero(t, attempts)
@@ -215,9 +218,6 @@ func TestCaptureHealthFrameResetInvalidatesAlreadyRunningLoss(t *testing.T) {
 	}
 	_, err := cs.BeginFrameTransition("page-b", 800, 600, 1)
 	require.NoError(t, err)
-	cs.mu.Lock()
-	cs.resetCaptureHealthForFrameLocked()
-	cs.mu.Unlock()
 	close(resume)
 	select {
 	case <-done:
@@ -236,7 +236,6 @@ func TestCaptureHealthFrameResetRejectsRetainedTimerEpoch(t *testing.T) {
 	_, err := cs.BeginFrameTransition("page-b", 800, 600, 1)
 	require.NoError(t, err)
 	cs.mu.Lock()
-	cs.resetCaptureHealthForFrameLocked()
 	currentEpoch := cs.ingestRecoveryEpoch
 	cs.mu.Unlock()
 	cs.runIngestRecoveryForEpoch(retainedEpoch)
@@ -264,9 +263,6 @@ func TestCaptureHealthFrameResetInvalidatesAlreadyRunningAttempt(t *testing.T) {
 	}
 	_, err := cs.BeginFrameTransition("page-b", 800, 600, 1)
 	require.NoError(t, err)
-	cs.mu.Lock()
-	cs.resetCaptureHealthForFrameLocked()
-	cs.mu.Unlock()
 	close(resume)
 	select {
 	case <-done:
@@ -342,9 +338,6 @@ func TestCaptureHealthRecoveryCancelsQueuedEpisode(t *testing.T) {
 			case "frame reset":
 				_, err := cs.BeginFrameTransition("page-b", 800, 600, 1)
 				require.NoError(t, err)
-				cs.mu.Lock()
-				cs.resetCaptureHealthForFrameLocked()
-				cs.mu.Unlock()
 			case "stop":
 				cs.Stop()
 			case "binding replacement":

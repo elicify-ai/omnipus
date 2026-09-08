@@ -166,6 +166,7 @@ type Session struct {
 	viewerRequests map[string]*viewerRequestAdmission
 	// Native preparation owns its own admission mutex.
 	viewerPreparations viewerPreparationPool
+	ingestPreparations ingestPreparationPool
 
 	videoPktCount          atomic.Int64
 	audioPktCount          atomic.Int64

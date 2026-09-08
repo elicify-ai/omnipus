@@ -17,10 +17,11 @@ type adapterOffer struct {
 }
 type adapterRelay struct {
 	fakeRelay
-	bindingMu sync.Mutex
-	nextToken uint64
-	requests  []adapterOffer
-	offer     func(context.Context, adapterOffer) (string, error)
+	bindingMu       sync.Mutex
+	nextToken       uint64
+	requests        []adapterOffer
+	recaptureFrames []CaptureFrameState
+	offer           func(context.Context, adapterOffer) (string, error)
 }
 
 func (r *adapterRelay) BeginIngestBinding(ctx context.Context) (uint64, error) {
@@ -68,6 +69,32 @@ func adapterBind(t *testing.T, cs *CaptureSession, ctx context.Context) uint64 {
 	require.NoError(t, err)
 	return epoch
 }
+
+// recoveryBind exercises the qualified control boundary used by the gateway.
+func recoveryBind(t *testing.T, cs *CaptureSession, r *adapterRelay) uint64 {
+	t.Helper()
+	_, epoch, err := cs.BindIngestRecaptureContext(context.Background(), func(string, *string, int, int, int) error { return nil },
+		func(ctx context.Context, frame CaptureFrameState, current func() bool) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !current() {
+				return context.Canceled
+			}
+			r.bindingMu.Lock()
+			r.recaptureFrames = append(r.recaptureFrames, frame)
+			r.bindingMu.Unlock()
+			return nil
+		}, func() {})
+	require.NoError(t, err)
+	return epoch
+}
+func (r *adapterRelay) recoveryFrames() []CaptureFrameState {
+	r.bindingMu.Lock()
+	defer r.bindingMu.Unlock()
+	return append([]CaptureFrameState(nil), r.recaptureFrames...)
+}
+
 func awaitAdapterError(t *testing.T, result <-chan error) error {
 	t.Helper()
 	select {

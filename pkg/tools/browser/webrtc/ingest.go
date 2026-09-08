@@ -80,7 +80,16 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (string, error) {
 	return s.handleIngestOffer(sdpOffer, 0, "", nil)
 }
 
-func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (answer string, err error) {
+func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (string, error) {
+	if admission == nil {
+		return s.handleIngestOfferOnce(sdpOffer, generation, targetID, nil)
+	}
+	return s.ingestPreparations.run(admission.ctx, func() (string, error) {
+		return s.handleIngestOfferOnce(sdpOffer, generation, targetID, admission)
+	})
+}
+
+func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (answer string, err error) {
 	if sdpOffer == "" {
 		return "", fmt.Errorf("webrtc: ingest offer: empty SDP")
 	}
@@ -165,17 +174,8 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 	installed := false
 	defer func() {
 		if !installed {
-			closeCandidate := func() {
-				if cerr := pc.Close(); cerr != nil {
-					s.logf("%s closing failed new ingest connection: %v", prefix, cerr)
-				}
-			}
-			// Cancellation returns promptly even if old candidate resources
-			// take time to close. This exact candidate was never installed.
-			if admission != nil && ctx.Err() != nil {
-				go closeCandidate()
-			} else {
-				closeCandidate()
+			if cerr := pc.Close(); cerr != nil {
+				s.logf("%s closing failed new ingest connection: %v", prefix, cerr)
 			}
 		}
 	}()
@@ -216,19 +216,9 @@ func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID
 	})
 
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
-	if admission == nil {
-		err = prepareIngestAnswer(pc, sdpOffer, prefix)
-	} else {
-		// Pion initializes its ICE agent synchronously during SDP preparation.
-		// A blocked network lookup must not hold the authenticated request open.
-		prepared := make(chan error, 1)
-		go func() { prepared <- prepareIngestAnswer(pc, sdpOffer, prefix) }()
-		select {
-		case err = <-prepared:
-		case <-ctx.Done():
-			return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, context.Cause(ctx))
-		}
-	}
+	// The preparation worker retains its slot through native SDP work and
+	// synchronous cleanup, even after the authenticated caller has canceled.
+	err = prepareIngestAnswer(pc, sdpOffer, prefix)
 	if err != nil {
 		return "", err
 	}

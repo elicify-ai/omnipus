@@ -330,7 +330,7 @@ func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *
 
 // TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget is the
 // regression guard for the Start()/Stop() race capture_session.go's Start()
-// explicitly handles (the "cs.stopped" branch inside startOnce.Do, comment:
+// explicitly handles (the "cs.stopped" branch after startup, comment:
 // "A Stop() (e.g. browser death detected concurrently) raced this Start()
 // and won — tear down what we just built rather than leaving an orphaned
 // encoder target nobody will ever close"). Blocks a fake EncoderStarter

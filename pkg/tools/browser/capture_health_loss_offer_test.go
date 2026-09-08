@@ -48,12 +48,14 @@ func qualifiedLossFixture(t *testing.T) (*CaptureSession, *qualifiedLossRelay, *
 	t.Cleanup(cs.Stop)
 	_, err = cs.BeginFrameTransition("page-a", 800, 600, 1)
 	require.NoError(t, err)
-	epoch := adapterBind(t, cs, context.Background())
+	epoch := recoveryBind(t, cs, &r.adapterRelay)
 	rec := &healthRecorder{}
-	cs.SetOnVideoHealth(rec.observe)
 	r.mu.Lock()
 	r.stats = webrtc.Stats{VideoPackets: 99, VideoReceipt: webrtc.VideoReceipt{BindingToken: 47, Generation: 1, TargetID: "page-a", Serial: 10}}
 	r.mu.Unlock()
+	cs.CommitFrameBoundary(1, "page-a", 100)
+	cs.RecordVideoProgress()
+	cs.SetOnVideoHealth(rec.observe)
 	return cs, r, rec, epoch
 }
 
@@ -76,6 +78,7 @@ func TestCaptureHealthLossRejectsRetiredOfferIdentity(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			cs, r, rec, epoch := qualifiedLossFixture(t)
 			original := lossOfferTuple{47, 9, 1, "page-a"}
+			claimedFrame := cs.FrameState()
 			switch scenario {
 			case "retired offer":
 				original.offer = 8
@@ -107,6 +110,11 @@ func TestCaptureHealthLossRejectsRetiredOfferIdentity(t *testing.T) {
 				want = 1
 			}
 			require.Equal(t, want, r.recaptureCount(), "loss must retain original offer and current capture ownership")
+			if want == 1 {
+				require.Equal(t, []CaptureFrameState{claimedFrame}, r.recoveryFrames())
+			} else {
+				require.Empty(t, r.recoveryFrames(), "retired loss cannot send a recapture command")
+			}
 			require.Equal(t, want, rec.count(VideoHealthLost))
 		})
 	}
