@@ -314,12 +314,43 @@ type findTextSearcher struct {
 
 var _ knowledgefind.TextSearcher = (*findTextSearcher)(nil)
 var _ knowledgefind.TextFreshnessReporter = (*findTextSearcher)(nil)
+var _ knowledgefind.TextDeepSearcher = (*findTextSearcher)(nil)
 
 func (s *findTextSearcher) Search(_ context.Context, words string, limit int) ([]knowledgefind.TextHit, error) {
 	hits, err := s.ix.Search(words, limit)
 	if err != nil {
 		return nil, err
 	}
+	return convertIndexHits(hits), nil
+}
+
+// SearchDeep implements knowledgefind.TextDeepSearcher (F3): it calls
+// knowledge.Index.SearchFiltered DIRECTLY — the same already-exported method
+// Search (above) reaches through knowledge.Index.Search, which discards
+// SearchFiltered's own truncated flag by design (see Index.Search's own doc
+// comment for why that discard is correct at ITS layer: every OTHER
+// production caller of Index.Search reaches SearchFiltered through
+// Searcher.Search instead, which folds truncation into its own report).
+// fetchWordHits' re-ask at propindex.BoundSurvivors is not one of those
+// callers — it goes through knowledgefind.TextSearcher — so this method
+// exists to carry the SAME flag through that path too, instead of leaving
+// fetchWordHits to infer exhaustion from a length comparison
+// indexSearchMaxFetch (SearchFiltered's own internal fetch ceiling, far
+// below propindex.BoundSurvivors) can make true by coincidence regardless
+// of the real corpus size.
+func (s *findTextSearcher) SearchDeep(_ context.Context, words string, limit int) ([]knowledgefind.TextHit, bool, error) {
+	hits, truncated, err := s.ix.SearchFiltered(words, limit, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	return convertIndexHits(hits), !truncated, nil
+}
+
+// convertIndexHits is the pkg/knowledge -> knowledgefind IndexHit conversion
+// Search and SearchDeep both need, pulled out so the two call sites (one
+// hitting knowledge.Index.Search, the other knowledge.Index.SearchFiltered
+// directly) share it rather than duplicating the field-by-field carry-through.
+func convertIndexHits(hits []knowledge.IndexHit) []knowledgefind.TextHit {
 	out := make([]knowledgefind.TextHit, 0, len(hits))
 	for _, h := range hits {
 		// h.Kind is pkg/knowledge's ScanKind ("note"/"attachment", scan.go) —
@@ -333,7 +364,7 @@ func (s *findTextSearcher) Search(_ context.Context, words string, limit int) ([
 			Path: h.Path, SourceHash: h.SourceHash, Score: h.Score, Kind: string(h.Kind),
 		})
 	}
-	return out, nil
+	return out
 }
 
 func (s *findTextSearcher) NearestTerms(_ context.Context, words string, limit int) ([]generated.VaultTermCount, error) {

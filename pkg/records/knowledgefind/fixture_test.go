@@ -159,6 +159,17 @@ type stubText struct {
 	terms []generated.VaultTermCount
 	err   error
 
+	// sourceHashErr, when set, makes SourceHash fail (F4c) instead of
+	// returning its ordinary ok=false miss.
+	sourceHashErr error
+
+	// termsErr, when set, makes NearestTerms fail independently of Search
+	// (err, above) — the two are separate calls in findRecords' zero-hit
+	// path (a successful zero-hit Search, THEN a NearestTerms lookup for
+	// the "did you mean" suggestion), and F4's regression needs the FIRST
+	// to succeed while the SECOND fails.
+	termsErr error
+
 	// populated controls Populated()'s answer. nil means true — an ordinary,
 	// built index — which is the default every existing test in this package
 	// relies on, since none of them are about build state. A test exercising
@@ -212,8 +223,34 @@ func (s *stubText) Search(_ context.Context, _ string, limit int) ([]TextHit, er
 	return out, nil
 }
 
+// SearchDeep makes stubText a TextDeepSearcher (F3): it reports the EXACT
+// exhaustion truth, computed from how many hits were available BEFORE the
+// limit cut, rather than inferring it from a length comparison the way a
+// plain TextSearcher without this capability is forced to. stubText itself
+// has no internal fetch ceiling of its own — s.only is held entirely in
+// memory — so this is always able to answer honestly; a test that wants to
+// exercise fetchWordHits' honest FALLBACK for a searcher that cannot prove
+// exhaustion uses stubTextCeilinged (kind_fanout_deep_search_test.go)
+// instead, which deliberately does not implement this interface.
+func (s *stubText) SearchDeep(ctx context.Context, words string, limit int) ([]TextHit, bool, error) {
+	hits, err := s.Search(ctx, words, -1) // -1: uncapped, everything s.only holds
+	if err != nil {
+		return nil, false, err
+	}
+	exhausted := len(hits) <= limit
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, exhausted, nil
+}
+
 // SourceHash is what FR-020c compares each returned row against.
 func (s *stubText) SourceHash(_ context.Context, path string) (string, bool, error) {
+	if s.sourceHashErr != nil {
+		// F4c's regression needs a FAILED lookup, distinct from an honest
+		// miss (ok=false, nil error) — see assemble.go's own fix.
+		return "", false, s.sourceHashErr
+	}
 	h, ok := s.hits[path]
 	if !ok {
 		return "", false, nil
@@ -222,6 +259,9 @@ func (s *stubText) SourceHash(_ context.Context, path string) (string, bool, err
 }
 
 func (s *stubText) NearestTerms(_ context.Context, _ string, _ int) ([]generated.VaultTermCount, error) {
+	if s.termsErr != nil {
+		return nil, s.termsErr
+	}
 	return s.terms, nil
 }
 

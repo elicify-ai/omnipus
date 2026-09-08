@@ -274,7 +274,23 @@ func zeroHitResponse(ctx context.Context, d Deps, q *query, echo string) generat
 
 	var terms []generated.VaultTermCount
 	if d.Text != nil && q.words != "" {
-		if t, err := d.Text.NearestTerms(ctx, q.words, 5); err == nil {
+		t, err := d.Text.NearestTerms(ctx, q.words, 5)
+		if err != nil {
+			// F4: a failed NearestTerms lookup used to be silently absorbed —
+			// the response lost the "did you mean" signal AND said nothing
+			// about the degrade, so a caller reading a bare zero-hit answer
+			// could not tell "your spelling found nothing near it either"
+			// from "the vocabulary check itself failed". Recording a problem
+			// keeps the AC-F4 completeness guarantee this response makes
+			// (the WORD search really was searched, and genuinely found
+			// nothing — see the R1 check that ran before this) while still
+			// naming the degrade, the same way every other best-effort
+			// signal in this package reports its own failure rather than
+			// disappearing.
+			resp.Problems = append(resp.Problems, problem(generated.IndexUnavailable,
+				fmt.Sprintf("the nearest-term suggestions for %q could not be read: %v", q.words, err),
+				"re-run, or run knowledge_describe check_integrity to see the index state"))
+		} else {
 			terms = t
 		}
 	}
