@@ -59,14 +59,23 @@ Corrected normal audio/video diagnostic `99970` exited 1 during setup, before
 any clicks: navigation encountered low-memory refusals at 17:36:55, 17:36:58 and
 17:37:00, then the preview-address assertion timed out after 30 seconds. The
 retained JSON has zero latency samples and null p95. This is not a measured
-clock-correction latency failure. The memory mechanism remains under read-only
-investigation. No speed or audio gain is established. The three earlier measured
+clock-correction latency failure. The memory investigation below explains the
+later refusal condition. No speed or audio gain is established. The three earlier measured
 runs remain results for `2259cd81f`.
 
 Corrected-run setup evidence:
 
 - `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-clock-review-1.log`
 - `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-clock-review-1/browser-improvements-laten-f8442-d-and-receiver-video-timing/latency-evidence.json`
+
+At 17:38:47 WIB, a read-only snapshot found 32 GiB physical memory and
+1,084,825 free/purgeable/external pages of 4,096 bytes: the product's Darwin
+availability estimate was 4.138 GiB (12.932%), below its 15% / 4.8 GiB
+tab-admission threshold. `memory_pressure -Q` reported 46%, using a different
+definition. No arithmetic or stale-read defect was established. Exact counters
+at the earlier refusal times were not logged, so this later snapshot does not
+prove their values or actual OS distress. The configured guard remains intact;
+other operators' processes were not terminated to create a passing test.
 
 ## Retained raw evidence
 
