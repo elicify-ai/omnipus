@@ -44,11 +44,11 @@ const ToolName = "knowledge_find"
 // ---------------------------------------------------------------------------
 
 // Description is the tool description, verbatim.
-const Description = `Search the vault — one call for plain words, typed filters, saved views, relations, and tasks.
+const Description = `Search the knowledge base — one call for plain words, typed filters, saved views, relations, and tasks.
 
 The loop: call knowledge_describe first (property names are declared per record type, and a guessed one is refused rather than silently empty). Use a saved view when one fits. Start with words; when more than a screenful matches, narrow with filter instead of paging. Then knowledge_read the winners.
 
-Every answer opens with its completeness verdict, names each record it could not evaluate and the fix for it, and ends with the calls to make next. An unknown property, operator or value is refused with the valid ones listed — never as zero results, so an empty answer means the vault is empty.`
+Every answer opens with its completeness verdict, names each record it could not evaluate and the fix for it, and ends with the calls to make next. An unknown property, operator or value is refused with the valid ones listed — never as zero results, so an empty answer means the knowledge base is empty.`
 
 // ---------------------------------------------------------------------------
 // THE ADVERTISED SUMMARY OPS — ONE LIST, NOT A SECOND ONE
@@ -302,7 +302,7 @@ func Parameters() map[string]any {
 			},
 			"explain": map[string]any{
 				"type":        "boolean",
-				"description": "Report the plan and evaluate nothing. Use it to check a query before running it over a large vault.",
+				"description": "Report the plan and evaluate nothing. Use it to check a query before running it over a large knowledge base.",
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -507,7 +507,7 @@ func unknownParameterRemedy(unknown []string) string {
 			return "use select"
 		}
 	}
-	return "drop the argument, or call knowledge_describe to see what this vault supports"
+	return "drop the argument, or call knowledge_describe to see what this knowledge base supports"
 }
 
 func quoteAll(in []string) []string {

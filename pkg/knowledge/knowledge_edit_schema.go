@@ -112,7 +112,7 @@ func (g knowledgeEditGovernance) Note() string {
 	case knowledgeEditNoType:
 		return "NOTE: no schema governed this write — the note declares no record type, so nothing was checked"
 	case knowledgeEditUnknownType:
-		return fmt.Sprintf("NOTE: no schema governed this write — %q has no schema in this vault, so nothing was checked", g.TypeName)
+		return fmt.Sprintf("NOTE: no schema governed this write — %q has no schema in this knowledge base, so nothing was checked", g.TypeName)
 	case knowledgeEditRejectedSchema:
 		return fmt.Sprintf("NOTE: no schema governed this write — %s's schema file failed to load (%s), so nothing was checked; fix it via knowledge_configure", g.TypeName, g.RejectionReason)
 	default:

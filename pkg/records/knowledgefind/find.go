@@ -260,8 +260,8 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 
 	if d.Text == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
-			"no text index is wired into this vault, so no answer can be checked for freshness",
-			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+			"no text index is wired into this knowledge base, so no answer can be checked for freshness",
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 		return refusalResponse(req, rawEcho(req), ref), ref
 	}
 
@@ -383,7 +383,7 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 	name := *req.View
 	if loader == nil {
 		return refuse(problem(generated.UnknownView,
-			fmt.Sprintf("this vault has no saved views, so %q cannot be resolved", name),
+			fmt.Sprintf("this knowledge base has no saved views, so %q cannot be resolved", name),
 			"drop the view and write the filter directly, or define the view with knowledge_configure"), nil)
 	}
 	view, ok := loader.View(name)
@@ -631,7 +631,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		}
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so no record can be read",
-			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -739,11 +739,11 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			//     (the index accounts for it as unindexable, not pending).
 			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 && fresh.NewFiles > 0 {
 				ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
-					fmt.Sprintf("the text index has not finished indexing this vault — it currently reflects "+
+					fmt.Sprintf("the text index has not finished indexing this knowledge base — it currently reflects "+
 						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
 						"under-report: matching files that are not yet indexed cannot appear here",
 						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.NewFiles)),
-					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state")})
+					"re-run indexing for this knowledge base; run knowledge_describe check_integrity to see the index state")})
 			}
 		}
 	}
@@ -824,18 +824,18 @@ func checkTextIndexPopulated(ctx context.Context, text TextSearcher) *RefusalErr
 		if fr, ok := text.(TextFreshnessReporter); ok {
 			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
 				return refuse(problem(generated.IndexUnavailable,
-					fmt.Sprintf("the text index has never finished indexing this vault — it currently reflects "+
+					fmt.Sprintf("the text index has never finished indexing this knowledge base — it currently reflects "+
 						"%s of the %s files on disk (%s not yet indexed), so a zero-hit answer here cannot be "+
-						"trusted; it is indistinguishable from a real miss over a vault that was actually searched",
+						"trusted; it is indistinguishable from a real miss over a knowledge base that was actually searched",
 						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
-					"re-run indexing for this vault; run knowledge_describe check_integrity to see the index state"), nil)
+					"re-run indexing for this knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 			}
 		}
 		return refuse(problem(generated.IndexUnavailable,
-			"the text index has never finished indexing this vault, so a zero-hit answer "+
+			"the text index has never finished indexing this knowledge base, so a zero-hit answer "+
 				"here cannot be trusted — it would be indistinguishable from a real miss over a "+
-				"vault that was actually searched",
-			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+				"knowledge base that was actually searched",
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 	}
 	return nil
 }

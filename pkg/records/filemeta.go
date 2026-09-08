@@ -507,7 +507,7 @@ func ResolveFileProperty(name string, m FileMeta) (PropertyValue, error) {
 			return PropertyValue{}, &QueryError{
 				Property: name,
 				Reason: "file.backlinks was asked for on a candidate whose backlink index was never derived; " +
-					"answering an empty list here would report 'nothing links to this note' for every note in the vault",
+					"answering an empty list here would report 'nothing links to this note' for every note in the knowledge base",
 				Remedy: "build the index once per query with BuildBacklinkIndex and set FileMeta.Backlinks / BacklinksDerived from it",
 			}
 		}
@@ -699,7 +699,7 @@ func TranslateFileMethod(method FileMethod, arg string) (generated.VaultFilterNo
 			// one when it returns their whole vault.
 			return generated.VaultFilterNode{}, &QueryError{
 				Property: "file.inFolder()",
-				Reason: "the vault root was named as a folder; every note is in it, so the filter would select the whole vault " +
+				Reason: "the knowledge base root was named as a folder; every note is in it, so the filter would select the whole knowledge base " +
 					"while looking like it narrowed something",
 				Remedy: "name a subfolder, or drop the filter",
 			}

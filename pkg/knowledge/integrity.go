@@ -160,7 +160,7 @@ func (c *CategoryResult) Clamped() bool { return c != nil && c.Total > len(c.Fin
 
 // IntegrityReport is the whole sweep.
 type IntegrityReport struct {
-	// ScopeLabel is what the report says it swept: "whole vault", or a
+	// ScopeLabel is what the report says it swept: "whole knowledge base", or a
 	// collection, or a record type.
 	ScopeLabel string
 	// NotesSwept is the number of markdown notes the walk found in scope.
@@ -928,6 +928,6 @@ func integrityScopeLabel(collection, recordType string) string {
 	case collection != "":
 		return collection
 	default:
-		return "whole vault"
+		return "whole knowledge base"
 	}
 }

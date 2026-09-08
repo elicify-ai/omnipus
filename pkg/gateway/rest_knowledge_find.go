@@ -500,7 +500,7 @@ func vaultSearchIncompleteReason(resp gen.VaultFindResponse, ready bool) string 
 		return *resp.CompleteReason
 	}
 	if !ready {
-		return "the vault index is not ready yet, so these results may be incomplete"
+		return "the knowledge base index is not ready yet, so these results may be incomplete"
 	}
 	return ""
 }

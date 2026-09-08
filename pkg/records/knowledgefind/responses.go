@@ -375,7 +375,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 	if d.Store == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so checkbox rows cannot be read",
-			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 

@@ -1365,7 +1365,7 @@ describe('LibraryExplorer — the knowledge panel is mounted, and asked about th
     // fix.
     expect(screen.getAllByRole('searchbox')).toHaveLength(1)
 
-    fireEvent.change(await screen.findByLabelText('Search this vault'), { target: { value: 'landlock' } })
+    fireEvent.change(await screen.findByLabelText('Search this knowledge base'), { target: { value: 'landlock' } })
     const results = await screen.findByTestId('library-search-results')
     fireEvent.click(within(results).getByRole('button'))
 

@@ -670,8 +670,8 @@ func TestIntegrity_RecordTypeScopeNarrowsTheWikilinkHalfToo(t *testing.T) {
 	if strings.Contains(strings.Join(got, "\n"), "Notes/loose.md") {
 		t.Errorf("a note outside the scope leaked into a scoped report")
 	}
-	if report.ScopeLabel == "whole vault" {
-		t.Errorf("a scoped report must not describe itself as the whole vault")
+	if report.ScopeLabel == "whole knowledge base" {
+		t.Errorf("a scoped report must not describe itself as the whole knowledge base")
 	}
 }
 

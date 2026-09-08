@@ -115,7 +115,7 @@ export function LibraryNewVaultDialog({
     onSuccess: (entry) => {
       void queryClient.invalidateQueries({ queryKey: ['library', workspaceId, 'entries'] })
       void queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
-      addToast({ message: `Vault "${trimmedName}" created.`, variant: 'success' })
+      addToast({ message: `Knowledge base "${trimmedName}" created.`, variant: 'success' })
       onOpenChange(false)
       onCreated(workspaceId, entry)
     },
@@ -125,10 +125,10 @@ export function LibraryNewVaultDialog({
       // exists at that path") is accurate but doesn't say WHAT kind of entry,
       // which is exactly what a person choosing a name wants to know here.
       if (isApiError(err) && err.status === 409) {
-        setError('A folder or vault with that name already exists here.')
+        setError('A folder or knowledge base with that name already exists here.')
         return
       }
-      setError(getLibraryErrorMessage(err, 'Could not create vault'))
+      setError(getLibraryErrorMessage(err, 'Could not create knowledge base'))
     },
   })
 
@@ -141,9 +141,9 @@ export function LibraryNewVaultDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="library-new-vault-dialog">
         <DialogHeader>
-          <DialogTitle>New vault</DialogTitle>
+          <DialogTitle>New knowledge base</DialogTitle>
           <DialogDescription>
-            A vault is a knowledge base — notes, records, and saved views the agent can search.
+            A knowledge base is notes, records, and saved views the agent can search.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
@@ -161,12 +161,12 @@ export function LibraryNewVaultDialog({
             />
             {hasSlash && (
               <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
-                A vault name can't contain "/" or "\".
+                A knowledge base name can't contain "/" or "\".
               </p>
             )}
             {!hasSlash && isDotName && (
               <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
-                "{trimmedName}" isn't a valid vault name.
+                "{trimmedName}" isn't a valid knowledge base name.
               </p>
             )}
           </div>
@@ -211,7 +211,7 @@ export function LibraryNewVaultDialog({
             disabled={invalid || mutation.isPending}
             data-testid="library-new-vault-confirm"
           >
-            {mutation.isPending ? 'Creating…' : 'Create vault'}
+            {mutation.isPending ? 'Creating…' : 'Create knowledge base'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -125,7 +125,7 @@ var propertyIndexRefusals = map[PropertyIndexCapability]string{
 		"wikilink and orphan checks still run",
 	CapabilityRecordTypeDeclaration: "record types cannot be declared on %s: this build has no properties index. " +
 		"The schema file would be written and never enforced",
-	CapabilityOpenIndex: "the vault properties index cannot be opened on %s: modernc.org/sqlite has no working " +
+	CapabilityOpenIndex: "the knowledge base properties index cannot be opened on %s: modernc.org/sqlite has no working " +
 		"build for this target. Records are a feature of the SQLite-capable builds; " +
 		"plain-word search and knowledge_read still work",
 }
@@ -133,7 +133,7 @@ var propertyIndexRefusals = map[PropertyIndexCapability]string{
 // ErrPropertyIndexUnavailable is the sentinel every platform refusal unwraps to,
 // so a caller can branch on the class (errors.Is) without matching on message
 // text and without importing the capability vocabulary.
-var ErrPropertyIndexUnavailable = errors.New("the vault properties index is not compiled into this build")
+var ErrPropertyIndexUnavailable = errors.New("the knowledge base properties index is not compiled into this build")
 
 // PropertyIndexUnavailableError is the refusal returned in place of a result on
 // a build where the properties index cannot exist. It is an error and never an

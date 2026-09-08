@@ -164,7 +164,7 @@ func buildRelationGraph(ctx context.Context, d Deps) (*relationGraph, *RefusalEr
 	if d.Store == nil {
 		return nil, refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so the relation graph cannot be walked",
-			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 	}
 
 	g := &relationGraph{}
@@ -259,8 +259,8 @@ func nearReachable(ctx context.Context, d Deps, q *query) (reached map[string]bo
 		// note has no relations" — precisely the quiet degradation Deps.Text
 		// is required, not optional, to prevent for the SAME reason.
 		return nil, "", refuse(problem(generated.IndexUnavailable,
-			"near/hops needs relation resolution, and this vault has none wired in",
-			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
+			"near/hops needs relation resolution, and this knowledge base has none wired in",
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 	}
 
 	// The anchor note's OWN path (hop 0), resolved independently of whether it
