@@ -11331,13 +11331,16 @@ type FileSearchHit struct {
 	// Excerpt Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable.
 	Excerpt *string `json:"excerpt,omitempty"`
 
+	// IsDir True when this hit is a directory rather than a file — always true (never omitted) for a directory hit; always false for a content hit (directories are never content-scanned). Deliberately carries no `default` keyword despite always being false-when-absent in practice: a `default` makes openapi-typescript emit this as a non-optional field regardless of the `required` list, which would force every existing FileSearchHit fixture built before this field existed to add it just to keep compiling. Absent (or false) means "this is a file" — an existing consumer keeps its prior, file-only reading with no changes required.
+	IsDir *bool `json:"is_dir,omitempty"`
+
 	// Line 1-based line number of the matching line (content hits only).
 	Line *int `json:"line,omitempty"`
 
 	// MatchKind Whether the file matched by its name/path or by a content line.
 	MatchKind FileSearchHitMatchKind `json:"match_kind"`
 
-	// Path Workspace-relative path of the matched file.
+	// Path Workspace-relative path of the matched file or directory (see is_dir).
 	Path string `json:"path"`
 }
 
@@ -11415,13 +11418,16 @@ type FileSearchResponse struct {
 		// Excerpt Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable.
 		Excerpt *string `json:"excerpt,omitempty"`
 
+		// IsDir True when this hit is a directory rather than a file — always true (never omitted) for a directory hit; always false for a content hit (directories are never content-scanned). Deliberately carries no `default` keyword despite always being false-when-absent in practice: a `default` makes openapi-typescript emit this as a non-optional field regardless of the `required` list, which would force every existing FileSearchHit fixture built before this field existed to add it just to keep compiling. Absent (or false) means "this is a file" — an existing consumer keeps its prior, file-only reading with no changes required.
+		IsDir *bool `json:"is_dir,omitempty"`
+
 		// Line 1-based line number of the matching line (content hits only).
 		Line *int `json:"line,omitempty"`
 
 		// MatchKind Whether the file matched by its name/path or by a content line.
 		MatchKind FileSearchResponseHitsMatchKind `json:"match_kind"`
 
-		// Path Workspace-relative path of the matched file.
+		// Path Workspace-relative path of the matched file or directory (see is_dir).
 		Path string `json:"path"`
 	} `json:"hits"`
 
@@ -11440,6 +11446,12 @@ type FileSearchResponse struct {
 	Stats struct {
 		// BytesScanned Content bytes actually scanned.
 		BytesScanned int `json:"bytes_scanned"`
+
+		// DirsVisited Directories the walk reached (name-checked and glob-filtered), the directory-entry counterpart of files_visited. Counted separately — not folded into files_visited — but the two share one Files budget, so a directory-heavy search that stops at max_matches or max_files never reports files_visited alone as though nothing else happened. Deliberately left OUT of this object's `required` list (unlike its five siblings above) even though a current engine always populates it: adding a new field to `required` breaks every existing FileSearchResponse fixture built before this field existed, forcing an unrelated update just to keep compiling — the same reasoning FileSearchHit.is_dir documents. Absent means "not reported" (treat as 0 / not yet upgraded), never "definitely zero directories".
+		DirsVisited *int `json:"dirs_visited,omitempty"`
+
+		// FilesFilteredGlob Files or directories the walk reached but rejected via include_globs/exclude_globs. Distinct from files_pruned_ignored: a request-scoped glob filter is a different reason than a repository-level .gitignore/.ignore/always-pruned/hidden rule, and conflating the two would hide which one actually explains a given search's shape. Left optional for the same backward-compatibility reason as dirs_visited above.
+		FilesFilteredGlob *int `json:"files_filtered_glob,omitempty"`
 
 		// FilesPrunedIgnored Entries pruned by .gitignore/.ignore or the always-pruned set — hidden-by-ignore is observable.
 		FilesPrunedIgnored int `json:"files_pruned_ignored"`

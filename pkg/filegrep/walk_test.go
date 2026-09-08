@@ -224,6 +224,164 @@ func TestFileGrep_DirectoryNameHit(t *testing.T) {
 	}
 }
 
+// TestFileGrep_DirectoryHitIsDirFlag pins review finding F1: a directory hit
+// must be distinguishable from a file hit on the wire
+// (contracts/components/schemas/FileSearchHit.yaml is_dir) — without it, a
+// caller can tell "name match, no line number" apart from "content match"
+// but never "file" apart from "folder", so the SPA renders a folder with a
+// file glyph and tries to open it as one.
+func TestFileGrep_DirectoryHitIsDirFlag(t *testing.T) {
+	files := map[string]string{
+		"Finance/report.md": "irrelevant content",
+		"Finance-notes.txt": "irrelevant content",
+	}
+	res := mustSearch(t, oneRoot(buildFS(files)), Options{Query: "Finance"})
+	var dirHit, fileHit *Hit
+	for i, h := range res.Hits {
+		switch h.Path {
+		case "Finance":
+			dirHit = &res.Hits[i]
+		case "Finance-notes.txt":
+			fileHit = &res.Hits[i]
+		}
+	}
+	if dirHit == nil {
+		t.Fatalf("want a hit for the Finance directory, got %+v", res.Hits)
+	}
+	if fileHit == nil {
+		t.Fatalf("want a hit for Finance-notes.txt, got %+v", res.Hits)
+	}
+	if !dirHit.IsDir {
+		t.Fatal("want IsDir=true on the directory hit")
+	}
+	if fileHit.IsDir {
+		t.Fatal("want IsDir=false on the file hit")
+	}
+}
+
+// TestFileGrep_DirectoryHitGlobFiltering pins review finding F2:
+// include_globs/exclude_globs must apply to a directory's own name hit
+// exactly like they apply to a file's (FileSearchRequest.yaml describes both
+// in terms of "paths", never singling out files) — gating the HIT only,
+// never traversal, since a directory failing an include glob can still
+// contain a descendant file that matches it.
+func TestFileGrep_DirectoryHitGlobFiltering(t *testing.T) {
+	t.Run("exclude glob suppresses the directory's own hit", func(t *testing.T) {
+		files := map[string]string{
+			"secret/plan.txt": "secret content",
+		}
+		res := mustSearch(t, oneRoot(buildFS(files)), Options{
+			Query:        "secret",
+			ExcludeGlobs: []string{"secret/**", "**/secret"},
+		})
+		for _, h := range res.Hits {
+			if h.Path == "secret" {
+				t.Fatalf("want the excluded 'secret' directory to produce no hit, got %+v", res.Hits)
+			}
+		}
+	})
+
+	t.Run("include glob excludes a directory hit that doesn't match", func(t *testing.T) {
+		files := map[string]string{
+			"docs/readme.md": "irrelevant content",
+		}
+		res := mustSearch(t, oneRoot(buildFS(files)), Options{
+			Query:        "docs",
+			IncludeGlobs: []string{"**/*.md"},
+		})
+		for _, h := range res.Hits {
+			if h.Path == "docs" {
+				t.Fatalf("want the 'docs' directory hit suppressed by include_globs (not a .md path), got %+v", res.Hits)
+			}
+		}
+	})
+
+	t.Run("an include glob still reaches a matching descendant of a non-matching directory", func(t *testing.T) {
+		// docs/readme.md itself is never name- or content-matched by "docs"
+		// (it matches only on the directory's own basename), so this proves
+		// traversal into "docs" was NOT pruned by the include-glob miss on
+		// the directory itself — pruning it would be a correctness bug, not
+		// a valid interpretation of "only matching paths are considered".
+		files := map[string]string{
+			"docs/docs-notes.md": "irrelevant content",
+		}
+		res := mustSearch(t, oneRoot(buildFS(files)), Options{
+			Query:        "docs",
+			IncludeGlobs: []string{"**/*.md"},
+		})
+		var found bool
+		for _, h := range res.Hits {
+			if h.Path == "docs/docs-notes.md" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("want docs/docs-notes.md still found despite its parent directory not matching, got %+v", res.Hits)
+		}
+	})
+}
+
+// TestFileGrep_DirectoryHitBudgetAccounting pins review finding F3: a
+// directory hit must count in the walk's own accounting and consume the same
+// Files budget a file visit does — otherwise a directory-heavy tree can
+// report a truncation (e.g. max_matches) while claiming "0 files searched",
+// and an unbounded number of directories has no budget protection at all.
+func TestFileGrep_DirectoryHitBudgetAccounting(t *testing.T) {
+	t.Run("directory hits are tallied in Stats.DirsVisited", func(t *testing.T) {
+		files := map[string]string{
+			"report-a/x.txt": "irrelevant",
+			"report-b/x.txt": "irrelevant",
+			"report-c/x.txt": "irrelevant",
+		}
+		res := mustSearch(t, oneRoot(buildFS(files)), Options{Query: "report"})
+		if res.Stats.DirsVisited != 3 {
+			t.Fatalf("want DirsVisited=3 (three report-* directories), got %d", res.Stats.DirsVisited)
+		}
+	})
+
+	t.Run("directories consume the same Files budget as files", func(t *testing.T) {
+		files := map[string]string{
+			"report-a/x.txt": "irrelevant",
+			"report-b/x.txt": "irrelevant",
+			"report-c/x.txt": "irrelevant",
+			"report-d/x.txt": "irrelevant",
+		}
+		res := mustSearch(t, oneRoot(buildFS(files)), Options{
+			Query:  "report",
+			Limits: Limits{Files: 2},
+		})
+		if !res.Truncated || res.TruncatedReason != ReasonMaxFiles {
+			t.Fatalf("want truncated max_files (4 directories exceed a Files budget of 2), got truncated=%v reason=%v", res.Truncated, res.TruncatedReason)
+		}
+	})
+}
+
+// TestFileGrep_GlobRejectionCounted pins review finding F4: every walk skip
+// must be observable — the hidden-skip fix that landed alongside directory
+// name hits said so explicitly ("every skip is observable, never silent"),
+// and a glob rejection is a walk skip too; it was the one branch left
+// uncounted.
+func TestFileGrep_GlobRejectionCounted(t *testing.T) {
+	files := map[string]string{
+		"keep.md":   "irrelevant",
+		"drop1.txt": "irrelevant",
+		"drop2.txt": "irrelevant",
+	}
+	res := mustSearch(t, oneRoot(buildFS(files)), Options{
+		Query:        "irrelevant",
+		IncludeGlobs: []string{"**/*.md"},
+	})
+	if len(res.Hits) != 1 || res.Hits[0].Path != "keep.md" {
+		t.Fatalf("want exactly the keep.md hit, got %+v", res.Hits)
+	}
+	if res.Stats.FilesFilteredGlob != 2 {
+		t.Fatalf("want FilesFilteredGlob=2 (drop1.txt, drop2.txt), got %d", res.Stats.FilesFilteredGlob)
+	}
+	if res.Stats.FilesVisited != 1 {
+		t.Fatalf("want FilesVisited=1 (only keep.md was actually visited), got %d", res.Stats.FilesVisited)
+	}
+}
+
 // TestFileGrep_GlobIncludeExclude pins US-3: doublestar ** glob filtering.
 func TestFileGrep_GlobIncludeExclude(t *testing.T) {
 	files := map[string]string{

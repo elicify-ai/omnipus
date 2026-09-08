@@ -116,7 +116,7 @@ const (
 // means "use the default"; values above the defaults are clamped DOWN by
 // Normalize (the caller discloses the clamp via the limits_applied echo).
 type Limits struct {
-	Files          int           // max files visited (default 50_000)
+	Files          int           // max files+directories visited combined (default 50_000; review finding F3)
 	Bytes          int64         // max content bytes scanned (default 256 MiB)
 	Matches        int           // max total hits (default 1_000)
 	MatchesPerFile int           // max hits contributed by one file (default 50)
@@ -212,10 +212,15 @@ type Options struct {
 // Hit is one result row (MV-14: one matching line = one hit; a name match is
 // one hit with KindName and Line 0).
 type Hit struct {
-	Path          string
-	Kind          MatchKind
-	Line          int
-	Excerpt       string
+	Path    string
+	Kind    MatchKind
+	Line    int
+	Excerpt string
+	// IsDir is true when this hit is a directory rather than a file (review
+	// finding F1). It is only ever true on a KindName hit — directories are
+	// never content-scanned, so a KindContent hit's IsDir is always false.
+	// Wire: FileSearchHit.is_dir (optional; omitted/false for a file hit).
+	IsDir         bool
 	ContextBefore []string
 	ContextAfter  []string
 }
@@ -228,6 +233,21 @@ type Stats struct {
 	FilesPrunedIgnored   int
 	FilesSkippedFileCap  int
 	HitsCappedPerFile    int
+	// DirsVisited is the directory-entry counterpart of FilesVisited (review
+	// finding F3): directories the walk reached, name-checked, and glob-
+	// filtered. Kept as its own counter rather than folded into
+	// FilesVisited — a "files searched" figure that silently included
+	// directories would be its own kind of misleading — but the two share
+	// one budget: see the Limits.Files enforcement in walkDir.
+	DirsVisited int
+	// FilesFilteredGlob counts a file OR directory the walk reached but
+	// rejected via include_globs/exclude_globs (review finding F4).
+	// Deliberately distinct from FilesPrunedIgnored: an include/exclude
+	// glob is a request-scoped filter the caller asked for, not a
+	// repository-level ignore rule (.gitignore/.ignore/always-pruned/
+	// hidden) — conflating the two would hide which one actually explains
+	// a given search's shape.
+	FilesFilteredGlob int
 }
 
 // Result is one search answer.
@@ -248,6 +268,15 @@ var alwaysPruned = map[string]struct{}{
 // excerpt cuts a <=ExcerptCapBytes window around pos, snapping to rune
 // boundaries so the result is always valid UTF-8 (MV-6).
 func excerpt(line []byte, pos int) string {
+	return excerptCapped(line, pos, ExcerptCapBytes)
+}
+
+// excerptCapped is excerpt's shared implementation, parameterized on the cap
+// so capContextLine's truncation-marker path (review finding F5) can reserve
+// room for the marker without duplicating the rune-boundary/UTF-8-validity
+// logic. excerpt(line, pos) is exactly excerptCapped(line, pos,
+// ExcerptCapBytes) — behavior-identical to the pre-F5 excerpt().
+func excerptCapped(line []byte, pos, capBytes int) string {
 	if len(line) == 0 {
 		return ""
 	}
@@ -257,22 +286,22 @@ func excerpt(line []byte, pos int) string {
 	if pos > len(line) {
 		pos = len(line)
 	}
-	half := ExcerptCapBytes / 2
+	half := capBytes / 2
 	start := pos - half
 	if start < 0 {
 		start = 0
 	}
-	end := start + ExcerptCapBytes
+	end := start + capBytes
 	if end > len(line) {
 		end = len(line)
-		if end-start > ExcerptCapBytes {
-			start = end - ExcerptCapBytes
+		if end-start > capBytes {
+			start = end - capBytes
 		}
 	}
 	// Snapping INWARD (trimming a partial leading/trailing rune) rather than
 	// outward can only shrink [start, end), so the pre-snap size — already
-	// <=ExcerptCapBytes above — bounds the result unconditionally; no
-	// separate reclamp is needed.
+	// <=capBytes above — bounds the result unconditionally; no separate
+	// reclamp is needed.
 	for start < end && !utf8.RuneStart(line[start]) {
 		start++
 	}
@@ -295,11 +324,33 @@ func excerpt(line []byte, pos int) string {
 	return string(result)
 }
 
+// contextTruncationMarker is appended to a ContextBefore/ContextAfter line
+// whose tail was actually cut by the ExcerptCapBytes bound (review finding
+// F5), so a reader — human or agent — never mistakes a truncated line for a
+// short one that simply ends there. An in-string marker rather than a wire
+// flag: context_before/context_after are plain string arrays
+// (FileSearchHit.yaml), and every existing consumer (SPA row rendering, the
+// grep tool's text rendering) already treats each entry as an opaque line —
+// a marker embedded in the string reaches all of them for free, with no
+// contract or consumer change, versus restructuring a string[] into an
+// object[] wire type for one edge case. Unlike excerpt(), which deliberately
+// windows AROUND the match (a reader already expects a fragment there), a
+// context line carries no match position and would otherwise lose its tail
+// with no trace at all.
+const contextTruncationMarker = "…"
+
 // capContextLine bounds a ContextBefore/ContextAfter line to <=ExcerptCapBytes
 // the same UTF-8-safe way excerpt() bounds a match window (MV-6) — a context
 // line carries no match position of its own, so it is capped from its start.
+// A line whose tail is actually cut (len(line) > ExcerptCapBytes, so
+// excerptCapped MUST drop bytes) gets contextTruncationMarker appended,
+// itself still inside the ExcerptCapBytes bound — the untruncated fast path
+// is untouched (no marker, no extra allocation beyond excerpt's own).
 func capContextLine(line []byte) string {
-	return excerpt(line, 0)
+	if len(line) <= ExcerptCapBytes {
+		return excerpt(line, 0)
+	}
+	return excerptCapped(line, 0, ExcerptCapBytes-len(contextTruncationMarker)) + contextTruncationMarker
 }
 
 // budgetError signals a request-level bound; carried through the walk.
@@ -653,18 +704,60 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 				s.res.Stats.FilesPrunedIgnored++
 				continue
 			}
-			// NAME match on the directory itself (one hit, KindName — F7).
-			// globAllowed doesn't apply here: include/exclude globs govern
-			// which FILES are reportable, not directory pruning or
-			// directory name hits.
-			if s.m.nameMatch(name) {
-				reported := rel
-				if root.Name != "" {
-					reported = root.Name + "/" + rel
+			reported := rel
+			if root.Name != "" {
+				reported = root.Name + "/" + rel
+			}
+			// Review finding F2: a directory's own hit is glob-filtered
+			// exactly like a file's — FileSearchRequest.yaml describes
+			// include_globs/exclude_globs in terms of "paths" ("only
+			// matching paths are considered" / "removed from
+			// consideration"), never singling out files, so a directory
+			// path is filtered the same way. This gates the HIT only, never
+			// TRAVERSAL: pruning the subtree on an include_globs miss here
+			// would be an outright bug, not a stricter reading of the
+			// contract — an include glob like "**/*.md" legitimately
+			// matches a descendant file (docs/report.md) whose parent
+			// directory name ("docs") does not itself match "**/*.md";
+			// pruning at the directory would silently lose that file's hit
+			// too. Subtree pruning already has a purpose-built, directory-
+			// aware mechanism — the .gitignore/.ignore layers just above
+			// (ignoredByFrom) — and this per-path filter does not take on a
+			// second, conflicting role.
+			if s.globAllowed(reported) {
+				// Review finding F3: a directory the walk reaches counts
+				// toward the SAME Files budget files do (checked against
+				// the COMBINED FilesVisited+DirsVisited total, not either
+				// counter alone — checking them separately would let a
+				// tree split across both categories evade the budget
+				// entirely, e.g. 999 files + 999 dirs, neither counter
+				// over a limit of 1000, yet 1998 entries actually
+				// visited), closing the gap where an unbounded-directory
+				// tree had no budget protection at all. DirsVisited keeps
+				// its own tally (rather than folding into FilesVisited) so
+				// a truncation's accounting stays honest either way: a
+				// directory-heavy search that hits ReasonMaxMatches no
+				// longer reports "0 files searched" while DirsVisited
+				// silently explains where the work actually went.
+				s.res.Stats.DirsVisited++
+				if s.res.Stats.FilesVisited+s.res.Stats.DirsVisited > s.lim.Files {
+					return budgetError{ReasonMaxFiles}
 				}
-				if err := s.chargeOutput(Hit{Path: reported, Kind: KindName}); err != nil {
-					return err
+				// NAME match on the directory itself (one hit, KindName —
+				// F7), IsDir true so the wire can tell it apart from a file
+				// hit (review finding F1 — FileSearchHit.is_dir).
+				if s.m.nameMatch(name) {
+					if err := s.chargeOutput(Hit{Path: reported, Kind: KindName, IsDir: true}); err != nil {
+						return err
+					}
 				}
+			} else {
+				// Review finding F4: a glob rejection is a walk skip like
+				// any other and must be counted, not silently dropped.
+				// Distinct from FilesPrunedIgnored — see Stats.
+				// FilesFilteredGlob's doc comment for why the two reasons
+				// are not conflated.
+				s.res.Stats.FilesFilteredGlob++
 			}
 			sub := append(layers, loadIgnoreLayer(root.FS, rel)...)
 			if err := s.walkDir(ctx, scanCtx, root, rel, depth+1, sub, ancestor, jobs); err != nil {
@@ -685,10 +778,19 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 			reported = root.Name + "/" + rel
 		}
 		if !s.globAllowed(reported) {
+			// Review finding F4: previously an uncounted, silent skip —
+			// every other rejection branch in this walk (always-pruned,
+			// hidden, .gitignore/.ignore, per-file byte cap, per-file
+			// match cap) increments a Stats counter; this one alone left
+			// the response's own numbers unable to account for the tree.
+			s.res.Stats.FilesFilteredGlob++
 			continue
 		}
 		s.res.Stats.FilesVisited++
-		if s.res.Stats.FilesVisited > s.lim.Files {
+		// Review finding F3: checked against the combined files+directories
+		// total — see the directory branch's own comment above for why a
+		// per-counter check alone isn't enough.
+		if s.res.Stats.FilesVisited+s.res.Stats.DirsVisited > s.lim.Files {
 			return budgetError{ReasonMaxFiles}
 		}
 		// NAME match (one hit, KindName — MV-14).

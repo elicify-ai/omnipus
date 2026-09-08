@@ -91,6 +91,54 @@ func TestFileGrep_UTF8SafeExcerpts(t *testing.T) {
 	})
 }
 
+// TestFileGrep_ContextLineTruncationMarker pins review finding F5: a
+// ContextBefore/ContextAfter line whose tail was cut by the ExcerptCapBytes
+// bound must be visibly distinguishable from a short line that happens to
+// end there on its own — capContextLine silently dropped everything past
+// byte 512 with no trace before this fix, so a reader (human or agent) had
+// no way to tell a 200KB minified line apart from an exactly-512-byte one.
+func TestFileGrep_ContextLineTruncationMarker(t *testing.T) {
+	t.Run("a line longer than the cap gets the truncation marker", func(t *testing.T) {
+		huge := strings.Repeat("x", ExcerptCapBytes+1000)
+		res := mustSearch(t, oneRoot(buildFS(map[string]string{
+			"f.txt": huge + "\nneedle line\n",
+		})), Options{Query: "needle", ContextLines: 1})
+		if len(res.Hits) != 1 {
+			t.Fatalf("want 1 hit, got %d", len(res.Hits))
+		}
+		before := res.Hits[0].ContextBefore
+		if len(before) != 1 {
+			t.Fatalf("want 1 context-before line, got %d", len(before))
+		}
+		if !strings.HasSuffix(before[0], contextTruncationMarker) {
+			t.Fatalf("want a truncated context line to end with %q, got %q", contextTruncationMarker, before[0])
+		}
+		if len(before[0]) > ExcerptCapBytes {
+			t.Fatalf("truncated context line length %d exceeds ExcerptCapBytes %d", len(before[0]), ExcerptCapBytes)
+		}
+	})
+
+	t.Run("a line at or under the cap is never marked", func(t *testing.T) {
+		short := strings.Repeat("y", ExcerptCapBytes)
+		res := mustSearch(t, oneRoot(buildFS(map[string]string{
+			"f.txt": short + "\nneedle line\n",
+		})), Options{Query: "needle", ContextLines: 1})
+		if len(res.Hits) != 1 {
+			t.Fatalf("want 1 hit, got %d", len(res.Hits))
+		}
+		before := res.Hits[0].ContextBefore
+		if len(before) != 1 {
+			t.Fatalf("want 1 context-before line, got %d", len(before))
+		}
+		if strings.HasSuffix(before[0], contextTruncationMarker) {
+			t.Fatalf("want an exactly-at-cap line to NOT be marked, got %q", before[0])
+		}
+		if before[0] != short {
+			t.Fatalf("want the untruncated line preserved exactly, got len=%d want len=%d", len(before[0]), len(short))
+		}
+	})
+}
+
 // FuzzExcerpt seeds go test -fuzz with representative multibyte content and
 // asserts the excerpt is always valid UTF-8 and within the size cap,
 // regardless of where pos lands (including mid-rune and out-of-range).
