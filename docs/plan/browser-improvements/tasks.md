@@ -155,8 +155,12 @@ persistence correction and a short diagnostic were integrated as `b293c9808`.
 Normal diagnostics `69699` and `71735` failed at p95 267ms and 306.1ms on
 unchanged source `2259cd81f`; only test decoder overhead was reduced. Explicit
 video-only experiment `67712` passed at 156.2ms with audio inactive, which does
-not close product/audio/soak acceptance. The separate dual sender-report clock
-finding still awaits reproduction/correction; causality remains unproven.
+not close product/audio/soak acceptance. Clock correction `d9352ceea` integrates
+`5ff70a549` after both actual baselines reproduced. Its final focused race run
+passed seven groups/nine records in 15.118s with zero skips/races, retaining actual
+packet replay and receiver/picture-loss feedback controls. Independent review
+and isolated build `42762` are running; no post-fix runtime result exists yet.
+Causality for the earlier latency failure remains unproven.
 Detailed evidence is retained in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
 

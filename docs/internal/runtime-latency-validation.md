@@ -36,11 +36,23 @@ retransmission requests: diagnostic 1 had NACK count +3 and diagnostic 2 +1.
 Earlier display metadata also does not justify subtracting time to manufacture
 a 200ms acceptance pass.
 
-A separate source inspection found two sender-report clocks for the same stream
-identifier: Pion's default reports and forwarded encoder reports. The manager
-lane is preparing its real reproduction and correction. That pre-existing source
-finding is open, and these runtime comparisons do not prove it caused the delay.
-No corrected production runtime has been measured at this checkpoint.
+## Clock correction checkpoint
+
+Production correction `d9352ceea` integrates worker `5ff70a549`. Two actual
+baselines reproduced distinct defects: compound audio/video reports were routed
+under the wrong source identity, and Pion-generated reports introduced a second
+clock alongside encoder reports. The correction qualifies source identity and
+retains only encoder-origin sender clocks on the viewer path.
+
+The final focused race selection passed seven groups/nine records in 15.118s,
+with zero skips/races. Actual negative-acknowledgment packet replay, receiver
+reports and picture-loss feedback controls remained covered. Both deliberate
+faults were caught and production restored. Detailed evidence is in
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-relay-clock-test-plan.md`.
+Independent startup-lane review and isolated build `42762` are running. No
+post-fix runtime result exists at this checkpoint. The three earlier latency
+runs remain measurements of `2259cd81f`; neither focused correctness tests nor
+the video-only comparison establishes improved product latency or audio sync.
 
 ## Retained raw evidence
 

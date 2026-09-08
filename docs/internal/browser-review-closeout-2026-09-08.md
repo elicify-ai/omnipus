@@ -139,8 +139,12 @@ pixel-decoder optimization reduced sampling overhead. Explicit video-only run
 `67712` passed at p95 156.2ms with inactive audio negotiation and 300 exact ordered
 events. This is a hypothesis experiment, not a production/audio/soak acceptance
 pass. All three runs used production source `2259cd81f`; detailed JSON was retained.
-The separate dual sender-report clock finding awaits its reproduction/correction;
-causality is not established by one fresh-session audio comparison. Metrics,
+Both actual sender-clock baselines were reproduced and corrected by `d9352ceea`
+(worker `5ff70a549`). Final focused race verification passed seven groups/nine
+records in 15.118s, zero skips/races, with actual packet replay, receiver-report
+and picture-loss feedback controls. Independent review and isolated build
+`42762` are running; no post-fix runtime result is claimed. Latency causality
+is not established by one fresh-session audio comparison. Metrics,
 interpretation limits and exact artifact paths are recorded in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
 
