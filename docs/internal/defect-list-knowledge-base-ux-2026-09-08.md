@@ -111,6 +111,29 @@ sanctioned path.
 
 ---
 
+---
+
+### KB-5 — the active workspace is collapsed in the sidebar
+**Severity:** low · **Area:** Sidebar SPA · **Reported by:** founder (UAT run)
+
+The sidebar's workspace accordion opens with **every** workspace collapsed,
+including the one currently active. The workspace you are working in is the one
+whose sessions you are most likely to want, so it should be expanded by
+default; today it takes an extra click every time the app loads.
+
+**Evidence:** `src/components/layout/Sidebar.tsx` — expansion state is
+`useState<Set<string>>(new Set())`, i.e. empty on mount, and the row computes
+`isExpanded = expandedWorkspaceIds.has(project.id)` independently of
+`isActive = activeWorkspaceId === project.id`. Nothing seeds the active
+workspace into the set, and nothing re-seeds it when the active workspace
+changes.
+
+**Worth deciding when fixing:** whether switching workspaces should also expand
+the newly-active one (and whether it should collapse the previous one), and
+whether a manual collapse of the active workspace must survive a reload — a
+naive "always expand the active one" would fight a user who deliberately
+collapsed it.
+
 ## `grep` tool — agent field test
 
 ### DEFECT-G1 — a path pointing at a file produces a false "not found" error
@@ -207,6 +230,7 @@ test that did not reproduce the documented condition.
 | KB-2 | No intuitive way to list reachable knowledge bases | High | Open |
 | KB-3 | New knowledge base dialog asks for known context | Medium | Open |
 | KB-4 | "New workspace" shown in Library create menu | Low | Open |
+| KB-5 | Active workspace collapsed in the sidebar | Low | Open |
 | DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
 | OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
 | DOC-1 | Concurrency doc claim | — | Closed — not a defect |
