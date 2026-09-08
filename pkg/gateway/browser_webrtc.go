@@ -1155,13 +1155,14 @@ func (h *BrowserWSHandler) auditStream(
 const captureIngestMaxMessageBytes = 256 * 1024
 
 // captureIngestConn wraps one capture-ingest connection's write side.
-// gorilla/websocket requires a single writer goroutine per connection;
-// sendMu serializes the (low-frequency: offer/answer/control/ping) writes
+// gorilla/websocket requires at most one concurrent writer per connection.
+// A cancelable admission gate serializes the offer/answer/control/ping writes
 // this socket carries, so a dedicated writePump/sendCh (as browser_ws.go
 // uses for the high-volume screencast socket) would be overkill here.
 type captureIngestConn struct {
-	conn   *websocket.Conn
-	sendMu sync.Mutex
+	conn      *websocket.Conn
+	writeOnce sync.Once
+	writeGate chan struct{}
 }
 
 // captureIngestWriteTimeout bounds every write to the capture-ingest socket
@@ -1184,19 +1185,7 @@ type captureIngestConn struct {
 var captureIngestWriteTimeout = 5 * time.Second
 
 func (c *captureIngestConn) sendJSON(v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("capture-ingest: marshal frame: %w", err)
-	}
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	if err := c.conn.SetWriteDeadline(time.Now().Add(captureIngestWriteTimeout)); err != nil {
-		return fmt.Errorf("capture-ingest: set write deadline: %w", err)
-	}
-	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		return fmt.Errorf("capture-ingest: write frame: %w", err)
-	}
-	return nil
+	return c.sendJSONContext(context.Background(), v, nil)
 }
 
 // captureIngestWSHandler implements /api/v1/browser/capture-ingest

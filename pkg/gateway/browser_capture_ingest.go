@@ -33,24 +33,31 @@ func (h *captureIngestWSHandler) serveBoundIngest(conn *websocket.Conn, cs *brow
 	closeConn := func() { closeOnce.Do(func() { cancelSocket(context.Canceled); _ = conn.Close() }) }
 	defer closeConn()
 	send := func(action string, reason *string, _, _, maxBitrate int) error {
-		frame := generated.BrowserCaptureControlFrame{Type: string(generated.WsFrameTypeBrowserCaptureControl), Action: action, Reason: reason}
 		if action == "recapture" {
-			// Identity and geometry must come from one confirmed snapshot, including
-			// callbacks queued before a newer transition committed.
-			state := cs.FrameState()
-			if state.Generation == 0 || state.TargetID == "" || state.Width <= 0 || state.Height <= 0 {
-				return errors.New("capture recapture requires a confirmed frame")
-			}
-			generation := int(state.Generation)
-			frame.CaptureGeneration, frame.TargetId = &generation, &state.TargetID
-			frame.ExpectedWidth, frame.ExpectedHeight, frame.CaptureScale = &state.Width, &state.Height, &state.Scale
+			return errors.New("capture recapture requires immutable frame admission")
 		}
+		frame := generated.BrowserCaptureControlFrame{Type: string(generated.WsFrameTypeBrowserCaptureControl), Action: action, Reason: reason}
 		if maxBitrate > 0 {
 			frame.MaxBitrate = &maxBitrate
 		}
-		return ic.sendJSON(frame)
+		return ic.sendJSONContext(socketCtx, frame, nil)
 	}
-	previousClose, epoch, err := cs.BindIngestContext(socketCtx, send, closeConn)
+	recapture := func(ctx context.Context, state browser.CaptureFrameState, current func() bool) error {
+		generation := int(state.Generation)
+		frame := generated.BrowserCaptureControlFrame{
+			Type: string(generated.WsFrameTypeBrowserCaptureControl), Action: "recapture",
+			CaptureGeneration: &generation, TargetId: &state.TargetID,
+			ExpectedWidth: &state.Width, ExpectedHeight: &state.Height, CaptureScale: &state.Scale,
+		}
+		err := ic.sendJSONContext(ctx, frame, current)
+		if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			// A transport failure retires this socket so the encoder can reconnect.
+			// Retired requests and writer-admission timeouts leave it available.
+			cancelSocket(err)
+		}
+		return err
+	}
+	previousClose, epoch, err := cs.BindIngestRecaptureContext(socketCtx, send, recapture, closeConn)
 	if err != nil {
 		slog.Warn("capture-ingest: binding rejected", "error", err, "browsing_key", browsingKey)
 		return
@@ -59,10 +66,9 @@ func (h *captureIngestWSHandler) serveBoundIngest(conn *websocket.Conn, cs *brow
 		previousClose()
 	}
 	defer cs.UnbindIngest(epoch)
-	if err := send("recapture", nil, 0, 0, 0); err != nil {
-		slog.Warn("capture-ingest: initial frame replay failed", "error", err, "browsing_key", browsingKey)
-		return
-	}
+	// A pending layout does not authorize a command or invalidate an otherwise
+	// healthy socket. Its measured transition will issue the first recapture.
+	cs.RecaptureFrameContext(socketCtx, cs.FrameState())
 	offers := make(chan queuedCaptureOffer, captureIngestOfferQueueCapacity)
 	readerDone := make(chan struct{})
 	go func() {

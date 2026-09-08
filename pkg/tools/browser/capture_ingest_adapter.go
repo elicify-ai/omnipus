@@ -16,6 +16,10 @@ type captureIngestRelay interface {
 // BindIngestContext publishes one authenticated socket and its independent relay
 // reservation atomically. It leaves closing the previous socket to the caller.
 func (cs *CaptureSession) BindIngestContext(ctx context.Context, send func(string, *string, int, int, int) error, closeConn func()) (func(), uint64, error) {
+	return cs.bindIngestContext(ctx, send, nil, closeConn)
+}
+
+func (cs *CaptureSession) bindIngestContext(ctx context.Context, send func(string, *string, int, int, int) error, recapture CaptureRecaptureSender, closeConn func()) (func(), uint64, error) {
 	if ctx == nil {
 		return nil, 0, fmt.Errorf("capture session: ingest binding requires a context")
 	}
@@ -51,6 +55,7 @@ func (cs *CaptureSession) BindIngestContext(ctx context.Context, send func(strin
 	cs.ingestBindingToken = token
 	cs.ingestBindingCtx, cs.ingestBindingCancel = binding, cancel
 	cs.ingestSend, cs.ingestClose = send, closeConn
+	cs.ingestRecapture = recapture
 	cs.lastPingAt = time.Now()
 	cs.captureHealth = CaptureHealthObservation{}
 	return previous, cs.ingestEpoch, nil
@@ -138,6 +143,7 @@ func (cs *CaptureSession) cancelIngestBindingLocked() {
 	}
 	cs.ingestOfferCancel, cs.ingestBindingCancel = nil, nil
 	cs.ingestBindingCtx = nil
+	cs.ingestRecapture = nil
 	cs.ingestBindingToken, cs.ingestOfferID = 0, 0
 }
 

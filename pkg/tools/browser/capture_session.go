@@ -359,8 +359,9 @@ type CaptureSession struct {
 	// follow-up, measured 2026-07-31 — stream stuck at 1278x632 launch
 	// geometry while the tab was CDP-verified at 615x744 in the same
 	// second).
-	ingestSend  func(action string, reason *string, expectedW, expectedH, maxBitrate int) error
-	ingestClose func()
+	ingestSend      func(action string, reason *string, expectedW, expectedH, maxBitrate int) error
+	ingestClose     func()
+	ingestRecapture CaptureRecaptureSender
 	// ingestEpoch increments on every BindIngest call — UnbindIngest only
 	// clears ingestSend/ingestClose if the epoch it was handed still matches
 	// the current one, guarding against a stale (superseded/reconnected)
@@ -397,9 +398,8 @@ type CaptureSession struct {
 	viewerGenSeq uint64
 	stopTimer    *time.Timer
 	onStopped    func() // invoked exactly once when Stop() completes (gateway hook for registry cleanup)
-	// done is closed exactly once, when Stop() completes — see Done()'s doc
-	// comment. Lets a caller (the gateway's encoder-liveness watchdog)
-	// select on session lifetime without a redundant onStopped wiring.
+	// done closes when Stop claims the session, before shutdown transport I/O.
+	// Callers can cancel pending work without waiting for socket cleanup.
 	done chan struct{}
 
 	// tabChangeRecaptureRunning/Pending coalesce concurrent
@@ -408,15 +408,8 @@ type CaptureSession struct {
 	tabChangeRecaptureRunning bool
 	tabChangeRecapturePending bool
 
-	// tabChangeRecaptureW/H carry the CDP-verified CSS viewport the NEXT
-	// worker pass should hand the encoder (0,0 = "no measurement to offer",
-	// same convention as RecaptureAt). Written by every
-	// RecaptureForTabChangeAt call — including one that only coalesces into a
-	// running worker — and read fresh at the top of each pass, so a burst of
-	// tab changes converges on the LAST caller's geometry rather than
-	// replaying the first one's. Guarded by mu.
-	tabChangeRecaptureW int
-	tabChangeRecaptureH int
+	// The pending pass owns its measured frame and original binding lifetime.
+	tabChangeRecaptureRequest captureTabRecaptureRequest
 
 	// ── Bounded automatic video recovery (#674) ─────────────────────────────
 	// All guarded by mu. See capture_video_health.go for the state machine
@@ -1495,138 +1488,71 @@ func (cs *CaptureSession) ResetAdaptation(reason string) {
 }
 
 func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
-	// Open the in-flight window BEFORE the control frame goes out (#674): the
-	// encoder tears its PeerConnection down as the first step of a recapture,
-	// so the resulting ingest loss can arrive before this function returns. A
-	// window opened afterwards would already have missed it, and the bounded
-	// recovery would spend an attempt on a recapture that was working.
-	cs.noteRecaptureIssued()
-	cs.requestControl("recapture", nil, expectedW, expectedH)
+	cs.mu.Lock()
+	if cs.stopped {
+		cs.mu.Unlock()
+		return
+	}
+	frame, qualified, send, binding := cs.frameStateLocked(), cs.ingestContextBound, cs.ingestSend, cs.ingestBindingCtx
+	if qualified && (frame.Width <= 0 || frame.Height <= 0 || cs.ingestRecapture == nil || binding == nil || binding.Err() != nil) {
+		cs.mu.Unlock()
+		return
+	}
+	cs.noteExplicitRecaptureIssuedLocked(ingestRecoverySettle)
+	cs.mu.Unlock()
+	if qualified {
+		cs.RecaptureFrameContext(binding, frame)
+		return
+	}
+	// Retain the explicit legacy callback rather than looking up a newer
+	// authenticated binding after admission.
+	if send != nil {
+		if err := send("recapture", nil, expectedW, expectedH, 0); err != nil {
+			cs.logf("capture[%s]: legacy recapture failed: %v", cs.agentID, err)
+		}
+	}
 	cs.relay.SignalRecapture()
 }
 
-// RecaptureForTabChange is the recapture entry point for "the active tab
-// moved", as opposed to "the viewport was resized" (RecaptureAt). It does
-// everything Recapture() does AND first re-asserts this agent's CURRENT
-// model-active tab as Chrome's foreground tab, so the encoder's own
-// chrome.tabs.query({active: true, lastFocusedWindow: true}) resolution
-// (captureext/embedded/encoder.js findActiveTargetTab) cannot answer with a
-// tab this manager no longer considers active.
-//
-// Why a SEPARATE entry point rather than putting the re-assert in
-// RecaptureAt (measured trade-off, 2026-08-15): RecaptureAt is also the
-// viewport-resize path, which the SPA drives at drag frequency
-// (pkg/gateway/browser_ws.go's handleViewport, and its Recapture() fallback
-// branches when the CDP resize handle fails). Adding a CDP round trip to
-// EVERY recapture would put a Page.bringToFront on that high-frequency path
-// — on a 2-CPU hosted box, CDP starvation is already what produced the
-// measured "auto-attach: failed to adopt new tab target ... timed out after
-// 20s". A tab change is a human clicking a tab strip: low frequency, one
-// extra round trip, paid only where it buys something. So the resize path
-// stays exactly as cheap as it was, and only this path pays.
-//
-// Why the re-assert is not redundant with the caller's own
-// activateTabInChrome (manager.go): that call is best-effort and its failure
-// is a WARN log, nothing more — the exact silence this whole defect class
-// lives in. This re-assert is an independent second attempt that resolves
-// the tab through mgr.Session (which recreates a dead tab context) rather
-// than through a context captured earlier, and it completes BEFORE the
-// control frame is pushed, so the encoder never re-queries Chrome ahead of
-// it.
-//
-// Runs on its own goroutine so a slow or wedged CDP round trip cannot add
-// latency to the caller's tab switch, and coalesces: a second call while a
-// worker is in flight sets a pending flag instead of spawning a second
-// goroutine, and the worker loops once more. Coalescing is SAFE rather than
-// lossy because the worker resolves the then-current model-active tab from
-// scratch on each pass — two rapid switches converge on the last one, which
-// is the correct answer anyway. A no-op once Stop() has run.
-//
-// Carries no expected geometry — see RecaptureForTabChangeAt for the variant
-// a caller that HAS a CDP-verified measurement (live.go's post-viewport-
-// re-apply tab-change path) must prefer.
+// RecaptureForTabChange coalesces foreground preparation and recapture.
 func (cs *CaptureSession) RecaptureForTabChange() {
 	cs.RecaptureForTabChangeAt(0, 0)
 }
 
-// RecaptureForTabChangeAt is RecaptureForTabChange carrying the CDP-verified
-// CSS viewport the encoder should converge on (0,0 = absent — see
-// RecaptureAt's doc comment for why a verified measurement beats the
-// encoder's own chrome.tabs.get stability poll, which two equally-stale reads
-// can satisfy).
-//
-// Why this exists (round-2 finding F3, 2026-08-16): the foreground re-assert
-// was reachable ONLY from BrowserManager.SwitchTab's "the model did not move"
-// branch — the rare recovery path — while the ORDINARY tab switch went
-// LiveView.onTabsChanged -> plain Recapture(), with no re-assert at all. That
-// is backwards: the re-assert exists precisely because
-// BrowserManager.activateTabInChrome is best-effort and its failure is a WARN
-// log and nothing more, so the path a user takes on every single tab click is
-// the one that most needs a second, independent attempt. live.go's tab-change
-// path now comes through here — and it has a verified viewport to offer by
-// then (it re-applies the panel's viewport to the new target first, because
-// Chrome's deviceScaleFactor override is per TARGET), which is why the
-// geometry-carrying variant is the one it needs.
-//
-// The dimensions are stored rather than captured by the worker goroutine, so
-// a call that merely coalesces into a running worker still gets ITS geometry
-// used on the next pass.
+// RecaptureForTabChangeAt retains the measured frame at request admission.
+// A newer request replaces only the pending pass; a running old pass cannot
+// acquire the replacement frame or binding after foreground preparation.
+// Dimensions remain hints only for the explicit legacy BindIngest adapter.
 func (cs *CaptureSession) RecaptureForTabChangeAt(expectedW, expectedH int) {
 	cs.mu.Lock()
 	if cs.stopped {
 		cs.mu.Unlock()
 		return
 	}
-	cs.tabChangeRecaptureW, cs.tabChangeRecaptureH = expectedW, expectedH
+	request := captureTabRecaptureRequest{
+		width: expectedW, height: expectedH, send: cs.ingestSend,
+		qualified: cs.ingestContextBound, frame: cs.frameStateLocked(),
+		binding: cs.ingestBindingCtx, frameCtx: cs.frameCtx,
+	}
+	if request.qualified && (request.binding == nil || request.binding.Err() != nil || request.frameCtx == nil || request.frameCtx.Err() != nil || request.frame.Width <= 0 || request.frame.Height <= 0 || cs.ingestRecapture == nil) {
+		cs.mu.Unlock()
+		return
+	}
+	cs.tabChangeRecaptureRequest = request
 	if cs.tabChangeRecaptureRunning {
 		cs.tabChangeRecapturePending = true
 		cs.mu.Unlock()
 		return
 	}
 	cs.tabChangeRecaptureRunning = true
-	// Same reason as RecaptureAt: a tab-change recapture is a real teardown,
-	// and the loss it produces must not be read as a death (#674).
-	cs.noteRecaptureIssuedLocked(ingestRecoverySettle)
+	if !request.qualified {
+		cs.noteExplicitRecaptureIssuedLocked(ingestRecoverySettle)
+	}
 	cs.mu.Unlock()
-
-	// Prime attached viewers for the coming gap NOW, on the caller's own
-	// goroutine, rather than behind the foreground re-assert. SignalRecapture
-	// is pure relay-side signalling (an immediate + bursted PLI) with no CDP
-	// in it, and there is no reason to make a viewer wait for a browser round
-	// trip before it starts recovering. The ENCODER's half — the control frame
-	// that makes it re-bind chrome.tabCapture — is the half that genuinely
-	// must come after the re-assert, and that is the half the worker still
-	// owns. Exactly one signal per pass either way; only the first one moved
-	// earlier.
-	cs.relay.SignalRecapture()
-
-	go func() {
-		firstPass := true
-		for {
-			cs.mu.Lock()
-			w, h := cs.tabChangeRecaptureW, cs.tabChangeRecaptureH
-			cs.mu.Unlock()
-
-			if !firstPass {
-				cs.relay.SignalRecapture()
-			}
-			firstPass = false
-
-			cs.assertForeground(context.Background())
-			cs.noteRecaptureIssued()
-			cs.requestControl("recapture", nil, w, h)
-
-			cs.mu.Lock()
-			if !cs.tabChangeRecapturePending || cs.stopped {
-				cs.tabChangeRecaptureRunning = false
-				cs.tabChangeRecapturePending = false
-				cs.mu.Unlock()
-				return
-			}
-			cs.tabChangeRecapturePending = false
-			cs.mu.Unlock()
-		}
-	}()
+	if !request.qualified {
+		cs.relay.SignalRecapture()
+	}
+	go cs.runTabRecaptures(request)
 }
 
 // assertForeground routes the foreground re-assert through the
