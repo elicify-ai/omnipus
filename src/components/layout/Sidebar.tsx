@@ -207,8 +207,13 @@ export function Sidebar() {
     },
   })
 
-  // Workspace accordion expansion state.
-  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set())
+  // Workspace accordion expansion state. Seeded with the active workspace so
+  // the one the user is already in opens without an extra click; the lazy
+  // initializer runs once at mount only, so it never overrides a collapse the
+  // user made afterward.
+  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(
+    () => new Set(activeWorkspaceId ? [activeWorkspaceId] : []),
+  )
   const toggleWorkspaceExpansion = useCallback((workspaceId: string) => {
     setExpandedWorkspaceIds((prev) => {
       const next = new Set(prev)
@@ -220,6 +225,26 @@ export function Sidebar() {
       return next
     })
   }, [])
+  // One-shot expand when the active workspace actually CHANGES (not on every
+  // render) — gated on the dependency array, so it never re-fires just
+  // because something else caused Sidebar to re-render. That gate is what
+  // lets a deliberate manual collapse of the still-active workspace survive:
+  // nothing re-adds it to the set until activeWorkspaceId moves to a
+  // different id. The previously-active workspace is only ever ADDED to,
+  // never removed from, the set, so switching workspaces never collapses the
+  // one just left.
+  const prevActiveWorkspaceIdRef = useRef(activeWorkspaceId)
+  useEffect(() => {
+    const prevId = prevActiveWorkspaceIdRef.current
+    prevActiveWorkspaceIdRef.current = activeWorkspaceId
+    if (!activeWorkspaceId || activeWorkspaceId === prevId) return
+    setExpandedWorkspaceIds((prev) => {
+      if (prev.has(activeWorkspaceId)) return prev
+      const next = new Set(prev)
+      next.add(activeWorkspaceId)
+      return next
+    })
+  }, [activeWorkspaceId])
 
   // Inbox workspace (is_default: true) always appears first; other workspaces: pinned then unpinned.
   const inboxProject = projects.find((p) => p.is_default)

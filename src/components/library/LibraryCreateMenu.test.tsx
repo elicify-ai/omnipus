@@ -1,9 +1,12 @@
-// LibraryCreateMenu.test.tsx — the unified "+" create control (feature C2).
+// LibraryCreateMenu.test.tsx — the unified "+" create control (feature C2;
+// KB-4 fix, 2026-09-08).
 //
-// Covers: the six actions collapse into one menu, scoped to the current
-// location (workspace-only actions absent at the virtual root; disabled
-// rather than hidden when the current folder/mount state forbids them), and
-// each callback prop actually fires on click.
+// Covers: every action requires a workspace to be open (none is offered at
+// the virtual root — "New workspace" is gone entirely, and "New knowledge
+// base" now joins the other workspace-scoped actions rather than being a
+// global action with its own picker); disabled rather than hidden when the
+// current folder/mount state forbids them; each callback prop actually fires
+// on click.
 
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -18,7 +21,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    createWorkspace: vi.fn(),
     createVault: vi.fn(),
   }
 })
@@ -27,15 +29,11 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-const workspaces = [
-  { id: 'ws-1', name: 'Research' },
-  { id: 'ws-2', name: 'Ops' },
-]
-
 function renderMenu(over: Partial<ComponentProps<typeof LibraryCreateMenu>> = {}) {
   const props = {
     workspaceId: 'ws-1',
-    workspaces,
+    workspaceName: 'Research',
+    browsedDir: '',
     isReservedLibraryDir: false,
     mountedCount: 0,
     uploadPending: false,
@@ -59,18 +57,18 @@ beforeEach(() => {
 })
 
 describe('LibraryCreateMenu', () => {
-  it('always offers New vault and New workspace, even at the virtual root', async () => {
-    renderMenu({ workspaceId: null })
+  it('never offers "New workspace" — the sidebar is the only entry point for that', async () => {
+    renderMenu()
     await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
-
-    expect(screen.getByTestId('library-create-menu-new-vault')).toBeInTheDocument()
-    expect(screen.getByTestId('library-create-menu-new-workspace')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-create-menu-new-workspace')).not.toBeInTheDocument()
+    expect(screen.queryByText('New workspace')).not.toBeInTheDocument()
   })
 
-  it('hides workspace-scoped actions at the virtual root', async () => {
+  it('hides every action at the virtual root, including New knowledge base', async () => {
     renderMenu({ workspaceId: null })
     await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
 
+    expect(screen.queryByTestId('library-create-menu-new-vault')).not.toBeInTheDocument()
     expect(screen.queryByTestId('library-create-menu-new-folder')).not.toBeInTheDocument()
     expect(screen.queryByTestId('library-create-menu-upload')).not.toBeInTheDocument()
     expect(screen.queryByTestId('library-create-menu-add-mount')).not.toBeInTheDocument()
@@ -83,7 +81,6 @@ describe('LibraryCreateMenu', () => {
 
     for (const testId of [
       'library-create-menu-new-vault',
-      'library-create-menu-new-workspace',
       'library-create-menu-new-folder',
       'library-create-menu-upload',
       'library-create-menu-add-mount',
@@ -93,10 +90,11 @@ describe('LibraryCreateMenu', () => {
     }
   })
 
-  it('disables New folder and Upload inside the reserved .library folder', async () => {
+  it('disables New knowledge base, New folder, and Upload inside the reserved .library folder', async () => {
     renderMenu({ isReservedLibraryDir: true })
     await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
 
+    expect(screen.getByTestId('library-create-menu-new-vault')).toHaveAttribute('data-disabled')
     expect(screen.getByTestId('library-create-menu-new-folder')).toHaveAttribute('data-disabled')
     expect(screen.getByTestId('library-create-menu-upload')).toHaveAttribute('data-disabled')
     // Add mount is unaffected by the reserved-folder rule — it targets the
@@ -116,12 +114,6 @@ describe('LibraryCreateMenu', () => {
     const item = screen.getByTestId('library-create-menu-manage-mounts')
     expect(item).not.toHaveAttribute('data-disabled')
     expect(item).toHaveTextContent('Manage 3 mounted folders')
-  })
-
-  it('disables New vault when there are no workspaces to target', async () => {
-    renderMenu({ workspaceId: null, workspaces: [] })
-    await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
-    expect(screen.getByTestId('library-create-menu-new-vault')).toHaveAttribute('data-disabled')
   })
 
   it('calls onNewFolder when New folder is selected', async () => {
@@ -152,17 +144,12 @@ describe('LibraryCreateMenu', () => {
     expect(props.onManageMounts).toHaveBeenCalledTimes(1)
   })
 
-  it('opens the New vault dialog when New vault is selected', async () => {
-    renderMenu()
+  it('opens the New knowledge base dialog, seeded with the current workspace and folder, when New knowledge base is selected', async () => {
+    renderMenu({ workspaceName: 'Research', browsedDir: 'projects' })
     await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
     await userEvent.click(screen.getByTestId('library-create-menu-new-vault'))
-    expect(await screen.findByTestId('library-new-vault-dialog')).toBeInTheDocument()
-  })
 
-  it('opens the New workspace slide-over when New workspace is selected', async () => {
-    renderMenu()
-    await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
-    await userEvent.click(screen.getByTestId('library-create-menu-new-workspace'))
-    expect(await screen.findByText('New workspace')).toBeInTheDocument()
+    expect(await screen.findByTestId('library-new-vault-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('library-new-vault-destination')).toHaveTextContent('Research / projects')
   })
 })

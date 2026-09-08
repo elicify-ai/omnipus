@@ -1,20 +1,19 @@
 // LibraryNewVaultDialog — creates a new Omnipus knowledge base ("vault")
-// anywhere reachable from the Library (feature C2).
+// at the CURRENT Library location (feature C2; KB-3 fix).
 //
-// Deliberately mirrors LibraryNewFolderDialog's pattern (a single primary
-// text field, client-side name-shape validation, the same LibraryErrorBanner
-// treatment for server-side rejections) rather than inventing a new dialog
-// style — creating a vault is a sibling action to New Folder, just with an
-// extra "where" choice attached (POST /library/{workspace_id}/vaults takes a
-// workspace-scoped target the way mkdir does not need to, since mkdir always
-// targets the CURRENT directory).
+// Mirrors LibraryNewFolderDialog exactly: the workspace and parent directory
+// are context the caller already knows (the user is standing in them), not a
+// choice this dialog should re-ask for — a workspace picker and a free-text
+// path box only duplicate state the explorer already has and invite typos
+// the server then rejects. The only field left to fill in is the name.
 //
-// Unlike LibraryNewFolderDialog, this dialog owns its own mutation rather
-// than delegating it to LibraryExplorer: the target workspace is a field ON
-// this form (not implied by "wherever the explorer currently is"), so the
-// mutation's only meaningful input is what this dialog itself collects. This
-// also keeps the create-vault plumbing out of LibraryExplorer.tsx, which
-// this feature does not otherwise need to touch.
+// Unlike LibraryNewFolderDialog, this dialog still owns its own mutation
+// (POST /library/{workspace_id}/vaults takes a workspace-scoped target the
+// way mkdir does not need to) rather than delegating it to LibraryExplorer —
+// that keeps the create-vault plumbing out of LibraryExplorer.tsx.
+//
+// The destination is never left implicit: it is rendered as read-only text
+// so removing the picker never makes "where will this go?" a guess.
 //
 // "Land the user in the new vault" (the caller's job once this dialog
 // reports success) is handled by the `onCreated` callback, not by this
@@ -33,66 +32,49 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 import { createVault, isApiError, libraryQueryKeys, type LibraryEntry } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
-export interface LibraryNewVaultDialogWorkspace {
-  id: string
-  name: string
-}
-
 interface LibraryNewVaultDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Every workspace the picker can target, sorted for display. */
-  workspaces: LibraryNewVaultDialogWorkspace[]
-  /** Preselected on open — the workspace the Library is currently browsing, if any. */
-  defaultWorkspaceId: string | null
+  /** The workspace the Library is currently browsing — the create target. */
+  workspaceId: string
+  /** Display name of that workspace, for the read-only destination line. */
+  workspaceName: string
+  /** The directory currently browsed within that workspace; '' = workspace root. */
+  parentPath: string
   /** Called once the vault is created, so the caller can navigate there. */
-  onCreated: (workspaceId: string, entry: LibraryEntry) => void
+  onCreated: (entry: LibraryEntry) => void
 }
 
-function cleanFolderInput(raw: string): string {
-  return raw.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+function destinationLabel(workspaceName: string, parentPath: string): string {
+  if (!parentPath) return `${workspaceName} (workspace root)`
+  return [workspaceName, ...parentPath.split('/').filter(Boolean)].join(' / ')
 }
 
 export function LibraryNewVaultDialog({
   open,
   onOpenChange,
-  workspaces,
-  defaultWorkspaceId,
+  workspaceId,
+  workspaceName,
+  parentPath,
   onCreated,
 }: LibraryNewVaultDialogProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [name, setName] = useState('')
-  const [workspaceId, setWorkspaceId] = useState('')
-  const [folder, setFolder] = useState('')
   const [error, setError] = useState<string>()
 
-  // Reset on every open, seeded with "here" (current workspace, workspace
-  // root) — a stale name or a leftover error from a previous attempt must
-  // never bleed into a fresh one.
+  // Reset on every open — a stale name or a leftover error from a previous
+  // attempt must never bleed into a fresh one.
   useEffect(() => {
     if (!open) return
     setName('')
-    setFolder('')
     setError(undefined)
-    setWorkspaceId(defaultWorkspaceId ?? workspaces[0]?.id ?? '')
-    // Only the dialog's OWN open transition matters here — re-seeding
-    // because the caller passed new workspace data while it's already open
-    // would yank the field out from under whatever the user just typed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const trimmedName = name.trim()
@@ -100,16 +82,11 @@ export function LibraryNewVaultDialog({
   const isDotName = trimmedName === '.' || trimmedName === '..'
   const nameInvalid = trimmedName.length === 0 || hasSlash || isDotName
 
-  const cleanedFolder = cleanFolderInput(folder)
-  const folderHasTraversal = cleanedFolder.split('/').some((seg) => seg === '..' || seg === '.')
-
-  const invalid = nameInvalid || folderHasTraversal || workspaceId === ''
-
   const mutation = useMutation({
     mutationFn: () =>
       createVault(workspaceId, {
         name: trimmedName,
-        parent_rel_path: cleanedFolder || undefined,
+        parent_rel_path: parentPath || undefined,
       }),
     onMutate: () => setError(undefined),
     onSuccess: (entry) => {
@@ -117,7 +94,7 @@ export function LibraryNewVaultDialog({
       void queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
       addToast({ message: `Knowledge base "${trimmedName}" created.`, variant: 'success' })
       onOpenChange(false)
-      onCreated(workspaceId, entry)
+      onCreated(entry)
     },
     onError: (err) => {
       // The friendlier, name-collision-specific wording the create-vault
@@ -133,7 +110,7 @@ export function LibraryNewVaultDialog({
   })
 
   function handleSubmit() {
-    if (invalid || mutation.isPending) return
+    if (nameInvalid || mutation.isPending) return
     mutation.mutate()
   }
 
@@ -172,32 +149,13 @@ export function LibraryNewVaultDialog({
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="library-new-vault-workspace">Location</Label>
-            <Select value={workspaceId} onValueChange={setWorkspaceId}>
-              <SelectTrigger id="library-new-vault-workspace" data-testid="library-new-vault-workspace-select">
-                <SelectValue placeholder="Choose a workspace" />
-              </SelectTrigger>
-              <SelectContent>
-                {workspaces.map((ws) => (
-                  <SelectItem key={ws.id} value={ws.id}>
-                    {ws.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Input
-              aria-label="Folder within the workspace (optional)"
-              data-testid="library-new-vault-folder-input"
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              placeholder="Leave blank for the workspace root"
-              className="font-mono text-sm"
-            />
-            {folderHasTraversal && (
-              <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-folder-traversal">
-                A folder path can't contain "." or "..".
-              </p>
-            )}
+            <Label>Location</Label>
+            <p
+              data-testid="library-new-vault-destination"
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-secondary)] font-mono truncate"
+            >
+              {destinationLabel(workspaceName, parentPath)}
+            </p>
           </div>
 
           {error && <LibraryErrorBanner message={error} testId="library-new-vault-error" />}
@@ -208,7 +166,7 @@ export function LibraryNewVaultDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={invalid || mutation.isPending}
+            disabled={nameInvalid || mutation.isPending}
             data-testid="library-new-vault-confirm"
           >
             {mutation.isPending ? 'Creating…' : 'Create knowledge base'}

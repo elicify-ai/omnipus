@@ -3,21 +3,27 @@
 //
 // Before this, New folder / Add mount / Upload / Manage mounts were four
 // separate icon buttons crowding the toolbar, with no single place to add a
-// FIFTH and SIXTH create action (New vault, New workspace) without the row
-// overflowing. This collapses all six into one DropdownMenu behind a single
-// "+" trigger, scoped to what makes sense at the CURRENT location:
-//   - New folder / Upload / Manage mounts / Add mount need a workspace open
-//     (they act on "here"); New folder/Upload are additionally disabled
-//     inside the reserved .library folder, same as the buttons they replace.
-//   - New vault and New workspace are global actions and stay enabled even
-//     at the Library's virtual root (New vault's own Location field lets you
-//     pick a workspace regardless of where you opened the menu from).
+// FIFTH action (New vault) without the row overflowing. This collapses them
+// into one DropdownMenu behind a single "+" trigger, scoped to what makes
+// sense at the CURRENT location:
+//   - Every action here needs a workspace open (they all act on "here") and
+//     is absent at the Library's virtual root. New folder/Upload/New
+//     knowledge base are additionally disabled inside the reserved .library
+//     folder, since none of them should write into that server-managed
+//     namespace.
 //
-// New vault's dialog (LibraryNewVaultDialog) and New workspace's slide-over
-// (NewWorkspaceSlideOver) are mounted HERE rather than in LibraryExplorer —
-// both are self-contained (own their own mutation, query invalidation, and
-// toasts), so this menu is the only place LibraryExplorer.tsx needs to touch
-// to gain both actions.
+// "New workspace" used to live in this menu too. It is NOT offered here
+// (KB-3 UX fix, 2026-09-08): a workspace is not a Library item, the sidebar's
+// own inline create-workspace row is the one sanctioned entry point for it,
+// and a second entry point sitting directly above "New knowledge base"
+// invited mis-clicks between two very different outcomes. Do not re-add it.
+//
+// New vault's dialog (LibraryNewVaultDialog) is mounted HERE rather than in
+// LibraryExplorer — it is self-contained (owns its own mutation, query
+// invalidation, and toasts) — so this menu is the only place LibraryExplorer
+// needs to touch to gain the action. It creates at the CURRENT workspace and
+// directory (mirroring LibraryNewFolderDialog), so those are passed straight
+// through rather than offered as a picker.
 import { useState } from 'react'
 import {
   DropdownMenu,
@@ -28,25 +34,21 @@ import {
 } from '@/components/ui/dropdown-menu'
 import {
   Books,
-  Buildings,
   FolderPlus,
   Plus,
   SpinnerGap,
   UploadSimple,
 } from '@phosphor-icons/react'
 import { LibraryNewVaultDialog } from './LibraryNewVaultDialog'
-import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import { MountFolderIcon } from './icons'
 import type { LibraryEntry } from '@/lib/api'
 
-export interface LibraryCreateMenuWorkspace {
-  id: string
-  name: string
-}
-
 interface LibraryCreateMenuProps {
   workspaceId: string | null
-  workspaces: LibraryCreateMenuWorkspace[]
+  /** Display name of workspaceId, for the New-vault dialog's destination line. */
+  workspaceName: string
+  /** The directory currently browsed within the workspace; '' = workspace root. */
+  browsedDir: string
   isReservedLibraryDir: boolean
   mountedCount: number
   uploadPending: boolean
@@ -55,12 +57,13 @@ interface LibraryCreateMenuProps {
   onManageMounts: () => void
   onUpload: () => void
   /** Called once the new vault is created, so the caller can navigate there. */
-  onVaultCreated: (workspaceId: string, entry: LibraryEntry) => void
+  onVaultCreated: (entry: LibraryEntry) => void
 }
 
 export function LibraryCreateMenu({
   workspaceId,
-  workspaces,
+  workspaceName,
+  browsedDir,
   isReservedLibraryDir,
   mountedCount,
   uploadPending,
@@ -71,7 +74,6 @@ export function LibraryCreateMenu({
   onVaultCreated,
 }: LibraryCreateMenuProps) {
   const [vaultDialogOpen, setVaultDialogOpen] = useState(false)
-  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false)
 
   const inWorkspace = workspaceId !== null
   const canWriteHere = inWorkspace && !isReservedLibraryDir
@@ -92,25 +94,16 @@ export function LibraryCreateMenu({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" data-testid="library-create-menu">
-          <DropdownMenuItem
-            onSelect={() => setVaultDialogOpen(true)}
-            disabled={workspaces.length === 0}
-            data-testid="library-create-menu-new-vault"
-            className="flex items-center gap-2"
-          >
-            <Books size={15} /> New knowledge base
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => setNewWorkspaceOpen(true)}
-            data-testid="library-create-menu-new-workspace"
-            className="flex items-center gap-2"
-          >
-            <Buildings size={15} /> New workspace
-          </DropdownMenuItem>
-
           {inWorkspace && (
             <>
-              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => setVaultDialogOpen(true)}
+                disabled={!canWriteHere}
+                data-testid="library-create-menu-new-vault"
+                className="flex items-center gap-2"
+              >
+                <Books size={15} /> New knowledge base
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={onNewFolder}
                 disabled={!canWriteHere}
@@ -150,14 +143,16 @@ export function LibraryCreateMenu({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <LibraryNewVaultDialog
-        open={vaultDialogOpen}
-        onOpenChange={setVaultDialogOpen}
-        workspaces={workspaces}
-        defaultWorkspaceId={workspaceId}
-        onCreated={onVaultCreated}
-      />
-      <NewWorkspaceSlideOver open={newWorkspaceOpen} onOpenChange={setNewWorkspaceOpen} />
+      {workspaceId !== null && (
+        <LibraryNewVaultDialog
+          open={vaultDialogOpen}
+          onOpenChange={setVaultDialogOpen}
+          workspaceId={workspaceId}
+          workspaceName={workspaceName}
+          parentPath={browsedDir}
+          onCreated={onVaultCreated}
+        />
+      )}
     </>
   )
 }

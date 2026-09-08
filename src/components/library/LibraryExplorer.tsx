@@ -800,7 +800,8 @@ export function LibraryExplorer({
           )}
           <LibraryCreateMenu
             workspaceId={workspaceId}
-            workspaces={sortedWorkspaces}
+            workspaceName={currentWorkspaceName}
+            browsedDir={browsedDir}
             isReservedLibraryDir={isReservedLibraryDir}
             mountedCount={workspaceMounts.length}
             uploadPending={uploadMutation.isPending}
@@ -808,9 +809,10 @@ export function LibraryExplorer({
             onAddMount={() => setAddMountOpen(true)}
             onManageMounts={() => setMountsOpen(true)}
             onUpload={() => fileInputRef.current?.click()}
-            onVaultCreated={(wsId, entry) => {
+            onVaultCreated={(entry) => {
+              if (!workspaceId) return
               setBrowsedDir(entry.path)
-              goTo(wsId, null)
+              goTo(workspaceId, null)
             }}
           />
           {onPopOut && (
