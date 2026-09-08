@@ -32,7 +32,6 @@ import {
   computeCropRect,
   computeModifiers,
   computeObjectContainRect,
-  framePixelToDeviceCoords,
   isPrintableKey,
   mapClientToFramePixels,
   mapMouseButton,
@@ -42,6 +41,7 @@ import {
   type RectLike,
 } from '@/lib/browserLiveCoords'
 import { mapClientToBrowserCss } from '@/lib/browserFrameCoords'
+import { annotationCssPoint, sameAnnotationFrame, type BrowserAnnotationFrame } from '@/lib/browserAnnotationFrame'
 import { BrowserFrameGate, type BrowserFrameGateState } from '@/lib/browserFrameGate'
 import { resolveOmniboxInput } from '@/lib/browserLiveUrl'
 import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
@@ -299,7 +299,8 @@ interface PendingAnnotation { // not-wire-format: local annotate-popover state, 
   file: File
   previewUrl: string
   /** Device (CSS) pixel point — center of the crop — for the D-B3 inspect call. */
-  point: { x: number; y: number }
+  point: { x: number; y: number } | null
+  frame: BrowserAnnotationFrame | null
 }
 
 /**
@@ -420,8 +421,6 @@ export function BrowserLiveView({
   // `driveMode` needs for the chip/glow to update immediately) never drifts
   // out of sync with it.
   const pendingTakeRef = useRef(false)
-  // Control ownership only guides the explicit Take over action.
-  const controlledByOtherRef = useRef(false)
   // Synchronous transport state for event handlers.
   const connectedRef = useRef(false)
   // ADR-040 D2 refactor — mirrors `driveMode` (computed below from
@@ -891,9 +890,6 @@ export function BrowserLiveView({
     if (isControlling) setPendingTake(false)
   }, [isControlling, setPendingTake])
   useEffect(() => {
-    controlledByOtherRef.current = controlledByOther
-  }, [controlledByOther])
-  useEffect(() => {
     connectedRef.current = connected
   }, [connected])
   useEffect(() => {
@@ -1215,15 +1211,7 @@ export function BrowserLiveView({
         // A capture-health verdict is only trustworthy up to the drop; the
         // fresh browser_attach round-trip after reconnect re-establishes it.
         setVideoHealth(null)
-        // The control-lock is server-side and per-connection — once the
-        // transport drops, whatever control state we last knew is stale (the
-        // human is no longer "driving" anything). Move to the local
-        // 'disconnected' pill state so the UI stops claiming control is
-        // held, the synthetic cursor clears (via the isControlling effect
-        // below), and every pointer/keyboard/wheel handler's `controllingRef`
-        // guard starts short-circuiting for the whole reconnect window —
-        // re-establishing control requires an explicit take-control action
-        // once the fresh browser_attach → browser_status round-trip lands.
+        // Clear presentation-only control ownership after the connection drops.
         setStatusState('disconnected')
         // A stale error surface (e.g. a blocked-navigate message from just
         // before the drop) must not keep showing through a disconnect.
@@ -1827,6 +1815,18 @@ export function BrowserLiveView({
     [],
   )
 
+  const annotationFrameSnapshot = useCallback((): BrowserAnnotationFrame | null => {
+    const capture = captureRef.current
+    const dims = activeFrameDims()
+    const source = currentStreamRef.current
+    if (!dims || !source || !capture.id || !capture.css || capture.marker === null || capture.gate.read(performance.now()).status !== 'ready') return null
+    return {
+      captureId: capture.id, generation: capture.generation, marker: capture.marker,
+      cssWidth: capture.css.width, cssHeight: capture.css.height,
+      videoWidth: dims.width, videoHeight: dims.height, source,
+    }
+  }, [activeFrameDims])
+
   // Finalizes a drag/click selection into a pendingAnnotation (crop + open
   // the comment popover). Never forwards anything over the control-input WS
   // path — annotate mode is a purely local, client-side interaction until
@@ -1873,12 +1873,13 @@ export function BrowserLiveView({
       const cropRect = computeCropRect(startPx, endPx, dims.width, dims.height)
       if (!cropRect) return fail()
 
+      const frame = annotationFrameSnapshot()
+      const point = annotationCssPoint(cropRect, frame)
       const file = await cropFrameToFile(cropRect, dims.width, dims.height)
       if (!file) return fail()
-      const center = framePixelToDeviceCoords(cropRect.x + cropRect.width / 2, cropRect.y + cropRect.height / 2)
-      setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point: center })
+      setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point, frame })
     },
-    [cropFrameToFile, resetSelection, activeFrameDims],
+    [cropFrameToFile, resetSelection, activeFrameDims, annotationFrameSnapshot],
   )
 
   // Address-bar navigation uses the same ordered connection as live input.
@@ -2110,7 +2111,10 @@ export function BrowserLiveView({
     // sessionId/agentId — this view's own pinned props, NOT re-read from
     // useSessionStore — so the annotation always targets the browser being
     // annotated even if the globally-active chat has since changed.
-    submitAnnotation({ comment, file: annotation.file, point: annotation.point, sessionId, agentId })
+    submitAnnotation({
+      comment, file: annotation.file, point: annotation.point, sessionId, agentId,
+      isPointCurrent: () => sameAnnotationFrame(annotation.frame, annotationFrameSnapshot()),
+    })
       .then(() => {
         useUiStore.getState().addToast({ message: 'Annotation sent to the agent.', variant: 'success' })
         URL.revokeObjectURL(annotation.previewUrl)
@@ -2132,7 +2136,7 @@ export function BrowserLiveView({
       .finally(() => {
         setAnnotateSubmitting(false)
       })
-  }, [pendingAnnotation, annotateComment, resetSelection, sessionId, agentId])
+  }, [pendingAnnotation, annotateComment, resetSelection, sessionId, agentId, annotationFrameSnapshot])
 
   const releaseWheel = useCallback(() => {
     const released = wsRef.current?.sendControl('release')

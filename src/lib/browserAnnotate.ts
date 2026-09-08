@@ -27,7 +27,9 @@ export interface SubmitAnnotationParams { // not-wire-format: local params for t
   /** The cropped-region PNG, already built by the caller (canvas.toBlob → File). */
   file: File
   /** Device (CSS) pixel point — center of the annotated region — for the best-effort inspect call (ADR-039 D-B3). */
-  point: { x: number; y: number }
+  point: { x: number; y: number } | null
+  /** Recheck the original presented source across upload and inspection waits. */
+  isPointCurrent?: () => boolean
   /** The live-browser panel's PINNED session/agent (BrowserLiveView's own
    *  props) — NOT re-read from useSessionStore, which reflects whatever
    *  chat is CURRENTLY active and may have changed since the panel was
@@ -66,7 +68,7 @@ export class AnnotationBusyError extends Error {}
  * Throws if `sessionId`/`agentId` are empty — callers must surface that to
  * the user.
  */
-export async function submitAnnotation({ comment, file, point, sessionId, agentId }: SubmitAnnotationParams): Promise<void> {
+export async function submitAnnotation({ comment, file, point, isPointCurrent, sessionId, agentId }: SubmitAnnotationParams): Promise<void> {
   if (!sessionId || !agentId) {
     throw new Error('No active chat session — open a chat before sending an annotation.')
   }
@@ -93,13 +95,13 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
   // clause folded into the framing note below.
   let autoContext = ''
   try {
-    const inspectResult = await inspectBrowserElement({
+    const inspectResult = point && (!isPointCurrent || isPointCurrent()) ? await inspectBrowserElement({
       session_id: sessionId,
       agent_id: agentId,
       x: point.x,
       y: point.y,
-    })
-    if (inspectResult.ok) {
+    }) : null
+    if (inspectResult?.ok && (!isPointCurrent || isPointCurrent())) {
       const tag = inspectResult.tag?.trim()
       const text = inspectResult.text?.trim()
       if (text) {
