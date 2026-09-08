@@ -394,11 +394,10 @@ func TestWatchEncoderLiveness_StopsStaleSessionAndNotifiesAttachedViewer(t *test
 	var onStoppedCalls int32
 	cs.SetOnStopped(func() {
 		atomic.AddInt32(&onStoppedCalls, 1)
-		handler.notifyViewersStreamStopped(cs.ViewerIDs())
+		handler.notifyViewersStreamStopped(cs, cs.ViewerIDs())
 	})
 
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-watchdog", wc, "sess-watchdog")
+	wc, _, _ := registerPublicationViewer(t, handler, cs, "viewer-watchdog")
 	cs.AddViewer("viewer-watchdog")
 
 	// Establish a baseline ping, then go silent — LastPingAt stays fixed

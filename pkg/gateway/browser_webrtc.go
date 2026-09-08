@@ -739,17 +739,35 @@ func (h *BrowserWSHandler) unregisterWebRTCViewerConn(viewerID string) {
 // every stop cause. viewerIDs is a snapshot taken via CaptureSession.
 // ViewerIDs(), which remains accurate to read even from inside onStopped
 // (Stop() never clears cs.viewers itself).
-func (h *BrowserWSHandler) notifyViewersStreamStopped(viewerIDs []string) {
-	for _, vid := range viewerIDs {
-		v, ok := h.viewerConns.Load(vid)
+func (h *BrowserWSHandler) notifyViewersStreamStopped(cs *browser.CaptureSession, viewerIDs []string) {
+	if cs == nil {
+		return
+	}
+	captureID := cs.FrameState().CaptureID
+	for _, viewerID := range viewerIDs {
+		value, ok := h.viewerConns.Load(viewerID)
 		if !ok {
 			continue
 		}
-		vc, ok := v.(*webrtcViewerConn)
-		if !ok {
+		vc, ok := value.(*webrtcViewerConn)
+		if !ok || vc == nil {
 			continue
 		}
-		h.sendWebRTCState(vc.wc, vc.sessionID, vid, false, false, false, "error")
+		origin := vc.attachmentCtx
+		current := func() bool {
+			return h.currentVideoViewer(viewerID, vc, cs, captureID, origin)
+		}
+		if !current() {
+			continue
+		}
+		reason := "error"
+		frame := generated.BrowserWebRTCStateFrame{
+			Type:      string(generated.WsFrameTypeBrowserWebrtcState),
+			SessionId: &vc.sessionID,
+			Available: false,
+			Reason:    &reason,
+		}
+		vc.wc.sendCriticalScopedGen(frame, dropContext(vc.sessionID, viewerID, "capture-stopped"), origin, current)
 	}
 }
 
@@ -975,7 +993,7 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 			h.captures.removeIfCurrent(browsingKey, cs)
 			audit.Emit(context.Background(), h.agentLoop.AuditLogger(), audit.EventBrowserWebRTCStreamStopped,
 				audit.SeverityInfo, map[string]any{"agent_id": agentID, "browsing_key": browsingKey})
-			h.notifyViewersStreamStopped(cs.ViewerIDs())
+			h.notifyViewersStreamStopped(cs, cs.ViewerIDs())
 		})
 		// Reading encoderLivenessCheckInterval/encoderLivenessStaleAfter HERE
 		// (as `go` statement arguments, evaluated on THIS goroutine before the
