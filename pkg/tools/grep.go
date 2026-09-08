@@ -527,8 +527,31 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 
 	default:
 		return filegrep.Root{}, fmt.Errorf(
-			"path %q in %s is a %s, not a directory or a regular file — grep can only search directories and regular files",
-			subPath, label, info.Mode().Type())
+			"path %q in %s is %s, not a directory or a regular file — grep can only search directories and regular files",
+			subPath, label, describeFileKind(info.Mode()))
+	}
+}
+
+// describeFileKind renders a Stat'd file's type as a short, human-readable
+// phrase for an error message — never the raw fs.FileMode.Type().String()
+// (e.g. "p---------"), which is accurate but reads as noise to an agent
+// deciding what to do next.
+func describeFileKind(mode fs.FileMode) string {
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		return "a symlink"
+	case mode&fs.ModeNamedPipe != 0:
+		return "a named pipe (FIFO)"
+	case mode&fs.ModeSocket != 0:
+		return "a socket"
+	case mode&fs.ModeCharDevice != 0:
+		return "a character device"
+	case mode&fs.ModeDevice != 0:
+		return "a device file"
+	case mode&fs.ModeIrregular != 0:
+		return "a file of an unrecognized kind"
+	default:
+		return fmt.Sprintf("a file of an unrecognized kind (mode %s)", mode)
 	}
 }
 
