@@ -154,6 +154,62 @@ is nested TODAY, on an existing install, because nothing stopped it? Refusing ne
 nesting is straightforward; the migration question for existing data is a
 separate decision and should be stated rather than discovered later.
 
+---
+
+### WL-5 — a Base VIEW cannot be embedded inside a note (`![[Tasks.base#View]]`)
+**Severity:** high · **Area:** Library SPA (markdown embed resolution) · **Reported by:** founder
+**Status:** Open · **Confirmed in code — MISSING CAPABILITY, not a bad import**
+
+The founder's dashboards compose themselves out of embedded Base views. Example:
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/e-vault-fix/07-Dashboards/Founder Cockpit.md`
+contains 15+ embeds of the form:
+
+```
+![[Tasks.base#Needs Daniel]]
+![[Decisions.base#Awaiting founder]]
+![[Subscriptions.base#Renewing <14d]]
+![[CRM.base#Companies by Segment]]
+```
+
+and states its own composition rule: *"assembled entirely from Base-view embeds
+— never hand-typed data. Adding a module means dropping in one more
+`![[Domain.base#View]]` embed."* An entire `07-Dashboards/` folder is built on
+this pattern.
+
+**The migration is NOT at fault — verified.** All 18 `.base` files are present in
+`06-Bases/`, alongside 40 record types and 69 views under the marker directory.
+Opening a `.base` file directly works: `preview/BasePreview.tsx` renders it as its
+views rather than a download.
+
+**What is missing.** `KbWikilinkOptions` (`preview/knowledgeMarkdown.tsx:344`)
+exposes exactly one embed hook — `resolveEmbedUrl?: (target) => string |
+undefined` — documented as *"Resolves an embedded ATTACHMENT (`![[diagram.png]]`)
+to a URL the browser can load."* There is no branch for a `.base#View` target
+anywhere in the preview tree (grepped: zero hits outside `BasePreview`'s own
+file-open path). So a dashboard embed falls through the attachment path,
+`resolveEmbedUrl` returns undefined for a non-attachment target, and the embed
+renders as a visibly-marked unresolved reference instead of the view.
+
+**Consequence:** every dashboard in the vault renders as a list of broken
+references rather than data. For a founder whose operating view IS the dashboard,
+the knowledge base is materially less useful than the Obsidian original — this is
+the largest functional gap found so far.
+
+**Direction (not a decision):** the pieces already exist and mostly need
+connecting — `parseWikilink` already distinguishes the `![[...]]` embed form and
+already parses a `#fragment`; `BasePreview` already renders a named view from a
+`.base`; `ViewPartsRenderer` already renders one view's parts. The work is a
+render path that recognises a `.base` target with a view fragment and mounts the
+existing view renderer inline, plus decisions on: how many embeds may render on
+one page (each is a query), whether an embedded view is read-only, and what an
+embed of a MISSING view renders as — it must be visibly unresolved, never an
+empty box that reads as "no data".
+
+**Check before building:** confirm whether the `#fragment` in these embeds
+matches the migrated view NAMES in `.omnipus-vault/views/*.yaml`, or only the
+`views:` block inside each `.base` file. If the two disagree, resolution needs a
+mapping and that is worth knowing up front rather than mid-implementation.
+
 ## Summary
 
 | ID | Title | Severity | Status |
@@ -162,6 +218,7 @@ separate decision and should be stated rather than discovered later.
 | WL-2 | Raw `[[wikilink]]` text in some notes | Medium | Open — mechanism confirmed, surface unreproduced |
 | WL-3 | New KB dialog still shows a Location field | Low | Open — confirmed |
 | WL-4 | A knowledge base can be created inside another | High | Open — confirmed, both paths |
+| WL-5 | Base views cannot be embedded in a note (dashboards) | High | Open — missing capability, import is fine |
 
 **Both trace to the same root theme** as the KB-8 work: wikilink rendering is
 correct on the note surface and partial everywhere else. WL-1 is a resolver
