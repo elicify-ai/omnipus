@@ -1326,8 +1326,15 @@ func (h *BrowserWSHandler) dispatchViewport(
 		return
 	}
 	state.lastViewportAt = now
-	attachment := state.commandAttachment()
+	request := state.attachmentRequest()
+	if request.ctx == nil {
+		return
+	}
 	state.work.submit(&h.activeConns, workKindViewport, func() {
+		attachment, err := state.awaitAttachment(request.ctx, request)
+		if err != nil {
+			return
+		}
 		h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, data)
 	})
 }
