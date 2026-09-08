@@ -243,9 +243,10 @@ describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed fra
 // set_goal-triggered post-write emission populates the record. Before this
 // fix, every frame wholesale-replaced the stored `goalPills[key]` entry, so
 // the very next routine frame after registration clobbered the
-// record-carrying pill: `GoalThreadTailCards`' `state==='active' &&
-// criteria.length>0` filter went false and the card unmounted seconds after
-// appearing. `mergeGoalPillFrame` (chat.ts) now field-preserves
+// record-carrying pill: the pre-ADR-082 thread-tail card component's
+// (retired) `state==='active' && criteria.length>0` filter went false and
+// the card unmounted seconds after appearing. `mergeGoalPillFrame`
+// (chat.ts) now field-preserves
 // criteria/dod/definition across a criteria-less, non-terminal frame for
 // the same pill key — this is the exact masked sequence the reviewer named.
 describe('chat handleFrame — goal_status: goalPills field-preserving merge (ADR-081 code-review round 1, Finding 1)', () => {

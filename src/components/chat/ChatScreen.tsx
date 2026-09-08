@@ -36,11 +36,11 @@ import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
+import { SetGoalCardBlock, parseSetGoalResult } from './tools/SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
-import { GoalThreadTailCards } from './GoalThreadTailCards'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
@@ -697,6 +697,19 @@ function wouldToolCallBeVisible(
   errorFlag: boolean,
   verboseChatEnabled: boolean,
 ): boolean {
+  if (tool === 'set_goal') {
+    // ADR-082 D9: set_goal renders via its own dedicated card
+    // (SetGoalCardBlock), never GenericToolCall — shouldRenderToolCall's
+    // hide-by-default classification (toolVisibility.ts) governs only the
+    // RAW call chip, which stays hidden either way. "Visible" here must
+    // instead mean "the dedicated card actually renders something", so
+    // this mirrors SetGoalCardBlock's own render gate (a well-formed,
+    // completed result) exactly — a still-running or rejected call (which
+    // renders null) must NOT count as visible content, or a message
+    // consisting solely of one would suppress ThinkingIndicator for a
+    // bubble that is genuinely still blank.
+    return parseSetGoalResult(result) !== null
+  }
   const isError = errorFlag || isMarshalErrorSentinel(result) || detectToolResultSentinels(result).any
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
@@ -1260,6 +1273,22 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                 />
               )
             }
+            // ADR-082 D9: set_goal renders its dedicated record card
+            // (SetGoalCardBlock) at the call's own interleaved position,
+            // built from the call's own result — never GenericToolCall
+            // (which self-gates set_goal to null; see toolVisibility.ts's
+            // `set_goal` case). Mirrors the live registration
+            // (SetGoalToolUI, OmnipusRuntimeProvider.tsx) so replay and
+            // live render identically.
+            if (tc.tool === 'set_goal') {
+              return (
+                <SetGoalCardBlock
+                  key={callId}
+                  result={tc.result ?? null}
+                  isRunning={tc.status === 'running'}
+                />
+              )
+            }
             return (
               <GenericToolCall
                 key={callId}
@@ -1383,13 +1412,6 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
           if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
           return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
         })}
-        {/* In-flow mount (operator report, 2026-09-07 — see
-            GoalThreadTailCards.tsx's doc comment): rendered at the tail of
-            the SCROLLABLE transcript, not the fixed non-scrolling slot above
-            the composer, so a long criteria/DoD ladder scrolls with the
-            messages instead of overflowing a fixed-height area with its
-            buttons unreachable. */}
-        <GoalThreadTailCards />
       </div>
     </div>
   )
@@ -1589,14 +1611,6 @@ function VirtualizedMessageListInner({
             </ThreadPrimitive.Messages>
           </div>
         )}
-
-        {/* In-flow mount (operator report, 2026-09-07 — see
-            GoalThreadTailCards.tsx's doc comment): rendered at the tail of
-            the SCROLLABLE Viewport content, not the fixed non-scrolling slot
-            above the composer, so a long criteria/DoD ladder scrolls with
-            the messages instead of overflowing a fixed-height area with its
-            buttons unreachable. */}
-        <GoalThreadTailCards />
       </div>
     </ThreadPrimitive.Viewport>
   )
@@ -3191,11 +3205,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           {messages.length === 0 ? (
             <div className="flex-1 overflow-y-auto pt-4 pb-2">
               <WelcomeState hasAgent={!!activeAgentId} />
-              {/* In-flow mount (see GoalThreadTailCards.tsx's doc comment):
-                  a queued goal can compile before any message has landed
-                  (e.g. right after onboarding). Still scrollable here even
-                  though there's nothing else to scroll past yet. */}
-              <GoalThreadTailCards />
             </div>
           ) : (
             <VirtualizedMessageList messages={messages} liteMode={liteMode} />

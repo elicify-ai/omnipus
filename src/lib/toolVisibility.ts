@@ -133,17 +133,22 @@ export function shouldRenderToolCall(
       return isError
 
     case 'set_goal':
-      // ADR-081 D5/A-3 (work-first goal flow): `set_goal` is the working
-      // agent's write-path for the goal record (register/update). The
-      // record-rendering surface for a reader is the `goal_status` frame's
-      // typed record card (GoalEchoCard, rendered by GoalThreadTailCards),
-      // never the raw tool call — same rationale as `delegate`'s hide (a
-      // dedicated, purpose-built surface already exists, so the call chip
-      // adds no reader-facing meaning). No error exception: unlike
-      // ToolSearch/Skill, a failed/rejected `set_goal` submission is a
-      // bounded-retry validation loop the calling agent handles inline (D2)
-      // — there is no separate "why did registration fail" question for a
-      // reader that the card can't already answer once the retry succeeds.
+      // ADR-081 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9:
+      // `set_goal` is the working agent's write-path for the goal record
+      // (register/update). The record-rendering surface for a reader is the
+      // typed record card (GoalEchoCard), rendered directly from THIS
+      // call's own result by its dedicated tool UI (SetGoalToolUI, live;
+      // the parts-loop `set_goal` branch, replay) — never the raw tool
+      // call, same rationale as `delegate`'s hide (a dedicated, purpose-
+      // built surface already exists, so the call chip adds no
+      // reader-facing meaning). This `false` governs only the RAW call
+      // chip's own visibility (GenericToolCall/the Fallback, which a
+      // registered dedicated tool UI bypasses entirely) — it does not hide
+      // the card itself. No error exception: unlike ToolSearch/Skill, a
+      // failed/rejected `set_goal` submission is a bounded-retry validation
+      // loop the calling agent handles inline (D2) — there is no separate
+      // "why did registration fail" question for a reader that the card
+      // can't already answer once the retry succeeds.
       return false
 
     case 'delegate': {
