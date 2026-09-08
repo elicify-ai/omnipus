@@ -668,9 +668,18 @@ type SessionStartedFrame struct {
 	Type               string  `json:"type"`
 }
 
+// SessionStateActiveTurn — ADR-082 D4 — the in-flight foreground turn of the session a connection has just bound to. Keep in sync by hand with components/schemas/SessionStateActiveTurn.yaml.
+type SessionStateActiveTurn struct {
+	AgentId   string `json:"agent_id"`
+	StartedAt string `json:"started_at"`
+	TurnId    string `json:"turn_id"`
+}
+
 // SessionStateFrame — Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array (never null). Backend coerces nil → []. SPA calls pending_approvals.map() — null crashes at render time.
 type SessionStateFrame struct {
-	EmittedAt string `json:"emitted_at"`
+	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
+	EmittedAt  string                  `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.

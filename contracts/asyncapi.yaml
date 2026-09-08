@@ -3400,6 +3400,26 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
+    SessionStateActiveTurn:
+      title: SessionStateActiveTurn
+      description: >
+        ADR-082 D4 — the in-flight foreground turn of the session a
+        connection has just bound to. Keep in sync by hand with
+        components/schemas/SessionStateActiveTurn.yaml.
+      type: object
+      required:
+        - turn_id
+        - agent_id
+        - started_at
+      additionalProperties: false
+      properties:
+        turn_id:
+          type: string
+        agent_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
     SessionStateFrame:
       title: SessionStateFrame
       description: 'Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array
@@ -3435,6 +3455,12 @@ components:
             PENDING AskUserQuestion card (global registry cap 64) so a
             reconnecting SPA re-hydrates its card + composer lock. Optional
             (older gateways omit it); absent/empty means no pending sets.
+        active_turn:
+          $ref: '#/components/schemas/SessionStateActiveTurn'
+          description: >
+            ADR-082 D4 — present only when the attached session has a
+            foreground turn in flight at emit time. Absent when idle. Keep in
+            sync by hand with components/schemas/SessionStateFrame.yaml.
         emitted_at:
           type: string
           format: date-time

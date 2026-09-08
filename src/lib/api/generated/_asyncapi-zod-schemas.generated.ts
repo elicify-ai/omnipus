@@ -507,12 +507,21 @@ export const SessionStatePendingApproval = z
   })
   .strict();
 
+export const SessionStateActiveTurn = z
+  .object({
+    turn_id: z.string(),
+    agent_id: z.string(),
+    started_at: z.string(),
+  })
+  .strict();
+
 export const SessionStateFrame = z
   .object({
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
+    active_turn: SessionStateActiveTurn.optional(),
     emitted_at: z.string(),
   })
   .strict();

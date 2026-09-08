@@ -467,11 +467,18 @@ export interface SessionStatePendingApproval {
   expires_in_ms: number;
 }
 
+export interface SessionStateActiveTurn {
+  turn_id: string;
+  agent_id: string;
+  started_at: string;
+}
+
 export interface SessionStateFrame {
   type: "session_state";
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
+  active_turn?: SessionStateActiveTurn;
   emitted_at: string;
 }
 
