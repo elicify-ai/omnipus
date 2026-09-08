@@ -242,7 +242,8 @@ func TestPendingAttachmentStaleInvalidFrameCannotPublish(t *testing.T) {
 		t.Fatalf("stale malformed work changed replacement: before=%+v after=%+v", before, after)
 	}
 	select {
-	case frame := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		frame := queued.data
 		t.Fatalf("stale malformed work published status to replacement: %s", frame)
 	default:
 	}

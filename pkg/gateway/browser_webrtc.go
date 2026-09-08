@@ -69,44 +69,31 @@ import (
 // (fix 8); and the WebRTCEnabled/lite_build/not_capable gate ladder is a
 // single shared classifier (fix 9, webrtcUnavailableReason).
 
-// captureRegistry is the process-wide WebRTC CaptureSession registry, keyed by
-// BROWSING KEY (ADR-075 FR-016a) — one capture session per workspace browser,
-// not per agent. It is shared between the main browser WS handler (which
-// creates sessions on a viewer's browser_webrtc_offer) and the capture-ingest
-// WS handler (which must locate a session purely from an inbound
-// browser_capture_hello's token — the hello frame carries no identity at all).
-//
-// The re-key is not bookkeeping tidiness; keying by agent id was actively
-// wrong after FR-001. Two agents on one workspace resolve to the SAME
-// BrowserManager, and ensureCaptureSession memoizes on the manager, so both
-// agents' entries pointed at one identical *CaptureSession. The ADR-048
-// condition-2 fence then asked "does any OTHER agent have a capture session
-// with viewers?", found the very session the caller was about to join, and
-// denied it — the second agent on a workspace could never get video. Keyed by
-// browsing key there is exactly one entry per browser, so "another key's
-// capture" means what it says: a genuinely different Chrome.
+// captureRegistry locates each active panel capture by its ingest token and
+// retains the workspace browsing key used for cross-browser conflict checks.
+// Several panel captures can belong to one workspace browser. The viewer
+// handler registers captures; the ingest handler resolves them from hello tokens.
 type captureRegistry struct {
 	mu       sync.Mutex
-	sessions map[string]*browser.CaptureSession // keyed by BrowsingKey.String()
+	sessions map[*browser.CaptureSession]string // value is BrowsingKey.String()
 }
 
 func newCaptureRegistry() *captureRegistry {
-	return &captureRegistry{sessions: make(map[string]*browser.CaptureSession)}
+	return &captureRegistry{sessions: make(map[*browser.CaptureSession]string)}
 }
 
 func (r *captureRegistry) set(browsingKey string, cs *browser.CaptureSession) {
 	r.mu.Lock()
-	r.sessions[browsingKey] = cs
+	r.sessions[cs] = browsingKey
 	r.mu.Unlock()
 }
 
-// removeIfCurrent drops browsingKey's entry iff it still equals cs — guards
-// against a stopped/superseded session's cleanup clobbering a newer one
-// (same discipline as BrowserManager.ClearCaptureSession).
+// removeIfCurrent removes only this capture in its original workspace.
+// Cleanup cannot remove another panel or a replacement capture.
 func (r *captureRegistry) removeIfCurrent(browsingKey string, cs *browser.CaptureSession) {
 	r.mu.Lock()
-	if r.sessions[browsingKey] == cs {
-		delete(r.sessions, browsingKey)
+	if key, ok := r.sessions[cs]; ok && key == browsingKey {
+		delete(r.sessions, cs)
 	}
 	r.mu.Unlock()
 }
@@ -121,13 +108,13 @@ func (r *captureRegistry) removeIfCurrent(browsingKey string, cs *browser.Captur
 //
 // exclude is a browsing key. Passing an agent id here would exclude nothing
 // and make every caller its own conflict — see the type's doc comment.
-func (r *captureRegistry) otherSessions(exclude string) map[string]*browser.CaptureSession {
+func (r *captureRegistry) otherSessions(exclude string) map[*browser.CaptureSession]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[string]*browser.CaptureSession, len(r.sessions))
-	for key, cs := range r.sessions {
+	out := make(map[*browser.CaptureSession]string, len(r.sessions))
+	for cs, key := range r.sessions {
 		if key != exclude {
-			out[key] = cs
+			out[cs] = key
 		}
 	}
 	return out
@@ -147,12 +134,12 @@ func (r *captureRegistry) findByToken(
 	candidateHex string,
 ) (browsingKey string, cs *browser.CaptureSession) {
 	r.mu.Lock()
-	snapshot := make(map[string]*browser.CaptureSession, len(r.sessions))
+	snapshot := make(map[*browser.CaptureSession]string, len(r.sessions))
 	for k, v := range r.sessions {
 		snapshot[k] = v
 	}
 	r.mu.Unlock()
-	for key, s := range snapshot {
+	for s, key := range snapshot {
 		if s.ValidateToken(candidateHex) {
 			return key, s
 		}
@@ -370,7 +357,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	browsingKey := mgr.BrowsingKey().String()
 	h.captureFenceMu.Lock()
 	if mgr.CaptureSession() == nil {
-		for other, otherCS := range h.captures.otherSessions(browsingKey) {
+		for otherCS, other := range h.captures.otherSessions(browsingKey) {
 			if otherCS.IsStarting() {
 				slog.Info("browser-webrtc: skipping supersede of another workspace's still-starting capture session",
 					"agent_id", frame.AgentId, "browsing_key", browsingKey, "starting_browsing_key", other)
@@ -992,7 +979,7 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 	cfg *config.Config,
 ) (*browser.CaptureSession, error) {
 	browsingKey := mgr.BrowsingKey().String()
-	return mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) {
+	return mgr.EnsureCaptureSessionForPanel(panelSessionID, func() (*browser.CaptureSession, error) {
 		webrtcCfg := webrtc.Config{
 			StunServer: cfg.Tools.Browser.WebRTCStunServer,
 			MediaConn:  h.sharedMediaConn(cfg),

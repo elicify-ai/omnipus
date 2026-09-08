@@ -55,7 +55,7 @@ const browserWSMaxMessageBytes = 64 * 1024
 // tracking) — this socket does exactly one thing: relay one live browser.
 type browserWSConn struct { // not-wire-format: internal connection bookkeeping, never marshaled.
 	conn         *websocket.Conn
-	sendCh       chan []byte
+	sendCh       chan browserOutboundFrame
 	doneCh       chan struct{}
 	closeOnce    sync.Once
 	latestMu     sync.Mutex
@@ -84,12 +84,7 @@ func (c *browserWSConn) close() {
 // control-sync/error frame — now the SOLE trail of that event — impossible
 // to correlate with a specific session/viewer after the fact.
 func (c *browserWSConn) sendCritical(data []byte, dropCtx string) {
-	select {
-	case c.sendCh <- data:
-	case <-c.doneCh:
-	case <-time.After(2 * time.Second):
-		slog.Warn("browser-ws: send channel full, dropping critical frame", "context", dropCtx)
-	}
+	c.enqueueCritical(browserOutboundFrame{data: data}, dropCtx)
 }
 
 // sendCriticalGen marshals and enqueues a critical frame via sendCritical.
@@ -882,7 +877,7 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	wc := &browserWSConn{
 		conn:   conn,
-		sendCh: make(chan []byte, browserWSSendCap),
+		sendCh: make(chan browserOutboundFrame, browserWSSendCap),
 		doneCh: make(chan struct{}),
 	}
 	viewerID := uuid.New().String()
@@ -1006,22 +1001,22 @@ func writeCloseAuthFailed(conn *websocket.Conn) {
 
 // writePump is the single goroutine that writes all frames to the
 // connection. gorilla/websocket requires all writes to happen from the same
-// goroutine. A nil message on sendCh is the sentinel for a ping frame.
+// goroutine. An envelope with nil data is the sentinel for a ping frame.
 func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 	// Every terminal write error also closes the reader and triggers detach.
 	defer wc.close()
 	wake := wc.latestWake()
 	for {
-		var msg []byte
+		var pending browserOutboundFrame
 		select {
 		case payload, ok := <-wc.sendCh:
 			if !ok {
 				return
 			}
-			msg = payload
+			pending = payload
 		case <-wake:
 			var ok bool
-			msg, ok = wc.takeLatest()
+			pending, ok = wc.takeLatestFrame()
 			if !ok {
 				continue
 			}
@@ -1034,6 +1029,10 @@ func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 			slog.Debug("browser-ws: SetWriteDeadline failed", "error", err)
 			return
 		}
+		if !wc.canSendFrame(pending) {
+			continue
+		}
+		msg := pending.data
 		if msg == nil {
 			if err := wc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				slog.Debug("browser-ws: ping write error", "error", err)
@@ -1048,7 +1047,7 @@ func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 	}
 }
 
-// pingPump enqueues a nil sentinel onto sendCh every 30s for keep-alive.
+// pingPump enqueues a ping envelope onto sendCh every 30s for keep-alive.
 func (h *BrowserWSHandler) pingPump(wc *browserWSConn) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -1056,7 +1055,7 @@ func (h *BrowserWSHandler) pingPump(wc *browserWSConn) {
 		select {
 		case <-ticker.C:
 			select {
-			case wc.sendCh <- nil:
+			case wc.sendCh <- browserOutboundFrame{}:
 			case <-wc.doneCh:
 				return
 			}

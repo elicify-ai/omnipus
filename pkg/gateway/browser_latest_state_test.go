@@ -16,7 +16,7 @@ import (
 )
 
 func latestTestConn() *browserWSConn {
-	return &browserWSConn{sendCh: make(chan []byte, 64), doneCh: make(chan struct{})}
+	return &browserWSConn{sendCh: make(chan browserOutboundFrame, 64), doneCh: make(chan struct{})}
 }
 
 func latestTestFrame(kind browserLatestKind, n int) any {
@@ -30,7 +30,7 @@ func TestBrowserLatestStateDoesNotWaitForSlowViewer(t *testing.T) {
 	wc := latestTestConn()
 	t.Cleanup(wc.close)
 	for i := 0; i < 64; i++ {
-		wc.sendCh <- []byte("reserved critical transition")
+		wc.sendCh <- browserOutboundFrame{data: []byte("reserved critical transition")}
 	}
 	done := make(chan error, 1)
 	go func() {

@@ -250,7 +250,8 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 	// No success frame (answer/state) should have been sent for a superseded
 	// commit — the connection already gave up on this offer.
 	select {
-	case frame := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		frame := queued.data
 		t.Fatalf("a superseded offer must not send a success frame after the fact, got: %s", frame)
 	default:
 	}

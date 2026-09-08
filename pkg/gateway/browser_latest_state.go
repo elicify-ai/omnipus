@@ -1,10 +1,6 @@
 package gateway
 
-import (
-	"context"
-	"encoding/json"
-	"log/slog"
-)
+import "context"
 
 type browserLatestKind uint8
 
@@ -14,58 +10,32 @@ const (
 	browserLatestKindCount
 )
 
-type browserLatestFrame struct { // not-wire-format: pending encoded connection state.
-	data       []byte
-	attachment context.Context
-}
+type browserLatestFrame = browserOutboundFrame
 
 // sendLatestGen accepts a complete replaceable snapshot without waiting for
 // transport or critical-queue capacity. The caller retains its observer's
 // original attachment scope; looking up a replacement scope here is unsafe.
 func (c *browserWSConn) sendLatestGen(kind browserLatestKind, frame any, attachment context.Context) bool {
-	if kind >= browserLatestKindCount {
-		slog.Error("browser-ws: unknown latest-state kind", "kind", kind)
-		return false
-	}
-	if attachment.Err() != nil {
-		return false
-	}
-	select {
-	case <-c.doneCh:
-		return false
-	default:
-	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		slog.Error("browser-ws: marshal latest state failed", "error", err)
-		return false
-	}
-	c.latestMu.Lock()
-	defer c.latestMu.Unlock()
-	// Recheck after encoding: cancellation may have happened while marshaling.
-	if attachment.Err() != nil {
-		return false
-	}
-	select {
-	case <-c.doneCh:
-		return false
-	default:
-	}
-	c.latestSlots[kind] = browserLatestFrame{data: data, attachment: attachment}
-	c.notifyLatestLocked()
-	return true
+	return c.sendLatestScopedGen(kind, frame, attachment, nil)
 }
 
-// takeLatest removes at most one valid snapshot. Alternating the starting kind
+// takeLatest exposes encoded state to existing internal consumers. Transport
+// writers use takeLatestFrame to retain the scope through final admission.
+func (c *browserWSConn) takeLatest() ([]byte, bool) {
+	frame, ok := c.takeLatestFrame()
+	return frame.data, ok
+}
+
+// takeLatestFrame removes at most one valid snapshot. Alternating the starting kind
 // prevents a stream of tab metadata from starving video/frame-health state.
 // Its lock is released before the writer performs any network I/O.
-func (c *browserWSConn) takeLatest() ([]byte, bool) {
+func (c *browserWSConn) takeLatestFrame() (browserOutboundFrame, bool) {
 	c.latestMu.Lock()
 	defer c.latestMu.Unlock()
 	select {
 	case <-c.doneCh:
 		c.latestSlots = [browserLatestKindCount]browserLatestFrame{}
-		return nil, false
+		return browserOutboundFrame{}, false
 	default:
 	}
 	for step := 0; step < len(c.latestSlots); step++ {
@@ -75,7 +45,7 @@ func (c *browserWSConn) takeLatest() ([]byte, bool) {
 			continue
 		}
 		c.latestSlots[index] = browserLatestFrame{}
-		if frame.attachment.Err() != nil {
+		if !c.canSendFrame(frame) {
 			continue
 		}
 		c.latestNext = (index + 1) % len(c.latestSlots)
@@ -85,9 +55,9 @@ func (c *browserWSConn) takeLatest() ([]byte, bool) {
 				break
 			}
 		}
-		return frame.data, true
+		return frame, true
 	}
-	return nil, false
+	return browserOutboundFrame{}, false
 }
 
 func (c *browserWSConn) latestWakeLocked() chan struct{} {

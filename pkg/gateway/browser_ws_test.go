@@ -668,7 +668,7 @@ func newControlTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
 	require.NoError(t, err)
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{
 		mgr:            mgr,
 		sessionID:      "control-test-session",
@@ -683,7 +683,8 @@ func newControlTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
 func readWCFrame(t *testing.T, wc *browserWSConn, timeout time.Duration) browserFrameDecoder {
 	t.Helper()
 	select {
-	case data := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		data := queued.data
 		var f browserFrameDecoder
 		require.NoError(t, json.Unmarshal(data, &f))
 		return f
@@ -713,7 +714,7 @@ func newTabActionTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) 
 	browserCfg.ExecPath = filepath.Join(tmpDir, "no-such-chromium-binary")
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{
 		mgr:            mgr,
 		sessionID:      "tab-action-test-session",
@@ -743,7 +744,7 @@ func marshalTabActionFrame(t *testing.T, action string, index *int) []byte {
 // managing tabs" gate must fire before any manager state is consulted.
 func TestBrowserWS_HandleTabAction_NotAttached_Rejected(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
 	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "switch", intPtr(0)))
@@ -986,7 +987,7 @@ func lastBrowserAuditRecord(t *testing.T, auditDir, event string) audit.Record {
 // consulted.
 func TestBrowserWS_HandleControl_NotAttached_Rejected(t *testing.T) {
 	handler, al, _ := newBrowserWSHandlerWithAudit(t)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
 	handler.handleControl(wc, state, "viewer1", "user1", marshalControlFrame(t, "take"), al.GetConfig())
@@ -1161,7 +1162,8 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 	// with the IDENTICAL underlying failure — must be throttled (no frame).
 	handler.handleInput(wc, state, "viewer1", moveFrame)
 	select {
-	case f := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		f := queued.data
 		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f)
 	case <-time.After(300 * time.Millisecond):
 		// expected: nothing sent

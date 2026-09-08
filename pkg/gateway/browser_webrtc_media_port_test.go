@@ -129,13 +129,14 @@ func TestNotifyMediaPortDegraded_PushesStatusErrorToThePanel(t *testing.T) {
 		bound:      50001,
 		lastProbed: 50001,
 	}}
-	wc := &browserWSConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 4), doneCh: make(chan struct{})}
 
 	h.notifyMediaPortDegraded(wc, "sess-1", "viewer-1")
 
 	var raw []byte
 	select {
-	case raw = <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		raw = queued.data
 	default:
 		t.Fatal("no frame was sent — the viewer would sit in front of a panel that can never show video " +
 			"remotely, with nothing on screen saying why (the exact ADR-061 failure this fixes)")
@@ -159,12 +160,13 @@ func TestNotifyMediaPortDegraded_PushesStatusErrorToThePanel(t *testing.T) {
 // dismiss.
 func TestNotifyMediaPortDegraded_SilentWhenHealthy(t *testing.T) {
 	h := &BrowserWSHandler{}
-	wc := &browserWSConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 4), doneCh: make(chan struct{})}
 
 	h.notifyMediaPortDegraded(wc, "sess-1", "viewer-1")
 
 	select {
-	case raw := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		raw := queued.data
 		t.Fatalf("a healthy install must send nothing, got %s", raw)
 	default:
 	}
@@ -323,7 +325,8 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	var status *generated.BrowserStatusFrame
 	for range 4 {
 		select {
-		case raw := <-wc.sendCh:
+		case queued := <-wc.sendCh:
+			raw := queued.data
 			var probe struct {
 				Type string `json:"type"`
 			}

@@ -485,7 +485,8 @@ func TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField(t *testing.T)
 	sink("viewer-oversized-text", rawOversized)
 
 	select {
-	case frame := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		frame := queued.data
 		t.Fatalf("an oversized text field must be dropped at schema validation, not dispatched (got frame: %s)", frame)
 	case <-time.After(200 * time.Millisecond):
 	}

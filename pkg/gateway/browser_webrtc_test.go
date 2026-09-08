@@ -149,7 +149,7 @@ type webrtcStateFrameDecoder struct { // not-wire-format: decode-only test asser
 // sendCriticalGen/sendFrameGen (sendCh), never touches wc.conn directly.
 func newTestBrowserWSConn() *browserWSConn {
 	return &browserWSConn{
-		sendCh: make(chan []byte, 8),
+		sendCh: make(chan browserOutboundFrame, 8),
 		doneCh: make(chan struct{}),
 	}
 }
@@ -158,7 +158,8 @@ func newTestBrowserWSConn() *browserWSConn {
 func drainOneFrame(t *testing.T, wc *browserWSConn) json.RawMessage {
 	t.Helper()
 	select {
-	case data := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		data := queued.data
 		return data
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for a frame on sendCh")
@@ -1010,7 +1011,7 @@ func TestCaptureRegistry_OtherSessions(t *testing.T) {
 
 	others := reg.otherSessions("agent-a")
 	require.Len(t, others, 1)
-	require.Contains(t, others, "agent-b")
-	require.Empty(t, reg.otherSessions("zzz-nonexistent")["agent-c"])
+	require.Equal(t, "agent-b", others[csB])
+	require.Equal(t, "agent-a", reg.otherSessions("zzz-nonexistent")[csA])
 	require.Len(t, reg.otherSessions("zzz-nonexistent"), 2)
 }

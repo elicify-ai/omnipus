@@ -37,7 +37,8 @@ func TestBrowserQueuedCommandCannotMigrateAfterAdmission(t *testing.T) {
 			release()
 			h.activeConns.Wait()
 			select {
-			case frame := <-wc.sendCh:
+			case queued := <-wc.sendCh:
+				frame := queued.data
 				t.Fatalf("obsolete command executed against replacement attachment: %s", frame)
 			default:
 			}
@@ -126,7 +127,8 @@ func TestBrowserCommandFailurePreservesAttachmentWithTypedStatus(t *testing.T) {
 	h.handleInput(wc, state, "viewer", []byte(`{"type":"browser_input","kind":"text","text":"test"}`))
 	var status generated.BrowserStatusFrame
 	select {
-	case data := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		data := queued.data
 		require.NoError(t, json.Unmarshal(data, &status))
 	default:
 		t.Fatal("missing command failure status")

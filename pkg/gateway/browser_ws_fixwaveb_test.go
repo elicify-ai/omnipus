@@ -423,7 +423,7 @@ func TestBrowserWS_AttachEpoch_SupersededCommitIsRefused(t *testing.T) {
 // it built instead of leaving a dangling viewer).
 func TestBrowserWS_HandleDetach_InvalidatesAnInFlightAttach(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	var state browserConnState
 
 	epoch := state.beginAttach() // dispatchAttach ran; handleAttach is "still negotiating"
@@ -497,7 +497,8 @@ func TestBrowserWS_HandleViewport_RefusalIsThrottled(t *testing.T) {
 
 	_ = readWCFrame(t, wc, 2*time.Second) // the first refusal
 	select {
-	case extra := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		extra := queued.data
 		t.Fatalf("an identical refusal inside the cooldown must be suppressed, got a second frame: %s", extra)
 	case <-time.After(200 * time.Millisecond):
 	}
@@ -520,7 +521,8 @@ func TestBrowserWS_HandleViewport_ControllingViewer_NotRefused(t *testing.T) {
 	handler.handleViewport(wc, state, "viewer-A", marshalViewportFrame(t, 900, 1010))
 
 	select {
-	case frame := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		frame := queued.data
 		t.Fatalf("the controlling viewer's own resize must not be refused, got: %s", frame)
 	case <-time.After(200 * time.Millisecond):
 	}
