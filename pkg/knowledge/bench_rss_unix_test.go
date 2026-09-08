@@ -19,5 +19,5 @@ func peakRSSBytes() (uint64, bool) {
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
 		return 0, false
 	}
-	return uint64(ru.Maxrss) * uint64(maxRSSUnitBytes), true //nolint:gosec // Maxrss is a non-negative high-water mark
+	return uint64(ru.Maxrss) * uint64(maxRSSUnitBytes), true
 }

@@ -233,7 +233,7 @@ func TestManifest_SavedFormIsDeterministic(t *testing.T) {
 		if err := m.Save(path); err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(path) //nolint:gosec // test-local path
+		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}

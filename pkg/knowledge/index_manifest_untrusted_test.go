@@ -161,7 +161,7 @@ func TestSyncWith_UnusableManifestStillSurvivesOnATrueFirstSync(t *testing.T) {
 // (treated as absent)".
 func bumpManifestVersion(t *testing.T, path string) {
 	t.Helper()
-	raw, err := os.ReadFile(path) //nolint:gosec // test fixture path
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read manifest %s: %v", path, err)
 	}

@@ -300,7 +300,7 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 		if !before.Exists {
 			return fmt.Errorf("%w: %q", ErrTrashSourceMissing, from)
 		}
-		content, rerr := os.ReadFile(abs) //nolint:gosec // abs is contained by ResolveContainedNoSymlink above
+		content, rerr := os.ReadFile(abs)
 		if rerr != nil {
 			return fmt.Errorf("knowledge: read %q: %w", from, rerr)
 		}
@@ -429,7 +429,7 @@ func moveFile(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
-	content, rerr := os.ReadFile(src) //nolint:gosec // src is contained by the caller
+	content, rerr := os.ReadFile(src)
 	if rerr != nil {
 		return fmt.Errorf("knowledge: read %q for move: %w", src, rerr)
 	}
@@ -474,7 +474,7 @@ func (tr *Trasher) listTrashDirs(fsys LinkFS) ([]string, error) {
 // fail."
 func (tr *Trasher) readReceipt(trashID string) (trashReceipt, bool) {
 	p := filepath.Join(tr.Root.Path(), MarkerDirName, trashDirName, trashID, trashReceiptFileName)
-	data, err := os.ReadFile(p) //nolint:gosec // p is built from a trash directory name this package enumerated
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return trashReceipt{}, false
 	}
@@ -571,7 +571,7 @@ func (tr *Trasher) findLiveRecordByID(fsys LinkFS, id string) (foundPath string,
 			continue
 		}
 		abs := filepath.Join(tr.Root.Path(), filepath.FromSlash(rel))
-		data, rerr := os.ReadFile(abs) //nolint:gosec // rel is a WalkContained result, already proven inside the root
+		data, rerr := os.ReadFile(abs)
 		if rerr != nil {
 			// An unreadable note cannot be PROVEN to collide; it is also not
 			// content this collection can address at all today, so it is
@@ -657,7 +657,7 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, statErr
 	}
 
-	content, rerr := os.ReadFile(chosen.FileAbs) //nolint:gosec // chosen.FileAbs is built from a trash directory this package enumerated, joined with the caller's own cleaned path
+	content, rerr := os.ReadFile(chosen.FileAbs)
 	if rerr != nil {
 		wrapped := fmt.Errorf("knowledge: read trashed copy of %q: %w", orig, rerr)
 		tr.emit(trashOpRestore, "refused", []string{orig}, wrapped.Error())

@@ -1085,7 +1085,7 @@ func recordsOfType(root, typeName string) ([]records.Record, error) {
 	var out []records.Record
 	for _, n := range notes {
 		abs := filepath.Join(root, filepath.FromSlash(n.RelPath))
-		data, rerr := os.ReadFile(abs) //nolint:gosec // abs is root-joined from a Scan() result, which enumerates only paths already contained in root
+		data, rerr := os.ReadFile(abs)
 		if rerr != nil {
 			// An unreadable note is check_integrity's finding to report, not
 			// this cascade's failure to compute — the note plainly does not
@@ -1134,7 +1134,7 @@ func createControlPlaneFile(target mutationTarget, abs string, data []byte) erro
 		if mkErr := os.MkdirAll(filepath.Dir(abs), controlPlaneDirPerm); mkErr != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(abs), mkErr)
 		}
-		f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, controlPlaneFilePerm) //nolint:gosec // abs is built from records.SchemaDir/ViewsDir joined with a name this file controls
+		f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, controlPlaneFilePerm)
 		if oerr != nil {
 			return oerr
 		}

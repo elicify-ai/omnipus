@@ -277,7 +277,7 @@ func computeVersionTokenFrom(r io.Reader) (VersionToken, int64, error) {
 // finishVersionToken appends the length suffix and encodes.
 func finishVersionToken(h hash.Hash, size int64) VersionToken {
 	var lenBuf [8]byte
-	binary.LittleEndian.PutUint64(lenBuf[:], uint64(size)) //nolint:gosec // size is never negative
+	binary.LittleEndian.PutUint64(lenBuf[:], uint64(size))
 	_, _ = h.Write(lenBuf[:])
 	return VersionToken(versionTokenPrefix + hex.EncodeToString(h.Sum(nil))[:versionTokenHexLen])
 }
@@ -322,7 +322,7 @@ func readNoteVersionAbs(rel, abs string) (NoteVersion, error) {
 		return NoteVersion{}, fmt.Errorf("%w: %q is %s", ErrNotRegularFile, rel, info.Mode().Type())
 	}
 
-	f, err := os.Open(abs) //nolint:gosec // abs is contained by Collection.ResolveInside
+	f, err := os.Open(abs)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return NoteVersion{Path: rel, Exists: false, Token: TokenAbsent}, nil
@@ -965,7 +965,7 @@ func writeFileAtomicPreservingMode(abs string, content []byte, exists bool) (int
 // note that is durable-on-next-sync is not worth failing an otherwise good
 // write over.
 func syncDir(dir string) {
-	d, err := os.Open(dir) //nolint:gosec // dir is the parent of a contained path
+	d, err := os.Open(dir)
 	if err != nil {
 		return
 	}

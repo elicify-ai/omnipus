@@ -99,7 +99,7 @@ func NewManifest(root string) *Manifest {
 // with a non-nil error describing why: the caller indexes from scratch (correct,
 // merely slower) and the reason is on the record rather than silently swallowed.
 func LoadManifest(path, root string) (*Manifest, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path is Omnipus-owned, under $OMNIPUS_HOME
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return NewManifest(root), nil

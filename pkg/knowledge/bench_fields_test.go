@@ -328,7 +328,7 @@ func a13HarvestDocs(tb testing.TB, root string) []indexDoc {
 		if e.Kind != ScanKindNote {
 			continue
 		}
-		data, rErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(e.RelPath))) //nolint:gosec // test fixture
+		data, rErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(e.RelPath)))
 		if rErr != nil {
 			tb.Fatalf("read %s: %v", e.RelPath, rErr)
 		}

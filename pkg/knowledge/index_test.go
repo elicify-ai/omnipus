@@ -1328,7 +1328,7 @@ func TestIndex_QuietlyEvictedNoteIsReportedNotIndexedAsEmpty(t *testing.T) {
 	prev := openFileForRead
 	openFileForRead = func(path string) (*os.File, error) {
 		if strings.HasSuffix(path, "evicted.md") {
-			return os.Open(placeholder) //nolint:gosec // test fixture
+			return os.Open(placeholder)
 		}
 		return prev(path)
 	}

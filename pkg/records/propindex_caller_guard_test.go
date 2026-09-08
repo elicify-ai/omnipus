@@ -407,7 +407,7 @@ func TestPropertyIndexGuard_NoCallerSwallowsTheRefusal(t *testing.T) {
 			return nil
 		}
 
-		src, readErr := os.ReadFile(path) //nolint:gosec // walking our own module
+		src, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return fmt.Errorf("read %s: %w", path, readErr)
 		}

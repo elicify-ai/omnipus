@@ -111,7 +111,7 @@ func IndexEpoch(home, collectionRoot string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is derived from IndexDirFor, not caller input
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// No structural change has ever happened to this collection.

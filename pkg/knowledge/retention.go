@@ -160,7 +160,7 @@ func IndexRevokedAt(home, collectionRoot string) (time.Time, error) {
 }
 
 func readIndexRevocation(indexDir string) (time.Time, error) {
-	raw, err := os.ReadFile(filepath.Join(indexDir, indexRevocationFileName)) //nolint:gosec // path is derived from $OMNIPUS_HOME
+	raw, err := os.ReadFile(filepath.Join(indexDir, indexRevocationFileName))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return time.Time{}, ErrIndexNotRevoked
@@ -238,7 +238,7 @@ func ReclaimableIndexes(home string, now time.Time) ([]ReclaimableIndex, error) 
 			continue
 		}
 		root := ""
-		if raw, rErr := os.ReadFile(filepath.Join(dir, indexRevocationFileName)); rErr == nil { //nolint:gosec // derived from $OMNIPUS_HOME
+		if raw, rErr := os.ReadFile(filepath.Join(dir, indexRevocationFileName)); rErr == nil {
 			var mark indexRevocation
 			if json.Unmarshal(raw, &mark) == nil {
 				root = mark.CollectionRoot

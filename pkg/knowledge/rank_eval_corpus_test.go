@@ -212,9 +212,9 @@ var evalStopwords = map[string]bool{
 // Three independent streams: prose, links, times. See the file header for why
 // they must not be one.
 func buildEvalCorpus() []evalNote {
-	prose := rand.New(rand.NewSource(0x5EED_0001)) //nolint:gosec // deterministic fixture, not security
-	links := rand.New(rand.NewSource(0x5EED_0002)) //nolint:gosec // deterministic fixture, not security
-	times := rand.New(rand.NewSource(0x5EED_0003)) //nolint:gosec // deterministic fixture, not security
+	prose := rand.New(rand.NewSource(0x5EED_0001))
+	links := rand.New(rand.NewSource(0x5EED_0002))
+	times := rand.New(rand.NewSource(0x5EED_0003))
 
 	type entity struct {
 		name  string
@@ -409,7 +409,7 @@ func sentencesOf(n evalNote) []string {
 // invented and then citing the result as evidence for a decision is the
 // circularity this whole exercise exists to avoid.
 func buildEvalQueries(notes []evalNote, degree map[string]int) []evalQuery {
-	sample := rand.New(rand.NewSource(0x5EED_0004)) //nolint:gosec // deterministic fixture, not security
+	sample := rand.New(rand.NewSource(0x5EED_0004))
 
 	usable := make([]evalNote, 0, len(notes))
 	for _, n := range notes {

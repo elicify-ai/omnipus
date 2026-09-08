@@ -463,7 +463,7 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 		// temp-file-plus-rename: rename REPLACES the destination, so the
 		// atomic write helper used for edits is exactly the wrong tool for a
 		// create that must fail when something is already there.
-		f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, noteFilePerm) //nolint:gosec // abs is proven contained by ResolveContained above
+		f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, noteFilePerm)
 		if oerr != nil {
 			if errors.Is(oerr, fs.ErrExist) {
 				return fmt.Errorf("%w: %q", ErrNoteExists, rel)

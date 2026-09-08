@@ -196,7 +196,7 @@ var queryableFields = map[string]struct{}{
 // FR-039a/MV-19 — "indexing 100,000 attachments reads zero content bytes from
 // them" — instead of asserting the absence of a behaviour, which no ordinary
 // test can do. Production always uses os.Open.
-var openFileForRead = func(path string) (*os.File, error) { return os.Open(path) } //nolint:gosec // collection paths are operator-owned and contained by the caller
+var openFileForRead = func(path string) (*os.File, error) { return os.Open(path) }
 
 // readNoteChunk performs one read of indexNote's segmenting pass. It exists
 // for the SAME reason openFileForRead does — a seam a test can substitute —
@@ -740,7 +740,7 @@ type indexFormat struct {
 // caller rebuilds on that too: an unreadable record of what wrote the index is
 // no better than no record.
 func readIndexFormat(path string) (int, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path is Omnipus-owned, under $OMNIPUS_HOME
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return 0, nil
