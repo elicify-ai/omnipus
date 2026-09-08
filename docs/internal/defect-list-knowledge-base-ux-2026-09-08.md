@@ -462,7 +462,8 @@ test that did not reproduce the documented condition.
 | KB-5 | Active workspace collapsed in the sidebar | Low | Open |
 | KB-6 | Search results: no relevance signal, too little context, no source marker | Medium | Open |
 | KB-7 | Multi-word queries broken in opposite ways per engine; no fuzziness | High | Open |
-| KB-8 | Records in a base not clickable; relation fields show raw `[[wikilinks]]` | Medium | Open |
+| KB-8 | Records in a base not clickable; relation fields show raw `[[wikilinks]]` | Medium | **Fixed** |
+| CI-1 | e2e conformance-replan: supervisor never calls plan_correct | High | Open — cause undetermined |
 | DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
 | OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
 | DOC-1 | Concurrency doc claim | — | Closed — not a defect |
@@ -481,6 +482,54 @@ That is a feature-parity gap, not a bug. Recorded for a product decision rather
 than fixed silently.
 
 ---
+
+---
+
+### CI-1 — e2e `llm-conformance-replan` fails: supervisor never calls `plan_correct` (OPEN, cause undetermined)
+**Severity:** high (blocks a green CI) · **Area:** plan supervision / tool surface · **Found by:** CI run on 031e7a583
+
+`Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED-RETRY`
+failed 3 times (original + 2 retries), each attempt taking 5-13 minutes:
+- attempts 1 and 2: `zero plan_correct calls committed (status=success) across the
+  plan's full round budget. plan state="running" phase="awaiting_supervision";
+  all plan_correct calls: []` — the supervisor model never called the tool.
+- attempt 3: the plan never reached `awaiting_supervision` within 300s at all.
+
+Every other e2e shard in the same run PASSED, including `llm-conformance-chat` and
+`llm-conformance-plan` — the two that were previously carried as deferred release
+defects (issue #682).
+
+**Three hypotheses, none yet eliminated:**
+
+1. **Our change altered the supervisor's tool surface.** VERIFIED as a mechanism,
+   not yet as a cause: this diff adds `grep` to the static catalog, and its
+   registration is NOT agent-specific — `pkg/agent/instance.go` registers it for
+   every agent, so PlanSupervisor's model now sees one more tool than before. A
+   larger tool surface can plausibly reduce the probability of selecting
+   `plan_correct`. The silent-failure audit independently flagged this grant as
+   "verified only by policy string" — i.e. nobody has tested the supervisor's
+   EFFECTIVE behaviour with grep present.
+2. **LLM non-determinism.** These conformance shards drive a real model
+   (z-ai/glm-5.3-flash). Three attempts produced THREE DIFFERENT failure modes,
+   runtimes varied 5-13 minutes for the same test, and shards that previously
+   failed deterministically now pass while a previously-passing one fails. That
+   pattern fits noise better than a deterministic regression.
+3. **A pre-existing conformance defect that moves between shards.** The t3
+   family was already failing on this branch before the search work (the earlier
+   t3b judge-backoff investigation), so a shard-level failure here is not
+   necessarily new.
+
+**Cheapest discriminator, not yet run:** temporarily set `grep: deny` for
+PlanSupervisor only and re-run the `llm-conformance-replan` shard. If it passes
+reliably, hypothesis 1 is confirmed and the founder ruling ("PlanSupervisor can
+have the tool as well, it does not hurt") needs revisiting with evidence. If it
+still fails, hypothesis 1 is eliminated. NOTE a single run cannot settle an
+LLM-driven test — this needs repetition, which is why it is logged rather than
+guessed at.
+
+**Do NOT close this as flaky without running that discriminator.** "The model is
+non-deterministic" is exactly the explanation that would let a real regression
+ship.
 
 ## Ratified fix plan (founder decisions, 2026-09-08)
 
