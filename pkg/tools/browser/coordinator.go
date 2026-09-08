@@ -81,8 +81,8 @@ import (
 // that the process holding the launch lockfile is OUR Chrome (ADR-043 D1 /
 // grill M2). CRIT-001 replaced the old net.Listen(":9223") port bind with an
 // O_EXCL/flock lockfile, so the marker is now the identity layer over the
-// lock: a held lock whose marker is absent or whose marker pid is dead is
-// treated as stale (removable), never silently driven.
+// lock. On Unix a held lock remains authoritative even without a marker;
+// only the non-Unix O_EXCL implementation uses marker-based stale recovery.
 const ownershipMarkerOwner = "omnipus"
 
 // BrowserCoordinator owns ONE Chrome process — one workspace's (ADR-075
@@ -994,6 +994,8 @@ const launchLockFileName = "chrome.lock"
 // lockPath is the single-launch lockfile (CRIT-001). It lives in the profile
 // dir, so it is per-KEY for exactly as long as the profile dir is.
 func (c *BrowserCoordinator) lockPath() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return filepath.Join(c.cfg.ProfileDir, launchLockFileName)
 }
 
@@ -1002,15 +1004,10 @@ func (c *BrowserCoordinator) lockPath() string {
 // the held *os.File the caller keeps open for the coordinator's lifetime (and
 // releases via releaseLaunchLock). Runs with c.mu NOT held.
 //
-// Ownership is proven WITHOUT a port: a held lock whose ownership marker names
-// a LIVE omnipus pid means a prior gateway's Chrome is still running (rejected
-// with a clear error). A held lock with a missing/dead-pid marker is a stale
-// lockfile left by a crashed prior process (only reachable off Unix, where
-// flock does not auto-release) — it is cleared and re-acquired once. The
-// pre-pipe "foreign Chrome squatting our port" case is gone: nothing but an
-// omnipus coordinator ever locks this file (it lives inside our own profile
-// dir), so a held-but-unidentifiable lock always means "stale", never
-// "foreign", and is safe to clear rather than reject.
+// A live marker improves the refusal's diagnostic, but a held Unix flock is
+// sufficient to refuse: startup and cache trimming legitimately hold it before
+// any Chrome PID marker exists. Only non-Unix O_EXCL files use marker-based
+// stale recovery, because their existence survives the holding process.
 func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
 	path := c.lockPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -1037,10 +1034,13 @@ func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
 			pid,
 		)
 	}
+	if launchLockReleasedOnExit {
+		return nil, fmt.Errorf("browser: the shared-Chrome launch lock %s is held by another live process (ownership marker unavailable)", path)
+	}
 
-	// Marker missing or its pid is dead → a stale lockfile from a crashed
-	// process. Clear it and retry once (a no-op on Unix, where flock
-	// auto-releases so the first acquire would already have succeeded).
+	// Only non-Unix O_EXCL files need marker-based stale-file recovery.
+	// Never unlink a held Unix flock: the holder owns the inode, and recreating
+	// its pathname would let a second process bypass that lock.
 	if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 		return nil, fmt.Errorf("browser: coordinator: cannot clear stale launch lock %s: %w", path, rmErr)
 	}

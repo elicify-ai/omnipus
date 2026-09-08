@@ -150,14 +150,10 @@ type TrimResult struct {
 // the old two-part check called the profile eligible and started deleting
 // directories out from under a browser that was starting.
 //
-// Winning the lock first does not save us either, which is why the fix is a
-// refusal rather than a lock-ordering argument. When the trim holds the lock
-// and the launcher arrives, takeLaunchLock finds it held, finds no ownership
-// marker (the trim writes none), concludes "stale lockfile from a crashed
-// process", os.Remove()s it and re-acquires. On Unix that leaves the trim
-// holding a flock on an unlinked inode while Chrome launches into the
-// directory it is mid-walk on. The lock is a guard against another GATEWAY,
-// not against this pool's own launch path; only this pool knows about that.
+// A held Unix launch lock also excludes a later launcher when the trim wins
+// first: takeLaunchLock must never remove it merely because trimming has no
+// Chrome PID marker. The pending-launch check avoids interfering with a start
+// already admitted by this pool, including before it acquires that lock.
 //
 // The profile DIRECTORY is never removed here. That has one trigger and it is
 // workspace deletion (FR-043a, DeleteProfile).
