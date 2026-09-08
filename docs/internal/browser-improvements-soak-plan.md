@@ -1,14 +1,14 @@
 # Isolated browser soak acceptance
 
 Prepared harness:
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/browser-improvements-soak.spec.ts`
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-acceptance/browser-improvements-soak.spec.ts`
 
 **The first full run failed latency acceptance** (details below). Root
 coordinates further runs after integration. The new evidence/diagnostic
 correction has been typechecked but has not been executed. Never run against the
 installed gateway on port 10994. This spec refuses any gateway except localhost
-or 127.0.0.1 port 11094 and requires an explicit isolated runtime home beneath the
-Omnipus project workspace.
+or 127.0.0.1 port 11094 and requires an explicit absolute isolated runtime home.
+It no longer assumes a particular machine username or workspace location.
 
 ## Acceptance and independent oracle
 
@@ -50,14 +50,30 @@ count, checksum, held state and first-error text accompany the binary grid.
 
 ## Runtime setup and evidence
 
-The coordinator supplies `OMNIPUS_URL=http://localhost:11094`,
-`SOAK_RUNTIME_HOME` pointing to the existing isolated runtime home, and a valid
-runtime-owned Playwright authentication state. Use a minimal configuration
-stored under the runtime directory with this one spec, one worker, zero retries,
-baseURL 11094 and the already-supported Chromium viewer launch flags. Do not use
-the repository-wide global setup: it can seed gateway configuration and is not
-needed by this acceptance test. Authentication/setup failure is a failed or
-blocked run, never a skipped pass. No short-duration environment override exists.
+The tracked manual runner is
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-manual.config.ts`.
+The coordinator must supply all four variables: `OMNIPUS_URL` (the isolated
+HTTP origin on port 11094), `SOAK_RUNTIME_HOME` (absolute existing isolated
+runtime directory), `OMNIPUS_AUTH_FILE` (absolute existing runtime-owned
+Playwright authentication file), and `BROWSER_PROBE_OUTPUT_DIR` (absolute,
+dedicated disposable results directory). No value has a machine-specific or
+production default. Playwright replaces its output directory, so this must be a
+separate results directory, never the runtime or authentication directory.
+
+The runner uses one worker, zero retries and the existing Chromium viewer
+flags. It neither starts a gateway nor executes repository-wide global setup
+(which can seed gateway configuration). Authentication/setup failure is a failed
+or blocked run, never a skipped pass. No short-duration override exists.
+
+With those variables supplied, select exactly one spec. For the full acceptance:
+
+```sh
+npx playwright test --config /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-manual.config.ts /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-acceptance/browser-improvements-soak.spec.ts
+```
+
+For either short diagnostic, replace the final argument with its absolute spec
+path documented below. Append `--list` to inspect collection without executing
+setup or launching a browser.
 
 The spec records before-idle, after-idle and final video screenshots, plus JSON
 containing phase start/end times, every click's timestamp/latency, static pixel
@@ -88,7 +104,7 @@ The full acceptance durations, 100-click sample and 200ms threshold are unchange
 
 ## Short latency diagnostic (not soak acceptance)
 
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/browser-improvements-latency.spec.ts`
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-diagnostics/browser-improvements-latency.spec.ts`
 uses the same authored fixture, decoder and UI setup through
 `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/fixtures/browser-input-probe.ts`.
 It performs 100 clicks, paced over at least 50 seconds, with 300 exact mouse events
@@ -154,7 +170,7 @@ buffering was substantially above the reported network-minimum delay. Audio/
 video synchronization is a hypothesis to test, not an established cause.
 
 The separate spec
-`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/browser-improvements-video-only-latency.spec.ts`
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/browser-diagnostics/browser-improvements-video-only-latency.spec.ts`
 selects only the explicit `latency-video-only` mode. Its harness-owned peer
 constructor overrides an actual `addTransceiver('audio', ...)` request to use
 `direction: 'inactive'`. Video negotiation, input routing, the exact 300-event
@@ -175,3 +191,39 @@ video means explicitly filter video reports, so audio cannot dilute the video
 summary. Missing fields remain null. This is test-only instrumentation; a faster
 video-only result would not be a product fix, an audio acceptance result, or a
 passing 20-minute soak. Runtime execution is still coordinated by root.
+
+
+## Automated CI and manual acceptance ownership
+
+The shard validator failed on the three original top-level E2E files: they were
+not in the automated shard manifest. Adding them there would still fail because
+CI runs a different gateway origin and global setup, without the explicitly
+owned local runtime required by these harnesses.
+
+The full soak now lives in the explicit `browser-acceptance` directory; the two
+short experiments live in `browser-diagnostics`. They are collected by the
+tracked manual runner above, outside the default automated E2E directory.
+The shard manifest, validator, workflow and ordinary E2E configuration are
+unchanged. There are no skipped tests or environment-gated passing results.
+Strict test-project TypeScript checking still includes all three specs and the
+manual runner.
+
+The full soak remains a **required manual browser release-acceptance gate**:
+ten minutes idle plus ten minutes mixed input, all 550 exact events/holds, and
+100-click p95 at most 200ms. Ordinary CI success does not satisfy that gate.
+The short normal diagnostic and audio-disabled hypothesis experiment provide
+investigation evidence only; neither substitutes for it. Report the actual
+manual terminal result and retained artifacts separately from automated CI.
+
+Validation for this classification correction: unchanged shard guard must pass
+after the move; manual `--list` must collect exactly the three preserved specs;
+missing explicit runner configuration must fail; strict test-project typecheck
+must include the new configuration. None of those checks is a browser run.
+
+Observed correction validation: root shard check exited 1 listing all three
+unassigned specs before changes; the unchanged guard exited 0 after relocation
+(58 automated specs). Manual runner list session 22317 exited 0 with exactly
+three tests in three files. Missing-configuration list session 37765 exited 1
+with the explicit required `OMNIPUS_URL` error. Strict test-project TypeScript
+session 25023 exited 0. No Go, build, global setup or browser execution occurred
+in this correction; these results do not change the recorded soak outcome.

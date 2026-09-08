@@ -356,8 +356,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
   const origin = new URL(process.env.OMNIPUS_URL || '');
   if (!['localhost', '127.0.0.1'].includes(origin.hostname) || origin.port !== '11094') throw new Error('This acceptance test requires the isolated gateway on port11094');
   const runtimeHome = fs.realpathSync(process.env.SOAK_RUNTIME_HOME || '');
-  const project = fs.realpathSync('/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus');
-  if (!runtimeHome.startsWith(project + path.sep)) throw new Error('SOAK_RUNTIME_HOME must be the isolated runtime home under the Omnipus workspace');
+  if (!path.isAbsolute(process.env.SOAK_RUNTIME_HOME || '') || !fs.statSync(runtimeHome).isDirectory()) throw new Error('SOAK_RUNTIME_HOME must name an absolute isolated runtime directory');
   const nonce = randomInt(1, 65_536);
   const plans = Array.from({ length: CLICK_COUNT }, (_, i) => {
     const plan = cyclePlan(i);

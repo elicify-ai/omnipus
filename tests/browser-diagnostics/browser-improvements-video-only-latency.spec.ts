@@ -1,5 +1,5 @@
 import { test } from '@playwright/test';
-import { runBrowserInputProbe } from './fixtures/browser-input-probe';
+import { runBrowserInputProbe } from '../e2e/fixtures/browser-input-probe';
 
 // A/B hypothesis experiment only. Disabled audio is not a product fix or soak acceptance.
 test.describe.configure({ retries: 0 });

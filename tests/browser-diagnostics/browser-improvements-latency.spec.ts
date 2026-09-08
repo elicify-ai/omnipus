@@ -1,5 +1,5 @@
 import { test } from '@playwright/test';
-import { runBrowserInputProbe } from './fixtures/browser-input-probe';
+import { runBrowserInputProbe } from '../e2e/fixtures/browser-input-probe';
 
 // Diagnostic only: no ten-minute idle/mixed acceptance claim.
 test.describe.configure({ retries: 0 });
