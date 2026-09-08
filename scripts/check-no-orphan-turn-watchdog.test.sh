@@ -28,6 +28,14 @@
 #      orphanWatchdogMaxRechecks, SubTurnOrphan) in non-comment code — NOT
 #      caught (they are a different, still-live mechanism per ADR-082 §5).
 #   7. A clean tree with none of the guarded symbols anywhere — exits 0.
+#   8. A tree missing a required scan directory — exits 2, never a silent
+#      green (the check itself could not run).
+#   9. F3: a forced grep failure (an invalid ERE injected via the script's
+#      test-only CHECK_NO_ORPHAN_TURN_WATCHDOG_SYMBOLS_OVERRIDE env var) is
+#      reported as exit 2 with the grep error on stderr — NOT swallowed into
+#      a false "OK: no ... symbols found." (the false-green F3 finding this
+#      fix addresses: `2>/dev/null || true` used to make a real grep failure
+#      indistinguishable from "no matches").
 #
 # Exit code: 0 if all assertions pass, 1 if any assertion fails.
 
@@ -237,6 +245,21 @@ mkdir -p "$TMP_DIR/pkg"
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$LINT_SCRIPT" 2>&1)
 EXIT_CODE=$?
 assert_exit_code "missing-dir-exit" 2 "$EXIT_CODE"
+
+# --- Test 9: a forced grep failure is a hard failure, not a false "OK" ------
+
+echo ""
+echo "Test 9 (F3): a grep failure (invalid ERE) is reported as exit 2, not swallowed as 'no matches'"
+setup_skeleton
+setup_fixture "pkg/agent/fixture9.go" '
+package agent
+
+func noop() {}
+'
+OUTPUT=$(REPO_ROOT="$TMP_DIR" CHECK_NO_ORPHAN_TURN_WATCHDOG_SYMBOLS_OVERRIDE='(unbalanced' bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "grep-failure-exit" 2 "$EXIT_CODE"
+assert_output_not_contains "grep-failure-not-false-ok" "OK: no retired" "$OUTPUT"
 
 # --- Summary ----------------------------------------------------------------
 

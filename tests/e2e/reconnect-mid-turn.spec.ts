@@ -57,15 +57,31 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
 
-    // D4: session_state.active_turn re-opens the streaming state → Stop is back
-    // (or the turn already finished — then a completed message must exist).
+    // D4: the gateway emits session_state{active_turn} FIRST on attach, so if
+    // the turn is still running Stop should reappear within ~5s of reconnect
+    // — bounded here at 15s for CI jitter. The turn may also have already
+    // finished during the reload, in which case a completed message exists
+    // instead. Assert the ACTUAL branch explicitly (not a tautological
+    // membership check that passes no matter which literal comes back).
     const stopOrDone = await Promise.race([
       stopButton(page).waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'stop' as const),
       assistantMessages(page).first().waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'done' as const),
     ])
-    expect(['stop', 'done']).toContain(stopOrDone)
+    if (stopOrDone === 'stop') {
+      await expect(stopButton(page)).toBeVisible()
+      await expect(anyAssistantRow(page).first()).toBeVisible()
+    } else {
+      const doneRow = assistantMessages(page).first()
+      await expect(doneRow).toBeVisible()
+      expect((await doneRow.innerText()).trim().length).toBeGreaterThan(0)
+    }
 
     await waitTurnDone(page)
+    // ADR-082 D4: "Stop is back after reload" also means Stop goes away and
+    // the composer re-enables once the turn genuinely ends — assert both,
+    // bounded, rather than relying on waitTurnDone's 240s ceiling alone.
+    await expect(stopButton(page)).toBeHidden({ timeout: 30_000 })
+    await expect(chatInput(page)).toBeEnabled({ timeout: 10_000 })
 
     // Exactly one assistant message; catch-up + live tail ⇒ no gap.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
@@ -85,14 +101,26 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page2)
 
+    // Same D4 attach-order guarantee as S-08, asserted on the SECOND tab's
+    // own attach: Stop reappears within the 15s bound if the turn is still
+    // running, otherwise a completed, non-empty message is already there.
     const stopOrDone = await Promise.race([
       stopButton(page2).waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'stop' as const),
       assistantMessages(page2).first().waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'done' as const),
     ])
-    expect(['stop', 'done']).toContain(stopOrDone)
+    if (stopOrDone === 'stop') {
+      await expect(stopButton(page2)).toBeVisible()
+      await expect(anyAssistantRow(page2).first()).toBeVisible()
+    } else {
+      const doneRow = assistantMessages(page2).first()
+      await expect(doneRow).toBeVisible()
+      expect((await doneRow.innerText()).trim().length).toBeGreaterThan(0)
+    }
 
     await waitTurnDone(page)
     await waitTurnDone(page2)
+    await expect(stopButton(page2)).toBeHidden({ timeout: 30_000 })
+    await expect(chatInput(page2)).toBeEnabled({ timeout: 10_000 })
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
 

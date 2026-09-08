@@ -4325,6 +4325,10 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if validateErr := validateRemovedKeys(data); validateErr != nil {
 		return nil, validateErr
 	}
+	// F11: gateway.orphaned_turn_grace_seconds (ADR-045, deleted by ADR-082
+	// D1) is silently dropped by json.Unmarshal like any unknown key — this
+	// never blocks load, it only tells the operator the key does nothing.
+	warnIfLegacyOrphanGraceKeyPresent(data)
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
 		c := DefaultConfig()

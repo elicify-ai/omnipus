@@ -55,6 +55,22 @@
 # genuine reintroduction disguised as a string.
 #
 # Exit: 0 clean, 1 offenders found, 2 the check itself could not run.
+#
+# F3 hardening: the two SYMBOLS greps below capture grep's own exit status
+# rather than swallowing it with `2>/dev/null || true`. grep exits 0 (match),
+# 1 (no match -- the expected common case), or >1 (a real failure: invalid
+# regex, an unreadable file, etc.). `|| true` made all three indistinguishable
+# from "no matches", i.e. a false-green guard -- a broken regex or a file
+# this script can no longer read would silently report "OK: no ... symbols
+# found." instead of failing loudly. Any grep exit >1 is now a hard failure
+# (exit 2, stderr shown) rather than a swallowed clean pass.
+#
+# TEST-ONLY OVERRIDE: CHECK_NO_ORPHAN_TURN_WATCHDOG_SYMBOLS_OVERRIDE, if set,
+# replaces the SYMBOLS pattern below. It exists solely so
+# check-no-orphan-turn-watchdog.test.sh can inject a deliberately invalid ERE
+# (e.g. an unbalanced paren) to force a real grep exit>1 and assert this
+# script reports it as exit 2 rather than a false "OK". Never set in CI/
+# Makefile/pr.yml -- production runs always use the real SYMBOLS list.
 
 set -uo pipefail
 
@@ -86,15 +102,40 @@ SYMBOLS='ArmOrphanForegroundTurnWatch|DisarmOrphanForegroundTurnWatch|fireOrphan
 # case-sensitive and "ORPHANED" != "Orphaned"), so that env var name is its
 # own separate, explicit alternative.
 
+# Test-only override — see the F3 hardening note above the Exit line.
+SYMBOLS="${CHECK_NO_ORPHAN_TURN_WATCHDOG_SYMBOLS_OVERRIDE:-$SYMBOLS}"
+
+GREP_STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/check-no-orphan-turn-watchdog-stderr.XXXXXX")"
+trap 'rm -f "$GREP_STDERR_FILE"' EXIT
+
 # Two passes: extension-filtered recursion over the scan dirs (--include only
 # applies to files grep finds by recursing into a directory — it does NOT
 # filter an explicitly-named file argument like Makefile below, which has no
 # extension at all), plus a plain, unfiltered scan of Makefile itself.
+#
+# Each grep's exit status is captured directly (no `|| true`): 0 (matched) and
+# 1 (no matches — the normal, expected outcome) both proceed; anything >1 is a
+# real grep failure (bad regex, unreadable file, ...) and is treated as a hard
+# failure of the check itself, not a silent "no matches found".
 dir_hits=$(grep -rnE "$SYMBOLS" \
   --include='*.go' --include='*.ts' --include='*.tsx' --include='*.yml' \
   --include='*.yaml' --include='*.sh' \
-  "${SCAN_DIRS[@]}" 2>/dev/null || true)
-makefile_hits=$(grep -nE "$SYMBOLS" Makefile 2>/dev/null | sed 's#^#Makefile:#' || true)
+  "${SCAN_DIRS[@]}" 2>"$GREP_STDERR_FILE")
+dir_status=$?
+if [ "$dir_status" -gt 1 ]; then
+  echo "check-no-orphan-turn-watchdog: grep failed while scanning source directories (exit $dir_status)" >&2
+  cat "$GREP_STDERR_FILE" >&2
+  exit 2
+fi
+
+: > "$GREP_STDERR_FILE"
+makefile_hits=$(grep -nE "$SYMBOLS" Makefile 2>"$GREP_STDERR_FILE" | sed 's#^#Makefile:#')
+makefile_status=$?
+if [ "$makefile_status" -gt 1 ]; then
+  echo "check-no-orphan-turn-watchdog: grep failed while scanning Makefile (exit $makefile_status)" >&2
+  cat "$GREP_STDERR_FILE" >&2
+  exit 2
+fi
 
 hits=$(printf '%s\n%s\n' "$dir_hits" "$makefile_hits" \
   | grep -v '/generated/' \
