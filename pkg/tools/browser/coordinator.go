@@ -418,11 +418,10 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig) {
 			},
 		)
 	}
-	// Persist the new config on the coordinator so subsequent
-	// reloads compare against the latest-applied state. Without this,
-	// a back-to-back reload with the same config would re-log the
-	// change (because oldCfg would be the original, not the latest).
+	// Keep the profile identity fixed for the coordinator's lifetime. Other
+	// settings retain the latest config for subsequent reload comparisons.
 	c.mu.Lock()
+	newCfg.ProfileDir = c.cfg.ProfileDir
 	c.cfg = newCfg
 	c.mu.Unlock()
 }
@@ -757,6 +756,9 @@ func (c *BrowserCoordinator) ensureLaunched(ctx context.Context) error {
 // lockFile and writes the ownership marker. On failure it tears down any
 // half-built state (including releasing the lock).
 func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
+	c.mu.Lock()
+	cfg := c.cfg
+	c.mu.Unlock()
 	// Single-launch atomicity via an O_EXCL/flock lockfile (CRIT-001): the
 	// removed net.Listen(":9223") bind was the atomic guard, and the CDP pipe
 	// has no port, so a cross-process lockfile takes its place. The ownership
@@ -776,19 +778,19 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		}
 	}()
 
-	if err = os.MkdirAll(c.cfg.ProfileDir, 0o700); err != nil {
-		return fmt.Errorf("browser: coordinator: cannot create profile directory %s: %w", c.cfg.ProfileDir, err)
+	if err = os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
+		return fmt.Errorf("browser: coordinator: cannot create profile directory %s: %w", cfg.ProfileDir, err)
 	}
-	cleanStaleSingletons(c.cfg.ProfileDir)
+	cleanStaleSingletons(cfg.ProfileDir)
 
 	// Resolve the Chromium binary (may shell out to probe PATH candidates or
 	// download Chrome-for-Testing — runs with c.mu released, per the file doc).
-	execPath, err := c.execPath.resolve(ctx, c.cfg)
+	execPath, err := c.execPath.resolve(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("browser: coordinator: cannot locate chromium: %w", err)
 	}
 
-	cmdline := managedExecAllocatorOpts(c.cfg, chromeMajorVersion(ctx, execPath))
+	cmdline := managedExecAllocatorOpts(cfg, chromeMajorVersion(ctx, execPath))
 
 	// Launch over the pipe (fail closed — err reports launch + CDP
 	// connectivity failure directly). The launcher is a seam so tests never
@@ -800,7 +802,7 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	res, err := launch(ctx, execPath, pipeLaunchConfig{
 		args:        cmdline.Args,
 		env:         cmdline.Env,
-		userDataDir: c.cfg.ProfileDir,
+		userDataDir: cfg.ProfileDir,
 	})
 	if err != nil {
 		c.mu.Lock()
@@ -863,7 +865,7 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	// a later wave). A load failure never fails the Chrome launch itself —
 	// browsing tools must keep working even if the optional extension can't
 	// load.
-	if c.cfg.ExtensionDir != "" && c.cfg.ExtensionID != "" {
+	if cfg.ExtensionDir != "" && cfg.ExtensionID != "" {
 		if _, lerr := c.LoadExtension(ctx); lerr != nil {
 			logger.WarnCF(
 				"browser",

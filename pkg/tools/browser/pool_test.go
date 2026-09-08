@@ -293,7 +293,12 @@ func TestPool_DeleteProfileOnWorkspaceDeletionOnly(t *testing.T) {
 	})
 
 	t.Run("refuses while the browser is still live", func(t *testing.T) {
-		seed()
+		// A deleted workspace cannot be reopened. This is an independent live
+		// workspace, not another operation on the preceding deleted fixture.
+		f := newPoolFixture(t)
+		inst := f.mustAcquire(t, "live-delete-refusal")
+		key, dir := inst.key, inst.profileDir
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Cookies"), []byte("session=abc"), 0o600))
 		err := f.pool.DeleteProfile(key)
 		require.Error(t, err,
 			"deleting a profile out from under a running Chrome races the browser's own "+

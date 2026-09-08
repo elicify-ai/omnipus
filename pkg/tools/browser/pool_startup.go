@@ -19,7 +19,7 @@ func (p *BrowserPool) runStartup(key BrowsingKey, cfg BrowserConfig, flight *sta
 	p.mu.Lock()
 	if err == nil {
 		switch {
-		case p.closed || p.launching[id] != flight:
+		case p.closed || p.launching[id] != flight || p.retiring[id] != nil:
 			err = errPoolClosed
 		case !flight.live():
 			err = context.Canceled

@@ -35,8 +35,9 @@ package browser
 //	P-6  A refusal names MEMORY and a remedy that exists. It never names a cap
 //	     or a config key, because there is none to raise.
 //
-// Lock order where more than one lock is involved: writeLease -> pool.mu ->
-// manager.mu. Nothing in this file takes a manager lock while holding pool.mu.
+// Lock order: writeLease -> pool.mu -> manager.mu. Retirement holds the
+// candidate's manager mutexes through its admission check and removal, then
+// releases every bookkeeping lock before process or filesystem work.
 
 import (
 	"context"
@@ -224,7 +225,9 @@ type BrowserPool struct {
 	// RELEASED (P-2).
 	launching map[string]*startupCohort
 
-	closed bool
+	closed   bool
+	retiring map[string]*poolRetirement
+	deleted  map[string]struct{}
 
 	// --- seams. Production leaves every one of these nil/default. ---
 
@@ -299,9 +302,10 @@ func NewBrowserPool(homeDir string, cfg BrowserConfig) *BrowserPool {
 }
 
 // ApplyRuntimeConfig applies a reloaded config to the pool and to every live
-// instance's coordinator. Launch-time properties of an already-running Chrome
-// (headless, exec_path, profile_dir) are the coordinator's business to
-// warn about; the pool's own reload-applied key is idle_close_ttl.
+// instance's coordinator. Profile roots remain fixed until gateway restart;
+// each coordinator receives its own workspace profile. Launch-time properties
+// of an already-running Chrome are reported by the coordinator, while idle
+// close and cache-trim intervals apply immediately.
 func (p *BrowserPool) ApplyRuntimeConfig(newCfg BrowserConfig) {
 	ttl := newCfg.IdleCloseTTL
 	if ttl <= 0 {
@@ -312,21 +316,33 @@ func (p *BrowserPool) ApplyRuntimeConfig(newCfg BrowserConfig) {
 		trimEvery = defaultCacheTrimInterval
 	}
 	p.mu.Lock()
+	if newCfg.ProfileDir != p.cfg.ProfileDir {
+		logger.WarnCF("browser", "browser profile directory changed on reload — applies after gateway restart", nil)
+	}
+	newCfg.ProfileDir = p.cfg.ProfileDir
 	p.cfg = newCfg
 	p.idleCloseTTL = ttl
 	p.cacheTrimInterval = trimEvery
-	coords := make([]*BrowserCoordinator, 0, len(p.instances))
+	updates := make(map[*BrowserCoordinator]BrowserConfig, len(p.instances))
 	for _, inst := range p.instances {
-		coords = append(coords, inst.coord)
+		cfg := newCfg
+		cfg.ProfileDir = inst.profileDir
+		updates[inst.coord] = cfg
 	}
 	p.mu.Unlock()
-	for _, c := range coords {
-		c.ApplyRuntimeConfig(newCfg)
+	for c, cfg := range updates {
+		c.ApplyRuntimeConfig(cfg)
 	}
 }
 
 // profileRoot is the directory per-key profiles are FLAT SIBLINGS inside.
 func (p *BrowserPool) profileRoot() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.profileRootLocked()
+}
+
+func (p *BrowserPool) profileRootLocked() string {
 	dir := strings.TrimSpace(p.cfg.ProfileDir)
 	if dir == "" {
 		return filepath.Join(p.homeDir, "browser", "profiles")
@@ -342,11 +358,15 @@ func (p *BrowserPool) profileRoot() string {
 // anyway, because it is the last place between a key and a filesystem call and
 // a cheap check there is worth more than a proof somewhere else.
 func (p *BrowserPool) ProfileDirFor(key BrowsingKey) (string, error) {
+	return profileDirForRoot(p.profileRoot(), key)
+}
+
+func profileDirForRoot(root string, key BrowsingKey) (string, error) {
 	seg := key.ProfileSegment()
 	if seg == "" || seg != filepath.Base(seg) || seg == "." || seg == ".." || strings.ContainsRune(seg, os.PathSeparator) {
 		return "", fmt.Errorf("browser: %q is not a usable profile directory name for key %q", seg, key.String())
 	}
-	return filepath.Join(p.profileRoot(), seg), nil
+	return filepath.Join(root, seg), nil
 }
 
 // markerPathFor is the per-key ownership marker: <homeDir>/browser/ws-<id>.pid.
@@ -367,7 +387,7 @@ func (p *BrowserPool) markerPathFor(key BrowsingKey) string {
 // dirname(profileDir)/../chromium, and a flat sibling has the same dirname as
 // the default profile, so N keys share ONE managed-Chromium install (FR-037a).
 func (p *BrowserPool) configFor(key BrowsingKey) (BrowserConfig, error) {
-	dir, err := p.ProfileDirFor(key)
+	dir, err := profileDirForRoot(p.profileRootLocked(), key)
 	if err != nil {
 		return BrowserConfig{}, err
 	}
@@ -462,7 +482,7 @@ func (p *BrowserPool) admitLaunchLocked() (admit, measured bool) {
 				map[string]any{"live_browsers": len(p.instances)},
 			)
 		}
-		return len(p.instances)+len(p.launching) == 0, false
+		return len(p.instances)+len(p.launching)+len(p.retiring) == 0, false
 	}
 	// pending+1: room for the launches already under way AND for this one.
 	return avail >= PerBrowserCostBytes*uint64(len(p.launching)+1), true
@@ -480,9 +500,9 @@ func (p *BrowserPool) admitLaunchLocked() (admit, measured bool) {
 //	                   Killing it turns a working call into an inexplicable
 //	                   error inside an agent's turn.
 //
-// The in-flight read happens under the SAME p.mu that a call's own increment
-// takes (FR-051), so a call that starts during selection is either seen here
-// or lands on an instance this pass has already declined to evict.
+// Selection is advisory. The final retirement claim rechecks all registered
+// managers while holding their mutexes through removal; EnterCall increments
+// under those same manager mutexes (FR-051).
 //
 // Every candidate is re-stamped from observed use before it is ranked, because
 // "least recently used" is only a safe thing to close if it means USED. See
@@ -686,6 +706,19 @@ func (p *BrowserPool) Acquire(ctx context.Context, key BrowsingKey) (*chromeInst
 			p.mu.Unlock()
 			return nil, errPoolClosed
 		}
+		if _, deleted := p.deleted[id]; deleted {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("browser: workspace %s was deleted", key.WorkspaceID())
+		}
+		if retiring := p.retiring[id]; retiring != nil {
+			p.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-retiring.done:
+				continue
+			}
+		}
 		if inst, ok := p.instances[id]; ok && inst != nil {
 			inst.lastUsed = p.clock()
 			p.mu.Unlock()
@@ -730,8 +763,12 @@ func (p *BrowserPool) Acquire(ctx context.Context, key BrowsingKey) (*chromeInst
 				victim = p.evictableLocked()
 			}
 			if victim != nil {
+				retiring := p.claimInstanceLocked(victim, poolCloseEviction)
 				p.mu.Unlock()
-				p.closeInstance(victim, "evicted to make room for another workspace's browser")
+				if retiring == nil {
+					continue
+				}
+				p.finishRetirement(victim.key, retiring, "evicted to make room for another workspace's browser")
 				p.noteReopen(victim.key)
 				continue
 			}
@@ -770,6 +807,9 @@ func (p *BrowserPool) Acquire(ctx context.Context, key BrowsingKey) (*chromeInst
 
 func (p *BrowserPool) finishLaunch(id string, flight *startupCohort, err error) {
 	p.mu.Lock()
+	if p.retiring[id] != nil && err == nil {
+		err = ErrBrowserRestarting
+	}
 	if p.launching[id] == flight {
 		delete(p.launching, id)
 	}
@@ -928,53 +968,38 @@ func (p *BrowserPool) Release(key BrowsingKey, mgr *BrowserManager) {
 // back.
 func (p *BrowserPool) Close(key BrowsingKey) {
 	p.mu.Lock()
-	inst := p.instances[key.String()]
-	delete(p.instances, key.String())
-	p.mu.Unlock()
-	if inst == nil {
+	if retiring := p.retiring[key.String()]; retiring != nil {
+		p.mu.Unlock()
+		<-retiring.done
 		return
 	}
-	p.closeInstance(inst, "closed")
-}
-
-// closeInstance performs the teardown with p.mu NOT held (P-2). It removes the
-// instance from the map first when called from Close; the eviction path passes
-// an instance it has already selected, so it deletes here too — both orders
-// end with exactly one Shutdown, because the map delete is idempotent and the
-// coordinator's own Shutdown is guarded by its shutdown flag.
-func (p *BrowserPool) closeInstance(inst *chromeInstance, why string) {
-	p.mu.Lock()
-	if cur, ok := p.instances[inst.key.String()]; ok && cur == inst {
-		delete(p.instances, inst.key.String())
-	}
-	mgrs := make([]*BrowserManager, 0, len(inst.mgrs))
-	for m := range inst.mgrs {
-		mgrs = append(mgrs, m)
+	inst := p.instances[key.String()]
+	var retiring *poolRetirement
+	if inst != nil {
+		retiring = p.claimInstanceLocked(inst, poolCloseExplicit)
+	} else if startup := p.launching[key.String()]; startup != nil {
+		retiring = &poolRetirement{done: make(chan struct{}), startup: startup}
+		if p.retiring == nil {
+			p.retiring = make(map[string]*poolRetirement)
+		}
+		p.retiring[key.String()] = retiring
+		startup.cancel()
 	}
 	p.mu.Unlock()
-
-	inst.coord.Shutdown()
-	// The managers survive the process. Invalidating their connections is what
-	// makes their next tool call re-register (and re-launch) instead of
-	// driving a dead pipe forever.
-	for _, m := range mgrs {
-		if m != nil {
-			m.invalidateConnection()
-		}
+	if retiring != nil {
+		p.finishRetirement(key, retiring, "closed")
 	}
-	_ = os.Remove(p.markerPathFor(inst.key))
-	logger.InfoCF("browser", "closed this workspace's browser (its profile is kept)", map[string]any{
-		"workspace":   inst.key.WorkspaceID(),
-		"why":         why,
-		"profile_dir": inst.profileDir,
-	})
-	// FR-072 trigger 1, and the primary one: the browser this key owned has
-	// just gone away, so its disposable cache is trimmable RIGHT NOW —
-	// milliseconds after the close, with no interval to wait for. The
-	// scheduled pass exists for profiles closed by something this process did
-	// not see (a previous run, another gateway).
-	p.logUnboundedContinuousDriveOnce()
-	p.TrimProfile(inst.key)
+}
+
+// closeInstance explicitly closes this exact instance if it is still current.
+// Automatic eviction/idle close use an eligibility-checked atomic claim instead.
+func (p *BrowserPool) closeInstance(inst *chromeInstance, why string) {
+	p.mu.Lock()
+	retiring := p.claimInstanceLocked(inst, poolCloseExplicit)
+	p.mu.Unlock()
+	if retiring != nil {
+		p.finishRetirement(inst.key, retiring, why)
+	}
 }
 
 // CloseIdle closes every instance that has had nothing to do for longer than
@@ -1012,7 +1037,7 @@ func (p *BrowserPool) CloseIdle(now time.Time) []string {
 	p.mu.Unlock()
 
 	// Re-check each victim AT THE POINT OF ACTION, not only at the point of
-	// decision. closeInstance kills a Chrome and walks a profile tree, so the
+	// decision. Retirement kills a Chrome and walks a profile tree, so the
 	// last entry in `due` dies many seconds after it was judged idle — and a
 	// tool call, a viewer attach or a tab open anywhere in that gap makes it
 	// busy. Without this the browser is killed mid-call, silently.
@@ -1020,17 +1045,20 @@ func (p *BrowserPool) CloseIdle(now time.Time) []string {
 	// Both halves matter. `cur == inst` catches the key having been closed and
 	// RELAUNCHED into a different live instance while we walked: closing on
 	// the stale pointer would take down a browser that is seconds old and
-	// still starting. `idle()` catches the same instance having become busy.
+	// still starting. The atomic claim catches the same instance becoming busy.
 	closed := make([]string, 0, len(due))
 	for _, inst := range due {
 		p.mu.Lock()
 		cur, still := p.instances[inst.key.String()]
-		reap := still && cur == inst && inst.idle()
+		var retiring *poolRetirement
+		if still && cur == inst && now.Sub(inst.lastUsed) >= ttl {
+			retiring = p.claimInstanceLocked(inst, poolCloseIdle)
+		}
 		p.mu.Unlock()
-		if !reap {
+		if retiring == nil {
 			continue
 		}
-		p.closeInstance(inst, "idle past tools.browser.idle_close_ttl")
+		p.finishRetirement(inst.key, retiring, "idle past tools.browser.idle_close_ttl")
 		closed = append(closed, inst.key.String())
 	}
 	sort.Strings(closed)
@@ -1041,27 +1069,37 @@ func (p *BrowserPool) CloseIdle(now time.Time) []string {
 // function in the package that does, and it has exactly ONE legitimate
 // trigger: the workspace was DELETED (FR-043a, SC-017).
 //
-// It refuses while that key still has a live Chrome, because deleting a
-// profile out from under a running Chrome races the browser's own writes. The
-// caller's contract is Close(key) first, and only once it has RETURNED,
-// DeleteProfile(key).
+// It refuses an unclosed live/pending browser and joins an already-running
+// close. Once accepted, deletion permanently retires the key in this pool so
+// retained callers cannot recreate the removed profile. Ordinary Close alone
+// remains reversible.
 //
 // Idle close, eviction, roster change, reload and crash recovery must NEVER
 // reach here. Each of them is a case where the workspace still exists and its
 // user still expects to be logged in when they come back.
 func (p *BrowserPool) DeleteProfile(key BrowsingKey) error {
-	p.mu.Lock()
-	_, live := p.instances[key.String()]
-	p.mu.Unlock()
-	if live {
-		return fmt.Errorf(
-			"browser: refusing to delete workspace %s's profile while its browser is still running — call Close first",
-			key.WorkspaceID(),
-		)
-	}
 	dir, err := p.ProfileDirFor(key)
 	if err != nil {
 		return err
+	}
+	p.mu.Lock()
+	retiring := p.retiring[key.String()]
+	_, live := p.instances[key.String()]
+	_, launching := p.launching[key.String()]
+	if retiring == nil && (live || launching) {
+		p.mu.Unlock()
+		return fmt.Errorf(
+			"browser: refusing to delete workspace %s's profile while its browser is running or starting — call Close first",
+			key.WorkspaceID(),
+		)
+	}
+	if p.deleted == nil {
+		p.deleted = make(map[string]struct{})
+	}
+	p.deleted[key.String()] = struct{}{}
+	p.mu.Unlock()
+	if retiring != nil {
+		<-retiring.done
 	}
 	if rmErr := os.RemoveAll(dir); rmErr != nil {
 		return fmt.Errorf("browser: could not delete workspace %s's browser profile: %w", key.WorkspaceID(), rmErr)
@@ -1125,18 +1163,18 @@ func (p *BrowserPool) Shutdown() {
 	for _, flight := range p.launching {
 		startups = append(startups, flight)
 	}
-	all := make([]*chromeInstance, 0, len(p.instances))
+	all := make(map[BrowsingKey]*poolRetirement, len(p.instances))
 	for _, inst := range p.instances {
-		all = append(all, inst)
+		if retirement := p.claimInstanceLocked(inst, poolCloseExplicit); retirement != nil {
+			all[inst.key] = retirement
+		}
 	}
-	p.instances = make(map[string]*chromeInstance)
 	p.mu.Unlock()
 	for _, flight := range startups {
 		flight.cancel()
 	}
-	for _, inst := range all {
-		inst.coord.Shutdown()
-		_ = os.Remove(p.markerPathFor(inst.key))
+	for key, retirement := range all {
+		p.finishRetirement(key, retirement, "gateway shutdown")
 	}
 }
 

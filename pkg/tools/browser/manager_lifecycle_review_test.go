@@ -16,6 +16,7 @@ func TestPassivePopupAdoptionRequiresAnOwnedOpener(t *testing.T) {
 
 func testPassivePopupAdoptionRequiresAnOwnedOpener(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t)
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	t.Cleanup(m.Shutdown)
 	_, err := m.Session("a")
 	require.NoError(t, err)
