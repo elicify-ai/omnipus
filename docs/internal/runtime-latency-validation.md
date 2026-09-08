@@ -84,3 +84,31 @@ Unlike the original twenty-minute soak, these runs persisted their detailed JSON
 - Diagnostic 1: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-diagnostic-1/browser-improvements-laten-f8442-d-and-receiver-video-timing/latency-evidence.json`
 - Diagnostic 2: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-diagnostic-2/browser-improvements-laten-f8442-d-and-receiver-video-timing/latency-evidence.json`
 - Video-only experiment: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-video-only-1/browser-improvements-video-c6037-citly-inactive-viewer-audio/latency-video-only-evidence.json`
+
+## Amsterdam deployment checkpoint — 2026-09-08 18:22 WIB
+
+The user authorized UAT in Amsterdam. The existing `uat-omnipus` machine
+`784041ef9ed398` in `ams` was updated to source `ee32c6fa6`; its services,
+environment, guest resources, mounts and initialization configuration were
+preserved. Pre-deployment snapshot: `vs_YYD1njpDJLGRiBxVKkmJ9glO`.
+
+The first Depot build reported publication, but the registry lookup and machine
+fetch could not find that image. It was not a successful deployment. The
+replacement BuildKit build `30862` and deployment `19145` both exited 0. Root
+verified the running machine's image digest, binary checksum, Chrome version
+and healthy endpoint:
+
+- Image: `sha256:b8ef492bd9b2d3202547822faf0a2b9b5b9497931f523035b2fe8142db8ad59c`.
+- Binary SHA-256: `5da276edcd94ec1ef0dd8a4f9dfa07a6ad6d28ef7c379b4100e38188c2c253da`.
+- Chrome: `152.0.7977.82`; health: `ok`.
+- Provenance: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/fly-uat-browser/provenance.json`.
+
+Manual runner `22ac66c0f` received an independent read-only review with no
+concrete regression found. It permits the designated HTTPS UAT origin and
+requires its preview origin to match; the runner must share the gateway's
+runtime filesystem. Its pixel oracle, event sequences, durations and 200ms
+threshold remain unchanged. Npm setup used session `72680`; by this checkpoint
+remote UAT test `61412` had started, with no terminal Linux latency result
+recorded here. Deployment
+health is not video, audio, latency or full-soak acceptance. Later results must
+identify their tested source and retained artifacts separately.

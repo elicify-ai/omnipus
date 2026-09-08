@@ -3,6 +3,27 @@
 Branch: `browser-improvements`; release base: `fbcbc5edc9845f1fbecb01b423f15d09fe405f5c`.
 This is an open findings ledger, not release acceptance.
 
+## Amsterdam and CI checkpoint — 2026-09-08 18:22 WIB
+
+User-authorized Amsterdam UAT deployment is verified on existing machine
+`784041ef9ed398` (`ams`), running source `ee32c6fa6` and Chrome `152.0.7977.82`.
+The replacement BuildKit build and deployment passed; the earlier Depot image
+was unavailable in the registry and did not deploy. Existing machine
+configuration was preserved and its health endpoint passed. Image/binary
+checksums, snapshot and provenance are recorded in
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
+No Linux latency or audio-enabled soak result existed at this checkpoint.
+
+PR [685](https://github.com/elicify-ai/omnipus/pull/685) targets
+`release/v0.1.1`; `main` remains untouched. Initial CI run
+[34216723190](https://github.com/elicify-ai/omnipus/actions/runs/34216723190)
+on head `b49194849` failed. Earlier browser-gating corrections were integrated;
+admission/filesystem fixture correction `6a178d5df` and WebRTC lint correction
+`86320b5d2` have focused local passing evidence. Remaining gateway/browser
+lint and race-fixture corrections were still being validated at this checkpoint.
+None of these local results converts the initial run into a pass or supplies
+final exact-commit CI acceptance.
+
 ## Input correction test plan
 
 The frame protocol and navigation recovery requirements supply the oracle:

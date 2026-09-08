@@ -184,13 +184,26 @@ Go test/build batches remain serial within this team; independent source work
 continues in isolated worktrees. No full CI is run for each fix. Other operators'
 processes are not controlled or terminated by this work.
 
+## Amsterdam and CI checkpoint — 2026-09-08 18:22 WIB
+
+- [x] Deploy the user-authorized Amsterdam UAT source `ee32c6fa6` to existing machine `784041ef9ed398`; verify image/binary identity, Chrome `152.0.7977.82` and health, preserving machine configuration and snapshot `vs_YYD1njpDJLGRiBxVKkmJ9glO`.
+- [x] Independently review manual runner `22ac66c0f`; designated-origin restrictions and the original pixel/event/timing oracle remain intact.
+- [ ] Obtain retained Linux audio-enabled latency and full-soak results. At this checkpoint setup had started, but no Linux latency result existed.
+- [ ] Complete corrections from PR 685's failed initial CI run `34216723190`, then obtain applicable passing checks on the final commit targeting `release/v0.1.1`. Earlier gating, admission/filesystem and WebRTC lint corrections were integrated; gateway/browser lint and race-fixture validation remained open at this checkpoint.
+
+The first Depot image was unavailable despite reported publication. Replacement
+BuildKit build `30862` and deployment `19145` succeeded and the running image
+was verified. Detailed immutable deployment provenance and evidence limits are in
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
+These checkpoint entries do not establish final CI or product acceptance.
+
 ## Release evidence (incomplete)
 
 - [ ] Independent intensive `/review` of complete release-base diff; seven review lenses, every finding resolved and rechecked.
 - [ ] Complete direct-browser acceptance: exact build and both ten-minute phases now have evidence, but the 100-click latency target failed and detailed soak artifacts were not retained.
 - [ ] Native installed macOS web-app focus/sleep/wake verification; preserve user profile and production data.
 - [ ] Local and remote connection behavior, audio playback/synchronization and failure recovery.
-- [ ] Push `browser-improvements`, run applicable CI on that exact commit, fix failures without suppressions or bypasses.
+- [ ] Obtain applicable passing CI on the final `browser-improvements` commit in PR 685 targeting `release/v0.1.1`; the initial run failed and corrections require a new run.
 - [ ] Final requirement-by-requirement completion audit; no commercial-readiness claim before all required evidence exists.
 
 ## Evidence qualifications
