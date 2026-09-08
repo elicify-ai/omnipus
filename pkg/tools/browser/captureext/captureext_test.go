@@ -401,6 +401,8 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
+	// 1.0.21: retired capture rejections preserve queued replacement commands.
+	"1.0.21": "6ad2a4d331957c962be3689b405dd7f4784d777674b2d4e65b22e0d289a1769b",
 	// 1.0.20: shutdown and adaptation asynchronous lifetime fences.
 	"1.0.20": "13ff401406de60a155f0df70655a3b8344ba7c23e02b41cc8877f596962b869f",
 	// Historical entry moved from the removed, disconnected skip-policy harness.

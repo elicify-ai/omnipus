@@ -1,0 +1,15 @@
+# Retired capture rejection
+
+A rejected asynchronous operation belongs to the capture attempt that issued it. If a replacement or shutdown has retired that attempt, its rejection must not close the current ingest socket, publish a new failure, or drop the queued replacement. A current attempt's actual failure must still be visible and close its failing socket through the existing recovery path.
+
+The focused tests drive the real control handler, coalescing loop and encoder pipeline. Only Chrome target lookup, stream-ID acquisition, media acquisition and peer/socket boundaries are controlled. Each of the three capture awaits rejects after either a replacement command, shutdown, or while still current. Replacement cases must perform the replacement lookup and media capture, publish exactly its generation/target/offer ID, and leave no pending capture loop. Shutdown cases preserve shutdown state without extra socket closes or failure diagnostics. Current-error controls require the original failure and socket close. A combined queued-replacement/shutdown case checks that shutdown does not start a later pass. One minimum fault removes the retired-rejection suppression, which must restore the failure without changing current-error controls.
+
+## Verification
+
+The initial real-module Node run reproduced all nine retired-rejection failures (three asynchronous stages times replacement, shutdown and queued-replacement/shutdown), while all three current-error controls passed. The fixed module passed all twelve schedules. Removing only the attempt-level retired-error suppression reproduced the nine failures again while retaining the three current-error controls; restoring production passed all twelve again.
+
+The final focused Go gate completed successfully in12.924 seconds. It ran the twelve new schedules, actual coalesced/recovery/connected-peer/shutdown controls, and the embedded version/hash gate, with zero skips. This verifies promise-order and production-handler behavior against controlled Chrome/media boundaries, not a new live-Chrome soak. No full suite or CI repeat was added.
+
+The attempt boundary retains its own local generation across the capture and negotiation awaits. It suppresses a rejection only when shutdown or a different local generation has retired that attempt; current failures propagate unchanged to the existing reporting/socket-close path. The coalescing loop preserves a pending replacement after retirement and clears pending work on shutdown. Comments now describe exact-target capture and same-generation track replacement accurately. Version1.0.21 and its new content hash ensure corrected assets are reseeded.
+
+GitNexus impact was LOW for runCaptureAndOffer (three direct callers/five total) and runCaptureAndOfferOnce (one direct caller/six total), with zero indexed affected processes. The version name remains ambiguous in the stale graph and was manually scoped to extension seeding and its version/hash gate. Final staged graph scope is checked before commit; root owns the separate canonical control-schema documentation correction.

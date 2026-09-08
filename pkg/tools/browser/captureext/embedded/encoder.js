@@ -1546,34 +1546,14 @@ function newPeerConnection() {
   return pc;
 }
 
-// runCaptureAndOffer performs (or re-performs, for recapture) the full
-// capture -> offer flow: acquire the active tab's MediaStream, build a
-// fresh non-trickle offer, and send it as a browser_capture_offer frame.
-// Tears down any previous PC/stream first, so it is safe to call both for
-// the initial connect and for a recapture control message — matching
-// wv1-spike-results.md Q3's proven "new PC with fresh SSRCs replaces the
-// old one" recovery pattern rather than incremental same-PC renegotiation.
-// captureInFlight serialises runCaptureAndOffer (2026-07-31, found by review
-// of the adaptive-viewport feature). This function has two awaits before it
-// assigns currentPC/currentStream, and it had NO in-flight guard. That was
-// practically unreachable while the only trigger was an active-tab switch (a
-// rare, effectively serialized event) — but the viewport feature added a
-// second, client-driven, HIGH-FREQUENCY trigger: every panel resize sends
-// browser_viewport, and the gateway answers with a recapture. A CaptureSession
-// is shared per AGENT, so two viewers of the same tab each push their own
-// geometry with no cross-viewer coordination.
+// Capture the exact server-assigned target. Same-generation recovery replaces
+// tracks on the connected peer; a target or geometry generation change creates
+// a fresh peer and offer. Each immutable command keeps its own geometry.
 //
-// Two overlapping calls race the same chrome.tabCapture pipeline for one tab.
-// Chrome allows only one active tabCapture stream per tab, so the loser's
-// getUserMedia throws — and handleControlFrame's catch closes the WHOLE ingest
-// WebSocket, tearing down a session that was otherwise fine. Even without a
-// throw, the loser's PeerConnection and MediaStreamTrack are orphaned, because
-// teardownCapture only ever closes whatever the globals currently point at.
-//
-// Coalesce rather than queue: if a recapture arrives while one is running, set
-// a rerun flag and let the in-flight call loop once more when it finishes. The
-// geometry we want is always the LATEST one, so collapsing N pending
-// recaptures into one extra pass is both correct and cheaper.
+// Chrome permits only one tabCapture per tab. Coalesce overlapping requests
+// into the latest pending command rather than starting competing captures.
+// A retired attempt's completion or rejection must leave that command queued;
+// shutdown retires both the active attempt and any pending pass.
 let captureInFlight = false;
 let captureRerunRequested = false;
 
@@ -1610,121 +1590,130 @@ async function runCaptureAndOffer(command) {
     do {
       captureRerunRequested = false;
       await runCaptureAndOfferOnce(desiredCaptureCommand);
-    } while (captureRerunRequested);
+    } while (captureRerunRequested && !shuttingDown);
   } finally {
     captureInFlight = false;
+    captureRerunRequested = false;
   }
 }
 
 async function runCaptureAndOfferOnce(command) {
   command = captureCommandFrom(command || desiredCaptureCommand || readConfig());
-  captureScale = command.capture_scale;
-  const existing = currentPC;
-  const sameGeneration = currentCaptureCommand &&
-    currentCaptureCommand.capture_generation === command.capture_generation &&
-    currentCaptureCommand.target_id === command.target_id;
-  if (sameGeneration && existing && existing.connectionState === 'connected' && currentStream) {
-    const generation = ++captureGeneration;
-    setStatus('capturing');
-    // Chrome forbids a second active capture of the same tab. Stop the
-    // source, retaining its sender and negotiated connection (verified with
-    // Chrome 151, H.264 VideoToolbox and Opus).
-    currentStream.getTracks().forEach((track) => track.stop());
-    currentStream = null;
-    try {
-      const replacement = await captureActiveTabStream(command);
-      if (!replacement) return;
-      if (shuttingDown || currentPC !== existing || captureGeneration !== generation) {
-        replacement.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      currentStream = replacement;
-      const senders = existing.getSenders();
-      for (const track of replacement.getTracks()) {
-        const sender = senders.find((candidate) => candidate.track && candidate.track.kind === track.kind);
-        if (!sender) throw new Error('recapture has no negotiated ' + track.kind + ' sender');
-        await queueSenderParams(() => sender.replaceTrack(track));
-      }
-      if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
-      applyVideoSenderConstraints(existing, { context: 'track-replacement', recordSuccess: true });
-      currentCaptureCommand = command;
-      setStatus('connected');
-      record('recapture: replaced tracks, retained ingest connection');
-      return;
-    } catch (e) {
-      if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
-      warn('recapture track replacement failed; renegotiating ingest', e);
-      record('recapture: replacement failed, renegotiating: ' + String(e));
-    }
-  }
-  teardownCapture();
-  const generation = ++captureGeneration;
-  setStatus('capturing');
-
-  const stream = await captureActiveTabStream(command);
-  if (!stream) return;
-  if (shuttingDown || captureGeneration !== generation) {
-    stream.getTracks().forEach((track) => track.stop());
-    return;
-  }
-  currentStream = stream;
-
-  setStatus('offering');
-  const pc = newPeerConnection();
-  currentPC = pc;
-  currentCaptureCommand = command;
-  const offerID = ++nextOfferID;
-  if (!Number.isSafeInteger(offerID)) throw new RangeError('capture offer_id exhausted');
-  currentOfferID = offerID;
-  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-  // Prefer H.264 over VP8 (measured 2026-08-13): software VP8 at the 2x
-  // capture size (1122x1416) tops out at 4-12fps on a 4-core mobile Intel -
-  // the encoder, not bitrate or transport, is the ceiling (proven by
-  // testufo.com runs: 'balanced' degradation removed the 3s stalls but avg
-  // fps stayed ~7). H.264 engages VideoToolbox HARDWARE encode on macOS,
-  // taking the encode off the CPU entirely. Best-effort: if H.264 is absent
-  // from capabilities (or setCodecPreferences unsupported) the negotiation
-  // falls back to the previous VP8 path untouched. The Pion relay registers
-  // default codecs incl. H264, and it forwards RTP without transcoding, so
-  // the preference must be expressed HERE, on the sending leg.
+  let generation = captureGeneration;
   try {
-    const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
-    if (caps && caps.codecs && caps.codecs.length) {
-      const h264 = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
-      if (h264.length) {
-        const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
-        const tr = pc.getTransceivers().find((x) => x.sender && x.sender.track && x.sender.track.kind === 'video');
-        if (tr && tr.setCodecPreferences) {
-          tr.setCodecPreferences(h264.concat(rest));
-          record('codec preference: H264 first (' + h264.length + ' profiles)');
+    captureScale = command.capture_scale;
+    const existing = currentPC;
+    const sameGeneration = currentCaptureCommand &&
+      currentCaptureCommand.capture_generation === command.capture_generation &&
+      currentCaptureCommand.target_id === command.target_id;
+    if (sameGeneration && existing && existing.connectionState === 'connected' && currentStream) {
+      generation = ++captureGeneration;
+      setStatus('capturing');
+      // Chrome forbids a second active capture of the same tab. Stop the
+      // source, retaining its sender and negotiated connection (verified with
+      // Chrome 151, H.264 VideoToolbox and Opus).
+      currentStream.getTracks().forEach((track) => track.stop());
+      currentStream = null;
+      try {
+        const replacement = await captureActiveTabStream(command);
+        if (!replacement) return;
+        if (shuttingDown || currentPC !== existing || captureGeneration !== generation) {
+          replacement.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        currentStream = replacement;
+        const senders = existing.getSenders();
+        for (const track of replacement.getTracks()) {
+          const sender = senders.find((candidate) => candidate.track && candidate.track.kind === track.kind);
+          if (!sender) throw new Error('recapture has no negotiated ' + track.kind + ' sender');
+          await queueSenderParams(() => sender.replaceTrack(track));
+        }
+        if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
+        applyVideoSenderConstraints(existing, { context: 'track-replacement', recordSuccess: true });
+        currentCaptureCommand = command;
+        setStatus('connected');
+        record('recapture: replaced tracks, retained ingest connection');
+        return;
+      } catch (e) {
+        if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
+        warn('recapture track replacement failed; renegotiating ingest', e);
+        record('recapture: replacement failed, renegotiating: ' + String(e));
+      }
+    }
+    teardownCapture();
+    generation = ++captureGeneration;
+    setStatus('capturing');
+
+    const stream = await captureActiveTabStream(command);
+    if (!stream) return;
+    if (shuttingDown || captureGeneration !== generation) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    currentStream = stream;
+
+    setStatus('offering');
+    const pc = newPeerConnection();
+    currentPC = pc;
+    currentCaptureCommand = command;
+    const offerID = ++nextOfferID;
+    if (!Number.isSafeInteger(offerID)) throw new RangeError('capture offer_id exhausted');
+    currentOfferID = offerID;
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    // Prefer H.264 over VP8 (measured 2026-08-13): software VP8 at the 2x
+    // capture size (1122x1416) tops out at 4-12fps on a 4-core mobile Intel -
+    // the encoder, not bitrate or transport, is the ceiling (proven by
+    // testufo.com runs: 'balanced' degradation removed the 3s stalls but avg
+    // fps stayed ~7). H.264 engages VideoToolbox HARDWARE encode on macOS,
+    // taking the encode off the CPU entirely. Best-effort: if H.264 is absent
+    // from capabilities (or setCodecPreferences unsupported) the negotiation
+    // falls back to the previous VP8 path untouched. The Pion relay registers
+    // default codecs incl. H264, and it forwards RTP without transcoding, so
+    // the preference must be expressed HERE, on the sending leg.
+    try {
+      const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
+      if (caps && caps.codecs && caps.codecs.length) {
+        const h264 = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
+        if (h264.length) {
+          const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
+          const tr = pc.getTransceivers().find((x) => x.sender && x.sender.track && x.sender.track.kind === 'video');
+          if (tr && tr.setCodecPreferences) {
+            tr.setCodecPreferences(h264.concat(rest));
+            record('codec preference: H264 first (' + h264.length + ' profiles)');
+          }
         }
       }
+    } catch (e) {
+      warn('setCodecPreferences failed; keeping default codec order', e);
     }
-  } catch (e) {
-    warn('setCodecPreferences failed; keeping default codec order', e);
+
+    // Fix-wave finding 4: cap bitrate + set encoding hints on the video
+    // sender now that addTrack has created it. Video-only (audio/Opus has no
+    // equivalent overdrive risk here). This pre-negotiation call is
+    // best-effort -- see applyVideoSenderConstraints's doc comment for why
+    // the post-answer/post-connected re-applies below are the ones that
+    // actually matter.
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      applyVideoSenderConstraints(pc, { context: 'pre-negotiation' });
+    }
+
+    const offer = await pc.createOffer();
+    offer.sdp = mungeVideoStartBitrate(offer.sdp);
+    await pc.setLocalDescription(offer);
+    await waitIceGatheringComplete(pc);
+
+    if (shuttingDown || currentPC !== pc || captureGeneration !== generation) return;
+    record('runCaptureAndOffer: sending browser_capture_offer');
+    sendFrame({ type: 'browser_capture_offer', sdp: pc.localDescription.sdp,
+      capture_generation: command.capture_generation, target_id: command.target_id, offer_id: offerID });
+    armOfferAnswerTimeout();
+  } catch (error) {
+    // Chrome can reject an old lookup/media/negotiation promise after a new
+    // command or shutdown retired it. Only a current attempt owns failure.
+    if (shuttingDown || captureGeneration !== generation) return;
+    throw error;
   }
-
-  // Fix-wave finding 4: cap bitrate + set encoding hints on the video
-  // sender now that addTrack has created it. Video-only (audio/Opus has no
-  // equivalent overdrive risk here). This pre-negotiation call is
-  // best-effort -- see applyVideoSenderConstraints's doc comment for why
-  // the post-answer/post-connected re-applies below are the ones that
-  // actually matter.
-  const videoTrack = stream.getVideoTracks()[0];
-  if (videoTrack) {
-    applyVideoSenderConstraints(pc, { context: 'pre-negotiation' });
-  }
-
-  const offer = await pc.createOffer();
-  offer.sdp = mungeVideoStartBitrate(offer.sdp);
-  await pc.setLocalDescription(offer);
-  await waitIceGatheringComplete(pc);
-
-  if (shuttingDown || currentPC !== pc || captureGeneration !== generation) return;
-  record('runCaptureAndOffer: sending browser_capture_offer');
-  sendFrame({ type: 'browser_capture_offer', sdp: pc.localDescription.sdp,
-    capture_generation: command.capture_generation, target_id: command.target_id, offer_id: offerID });
-  armOfferAnswerTimeout();
 }
 
 // ---- signaling ----------------------------------------------------------------
