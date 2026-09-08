@@ -19,6 +19,10 @@ import (
 // bound tests slow enough that someone would be tempted to skip them.
 func bulkCorpus(t *testing.T, store Store, n int) {
 	t.Helper()
+	idx, ok := store.(*Index)
+	if !ok {
+		t.Fatalf("bulkCorpus: store is %T, not *Index", store)
+	}
 	sc := plantSchema(t)
 	const batchSize = 2000
 	batch := make([]NoteRows, 0, batchSize)
@@ -26,14 +30,14 @@ func bulkCorpus(t *testing.T, store Store, n int) {
 		src := fmt.Sprintf("---\ntype: plant\nid: PL-%06d\nspecies: Sedum\n---\n", i)
 		batch = append(batch, note(t, fmt.Sprintf("garden/bulk/p-%06d.md", i), sc, src))
 		if len(batch) == batchSize {
-			if err := store.(*Index).UpsertNotes(context.Background(), batch); err != nil {
+			if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 				t.Fatalf("UpsertNotes: %v", err)
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
-		if err := store.(*Index).UpsertNotes(context.Background(), batch); err != nil {
+		if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 			t.Fatalf("UpsertNotes: %v", err)
 		}
 	}

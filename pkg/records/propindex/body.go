@@ -184,7 +184,7 @@ func normaliseTag(s string) string {
 	}
 	hasLetter := false
 	for _, r := range s {
-		if !(r >= '0' && r <= '9') && r != '-' && r != '_' && r != '/' {
+		if (r < '0' || r > '9') && r != '-' && r != '_' && r != '/' {
 			hasLetter = true
 			break
 		}

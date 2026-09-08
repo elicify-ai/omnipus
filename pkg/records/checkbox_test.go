@@ -276,7 +276,7 @@ func TestCheckbox_FoldsWithFullUnicodeNotToLower(t *testing.T) {
 	if FoldKey("istanbul") == FoldKey("İSTANBUL") {
 		t.Error("FoldKey must NOT fold Turkish dotted İ onto i — that is the classic Turkish-I wrong match, and strings.ToLower is how it gets in")
 	}
-	if strings.ToLower("İSTANBUL") == strings.ToLower("istanbul") {
+	if strings.ToLower("İSTANBUL") == strings.ToLower("istanbul") { //nolint:staticcheck // the point is that strings.ToLower collapses this pair; strings.EqualFold does not
 		// Documents WHY the assertion above is not vacuous: the rejected
 		// implementation really does answer differently here.
 		t.Log("confirmed: strings.ToLower collapses the Turkish pair, which is exactly why it is not used")

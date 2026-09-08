@@ -99,7 +99,11 @@ func TestRebuild_DeleteTheFileAndReopenYieldsIdenticalResults(t *testing.T) {
 	if !store.NeedsFullIndex() {
 		t.Error("a brand-new index must report that it needs a full index; otherwise nothing ever fills it")
 	}
-	if err := store.(*Index).UpsertNotes(ctx, corpus); err != nil {
+	idx, ok := store.(*Index)
+	if !ok {
+		t.Fatalf("store is %T, not *Index", store)
+	}
+	if err := idx.UpsertNotes(ctx, corpus); err != nil {
 		t.Fatalf("UpsertNotes: %v", err)
 	}
 	if store.NeedsFullIndex() {
@@ -136,7 +140,11 @@ func TestRebuild_DeleteTheFileAndReopenYieldsIdenticalResults(t *testing.T) {
 			"not report itself populated — an index that thinks it is complete over zero notes " +
 			"answers every query with a confident nothing")
 	}
-	if err := rebuilt.(*Index).UpsertNotes(ctx, corpus); err != nil {
+	rebuiltIdx, ok := rebuilt.(*Index)
+	if !ok {
+		t.Fatalf("rebuilt is %T, not *Index", rebuilt)
+	}
+	if err := rebuiltIdx.UpsertNotes(ctx, corpus); err != nil {
 		t.Fatalf("re-deriving from the notes: %v", err)
 	}
 
@@ -167,7 +175,11 @@ func TestRebuild_AnIncompatibleSchemaVersionIsDiscardedNotMigrated(t *testing.T)
 	if err != nil {
 		t.Fatalf("reopening: %v", err)
 	}
-	if _, serr := stamp.(*Index).exec(ctx, PhaseOpen, "PRAGMA user_version = 999"); serr != nil {
+	stampIdx, ok := stamp.(*Index)
+	if !ok {
+		t.Fatalf("stamp is %T, not *Index", stamp)
+	}
+	if _, serr := stampIdx.exec(ctx, PhaseOpen, "PRAGMA user_version = 999"); serr != nil {
 		t.Fatalf("stamping a foreign version: %v", serr)
 	}
 	if cerr := stamp.Close(); cerr != nil {

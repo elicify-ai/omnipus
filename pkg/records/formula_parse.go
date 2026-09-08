@@ -473,7 +473,7 @@ func (p *formulaParser) parseIdentPath() (FormulaNode, *FormulaError) {
 	// steals the name: `formula.length` would resolve its receiver as the bare
 	// word `formula`, which is not a value, and the author would be told to
 	// "name the formula you mean" about an expression that already did.
-	if len(segs) > 1 && isAccessorField(segs[last]) && !(len(segs) == 2 && segs[0] == "formula") {
+	if len(segs) > 1 && isAccessorField(segs[last]) && (len(segs) != 2 || segs[0] != "formula") {
 		recv, err := p.reference(segs[:last], offsets[0], strings.Join(segs[:last], "."))
 		if err != nil {
 			return nil, err
