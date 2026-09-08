@@ -38,7 +38,7 @@ func (cs *CaptureSession) prepareEncoderFrame(ctx context.Context, measure captu
 	// Normal viewer startup already has a tab. Only the boot-time capture
 	// path may need lazy session creation; never recreate while owning admission.
 	if _, _, err := cs.mgr.activeTargetSnapshot(panelID); err != nil {
-		if _, err := cs.mgr.Session(panelID); err != nil {
+		if _, err := cs.mgr.SessionContext(ctx, panelID); err != nil {
 			return CaptureFrameState{}, fmt.Errorf("capture session: prepare browsing session: %w", err)
 		}
 	}
