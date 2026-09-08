@@ -25,10 +25,13 @@ func TestLiveInputCallerCancellationStopsDispatch(t *testing.T) {
 		<-bounded.Done()
 		return bounded.Err()
 	})
+	picture := installInputTestPicture(t, lv)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { result <- lv.dispatchInputContext(ctx, "a", LiveInput{Kind: "text", Text: "a"}) }()
+	go func() {
+		result <- lv.dispatchInputContext(ctx, "a", inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "a"}))
+	}()
 	<-entered
 	cancel()
 	select {
@@ -51,9 +54,10 @@ func TestLiveInputDetachReleasesOnlyFinalKeyOwner(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	down := LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft", KeyCode: 16}
 	for _, viewer := range []string{"a", "b"} {
-		if err := lv.dispatchInput(viewer, down); err != nil {
+		if err := lv.dispatchInput(viewer, inputWithTestPicture(picture, down)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -77,21 +81,22 @@ func TestLiveInputExplicitReleasePreservesOtherOwner(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	down := LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}
 	for _, viewer := range []string{"a", "b"} {
-		if err := lv.dispatchInput(viewer, down); err != nil {
+		if err := lv.dispatchInput(viewer, inputWithTestPicture(picture, down)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	up := down
 	up.Kind = "key_up"
-	if err := lv.dispatchInput("a", up); err != nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, up)); err != nil {
 		t.Fatal(err)
 	}
 	if len(types) != 2 {
 		t.Fatalf("release from first owner emitted keyUp while second still held it: %v", types)
 	}
-	if err := lv.dispatchInput("b", up); err != nil {
+	if err := lv.dispatchInput("b", inputWithTestPicture(picture, up)); err != nil {
 		t.Fatal(err)
 	}
 	if len(types) != 3 || types[2] != input.KeyUp {
@@ -138,12 +143,13 @@ func TestLiveInputMouseDragCarriesHeldButtons(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	for _, in := range []LiveInput{
 		{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20},
 		{Kind: "mouse_move", Button: "left", HasXY: true, X: 30, Y: 40},
 		{Kind: "mouse_up", Button: "left", HasXY: true, X: 30, Y: 40},
 	} {
-		if err := lv.dispatchInput("a", in); err != nil {
+		if err := lv.dispatchInput("a", inputWithTestPicture(picture, in)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -161,7 +167,8 @@ func TestLiveInputUncertainPressIsReleasedOnDetach(t *testing.T) {
 		}
 		return nil
 	})
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Control", Code: "ControlLeft", KeyCode: 17}); !errors.Is(err, context.DeadlineExceeded) {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Control", Code: "ControlLeft", KeyCode: 17})); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want ambiguous timeout, got %v", err)
 	}
 	lv.detach("a")
@@ -174,7 +181,8 @@ func TestLiveInputRejectedPressDoesNotCreateHeldState(t *testing.T) {
 	calls := 0
 	rejection := &cdproto.Error{Code: -32602, Message: "invalid key parameter"}
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return rejection })
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Control", Code: "ControlLeft"}); !errors.Is(err, rejection) {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Control", Code: "ControlLeft"})); !errors.Is(err, rejection) {
 		t.Fatalf("want rejection, got %v", err)
 	}
 	lv.detach("a")
@@ -191,14 +199,15 @@ func TestLiveInputHeldReleaseSurvivesRatePressure(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	// Existing public limit is100discrete events/second. Releases of tracked
 	// holds must still be accepted after that budget is consumed.
 	for range 100 {
-		if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}); err != nil {
+		if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"})); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_up", Key: "Shift", Code: "ShiftLeft"}); err != nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_up", Key: "Shift", Code: "ShiftLeft"})); err != nil {
 		t.Fatalf("held release rejected under rate pressure: %v", err)
 	}
 	if releases != 1 {
@@ -220,13 +229,14 @@ func TestLiveInputFailedReleaseRetriesBeforeNextCommand(t *testing.T) {
 		}
 		return nil
 	})
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}); err != nil {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_up", Key: "Shift", Code: "ShiftLeft"}); !errors.Is(err, context.DeadlineExceeded) {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_up", Key: "Shift", Code: "ShiftLeft"})); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("release error: %v", err)
 	}
-	if err := lv.dispatchInput("a", LiveInput{Kind: "text", Text: "safe"}); err != nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "safe"})); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"rawKeyDown", "keyUp", "keyUp", "text"}
@@ -245,7 +255,8 @@ func TestLiveInputTransportFailurePressIsReleased(t *testing.T) {
 		}
 		return nil
 	})
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}); !errors.Is(err, disconnected) {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"})); !errors.Is(err, disconnected) {
 		t.Fatalf("error: %v", err)
 	}
 	lv.detach("a")
@@ -261,11 +272,12 @@ func TestLiveInputCanceledViewportDoesNotPoisonNextInput(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	})
+	picture := installInputTestPicture(t, lv)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		result <- lv.dispatchInputContext(ctx, "a", LiveInput{Kind: "mouse_move", HasXY: true, X: 10, Y: 20, CaptureWidth: 800, CaptureHeight: 600})
+		result <- lv.dispatchInputContext(ctx, "a", inputWithTestPicture(picture, LiveInput{Kind: "mouse_move", HasXY: true, X: 10, Y: 20, CaptureWidth: 800, CaptureHeight: 600}))
 	}()
 	<-entered
 	cancel()
@@ -322,6 +334,7 @@ func TestLiveInputNavigationAcknowledgesWithoutLoadEvent(t *testing.T) {
 func TestLiveInputQueuedCancellationNeverDispatches(t *testing.T) {
 	calls := 0
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
+	picture := installInputTestPicture(t, lv)
 	lv.mu.Lock()
 	gate := lv.inputStateLocked().gate
 	lv.mu.Unlock()
@@ -330,7 +343,9 @@ func TestLiveInputQueuedCancellationNeverDispatches(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { result <- lv.dispatchInputContext(ctx, "a", LiveInput{Kind: "text", Text: "obsolete"}) }()
+	go func() {
+		result <- lv.dispatchInputContext(ctx, "a", inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "obsolete"}))
+	}()
 	deadline := time.After(time.Second)
 	for {
 		lv.mu.Lock()
@@ -371,8 +386,11 @@ func TestLiveInputDetachCancelsInFlightPressThenReleases(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	result := make(chan error, 1)
-	go func() { result <- lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}) }()
+	go func() {
+		result <- lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}))
+	}()
 	<-entered
 	lv.detach("a")
 	if err := <-result; !errors.Is(err, context.Canceled) {
@@ -395,7 +413,8 @@ func TestLiveInputTabRetirementReleasesOriginalTarget(t *testing.T) {
 		return nil
 	})
 	lv.tabCtx = oldTarget
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"}); err != nil {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "Shift", Code: "ShiftLeft"})); err != nil {
 		t.Fatal(err)
 	}
 	lv.mu.Lock()
@@ -410,8 +429,9 @@ func TestLiveInputTabRetirementReleasesOriginalTarget(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tab retirement did not release held key")
 	}
+	picture = installInputTestPicture(t, lv)
 	// A subsequent request also waits for the cleanup worker's gate to drain.
-	if err := lv.dispatchInput("a", LiveInput{Kind: "text", Text: "new tab"}); err != nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "new tab"})); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -429,13 +449,14 @@ func TestLiveInputUnmappedMouseReleaseRetriesBeforeNextCommand(t *testing.T) {
 		}
 		return nil
 	})
-	if err := lv.dispatchInput("a", LiveInput{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20}); err != nil {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lv.dispatchInput("a", LiveInput{Kind: "mouse_up", Button: "left", HasXY: true, X: 30, Y: 40, CaptureWidth: 800, CaptureHeight: 600}); err == nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "mouse_up", Button: "left", HasXY: true, X: 30, Y: 40, CaptureWidth: 800, CaptureHeight: 600})); err == nil {
 		t.Fatal("unknown coordinate mapping should reject pointer position")
 	}
-	if err := lv.dispatchInput("a", LiveInput{Kind: "text", Text: "next"}); err != nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "next"})); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"mousePressed", "mouseReleased", "text"}
@@ -447,10 +468,11 @@ func TestLiveInputUnmappedMouseReleaseRetriesBeforeNextCommand(t *testing.T) {
 func TestLiveInputKeyCodeIdentitySurvivesKeyCaseChange(t *testing.T) {
 	calls := 0
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_down", Key: "A", KeyCode: 65}); err != nil {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_down", Key: "A", KeyCode: 65})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lv.dispatchInput("a", LiveInput{Kind: "key_up", Key: "a", KeyCode: 65}); err != nil {
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "key_up", Key: "a", KeyCode: 65})); err != nil {
 		t.Fatal(err)
 	}
 	lv.detach("a")
@@ -462,8 +484,9 @@ func TestLiveInputKeyCodeIdentitySurvivesKeyCaseChange(t *testing.T) {
 func TestLiveInputUnownedReleaseNeverReachesBrowser(t *testing.T) {
 	calls := 0
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
+	picture := installInputTestPicture(t, lv)
 	for _, in := range []LiveInput{{Kind: "key_up", Key: "Shift", Code: "ShiftLeft"}, {Kind: "mouse_up", Button: "left", HasXY: true, X: 10, Y: 20}} {
-		if err := lv.dispatchInput("never-pressed", in); err != nil {
+		if err := lv.dispatchInput("never-pressed", inputWithTestPicture(picture, in)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -478,7 +501,8 @@ func TestLiveInputRepeatedDetachDoesNotRepeatSuccessfulRelease(t *testing.T) {
 		sequence = append(sequence, actions[0].(*input.DispatchMouseEventParams).Type)
 		return nil
 	})
-	if err := lv.dispatchInput("a", LiveInput{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20}); err != nil {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20})); err != nil {
 		t.Fatal(err)
 	}
 	lv.detach("a")
@@ -496,10 +520,11 @@ func TestLiveInputCleanupUsesSharedPointersLatestPosition(t *testing.T) {
 		}
 		return nil
 	})
-	if err := lv.dispatchInput("a", LiveInput{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20}); err != nil {
+	picture := installInputTestPicture(t, lv)
+	if err := lv.dispatchInput("a", inputWithTestPicture(picture, LiveInput{Kind: "mouse_down", Button: "left", HasXY: true, X: 10, Y: 20})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lv.dispatchInput("b", LiveInput{Kind: "mouse_move", HasXY: true, X: 30, Y: 40}); err != nil {
+	if err := lv.dispatchInput("b", inputWithTestPicture(picture, LiveInput{Kind: "mouse_move", HasXY: true, X: 30, Y: 40})); err != nil {
 		t.Fatal(err)
 	}
 	lv.detach("a")

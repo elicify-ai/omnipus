@@ -119,7 +119,7 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 	cs.mu.Lock()
 	cs.foregroundAssertFn = func(context.Context) bool { return true }
 	cs.mu.Unlock()
-	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
 
 	var (
 		mu       sync.Mutex
@@ -253,10 +253,12 @@ func TestApplyViewport_DiscardsAMeasurementTheActiveTabHasMovedPast(t *testing.T
 func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureSession, *ingestLedger, *orderLog) {
 	t.Helper()
 	m := newTestManagerWithFakeTabs(t)
+	// This fixture opens fake tabs; host memory is outside its routing contract.
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	m.live = newLiveViewRegistry(m)
 
 	relay := &fakeRelay{}
-	cs, err := m.EnsureCaptureSession(func() (*CaptureSession, error) {
+	cs, err := m.EnsureCaptureSessionForPanel(testSessionID, func() (*CaptureSession, error) {
 		return NewCaptureSessionWithDeps(m, "agent-e2e", relay, fakeEncoderStarter(new(int32), nil), nil)
 	})
 	require.NoError(t, err)

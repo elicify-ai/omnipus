@@ -1750,13 +1750,12 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 // encoder should converge on (0,0 = "no measurement to offer", which makes the
 // encoder fall back to its own chrome.tabs.get stability poll). A no-op when
 // this LiveView has no manager (hand-built in tests) or no capture session is
-// active — WebRTC never used, or this LiveView's session is not the one the
-// manager's single CaptureSession is bound to.
+// active for this panel. Another panel's capture is never a fallback.
 func (lv *LiveView) signalRecapture(w, h int) {
 	if lv.mgr == nil {
 		return
 	}
-	cs := lv.mgr.CaptureSession()
+	cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
 	if cs == nil {
 		return
 	}
@@ -1783,7 +1782,7 @@ func (lv *LiveView) signalRecaptureForTabChange(w, h int) {
 	if lv.mgr == nil {
 		return
 	}
-	cs := lv.mgr.CaptureSession()
+	cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
 	if cs == nil {
 		return
 	}
@@ -2032,14 +2031,10 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 		return
 	}
 
-	// ADR-047 / wave-plan W2-A item 5 ("also on browser_status-relevant
-	// lifecycle: browser death -> stop session"): the browsing context is
-	// genuinely gone, so any active WebRTC capture session for this agent
-	// has nothing left to capture — its encoder page's own CDP target died
-	// along with the rest of the browser context. Stop() is idempotent and
-	// safe even if the session already noticed independently.
+	// The panel browsing context ended. Stop only its capture; manager
+	// Shutdown/invalidateConnection owns cleanup across the whole browser.
 	if mgr != nil {
-		if cs := mgr.CaptureSession(); cs != nil {
+		if cs := mgr.CaptureSessionForPanel(sessionID); cs != nil {
 			cs.Stop()
 		}
 	}

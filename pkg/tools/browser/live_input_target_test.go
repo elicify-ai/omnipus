@@ -23,7 +23,7 @@ func TestLiveInputCommittedPictureRequiresSameTarget(t *testing.T) {
 			active := &tabEntry{ctx: lv.tabCtx, targetID: target.ID("displayed-target")}
 			lv.mgr.sessions[lv.sessionID] = &sessionEntry{tabs: []*tabEntry{active}}
 			cs, _ := newRecoveryTestSession(t, &fakeRelay{})
-			lv.mgr.captures = map[string]*CaptureSession{lv.mgr.OperatorSessionID(): cs}
+			lv.mgr.captures = map[string]*CaptureSession{lv.sessionID: cs}
 			frame, err := cs.BeginFrameTransition("displayed-target", 800, 600, 1)
 			if err != nil {
 				t.Fatal(err)

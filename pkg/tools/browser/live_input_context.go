@@ -148,16 +148,21 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	lv.mu.Unlock()
 	// Ordinary interaction must describe the committed picture. Navigation
 	// controls and an already-owned release do not depend on that picture.
-	if !(tracked && releasing) && !navigationInputKind(in.Kind) && lv.mgr != nil {
-		if cs := lv.mgr.CaptureSession(); cs != nil {
-			frame := cs.FrameState()
-			activeCtx, activeID, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
-			if err != nil || activeCtx != targetCtx || activeID == "" || string(activeID) != frame.TargetID {
-				return benignInputError("browser live: displayed target changed; wait for the current picture")
-			}
-			if !frame.Ready || in.CaptureID == "" || in.CaptureID != frame.CaptureID || in.CaptureGeneration == 0 || in.CaptureGeneration != frame.Generation {
-				return benignInputError("browser live: displayed frame changed; wait for the current picture")
-			}
+	if !(tracked && releasing) && !navigationInputKind(in.Kind) {
+		if lv.mgr == nil {
+			return benignInputError("browser live: no capture for this panel; wait for the current picture")
+		}
+		cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
+		if cs == nil {
+			return benignInputError("browser live: no capture for this panel; wait for the current picture")
+		}
+		frame := cs.FrameState()
+		activeCtx, activeID, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+		if err != nil || activeCtx != targetCtx || activeID == "" || string(activeID) != frame.TargetID {
+			return benignInputError("browser live: displayed target changed; wait for the current picture")
+		}
+		if !frame.Ready || in.CaptureID == "" || in.CaptureID != frame.CaptureID || in.CaptureGeneration == 0 || in.CaptureGeneration != frame.Generation {
+			return benignInputError("browser live: displayed frame changed; wait for the current picture")
 		}
 	}
 	lv.mu.Lock()

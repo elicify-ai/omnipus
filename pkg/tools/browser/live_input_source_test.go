@@ -23,9 +23,10 @@ func TestLiveInputSourceCancellationReleasesWithoutNextInput(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	source, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := lv.dispatchInput("viewer", LiveInput{SourceContext: source, Kind: "key_down", Key: "Shift", Code: "ShiftLeft", KeyCode: 16}); err != nil {
+	if err := lv.dispatchInput("viewer", inputWithTestPicture(picture, LiveInput{SourceContext: source, Kind: "key_down", Key: "Shift", Code: "ShiftLeft", KeyCode: 16})); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -52,13 +53,14 @@ func TestLiveInputSourcesShareViewerWithoutSharingHoldOwnership(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	first, cancelFirst := context.WithCancel(context.Background())
 	defer cancelFirst()
 	second, cancelSecond := context.WithCancel(context.Background())
 	defer cancelSecond()
 	send := func(source context.Context, kind string) {
 		t.Helper()
-		if err := lv.dispatchInput("viewer", LiveInput{SourceContext: source, Kind: kind, Key: "Shift", Code: "ShiftLeft", KeyCode: 16}); err != nil {
+		if err := lv.dispatchInput("viewer", inputWithTestPicture(picture, LiveInput{SourceContext: source, Kind: kind, Key: "Shift", Code: "ShiftLeft", KeyCode: 16})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,9 +83,10 @@ func TestLiveInputSourcesShareViewerWithoutSharingHoldOwnership(t *testing.T) {
 func TestLiveInputCanceledSourceCannotDispatch(t *testing.T) {
 	calls := 0
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
+	picture := installInputTestPicture(t, lv)
 	source, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := lv.dispatchInput("viewer", LiveInput{SourceContext: source, Kind: "text", Text: "obsolete"})
+	err := lv.dispatchInput("viewer", inputWithTestPicture(picture, LiveInput{SourceContext: source, Kind: "text", Text: "obsolete"}))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled source accepted: %v", err)
 	}
@@ -99,13 +102,14 @@ func TestLiveInputSourceCancellationStopsInFlightCommand(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	})
+	picture := installInputTestPicture(t, lv)
 	source, cancelSource := context.WithCancel(context.Background())
 	defer cancelSource()
 	caller, cancelCaller := context.WithCancel(context.Background())
 	defer cancelCaller()
 	result := make(chan error, 1)
 	go func() {
-		result <- lv.dispatchInputContext(caller, "viewer", LiveInput{SourceContext: source, Kind: "text", Text: "obsolete"})
+		result <- lv.dispatchInputContext(caller, "viewer", inputWithTestPicture(picture, LiveInput{SourceContext: source, Kind: "text", Text: "obsolete"}))
 	}()
 	<-entered
 	cancelSource()
@@ -134,21 +138,22 @@ func TestLiveInputReplacementFlushesOldSourceBeforeNewPress(t *testing.T) {
 		}
 		return nil
 	})
+	picture := installInputTestPicture(t, lv)
 	first, cancelFirst := context.WithCancel(context.Background())
 	defer cancelFirst()
 	second, cancelSecond := context.WithCancel(context.Background())
 	defer cancelSecond()
 	down := LiveInput{SourceContext: first, Kind: "key_down", Key: "a", Code: "KeyA", KeyCode: 65}
-	if err := lv.dispatchInput("viewer", down); err != nil {
+	if err := lv.dispatchInput("viewer", inputWithTestPicture(picture, down)); err != nil {
 		t.Fatal(err)
 	}
 	cancelFirst()
 	down.SourceContext = second
-	if err := lv.dispatchInput("viewer", down); err != nil {
+	if err := lv.dispatchInput("viewer", inputWithTestPicture(picture, down)); err != nil {
 		t.Fatal(err)
 	}
 	down.Kind = "key_up"
-	if err := lv.dispatchInput("viewer", down); err != nil {
+	if err := lv.dispatchInput("viewer", inputWithTestPicture(picture, down)); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()

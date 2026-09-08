@@ -960,15 +960,8 @@ func TestControlledResult(t *testing.T) {
 // call them at the right moment.
 // ---------------------------------------------------------------------------
 
-// TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession
-// proves the watchForUnexpectedDeath -> cs.Stop() wire (live.go, wave-plan
-// W2-A item 5: "also on browser_status-relevant lifecycle: browser death ->
-// stop session"). mgr.browserAlive("s1") is made to report false (genuinely
-// dead) simply by never populating mgr.sessions at all — browserAlive's own
-// implementation treats "no sessionEntry for this id" as not-alive, which is
-// exactly the "whole browsing context is gone" case this trigger targets
-// (as opposed to a mere tab close/switch, which watchForUnexpectedDeath
-// deliberately leaves alone — see its doc comment).
+// A missing panel browsing context ends its capture. This watcher is local to
+// the panel; manager Shutdown/invalidateConnection owns whole-browser cleanup.
 func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession(t *testing.T) {
 	// NewBrowserManager (not a bare &BrowserManager{} literal) so mgr.sessions
 	// starts as an empty map, which is exactly what this test wants:
@@ -980,7 +973,7 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 	var calls int32
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-death", relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
 
 	lv := &LiveView{
 		mgr:          mgr,
@@ -1000,9 +993,7 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 		close(done)
 	}()
 
-	// Simulate the whole browsing context dying (BrowserManager.Shutdown or a
-	// genuine crash) — the tab's own context (and everything derived from
-	// it, including this epoch's listenCtx) dies WITHOUT a clean detach().
+	// Simulate the watched browsing context ending without a clean detach.
 	cancel()
 
 	select {
@@ -1042,7 +1033,7 @@ func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(
 	var calls int32
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-recapture", relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	mgr.captures = map[string]*CaptureSession{mgr.OperatorSessionID(): cs}
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
 
 	lv := &LiveView{
 		mgr:                mgr,
@@ -1221,6 +1212,8 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 				mu.Unlock()
 				return nil
 			})
+			picture := installInputTestPicture(t, lv)
+			tc.in = inputWithTestPicture(picture, tc.in)
 			lv.cssViewportW = int(cssW)
 			lv.cssViewportH = int(cssH)
 			require.True(t, lv.takeControl("viewerA"))
