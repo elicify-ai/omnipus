@@ -21,9 +21,18 @@ func (m *BrowserManager) SessionContext(caller context.Context, sessionID string
 // The caller already owns the tab-command gate. Both legacy and contextual
 // Session calls inherit its retirement without reacquiring admission.
 func (m *BrowserManager) sessionUnderGate(caller context.Context, sessionID string) (context.Context, error) {
+	ctx, stop, err := m.startupContextUnderGate(caller, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer stop()
+	return m.sessionWithContext(ctx, sessionID)
+}
+
+func (m *BrowserManager) startupContextUnderGate(caller context.Context, sessionID string) (context.Context, func(), error) {
 	m.mu.Lock()
 	gate := m.tabCommands[sessionID]
-	// Only session resolution needs this lifetime; mouse/key admission does not
+	// Session resolution and tab opening need this lifetime; mouse/key admission does not
 	// allocate an unused cancellation context for every interactive command.
 	if gate.lifetime == nil && !gate.retired {
 		gate.lifetime, gate.stop = context.WithCancelCause(context.Background())
@@ -32,11 +41,10 @@ func (m *BrowserManager) sessionUnderGate(caller context.Context, sessionID stri
 	retired := gate.retired
 	m.mu.Unlock()
 	if retired {
-		return nil, errBrowserSessionChanged
+		return nil, nil, errBrowserSessionChanged
 	}
 	ctx, stop := sessionStartupContext(caller, lifetime)
-	defer stop()
-	return m.sessionWithContext(ctx, sessionID)
+	return ctx, stop, nil
 }
 
 func sessionStartupContext(caller, lifetime context.Context) (context.Context, func()) {

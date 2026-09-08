@@ -1085,10 +1085,9 @@ func (m *BrowserManager) Viewers() int {
 // write one. A screenshot that returns "connection lost" mid-turn is not less
 // confusing for having been read-only.
 //
-// It is an int64 read under m.mu rather than an atomic, so that the pool's
-// eviction selection and a call's own increment serialise: see
-// BrowserPool.evictableLocked for why a call starting DURING selection must
-// be either seen or landed on a relaunched instance, never lost between them.
+// The read and EnterCall's increment use m.mu. The pool holds that same mutex
+// through the final retirement claim, so a new call is either counted before
+// removal or observes a manager marked unstarted and waits for cleanup.
 func (m *BrowserManager) InFlight() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2533,9 +2532,14 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		return Tab{}, admissionErr
 	}
 	defer release()
+	startupCtx, stopStartup, startupErr := m.startupContextUnderGate(context.Background(), sessionID)
+	if startupErr != nil {
+		return Tab{}, startupErr
+	}
+	defer stopStartup()
 
 	m.mu.Lock()
-	if err := m.ensureStarted(); err != nil {
+	if err := m.ensureStartedContext(startupCtx); err != nil {
 		m.mu.Unlock()
 		return Tab{}, err
 	}
@@ -3212,10 +3216,12 @@ func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
 			return
 		}
 	}
+	// Discovery is browser-global; another tab set's popup is not ours.
+	ownedOpener := exists && info.OpenerID != "" && se.indexOfTarget(info.OpenerID) >= 0
 	m.mu.Unlock()
 
-	if info.OpenerID == "" {
-		return // not opened by a page — a top-level/browser-initiated target, not ours
+	if !ownedOpener {
+		return
 	}
 	// adoptTargetWithRetry, not a bare adoptTarget: Target.targetCreated
 	// fires exactly once per target, so a single transient failure here used
