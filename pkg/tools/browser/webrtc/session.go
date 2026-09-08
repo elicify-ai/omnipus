@@ -249,8 +249,9 @@ func hostedViewerLeg(cfg Config) bool {
 // NewSession builds a Session backed by a fresh Pion API: an explicit
 // MediaEngine with the default codec set (VP8/H264 + Opus, among others) so
 // Chrome's tabCapture-derived offer negotiates cleanly, and the default
-// Interceptor registry (NACK/RTCP reports -- what makes getStats() on the
-// browser side report framesDecoded/audioLevel etc). sink receives every
+// ingest interceptor registry. The viewer registry retains the other default
+// stages but forwards encoder clocks instead of generating sender reports.
+// sink receives every
 // "input" data-channel message from every viewer; logf receives structured
 // log lines (may be nil, in which case logging is a no-op).
 func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session {
@@ -275,6 +276,14 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	ir := &interceptor.Registry{}
 	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
 		s.logf("webrtc: register default interceptors failed: %v (session will reject all offers)", err)
+		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
+		return s
+	}
+
+	viewerInterceptors := &interceptor.Registry{}
+	if err := registerViewerInterceptors(m, viewerInterceptors); err != nil {
+		s.logf("webrtc: register viewer interceptors failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
 		s.apiViewer = s.api
 		return s
@@ -379,7 +388,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	s.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
 	s.apiViewer = webrtc.NewAPI(
 		webrtc.WithMediaEngine(m),
-		webrtc.WithInterceptorRegistry(ir),
+		webrtc.WithInterceptorRegistry(viewerInterceptors),
 		webrtc.WithSettingEngine(viewerSE),
 	)
 	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {

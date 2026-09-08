@@ -659,7 +659,9 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 			}
 			for _, pkt := range pkts {
 				sr, ok := pkt.(*rtcp.SenderReport)
-				if !ok {
+				// A compound RTCP datagram can carry reports for both media
+				// kinds. Only this receiver's source clock belongs to its feed.
+				if !ok || sr.SSRC != uint32(remote.SSRC()) {
 					continue
 				}
 				forward.senderReport(feedID, sr, func(report *rtcp.SenderReport) {
@@ -877,11 +879,10 @@ func (s *Session) forwardPLIThrottled(prefix string) {
 // finding 2, UAT symptom "audio slightly delayed vs video"): Chrome's own
 // WebRTC stack uses a stream's Sender Reports (NTP wall-clock time paired
 // with that stream's RTP timestamp) to align independently-clocked audio
-// and video tracks into one presentation timeline. Without ANY Sender
-// Report ever reaching the viewer -- true before this fix, since the
-// ingest-side RTCP drain simply discarded everything -- the browser falls
-// back to jitter-buffer-only heuristics that can drift out of sync under
-// load.
+// and video tracks into one presentation timeline. These encoder-origin
+// reports retain their shared source clock; independently generated relay
+// reports instead anchor each kind to its packet-arrival time. The viewer
+// interceptor registry therefore disables local sender-report generation.
 //
 // mediaForwarder has already applied the same timestamp translation to
 // this report as to its feed's RTP packets. What MUST be rewritten, once per viewer, is the packet's own SSRC
