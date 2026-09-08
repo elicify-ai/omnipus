@@ -116,7 +116,17 @@ sanctioned path.
 ### DEFECT-G1 — a path pointing at a file produces a false "not found" error
 **Severity:** medium (reported low; raised — the message misleads rather than
 merely refusing) · **Area:** `pkg/tools/grep.go` · **Reported by:** agent field test
-**Status: fix in progress**
+**Status: FIXED** — merged, verified. Scoping to a single file now works
+(the file's parent is opened as the confined root and the walk is narrowed to
+that one entry, with globs and ignore rules still applying). Remaining
+refusals name what is actually true: *does not exist* / *permission denied* /
+*wrong kind* (e.g. a FIFO). A carved-out secret named directly as `path`
+still returns zero hits, leaking neither content nor existence.
+
+Root cause, established by experiment rather than assumed: `(*os.Root).OpenRoot`
+on a regular file returns a BARE error — `errors.Is` matches neither
+`fs.ErrNotExist` nor `syscall.ENOTDIR` — so the old blanket wrap could not
+have distinguished the cases even in principle.
 
 Pointing `path` at a single file rather than a directory returns:
 
@@ -144,7 +154,11 @@ workspace*. A file scope must not bypass the secret carve-out.
 ### OBS-G1 — a glob that matches nothing fails silently
 **Severity:** medium (reported as an observation; raised to defect — see below)
 · **Area:** `pkg/tools/grep.go` · **Reported by:** agent field test
-**Status: fix in progress**
+**Status: FIXED** — merged, verified. A zero-hit result now states how many
+entries the globs excluded before any match was attempted, and explains the
+anchoring rule when the excluded count dominates. The count also appears in
+the stats footer on non-empty results. Bare filenames are still NOT
+auto-anchored — pinned by `TestGrepTool_GlobDoesNotAutoAnchor`.
 
 `include_globs: ["spike.txt"]` matches nothing; only `**/spike.txt` works. The
 result is a silent zero — indistinguishable from "the term genuinely is not
@@ -193,6 +207,19 @@ test that did not reproduce the documented condition.
 | KB-2 | No intuitive way to list reachable knowledge bases | High | Open |
 | KB-3 | New knowledge base dialog asks for known context | Medium | Open |
 | KB-4 | "New workspace" shown in Library create menu | Low | Open |
-| DEFECT-G1 | `path` at a file gives a false "not found" | Medium | Fix in progress |
-| OBS-G1 | Glob matching nothing fails silently | Medium | Fix in progress |
+| DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
+| OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
 | DOC-1 | Concurrency doc claim | — | Closed — not a defect |
+
+---
+
+## Adjacent gap found while fixing DEFECT-G1 — not a defect, needs a decision
+
+The REST Library file-search surface does **not** share either grep defect: it
+`Stat`s first and returns a real `400 "path is not a directory"` (never a false
+"not found"), and it already puts `files_filtered_glob` on the wire. What it
+lacks is **single-file scoping** — a `path` naming a file is rejected before the
+search runs, so the human search bar cannot do what the agent tool now can.
+
+That is a feature-parity gap, not a bug. Recorded for a product decision rather
+than fixed silently.
