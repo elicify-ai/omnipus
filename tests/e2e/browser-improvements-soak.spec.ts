@@ -26,11 +26,12 @@ type Probe = {
 type ProbeWindow = Window & { __omnipusSoak?: Probe };
 
 // The independent event alphabet: left/right mouse down1/2, up3/4,
-// click5/6; A down/up7/8; B down/up9/10. Unexpected events are255.
+// click5/6; ArrowLeft down/up7/8; ArrowRight down/up9/10. Unexpected events are255.
+// Nonprintable keys use the real key-down/up route; printable text uses insertText.
 function cyclePlan(index: number) {
   const zone = (index * 7) % 11 < 5 ? 0 : 1;
-  const key = index % 2 === 0 ? 'a' : 'b';
-  const events = [1 + zone, 3 + zone, 5 + zone, key === 'a' ? 7 : 9, key === 'a' ? 8 : 10];
+  const key = index % 2 === 0 ? 'ArrowLeft' : 'ArrowRight';
+  const events = [1 + zone, 3 + zone, 5 + zone, key === 'ArrowLeft' ? 7 : 9, key === 'ArrowLeft' ? 8 : 10];
   if (index % 10 === 9) events.push(2, 7, 8, 4, 6);
   return { zone, key, events };
 }
@@ -64,8 +65,8 @@ function record(code,trusted){
 addEventListener('mousedown',e=>{held|=1;record(e.button===0?1+(e.clientX>=innerWidth/2):255,e.isTrusted)});
 addEventListener('mouseup',e=>{held&=~1;record(e.button===0?3+(e.clientX>=innerWidth/2):255,e.isTrusted)});
 addEventListener('click',e=>record(e.button===0?5+(e.clientX>=innerWidth/2):255,e.isTrusted));
-addEventListener('keydown',e=>{e.preventDefault();const bit=e.code==='KeyA'?2:e.code==='KeyB'?4:0;held|=bit;record(e.repeat?255:bit===2?7:bit===4?9:255,e.isTrusted)});
-addEventListener('keyup',e=>{e.preventDefault();const bit=e.code==='KeyA'?2:e.code==='KeyB'?4:0;held&=~bit;record(bit===2?8:bit===4?10:255,e.isTrusted)});
+addEventListener('keydown',e=>{e.preventDefault();const bit=e.code==='ArrowLeft'?2:e.code==='ArrowRight'?4:0;held|=bit;record(e.repeat?255:bit===2?7:bit===4?9:255,e.isTrusted)});
+addEventListener('keyup',e=>{e.preventDefault();const bit=e.code==='ArrowLeft'?2:e.code==='ArrowRight'?4:0;held&=~bit;record(bit===2?8:bit===4?10:255,e.isTrusted)});
 addEventListener('resize',paint);paint();
 </script>`;
 }
@@ -315,10 +316,10 @@ test('isolated browser remains idle 10min then preserves exact mixed input for 1
         const holdPoint = await pointerPoint(page, state, 1);
         await page.mouse.move(holdPoint.x, holdPoint.y);
         await page.mouse.down();
-        await page.keyboard.down('a');
+        await page.keyboard.down('ArrowLeft');
         state = advance(state, [2, 7]);
         await readState(page, state); // Both holds must be visible remotely.
-        await page.keyboard.up('a');
+        await page.keyboard.up('ArrowLeft');
         await page.mouse.up();
         state = advance(state, [8, 4, 6]);
         await readState(page, state); // Both releases, exactly once, must arrive.

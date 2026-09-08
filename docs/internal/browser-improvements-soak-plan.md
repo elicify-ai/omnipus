@@ -22,8 +22,10 @@ Omnipus project workspace.
    because time passed: a static source may legitimately stop producing them.
    Renegotiation, replacement, failure/recovery and unexpected input fail.
 3. For ten further minutes, issue 100 normal clicks spaced six seconds apart,
-   each followed by an A/B key pair. Every tenth cycle adds a simultaneous
-   mouse/key hold, a decoded held-state checkpoint, then both releases. This is
+   each followed by an ArrowLeft/ArrowRight key-down/up pair. These nonprintable
+   keys use the UI’s forwarded key-event path; printable characters use
+   `Input.insertText` and are not a native key-down/up oracle. Every tenth cycle
+   adds a simultaneous mouse/key hold, a decoded held-state checkpoint, then both releases. This is
    550 expected native page events: 330 mouse events and 220 key events. The
    first click proves interaction still works after the full idle period.
 4. Read only the decoded `<video>` pixels for action results. A 96-bit visible
