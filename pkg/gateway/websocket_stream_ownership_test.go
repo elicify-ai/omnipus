@@ -34,7 +34,17 @@ import (
 // *webchatChannel/*WSHandler pair (so WSHandler.streamOwners is reachable —
 // unlike buildWsStreamer's bare fixture, which leaves channel nil and is
 // used by tests that don't exercise the ownership gate) sharing chatID, and
-// returns the streamer plus its own connection's outbound frame channel.
+// returns the streamer plus chatID's outbound frame channel.
+//
+// ADR-082 D2: a chatID now maps to exactly ONE bound *wsConn in
+// h.sessions/h.sessionIDs (matching production — one chatID is one physical
+// WS connection), so every streamer built for the SAME chatID here shares
+// the SAME connection/channel — exactly mirroring the real scenario these
+// tests exercise: two concurrent delegate turns racing to write to the SAME
+// physical connection, where the shadow-ownership gate (not a
+// per-streamer-private connection) is what prevents interleaving. The first
+// call for a given chatID creates and binds the connection; later calls for
+// the same chatID reuse it.
 func buildOwnershipTestStreamer(
 	t *testing.T,
 	h *WSHandler,
@@ -42,15 +52,26 @@ func buildOwnershipTestStreamer(
 	chatID, turnID string,
 ) (*wsStreamer, chan []byte) {
 	t.Helper()
-	ch := make(chan []byte, 16)
-	conn := &wsConn{
-		sendCh:         ch,
-		doneCh:         make(chan struct{}),
-		replayDivertCh: make(chan []byte, replayLiveBufferCap),
+	sessionID := "session-" + chatID
+
+	h.mu.Lock()
+	conn, exists := h.sessions[chatID]
+	h.mu.Unlock()
+	var ch chan []byte
+	if exists {
+		ch = conn.sendCh
+	} else {
+		ch = make(chan []byte, 16)
+		conn = &wsConn{
+			sendCh:         ch,
+			doneCh:         make(chan struct{}),
+			replayDivertCh: make(chan []byte, replayLiveBufferCap),
+		}
+		bindTestConnToSession(h, chatID, sessionID, conn)
 	}
+
 	s := &wsStreamer{
-		conn:      conn,
-		sessionID: "session-" + chatID,
+		sessionID: sessionID,
 		chatID:    chatID,
 		channel:   wch,
 	}
@@ -151,6 +172,12 @@ func TestWsStreamer_Finalize_ReleasesOwnership_NextConcurrentTurnBecomesLive(t *
 
 	// A finishes — releases the slot.
 	require.NoError(t, streamA.Finalize(context.Background(), "first stream content"))
+	// ADR-082 D2: A/B/C all share the SAME physical connection now (one
+	// chatID = one *wsConn, matching production — see
+	// buildOwnershipTestStreamer's doc comment), so A's own done frame
+	// (Finalize, since A is the owner) lands on the SAME channel C will read
+	// from next. Drain it here so it isn't mistaken for C's token frame.
+	readDoneFrameFromConn(t, chA)
 
 	// A NEW streamer for a THIRD turn now claims the freshly-released slot
 	// and streams live immediately.
@@ -213,6 +240,13 @@ func TestWsStreamer_Finalize_ShadowStreamStillPersistsCompleteCorrectTranscript(
 	owner, chOwner := buildOwnershipTestStreamer(t, h, wch, chatID, "turn-owner")
 	owner.sessionID = meta.ID
 	owner.agentStore = store
+	// buildOwnershipTestStreamer bound chatID's connection under the default
+	// "session-"+chatID id — rebind it to the REAL session id the test just
+	// overrode both streamers onto, so Update/Finalize's resolveSessionConnsLocked
+	// (ADR-082 D2) actually finds this connection.
+	h.mu.Lock()
+	h.sessionIDs[chatID] = meta.ID
+	h.mu.Unlock()
 
 	shadow, chShadow := buildOwnershipTestStreamer(t, h, wch, chatID, "turn-shadow-delegate")
 	shadow.sessionID = meta.ID

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 )
@@ -107,6 +108,67 @@ func TestWebchatChannel_SendBroadcastsToSecondAttachedTab(t *testing.T) {
 		}
 		assert.True(t, gotToken, "each session-attached connection must receive the token frame")
 		assert.True(t, gotDone, "each session-attached connection must receive the done frame")
+	}
+}
+
+// TestWebchatSend_BySessionID_ZeroConnsSucceeds proves ADR-082 D6/FR-012: a
+// webchat Send with zero bound connections MUST succeed (no ErrSendFailed,
+// no drop notice) — the content is already durable in the transcript and
+// will replay on the next attach_session. This closes E5 (keeper-originated
+// turns whose only connection has since disconnected/reconnected elsewhere
+// used to fail twice per fire).
+func TestWebchatSend_BySessionID_ZeroConnsSucceeds(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	ch := newWebchatChannel(handler)
+
+	// No connection registered anywhere for either the chat id or the
+	// session id — simulating a keeper follow-up dispatched after every
+	// viewer disconnected.
+	err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:    "chat-nobody-here",
+		SessionID: "session-nobody-here",
+		Content:   "the answer, delivered to nobody",
+	})
+	assert.NoError(t, err, "Send with zero bound connections must succeed, not return ErrSendFailed")
+}
+
+// TestWebchatSend_ResolvesBySessionIDFirst proves the D6 resolution order:
+// msg.SessionID is consulted BEFORE the chatID→sessionID fallback — a stale
+// ChatID (E5: the goal keeper's captured GoalRouteChatID from an
+// since-reconnected-elsewhere session) must not prevent delivery when the
+// correct, current session id is supplied directly.
+func TestWebchatSend_ResolvesBySessionIDFirst(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	liveConn := makeTestConn()
+	const (
+		staleChatID = "chat-stale-from-old-connection"
+		liveChatID  = "chat-live-after-reconnect"
+		sessionID   = "session-that-moved-connections"
+	)
+	// Only the LIVE chat id is currently bound to the session — the stale
+	// chat id (what a keeper dispatch would carry) is not registered at all.
+	handler.mu.Lock()
+	handler.sessions[liveChatID] = liveConn
+	handler.sessionIDs[liveChatID] = sessionID
+	handler.mu.Unlock()
+
+	ch := newWebchatChannel(handler)
+	err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:    staleChatID,
+		SessionID: sessionID,
+		Content:   "keeper follow-up after reconnect",
+	})
+	require.NoError(t, err)
+
+	select {
+	case frame := <-liveConn.sendCh:
+		assert.True(t, bytesContains(frame, "\"type\":\"token\""))
+	case <-time.After(2 * time.Second):
+		t.Fatal("the live, session-bound connection must receive the message despite the stale chat id")
 	}
 }
 

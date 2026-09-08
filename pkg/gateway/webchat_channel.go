@@ -82,17 +82,19 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	c.wsHandler.mu.Unlock()
 
 	if len(conns) == 0 {
-		// Wrap as channels.ErrSendFailed so the Manager's sendWithRetry loop
-		// classifies the failure as PERMANENT and stops immediately. Under
-		// concurrent load (e.g. 2000 in-process WS clients all hanging up
-		// near simultaneously) the default "unknown error" classification
-		// triggered exponential-backoff retries — each blocking the worker
-		// for up to maxBackoff seconds, multiplied by 3 attempts per
-		// dead chat. There is no recovery path when a chat's only WS
-		// connection has closed; retrying just wastes the worker's time
-		// and starves live chats sharing the same goroutine.
-		return fmt.Errorf("webchat: no active connection for chat %s: %w",
-			msg.ChatID, channels.ErrSendFailed)
+		// ADR-082 D6/FR-012: zero bound connections is no longer a failure.
+		// A turn is UI-independent (ADR-082 P1) — the content is already
+		// durable in the transcript (written by the streaming path's
+		// Finalize, or by the caller before this Send for a non-streamed
+		// response) and will replay on the next attach_session, whenever
+		// that happens. Returning ErrSendFailed here used to make the
+		// Manager's sendWithRetry loop classify a merely-absent viewer as a
+		// PERMANENT failure and (for keeper-originated turns, E5) log
+		// "Send failed"/trigger a drop notice every 60-90s until the goal
+		// cleared — pure noise, since there was never anything to retry.
+		slog.Debug("webchat: no bound connection, transcript is durable",
+			"chat_id", msg.ChatID, "session_id", sid)
+		return nil
 	}
 
 	for _, conn := range conns {
