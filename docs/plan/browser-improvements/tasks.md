@@ -79,32 +79,34 @@ Integrated on `browser-improvements`:
   subsequently reproduced a retired capture rejection aborting its queued
   replacement; media owns that additional negative outcome and documentation.
 
-Current parallel ownership and remaining integration:
+Latest integration and open findings are recorded in
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-review-closeout-2026-09-08.md`.
 
-- UI: annotation CSS coordinates and stale-enrichment rejection, plus remaining
-  written-only control-reference cleanup.
-- Startup: migrate obsolete gateway integration fixtures to actual scoped
-  production routes, remove dead helpers/requested-scale cache, and bound
-  combined media-degradation notices to the 512-character wire contract.
-- Media: retired capture rejection must not close the current socket or abort
-  a replacement capture; current failures must remain visible.
-- Root: integration, canonical capture-description correction, exact build
-  identity and real browser testing. Independent review covered the frontend/
-  encoder and all 82 changed gateway/contract files; remaining browser manager,
-  relay, startup and other changed-file slices still require independent review.
+- Encoder retired rejection correction integrated as `b9820ca97` and independently
+  rechecked. Annotation coordinates and stale enrichment integrated as `c11facff8`.
+- UI/server wheel semantics and actual Back recovery integrated as `27a5e68ad`.
+  Eight wheel and three Back behavioral regressions were reproduced; restored
+  affected Go race checks passed. Eighty affected UI/annotation tests, integrated
+  typecheck and focused lint passed. Independent correction recheck pending.
+- Gateway scoped-route/fixture and combined-message correction integrated as
+  `e2a3223c3`. Worker restored race selection passed 44 entries; final Linux-only
+  fixture correction still needs compilation/execution on its supported build.
+- Independent review read all 78 relay/capture files and all 52 manager files.
+  New findings are assigned to capture, manager and startup workers; fixes and
+  independent rechecks remain open. Root owns document navigation fencing.
+- New document transition design and reproduction preparation are recorded in
+  `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-document-transition-plan.md`.
 
-Runtime evidence so far: the intermediate binary built from `0c5a8d256` booted
-successfully on isolated port 11094; the installed instance on 10994 was
-preserved. Preliminary UAT-13 exited 1 because tab admission reported low
-memory, before video attached. This is not video/input acceptance. Subsequent
-host snapshots moved from near the application's 15% available-memory boundary
-above it; macOS memory-pressure percentage is a different measurement. No
-memory-policy bypass or arithmetic fix was introduced. Repeat actual browser
-testing after compilation work finishes and all implementation changes land.
+Intermediate real-browser evidence at build `b80287c49`: video/scroll and
+click/typing tests each passed, with no skips. Opening was 18.004 seconds;
+click-to-destination 904ms included external loading, and typed content appeared
+in 380ms. These are smoke results, not controlled cold/warm or 100-action latency
+acceptance. Full-app long-error wrapping was visually verified. The production
+instance on 10994 remains preserved; the isolated test instance uses 11094.
 
-Go test/build batches remain serial within this team. Source work continues in
-isolated worktrees. Other independent operators' processes are not controlled
-or terminated by this work.
+Go test/build batches remain serial within this team; independent source work
+continues in isolated worktrees. No full CI is run for each fix. Other operators'
+processes are not controlled or terminated by this work.
 
 ## Release evidence (all pending)
 
