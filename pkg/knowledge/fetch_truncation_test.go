@@ -77,7 +77,7 @@ func TestSearchFilteredReportsTruncationAtTheFetchCap(t *testing.T) {
 		return strings.HasPrefix(relPath, "Meetings/")
 	}
 
-	hits, truncated, err := ix.SearchFiltered("review", 10, keepMeetings)
+	hits, truncated, _, err := ix.SearchFiltered("review", 10, keepMeetings)
 	if err != nil {
 		t.Fatalf("SearchFiltered: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestSearchFilteredReportsTruncationAtTheFetchCap(t *testing.T) {
 	// corpus finds enough within the (still-lowered) cap and must report
 	// truncated=false — this test would be worthless if truncated were always
 	// true regardless of whether the loop actually needed the ceiling.
-	allHits, allTruncated, err := ix.SearchFiltered("review", 5, nil)
+	allHits, allTruncated, _, err := ix.SearchFiltered("review", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchFiltered (unfiltered): %v", err)
 	}

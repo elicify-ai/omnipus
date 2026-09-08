@@ -207,6 +207,30 @@ type Options struct {
 	ExcludeGlobs  []string
 	ContextLines  int // 0..5
 	Limits        Limits
+	// MatchAllWords activates KB-7b's document-level AND: Query is split on
+	// whitespace into words and a FILE is a hit when every word is present
+	// SOMEWHERE in it — not, as the plain literal/regex match requires, all
+	// on one line. A file that matches is reported as ONE collapsed
+	// KindContent hit (Hit.MatchCount carries how many lines actually
+	// matched), redefining a hit from "one matching line" to "one matching
+	// document" for this mode only.
+	//
+	// It is OPT-IN and false by default deliberately: this package is also
+	// the agent `grep` tool's engine (this file's own package doc), whose
+	// literal-substring, line-scoped contract (DEFECT-G1/OBS-G1) is exactly
+	// what a caller relies on today. Splitting Query into words and
+	// collapsing hits to one-per-file is a different contract, not a
+	// strictly-better default — so it is reached only by a caller that asks
+	// for it (the human Library file search bar), never silently, and never
+	// for the agent tool.
+	//
+	// It is IGNORED when Regex is true: a regex pattern is already one
+	// expression a caller wrote on purpose, and splitting it on whitespace
+	// would mangle it (a pattern like "foo\s+bar" contains a literal space
+	// that is part of the expression, not a word boundary). Multi-term AND
+	// is a human-literal-query feature; regex mode keeps its existing
+	// single-pattern, line-scoped semantics unconditionally.
+	MatchAllWords bool
 }
 
 // Hit is one result row (MV-14: one matching line = one hit; a name match is
@@ -223,6 +247,15 @@ type Hit struct {
 	IsDir         bool
 	ContextBefore []string
 	ContextAfter  []string
+	// MatchCount is KB-7b/KB-6a's per-document collapse signal: how many
+	// lines in this file matched, when Options.MatchAllWords collapsed them
+	// into this one Hit. Zero (the default) means "not applicable" — every
+	// hit produced outside MatchAllWords mode (a KindName hit, or an
+	// ordinary one-line-one-hit KindContent hit) leaves it unset, and a
+	// reader should treat zero/absent as "this row already IS the one
+	// match" rather than as "zero matches". Only ever >1 on a collapsed
+	// MatchAllWords hit with more than one matching line.
+	MatchCount int
 }
 
 // Stats is the walk accounting (observable, never silent).
@@ -844,16 +877,41 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 		return nil // binary: name-matchable only (FR-005)
 	}
 
+	// collapsed is KB-7b's document-level AND: true when this search asked
+	// for MatchAllWords and the query actually split into two or more
+	// words (compile() only ever populates s.m.words in that case — see
+	// its own doc comment). One file produces AT MOST one Hit in this mode,
+	// gated on every word having matched SOMEWHERE in the file by EOF.
+	collapsed := len(s.m.words) >= 2
 	var (
-		fileBytes int64
-		lineNo    int
-		before    []string // ring of up to contextN previous lines, each pre-capped
-		fileHits  []Hit
-		pending   []int // indices into fileHits awaiting up to contextN after-lines
-		perFile   int   // this file's own match count (MatchesPerFile cap)
+		fileBytes   int64
+		lineNo      int
+		before      []string // ring of up to contextN previous lines, each pre-capped
+		fileHits    []Hit
+		pending     []int // indices into fileHits awaiting up to contextN after-lines
+		perFile     int   // this file's own match count (MatchesPerFile cap) — legacy mode only
+		wordFound   []bool
+		matchLines  int // collapsed mode: how many lines matched at least one word
+		linesCapped bool
 	)
+	if collapsed {
+		wordFound = make([]bool, len(s.m.words))
+	}
 
 	flush := func() error {
+		if collapsed {
+			// KB-7b's AND gate: a file that does not contain every query
+			// word SOMEWHERE is not a hit at all, no matter how many of the
+			// words it did match — this is what makes a hit mean "a
+			// matching document" rather than "a matching line" under
+			// MatchAllWords. fileHits holds at most the one representative
+			// hit built below; when the gate fails there is nothing to
+			// charge.
+			if len(fileHits) == 0 || !allWordsFound(wordFound) {
+				return nil
+			}
+			fileHits[0].MatchCount = matchLines
+		}
 		for _, h := range fileHits {
 			if err := s.chargeOutput(h); err != nil {
 				return err
@@ -907,7 +965,40 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 			if s.m.contextN > 0 {
 				appendAfter(trimmed)
 			}
-			if pos, ok := s.m.lineMatch(trimmed); ok {
+			if collapsed {
+				// KB-7b: this line's contribution is "which words did it
+				// touch", not "is this line itself a hit" — a hit is
+				// decided once, at EOF, by flush()'s allWordsFound gate.
+				// The FIRST matching line becomes the one representative
+				// Hit (excerpt + context); every line after that only
+				// updates wordFound/matchLines, exactly like the reference
+				// engine folds repeated matches into one row (KB-6a).
+				if pos, ok := s.m.wordMatch(trimmed, wordFound); ok {
+					if !linesCapped {
+						if matchLines >= s.lim.MatchesPerFile {
+							linesCapped = true
+							s.countHitsCappedPerFile()
+						} else {
+							matchLines++
+						}
+					}
+					if len(fileHits) == 0 {
+						h := Hit{
+							Path:    job.reported,
+							Kind:    KindContent,
+							Line:    lineNo,
+							Excerpt: excerpt(trimmed, pos),
+						}
+						if s.m.contextN > 0 {
+							h.ContextBefore = append(h.ContextBefore, before...)
+						}
+						fileHits = append(fileHits, h)
+						if s.m.contextN > 0 {
+							pending = append(pending, 0)
+						}
+					}
+				}
+			} else if pos, ok := s.m.lineMatch(trimmed); ok {
 				if perFile >= s.lim.MatchesPerFile {
 					s.countHitsCappedPerFile()
 					// keep scanning for byte accounting? No: capped file is

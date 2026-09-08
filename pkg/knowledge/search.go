@@ -364,6 +364,16 @@ type SearchReport struct {
 	// there is no "N of M" ratio to state, because the total that WOULD have
 	// matched was never counted — only that more existed than were looked at.
 	FetchTruncated bool `json:"fetch_truncated"`
+	// RelaxedToOrRanking is KB-7a's disclosure: true when the strict AND
+	// tier (every query term present somewhere in the note) found nothing
+	// and this answer came from the looser OR-ranked fallback instead —
+	// where a hit may satisfy only SOME of the query's terms, ordered by
+	// BM25 relevance, with typo-tolerant fuzzy matching included. It exists
+	// so a caller can never mistake a loosened answer for an exact one: the
+	// founder's own measured case (a query matching zero notes on all
+	// terms) must read as "no exact match; here is the closest ranked
+	// answer", not as a silent 224-result flat list.
+	RelaxedToOrRanking bool `json:"relaxed_to_or_ranking"`
 	// Statement is the human-readable sentence(s) describing everything above.
 	// It is EMPTY only when the answer is complete and nothing was clamped —
 	// which is US-6 AS-4: a finished index shows no incompleteness notice.
@@ -522,12 +532,12 @@ func (s *Searcher) Search(query string, opts SearchOptions) (SearchResponse, err
 		clamped = true
 	}
 
-	hits, truncated, err := s.ix.SearchFiltered(query, applied, folderFilter(opts.Folder))
+	hits, truncated, relaxed, err := s.ix.SearchFiltered(query, applied, folderFilter(opts.Folder))
 	if err != nil {
 		return SearchResponse{}, err
 	}
 
-	report := buildSearchReport(s.progress.Progress(), requested, applied, clamped, truncated)
+	report := buildSearchReport(s.progress.Progress(), requested, applied, clamped, truncated, relaxed)
 	return SearchResponse{hits: hits, report: report}, nil
 }
 
@@ -588,14 +598,22 @@ func SyncTracked(ctx context.Context, ix *Index, tracker *ProgressTracker, opts 
 // filter whose matches rank below indexSearchMaxFetch), and an in-flight index
 // build can happen alongside a search that ALSO truncated. Neither is allowed
 // to hide the other.
-func buildSearchReport(p IndexProgress, requested, applied int, clamped, truncated bool) SearchReport {
+func buildSearchReport(p IndexProgress, requested, applied int, clamped, truncated, relaxed bool) SearchReport {
 	r := SearchReport{
-		Complete:       !p.InFlight() && !truncated,
-		RequestedTopN:  requested,
-		AppliedTopN:    applied,
-		MaxTopN:        SearchMaxTopN,
-		Clamped:        clamped,
-		FetchTruncated: truncated,
+		// RelaxedToOrRanking deliberately does NOT enter this expression.
+		// Complete answers "did the search cover everything there was to
+		// cover" (index freshness, fetch ceiling) — a relaxed answer covered
+		// everything just as thoroughly, it simply matched under a looser
+		// rule. Folding the two together would make a fully-covered,
+		// nothing-clamped OR-fallback answer read as "incomplete", which is
+		// the wrong caveat for what actually happened.
+		Complete:           !p.InFlight() && !truncated,
+		RequestedTopN:      requested,
+		AppliedTopN:        applied,
+		MaxTopN:            SearchMaxTopN,
+		Clamped:            clamped,
+		FetchTruncated:     truncated,
+		RelaxedToOrRanking: relaxed,
 	}
 	// The index-build ratio/indeterminate state is a property of p alone, not
 	// of r.Complete — r.Complete can now be false purely because the search
@@ -649,6 +667,16 @@ func composeStatement(r SearchReport) string {
 		parts = append(parts, fmt.Sprintf(
 			"The requested result count of %d was clamped to the maximum of %d.",
 			r.RequestedTopN, r.MaxTopN))
+	}
+	if r.RelaxedToOrRanking {
+		// KB-7a: a reader seeing these results must not mistake them for an
+		// exact match on every query term — say so in the same sentence
+		// that would otherwise stay silent (US-6 AS-4 only suppresses the
+		// INCOMPLETENESS notice; a relaxed match rule is a different kind of
+		// caveat and is disclosed even when the search was otherwise
+		// complete, unclamped and untruncated).
+		parts = append(parts,
+			"No note contains every word of this query, so these results are ranked by relevance to the closest match instead — some may contain only some of the query's words.")
 	}
 	return strings.Join(parts, " ")
 }

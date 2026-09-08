@@ -774,7 +774,7 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 	// first — otherwise "exactly one result" is trivially true and proves nothing
 	// about collapsing.
 	rawSegments := map[int]bool{}
-	raw, _, err := ix.searchRaw(b2SharedSegmentTerm, 100)
+	raw, _, _, err := ix.searchRaw(b2SharedSegmentTerm, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

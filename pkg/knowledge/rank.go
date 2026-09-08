@@ -356,13 +356,60 @@ var fusionFieldWeights = []fieldWeight{
 	{Field: fieldBody, Weight: 1.0},
 }
 
+// buildWeightedAndQuery is bm25fPool's own KB-7a AND tier: the SAME
+// document-level "every term present somewhere" retrieval index.go's
+// buildAndQuery performs for the production path, built over
+// fusionFieldWeights' weighted fields instead of textSearchFields'
+// unweighted ones — so the retrieval STRATEGY (AND-first, OR fallback)
+// stays identical between the shipped baseline and this experimental pool,
+// and only the WEIGHTING differs. Without this, the eval in
+// rank_eval_test.go would compare an AND-first baseline against a
+// still-OR-only weighted pool and "regresses" would mean nothing more than
+// "the baseline got a retrieval fix the pool did not" — a fact about which
+// function happened to get edited, not about field weighting.
+func buildWeightedAndQuery(terms []string) bleveQuery.Query {
+	perTerm := make([]bleveQuery.Query, 0, len(terms))
+	for _, term := range terms {
+		qs := make([]bleveQuery.Query, 0, len(fusionFieldWeights))
+		for _, fw := range fusionFieldWeights {
+			mq := bleveQuery.NewMatchQuery(term)
+			mq.SetField(fw.Field)
+			mq.SetBoost(fw.Weight)
+			qs = append(qs, mq)
+		}
+		perTerm = append(perTerm, bleve.NewDisjunctionQuery(qs...))
+	}
+	if len(perTerm) == 1 {
+		return perTerm[0]
+	}
+	return bleve.NewConjunctionQuery(perTerm...)
+}
+
+// buildWeightedOrQuery is bm25fPool's pre-KB-7a query, unchanged: a
+// disjunction of per-field match queries over the whole query string,
+// weighted by fusionFieldWeights.
+func buildWeightedOrQuery(query string) bleveQuery.Query {
+	qs := make([]bleveQuery.Query, 0, len(fusionFieldWeights))
+	for _, fw := range fusionFieldWeights {
+		mq := bleveQuery.NewMatchQuery(query)
+		mq.SetField(fw.Field)
+		mq.SetBoost(fw.Weight)
+		qs = append(qs, mq)
+	}
+	return bleve.NewDisjunctionQuery(qs...)
+}
+
 // bm25fPool runs the weighted-field retriever and returns the candidate pool,
 // collapsed to one hit per note (FR-034a) and ordered best first.
 //
-// It deliberately does not go through Index.SearchFiltered: that method builds
-// an UNWEIGHTED disjunction, which is the plain-BM25 baseline the fusion is
-// measured against. Sharing one query builder between the baseline and the
-// treatment would make the comparison measure nothing.
+// It deliberately does not go through Index.SearchFiltered: that method
+// applies its OWN field weighting decision (none — see textSearchFields),
+// which is the plain-BM25 baseline the fusion is measured against. Sharing
+// one query builder between the baseline and the treatment would make the
+// comparison measure nothing. What the two DO share, deliberately, is the
+// AND-first-with-OR-fallback retrieval strategy (KB-7a) — see
+// buildWeightedAndQuery's doc comment for why that sharing is required for
+// the comparison to mean anything.
 func (ix *Index) bm25fPool(query string, size int, keep func(string) bool) ([]IndexHit, error) {
 	if size <= 0 {
 		size = FusionPoolSize
@@ -370,14 +417,6 @@ func (ix *Index) bm25fPool(query string, size int, keep func(string) bool) ([]In
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return nil, nil
-	}
-
-	qs := make([]bleveQuery.Query, 0, len(fusionFieldWeights))
-	for _, fw := range fusionFieldWeights {
-		mq := bleveQuery.NewMatchQuery(q)
-		mq.SetField(fw.Field)
-		mq.SetBoost(fw.Weight)
-		qs = append(qs, mq)
 	}
 
 	// Over-fetch: the pool is per-NOTE but bleve ranks per-SEGMENT, so a
@@ -388,13 +427,30 @@ func (ix *Index) bm25fPool(query string, size int, keep func(string) bool) ([]In
 		fetch = indexSearchMaxFetch
 	}
 
-	req := bleve.NewSearchRequestOptions(bleveQuery.NewDisjunctionQuery(qs), fetch, 0, false)
+	terms := prefixSearchTokens(q)
+	if len(terms) >= 1 {
+		collapsed, err := ix.bm25fPoolQuery(buildWeightedAndQuery(terms), query, fetch, size, keep)
+		if err != nil {
+			return nil, err
+		}
+		if len(collapsed) > 0 {
+			return collapsed, nil
+		}
+	}
+	return ix.bm25fPoolQuery(buildWeightedOrQuery(q), query, fetch, size, keep)
+}
+
+// bm25fPoolQuery runs one bleve query for bm25fPool and returns its
+// collapsed, size-capped, keep-filtered pool. Factored out so both the AND
+// tier and the OR-fallback tier decode hits identically (KB-7a).
+func (ix *Index) bm25fPoolQuery(q bleveQuery.Query, label string, fetch, size int, keep func(string) bool) ([]IndexHit, error) {
+	req := bleve.NewSearchRequestOptions(q, fetch, 0, false)
 	req.Fields = []string{fieldPath, fieldKind, fieldOffset}
 	req.SortBy([]string{"-_score", "_id"}) // deterministic ties (FR-046)
 
 	res, err := ix.idx.Search(req)
 	if err != nil {
-		return nil, fmt.Errorf("knowledge: bm25f pool %q: %w", query, err)
+		return nil, fmt.Errorf("knowledge: bm25f pool %q: %w", label, err)
 	}
 
 	hits := make([]IndexHit, 0, len(res.Hits))
@@ -773,6 +829,25 @@ func GraphBacklinks(g *LinkGraph) func(string) int {
 // is, and a real graded query set is what the ablation needs re-run against
 // before that wiring is trusted.
 const FusionEnabledByDefault = false
+
+// KB-7a POSTSCRIPT (2026-09-08): the AND-first-with-OR-fallback retrieval
+// fix (searchRaw's buildAndQuery, and bm25fPool's own matching
+// buildWeightedAndQuery — synced deliberately so the ablation still
+// isolates field weighting rather than comparing two different retrieval
+// strategies) measurably raised nDCG@10 across every rung, including the
+// full fusion, enough that TestRank_FusionMeetsNDCGThreshold now sometimes
+// logs a FINDING that the fusion clears FR-113's gain threshold on this
+// corpus. Read that finding for what it is and no more: this eval remains
+// a SELF-GENERATED KNOWN-ITEM corpus whose ground truth is independent of
+// the recency/backlink priors BY CONSTRUCTION
+// (TestRankEval_GroundTruthIsNotPrivileged) — it can still only VETO a
+// regression, never AUTHORISE shipping the fusion, for exactly the reasons
+// the paragraphs above already give. The threshold crossing is real and
+// reproducible (fixed corpus/query seeds), but it is evidence that the
+// SHARED RETRIEVAL POOL got better for everyone, not evidence that the
+// name/recency/backlink priors themselves improved — and it is not, on its
+// own, the human decision with a real graded query set that would be
+// required before this constant could responsibly change.
 
 // RankOptions selects a ranking strategy for one query.
 //

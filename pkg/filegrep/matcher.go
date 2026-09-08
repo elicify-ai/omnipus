@@ -6,6 +6,7 @@ package filegrep
 
 import (
 	"bytes"
+	"strings"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -67,6 +68,24 @@ type matcher struct {
 	foldRe *regexp.Regexp // insensitive-literal, non-ASCII fallback engine
 
 	contextN int
+
+	// words is KB-7b's multi-term AND matchers: one literal matcher per
+	// whitespace-separated word of Options.Query, built ONLY when
+	// Options.MatchAllWords is set, Options.Regex is false, and Query splits
+	// into two or more words. A single-word query leaves this nil and falls
+	// straight through the ordinary top-level matcher fields above —
+	// MatchAllWords has no effect on a one-word query, since "all N words
+	// present" and "the one word present" are the same question.
+	//
+	// Each entry is a full matcher built by the SAME compile() this type
+	// itself goes through (one word's Options carrying that word as Query,
+	// Regex forced false, Case forced to the PARENT query's resolved mode —
+	// never re-derived per word, so "smart" case is one decision for the
+	// whole query, not one inconsistent decision per word). That reuse is
+	// deliberate: every existing fast path (sensitive literal, ASCII fold,
+	// non-ASCII fold) is inherited for free, per word, with no new matching
+	// code.
+	words []*matcher
 }
 
 func clampContext(n int) int {
@@ -128,6 +147,23 @@ func compile(o Options) (*matcher, error) {
 			m.foldRe = foldRe
 		}
 	}
+
+	// KB-7b: build the per-word matchers for MatchAllWords mode. Regex is
+	// excluded above (this whole branch is under `if o.Regex` returning
+	// early), so reaching here already means literal mode.
+	if o.MatchAllWords {
+		words := strings.Fields(o.Query)
+		if len(words) >= 2 {
+			m.words = make([]*matcher, 0, len(words))
+			for _, w := range words {
+				wm, err := compile(Options{Query: w, Case: cs})
+				if err != nil {
+					return nil, err
+				}
+				m.words = append(m.words, wm)
+			}
+		}
+	}
 	return m, nil
 }
 
@@ -173,6 +209,44 @@ func (m *matcher) lineMatch(line []byte) (int, bool) {
 func (m *matcher) nameMatch(name string) bool {
 	_, ok := m.lineMatch([]byte(name))
 	return ok
+}
+
+// wordMatch reports which of m.words matched line (setting found[i] true for
+// each one, never clearing an already-true entry — presence accumulates
+// across the whole file, it does not need to hold on every line at once),
+// and returns the earliest match position on THIS line across every word,
+// for excerpting the representative line. ok is false when no word matched
+// on this particular line.
+//
+// Only ever called when len(m.words) >= 2 (KB-7b's MatchAllWords mode);
+// found must be the same length as m.words.
+func (m *matcher) wordMatch(line []byte, found []bool) (pos int, ok bool) {
+	best := -1
+	for i, w := range m.words {
+		if p, matched := w.lineMatch(line); matched {
+			found[i] = true
+			ok = true
+			if best == -1 || p < best {
+				best = p
+			}
+		}
+	}
+	if !ok {
+		return 0, false
+	}
+	return best, true
+}
+
+// allWordsFound reports whether every word matcher has been seen at least
+// once — the KB-7b document-level AND gate: a file is a hit only when this
+// is true by the time the whole file has been scanned.
+func allWordsFound(found []bool) bool {
+	for _, f := range found {
+		if !f {
+			return false
+		}
+	}
+	return true
 }
 
 func isASCIIString(s string) bool {
