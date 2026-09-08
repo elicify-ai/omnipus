@@ -36,7 +36,7 @@ import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
-import { SetGoalCardBlock, parseSetGoalResult } from './tools/SetGoalToolUI'
+import { SetGoalCardBlock, classifySetGoalCall } from './tools/SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
@@ -698,17 +698,25 @@ function wouldToolCallBeVisible(
   verboseChatEnabled: boolean,
 ): boolean {
   if (tool === 'set_goal') {
-    // ADR-082 D9: set_goal renders via its own dedicated card
-    // (SetGoalCardBlock), never GenericToolCall — shouldRenderToolCall's
-    // hide-by-default classification (toolVisibility.ts) governs only the
-    // RAW call chip, which stays hidden either way. "Visible" here must
-    // instead mean "the dedicated card actually renders something", so
-    // this mirrors SetGoalCardBlock's own render gate (a well-formed,
-    // completed result) exactly — a still-running or rejected call (which
-    // renders null) must NOT count as visible content, or a message
-    // consisting solely of one would suppress ThinkingIndicator for a
-    // bubble that is genuinely still blank.
-    return parseSetGoalResult(result) !== null
+    // ADR-082 D9: set_goal renders via its own dedicated UI
+    // (SetGoalCardBlock), which pre-empts GenericToolCall on both paths.
+    // "Visible" here must mean "that UI actually renders something", so
+    // this consults the SAME decision table the block renders from
+    // (classifySetGoalCall, review S4) — verbose chat shows the raw call,
+    // a failed call shows its quiet failure line, a record shows the card,
+    // a present-but-unparseable result shows a chip; only a still-running
+    // call (no result yet) or a completed call with no result at all is
+    // hidden, so a bubble consisting solely of one still shows the
+    // ThinkingIndicator rather than a blank shell.
+    return (
+      classifySetGoalCall({
+        args: params,
+        result,
+        isRunning: false,
+        isError: errorFlag,
+        verboseChatEnabled,
+      }) !== 'hidden'
+    )
   }
   const isError = errorFlag || isMarshalErrorSentinel(result) || detectToolResultSentinels(result).any
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
@@ -1281,11 +1289,22 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // (SetGoalToolUI, OmnipusRuntimeProvider.tsx) so replay and
             // live render identically.
             if (tc.tool === 'set_goal') {
+              // `tc.result` is passed UNCHANGED (review S12): on replay it
+              // is the persisted `{ text: "<payload json>" }` envelope,
+              // which SetGoalCardBlock's parser unwraps itself. The store's
+              // resolved outcome (`status`/`error`) is passed explicitly so
+              // a failed registration renders its quiet trace (review S4).
               return (
                 <SetGoalCardBlock
                   key={callId}
-                  result={tc.result ?? null}
+                  args={tc.params}
+                  result={tc.result}
+                  status={replayPartStatus(tc.status)}
                   isRunning={tc.status === 'running'}
+                  isError={tc.status === 'error'}
+                  error={tc.error}
+                  durationMs={tc.duration_ms}
+                  sessionId={activeSessionId ?? ''}
                 />
               )
             }

@@ -41,7 +41,12 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
-type CapturedRenderFn = (props: { args?: unknown; result: unknown; status: { type: string } }) => React.ReactNode
+type CapturedRenderFn = (props: {
+  args?: unknown
+  result: unknown
+  status: { type: string; reason?: string }
+  isError?: boolean
+}) => React.ReactNode
 const capturedToolUIs = vi.hoisted((): Record<string, CapturedRenderFn> => ({}))
 
 vi.mock('@assistant-ui/react', () => {
@@ -206,9 +211,25 @@ vi.mock('@/lib/memory-observer', () => ({
 }))
 
 import { ChatScreen } from '../ChatScreen'
-import { SetGoalCardBlock, buildFrameFromSetGoalResult, type SetGoalResult } from '../tools/SetGoalToolUI'
+import {
+  SetGoalCardBlock,
+  buildFrameFromSetGoalResult,
+  parseSetGoalResult,
+  classifySetGoalCall,
+  type SetGoalResult,
+} from '../tools/SetGoalToolUI'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 
 const SID = 'test-session-goal-card-anchoring'
+
+/** The PERSISTED replay shape (review S12): the transcript stores every
+ * plain-text tool result as `{ text: "<ForLLM text>" }` (pkg/agent/loop.go's
+ * tcRecord) and replay.go forwards that map unchanged — so on the replay
+ * path `tc.result` is an envelope whose `text` holds the payload JSON as a
+ * STRING. Taken verbatim from a live session's transcript.jsonl. */
+function goalResultEnvelope(overrides: Partial<SetGoalResult> & { mode?: string } = {}): { text: string } {
+  return { text: goalResultJSON(overrides) }
+}
 
 function seedBucket(messages: ChatMessage[]): void {
   const bucket = makeBucketMessages(messages)
@@ -352,12 +373,231 @@ describe('SetGoalToolUI — live path', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('a failed/malformed result renders nothing (no card for a rejected submission)', () => {
+  it('a completed call with NO result at all renders nothing', () => {
     const renderFn = capturedToolUIs['set_goal']!
     const { container } = render(
-      <>{renderFn({ args: {}, result: 'set_goal rejected: definition is required', status: { type: 'complete' } })}</>,
+      <>{renderFn({ args: {}, result: null, status: { type: 'complete' } })}</>,
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+// ── S4: a FAILED set_goal is never invisible ─────────────────────────────────
+
+describe('SetGoalToolUI — failed call (review S4)', () => {
+  afterEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
+  it('verbose OFF: a failed call renders a one-line quiet "Goal registration failed" trace with the error on expand', () => {
+    const renderFn = capturedToolUIs['set_goal']!
+    const { container } = render(
+      <>
+        {renderFn({
+          args: { mode: 'register' },
+          result: 'set_goal rejected: definition is required',
+          status: { type: 'incomplete', reason: 'error' },
+          isError: true,
+        })}
+      </>,
     )
     expect(container.querySelector('[data-testid="goal-echo-card"]')).toBeNull()
+    const failed = container.querySelector('[data-testid="set-goal-failed"]')
+    expect(failed).not.toBeNull()
+    expect(failed?.textContent).toContain('Goal registration failed')
+    expect(container.querySelector('[data-testid="set-goal-failed-detail"]')?.textContent).toContain(
+      'definition is required',
+    )
+    // The raw chip stays hidden — the trace is the dedicated UI's own.
+    expect(container.querySelector('[data-testid="tool-call-badge"]')).toBeNull()
+  })
+
+  it('verbose ON: a failed call falls through to GenericToolCall (the raw call), not the quiet trace', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const renderFn = capturedToolUIs['set_goal']!
+    const { container } = render(
+      <>
+        {renderFn({
+          args: { mode: 'register' },
+          result: 'set_goal rejected: definition is required',
+          status: { type: 'incomplete', reason: 'error' },
+          isError: true,
+        })}
+      </>,
+    )
+    expect(container.querySelector('[data-testid="set-goal-failed"]')).toBeNull()
+    // GenericToolCall is mocked in this file to a badge div carrying data-tool.
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="set_goal"]')).not.toBeNull()
+  })
+
+  it('verbose ON: a SUCCESSFUL call also falls through to GenericToolCall — no card pre-empts the raw view', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const renderFn = capturedToolUIs['set_goal']!
+    const { container } = render(
+      <>{renderFn({ args: {}, result: goalResultJSON(), status: { type: 'complete' } })}</>,
+    )
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="set_goal"]')).not.toBeNull()
+  })
+
+  it('replay path (verbose OFF): a message whose ONLY part is a failed set_goal shows the trace, not an empty shell', async () => {
+    const assistantMsg: ChatMessage = {
+      id: 'msg_failed_set_goal',
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      tool_calls: [
+        {
+          id: 'tc_failed',
+          tool: 'set_goal',
+          params: { mode: 'register' },
+          result: undefined,
+          error: 'set_goal rejected: criteria is required, at least one',
+          status: 'error',
+          textOffset: 0,
+        } as PositionedToolCall,
+      ],
+    }
+    seedBucket([assistantMsg])
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    const failed = container.querySelector('[data-testid="set-goal-failed"]')
+    expect(failed).not.toBeNull()
+    expect(container.querySelector('[data-testid="set-goal-failed-detail"]')?.textContent).toContain(
+      'criteria is required',
+    )
+  })
+
+  it('classifySetGoalCall (the shared decision table wouldToolCallBeVisible consults) agrees with the renderer', () => {
+    const base = { args: {}, isRunning: false, verboseChatEnabled: false }
+    expect(classifySetGoalCall({ ...base, result: undefined, isError: false })).toBe('hidden')
+    expect(classifySetGoalCall({ ...base, result: undefined, isError: false, isRunning: true })).toBe('hidden')
+    expect(classifySetGoalCall({ ...base, result: 'set_goal rejected: x', isError: true })).toBe('failed')
+    expect(classifySetGoalCall({ ...base, result: goalResultJSON(), isError: false })).toBe('card')
+    expect(classifySetGoalCall({ ...base, result: goalResultEnvelope(), isError: false })).toBe('card')
+    expect(classifySetGoalCall({ ...base, result: 'goal record register: 1 criteria, 2 DoD items', isError: false })).toBe('chip')
+    expect(classifySetGoalCall({ ...base, result: undefined, isError: false, verboseChatEnabled: true })).toBe('raw')
+    expect(classifySetGoalCall({ ...base, result: 'set_goal rejected: x', isError: true, verboseChatEnabled: true })).toBe('raw')
+  })
+})
+
+// ── S9/S12: result parsing never throws; the persisted envelope is unwrapped ─
+
+describe('parseSetGoalResult — shapes and malformed input (review S9/S12)', () => {
+  it('unwraps the persisted replay envelope { text: "<json>" } (S12)', () => {
+    const parsed = parseSetGoalResult(goalResultEnvelope({ goal_id: 'goal-env-1' }))
+    expect(parsed).not.toBeNull()
+    expect(parsed?.goal_id).toBe('goal-env-1')
+    expect(parsed?.definition).toBe('Ship a playable browser tetris game.')
+    expect(parsed?.criteria).toHaveLength(1)
+  })
+
+  it('unwraps the exact persisted transcript.jsonl shape seen in the e2e run (assessment first, goal_id later)', () => {
+    const persisted = {
+      text: JSON.stringify({
+        assessment: { clarity: 'clear', assumptions: ['browser build'] },
+        criteria: [
+          { kind: 'prose', judgment: 'boolean', text: 'game is playable', author: { kind: 'agent', id: 'mia' }, status: 'pending' },
+        ],
+        criteria_count: 1,
+        definition: 'Ship tetris.',
+        dod: [],
+        dod_count: 0,
+        goal_id: 'goal-e2e-1',
+        mode: 'register',
+      }),
+    }
+    const parsed = parseSetGoalResult(persisted)
+    expect(parsed?.goal_id).toBe('goal-e2e-1')
+    expect(parsed?.definition).toBe('Ship tetris.')
+  })
+
+  it('accepts { text: <object> } and an already-parsed object alike', () => {
+    const obj = JSON.parse(goalResultJSON({ goal_id: 'goal-obj' }))
+    expect(parseSetGoalResult(obj)?.goal_id).toBe('goal-obj')
+    expect(parseSetGoalResult({ text: obj })?.goal_id).toBe('goal-obj')
+  })
+
+  it('a pre-D9 result WITHOUT goal_id still parses (goal_id "") instead of vanishing', () => {
+    const noId = JSON.stringify({ definition: 'Old goal.', criteria: [{ text: 'it works', judgment: 'boolean' }], dod: [] })
+    const parsed = parseSetGoalResult(noId)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.goal_id).toBe('')
+    expect(parsed?.criteria).toHaveLength(1)
+  })
+
+  it('drops malformed criteria/dod items (no text) instead of throwing', () => {
+    const malformed = JSON.stringify({
+      goal_id: 'goal-mal',
+      definition: 'Def.',
+      criteria: [
+        { kind: 'prose', judgment: 'boolean', text: 'good one', status: 'pending' },
+        { kind: 'prose', judgment: 'boolean' }, // no text
+        'not an object',
+        null,
+        { text: '' }, // empty text
+      ],
+      dod: [42, { text: 'dod ok', judgment: 'boolean', provenance: 'floor', status: 'weird' }],
+    })
+    const parsed = parseSetGoalResult(malformed)
+    expect(parsed?.criteria.map((c) => c.text)).toEqual(['good one'])
+    expect(parsed?.dod).toHaveLength(1)
+    expect(parsed?.dod[0].status).toBe('pending') // normalised from a stray value
+  })
+
+  it('a malformed item with a MATCHING pill does not throw inside render (was: thread unmount)', () => {
+    const pill: GoalStatusFrame = {
+      type: 'goal_status',
+      session_id: SID,
+      goal_id: 'goal-mal-2',
+      condition: 'x',
+      round: 1,
+      max_rounds: 5,
+      latest_reason: '',
+      active_loops: 0,
+      cap: 4,
+      state: 'active',
+      criteria: [{ kind: 'prose', judgment: 'boolean', text: 'good one', author: { kind: 'agent', id: 'mia' }, status: 'met' }],
+    }
+    act(() => {
+      useChatStore.setState({ goalPills: { 'goal-mal-2': pill } })
+    })
+    const malformed = JSON.stringify({
+      goal_id: 'goal-mal-2',
+      definition: 'Def.',
+      criteria: [{ judgment: 'boolean' }, { text: 'good one', judgment: 'boolean' }],
+      dod: [],
+    })
+    expect(() =>
+      render(<SetGoalCardBlock result={malformed} status={{ type: 'complete' }} />),
+    ).not.toThrow()
+  })
+
+  it('returns null for a plain error sentence, an empty string, and non-record JSON', () => {
+    expect(parseSetGoalResult('set_goal rejected: definition is required')).toBeNull()
+    expect(parseSetGoalResult('')).toBeNull()
+    expect(parseSetGoalResult('[1,2,3]')).toBeNull()
+    expect(parseSetGoalResult({ text: 'not json' })).toBeNull()
+    expect(parseSetGoalResult(JSON.stringify({ goal_id: 'g', criteria: [] }))).toBeNull() // no definition
+  })
+
+  it('a present-but-unparseable SUCCESS result renders a minimal chip so the registration leaves a trace', () => {
+    const { container } = render(
+      <SetGoalCardBlock result="goal record register: 1 criteria, 2 DoD items" status={{ type: 'complete' }} />,
+    )
+    const chip = container.querySelector('[data-testid="set-goal-chip"]')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('Goal record registered')
   })
 })
 
@@ -379,7 +619,9 @@ describe('SetGoalCardBlock — replay path (VirtualAssistantMessageRow parts loo
           id: 'tc_set_goal_1',
           tool: 'set_goal',
           params: { definition: 'Ship a playable browser tetris game.', criteria: [] },
-          result: goalResultJSON(),
+          // The replay path hands the PERSISTED envelope shape (S12) — the
+          // raw JSON string is the LIVE shape and never reaches replay.
+          result: goalResultEnvelope(),
           status: 'success',
           textOffset: before.length,
         } as PositionedToolCall,
@@ -417,11 +659,11 @@ describe('SetGoalCardBlock — register then amend, own record each', () => {
     const seg1 = 'Registering the goal. '
     const seg2 = 'Amending it with sound effects.'
     const content = seg1 + seg2
-    const registerResult = goalResultJSON({
+    const registerResult = goalResultEnvelope({
       mode: 'register',
       definition: 'Ship a playable browser tetris game.',
     })
-    const amendResult = goalResultJSON({
+    const amendResult = goalResultEnvelope({
       mode: 'update',
       definition: 'Ship a playable browser tetris game with sound.',
       criteria: [
@@ -489,13 +731,28 @@ describe('buildFrameFromSetGoalResult — live overlay by goal_id (FR-018/S-17)'
     dod: [],
   }
 
-  it('with no matching pill, the frame falls back entirely to the result (round/max_rounds/cap default to 0)', () => {
-    const frame = buildFrameFromSetGoalResult(result, undefined)
-    expect(frame.definition).toBe(result.definition)
-    expect(frame.criteria?.map((c) => c.status)).toEqual(['pending', 'pending'])
-    expect(frame.round).toBe(0)
-    expect(frame.max_rounds).toBe(0)
-    expect(frame.state).toBe('active')
+  it('with no matching pill, the view carries the record only and reports NO live progress (review S3)', () => {
+    const view = buildFrameFromSetGoalResult(result, undefined)
+    expect(view.hasLiveProgress).toBe(false)
+    expect(view.frame.definition).toBe(result.definition)
+    expect(view.frame.criteria?.map((c) => c.status)).toEqual(['pending', 'pending'])
+  })
+
+  it('a result WITHOUT goal_id never matches a pill, even one whose goal_id is also empty', () => {
+    const emptyIdPill: GoalStatusFrame = {
+      type: 'goal_status',
+      session_id: SID,
+      goal_id: '',
+      condition: 'x',
+      round: 4,
+      max_rounds: 9,
+      latest_reason: '',
+      active_loops: 0,
+      cap: 2,
+      state: 'judging',
+    }
+    const view = buildFrameFromSetGoalResult({ ...result, goal_id: '' }, emptyIdPill)
+    expect(view.hasLiveProgress).toBe(false)
   })
 
   it('a matching pill overlays progress fields and per-criterion status by text, WITHOUT replacing definition/criteria text', () => {
@@ -514,7 +771,8 @@ describe('buildFrameFromSetGoalResult — live overlay by goal_id (FR-018/S-17)'
         { kind: 'prose', judgment: 'boolean', text: 'the game is playable end to end', author: { kind: 'agent', id: 'mia' }, status: 'met' },
       ],
     }
-    const frame = buildFrameFromSetGoalResult(result, pill)
+    const { frame, hasLiveProgress } = buildFrameFromSetGoalResult(result, pill)
+    expect(hasLiveProgress).toBe(true)
     // Progress fields overlay from the pill.
     expect(frame.round).toBe(3)
     expect(frame.max_rounds).toBe(20)
@@ -544,10 +802,9 @@ describe('buildFrameFromSetGoalResult — live overlay by goal_id (FR-018/S-17)'
       cap: 16,
       state: 'done',
     }
-    const frame = buildFrameFromSetGoalResult(result, otherPill)
-    expect(frame.round).toBe(0)
-    expect(frame.state).toBe('active')
-    expect(frame.definition).toBe(result.definition)
+    const view = buildFrameFromSetGoalResult(result, otherPill)
+    expect(view.hasLiveProgress).toBe(false)
+    expect(view.frame.definition).toBe(result.definition)
   })
 })
 
@@ -577,7 +834,7 @@ describe('SetGoalCardBlock — overlay reaches the rendered DOM', () => {
       useChatStore.setState({ goalPills: { 'goal-dom-overlay': pill } })
     })
     const result = goalResultJSON({ goal_id: 'goal-dom-overlay' })
-    const { container } = render(<SetGoalCardBlock result={result} isRunning={false} />)
+    const { container } = render(<SetGoalCardBlock result={result} status={{ type: 'complete' }} />)
     const roundEl = container.querySelector('[data-testid="goal-echo-round"]')
     expect(roundEl?.textContent).toContain('12 rounds')
     expect(roundEl?.textContent).toContain('8 concurrent loops')
@@ -585,5 +842,24 @@ describe('SetGoalCardBlock — overlay reaches the rendered DOM', () => {
     expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe(
       'Ship a playable browser tetris game.',
     )
+  })
+
+  it('with NO pill the card renders the record without any round/cap line (review S3 — no false progress claim)', () => {
+    const result = goalResultJSON({ goal_id: 'goal-no-pill-yet' })
+    const { container } = render(<SetGoalCardBlock result={result} status={{ type: 'complete' }} />)
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe(
+      'Ship a playable browser tetris game.',
+    )
+    expect(container.querySelector('[data-testid="goal-echo-round"]')).toBeNull()
+    expect(container.textContent).not.toContain('0 rounds')
+  })
+
+  it('a pre-D9 result lacking goal_id renders a minimal card (no overlay, no progress) instead of vanishing (review S9)', () => {
+    const noId = JSON.stringify({ definition: 'Old goal.', criteria: [{ text: 'it works', judgment: 'boolean' }], dod: [] })
+    const { container } = render(<SetGoalCardBlock result={noId} status={{ type: 'complete' }} />)
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe('Old goal.')
+    expect(container.querySelector('[data-testid="goal-echo-round"]')).toBeNull()
   })
 })

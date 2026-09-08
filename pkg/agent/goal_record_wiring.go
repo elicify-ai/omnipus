@@ -17,6 +17,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -68,7 +69,189 @@ func (a agentLoopGoalRecordAccess) ReadGoalState(sessionID string) (goalID, goal
 	if gerr != nil {
 		return "", "", "", fmt.Errorf("goal record access: reading session meta: %w", gerr)
 	}
+	if meta.GoalCondition != "" && meta.GoalID == "" {
+		// ADR-082 D9 review F8: an active goal with no id is a pre-ADR-053
+		// goal meta (activated before goal ids were minted) or a meta
+		// written by a path that skipped newGoalID. set_goal would silently
+		// emit `"goal_id": ""` — the SPA then renders the record card with
+		// no live-progress overlay and nothing in the log explains why.
+		// Surface it loudly here, once per read, instead of letting the
+		// empty id propagate unremarked.
+		logger.WarnCF("goal", "goal record access: active goal has no goal_id — set_goal's result will carry an empty id and the SPA card cannot overlay live progress (pre-ADR-053 goal meta?)",
+			map[string]any{"session_id": sessionID, "goal_condition": meta.GoalCondition})
+	}
 	return meta.GoalID, meta.GoalCondition, meta.GoalCriteriaJSON, nil
+}
+
+// goalRecordAnchor describes one ENGINE-authored goal-record write that must
+// be anchored in the session transcript as a `set_goal` tool call (ADR-082
+// D9, review CR8). Three paths write a record without ever running the tool
+// — the marker-path activation and marker-path restate (goal_loop.go's
+// applyGoalCommandPrompt / applyGoalMarkerRestate) and the D7 keeper
+// fallback compile (goal_triggers.go's dispatchGoalFallbackCompile). Under
+// D9 the record card renders ONLY from a `set_goal` call's own result at
+// the call's own position; afterGoalRecordWrite's goal_status frame feeds the
+// header pill and the per-criterion overlay, never the card's content. So
+// each of those writes produces NO card at all unless the transcript carries
+// a `set_goal` call for it — this is that call.
+type goalRecordAnchor struct {
+	store     *session.UnifiedStore
+	sessionID string
+	// agentID is the agent the record is attributed to (the goal-bearing
+	// agent) — stamped on the transcript entry and the live frames exactly
+	// as a real set_goal call stamps its calling agent.
+	agentID string
+	// chatID is the routing chat id for the live frames (the WS forwarder
+	// matches on chat id OR session id; session id is the key that matters
+	// under ADR-082 D6, chat id is advisory).
+	chatID string
+	// mode is tools.SetGoalModeRegister or tools.SetGoalModeUpdate.
+	mode string
+	// narration is the short assistant-role content line the entry carries
+	// ahead of the call — non-empty on purpose: replay emits a replay_message
+	// only for non-empty content, and the SPA anchors the following
+	// tool_call_start to that just-emitted assistant bubble; an empty-content
+	// entry would leave the card riding a placeholder bubble minted mid-
+	// replay instead.
+	narration string
+	record    *CompiledGoal
+	// assumptions is surfaced as the call's `assessment.assumptions` so the
+	// card (and the log) say plainly that the ENGINE, not the agent, authored
+	// this record and why.
+	assumptions []string
+}
+
+// goalAnchorTraceSource / goalAnchorTracePath label the synthetic frames'
+// EventMeta so the event log distinguishes an engine-anchored set_goal call
+// from a tool-executed one.
+const (
+	goalAnchorTraceSource = "goal_loop"
+	goalAnchorTracePath   = "goal.record.anchor"
+)
+
+// anchorGoalRecordInTranscript appends one assistant transcript entry
+// carrying a single successful `set_goal` tool call for a.record — params
+// {mode, definition, criteria, dod, assessment} in the tool's own schema
+// shape, result = the byte-identical payload a real set_goal success returns
+// (tools.SetGoalResultPayload, goal_id + the full record), persisted under
+// the SAME {"text": <json>} Result shape pkg/agent/loop.go's tcRecord
+// construction persists for every plain-text tool result — so replay
+// (pkg/gateway/replay.go) and hydration (attach_hydrate.go, which turns an
+// assistant entry's ToolCalls into a balanced tool_use/tool_result pair)
+// treat it exactly like a tool-executed call. Then it emits the SAME
+// EventKindToolExecStart/End pair loop.go's runTurn emits around a real
+// call, keyed by session id, so a bound webchat connection sees the card
+// appear live at that position rather than only after a reload.
+//
+// Returns the minted tool-call id. A transcript write failure is returned
+// (and counted on taskGoalTranscriptWriteFailures) after logging; the live
+// frames are NOT emitted in that case — a card the transcript cannot replay
+// would be a one-time apparition, worse than none.
+func (al *AgentLoop) anchorGoalRecordInTranscript(a goalRecordAnchor) (session.ToolCallID, error) {
+	if a.store == nil || a.sessionID == "" {
+		return "", errors.New("goal anchor: no session store or session id")
+	}
+	if a.record == nil {
+		return "", errors.New("goal anchor: nil compiled record")
+	}
+	meta, err := a.store.GetMeta(a.sessionID)
+	if err != nil || meta == nil {
+		return "", fmt.Errorf("goal anchor: reading session meta: %w", err)
+	}
+	// A marker-shaped record legitimately carries no restated statement
+	// (ADR-081 round-2 B-3); the card's lead line then falls back to the
+	// goal condition, the same fallback the echo and the frame already use.
+	definition := a.record.Definition
+	if definition == "" {
+		definition = a.record.Prompt
+	}
+	if definition == "" {
+		definition = a.record.Intent
+	}
+	assessment := map[string]any{"clarity": "clear"}
+	if len(a.assumptions) > 0 {
+		assessment["assumptions"] = a.assumptions
+	}
+	params := map[string]any{
+		"mode":       a.mode,
+		"definition": definition,
+		"criteria":   setGoalCriteriaArgs(a.record.Criteria, false),
+		"dod":        setGoalCriteriaArgs(a.record.DoD, true),
+		"assessment": assessment,
+	}
+	resultJSON, merr := json.Marshal(tools.SetGoalResultPayload(tools.SetGoalResultCore{
+		Mode:       a.mode,
+		GoalID:     meta.GoalID,
+		Definition: definition,
+		Criteria:   a.record.Criteria,
+		DoD:        a.record.DoD,
+		Assessment: assessment,
+	}))
+	if merr != nil {
+		return "", fmt.Errorf("goal anchor: encoding set_goal result: %w", merr)
+	}
+	now := time.Now().UTC()
+	callID := session.ToolCallID(fmt.Sprintf("tc_goal_%s_%d", a.mode, now.UnixNano()))
+	tc := session.ToolCall{
+		ID:         callID,
+		Tool:       tools.SetGoalToolName,
+		Status:     "success",
+		Parameters: params,
+		Result:     map[string]any{"text": string(resultJSON)},
+	}
+	entry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("goal-%s-anchor-%d", a.sessionID, now.UnixNano()),
+		Role:      "assistant",
+		Content:   a.narration,
+		AgentID:   a.agentID,
+		Timestamp: now,
+		ToolCalls: []session.ToolCall{tc},
+	}
+	if werr := a.store.AppendTranscriptStrict(a.sessionID, entry); werr != nil {
+		taskGoalTranscriptWriteFailures.Add(1)
+		logger.WarnCF("agent", "goal: could not anchor the record as a set_goal transcript call; the card will not render for this write",
+			map[string]any{"component": "goal", "session_id": a.sessionID, "goal_id": meta.GoalID, "mode": a.mode, "error": werr.Error()})
+		return "", fmt.Errorf("goal anchor: transcript write: %w", werr)
+	}
+
+	evtMeta := EventMeta{AgentID: a.agentID, Source: goalAnchorTraceSource, TracePath: goalAnchorTracePath}
+	al.emitEvent(EventKindToolExecStart, evtMeta, ToolExecStartPayload{
+		ToolCallID: callID,
+		ChatID:     a.chatID,
+		SessionID:  a.sessionID,
+		Tool:       tools.SetGoalToolName,
+		Arguments:  cloneEventArguments(params),
+		AgentID:    a.agentID,
+	})
+	al.emitEvent(EventKindToolExecEnd, evtMeta, ToolExecEndPayload{
+		ToolCallID: callID,
+		ChatID:     a.chatID,
+		SessionID:  a.sessionID,
+		Tool:       tools.SetGoalToolName,
+		ForLLMLen:  len(resultJSON),
+		Result:     string(resultJSON),
+		AgentID:    a.agentID,
+	})
+	logger.InfoCF("agent", "goal: record anchored as a set_goal transcript call",
+		map[string]any{"component": "goal", "session_id": a.sessionID, "goal_id": meta.GoalID, "mode": a.mode, "tool_call_id": string(callID)})
+	return callID, nil
+}
+
+// setGoalCriteriaArgs renders a criterion ladder in set_goal's OWN argument
+// schema (Parameters(): criteria items are {text, judgment}; dod items add
+// {provenance}) so the synthetic call's params read exactly like a call the
+// agent would have made — a reader expanding the raw call (verbose chat)
+// sees the tool's documented input shape, not an internal record dump.
+func setGoalCriteriaArgs(items []task.AcceptanceCriterion, withProvenance bool) []any {
+	out := make([]any, 0, len(items))
+	for _, c := range items {
+		item := map[string]any{"text": c.Text, "judgment": string(c.Judgment)}
+		if withProvenance && c.Provenance != "" {
+			item["provenance"] = string(c.Provenance)
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // WriteRecord implements tools.GoalRecordAccess: persists recordJSON as
