@@ -283,22 +283,49 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 		// can disagree exactly as easily as a word query's, and checking only
 		// the word path would leave the commonest query shape unchecked.
 		textHash := s.textHash
+		var hashErr error
 		if !s.hasText {
-			if h, ok, err := d.Text.SourceHash(ctx, s.cand.Path); err == nil && ok {
+			h, ok, err := d.Text.SourceHash(ctx, s.cand.Path)
+			switch {
+			case err != nil:
+				hashErr = err
+			case ok:
 				textHash = h
 			}
 		}
-		fresh := propindex.CompareFreshness(s.cand.SourceHash, textHash)
-		if fresh == propindex.FreshnessAgree {
-			agreeing++
-		} else {
+		switch {
+		case hashErr != nil:
+			// F4: a FAILED lookup is a different fact from "the text index
+			// holds no hash for this record" — collapsing `err != nil` into
+			// the same empty-textHash path as `ok == false` used to hand this
+			// straight to CompareFreshness, which reports BOTH as
+			// FreshnessUnknown with the identical "one of the two indexes
+			// holds no content hash for it" reason. That sends the reader to
+			// check_integrity for what is actually a failing read (e.g. a
+			// transient I/O error) — the wrong diagnosis, and the wrong next
+			// step, for what actually happened.
 			t := true
 			row.Stale = &t
-			p := problem(generated.StaleRecord, s.cand.Path+": "+fresh.Reason(),
+			p := problem(generated.IndexUnavailable,
+				fmt.Sprintf("%s: the text index's stored hash for this record could not be read: %v",
+					s.cand.Path, hashErr),
 				"re-run to confirm; run knowledge_describe check_integrity if it persists",
 				identityOf(s.cand))
 			p.Paths = &[]string{s.cand.Path}
 			e.problems = append(e.problems, p)
+		default:
+			fresh := propindex.CompareFreshness(s.cand.SourceHash, textHash)
+			if fresh == propindex.FreshnessAgree {
+				agreeing++
+			} else {
+				t := true
+				row.Stale = &t
+				p := problem(generated.StaleRecord, s.cand.Path+": "+fresh.Reason(),
+					"re-run to confirm; run knowledge_describe check_integrity if it persists",
+					identityOf(s.cand))
+				p.Paths = &[]string{s.cand.Path}
+				e.problems = append(e.problems, p)
+			}
 		}
 		rows = append(rows, row)
 	}

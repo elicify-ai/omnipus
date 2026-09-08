@@ -143,6 +143,40 @@ type TextFreshnessReporter interface {
 	IndexFreshness(ctx context.Context) (TextIndexFreshness, error)
 }
 
+// TextDeepSearcher is an OPTIONAL capability a TextSearcher may implement to
+// answer fetchWordHits' own re-ask at propindex.BoundSurvivors (F3) honestly.
+//
+// Search's contract is "returns at most limit, and is silent about whether the
+// corpus held more" (see TextSearcher.Search's own doc comment). fetchWordHits
+// used to turn that silence into a claim of exhaustion by comparing
+// len(hits) to the limit it asked for — but that comparison is only sound if
+// the searcher's OWN implementation cannot itself run out of budget before
+// the corpus does. The real production adapter cannot make that promise:
+// knowledge.Index.Search is built on SearchFiltered, which stops at its own
+// internal fetch ceiling (indexSearchMaxFetch, far below
+// propindex.BoundSurvivors) and DISCARDS the truncated flag that would say
+// so (see Index.Search's own doc comment for why that discard is
+// deliberate at ITS layer). So "fewer than BoundSurvivors hits came back"
+// is consistent with BOTH "the corpus is exhausted" and "the searcher's own
+// ceiling stopped it first" — Search alone cannot tell fetchWordHits which
+// happened, and len(hits) < BoundSurvivors was true in both cases, making
+// the old inference unconditionally true whenever a real corpus exceeded
+// that ceiling.
+//
+// A TextSearcher that CAN prove the difference implements this, and
+// fetchWordHits asks it directly instead of inferring. One that cannot —
+// including every existing test double before this fix — is used through
+// Search alone, and fetchWordHits then treats deep exhaustion as UNPROVEN
+// (never true) rather than guessing, the same honest-degradation shape
+// TextFreshnessReporter's own absence already gets elsewhere in this file.
+type TextDeepSearcher interface {
+	// SearchDeep is Search, plus the one bit Search's contract cannot carry:
+	// exhausted is true only when the searcher can PROVE no further match
+	// exists past what hits already holds — never inferred from a length
+	// comparison a hidden internal ceiling could make true by coincidence.
+	SearchDeep(ctx context.Context, words string, limit int) (hits []TextHit, exhausted bool, err error)
+}
+
 // ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
 // owns the loader; this package consumes it.
 type ViewLoader interface {
@@ -576,6 +610,29 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// ordinary zero-survivor query does), which is where the truncation
 		// problem is actually recorded.
 		if len(wordPaths) == 0 && !wordsTruncated {
+			// F1: a zero-hit word search must not report completeness for a
+			// query that ALSO depends on the properties index (a typed
+			// filter, record type, near, join, group_by, sort, select, or a
+			// kind the text index alone cannot answer — see
+			// textOnlyServable) when that index is not open. Without this
+			// check, THIS query's verdict depended on whether the word
+			// happened to match: a miss took this branch straight to
+			// zeroHitResponse below — Complete:true, 0 hits — while a hit
+			// (or no `words` at all) fell through to the d.Store == nil
+			// gate further down and refused. Checking the identical
+			// condition that gate checks, HERE, before the zero is reported
+			// as complete, makes the two agree regardless of which side of
+			// the word match this query lands on. This is also what keeps
+			// MV-9's attachment carve-out (see textOnlyServable, consulted
+			// by the SAME d.Store == nil gate below) honest on a build with
+			// no properties index at all: a kind=attachment word-miss must
+			// refuse exactly like a kind=attachment word-hit already does,
+			// not answer a confident zero because textOnlyServable was
+			// never consulted for it.
+			if d.Store == nil && !q.textOnlyServable() {
+				ref := propertiesIndexUnavailableRefusal()
+				return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+			}
 			// R1 (docs/internal/design/knowledge-tools-remediation.md):
 			// complete:true over zero hits is a claim that the corpus was
 			// actually searched. Search's own zero return cannot make that
@@ -629,9 +686,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		if q.textOnlyServable() {
 			return textOnlyResponse(d, q, echo, wordHits, wordsTruncated), nil
 		}
-		ref := refuse(problem(generated.IndexUnavailable,
-			"the properties index is not open, so no record can be read",
-			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
+		ref := propertiesIndexUnavailableRefusal()
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -737,7 +792,22 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			//     IndexedFiles<ScannedFiles forever; keying on that disjunct
 			//     made every search incomplete for good. NewFiles excludes it
 			//     (the index accounts for it as unindexable, not pending).
-			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 && fresh.NewFiles > 0 {
+			//
+			// F4: `ferr == nil` used to be the ONLY branch — a freshness-read
+			// ERROR fell through to no problem being recorded at all, so the
+			// caller lost the entire "this may under-report" warning exactly
+			// when the coverage check itself could not be trusted either.
+			// checkTextIndexPopulated's own zero-hit fallback (below, when
+			// TextFreshnessReporter is unavailable or errors) already treats a
+			// freshness failure as worth reporting rather than silent; this
+			// mirrors that for the non-zero-hit path instead of dropping it.
+			switch fresh, ferr := fr.IndexFreshness(ctx); {
+			case ferr != nil:
+				ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
+					fmt.Sprintf("the text index's freshness could not be verified: %v — this `words` result "+
+						"may under-report if the index is behind", ferr),
+					"re-run, or run knowledge_describe check_integrity to see the index state")})
+			case fresh.ScannedFiles > 0 && fresh.NewFiles > 0:
 				ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
 					fmt.Sprintf("the text index has not finished indexing this knowledge base — it currently reflects "+
 						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
@@ -769,6 +839,20 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	return ev.assemble(ctx, d, echo), nil
+}
+
+// propertiesIndexUnavailableRefusal is the one refusal for "this query needs
+// the properties index and it is not open" — shared by every place findRecords
+// discovers that gap, so the message is byte-identical regardless of WHERE it
+// is discovered. F1/F2: before this was centralized, the word-search zero-hit
+// early return and the general d.Store == nil gate each built this refusal
+// independently, and only the second one actually ran early enough to catch a
+// query whose word half missed — the verdict must not depend on that, so both
+// call sites now share one source of truth.
+func propertiesIndexUnavailableRefusal() *RefusalError {
+	return refuse(problem(generated.IndexUnavailable,
+		"the properties index is not open, so no record can be read",
+		"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
 }
 
 // checkTextIndexPopulated refuses a words-carrying, zero-hit query whose text
@@ -933,9 +1017,26 @@ func fetchWordHits(ctx context.Context, text TextSearcher, q *query, fanout int)
 		// The first window was crowded out by the other kind and the index is
 		// not exhausted — broaden the ask to this package's own ceiling and
 		// filter again, once.
-		raw, err = text.Search(ctx, q.words, propindex.BoundSurvivors)
-		if err != nil {
-			return nil, false, err
+		//
+		// F3: `exhausted = len(raw) < propindex.BoundSurvivors` used to be the
+		// proof here, and it is not one — see TextDeepSearcher's doc comment.
+		// A TextDeepSearcher is asked directly, when the searcher offers one,
+		// for the real answer; a plain TextSearcher cannot prove it either
+		// way, so exhaustion here is left UNPROVEN (false) rather than
+		// inferred from a length comparison indexSearchMaxFetch (the real
+		// production ceiling, far below BoundSurvivors) can make true by
+		// coincidence regardless of the corpus' actual size.
+		if ds, ok := text.(TextDeepSearcher); ok {
+			raw, exhausted, err = ds.SearchDeep(ctx, q.words, propindex.BoundSurvivors)
+			if err != nil {
+				return nil, false, err
+			}
+		} else {
+			raw, err = text.Search(ctx, q.words, propindex.BoundSurvivors)
+			if err != nil {
+				return nil, false, err
+			}
+			exhausted = false
 		}
 		filtered = filtered[:0]
 		for _, h := range raw {
@@ -943,7 +1044,6 @@ func fetchWordHits(ctx context.Context, text TextSearcher, q *query, fanout int)
 				filtered = append(filtered, h)
 			}
 		}
-		exhausted = len(raw) < propindex.BoundSurvivors
 	}
 
 	switch {
