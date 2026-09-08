@@ -132,6 +132,10 @@ func buildMeasurementCorpus(t *testing.T, n int) string {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	idx, ok := store.(*Index)
+	if !ok {
+		t.Fatalf("buildMeasurementCorpus: store is %T, not *Index", store)
+	}
 	sc := plantSchema(t)
 	const batchSize = 1000
 	batch := make([]NoteRows, 0, batchSize)
@@ -154,14 +158,14 @@ labels: [indoor, humid]
 `, i, []string{"seedling", "growing", "dormant"}[i%3], i%28+1, i%9, i%40)
 		batch = append(batch, note(t, fmt.Sprintf("garden/bulk/p-%06d.md", i), sc, src))
 		if len(batch) == batchSize {
-			if err := store.(*Index).UpsertNotes(context.Background(), batch); err != nil {
+			if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 				t.Fatalf("UpsertNotes: %v", err)
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
-		if err := store.(*Index).UpsertNotes(context.Background(), batch); err != nil {
+		if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 			t.Fatalf("UpsertNotes: %v", err)
 		}
 	}

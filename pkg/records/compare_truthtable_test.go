@@ -836,7 +836,7 @@ func TestComparisonTruthTable(t *testing.T) {
 					counted := op == OpIsNull || op == OpIsNotNull ||
 						(!l.absent && !r.absent && !l.nonConf && !r.nonConf &&
 							oracleDomain(l.typ) == oracleDomain(r.typ) && oracleDisposition[l.typ][op] &&
-							!((l.many || r.many) && isOrderingOperator(op)))
+							(!l.many && !r.many || !isOrderingOperator(op)))
 					if counted {
 						n := answered[op]
 						if wantResult {

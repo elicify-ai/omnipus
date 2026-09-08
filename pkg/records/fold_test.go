@@ -125,7 +125,7 @@ func TestFold_DisagreesWithBothStdlibFunctions(t *testing.T) {
 	equalFold := make([]bool, 0, len(ac89Pairs))
 	for _, p := range ac89Pairs {
 		ours = append(ours, FoldEqual(p.left, p.right))
-		toLower = append(toLower, strings.ToLower(p.left) == strings.ToLower(p.right))
+		toLower = append(toLower, strings.ToLower(p.left) == strings.ToLower(p.right)) //nolint:staticcheck // the point is to DIFFER from strings.EqualFold, computed separately below
 		equalFold = append(equalFold, strings.EqualFold(p.left, p.right))
 	}
 
@@ -283,7 +283,7 @@ func TestFold_TotalOrderForSorting(t *testing.T) {
 		// Executed evidence from ADR-068 D4: "Won" < "lost" is TRUE on raw
 		// bytes and FALSE folded, because byte order puts every capitalised
 		// value before every lowercase one.
-		if !("Won" < "lost") {
+		if "Won" >= "lost" {
 			t.Fatal("fixture assumption broken: raw byte order must put \"Won\" before \"lost\"")
 		}
 		if FoldLess("Won", "lost") {

@@ -32,12 +32,12 @@ func NearestWithinOneEdit(requested, observed []string) map[string]string {
 // or less.
 func withinOneEdit(a, b string) bool {
 	ar, br := []rune(a), []rune(b)
-	switch d := len(ar) - len(br); {
-	case d == 0:
+	switch d := len(ar) - len(br); d {
+	case 0:
 		return equalRunes(ar, br) || oneSubstitutionApart(ar, br) || oneTranspositionApart(ar, br)
-	case d == 1:
+	case 1:
 		return oneDeletionApart(ar, br)
-	case d == -1:
+	case -1:
 		return oneDeletionApart(br, ar)
 	}
 	return false

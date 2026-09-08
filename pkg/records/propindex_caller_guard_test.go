@@ -150,7 +150,10 @@ func classifyCallSite(
 	if stmtIdx < 0 {
 		return bad("the guard could not find the statement containing this call")
 	}
-	stmt := stack[stmtIdx].(ast.Stmt)
+	stmt, ok := stack[stmtIdx].(ast.Stmt)
+	if !ok {
+		return bad("internal error: the guard lost track of the enclosing statement's type")
+	}
 	var parent ast.Node
 	if stmtIdx > 0 {
 		parent = stack[stmtIdx-1]

@@ -76,7 +76,7 @@ func TestEnum_ClosedAndLexical(t *testing.T) {
 		// capitalised value before every lowercase one, which would render
 		// `Won`, `won` and `WON` in three places while grouping collapsed them
 		// into one.
-		if !("Won" < "lost") {
+		if "Won" >= "lost" {
 			t.Fatal("fixture assumption broken: raw byte order must put \"Won\" before \"lost\"")
 		}
 		if FoldLess("Won", "lost") {

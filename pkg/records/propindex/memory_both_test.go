@@ -241,6 +241,10 @@ func writeCorpus(t *testing.T, root, dbPath string, n int) {
 		}
 	}()
 
+	idx, ok := store.(*propindex.Index)
+	if !ok {
+		t.Fatalf("writeCorpus: store is %T, not *propindex.Index", store)
+	}
 	const batchSize = 1000
 	batch := make([]propindex.NoteRows, 0, batchSize)
 	for i := range n {
@@ -268,14 +272,14 @@ A cutting taken in spring, kept in bright indirect light near the east window.
 		propindex.ExportedMustWriteFile(t, filepath.Join(root, rel), src)
 		batch = append(batch, propindex.ExportedNote(t, rel, sc, src))
 		if len(batch) == batchSize {
-			if err := store.(*propindex.Index).UpsertNotes(context.Background(), batch); err != nil {
+			if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 				t.Fatalf("UpsertNotes: %v", err)
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
-		if err := store.(*propindex.Index).UpsertNotes(context.Background(), batch); err != nil {
+		if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 			t.Fatalf("UpsertNotes: %v", err)
 		}
 	}

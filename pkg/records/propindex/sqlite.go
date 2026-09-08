@@ -126,7 +126,7 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 	if err := ix.init(ctx); err != nil {
 		if !isCorruptionError(err) {
 			if cerr := db.Close(); cerr != nil {
-				return nil, fmt.Errorf("%w (and closing the database failed: %v)", err, cerr)
+				return nil, fmt.Errorf("%w (and closing the database failed: %w)", err, cerr)
 			}
 			return nil, err
 		}
@@ -153,7 +153,7 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 		}
 		rebuilt, rerr := rebuildAfterCorruption(ctx, path, opts)
 		if rerr != nil {
-			return nil, fmt.Errorf("propindex: the index at %q is corrupt (%v) and could not be rebuilt: %w",
+			return nil, fmt.Errorf("propindex: the index at %q is corrupt (%w) and could not be rebuilt: %w",
 				path, err, rerr)
 		}
 		return rebuilt, nil
@@ -308,7 +308,7 @@ func rebuildAfterCorruption(ctx context.Context, path string, opts Options) (Sto
 	ix := &Index{db: db, path: path, rec: opts.Recorder}
 	if err := ix.init(ctx); err != nil {
 		if cerr := db.Close(); cerr != nil {
-			return nil, fmt.Errorf("%w (and closing the database failed: %v)", err, cerr)
+			return nil, fmt.Errorf("%w (and closing the database failed: %w)", err, cerr)
 		}
 		return nil, err
 	}
@@ -511,7 +511,7 @@ func (ix *Index) UpsertNotes(ctx context.Context, batch []NoteRows) (err error) 
 	defer func() {
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-				err = fmt.Errorf("%w (and rolling back failed: %v)", err, rbErr)
+				err = fmt.Errorf("%w (and rolling back failed: %w)", err, rbErr)
 			}
 		}
 	}()
@@ -629,7 +629,7 @@ func (ix *Index) DeleteNote(ctx context.Context, path string) (err error) {
 	defer func() {
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-				err = fmt.Errorf("%w (and rolling back failed: %v)", err, rbErr)
+				err = fmt.Errorf("%w (and rolling back failed: %w)", err, rbErr)
 			}
 		}
 	}()
@@ -690,7 +690,7 @@ func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNa
 	defer func() {
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-				err = fmt.Errorf("%w (and rolling back failed: %v)", err, rbErr)
+				err = fmt.Errorf("%w (and rolling back failed: %w)", err, rbErr)
 			}
 		}
 	}()

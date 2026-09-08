@@ -1230,7 +1230,7 @@ func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) 
 
 	var decl propertyDecl
 	if err := node.Decode(&decl); err != nil {
-		return nil, fmt.Errorf("declaration is not readable: %v", err)
+		return nil, fmt.Errorf("declaration is not readable: %w", err)
 	}
 
 	pt := PropertyType(strings.TrimSpace(decl.Type))
@@ -1487,7 +1487,7 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 		return EnumValue{Name: n.Value}, nil
 	case yaml.MappingNode:
 		if err := checkDeclaredKeys("an enum value", &n, enumValueDeclKeys); err != nil {
-			return EnumValue{}, fmt.Errorf("enum value at position %d: %v", position, err)
+			return EnumValue{}, fmt.Errorf("enum value at position %d: %w", position, err)
 		}
 		var long struct {
 			Name  string `yaml:"name"`
@@ -1495,7 +1495,7 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 			Group string `yaml:"group"`
 		}
 		if err := n.Decode(&long); err != nil {
-			return EnumValue{}, fmt.Errorf("enum value at position %d is not readable: %v", position, err)
+			return EnumValue{}, fmt.Errorf("enum value at position %d is not readable: %w", position, err)
 		}
 		if strings.TrimSpace(long.Name) == "" {
 			return EnumValue{}, fmt.Errorf("enum value at position %d declares no `name`", position)

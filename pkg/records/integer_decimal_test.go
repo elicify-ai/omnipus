@@ -378,8 +378,8 @@ func TestNumeric_ExpectedShapeNamesTheBound(t *testing.T) {
 // is that the typed constants still EXIST and still carry the right values, so
 // nobody deletes them as redundant.
 func TestNumeric_BoundConstantsAreTypedInt64(t *testing.T) {
-	var min64 int64 = MinInteger
-	var max64 int64 = MaxInteger
+	var min64 = MinInteger
+	var max64 = MaxInteger
 	if min64 != math.MinInt64 || max64 != math.MaxInt64 {
 		t.Fatalf("MinInteger/MaxInteger = %d/%d, want the int64 bounds", min64, max64)
 	}
